@@ -1,7 +1,5 @@
 from __future__ import annotations
-import os, threading, re
-from typing import Any, Dict, List, Optional
-from server_modules.automation_intents import classify_automation_intent
+from typing import Optional
 from server_modules.connectors.autopilot_connector_config import (
     _AUTOPILOT_ERROR_CATEGORY_HINTS,
     _AUTOPILOT_EVENT_DEDUP,
@@ -43,50 +41,6 @@ from server_modules.connectors.autopilot_connector_config import (
 from server_modules.connectors.autopilot_connector_export_facade import AutopilotConnectorExportFacade
 from server_modules.connectors.autopilot_connector_shell_builder import build_autopilot_connector_shell_service
 from server_modules.connectors.autopilot_connector_shell_service import AutopilotConnectorShellService
-from server_modules.connectors.autopilot_approval_service import AutopilotApprovalService
-from server_modules.connectors.autopilot_bridge_facade_service import AutopilotBridgeFacadeService
-from server_modules.connectors.autopilot_channel_registry_bridge_service import AutopilotChannelRegistryBridgeService
-from server_modules.connectors.autopilot_common_support_service import AutopilotCommonSupportService
-from server_modules.connectors.autopilot_event_bridge_service import AutopilotEventBridgeService
-from server_modules.connectors.autopilot_registry_facade_service import AutopilotRegistryFacadeService
-from server_modules.connectors.autopilot_state_bridge_service import AutopilotStateBridgeService
-from server_modules.connectors.autopilot_terminal_bridge_service import AutopilotTerminalBridgeService
-from server_modules.connectors.autopilot_skill_service import AutopilotSkillService
-from server_modules.connectors.autopilot_workflow_setup_service import AutopilotWorkflowSetupService
-from server_modules.connectors.autopilot_run_entry_service import AutopilotRunEntryService
-from server_modules.connectors.autopilot_runtime_support_service import AutopilotRuntimeSupportService
-from server_modules.connectors.autopilot_shared_service_registry import AutopilotSharedServiceRegistry
-from server_modules.connectors.autopilot_profile_service import AutopilotProfileService
-from server_modules.connectors.autopilot_runtime_facade_service import AutopilotRuntimeFacadeService
-from server_modules.connectors.autopilot_runtime_registry_bridge_service import AutopilotRuntimeRegistryBridgeService
-from server_modules.connectors.autopilot_runtime_service_registry import AutopilotRuntimeServiceRegistry
-from server_modules.connectors.autopilot_support_service_registry import AutopilotSupportServiceRegistry
-from server_modules.connectors.autopilot_support_registry_bridge_service import AutopilotSupportRegistryBridgeService
-from server_modules.connectors.runtime_status_service import RuntimeStatusService
-from server_modules.connectors.telegram_autopilot_helper_registry import TelegramAutopilotHelperRegistry
-from server_modules.connectors.telegram_helper_registry_bridge_service import TelegramHelperRegistryBridgeService
-from server_modules.connectors.telegram_compatibility_bridge_service import TelegramCompatibilityBridgeService
-from server_modules.connectors.telegram_connector_context_service import TelegramConnectorContextService
-from server_modules.connectors.telegram_connector_support_service import TelegramConnectorSupportService
-from server_modules.connectors.telegram_menu_service import TelegramMenuService
-from server_modules.connectors.telegram_autopilot_service_registry import TelegramAutopilotServiceRegistry
-from server_modules.connectors.telegram_connector_poll_service import TelegramConnectorPollService
-from server_modules.connectors.telegram_media_service import telegram_safe_path_token
-from server_modules.connectors.telegram_profile_service import TELEGRAM_PROFILE_FIELDS as _TELEGRAM_PROFILE_FIELDS
-from server_modules.connectors.telegram_space_service import telegram_space_question_via_mcp
-from server_modules.connectors.telegram_terminal_service import TelegramTerminalService
-from server_modules.connectors.telegram_transport_service import TelegramTransportService
-from server_modules.connectors.whatsapp_webhook_bridge_service import WhatsAppWebhookBridgeService
-from server_modules.connectors.whatsapp_autopilot_service_registry import WhatsAppAutopilotServiceRegistry
-from server_modules.installed_skills import query_active_installed_skills
-try:
-    from fastapi import Request, Response
-except Exception:  # pragma: no cover - test fallback when FastAPI is unavailable
-    class Request:  # type: ignore[override]
-        pass
-
-    class Response:  # type: ignore[override]
-        pass
 _server = None
 _SYNC_SERVER_GLOBALS = (
     "TELEGRAM_AUTOPILOT_THREAD",
@@ -107,110 +61,6 @@ def _autopilot_connector_shell_service() -> AutopilotConnectorShellService:
             import_server=lambda: __import__("server", fromlist=["*"]),
         )
     return _AUTOPILOT_CONNECTOR_SHELL_SERVICE
-
-
-def _autopilot_registry_facade_service() -> AutopilotRegistryFacadeService:
-    return _autopilot_connector_shell_service().registry_facade_service()
-
-
-def _autopilot_bridge_facade_service() -> AutopilotBridgeFacadeService:
-    return _autopilot_connector_shell_service().bridge_facade_service()
-
-
-def _autopilot_shared_service_registry() -> AutopilotSharedServiceRegistry:
-    return _autopilot_bridge_facade_service().shared_service_registry()
-
-
-def _autopilot_status_service():
-    return _autopilot_bridge_facade_service().autopilot_status_service()
-
-
-def _autopilot_endpoint_service():
-    return _autopilot_bridge_facade_service().autopilot_endpoint_service()
-
-
-def _autopilot_event_service():
-    return _autopilot_bridge_facade_service().autopilot_event_service()
-
-
-def _whatsapp_service_registry() -> WhatsAppAutopilotServiceRegistry:
-    return _autopilot_channel_registry_bridge_service().whatsapp_service_registry()
-
-
-def _autopilot_profile_service() -> AutopilotProfileService:
-    return _autopilot_support_service_registry().profile_service()
-
-
-def _telegram_connector_support_service() -> TelegramConnectorSupportService:
-    return _autopilot_runtime_service_registry().connector_support_service()
-
-
-def _runtime_status_service() -> RuntimeStatusService:
-    return _autopilot_support_service_registry().runtime_status_service()
-
-
-def _autopilot_workflow_setup_service() -> AutopilotWorkflowSetupService:
-    return _autopilot_support_service_registry().workflow_setup_service()
-
-
-def _telegram_connector_context_service() -> TelegramConnectorContextService:
-    return _autopilot_support_service_registry().connector_context_service()
-
-
-def _autopilot_approval_service() -> AutopilotApprovalService:
-    return _autopilot_support_service_registry().approval_service()
-
-
-def _telegram_transport_service() -> TelegramTransportService:
-    return _autopilot_runtime_service_registry().transport_service()
-
-
-def _telegram_terminal_service() -> TelegramTerminalService:
-    return _autopilot_runtime_service_registry().terminal_service()
-
-
-def _autopilot_common_support_service() -> AutopilotCommonSupportService:
-    return _autopilot_support_service_registry().common_support_service()
-
-
-def _autopilot_run_entry_service() -> AutopilotRunEntryService:
-    return _autopilot_runtime_service_registry().run_entry_service()
-
-
-def _autopilot_runtime_support_service() -> AutopilotRuntimeSupportService:
-    return _autopilot_runtime_service_registry().runtime_support_service()
-
-
-def _autopilot_skill_service() -> AutopilotSkillService:
-    return _autopilot_support_service_registry().skill_service()
-
-
-def _autopilot_channel_support_service() -> AutopilotChannelSupportService:
-    return _autopilot_support_service_registry().channel_support_service()
-
-
-def _autopilot_event_bridge_service() -> AutopilotEventBridgeService:
-    return _autopilot_bridge_facade_service().event_bridge_service()
-
-
-def _autopilot_terminal_bridge_service() -> AutopilotTerminalBridgeService:
-    return _autopilot_bridge_facade_service().terminal_bridge_service()
-
-
-def _autopilot_state_bridge_service() -> AutopilotStateBridgeService:
-    return _autopilot_bridge_facade_service().state_bridge_service()
-
-
-def _telegram_compatibility_bridge_service() -> TelegramCompatibilityBridgeService:
-    return _autopilot_bridge_facade_service().compatibility_bridge_service()
-
-
-def _whatsapp_webhook_bridge_service() -> WhatsAppWebhookBridgeService:
-    return _autopilot_bridge_facade_service().webhook_bridge_service()
-
-
-def _autopilot_runtime_facade_service() -> AutopilotRuntimeFacadeService:
-    return _autopilot_connector_shell_service().runtime_facade_service()
 
 _AUTOPILOT_EXPORT_FACADE = AutopilotConnectorExportFacade(global_namespace=globals())
 

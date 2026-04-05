@@ -1747,6 +1747,67 @@ The connector module still exports the historical helper and endpoint names, but
   - `server_modules.tests.test_agent_machine_mode`
   - `scripts.orion_terminal.tests.test_autopilot_event_dedupe`
 
+### 2026-04-05 - Dead Pre-Facade Wrapper Layer And Import Overhead Removed From Connector Shell
+
+#### Stage
+
+Stage 1 continues. The connector shell no longer carries the dead pre-facade wrapper layer that was still sitting above the export facade.
+
+This cut is not a new architectural boundary. It is cleanup that removes redundant ownership after the façade extractions were already in place.
+
+#### Completed Work
+
+- Removed the now-dead wrapper function layer from [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) for:
+  - registry/bridge/runtime service accessors that were immediately overwritten by export-facade bindings
+  - support/runtime helper accessors that no longer had any direct callers
+  - Telegram compatibility and webhook bridge wrapper defs that were already delegated through the export facade
+- Reduced the connector module import surface so it now keeps:
+  - the config re-exports that are still part of the compatibility surface
+  - the shell builder
+  - the shell service singleton type
+  - the export facade
+- Removed the now-unused FastAPI fallback class band from [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) because the webhook handler export is now owned through the export facade instead of a local function definition.
+
+#### Current Truth
+
+- [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) is now down to `122` lines from `272` before this cut.
+- The connector shell is now much closer to the target shape:
+  - config compatibility surface
+  - shell singleton construction
+  - export-facade bindings
+  and very little else.
+- Public behavior remains intact:
+  - config export tests still pass
+  - machine-mode run tests still pass
+  - throttled event dedupe still respects patched module exports
+
+#### Open Gaps
+
+- [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) is now thin, but it still acts as a broad compatibility export surface rather than a deliberately minimal supported API.
+- The remaining config re-exports may still be larger than the long-term public contract should be.
+- Some historical callers may still depend on names that should eventually move behind a narrower connector API.
+
+#### Next Required Work
+
+1. Decide which remaining exports on [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) are truly part of the supported connector API versus pure legacy compatibility.
+2. Continue shrinking the re-export surface only after validating any remaining external callers for those names.
+3. Keep the focused late-bound tests in place as guardrails while the compatibility shell approaches its final minimal shape.
+
+#### Verification
+
+- `python3 -m py_compile` passed for:
+  - [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py)
+- Focused unit tests passed in the project virtualenv:
+  - `server_modules.tests.test_autopilot_connector_export_facade`
+  - `server_modules.tests.test_autopilot_connector_shell_builder`
+  - `server_modules.tests.test_autopilot_connector_shell_service`
+  - `server_modules.tests.test_autopilot_connector_config_exports`
+  - `server_modules.tests.test_autopilot_registry_facade_service`
+  - `server_modules.tests.test_autopilot_bridge_facade_service`
+  - `server_modules.tests.test_autopilot_runtime_facade_service`
+  - `server_modules.tests.test_agent_machine_mode`
+  - `scripts.orion_terminal.tests.test_autopilot_event_dedupe`
+
 ### 2026-04-05 - Top-Level Telegram And WhatsApp Registry Wiring Moved Behind Channel Registry Bridge
 
 #### Stage

@@ -658,6 +658,71 @@ def build_runs_delegation_legacy_request_services(
     )
 
 
+def _resolve_namespace_callable(
+    namespace: Dict[str, Any],
+    *names: str,
+    fallback_loader: Optional[Callable[[], Any]] = None,
+) -> Any:
+    for name in names:
+        candidate = namespace.get(name)
+        if callable(candidate):
+            return candidate
+    if fallback_loader is not None:
+        return fallback_loader()
+    for name in names:
+        candidate = namespace.get(name)
+        if candidate is not None:
+            return candidate
+    return None
+
+
+def build_runs_delegation_runtime_request_services_from_namespace(
+    *,
+    namespace: Dict[str, Any],
+    prepare_run_start_request: Any,
+    decide_execution_target: Callable[..., dict[str, Any]],
+    apply_execution_route_metadata: Callable[[dict[str, Any], dict[str, Any]], dict[str, Any]],
+    build_doctor_run_gate: Callable[..., dict[str, Any]],
+    agent_machine_inherited_owner_user_id: Callable[[Any], Any],
+    resolve_runtime_policy_mode: Callable[..., dict[str, Any]],
+    agent_machine_full_trust_enabled: Callable[[Any], bool],
+    local_execution_target: str,
+    local_execution_pack_id: str,
+    now_iso: Optional[Callable[[], str]] = None,
+    compute_tool_policy_precheck_fallback: Optional[Callable[[], Any]] = None,
+    create_run_fallback: Optional[Callable[[], Any]] = None,
+    begin_run_pending_confirmation_fallback: Optional[Callable[[], Any]] = None,
+) -> LegacyRunRequestServices:
+    return build_runs_delegation_legacy_request_services(
+        prepare_run_start_request=prepare_run_start_request,
+        decide_execution_target=decide_execution_target,
+        apply_execution_route_metadata=apply_execution_route_metadata,
+        build_doctor_run_gate=build_doctor_run_gate,
+        agent_machine_inherited_owner_user_id=agent_machine_inherited_owner_user_id,
+        compute_tool_policy_precheck=_resolve_namespace_callable(
+            namespace,
+            "_compute_tool_policy_precheck",
+            fallback_loader=compute_tool_policy_precheck_fallback,
+        ),
+        resolve_runtime_policy_mode=resolve_runtime_policy_mode,
+        agent_machine_full_trust_enabled=agent_machine_full_trust_enabled,
+        begin_run_pending_confirmation=_resolve_namespace_callable(
+            namespace,
+            "_begin_run_pending_confirmation",
+            "_begin_run_pending_approval",
+            fallback_loader=begin_run_pending_confirmation_fallback,
+        ),
+        create_run=_resolve_namespace_callable(
+            namespace,
+            "create_run",
+            fallback_loader=create_run_fallback,
+        ),
+        local_execution_target=local_execution_target,
+        local_execution_pack_id=local_execution_pack_id,
+        now_iso=now_iso,
+    )
+
+
 def build_runs_core_legacy_preparation_services(
     *,
     engine_registry: dict[str, Any],

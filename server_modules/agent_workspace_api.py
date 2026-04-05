@@ -13,7 +13,7 @@ from scripts.platform_execution import current_platform_context, supported_devic
 from server_modules.auth import enforce_workspace_access
 from server_modules.run_service import RunExecutionServices, build_server_system_run_execution_services
 from server_modules.schemas import DeviceExecuteRequest, WorkspaceFileDeleteRequest, WorkspaceFileWriteRequest
-from server_modules.turn_runtime import execute_unowned_system_run_start_request_via_turn_runtime
+from server_modules.turn_runtime import build_execute_unowned_system_run_start_request_via_turn_runtime
 
 
 def _late_server_export(name: str):
@@ -29,18 +29,7 @@ def _refresh_server_exports():
     return _server
 
 
-def execute_system_run_start_request_via_turn_runtime(
-    request: Any,
-    *,
-    stamp_request_owner_fn: Any,
-    services: RunExecutionServices,
-    current_user: Optional[Dict[str, Any]] = None,
-) -> Dict[str, Any]:
-    return execute_unowned_system_run_start_request_via_turn_runtime(
-        request,
-        services=services,
-        current_user=current_user,
-    )
+execute_system_run_start_request_via_turn_runtime = build_execute_unowned_system_run_start_request_via_turn_runtime()
 
 
 def _agent_workspace_run_execution_services() -> RunExecutionServices:

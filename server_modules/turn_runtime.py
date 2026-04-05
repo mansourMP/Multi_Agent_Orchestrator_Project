@@ -107,3 +107,23 @@ def execute_unowned_system_run_start_request_via_turn_runtime(
         services=services,
         current_user=current_user,
     )
+
+
+def build_execute_unowned_system_run_start_request_via_turn_runtime(
+    *,
+    execute_unowned_system_run_start_request_via_turn_runtime_fn: Any = execute_unowned_system_run_start_request_via_turn_runtime,
+) -> Any:
+    def _execute(
+        request: Any,
+        *,
+        stamp_request_owner_fn: Any,
+        services: RunExecutionServices,
+        current_user: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        return execute_unowned_system_run_start_request_via_turn_runtime_fn(
+            request,
+            services=services,
+            current_user=current_user,
+        )
+
+    return _execute

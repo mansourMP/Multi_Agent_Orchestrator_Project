@@ -14,7 +14,7 @@ from server_modules.runs_output import (
     _serialize_run_snapshot,
     _upsert_run_history_snapshot,
 )
-from server_modules.turn_runtime import execute_unowned_system_run_start_request_via_turn_runtime
+from server_modules.turn_runtime import build_execute_unowned_system_run_start_request_via_turn_runtime
 
 globals().update({key: value for key, value in vars(config).items() if not key.startswith("__")})
 globals().update({key: value for key, value in vars(shared).items() if not key.startswith("__")})
@@ -120,18 +120,7 @@ _safe_int = run_service.safe_int
 _normalize_requested_max_iterations = run_service.normalize_requested_max_iterations
 
 
-def execute_system_run_start_request_via_turn_runtime(
-    request: Any,
-    *,
-    stamp_request_owner_fn: Any,
-    services: run_service.RunExecutionServices,
-    current_user: Optional[Dict[str, Any]] = None,
-) -> Dict[str, Any]:
-    return execute_unowned_system_run_start_request_via_turn_runtime(
-        request,
-        services=services,
-        current_user=current_user,
-    )
+execute_system_run_start_request_via_turn_runtime = build_execute_unowned_system_run_start_request_via_turn_runtime()
 
 
 def _delegation_run_execution_services() -> run_service.RunExecutionServices:
@@ -494,33 +483,33 @@ _apply_browser_execution_metadata = run_service.apply_browser_execution_metadata
 
 
 def _create_run_from_request(req: RunStartRequest, schedule_id: Optional[str] = None) -> Dict[str, Any]:
-    precheck_fn = globals().get("_compute_tool_policy_precheck")
-    create_run_fn = globals().get("create_run")
-    begin_confirmation_fn = globals().get("_begin_run_pending_confirmation") or globals().get("_begin_run_pending_approval")
-    if not callable(precheck_fn):
-        from server_modules.runs_execution import _compute_tool_policy_precheck as precheck_fn  # type: ignore[assignment]
-    if not callable(create_run_fn):
-        from server_modules.runs_execution import create_run as create_run_fn  # type: ignore[assignment]
-    if not callable(begin_confirmation_fn):
-        from server_modules.runs_core import _begin_run_pending_confirmation as begin_confirmation_fn  # type: ignore[assignment]
-
     return run_service.create_legacy_run_result_from_request(
         req,
         schedule_id=schedule_id,
-        services=run_service.build_runs_delegation_legacy_request_services(
+        services=run_service.build_runs_delegation_runtime_request_services_from_namespace(
+            namespace=globals(),
             prepare_run_start_request=_prepare_run_start_request,
             decide_execution_target=decide_execution_target,
             apply_execution_route_metadata=apply_execution_route_metadata,
             build_doctor_run_gate=build_doctor_run_gate_from_snapshot,
             agent_machine_inherited_owner_user_id=agent_machine_inherited_owner_user_id,
-            compute_tool_policy_precheck=precheck_fn,
             resolve_runtime_policy_mode=resolve_runtime_policy_mode,
             agent_machine_full_trust_enabled=agent_machine_full_trust_enabled,
-            begin_run_pending_confirmation=begin_confirmation_fn,
-            create_run=create_run_fn,
             local_execution_target=EXECUTION_TARGET_LOCAL_COMPANION,
             local_execution_pack_id=LOCAL_EXECUTION_PACK_ID,
             now_iso=lambda: datetime.utcnow().isoformat() + "Z",
+            compute_tool_policy_precheck_fallback=lambda: __import__(
+                "server_modules.runs_execution",
+                fromlist=["_compute_tool_policy_precheck"],
+            )._compute_tool_policy_precheck,
+            create_run_fallback=lambda: __import__(
+                "server_modules.runs_execution",
+                fromlist=["create_run"],
+            ).create_run,
+            begin_run_pending_confirmation_fallback=lambda: __import__(
+                "server_modules.runs_core",
+                fromlist=["_begin_run_pending_confirmation"],
+            )._begin_run_pending_confirmation,
         ),
     )
 

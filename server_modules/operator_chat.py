@@ -24,6 +24,7 @@ from scripts.orion_local_worker_llm import (
 from server_modules import direct_chat_provider_service
 from scripts.orion_local_worker_utils import build_operator_system_prompt
 from server_modules import direct_chat_availability_service
+from server_modules import direct_chat_composition_service
 from server_modules import direct_chat_handoff_facade_service
 from server_modules import direct_chat_prompt_service
 from server_modules import direct_chat_handoff_service
@@ -1584,88 +1585,90 @@ _DIRECT_TOOL_RESULT_SUMMARY_SYSTEM_MESSAGE = (
 
 
 def _direct_chat_generation_services() -> direct_chat_generation_service.DirectChatGenerationServices:
-    return direct_chat_callback_facade_service.build_direct_chat_generation_services(
+    return direct_chat_composition_service.build_direct_chat_generation_services(
         _direct_chat_callback_facade_inputs(),
     )
 
 
 def _direct_chat_callback_facade_inputs() -> direct_chat_callback_facade_service.DirectChatCallbackFacadeInputs:
-    return direct_chat_callback_facade_service.DirectChatCallbackFacadeInputs(
-        thinking_step_payload=_thinking_step_payload,
-        build_context_used=_build_context_used,
-        build_direct_tool_approval_response=_build_direct_tool_approval_response,
-        parse_tool_name=_parse_tool_name,
-        tool_arguments_payload=_tool_arguments_payload,
+    return direct_chat_composition_service.build_direct_chat_callback_facade_inputs(
+        namespace={
+            "thinking_step_payload": _thinking_step_payload,
+            "build_context_used": _build_context_used,
+            "build_direct_tool_approval_response": _build_direct_tool_approval_response,
+            "parse_tool_name": _parse_tool_name,
+            "tool_arguments_payload": _tool_arguments_payload,
+            "direct_tool_step_payload": _direct_tool_step_payload,
+            "execute_single_direct_tool_call": _execute_single_direct_tool_call,
+            "direct_tool_followup_message": _direct_tool_followup_message,
+            "suggest_actions": _suggest_actions,
+            "clear_direct_tool_loop_state": _clear_direct_tool_loop_state,
+            "persist_direct_chat_memory_best_effort": _persist_direct_chat_memory_best_effort,
+            "persist_direct_chat_transcript_best_effort": _persist_direct_chat_transcript_best_effort,
+            "record_direct_tool_signature": _record_direct_tool_signature,
+            "direct_chat_error_reply": _direct_chat_error_reply,
+            "compact_text": _compact_text,
+            "safe_positive_int": _safe_positive_int,
+            "resolve_chat_local_path": _resolve_chat_local_path,
+            "extract_first_path_reference": _extract_first_path_reference,
+            "extract_first_url": _extract_first_url,
+            "approval_required_for_direct_tool": _approval_required_for_direct_tool,
+            "agent_machine_full_trust_for_session": _agent_machine_full_trust_for_session,
+            "direct_chat_session_key": _direct_chat_session_key,
+            "resolved_chat_iteration_limit": _resolved_chat_iteration_limit,
+            "session_model_preference": _session_model_preference,
+            "normalize_reasoning_effort": _normalize_reasoning_effort,
+            "parse_slash_command": _parse_slash_command,
+            "set_session_model_preference": _set_session_model_preference,
+            "mark_thread_cleared": _mark_thread_cleared,
+            "normalize_prior_messages": _normalize_prior_messages,
+            "consume_thread_cleared": _consume_thread_cleared,
+            "build_proactive_suggestions": _build_proactive_suggestions,
+            "direct_tool_session_key": _direct_tool_session_key,
+            "resolve_direct_chat_availability": _resolve_direct_chat_availability,
+            "connected_system_labels": _connected_system_labels,
+            "context_tool_capabilities": _context_tool_capabilities,
+            "build_direct_chat_tools": _build_direct_chat_tools,
+            "build_local_direct_chat_tools": _build_local_direct_chat_tools,
+            "build_builtin_direct_chat_tools": _build_builtin_direct_chat_tools,
+            "normalize_direct_approved_action": _normalize_direct_approved_action,
+            "with_context_used": _with_context_used,
+            "connected_provider_tokens": _connected_provider_tokens,
+            "active_run_count": _active_run_count,
+            "slash_command_help_text": _slash_command_help_text,
+            "execute_direct_tool_calls": _execute_direct_tool_calls,
+            "direct_chat_credentials": _direct_chat_credentials,
+            "tool_gate_response": _tool_gate_response,
+            "tool_write_action_available": _tool_write_action_available,
+            "approved_action_to_tool_call": _approved_action_to_tool_call,
+            "resolve_provider_for_direct_chat_message": _resolve_provider_for_direct_chat_message,
+            "plan_direct_chat_route": _plan_direct_chat_route,
+            "start_direct_chat_run_handoff": _start_direct_chat_run_handoff,
+            "direct_chat_run_handoff_reply": _direct_chat_run_handoff_reply,
+            "stream_direct_chat_run_handoff": _stream_direct_chat_run_handoff,
+            "direct_chat_run_handoff_failure_payload": _direct_chat_run_handoff_failure_payload,
+            "supports_direct_message_native_chat": _supports_direct_message_native_chat,
+            "build_direct_chat_system_prompt": _build_direct_chat_system_prompt,
+            "direct_chat_workspace_context_text": _direct_chat_workspace_context_text,
+        },
         parse_page_state=parse_json_object_loose,
-        direct_tool_step_payload=_direct_tool_step_payload,
-        execute_single_direct_tool_call=_execute_single_direct_tool_call,
-        direct_tool_followup_message=_direct_tool_followup_message,
-        suggest_actions=_suggest_actions,
-        clear_direct_tool_loop_state=_clear_direct_tool_loop_state,
-        persist_direct_chat_memory_best_effort=_persist_direct_chat_memory_best_effort,
-        persist_direct_chat_transcript_best_effort=_persist_direct_chat_transcript_best_effort,
-        record_direct_tool_signature=_record_direct_tool_signature,
-        direct_chat_error_reply=_direct_chat_error_reply,
         capture_exception=sentry_sdk.capture_exception,
         generate_chat_reply_stream_with_provider_fallback=generate_chat_reply_stream_with_provider_fallback,
-        compact_text=_compact_text,
-        safe_positive_int=_safe_positive_int,
-        resolve_chat_local_path=_resolve_chat_local_path,
-        extract_first_path_reference=_extract_first_path_reference,
-        extract_first_url=_extract_first_url,
         parse_memory_write=memory_service.parse_no_provider_memory_write,
         parse_memory_read=memory_service.parse_no_provider_memory_read,
         handle_memory_request=memory_service.handle_no_provider_memory_request,
-        approval_required_for_direct_tool=_approval_required_for_direct_tool,
-        agent_machine_full_trust_for_session=_agent_machine_full_trust_for_session,
-        direct_chat_session_key=_direct_chat_session_key,
-        resolved_chat_iteration_limit=_resolved_chat_iteration_limit,
-        session_model_preference=_session_model_preference,
-        normalize_reasoning_effort=_normalize_reasoning_effort,
-        parse_slash_command=_parse_slash_command,
-        set_session_model_preference=_set_session_model_preference,
-        mark_thread_cleared=_mark_thread_cleared,
-        normalize_prior_messages=_normalize_prior_messages,
-        consume_thread_cleared=_consume_thread_cleared,
         compact_conversation_history=compact_conversation_history,
-        build_proactive_suggestions=_build_proactive_suggestions,
-        direct_tool_session_key=_direct_tool_session_key,
-        resolve_direct_chat_availability=_resolve_direct_chat_availability,
-        connected_system_labels=_connected_system_labels,
-        context_tool_capabilities=_context_tool_capabilities,
-        build_direct_chat_tools=_build_direct_chat_tools,
-        build_local_direct_chat_tools=_build_local_direct_chat_tools,
-        build_builtin_direct_chat_tools=_build_builtin_direct_chat_tools,
-        normalize_direct_approved_action=_normalize_direct_approved_action,
         direct_chat_compaction_token_limit=DIRECT_CHAT_COMPACTION_TOKEN_LIMIT,
-        with_context_used=_with_context_used,
-        connected_provider_tokens=_connected_provider_tokens,
         list_memory_entries=list_memory_entries,
-        active_run_count=_active_run_count,
         get_memory=get_memory,
         delete_memory=delete_memory,
-        slash_command_help_text=_slash_command_help_text,
-        execute_direct_tool_calls=_execute_direct_tool_calls,
-        direct_chat_credentials=_direct_chat_credentials,
-        tool_gate_response=_tool_gate_response,
-        tool_write_action_available=_tool_write_action_available,
-        approved_action_to_tool_call=_approved_action_to_tool_call,
-        resolve_provider_for_direct_chat_message=_resolve_provider_for_direct_chat_message,
-        plan_direct_chat_route=_plan_direct_chat_route,
-        start_direct_chat_run_handoff=_start_direct_chat_run_handoff,
-        direct_chat_run_handoff_reply=_direct_chat_run_handoff_reply,
-        stream_direct_chat_run_handoff=_stream_direct_chat_run_handoff,
-        direct_chat_run_handoff_failure_payload=_direct_chat_run_handoff_failure_payload,
-        supports_direct_message_native_chat=_supports_direct_message_native_chat,
-        supported_providers=list(SUPPORTED_PROVIDERS),
-        build_direct_chat_system_prompt=_build_direct_chat_system_prompt,
-        direct_chat_workspace_context_text=_direct_chat_workspace_context_text,
         no_provider_reasoning_required_response=no_provider_service.no_provider_reasoning_required_response,
+        supported_providers=list(SUPPORTED_PROVIDERS),
     )
 
 
 def _direct_chat_runtime_facade_callbacks() -> direct_chat_runtime_facade_service.DirectChatRuntimeFacadeCallbacks:
-    return direct_chat_callback_facade_service.build_direct_chat_runtime_facade_callbacks(
+    return direct_chat_composition_service.build_direct_chat_runtime_facade_callbacks(
         _direct_chat_callback_facade_inputs(),
     )
 
@@ -1685,7 +1688,7 @@ def _prepare_direct_chat_request(
     approved_action: Optional[Dict[str, Any]],
     max_iterations: Optional[int],
 ) -> direct_chat_entry_service.PreparedDirectChatRequest:
-    return direct_chat_runtime_facade_service.prepare_direct_chat_request(
+    return direct_chat_composition_service.prepare_direct_chat_request(
         resolved_turn_request=resolved_turn_request,
         session_ctx=session_ctx,
         message=message,
@@ -1703,14 +1706,14 @@ def _prepare_direct_chat_request(
 
 
 def _direct_chat_response_services() -> direct_chat_response_service.DirectChatResponseServices:
-    return direct_chat_runtime_facade_service.build_direct_chat_response_services(
-        _direct_chat_runtime_facade_callbacks(),
+    return direct_chat_composition_service.build_direct_chat_response_services(
+        callbacks=_direct_chat_runtime_facade_callbacks(),
     )
 
 
 def _direct_chat_runtime_services() -> direct_chat_runtime_service.DirectChatRuntimeServices:
-    return direct_chat_runtime_facade_service.build_direct_chat_runtime_services(
-        _direct_chat_runtime_facade_callbacks(),
+    return direct_chat_composition_service.build_direct_chat_runtime_services(
+        callbacks=_direct_chat_runtime_facade_callbacks(),
     )
 
 

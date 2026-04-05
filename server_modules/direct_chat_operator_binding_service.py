@@ -5,8 +5,11 @@ from typing import Any, Dict, Optional
 
 from server_modules import direct_chat_availability_service
 from server_modules import direct_chat_composition_service
+from server_modules import direct_chat_context_service
 from server_modules import direct_chat_entry_policy_service
 from server_modules import direct_chat_handoff_facade_service
+from server_modules import direct_chat_memory_facade_service
+from server_modules import direct_chat_metadata_service
 from server_modules import direct_chat_operator_support_service
 from server_modules import direct_chat_prompt_service
 from server_modules import direct_chat_provider_facade_service
@@ -15,6 +18,7 @@ from server_modules import direct_chat_support_binding_service
 from server_modules import direct_chat_tool_catalog_service
 from server_modules import direct_tool_approval_service
 from server_modules import direct_tool_execution_service
+from server_modules import direct_tool_loop_guard_service
 from server_modules import direct_tool_runtime_facade_service
 
 
@@ -111,6 +115,35 @@ class DirectChatOperatorToolRoutingBindings:
     approval_required_for_direct_tool: Any
     preview_run_response: Any
     prefer_durable_run_handoff: Any
+
+
+@dataclass(slots=True)
+class DirectChatOperatorStateBindings:
+    agent_machine_owner_user_id: Any
+    agent_machine_full_trust_for_session: Any
+    availability_lines: Any
+    connected_system_labels: Any
+    context_tool_capabilities: Any
+    normalize_prior_messages: Any
+    direct_tool_session_key: Any
+    direct_chat_session_key: Any
+    parse_slash_command: Any
+    session_model_preference: Any
+    set_session_model_preference: Any
+    mark_thread_cleared: Any
+    consume_thread_cleared: Any
+    active_run_count: Any
+    slash_command_help_text: Any
+    tool_call_signature: Any
+    record_direct_tool_signature: Any
+    clear_direct_tool_loop_state: Any
+    direct_chat_memory_context_message: Any
+    direct_chat_workspace_context_text: Any
+    build_direct_chat_daily_log_summary: Any
+    persist_direct_chat_memory_best_effort: Any
+    persist_direct_chat_transcript_best_effort: Any
+    build_context_used: Any
+    with_context_used: Any
 
 
 def _lookup(namespace: Dict[str, Any], name: str) -> Any:
@@ -1210,4 +1243,154 @@ def build_direct_chat_tool_routing_bindings(
         approval_required_for_direct_tool=approval_required_for_direct_tool,
         preview_run_response=preview_run_response,
         prefer_durable_run_handoff=prefer_durable_run_handoff,
+    )
+
+
+def build_direct_chat_state_bindings(
+    *,
+    agent_machine_full_trust_enabled_fn: Any,
+    normalize_tool_capabilities_fn: Any,
+    max_context_tool_actions: int,
+    max_context_tool_capabilities: int,
+    max_direct_chat_prior_message_chars: int,
+    max_direct_chat_prior_messages: int,
+    direct_chat_model_preferences: dict[str, Any],
+    direct_chat_clear_markers: set[str],
+    direct_tool_loop_state: dict[str, Any],
+    direct_chat_loop_repeat_limit: int,
+    parse_json_object_loose_fn: Any,
+    generate_reply_fn: Any,
+    extraction_prompt: str,
+    extraction_system_prompt: str,
+    save_session_transcript_fn: Any,
+    system_prefix: str,
+) -> DirectChatOperatorStateBindings:
+    def agent_machine_full_trust_for_session(session_ctx):
+        return agent_machine_full_trust_enabled_fn(
+            direct_chat_context_service.agent_machine_owner_user_id(session_ctx),
+        )
+
+    def availability_lines(workspace_id, availability):
+        return direct_chat_entry_policy_service.availability_lines(
+            workspace_id,
+            availability,
+            normalize_tool_capabilities=normalize_tool_capabilities_fn,
+        )
+
+    def connected_system_labels(availability):
+        return direct_chat_entry_policy_service.connected_system_labels(
+            availability,
+            normalize_tool_capabilities=normalize_tool_capabilities_fn,
+        )
+
+    def context_tool_capabilities(availability):
+        return direct_chat_entry_policy_service.context_tool_capabilities(
+            availability,
+            normalize_tool_capabilities=normalize_tool_capabilities_fn,
+            max_context_tool_actions=max_context_tool_actions,
+            max_context_tool_capabilities=max_context_tool_capabilities,
+        )
+
+    def normalize_prior_messages(prior_messages):
+        return direct_chat_entry_policy_service.normalize_prior_messages(
+            prior_messages,
+            max_direct_chat_prior_message_chars=max_direct_chat_prior_message_chars,
+            max_direct_chat_prior_messages=max_direct_chat_prior_messages,
+        )
+
+    def session_model_preference(session_key):
+        return direct_chat_entry_policy_service.session_model_preference(
+            session_key,
+            store=direct_chat_model_preferences,
+        )
+
+    def set_session_model_preference(session_key, provider=None, model=None):
+        return direct_chat_entry_policy_service.set_session_model_preference(
+            session_key,
+            provider=provider,
+            model=model,
+            store=direct_chat_model_preferences,
+        )
+
+    def mark_thread_cleared(session_key):
+        return direct_chat_entry_policy_service.mark_thread_cleared(
+            session_key,
+            clear_markers=direct_chat_clear_markers,
+        )
+
+    def consume_thread_cleared(session_key):
+        return direct_chat_entry_policy_service.consume_thread_cleared(
+            session_key,
+            clear_markers=direct_chat_clear_markers,
+        )
+
+    def tool_call_signature(tool_call):
+        return direct_tool_loop_guard_service.tool_call_signature(
+            tool_call,
+            tool_arguments_payload_fn=lambda arguments: tool_arguments_payload(arguments, parse_json_object_loose_fn=parse_json_object_loose_fn),
+            parse_tool_name_fn=parse_tool_name,
+            parse_json_object_loose_fn=parse_json_object_loose_fn,
+        )
+
+    def record_direct_tool_signature(session_key, tool_call):
+        return direct_tool_loop_guard_service.record_direct_tool_signature(
+            session_key,
+            tool_call,
+            loop_state=direct_tool_loop_state,
+            repeat_limit=direct_chat_loop_repeat_limit,
+            tool_call_signature_fn=tool_call_signature,
+        )
+
+    def clear_direct_tool_loop_state(session_key):
+        return direct_tool_loop_guard_service.clear_direct_tool_loop_state(
+            session_key,
+            loop_state=direct_tool_loop_state,
+        )
+
+    def direct_chat_memory_context_message(message):
+        return direct_chat_memory_facade_service.direct_chat_memory_context_message(
+            message,
+            system_prefix=system_prefix,
+        )
+
+    def persist_direct_chat_memory_best_effort(**kwargs):
+        return direct_chat_support_binding_service.persist_direct_chat_memory_best_effort(
+            generate_reply=generate_reply_fn,
+            extraction_prompt=extraction_prompt,
+            extraction_system_prompt=extraction_system_prompt,
+            **kwargs,
+        )
+
+    def persist_direct_chat_transcript_best_effort(**kwargs):
+        return direct_chat_support_binding_service.persist_direct_chat_transcript_best_effort(
+            save_session_transcript_fn=save_session_transcript_fn,
+            **kwargs,
+        )
+
+    return DirectChatOperatorStateBindings(
+        agent_machine_owner_user_id=direct_chat_context_service.agent_machine_owner_user_id,
+        agent_machine_full_trust_for_session=agent_machine_full_trust_for_session,
+        availability_lines=availability_lines,
+        connected_system_labels=connected_system_labels,
+        context_tool_capabilities=context_tool_capabilities,
+        normalize_prior_messages=normalize_prior_messages,
+        direct_tool_session_key=direct_chat_entry_policy_service.direct_tool_session_key,
+        direct_chat_session_key=direct_chat_entry_policy_service.direct_chat_session_key,
+        parse_slash_command=direct_chat_entry_policy_service.parse_slash_command,
+        session_model_preference=session_model_preference,
+        set_session_model_preference=set_session_model_preference,
+        mark_thread_cleared=mark_thread_cleared,
+        consume_thread_cleared=consume_thread_cleared,
+        active_run_count=direct_chat_operator_support_service.active_run_count,
+        slash_command_help_text=direct_chat_entry_policy_service.slash_command_help_text,
+        tool_call_signature=tool_call_signature,
+        record_direct_tool_signature=record_direct_tool_signature,
+        clear_direct_tool_loop_state=clear_direct_tool_loop_state,
+        direct_chat_memory_context_message=direct_chat_memory_context_message,
+        direct_chat_workspace_context_text=direct_chat_memory_facade_service.direct_chat_workspace_context_text,
+        build_direct_chat_daily_log_summary=direct_chat_memory_facade_service.build_direct_chat_daily_log_summary,
+        persist_direct_chat_memory_best_effort=persist_direct_chat_memory_best_effort,
+        persist_direct_chat_transcript_best_effort=persist_direct_chat_transcript_best_effort,
+        build_context_used=direct_chat_support_binding_service.build_context_used,
+        with_context_used=direct_chat_metadata_service.with_context_used,
     )

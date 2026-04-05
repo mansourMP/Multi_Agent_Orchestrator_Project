@@ -23,7 +23,6 @@ from scripts.orion_local_worker_llm import (
 from scripts.orion_local_worker_utils import build_operator_system_prompt
 from server_modules import direct_chat_availability_service
 from server_modules import direct_chat_handoff_facade_service
-from server_modules import direct_chat_memory_facade_service
 from server_modules import direct_chat_entry_policy_service
 from server_modules import direct_chat_operator_binding_service
 from server_modules import direct_chat_operator_support_service
@@ -31,14 +30,11 @@ from server_modules import direct_chat_support_binding_service
 from server_modules import direct_chat_provider_facade_service
 from server_modules import direct_chat_runtime_entry_facade_service
 from server_modules import direct_chat_routing_service
-from server_modules import direct_chat_context_service
-from server_modules import direct_chat_metadata_service
 from server_modules import direct_chat_runtime_facade_service
 from server_modules import direct_chat_tool_catalog_service
 from server_modules import direct_tool_approval_service
 from server_modules import direct_tool_config_service
 from server_modules import direct_tool_execution_service
-from server_modules import direct_tool_loop_guard_service
 from server_modules import memory_service
 from server_modules import no_provider_service
 from server_modules import runtime_config as runtime_config
@@ -306,100 +302,49 @@ _tool_runtime_usable = direct_chat_operator_support_service.tool_runtime_usable
 _local_worker_available = direct_chat_operator_support_service.local_worker_available
 
 
-_agent_machine_owner_user_id = direct_chat_context_service.agent_machine_owner_user_id
-_agent_machine_full_trust_for_session = lambda session_ctx: runtime_config.agent_machine_full_trust_enabled(
-    _agent_machine_owner_user_id(session_ctx),
-)
-_availability_lines = partial(
-    direct_chat_entry_policy_service.availability_lines,
-    normalize_tool_capabilities=_normalize_tool_capabilities,
-)
-_connected_system_labels = partial(
-    direct_chat_entry_policy_service.connected_system_labels,
-    normalize_tool_capabilities=_normalize_tool_capabilities,
-)
-_context_tool_capabilities = partial(
-    direct_chat_entry_policy_service.context_tool_capabilities,
-    normalize_tool_capabilities=_normalize_tool_capabilities,
+_direct_chat_state_bindings = direct_chat_operator_binding_service.build_direct_chat_state_bindings(
+    agent_machine_full_trust_enabled_fn=runtime_config.agent_machine_full_trust_enabled,
+    normalize_tool_capabilities_fn=_normalize_tool_capabilities,
     max_context_tool_actions=MAX_CONTEXT_TOOL_ACTIONS,
     max_context_tool_capabilities=MAX_CONTEXT_TOOL_CAPABILITIES,
-)
-_normalize_prior_messages = partial(
-    direct_chat_entry_policy_service.normalize_prior_messages,
     max_direct_chat_prior_message_chars=MAX_DIRECT_CHAT_PRIOR_MESSAGE_CHARS,
     max_direct_chat_prior_messages=MAX_DIRECT_CHAT_PRIOR_MESSAGES,
-)
-_direct_tool_session_key = direct_chat_entry_policy_service.direct_tool_session_key
-_direct_chat_session_key = direct_chat_entry_policy_service.direct_chat_session_key
-_parse_slash_command = direct_chat_entry_policy_service.parse_slash_command
-_session_model_preference = partial(
-    direct_chat_entry_policy_service.session_model_preference,
-    store=_DIRECT_CHAT_MODEL_PREFERENCES,
-)
-_set_session_model_preference = partial(
-    direct_chat_entry_policy_service.set_session_model_preference,
-    store=_DIRECT_CHAT_MODEL_PREFERENCES,
-)
-_mark_thread_cleared = partial(
-    direct_chat_entry_policy_service.mark_thread_cleared,
-    clear_markers=_DIRECT_CHAT_CLEAR_MARKERS,
-)
-_consume_thread_cleared = partial(
-    direct_chat_entry_policy_service.consume_thread_cleared,
-    clear_markers=_DIRECT_CHAT_CLEAR_MARKERS,
-)
-
-
-_active_run_count = direct_chat_operator_support_service.active_run_count
-
-
-_slash_command_help_text = direct_chat_entry_policy_service.slash_command_help_text
-
-
-_tool_call_signature = partial(
-    direct_tool_loop_guard_service.tool_call_signature,
-    tool_arguments_payload_fn=lambda arguments: _tool_arguments_payload(arguments),
-    parse_tool_name_fn=lambda tool_name: _parse_tool_name(tool_name),
+    direct_chat_model_preferences=_DIRECT_CHAT_MODEL_PREFERENCES,
+    direct_chat_clear_markers=_DIRECT_CHAT_CLEAR_MARKERS,
+    direct_tool_loop_state=_DIRECT_TOOL_LOOP_STATE,
+    direct_chat_loop_repeat_limit=DIRECT_CHAT_LOOP_REPEAT_LIMIT,
     parse_json_object_loose_fn=parse_json_object_loose,
-)
-
-_record_direct_tool_signature = partial(
-    direct_tool_loop_guard_service.record_direct_tool_signature,
-    loop_state=_DIRECT_TOOL_LOOP_STATE,
-    repeat_limit=DIRECT_CHAT_LOOP_REPEAT_LIMIT,
-    tool_call_signature_fn=lambda tool_call: _tool_call_signature(tool_call),
-)
-
-_clear_direct_tool_loop_state = partial(
-    direct_tool_loop_guard_service.clear_direct_tool_loop_state,
-    loop_state=_DIRECT_TOOL_LOOP_STATE,
-)
-
-_direct_chat_memory_context_message = partial(
-    direct_chat_memory_facade_service.direct_chat_memory_context_message,
-    system_prefix=_DIRECT_CHAT_MEMORY_SYSTEM_PREFIX,
-)
-
-_direct_chat_workspace_context_text = direct_chat_memory_facade_service.direct_chat_workspace_context_text
-_build_direct_chat_daily_log_summary = direct_chat_memory_facade_service.build_direct_chat_daily_log_summary
-
-
-_persist_direct_chat_memory_best_effort = partial(
-    direct_chat_support_binding_service.persist_direct_chat_memory_best_effort,
-    generate_reply=generate_chat_reply_with_provider_fallback,
+    generate_reply_fn=generate_chat_reply_with_provider_fallback,
     extraction_prompt=_DIRECT_CHAT_MEMORY_EXTRACTION_PROMPT,
     extraction_system_prompt=_DIRECT_CHAT_MEMORY_EXTRACTION_SYSTEM_PROMPT,
-)
-
-_persist_direct_chat_transcript_best_effort = partial(
-    direct_chat_support_binding_service.persist_direct_chat_transcript_best_effort,
     save_session_transcript_fn=save_session_transcript,
+    system_prefix=_DIRECT_CHAT_MEMORY_SYSTEM_PREFIX,
 )
-
-_build_context_used = direct_chat_support_binding_service.build_context_used
-
-
-_with_context_used = direct_chat_metadata_service.with_context_used
+_agent_machine_owner_user_id = _direct_chat_state_bindings.agent_machine_owner_user_id
+_agent_machine_full_trust_for_session = _direct_chat_state_bindings.agent_machine_full_trust_for_session
+_availability_lines = _direct_chat_state_bindings.availability_lines
+_connected_system_labels = _direct_chat_state_bindings.connected_system_labels
+_context_tool_capabilities = _direct_chat_state_bindings.context_tool_capabilities
+_normalize_prior_messages = _direct_chat_state_bindings.normalize_prior_messages
+_direct_tool_session_key = _direct_chat_state_bindings.direct_tool_session_key
+_direct_chat_session_key = _direct_chat_state_bindings.direct_chat_session_key
+_parse_slash_command = _direct_chat_state_bindings.parse_slash_command
+_session_model_preference = _direct_chat_state_bindings.session_model_preference
+_set_session_model_preference = _direct_chat_state_bindings.set_session_model_preference
+_mark_thread_cleared = _direct_chat_state_bindings.mark_thread_cleared
+_consume_thread_cleared = _direct_chat_state_bindings.consume_thread_cleared
+_active_run_count = _direct_chat_state_bindings.active_run_count
+_slash_command_help_text = _direct_chat_state_bindings.slash_command_help_text
+_tool_call_signature = _direct_chat_state_bindings.tool_call_signature
+_record_direct_tool_signature = _direct_chat_state_bindings.record_direct_tool_signature
+_clear_direct_tool_loop_state = _direct_chat_state_bindings.clear_direct_tool_loop_state
+_direct_chat_memory_context_message = _direct_chat_state_bindings.direct_chat_memory_context_message
+_direct_chat_workspace_context_text = _direct_chat_state_bindings.direct_chat_workspace_context_text
+_build_direct_chat_daily_log_summary = _direct_chat_state_bindings.build_direct_chat_daily_log_summary
+_persist_direct_chat_memory_best_effort = _direct_chat_state_bindings.persist_direct_chat_memory_best_effort
+_persist_direct_chat_transcript_best_effort = _direct_chat_state_bindings.persist_direct_chat_transcript_best_effort
+_build_context_used = _direct_chat_state_bindings.build_context_used
+_with_context_used = _direct_chat_state_bindings.with_context_used
 
 
 _connect_action = direct_chat_availability_service.connect_action

@@ -418,6 +418,55 @@ class DirectChatOperatorBindingServiceTests(unittest.TestCase):
             )
         )
 
+    def test_build_direct_chat_state_bindings_preserves_session_and_loop_helpers(self) -> None:
+        model_preferences = {}
+        clear_markers = set()
+        loop_state = {}
+
+        bindings = service.build_direct_chat_state_bindings(
+            agent_machine_full_trust_enabled_fn=lambda owner_user_id: owner_user_id == "owner-1",
+            normalize_tool_capabilities_fn=lambda availability: availability.get("tools") or [],
+            max_context_tool_actions=2,
+            max_context_tool_capabilities=2,
+            max_direct_chat_prior_message_chars=100,
+            max_direct_chat_prior_messages=5,
+            direct_chat_model_preferences=model_preferences,
+            direct_chat_clear_markers=clear_markers,
+            direct_tool_loop_state=loop_state,
+            direct_chat_loop_repeat_limit=2,
+            parse_json_object_loose_fn=lambda value: {},
+            generate_reply_fn=lambda **kwargs: ("", {}, "", ""),
+            extraction_prompt="prompt",
+            extraction_system_prompt="system",
+            save_session_transcript_fn=lambda *args, **kwargs: None,
+            system_prefix="Memory",
+        )
+
+        session_key = bindings.direct_chat_session_key("default", "thread-1")
+        bindings.set_session_model_preference(session_key, provider="openai", model="gpt-5.4")
+        loop_repeat = bindings.record_direct_tool_signature(
+            "tool:default:thread-1",
+            {"name": "memory_search", "arguments": {}},
+        )
+        context_used = bindings.build_context_used(
+            workspace_id="default",
+            requested_provider="openai",
+            effective_provider="openai",
+            requested_model="gpt-5.4",
+            effective_model="gpt-5.4",
+            reasoning_effort=None,
+            connected_systems=[],
+            tool_capabilities=[],
+            prior_messages_used=False,
+            history_mode="none",
+            run_created=False,
+        )
+
+        self.assertFalse(loop_repeat)
+        self.assertEqual(bindings.session_model_preference(session_key)["provider"], "openai")
+        self.assertTrue(bindings.agent_machine_full_trust_for_session({"meta": {"owner_user_id": "owner-1"}}))
+        self.assertEqual(context_used["workspace"], "default")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -26,6 +26,7 @@ from scripts.orion_local_worker_utils import build_operator_system_prompt
 from server_modules import direct_chat_availability_service
 from server_modules import direct_chat_composition_service
 from server_modules import direct_chat_handoff_facade_service
+from server_modules import direct_chat_memory_facade_service
 from server_modules import direct_chat_prompt_service
 from server_modules import direct_chat_handoff_service
 from server_modules import direct_chat_generation_service
@@ -625,18 +626,21 @@ def _clear_direct_tool_loop_state(session_key: str) -> None:
 
 
 def _direct_chat_memory_context_message(workspace_id: str) -> Optional[Dict[str, str]]:
-    return memory_service.direct_chat_memory_context_message(
+    return direct_chat_memory_facade_service.direct_chat_memory_context_message(
         workspace_id,
         system_prefix=_DIRECT_CHAT_MEMORY_SYSTEM_PREFIX,
     )
 
 
 def _direct_chat_workspace_context_text(workspace_id: str, *, memory_query: str = "") -> str:
-    return memory_service.direct_chat_workspace_context_text(workspace_id, memory_query=memory_query)
+    return direct_chat_memory_facade_service.direct_chat_workspace_context_text(
+        workspace_id,
+        memory_query=memory_query,
+    )
 
 
 def _build_direct_chat_daily_log_summary(*, user_message: str, assistant_reply: str) -> str:
-    return memory_service.build_direct_chat_daily_log_summary(
+    return direct_chat_memory_facade_service.build_direct_chat_daily_log_summary(
         user_message=user_message,
         assistant_reply=assistant_reply,
     )
@@ -653,7 +657,7 @@ def _persist_direct_chat_memory_best_effort(
     user_message: str,
     assistant_reply: str,
 ) -> None:
-    memory_service.persist_direct_chat_memory_best_effort(
+    direct_chat_memory_facade_service.persist_direct_chat_memory_best_effort(
         workspace_id=workspace_id,
         provider=provider,
         model=model,
@@ -678,18 +682,16 @@ def _persist_direct_chat_transcript_best_effort(
     user_message: str,
     assistant_reply: str,
 ) -> None:
-    try:
-        save_session_transcript(
-            workspace_id=workspace_id,
-            thread_id=thread_id,
-            provider=provider,
-            model=model,
-            messages=messages,
-            user_message=user_message,
-            assistant_reply=assistant_reply,
-        )
-    except Exception:
-        return
+    direct_chat_memory_facade_service.persist_direct_chat_transcript_best_effort(
+        workspace_id=workspace_id,
+        thread_id=thread_id,
+        provider=provider,
+        model=model,
+        messages=messages,
+        user_message=user_message,
+        assistant_reply=assistant_reply,
+        save_session_transcript_fn=save_session_transcript,
+    )
 
 
 def _build_context_used(

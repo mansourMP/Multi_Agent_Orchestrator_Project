@@ -15,6 +15,7 @@ from server_modules.runtime_models import (
 from server_modules import health_core as core
 from server_modules import health_diagnostics as diagnostics
 from server_modules import skills_registry
+from server_modules import db as runtime_db
 
 router = APIRouter()
 
@@ -94,11 +95,19 @@ async def memory_upsert(body: MemoryUpsertRequest, current_user=Depends(require_
     return await core.memory_upsert(body)
 
 
+async def db_health():
+    return {
+        "postgres": await runtime_db.postgres_health_status(),
+        "sqlite": runtime_db.sqlite_health_status(),
+    }
+
+
 router.add_api_route("/contract", core.runtime_contract, methods=['GET'], dependencies=[Depends(get_current_user)])
 router.add_api_route("/memory/health", core.memory_health, methods=['GET'], dependencies=[Depends(require_api_key)])
 router.add_api_route("/memory/search", memory_search, methods=['POST'])
 router.add_api_route("/memory/upsert", memory_upsert, methods=['POST'])
 router.add_api_route("/health", core.health, methods=['GET'])
+router.add_api_route("/health/db", db_health, methods=['GET'])
 router.add_api_route("/mobile/handoff", core.mobile_handoff, methods=['GET'], dependencies=[Depends(get_current_user)])
 router.add_api_route("/validation/latest", core.validation_latest, methods=['GET'], dependencies=[Depends(require_api_key)])
 router.add_api_route("/validation/history", core.validation_history, methods=['GET'], dependencies=[Depends(require_api_key)])

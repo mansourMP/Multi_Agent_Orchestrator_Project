@@ -94,7 +94,9 @@ from server_modules.run_service import (
     find_run_relationships,
     emit_auto_delegation_routing_log,
     iter_known_run_snapshots,
+    is_local_runtime_run,
     llm_auto_delegate_role,
+    load_live_runtime_state,
     resolve_fastest_routing_context,
     refresh_parent_delegation_state,
     schedule_auto_retry_for_failed_children,
@@ -126,6 +128,15 @@ class RunServiceTests(unittest.TestCase):
         self.assertEqual(record["memory_trace"]["enabled"], True)
         self.assertEqual(record["active_profile_id"], "profile-1")
         self.assertEqual(record["active_provider"], "openai")
+
+    def test_is_local_runtime_run_detects_local_status_or_selected_target(self):
+        self.assertTrue(is_local_runtime_run({"status": "queued_local"}))
+        self.assertTrue(
+            is_local_runtime_run(
+                {"status": "starting", "context": {"metadata": {"execution_target_selected": "local_companion"}}}
+            )
+        )
+        self.assertFalse(is_local_runtime_run({"status": "running", "context": {"metadata": {}}}))
 
     def test_register_live_run_indexes_and_persists(self):
         runs = {}
@@ -208,6 +219,56 @@ class RunServiceTests(unittest.TestCase):
         self.assertEqual(synced, [True])
         self.assertNotIn(id(run["logs"]), queue_index)
         self.assertIn(("runs_completed", 1), metrics_inc)
+
+    def test_load_live_runtime_state_requeues_local_runs_and_fails_interrupted_cloud_runs(self):
+        local_log_queue = queue.Queue()
+        cloud_log_queue = queue.Queue()
+        runs_by_id = {
+            "local-run": {
+                "status": "running_local",
+                "logs": local_log_queue,
+                "context": {"metadata": {"execution_target_selected": "local_companion"}},
+            },
+            "cloud-run": {
+                "status": "running",
+                "logs": cloud_log_queue,
+                "context": {"metadata": {}},
+            },
+            "done-run": {
+                "status": "completed",
+                "logs": queue.Queue(),
+                "context": {"metadata": {}},
+            },
+        }
+        run_queue_index = {}
+        local_pending = []
+        removed = []
+        persisted = []
+        status_changes = []
+        sync_calls = []
+
+        load_live_runtime_state(
+            startup_sync_fn=lambda: None,
+            runs_by_id=runs_by_id,
+            run_queue_index=run_queue_index,
+            local_claimed_runs={},
+            local_pending_run_ids=local_pending,
+            local_queue_lock=__import__("threading").Lock(),
+            persisted_terminal_statuses={"completed", "failed", "timeout"},
+            remove_live_run_state_fn=lambda run_id: removed.append(run_id),
+            persist_live_run_state_fn=lambda run_id, run: persisted.append((run_id, run["status"])),
+            now_iso_fn=lambda: "2026-04-06T00:00:00Z",
+            emit_log_fn=lambda *args, **kwargs: None,
+            set_run_status_fn=lambda run_id, status: status_changes.append((run_id, status)),
+            sync_local_runtime_state_snapshot_fn=lambda: sync_calls.append(True),
+        )
+
+        self.assertEqual(runs_by_id["local-run"]["status"], "queued_local")
+        self.assertIn("local-run", local_pending)
+        self.assertIn(("local-run", "queued_local"), persisted)
+        self.assertEqual(status_changes, [("cloud-run", "failed")])
+        self.assertEqual(removed, ["done-run"])
+        self.assertEqual(sync_calls, [True])
 
     def test_safe_int_and_normalize_requested_max_iterations(self):
         self.assertEqual(safe_int("7", 0), 7)

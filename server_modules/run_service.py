@@ -701,6 +701,95 @@ def build_execute_unowned_system_run_start_request_via_turn_runtime(
     return _execute
 
 
+def is_local_runtime_run(run: Dict[str, Any]) -> bool:
+    status = str(run.get("status") or "").strip().lower()
+    if status.endswith("_local"):
+        return True
+    context = run.get("context") if isinstance(run.get("context"), dict) else {}
+    metadata = context.get("metadata") if isinstance(context.get("metadata"), dict) else {}
+    selected = str(
+        metadata.get("execution_target_selected")
+        or metadata.get("execution_target_requested")
+        or ""
+    ).strip().lower()
+    return selected in {"local", "local_companion"}
+
+
+def load_live_runtime_state(
+    *,
+    startup_sync_fn: Callable[[], Any],
+    runs_by_id: Dict[str, Any],
+    run_queue_index: Dict[int, str],
+    local_claimed_runs: Dict[str, Any],
+    local_pending_run_ids: List[str],
+    local_queue_lock: Any,
+    persisted_terminal_statuses: Set[str],
+    remove_live_run_state_fn: Callable[[str], Any],
+    persist_live_run_state_fn: Callable[[str, Dict[str, Any]], Any],
+    now_iso_fn: Callable[[], str],
+    emit_log_fn: Callable[..., Any],
+    set_run_status_fn: Callable[[str, str], Any],
+    sync_local_runtime_state_snapshot_fn: Callable[[], Any],
+) -> None:
+    startup_sync_fn()
+
+    run_queue_index.clear()
+    for run_id, run in list(runs_by_id.items()):
+        log_queue = run.get("logs") if isinstance(run, dict) else None
+        if log_queue is not None:
+            run_queue_index[id(log_queue)] = run_id
+
+    recovered_queue = False
+    for run_id, run in list(runs_by_id.items()):
+        status = str(run.get("status") or "").strip().lower()
+        if status in persisted_terminal_statuses:
+            remove_live_run_state_fn(run_id)
+            log_queue = run.get("logs")
+            if log_queue is not None:
+                run_queue_index.pop(id(log_queue), None)
+            runs_by_id.pop(run_id, None)
+            continue
+        if is_local_runtime_run(run):
+            if status == "running_local" and run_id not in local_claimed_runs:
+                run["status"] = "queued_local"
+                run["local_worker_id"] = None
+                run["local_claimed_at"] = None
+                run["local_last_heartbeat_at"] = None
+                run["updated_at"] = now_iso_fn()
+                with local_queue_lock:
+                    if run_id not in local_pending_run_ids:
+                        local_pending_run_ids.append(run_id)
+                persist_live_run_state_fn(run_id, run)
+                recovered_queue = True
+                continue
+            if status in {"starting", "queued_local"}:
+                run["status"] = "queued_local"
+                run["updated_at"] = now_iso_fn()
+                with local_queue_lock:
+                    if run_id not in local_pending_run_ids and run_id not in local_claimed_runs:
+                        local_pending_run_ids.append(run_id)
+                persist_live_run_state_fn(run_id, run)
+                recovered_queue = True
+                continue
+            persist_live_run_state_fn(run_id, run)
+            continue
+        if status in {"starting", "running"}:
+            emit_log_fn(
+                run["logs"],
+                "error",
+                "Run interrupted when the runtime restarted.",
+                event="runtime_restart_interrupted_run",
+                data={"run_id": run_id},
+            )
+            run["result"] = "Run interrupted when the runtime restarted."
+            set_run_status_fn(run_id, "failed")
+            run["logs"].put(None)
+            continue
+        persist_live_run_state_fn(run_id, run)
+    if recovered_queue:
+        sync_local_runtime_state_snapshot_fn()
+
+
 async def execute_durable_agent_turn_dispatch(
     *,
     turn_request: AgentTurnRequest,

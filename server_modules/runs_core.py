@@ -75,81 +75,32 @@ def _sync_local_runtime_state_snapshot() -> None:
 
 
 def _is_local_runtime_run(run: Dict[str, Any]) -> bool:
-    status = str(run.get("status") or "").strip().lower()
-    if status.endswith("_local"):
-        return True
-    context = run.get("context") if isinstance(run.get("context"), dict) else {}
-    metadata = context.get("metadata") if isinstance(context.get("metadata"), dict) else {}
-    selected = str(
-        metadata.get("execution_target_selected")
-        or metadata.get("execution_target_requested")
-        or ""
-    ).strip().lower()
-    return selected in {"local", "local_companion"}
+    return run_service.is_local_runtime_run(run)
 
 
 def _load_live_runtime_state() -> None:
-    try:
-        shared.sync_acp_manager_paths(runtime_db_path=ORION_RUNTIME_STATE_DB)
-        ACP_MANAGER.reload_runtime_state()
-    except Exception:
-        pass
+    def _startup_sync() -> None:
+        try:
+            shared.sync_acp_manager_paths(runtime_db_path=ORION_RUNTIME_STATE_DB)
+            ACP_MANAGER.reload_runtime_state()
+        except Exception:
+            pass
 
-    RUN_QUEUE_INDEX.clear()
-    for run_id, run in list(runs.items()):
-        log_queue = run.get("logs") if isinstance(run, dict) else None
-        if log_queue is not None:
-            RUN_QUEUE_INDEX[id(log_queue)] = run_id
-
-    recovered_queue = False
-    for run_id, run in list(runs.items()):
-        status = str(run.get("status") or "").strip().lower()
-        if status in _PERSISTED_TERMINAL_RUN_STATUSES:
-            _remove_live_run_state(run_id)
-            log_queue = run.get("logs")
-            if log_queue is not None:
-                RUN_QUEUE_INDEX.pop(id(log_queue), None)
-            runs.pop(run_id, None)
-            continue
-        if _is_local_runtime_run(run):
-            if status == "running_local" and run_id not in LOCAL_CLAIMED_RUNS:
-                run["status"] = "queued_local"
-                run["local_worker_id"] = None
-                run["local_claimed_at"] = None
-                run["local_last_heartbeat_at"] = None
-                run["updated_at"] = _utc_now_iso()
-                with LOCAL_QUEUE_LOCK:
-                    if run_id not in LOCAL_PENDING_RUN_IDS:
-                        LOCAL_PENDING_RUN_IDS.append(run_id)
-                _persist_live_run_state(run_id, run)
-                recovered_queue = True
-                continue
-            if status in {"starting", "queued_local"}:
-                run["status"] = "queued_local"
-                run["updated_at"] = _utc_now_iso()
-                with LOCAL_QUEUE_LOCK:
-                    if run_id not in LOCAL_PENDING_RUN_IDS and run_id not in LOCAL_CLAIMED_RUNS:
-                        LOCAL_PENDING_RUN_IDS.append(run_id)
-                _persist_live_run_state(run_id, run)
-                recovered_queue = True
-                continue
-            _persist_live_run_state(run_id, run)
-            continue
-        if status in {"starting", "running"}:
-            emit_log(
-                run["logs"],
-                "error",
-                "Run interrupted when the runtime restarted.",
-                event="runtime_restart_interrupted_run",
-                data={"run_id": run_id},
-            )
-            run["result"] = "Run interrupted when the runtime restarted."
-            set_run_status(run_id, "failed")
-            run["logs"].put(None)
-            continue
-        _persist_live_run_state(run_id, run)
-    if recovered_queue:
-        _sync_local_runtime_state_snapshot()
+    return run_service.load_live_runtime_state(
+        startup_sync_fn=_startup_sync,
+        runs_by_id=runs,
+        run_queue_index=RUN_QUEUE_INDEX,
+        local_claimed_runs=LOCAL_CLAIMED_RUNS,
+        local_pending_run_ids=LOCAL_PENDING_RUN_IDS,
+        local_queue_lock=LOCAL_QUEUE_LOCK,
+        persisted_terminal_statuses=_PERSISTED_TERMINAL_RUN_STATUSES,
+        remove_live_run_state_fn=_remove_live_run_state,
+        persist_live_run_state_fn=_persist_live_run_state,
+        now_iso_fn=_utc_now_iso,
+        emit_log_fn=emit_log,
+        set_run_status_fn=set_run_status,
+        sync_local_runtime_state_snapshot_fn=_sync_local_runtime_state_snapshot,
+    )
 
 def _begin_run_pending_confirmation(
     run_id: str,

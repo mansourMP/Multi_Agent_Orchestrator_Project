@@ -176,6 +176,7 @@ class MachineLeaseServiceTests(unittest.TestCase):
             persist_local_runtime_state_fn=lambda: persisted.append(True),
             emit_log_fn=lambda log_queue, level, message, **kwargs: logs.append((level, message, kwargs)),
             set_run_status_fn=lambda run_id, status: statuses.append((run_id, status)),
+            schedule_restored_run_resume_fn=lambda run_id, run: False,
             local_worker_lost_timeout_seconds=30,
             default_lease_seconds=30,
         )
@@ -189,6 +190,62 @@ class MachineLeaseServiceTests(unittest.TestCase):
         self.assertEqual(statuses, [("run-1", "failed")])
         self.assertEqual(persisted, [True])
         self.assertEqual(logs[0][2]["event"], "local_worker_lost")
+
+    def test_cleanup_stale_machine_leases_recovers_checkpoint_run_and_schedules_resume(self) -> None:
+        claimed = {
+            "run-1": {
+                "worker_id": "worker-1",
+                "machine_id": "machine-1",
+                "lease_id": "lease-1",
+                "claimed_at": "2026-04-06T00:00:00Z",
+                "last_heartbeat_at": "2026-04-06T00:00:00Z",
+                "lease_seconds": 30,
+            }
+        }
+        worker_registry = {
+            "worker-1": {
+                "worker_id": "worker-1",
+                "runtime_id": "worker-1",
+                "machine_id": "machine-1",
+                "lease_seconds": 30,
+            }
+        }
+        logs = []
+        statuses = []
+        persisted = []
+        scheduled = []
+        run = {
+            "status": "running_local",
+            "logs": queue.Queue(),
+            "browser_checkpoint": {"next_action_index": 4, "session_profile": "qa-browser"},
+            "context": {"metadata": {"execution_target_selected": "local_companion"}},
+        }
+
+        stale = machine_lease_service.cleanup_stale_machine_leases(
+            now=datetime.fromisoformat("2026-04-06T00:01:00"),
+            local_queue_lock=threading.Lock(),
+            claimed_runs=claimed,
+            worker_registry=worker_registry,
+            runs_by_id={"run-1": run},
+            parse_utc_ts_fn=lambda value: datetime.fromisoformat(str(value).replace("Z", "")) if value else None,
+            utc_now_iso_fn=lambda: "2026-04-06T00:01:00Z",
+            persist_local_runtime_state_fn=lambda: persisted.append(True),
+            emit_log_fn=lambda log_queue, level, message, **kwargs: logs.append((level, message, kwargs)),
+            set_run_status_fn=lambda run_id, status: statuses.append((run_id, status)) or run.__setitem__("status", status),
+            schedule_restored_run_resume_fn=lambda run_id, live_run: scheduled.append((run_id, live_run.get("status"))) or True,
+            local_worker_lost_timeout_seconds=30,
+            default_lease_seconds=30,
+        )
+
+        self.assertEqual(stale, ["run-1"])
+        self.assertEqual(claimed, {})
+        self.assertEqual(worker_registry["worker-1"]["status"], "offline")
+        self.assertEqual(statuses, [("run-1", "waiting_for_input")])
+        self.assertEqual(scheduled, [("run-1", "waiting_for_input")])
+        self.assertTrue(run["context"]["metadata"]["browser_resume_supported"])
+        self.assertEqual(run["result_data"]["error"], "local_worker_lost_recoverable")
+        self.assertEqual(logs[0][2]["event"], "local_worker_lost_recoverable")
+        self.assertEqual(logs[1][2]["event"], "local_resume_scheduled_after_worker_loss")
 
 
 if __name__ == "__main__":

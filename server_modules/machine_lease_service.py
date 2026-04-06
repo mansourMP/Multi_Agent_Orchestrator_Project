@@ -474,6 +474,7 @@ def cleanup_stale_machine_leases(
     persist_local_runtime_state_fn: Callable[[], Any],
     emit_log_fn: Callable[..., Any],
     set_run_status_fn: Callable[[str, str], Any],
+    schedule_restored_run_resume_fn: Optional[Callable[[str, Dict[str, Any]], bool]],
     local_worker_lost_timeout_seconds: int,
     default_lease_seconds: int,
 ) -> List[str]:
@@ -539,7 +540,73 @@ def cleanup_stale_machine_leases(
         status = str(run.get("status") or "").strip().lower()
         if status in {"completed", "failed", "timeout"}:
             continue
+        checkpoint = run.get("browser_checkpoint") if isinstance(run.get("browser_checkpoint"), dict) else {}
+        context = run.get("context") if isinstance(run.get("context"), dict) else {}
+        metadata = context.get("metadata") if isinstance(context.get("metadata"), dict) else {}
+        selected_target = str(
+            metadata.get("execution_target_selected")
+            or metadata.get("execution_target")
+            or ""
+        ).strip().lower()
         clear_active_machine_lease_binding(run)
+        if checkpoint and selected_target in {"local", "local_companion"}:
+            run["result"] = "Worker lost connection. Recovering from saved browser checkpoint."
+            run["result_data"] = {
+                "summary": "Worker lost connection. Recovering from saved browser checkpoint.",
+                "error": "local_worker_lost_recoverable",
+                "resume_available": True,
+                "worker_id": item.get("worker_id"),
+                "machine_id": item.get("machine_id"),
+                "last_heartbeat_at": item.get("last_heartbeat_at"),
+                "next_action_index": checkpoint.get("next_action_index"),
+                "session_profile": checkpoint.get("session_profile"),
+            }
+            metadata["browser_resume_supported"] = True
+            metadata["resume_ready"] = True
+            metadata["local_worker_recovery_reason"] = "worker_lost"
+            context["metadata"] = metadata
+            run["context"] = context
+            log_queue = run.get("logs")
+            if log_queue is not None:
+                emit_log_fn(
+                    log_queue,
+                    "warn",
+                    "Worker lost connection. Recovering from saved browser checkpoint.",
+                    event="local_worker_lost_recoverable",
+                    data={
+                        "run_id": run_id,
+                        "worker_id": item.get("worker_id"),
+                        "machine_id": item.get("machine_id"),
+                        "lease_seconds": item.get("lease_seconds"),
+                        "last_heartbeat_at": item.get("last_heartbeat_at"),
+                        "next_action_index": checkpoint.get("next_action_index"),
+                        "session_profile": checkpoint.get("session_profile"),
+                    },
+                )
+            set_run_status_fn(run_id, "waiting_for_input")
+            resumed = False
+            if callable(schedule_restored_run_resume_fn):
+                try:
+                    resumed = bool(schedule_restored_run_resume_fn(run_id, run))
+                except Exception:
+                    resumed = False
+            if resumed:
+                if log_queue is not None:
+                    emit_log_fn(
+                        log_queue,
+                        "info",
+                        "Automatic local checkpoint recovery was scheduled after worker loss.",
+                        event="local_resume_scheduled_after_worker_loss",
+                        data={
+                            "run_id": run_id,
+                            "worker_id": item.get("worker_id"),
+                            "machine_id": item.get("machine_id"),
+                            "next_action_index": checkpoint.get("next_action_index"),
+                            "session_profile": checkpoint.get("session_profile"),
+                        },
+                    )
+                continue
+            run.pop("_resume_after_confirmation_scheduled", None)
         run["result"] = "Worker lost connection."
         run["result_data"] = {
             "summary": "Worker lost connection.",

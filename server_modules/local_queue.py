@@ -413,6 +413,14 @@ def _is_worker_online(record: Dict[str, Any], now: Optional[datetime] = None) ->
 
 def _cleanup_stale_local_claims() -> List[str]:
     _init()
+    def _schedule_restored_run_resume(run_id: str, run: Dict[str, Any]) -> bool:
+        try:
+            from server_modules import runtime_runs_api
+
+            return bool(runtime_runs_api._schedule_restored_run_resume(run_id, run))
+        except Exception:
+            return False
+
     return machine_lease_service.cleanup_stale_machine_leases(
         now=_server._utc_now(),
         local_queue_lock=_server.LOCAL_QUEUE_LOCK,
@@ -424,6 +432,7 @@ def _cleanup_stale_local_claims() -> List[str]:
         persist_local_runtime_state_fn=_persist_local_runtime_state,
         emit_log_fn=_server.emit_log,
         set_run_status_fn=_server.set_run_status,
+        schedule_restored_run_resume_fn=_schedule_restored_run_resume,
         local_worker_lost_timeout_seconds=LOCAL_RUN_WORKER_LOST_TIMEOUT_SECONDS,
         default_lease_seconds=_server.ORION_LOCAL_LEASE_SECONDS,
     )

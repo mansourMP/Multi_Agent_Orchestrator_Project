@@ -886,6 +886,8 @@ def dispatch_inbound_event(
             metadata=context["metadata"],
         )
         request = build_run_start_request_from_turn(turn_request, base_request=base_request)
+        if owner_user_id:
+            request.metadata["owner_user_id"] = owner_user_id
         created = start_run_request(request)
         if isinstance(created, dict):
             run_id = str(created.get("run_id") or "").strip()

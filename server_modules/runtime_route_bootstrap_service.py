@@ -32,7 +32,7 @@ def import_runtime_run_route_dependencies(
             module_globals[key] = value
 
     connectors = import_module(
-        "server_modules.autopilot_connectors",
+        "server_modules.connectors.autopilot_runtime_exports",
         fromlist=["handle_telegram_send_message"],
     )
     memory_service = import_module(

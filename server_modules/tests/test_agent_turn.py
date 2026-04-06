@@ -9,6 +9,8 @@ from server_modules.agent_turn import (
     build_discord_turn_request,
     build_inbound_agent_turn_request,
     build_local_worker_turn_request,
+    build_telegram_turn_request,
+    build_whatsapp_turn_request,
     resolve_agent_turn_session_identity,
     build_run_start_turn_request,
     ensure_direct_chat_turn_request,
@@ -92,6 +94,48 @@ class AgentTurnTests(unittest.TestCase):
         self.assertEqual(metadata["agent_turn_contract_version"], 1)
         self.assertEqual(metadata["agent_turn_request"]["workspace_id"], "workspace-1")
         self.assertEqual(metadata["agent_turn_request"]["actor"]["id"], "user-1")
+
+    def test_build_telegram_turn_request_shapes_channel_identity(self):
+        request = build_telegram_turn_request(
+            workspace_id="workspace-1",
+            connector_entry={"metadata": {"tenant_id": "tenant-1", "trust_mode": "guarded"}},
+            goal="Check status",
+            chat_id="chat-1",
+            sender_id="sender-1",
+            update_id=42,
+            message_id="msg-1",
+            trace_id="tg:trace-1",
+            source_event_id="event-1",
+            metadata={"execution_target": "local_companion"},
+        )
+
+        self.assertEqual(request.channel, "telegram")
+        self.assertEqual(request.session_id, "chat-1")
+        self.assertEqual(request.actor.id, "sender-1")
+        self.assertEqual(request.tenant_id, "tenant-1")
+        self.assertEqual(request.context_hints["telegram"]["message_id"], "msg-1")
+        self.assertEqual(request.policy_context["execution_target"], "local_companion")
+
+    def test_build_whatsapp_turn_request_shapes_channel_identity(self):
+        request = build_whatsapp_turn_request(
+            workspace_id="workspace-1",
+            connector_entry={"metadata": {"tenant_id": "tenant-1", "trust_mode": "guarded"}},
+            goal="Handle inbound",
+            from_number="whatsapp:+1",
+            to_number="whatsapp:+2",
+            message_sid="SM123",
+            account_sid="AC123",
+            session_id="whatsapp:+1->+2",
+            trace_id="wa:trace-1",
+            metadata={"execution_target": "cloud"},
+        )
+
+        self.assertEqual(request.channel, "whatsapp")
+        self.assertEqual(request.session_id, "whatsapp:+1->+2")
+        self.assertEqual(request.actor.id, "whatsapp:+1")
+        self.assertEqual(request.tenant_id, "tenant-1")
+        self.assertEqual(request.context_hints["whatsapp"]["message_sid"], "SM123")
+        self.assertEqual(request.policy_context["execution_target"], "cloud")
 
     def test_resolve_agent_turn_request_round_trips_serialized_payload(self):
         request = build_direct_chat_turn_request(

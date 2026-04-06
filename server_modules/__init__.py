@@ -52,7 +52,7 @@ from .local_queue import (
     handle_fail_local_run,
 )
 
-from .autopilot_connectors import (
+from .connectors.autopilot_runtime_exports import (
     _run_telegram_autopilot_forever,
     handle_whatsapp_twilio_webhook,
     handle_telegram_autopilot_status,

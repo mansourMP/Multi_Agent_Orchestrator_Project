@@ -4,7 +4,8 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from server_modules import autopilot_connectors, operator_chat, runtime_config, runtime_runs_api, runs_core, runs_engine
+from server_modules.connectors import autopilot_runtime_exports as autopilot_connectors
+from server_modules import operator_chat, runtime_config, runtime_runs_api, runs_core, runs_engine
 from server_modules.connectors import discord_connector
 from server_modules.runtime_models import RunStartRequest
 
@@ -319,11 +320,11 @@ class AgentMachineModeTests(unittest.TestCase):
         with patch.object(runtime_config, "AGENT_MACHINE_MODE", "agent"):
             with patch.object(runtime_config, "AGENT_MACHINE_OWNER", "user-123"):
                 autopilot_connectors._init()
-                with patch("server_modules.autopilot_connectors.decide_execution_target", return_value={"selected": "cloud"}, create=True):
-                    with patch("server_modules.autopilot_connectors.apply_execution_route_metadata", side_effect=lambda metadata, route: metadata, create=True):
-                        with patch("server_modules.autopilot_connectors.execute_system_run_start_request_via_turn_runtime", side_effect=_fake_execute_system_run_start_request, create=True):
-                            with patch("server_modules.autopilot_connectors._stamp_request_owner", side_effect=lambda req, current_user: req, create=True):
-                                with patch("server_modules.autopilot_connectors._run_execution_services", side_effect=lambda: object(), create=True):
+                with patch("server_modules.connectors.autopilot_runtime_exports.decide_execution_target", return_value={"selected": "cloud"}, create=True):
+                    with patch("server_modules.connectors.autopilot_runtime_exports.apply_execution_route_metadata", side_effect=lambda metadata, route: metadata, create=True):
+                        with patch("server_modules.connectors.autopilot_runtime_exports.execute_system_run_start_request_via_turn_runtime", side_effect=_fake_execute_system_run_start_request, create=True):
+                            with patch("server_modules.connectors.autopilot_runtime_exports._stamp_request_owner", side_effect=lambda req, current_user: req, create=True):
+                                with patch("server_modules.connectors.autopilot_runtime_exports._run_execution_services", side_effect=lambda: object(), create=True):
                                     autopilot_connectors._autopilot_run_entry_service().create_telegram_run(
                                         goal="Investigate this issue",
                                         workspace_id="default",
@@ -349,11 +350,11 @@ class AgentMachineModeTests(unittest.TestCase):
         with patch.object(runtime_config, "AGENT_MACHINE_MODE", "agent"):
             with patch.object(runtime_config, "AGENT_MACHINE_OWNER", "user-123"):
                 autopilot_connectors._init()
-                with patch("server_modules.autopilot_connectors.decide_execution_target", return_value={"selected": "cloud"}, create=True):
-                    with patch("server_modules.autopilot_connectors.apply_execution_route_metadata", side_effect=lambda metadata, route: metadata, create=True):
-                        with patch("server_modules.autopilot_connectors.execute_system_run_start_request_via_turn_runtime", side_effect=_fake_execute_system_run_start_request, create=True):
-                            with patch("server_modules.autopilot_connectors._stamp_request_owner", side_effect=lambda req, current_user: req, create=True):
-                                with patch("server_modules.autopilot_connectors._run_execution_services", side_effect=lambda: object(), create=True):
+                with patch("server_modules.connectors.autopilot_runtime_exports.decide_execution_target", return_value={"selected": "cloud"}, create=True):
+                    with patch("server_modules.connectors.autopilot_runtime_exports.apply_execution_route_metadata", side_effect=lambda metadata, route: metadata, create=True):
+                        with patch("server_modules.connectors.autopilot_runtime_exports.execute_system_run_start_request_via_turn_runtime", side_effect=_fake_execute_system_run_start_request, create=True):
+                            with patch("server_modules.connectors.autopilot_runtime_exports._stamp_request_owner", side_effect=lambda req, current_user: req, create=True):
+                                with patch("server_modules.connectors.autopilot_runtime_exports._run_execution_services", side_effect=lambda: object(), create=True):
                                     autopilot_connectors._autopilot_run_entry_service().create_whatsapp_run(
                                         goal="Handle this request",
                                         workspace_id="default",

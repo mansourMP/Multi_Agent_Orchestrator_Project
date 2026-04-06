@@ -381,6 +381,103 @@ def build_discord_turn_request(
     )
 
 
+def build_telegram_turn_request(
+    *,
+    workspace_id: str,
+    connector_entry: Optional[Dict[str, Any]],
+    goal: str,
+    chat_id: str,
+    sender_id: str,
+    update_id: int,
+    message_id: Optional[str] = None,
+    trace_id: str = "",
+    source_event_id: str = "",
+    metadata: Optional[Dict[str, Any]] = None,
+) -> AgentTurnRequest:
+    connector_metadata = connector_entry.get("metadata") if isinstance((connector_entry or {}).get("metadata"), dict) else {}
+    merged_metadata = dict(connector_metadata)
+    if isinstance(metadata, dict):
+        merged_metadata.update(metadata)
+    resolved_workspace_id = str(workspace_id or connector_entry.get("workspace_id") or merged_metadata.get("workspace_id") or "default").strip() or "default"
+    return build_inbound_agent_turn_request(
+        tenant_id=str(merged_metadata.get("tenant_id") or "default").strip() or "default",
+        workspace_id=resolved_workspace_id,
+        session_id=str(chat_id or "telegram").strip() or "telegram",
+        channel="telegram",
+        actor_type="user",
+        actor_id=str(sender_id or chat_id or "telegram-user").strip() or "telegram-user",
+        actor_display_name=str(sender_id or chat_id or "telegram-user").strip() or "telegram-user",
+        message=str(goal or ""),
+        context_hints={
+            "trace_id": str(trace_id or "").strip() or None,
+            "source": "telegram_connector",
+            "telegram": {
+                "chat_id": str(chat_id or "").strip() or None,
+                "sender_id": str(sender_id or "").strip() or None,
+                "update_id": int(update_id or 0),
+                "message_id": str(message_id or "").strip() or None,
+                "source_event_id": str(source_event_id or "").strip() or None,
+            },
+            "metadata": merged_metadata,
+        },
+        execution_mode="durable",
+        response_mode="artifact",
+        machine_target=str(merged_metadata.get("machine_target") or "").strip() or None,
+        policy_context={
+            "execution_target": str(merged_metadata.get("execution_target") or "").strip() or None,
+            "trust_mode": str(merged_metadata.get("trust_mode") or "").strip() or None,
+        },
+    )
+
+
+def build_whatsapp_turn_request(
+    *,
+    workspace_id: str,
+    connector_entry: Optional[Dict[str, Any]],
+    goal: str,
+    from_number: str,
+    to_number: str,
+    message_sid: str,
+    account_sid: str,
+    session_id: str,
+    trace_id: str = "",
+    metadata: Optional[Dict[str, Any]] = None,
+) -> AgentTurnRequest:
+    connector_metadata = connector_entry.get("metadata") if isinstance((connector_entry or {}).get("metadata"), dict) else {}
+    merged_metadata = dict(connector_metadata)
+    if isinstance(metadata, dict):
+        merged_metadata.update(metadata)
+    resolved_workspace_id = str(workspace_id or connector_entry.get("workspace_id") or merged_metadata.get("workspace_id") or "default").strip() or "default"
+    return build_inbound_agent_turn_request(
+        tenant_id=str(merged_metadata.get("tenant_id") or "default").strip() or "default",
+        workspace_id=resolved_workspace_id,
+        session_id=str(session_id or "whatsapp").strip() or "whatsapp",
+        channel="whatsapp",
+        actor_type="user",
+        actor_id=str(from_number or "whatsapp-user").strip() or "whatsapp-user",
+        actor_display_name=str(from_number or "whatsapp-user").strip() or "whatsapp-user",
+        message=str(goal or ""),
+        context_hints={
+            "trace_id": str(trace_id or "").strip() or None,
+            "source": "whatsapp_connector",
+            "whatsapp": {
+                "from": str(from_number or "").strip() or None,
+                "to": str(to_number or "").strip() or None,
+                "message_sid": str(message_sid or "").strip() or None,
+                "account_sid": str(account_sid or "").strip() or None,
+            },
+            "metadata": merged_metadata,
+        },
+        execution_mode="durable",
+        response_mode="artifact",
+        machine_target=str(merged_metadata.get("machine_target") or "").strip() or None,
+        policy_context={
+            "execution_target": str(merged_metadata.get("execution_target") or "").strip() or None,
+            "trust_mode": str(merged_metadata.get("trust_mode") or "").strip() or None,
+        },
+    )
+
+
 def resolve_direct_chat_turn_request(
     *,
     current_user: Any,

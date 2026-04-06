@@ -16,7 +16,7 @@ class _DummyScheduler:
 class RuntimeRouteBootstrapServiceTests(unittest.TestCase):
     def test_import_runtime_run_route_dependencies_loads_expected_members(self):
         modules = {
-            "server_modules.autopilot_connectors": type(
+            "server_modules.connectors.autopilot_runtime_exports": type(
                 "Connectors",
                 (),
                 {"handle_telegram_send_message": staticmethod(lambda *args, **kwargs: None)},

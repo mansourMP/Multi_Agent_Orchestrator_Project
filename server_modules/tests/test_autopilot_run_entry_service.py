@@ -56,6 +56,8 @@ class AutopilotRunEntryServiceTests(unittest.TestCase):
         self.assertEqual(metadata["owner_user_id"], "user-123")
         self.assertEqual(metadata["telegram"]["profile_context"]["project"], "alpha")
         self.assertEqual(metadata["route_selected"], "cloud")
+        self.assertEqual(metadata["agent_turn_request"]["channel"], "telegram")
+        self.assertEqual(metadata["agent_turn_request"]["message"], "Investigate")
         self.assertEqual(len(self.telegram_started), 1)
         self.assertEqual(self.events[0]["event_type"], "run_started")
 
@@ -77,6 +79,8 @@ class AutopilotRunEntryServiceTests(unittest.TestCase):
         metadata = self.created[0]["context"]["metadata"]
         self.assertEqual(metadata["owner_user_id"], "user-123")
         self.assertEqual(metadata["route_selected"], "cloud")
+        self.assertEqual(metadata["agent_turn_request"]["channel"], "whatsapp")
+        self.assertEqual(metadata["agent_turn_request"]["message"], "Handle this")
         self.assertEqual(len(self.whatsapp_started), 1)
 
     def test_create_telegram_run_can_start_via_canonical_run_request(self) -> None:
@@ -112,6 +116,7 @@ class AutopilotRunEntryServiceTests(unittest.TestCase):
         self.assertEqual(started_requests[0].metadata["channel"], "telegram")
         self.assertEqual(started_requests[0].metadata["execution_target"], "local_companion")
         self.assertEqual(started_requests[0].metadata["owner_user_id"], "user-123")
+        self.assertEqual(started_requests[0].metadata["agent_turn_request"]["channel"], "telegram")
         self.assertEqual(len(self.created), 0)
 
     def test_can_auto_approve_wait_requires_matching_owner_and_approval(self) -> None:

@@ -1,6 +1,6 @@
 import unittest
 
-from server_modules import autopilot_connectors as ac
+from server_modules.connectors import autopilot_runtime_exports as ac
 from server_modules.connectors import autopilot_connector_config as config
 
 

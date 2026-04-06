@@ -92,7 +92,7 @@ from server_modules.local_queue import (
     handle_complete_local_run,
     handle_fail_local_run,
 )
-from server_modules.autopilot_connectors import (
+from server_modules.connectors.autopilot_runtime_exports import (
     _load_telegram_autopilot_state,
     _load_whatsapp_autopilot_state,
     _run_telegram_autopilot_forever,

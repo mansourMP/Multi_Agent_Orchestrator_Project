@@ -2,6 +2,14 @@ from __future__ import annotations
 
 from typing import Any, Callable, Dict, List, Optional
 
+from server_modules.agent_turn import (
+    AgentTurnRequest,
+    bind_agent_turn_metadata,
+    build_telegram_turn_request,
+    build_whatsapp_turn_request,
+)
+from server_modules.run_service import build_run_start_request_from_turn
+
 
 class AutopilotRunEntryService:
     def __init__(
@@ -192,11 +200,24 @@ class AutopilotRunEntryService:
             metadata["agent_role_source"] = "connector_assignment"
         metadata["trust_mode"] = self.normalize_trust_mode(trust_mode_value)
         metadata["execution_target"] = self.normalize_execution_target(execution_target_value)
+        turn_request = build_telegram_turn_request(
+            workspace_id=workspace_id,
+            connector_entry=connector_entry,
+            goal=goal,
+            chat_id=chat_id,
+            sender_id=sender_id,
+            update_id=update_id,
+            message_id=message_id,
+            trace_id=resolved_trace_id,
+            source_event_id=str(source_event_id or "").strip(),
+            metadata=metadata,
+        )
         created = self._create_run_record(
             engine=self.telegram_engine,
             workspace_id=workspace_id,
             goal=goal,
             metadata=metadata,
+            turn_request=turn_request,
         )
         run_id = str(created.get("run_id") or "").strip()
         if not run_id:
@@ -268,11 +289,24 @@ class AutopilotRunEntryService:
             metadata["agent_role_source"] = "connector_assignment"
         metadata["trust_mode"] = self.normalize_trust_mode(trust_mode_value)
         metadata["execution_target"] = self.normalize_execution_target(execution_target_value)
+        turn_request = build_whatsapp_turn_request(
+            workspace_id=workspace_id,
+            connector_entry=connector_entry,
+            goal=goal,
+            from_number=from_number,
+            to_number=to_number,
+            message_sid=message_sid,
+            account_sid=account_sid,
+            session_id=self.whatsapp_session_key(from_number, to_number),
+            trace_id=trace_id,
+            metadata=metadata,
+        )
         created = self._create_run_record(
             engine=self.whatsapp_engine,
             workspace_id=workspace_id,
             goal=goal,
             metadata=metadata,
+            turn_request=turn_request,
         )
         run_id = str(created.get("run_id") or "").strip()
         if not run_id:
@@ -320,14 +354,16 @@ class AutopilotRunEntryService:
         workspace_id: str,
         goal: str,
         metadata: Dict[str, Any],
+        turn_request: AgentTurnRequest,
     ) -> Dict[str, Any]:
         if callable(self.start_run_request) and callable(self.run_start_request_class):
-            request = self.run_start_request_class(
+            base_request = self.run_start_request_class(
                 engine=engine,
                 workspace_id=workspace_id,
                 user_goal=goal,
                 metadata=metadata,
             )
+            request = build_run_start_request_from_turn(turn_request, base_request=base_request)
             result = self.start_run_request(request)
             if isinstance(result, dict) and str(result.get("run_id") or "").strip():
                 return dict(result)
@@ -335,18 +371,19 @@ class AutopilotRunEntryService:
                 return {"result": result}
 
         route = self._apply_route_metadata(metadata)
+        bound_metadata = bind_agent_turn_metadata(metadata, turn_request, source="runs/start")
         run_id = self.create_run(
             engine=engine,
             context={
                 "workflow_id": None,
                 "workspace_id": workspace_id,
-                "user_goal": goal,
+                "user_goal": str(turn_request.message or goal).strip(),
                 "business_plan": None,
                 "provider": None,
                 "model": None,
                 "credential_id": None,
                 "agents": [],
-                "metadata": metadata,
+                "metadata": bound_metadata,
             },
         )
         return {"run_id": run_id, "route": route}

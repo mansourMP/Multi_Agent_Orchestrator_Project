@@ -346,7 +346,9 @@ class MachineLeaseServiceTests(unittest.TestCase):
 
         self.assertEqual(statuses, [("run-1", "waiting_for_input")])
         self.assertEqual(run["result_data"]["error"], "local_worker_recovery_exhausted")
+        self.assertTrue(run["result_data"]["manual_confirmation_required"])
         self.assertTrue(run["context"]["metadata"]["local_worker_recovery_auto_retry_exhausted"])
+        self.assertTrue(run["context"]["metadata"]["local_worker_recovery_manual_confirmation_required"])
         self.assertEqual(logs[0][2]["event"], "local_worker_recovery_exhausted")
 
 

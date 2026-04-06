@@ -14,6 +14,8 @@ class RuntimeRouteBindingServiceTests(unittest.TestCase):
             "_build_auto_delegation_plan": object(),
             "_emit_auto_delegation_routing_log": object(),
             "_find_run_relationships": object(),
+            "_clear_pending_confirmation": object(),
+            "_begin_run_pending_confirmation": object(),
         }
 
         bindings = runtime_route_binding_service.build_runtime_route_bindings(
@@ -73,6 +75,10 @@ class RuntimeRouteBindingServiceTests(unittest.TestCase):
         self.assertIs(
             bindings.resume_waiting_run_callbacks["serialize_run_snapshot"],
             markers["_serialize_run_snapshot"],
+        )
+        self.assertIs(
+            bindings.resume_waiting_run_callbacks["begin_run_pending_confirmation"],
+            markers["_begin_run_pending_confirmation"],
         )
 
 

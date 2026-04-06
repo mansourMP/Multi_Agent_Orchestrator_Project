@@ -4,8 +4,8 @@ from dataclasses import dataclass
 from typing import Any, Callable
 
 from server_modules import runtime_history_service
-from server_modules import runtime_run_approval_service
 from server_modules import runtime_run_control_service
+from server_modules import runtime_run_approval_service
 from server_modules import runtime_run_delegation_service
 from server_modules import runtime_run_query_service
 
@@ -129,12 +129,14 @@ def build_runtime_route_bindings(
         enforce_run_owner_access=enforce_run_owner_access,
         get_pending_confirmation=get_pending_confirmation_fn,
         set_pending_confirmation=set_pending_confirmation,
+        clear_pending_confirmation=late_server_export("_clear_pending_confirmation"),
         parse_utc_ts=parse_utc_ts,
         utc_now=utc_now,
         utc_now_iso=utc_now_iso,
         approval_correlation_id=approval_correlation_id,
         append_approval_audit=append_approval_audit,
         resolve_local_execution_start_approval=resolve_local_execution_start_approval,
+        resolve_local_worker_recovery_approval=runtime_run_control_service.resolve_local_worker_recovery_approval,
         run_thread_is_alive=run_thread_is_alive,
         emit_log=emit_log,
         schedule_restored_run_resume=schedule_restored_run_resume,
@@ -143,6 +145,7 @@ def build_runtime_route_bindings(
         serialize_run_snapshot=serialize_run_snapshot,
         enforce_run_owner_access=enforce_run_owner_access,
         get_pending_confirmation=get_pending_confirmation_fn,
+        begin_run_pending_confirmation=late_server_export("_begin_run_pending_confirmation"),
         emit_log=emit_log,
         schedule_restored_run_resume=schedule_restored_run_resume,
     )

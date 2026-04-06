@@ -565,6 +565,7 @@ def cleanup_stale_machine_leases(
                     "summary": "Worker lost connection repeatedly. Automatic checkpoint recovery is paused.",
                     "error": "local_worker_recovery_exhausted",
                     "resume_available": True,
+                    "manual_confirmation_required": True,
                     "worker_id": item.get("worker_id"),
                     "machine_id": item.get("machine_id"),
                     "last_heartbeat_at": item.get("last_heartbeat_at"),
@@ -577,6 +578,7 @@ def cleanup_stale_machine_leases(
                 metadata["resume_ready"] = True
                 metadata["local_worker_recovery_reason"] = "worker_lost"
                 metadata["local_worker_recovery_auto_retry_exhausted"] = True
+                metadata["local_worker_recovery_manual_confirmation_required"] = True
                 metadata["local_worker_recovery_attempt_count"] = previous_attempts
                 metadata["local_worker_recovery_next_retry_at"] = None
                 metadata["local_worker_recovery_backoff_seconds"] = 0
@@ -637,6 +639,7 @@ def cleanup_stale_machine_leases(
             metadata["local_worker_recovery_backoff_seconds"] = backoff_seconds
             metadata["local_worker_recovery_max_auto_retries"] = max_auto_retries
             metadata["local_worker_recovery_auto_retry_exhausted"] = False
+            metadata["local_worker_recovery_manual_confirmation_required"] = False
             metadata["local_worker_recovery_next_retry_at"] = next_retry_at
             context["metadata"] = metadata
             run["context"] = context

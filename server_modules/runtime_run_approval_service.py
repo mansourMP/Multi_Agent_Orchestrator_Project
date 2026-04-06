@@ -30,12 +30,14 @@ def build_resolve_run_approval_callbacks(
     enforce_run_owner_access: Callable[[Any, Any], None],
     get_pending_confirmation: Callable[[dict[str, Any]], Any],
     set_pending_confirmation: Callable[[dict[str, Any], dict[str, Any]], None],
+    clear_pending_confirmation: Callable[[dict[str, Any]], None],
     parse_utc_ts: Callable[[Any], Any],
     utc_now: Callable[[], Any],
     utc_now_iso: Callable[[], str],
     approval_correlation_id: Callable[..., str],
     append_approval_audit: Callable[..., None],
     resolve_local_execution_start_approval: Callable[..., dict[str, Any]],
+    resolve_local_worker_recovery_approval: Callable[..., dict[str, Any]],
     run_thread_is_alive: Callable[[dict[str, Any]], bool],
     emit_log: Callable[..., None],
     schedule_restored_run_resume: Callable[[str, dict[str, Any]], bool],
@@ -51,9 +53,11 @@ def build_resolve_run_approval_callbacks(
     callbacks.update(
         {
             "set_pending_confirmation": set_pending_confirmation,
+            "clear_pending_confirmation": clear_pending_confirmation,
             "parse_utc_ts": parse_utc_ts,
             "utc_now": utc_now,
             "utc_now_iso": utc_now_iso,
+            "resolve_local_worker_recovery_approval": resolve_local_worker_recovery_approval,
             "run_thread_is_alive": run_thread_is_alive,
             "emit_log": emit_log,
             "schedule_restored_run_resume": schedule_restored_run_resume,
@@ -133,12 +137,14 @@ def resolve_run_approval(
     enforce_run_owner_access: Callable[[Any, Any], None],
     get_pending_confirmation: Callable[[dict[str, Any]], Any],
     set_pending_confirmation: Callable[[dict[str, Any], dict[str, Any]], None],
+    clear_pending_confirmation: Callable[[dict[str, Any]], None],
     parse_utc_ts: Callable[[Any], Any],
     utc_now: Callable[[], Any],
     utc_now_iso: Callable[[], str],
     approval_correlation_id: Callable[..., str],
     append_approval_audit: Callable[..., None],
     resolve_local_execution_start_approval: Callable[..., dict[str, Any]],
+    resolve_local_worker_recovery_approval: Callable[..., dict[str, Any]],
     run_thread_is_alive: Callable[[dict[str, Any]], bool],
     emit_log: Callable[..., None],
     schedule_restored_run_resume: Callable[[str, dict[str, Any]], bool],
@@ -163,6 +169,15 @@ def resolve_run_approval(
             approval_id,
             decision_text,
             str(payload.note or ""),
+        )
+    pending_metadata = pending.get("metadata") if isinstance(pending.get("metadata"), dict) else {}
+    if str(pending_metadata.get("kind") or "").strip() == "local_worker_recovery_resume":
+        return resolve_local_worker_recovery_approval(
+            run_id,
+            run,
+            approval_id,
+            decision_text,
+            note=str(payload.note or ""),
         )
     approve_tokens = {"proceed", "approve", "yes", "y", "continue", "ok"}
     reject_tokens = {"hold", "reject", "no", "n", "abort", "stop", "cancel"}

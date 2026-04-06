@@ -2753,18 +2753,15 @@ export function AutopilotWorkspace() {
         removeSimpleChatMessage(sessionId, placeholderId);
         return;
       }
-      patchSimpleChatMessage(sessionId, placeholderId, {
-        content: error instanceof Error ? error.message : 'Failed to get assistant reply.',
-        status: 'error',
-        actions: [],
-        contextUsed: null,
-        steps: streamedSteps,
-        ts: new Date().toISOString(),
-      });
+      const message = error instanceof Error ? error.message : 'Failed to get assistant reply.';
+      removeSimpleChatMessage(sessionId, placeholderId);
+      setTopError(message);
+      appendLog(message, 'error');
     } finally {
       setPendingSimpleChat(null);
     }
   }, [
+    appendLog,
     appendSimpleChatMessage,
     goal,
     patchSimpleChatMessage,
@@ -2774,6 +2771,7 @@ export function AutopilotWorkspace() {
     sendOperatorChat,
     setChatNoProviderStatus,
     setGoal,
+    setTopError,
     simpleChatDepth,
   ]);
 

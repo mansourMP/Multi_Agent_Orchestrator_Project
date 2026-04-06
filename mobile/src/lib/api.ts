@@ -124,7 +124,7 @@ function getEmpyralistApiBaseUrl(session?: MobileSession | null) {
 }
 
 function getEmpyralistChatEndpoint(session?: MobileSession | null) {
-  return `${getEmpyralistApiBaseUrl(session)}/chat/respond`;
+  return `${getEmpyralistApiBaseUrl(session)}/turn`;
 }
 
 function normalizeEmpyralistChatResponse(payload: unknown): EmpyralistDirectChatResponse {

@@ -16,6 +16,13 @@ import orion_local_worker_llm as worker_llm
 
 
 class OrionLocalWorkerLlmTests(unittest.TestCase):
+    def test_resolve_requested_provider_preserves_explicit_anthropic_in_local_cli_mode(self):
+        with patch.dict(os.environ, {"ORION_AUTH_MODE": "local_cli"}, clear=False):
+            with patch.object(worker_llm, "get_claude_code_session_token", return_value="session-token"):
+                provider = worker_llm.resolve_requested_provider({"provider": "anthropic"}, {})
+
+        self.assertEqual(provider, "anthropic")
+
     def test_generate_chat_for_turn_request_binds_agent_turn_metadata(self):
         turn_request = build_inbound_agent_turn_request(
             workspace_id="workspace-1",
@@ -313,6 +320,27 @@ class OrionLocalWorkerLlmTests(unittest.TestCase):
             )
 
         self.assertEqual(order, ["openai"])
+
+    def test_generate_chat_logs_when_requested_provider_is_overridden(self):
+        with patch.object(worker_llm, "provider_order_for_run", return_value=["codex_cli"]):
+            with patch.object(
+                worker_llm,
+                "openai_codex_backend_text",
+                return_value=("Direct answer", None, "gpt-5.4", ""),
+            ):
+                with patch.object(worker_llm.LOGGER, "warning") as logger_warning:
+                    text, usage, attempted, error = worker_llm.generate_chat_reply_with_provider_fallback(
+                        context={"provider": "anthropic"},
+                        metadata={},
+                        user_goal="hello",
+                        system_prompt="You are concise.",
+                    )
+
+        self.assertEqual(text, "Direct answer")
+        self.assertIsNotNone(usage)
+        self.assertEqual(attempted, "codex_cli")
+        self.assertEqual(error, "")
+        logger_warning.assert_called_once()
 
     def test_openai_path_does_not_use_codex_auth_vault_token(self):
         with tempfile.TemporaryDirectory() as tmpdir:

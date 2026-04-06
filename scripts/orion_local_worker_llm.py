@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import json
+import logging
 import os
 from pathlib import Path
 import shutil
@@ -41,6 +42,7 @@ OPENAI_CODEX_DIRECT_AUTH_ERROR = (
 )
 CLAUDE_CODE_CREDENTIALS_PATH = Path.home() / ".claude" / ".credentials.json"
 CLAUDE_CODE_KEYCHAIN_SERVICE = "Claude Code-credentials"
+LOGGER = logging.getLogger(__name__)
 
 
 def ensure_trailing_slashless(url: str) -> str:
@@ -455,7 +457,10 @@ def resolve_requested_provider(context: Dict[str, Any], metadata: Dict[str, Any]
     if raw_provider == "openai-codex":
         return "codex_cli"
     if raw_provider == "anthropic" and auth_mode in LOCAL_CLI_AUTH_MODES:
-        return "claude_code_cli"
+        if provider_has_usable_credentials("anthropic", context, metadata):
+            return "anthropic"
+        if provider_has_usable_credentials("claude_code_cli", context, metadata):
+            return "claude_code_cli"
     return raw_provider
 
 
@@ -1747,6 +1752,11 @@ def provider_order_for_run(context: Dict[str, Any], metadata: Dict[str, Any]) ->
         "off",
     }
     context_provider = resolve_requested_provider(context, metadata)
+    explicit_requested_provider = context_provider if context_provider in SUPPORTED_PROVIDERS else ""
+    explicit_requested_provider_has_credentials = bool(
+        explicit_requested_provider
+        and provider_has_usable_credentials(explicit_requested_provider, context, metadata)
+    )
     run_source = str(metadata.get("source") or context.get("source") or "").strip().lower()
     disable_fallback = str(
         metadata.get("disable_provider_fallback")
@@ -1759,12 +1769,15 @@ def provider_order_for_run(context: Dict[str, Any], metadata: Dict[str, Any]) ->
         base.insert(0, provider_hint)
     if context_provider in SUPPORTED_PROVIDERS and context_provider not in base:
         base.insert(0, context_provider)
+    if explicit_requested_provider_has_credentials:
+        base = [explicit_requested_provider] + [pid for pid in base if pid != explicit_requested_provider]
 
     for pid in SUPPORTED_PROVIDERS:
         if pid not in base:
             base.append(pid)
     if (
         auth_mode == "codex"
+        and not explicit_requested_provider_has_credentials
         and run_source not in {"chat_direct"}
         and use_codex_cli
         and "codex_cli" in base
@@ -1788,6 +1801,26 @@ def provider_order_for_run(context: Dict[str, Any], metadata: Dict[str, Any]) ->
     return [pid for pid in base if provider_has_usable_credentials(pid, context, metadata)]
 
 
+def _log_provider_override(
+    requested_provider: str,
+    effective_provider: str,
+    *,
+    attempted: List[str],
+    reason: str,
+) -> None:
+    requested = str(requested_provider or "").strip().lower()
+    effective = str(effective_provider or "").strip().lower()
+    if not requested or not effective or requested == effective:
+        return
+    LOGGER.warning(
+        "Requested provider overridden: requested=%s effective=%s reason=%s attempted=%s",
+        requested,
+        effective,
+        reason,
+        ",".join(str(item or "").strip().lower() for item in attempted if str(item or "").strip()),
+    )
+
+
 def generate_pack_with_provider_fallback(
     context: Dict[str, Any],
     metadata: Dict[str, Any],
@@ -1796,10 +1829,17 @@ def generate_pack_with_provider_fallback(
 ) -> Tuple[Optional[Dict[str, Any]], Optional[Dict[str, Any]], str, str]:
     attempted: list[str] = []
     last_error = "no provider credentials available"
+    requested_provider = resolve_requested_provider(context, metadata)
     requested_model = resolve_requested_model(context, metadata)
     credential_override = metadata.get("credentials") if isinstance(metadata.get("credentials"), dict) else None
     for provider in provider_order_for_run(context, metadata):
         attempted.append(provider)
+        _log_provider_override(
+            requested_provider,
+            provider,
+            attempted=attempted,
+            reason="provider_order_for_run",
+        )
         provider_model = coerce_requested_model_for_provider(requested_model, provider)
         if provider == "codex_cli":
             result, usage, model, provider_error = codex_exec_json(
@@ -1868,11 +1908,18 @@ def generate_chat_reply_with_provider_fallback(
     attempted: list[str] = []
     last_error = "no provider credentials available"
     prefer_openai_chat = should_use_openai_chat_completions(context, metadata)
+    requested_provider = resolve_requested_provider(context, metadata)
     requested_model = resolve_requested_model(context, metadata)
     requested_reasoning_effort = resolve_requested_reasoning_effort(context, metadata)
     credential_override = metadata.get("credentials") if isinstance(metadata.get("credentials"), dict) else None
     for provider in provider_order_for_run(context, metadata):
         attempted.append(provider)
+        _log_provider_override(
+            requested_provider,
+            provider,
+            attempted=attempted,
+            reason="provider_order_for_run",
+        )
         provider_model = coerce_requested_model_for_provider(requested_model, provider)
         if provider == "codex_cli":
             text, usage, model, provider_error = openai_codex_backend_text(
@@ -2037,6 +2084,7 @@ def generate_chat_reply_stream_with_provider_fallback(
     attempted: list[str] = []
     last_error = "no provider credentials available"
     prefer_openai_chat = should_use_openai_chat_completions(context, metadata)
+    requested_provider = resolve_requested_provider(context, metadata)
     requested_model = resolve_requested_model(context, metadata)
     requested_reasoning_effort = resolve_requested_reasoning_effort(context, metadata)
     credential_override = metadata.get("credentials") if isinstance(metadata.get("credentials"), dict) else None
@@ -2045,6 +2093,12 @@ def generate_chat_reply_stream_with_provider_fallback(
     for provider in provider_order_for_run(context, metadata):
         attempted.append(provider)
         attempted_str = ",".join(attempted)
+        _log_provider_override(
+            requested_provider,
+            provider,
+            attempted=attempted,
+            reason="provider_order_for_run",
+        )
         provider_model = coerce_requested_model_for_provider(requested_model, provider)
 
         if provider == "codex_cli":

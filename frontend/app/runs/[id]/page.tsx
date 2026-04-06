@@ -16,6 +16,7 @@ import {
   type AuthenticatedEventStreamConnection,
 } from '@/lib/authenticatedEventStream';
 import { ensureControlPlaneSession } from '@/lib/controlPlaneSession';
+import { LocalCompanionRunPanel } from '@/components/orion/runs/LocalCompanionRunPanel';
 const TERMINAL_RUN_STATUSES = new Set(['completed', 'failed', 'error', 'stopped', 'timeout', 'cancelled']);
 
 type HistoryItem = {
@@ -1145,6 +1146,14 @@ export default function RunDetailPage() {
                 </div>
               </div>
             ) : null}
+
+            <LocalCompanionRunPanel
+              runId={runId}
+              diagnostics={runDiagnostics}
+              requiredCapabilities={executionTargetRequiredCapabilities}
+              missingCapabilities={executionTargetMissingCapabilities}
+              busyRuntimeLabels={executionTargetBusyRuntimeLabels}
+            />
 
             {pendingConfirmation?.approval_id ? (
               <div className="orion-panel hekor-run-approval">

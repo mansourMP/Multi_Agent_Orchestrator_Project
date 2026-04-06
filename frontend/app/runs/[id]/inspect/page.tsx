@@ -28,6 +28,7 @@ import { fetchRuntimeArtifactBlob } from '@/lib/runtimeArtifacts';
 import { resolveSkillsByIds } from '@/lib/skills';
 import { SINGLE_AGENT_MODE } from '@/lib/appFlags';
 import { getLocalExecutionCapabilityTitle } from '@/lib/localExecutionCapabilities';
+import { LocalCompanionRunPanel } from '@/components/orion/runs/LocalCompanionRunPanel';
 
 type HistoryItem = {
   run_id: string;
@@ -162,6 +163,9 @@ type RunDiagnostics = {
 type RunDetailPayload = {
   run_id?: string;
   status?: string;
+  execution_target_required_capabilities?: string[] | null;
+  execution_target_missing_capabilities?: string[] | null;
+  execution_target_busy_runtime_labels?: string[] | null;
   context?: {
     user_goal?: string;
     workspace_id?: string;
@@ -1497,6 +1501,24 @@ export default function RunInspectPage() {
     }
     return rows;
   }, [runDiagnostics]);
+  const inspectRequiredCapabilities = useMemo(
+    () => Array.isArray(runDetail?.execution_target_required_capabilities)
+      ? runDetail.execution_target_required_capabilities.filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+      : [],
+    [runDetail?.execution_target_required_capabilities],
+  );
+  const inspectMissingCapabilities = useMemo(
+    () => Array.isArray(runDetail?.execution_target_missing_capabilities)
+      ? runDetail.execution_target_missing_capabilities.filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+      : [],
+    [runDetail?.execution_target_missing_capabilities],
+  );
+  const inspectBusyRuntimeLabels = useMemo(
+    () => Array.isArray(runDetail?.execution_target_busy_runtime_labels)
+      ? runDetail.execution_target_busy_runtime_labels.filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+      : [],
+    [runDetail?.execution_target_busy_runtime_labels],
+  );
   const canResumeRun = effectiveRunStatus === 'waiting_for_input' && !pendingConfirmation?.approval_id && Boolean(runDiagnostics?.browser_resume_supported);
   const needsLocalMachineAttention = ['local_runtime_wait', 'local_capacity_wait', 'local_queue', 'local_running'].includes(String(runDiagnostics?.category || ''));
   const runtimePolicyNotes = useMemo(() => {
@@ -1923,6 +1945,14 @@ export default function RunInspectPage() {
                 </div>
               ) : null}
             </article>
+
+            <LocalCompanionRunPanel
+              runId={runId}
+              diagnostics={runDiagnostics}
+              requiredCapabilities={inspectRequiredCapabilities}
+              missingCapabilities={inspectMissingCapabilities}
+              busyRuntimeLabels={inspectBusyRuntimeLabels}
+            />
 
             <article className="orion-panel">
               <div className="orion-panel-title">Deliverables</div>

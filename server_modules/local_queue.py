@@ -19,6 +19,8 @@ _server = None
 LOCAL_RUN_STILL_WORKING_INTERVAL_SECONDS = 15
 LOCAL_RUN_WORKER_LOST_TIMEOUT_SECONDS = 30
 LOCAL_RUNTIME_WATCHDOG_INTERVAL_SECONDS = 5
+LOCAL_CHECKPOINT_RECOVERY_MAX_AUTO_RETRIES = 3
+LOCAL_CHECKPOINT_RECOVERY_BACKOFF_SECONDS = [0, 10, 30]
 _COLD_BOOT_RECOVERY_DONE = False
 _LOCAL_RUNTIME_WATCHDOG_LOCK = threading.Lock()
 _LOCAL_RUNTIME_WATCHDOG_STATE: Dict[str, Any] = {
@@ -29,6 +31,8 @@ _LOCAL_RUNTIME_WATCHDOG_STATE: Dict[str, Any] = {
     "last_summary": "Local runtime watchdog not started yet.",
     "last_cleaned_count": 0,
     "last_cleaned_run_ids": [],
+    "last_resumed_count": 0,
+    "last_resumed_run_ids": [],
 }
 
 
@@ -187,6 +191,7 @@ def _record_local_runtime_watchdog_status(
     status: str,
     summary: str,
     cleaned_run_ids: Optional[List[str]] = None,
+    resumed_run_ids: Optional[List[str]] = None,
     interval_seconds: Optional[int] = None,
 ) -> None:
     with _LOCAL_RUNTIME_WATCHDOG_LOCK:
@@ -199,6 +204,8 @@ def _record_local_runtime_watchdog_status(
                 "last_summary": str(summary or "").strip() or "Local runtime watchdog ran.",
                 "last_cleaned_count": len(cleaned_run_ids or []),
                 "last_cleaned_run_ids": [str(item) for item in (cleaned_run_ids or []) if str(item or "").strip()],
+                "last_resumed_count": len(resumed_run_ids or []),
+                "last_resumed_run_ids": [str(item) for item in (resumed_run_ids or []) if str(item or "").strip()],
             }
         )
 
@@ -213,6 +220,8 @@ def local_runtime_watchdog_status_snapshot() -> Dict[str, Any]:
             "last_summary": _LOCAL_RUNTIME_WATCHDOG_STATE.get("last_summary"),
             "last_cleaned_count": int(_LOCAL_RUNTIME_WATCHDOG_STATE.get("last_cleaned_count") or 0),
             "last_cleaned_run_ids": list(_LOCAL_RUNTIME_WATCHDOG_STATE.get("last_cleaned_run_ids") or []),
+            "last_resumed_count": int(_LOCAL_RUNTIME_WATCHDOG_STATE.get("last_resumed_count") or 0),
+            "last_resumed_run_ids": list(_LOCAL_RUNTIME_WATCHDOG_STATE.get("last_resumed_run_ids") or []),
         }
 
 
@@ -433,9 +442,74 @@ def _cleanup_stale_local_claims() -> List[str]:
         emit_log_fn=_server.emit_log,
         set_run_status_fn=_server.set_run_status,
         schedule_restored_run_resume_fn=_schedule_restored_run_resume,
+        checkpoint_recovery_max_auto_retries=LOCAL_CHECKPOINT_RECOVERY_MAX_AUTO_RETRIES,
+        checkpoint_recovery_backoff_seconds=LOCAL_CHECKPOINT_RECOVERY_BACKOFF_SECONDS,
         local_worker_lost_timeout_seconds=LOCAL_RUN_WORKER_LOST_TIMEOUT_SECONDS,
         default_lease_seconds=_server.ORION_LOCAL_LEASE_SECONDS,
     )
+
+
+def _resume_due_checkpoint_recoveries() -> List[str]:
+    _init()
+    now = _server._utc_now()
+    resumed_run_ids: List[str] = []
+    for run_id, run in list(_server.runs.items()):
+        if not isinstance(run, dict):
+            continue
+        if str(run.get("status") or "").strip().lower() != "waiting_for_input":
+            continue
+        if bool(run.get("_resume_after_confirmation_scheduled")):
+            continue
+        checkpoint = run.get("browser_checkpoint") if isinstance(run.get("browser_checkpoint"), dict) else {}
+        if not checkpoint:
+            continue
+        context = run.get("context") if isinstance(run.get("context"), dict) else {}
+        metadata = context.get("metadata") if isinstance(context.get("metadata"), dict) else {}
+        if str(metadata.get("local_worker_recovery_reason") or "").strip().lower() != "worker_lost":
+            continue
+        if bool(metadata.get("local_worker_recovery_auto_retry_exhausted")):
+            continue
+        selected_target = str(
+            metadata.get("execution_target_selected")
+            or metadata.get("execution_target")
+            or ""
+        ).strip().lower()
+        if selected_target not in {"local", "local_companion"}:
+            continue
+        if isinstance(run.get("pending_confirmation"), dict) and run.get("pending_confirmation"):
+            continue
+        next_retry_at = _server._parse_utc_ts(metadata.get("local_worker_recovery_next_retry_at"))
+        if next_retry_at is not None and now < next_retry_at:
+            continue
+        try:
+            from server_modules import runtime_runs_api
+
+            resumed = bool(runtime_runs_api._schedule_restored_run_resume(run_id, run))
+        except Exception:
+            resumed = False
+        if not resumed:
+            continue
+        metadata["local_worker_recovery_next_retry_at"] = None
+        metadata["local_worker_recovery_backoff_seconds"] = 0
+        metadata["local_worker_recovery_last_resume_scheduled_at"] = _server._utc_now_iso()
+        context["metadata"] = metadata
+        run["context"] = context
+        resumed_run_ids.append(run_id)
+        log_queue = run.get("logs")
+        if log_queue is not None:
+            _server.emit_log(
+                log_queue,
+                "info",
+                "Automatic checkpoint recovery resumed after backoff.",
+                event="local_resume_scheduled_after_backoff",
+                data={
+                    "run_id": run_id,
+                    "attempt_count": int(metadata.get("local_worker_recovery_attempt_count") or 0),
+                    "next_action_index": checkpoint.get("next_action_index"),
+                    "session_profile": checkpoint.get("session_profile"),
+                },
+            )
+    return resumed_run_ids
 
 
 def recover_orphaned_local_runs_on_startup() -> List[str]:

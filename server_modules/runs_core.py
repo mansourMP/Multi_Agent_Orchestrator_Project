@@ -405,6 +405,7 @@ def initialize_runtime_services() -> None:
 
         run_service.run_local_runtime_watchdog_forever(
             cleanup_stale_local_claims_fn=_local_queue._cleanup_stale_local_claims,
+            resume_due_checkpoint_recoveries_fn=_local_queue._resume_due_checkpoint_recoveries,
             update_watchdog_status_fn=_local_queue._record_local_runtime_watchdog_status,
             utc_now_iso_fn=_utc_now_iso,
             interval_seconds=_local_queue.LOCAL_RUNTIME_WATCHDOG_INTERVAL_SECONDS,

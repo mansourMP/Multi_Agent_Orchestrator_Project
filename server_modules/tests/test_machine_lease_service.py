@@ -177,6 +177,8 @@ class MachineLeaseServiceTests(unittest.TestCase):
             emit_log_fn=lambda log_queue, level, message, **kwargs: logs.append((level, message, kwargs)),
             set_run_status_fn=lambda run_id, status: statuses.append((run_id, status)),
             schedule_restored_run_resume_fn=lambda run_id, run: False,
+            checkpoint_recovery_max_auto_retries=3,
+            checkpoint_recovery_backoff_seconds=[0, 10, 30],
             local_worker_lost_timeout_seconds=30,
             default_lease_seconds=30,
         )
@@ -233,6 +235,8 @@ class MachineLeaseServiceTests(unittest.TestCase):
             emit_log_fn=lambda log_queue, level, message, **kwargs: logs.append((level, message, kwargs)),
             set_run_status_fn=lambda run_id, status: statuses.append((run_id, status)) or run.__setitem__("status", status),
             schedule_restored_run_resume_fn=lambda run_id, live_run: scheduled.append((run_id, live_run.get("status"))) or True,
+            checkpoint_recovery_max_auto_retries=3,
+            checkpoint_recovery_backoff_seconds=[0, 10, 30],
             local_worker_lost_timeout_seconds=30,
             default_lease_seconds=30,
         )
@@ -246,6 +250,104 @@ class MachineLeaseServiceTests(unittest.TestCase):
         self.assertEqual(run["result_data"]["error"], "local_worker_lost_recoverable")
         self.assertEqual(logs[0][2]["event"], "local_worker_lost_recoverable")
         self.assertEqual(logs[1][2]["event"], "local_resume_scheduled_after_worker_loss")
+
+    def test_cleanup_stale_machine_leases_applies_backoff_for_repeated_checkpoint_recovery(self) -> None:
+        claimed = {
+            "run-1": {
+                "worker_id": "worker-1",
+                "machine_id": "machine-1",
+                "lease_id": "lease-1",
+                "claimed_at": "2026-04-06T00:00:00Z",
+                "last_heartbeat_at": "2026-04-06T00:00:00Z",
+                "lease_seconds": 30,
+            }
+        }
+        worker_registry = {"worker-1": {"worker_id": "worker-1", "runtime_id": "worker-1", "machine_id": "machine-1", "lease_seconds": 30}}
+        logs = []
+        statuses = []
+        run = {
+            "status": "running_local",
+            "logs": queue.Queue(),
+            "browser_checkpoint": {"next_action_index": 4, "session_profile": "qa-browser"},
+            "context": {
+                "metadata": {
+                    "execution_target_selected": "local_companion",
+                    "local_worker_recovery_attempt_count": 1,
+                }
+            },
+        }
+
+        machine_lease_service.cleanup_stale_machine_leases(
+            now=datetime.fromisoformat("2026-04-06T00:01:00"),
+            local_queue_lock=threading.Lock(),
+            claimed_runs=claimed,
+            worker_registry=worker_registry,
+            runs_by_id={"run-1": run},
+            parse_utc_ts_fn=lambda value: datetime.fromisoformat(str(value).replace("Z", "")) if value else None,
+            utc_now_iso_fn=lambda: "2026-04-06T00:01:00Z",
+            persist_local_runtime_state_fn=lambda: None,
+            emit_log_fn=lambda log_queue, level, message, **kwargs: logs.append((level, message, kwargs)),
+            set_run_status_fn=lambda run_id, status: statuses.append((run_id, status)) or run.__setitem__("status", status),
+            schedule_restored_run_resume_fn=lambda run_id, live_run: self.fail("backoff attempt should not resume immediately"),
+            checkpoint_recovery_max_auto_retries=3,
+            checkpoint_recovery_backoff_seconds=[0, 10, 30],
+            local_worker_lost_timeout_seconds=30,
+            default_lease_seconds=30,
+        )
+
+        self.assertEqual(statuses, [("run-1", "waiting_for_input")])
+        self.assertEqual(run["result_data"]["retry_backoff_seconds"], 10)
+        self.assertEqual(run["context"]["metadata"]["local_worker_recovery_attempt_count"], 2)
+        self.assertEqual(logs[1][2]["event"], "local_worker_recovery_backoff")
+
+    def test_cleanup_stale_machine_leases_stops_auto_retry_after_limit(self) -> None:
+        claimed = {
+            "run-1": {
+                "worker_id": "worker-1",
+                "machine_id": "machine-1",
+                "lease_id": "lease-1",
+                "claimed_at": "2026-04-06T00:00:00Z",
+                "last_heartbeat_at": "2026-04-06T00:00:00Z",
+                "lease_seconds": 30,
+            }
+        }
+        worker_registry = {"worker-1": {"worker_id": "worker-1", "runtime_id": "worker-1", "machine_id": "machine-1", "lease_seconds": 30}}
+        logs = []
+        statuses = []
+        run = {
+            "status": "running_local",
+            "logs": queue.Queue(),
+            "browser_checkpoint": {"next_action_index": 4, "session_profile": "qa-browser"},
+            "context": {
+                "metadata": {
+                    "execution_target_selected": "local_companion",
+                    "local_worker_recovery_attempt_count": 3,
+                }
+            },
+        }
+
+        machine_lease_service.cleanup_stale_machine_leases(
+            now=datetime.fromisoformat("2026-04-06T00:01:00"),
+            local_queue_lock=threading.Lock(),
+            claimed_runs=claimed,
+            worker_registry=worker_registry,
+            runs_by_id={"run-1": run},
+            parse_utc_ts_fn=lambda value: datetime.fromisoformat(str(value).replace("Z", "")) if value else None,
+            utc_now_iso_fn=lambda: "2026-04-06T00:01:00Z",
+            persist_local_runtime_state_fn=lambda: None,
+            emit_log_fn=lambda log_queue, level, message, **kwargs: logs.append((level, message, kwargs)),
+            set_run_status_fn=lambda run_id, status: statuses.append((run_id, status)) or run.__setitem__("status", status),
+            schedule_restored_run_resume_fn=lambda run_id, live_run: self.fail("exhausted recovery should not auto-resume"),
+            checkpoint_recovery_max_auto_retries=3,
+            checkpoint_recovery_backoff_seconds=[0, 10, 30],
+            local_worker_lost_timeout_seconds=30,
+            default_lease_seconds=30,
+        )
+
+        self.assertEqual(statuses, [("run-1", "waiting_for_input")])
+        self.assertEqual(run["result_data"]["error"], "local_worker_recovery_exhausted")
+        self.assertTrue(run["context"]["metadata"]["local_worker_recovery_auto_retry_exhausted"])
+        self.assertEqual(logs[0][2]["event"], "local_worker_recovery_exhausted")
 
 
 if __name__ == "__main__":

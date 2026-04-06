@@ -676,6 +676,7 @@ class RunServiceTests(unittest.TestCase):
 
         result = run_local_runtime_watchdog_pass(
             cleanup_stale_local_claims_fn=lambda: ["run-1", "run-2"],
+            resume_due_checkpoint_recoveries_fn=lambda: ["run-3"],
             update_watchdog_status_fn=lambda **kwargs: updates.append(kwargs),
             utc_now_iso_fn=lambda: "2026-04-06T12:00:00Z",
             interval_seconds=5,
@@ -683,14 +684,17 @@ class RunServiceTests(unittest.TestCase):
 
         self.assertEqual(result["status"], "ok")
         self.assertEqual(result["cleaned_run_ids"], ["run-1", "run-2"])
+        self.assertEqual(result["resumed_run_ids"], ["run-3"])
         self.assertEqual(updates[0]["status"], "ok")
         self.assertEqual(updates[0]["cleaned_run_ids"], ["run-1", "run-2"])
+        self.assertEqual(updates[0]["resumed_run_ids"], ["run-3"])
 
     def test_run_local_runtime_watchdog_pass_records_failures_without_crashing(self):
         updates = []
 
         result = run_local_runtime_watchdog_pass(
             cleanup_stale_local_claims_fn=lambda: (_ for _ in ()).throw(RuntimeError("lease cleanup broke")),
+            resume_due_checkpoint_recoveries_fn=lambda: [],
             update_watchdog_status_fn=lambda **kwargs: updates.append(kwargs),
             utc_now_iso_fn=lambda: "2026-04-06T12:00:00Z",
             interval_seconds=5,

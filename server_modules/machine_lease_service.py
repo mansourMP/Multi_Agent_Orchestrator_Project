@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import uuid
+from datetime import timedelta
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Mapping, Optional
 
@@ -475,6 +476,8 @@ def cleanup_stale_machine_leases(
     emit_log_fn: Callable[..., Any],
     set_run_status_fn: Callable[[str, str], Any],
     schedule_restored_run_resume_fn: Optional[Callable[[str, Dict[str, Any]], bool]],
+    checkpoint_recovery_max_auto_retries: int,
+    checkpoint_recovery_backoff_seconds: List[int],
     local_worker_lost_timeout_seconds: int,
     default_lease_seconds: int,
 ) -> List[str]:
@@ -550,9 +553,71 @@ def cleanup_stale_machine_leases(
         ).strip().lower()
         clear_active_machine_lease_binding(run)
         if checkpoint and selected_target in {"local", "local_companion"}:
-            run["result"] = "Worker lost connection. Recovering from saved browser checkpoint."
+            previous_attempts = int(metadata.get("local_worker_recovery_attempt_count") or 0)
+            attempt_count = previous_attempts + 1
+            max_auto_retries = max(1, int(checkpoint_recovery_max_auto_retries or 1))
+            backoff_schedule = [max(0, int(item or 0)) for item in (checkpoint_recovery_backoff_seconds or [])]
+            if not backoff_schedule:
+                backoff_schedule = [0]
+            if attempt_count > max_auto_retries:
+                run["result"] = "Worker lost connection repeatedly. Automatic checkpoint recovery is paused."
+                run["result_data"] = {
+                    "summary": "Worker lost connection repeatedly. Automatic checkpoint recovery is paused.",
+                    "error": "local_worker_recovery_exhausted",
+                    "resume_available": True,
+                    "worker_id": item.get("worker_id"),
+                    "machine_id": item.get("machine_id"),
+                    "last_heartbeat_at": item.get("last_heartbeat_at"),
+                    "next_action_index": checkpoint.get("next_action_index"),
+                    "session_profile": checkpoint.get("session_profile"),
+                    "attempt_count": previous_attempts,
+                    "max_auto_retries": max_auto_retries,
+                }
+                metadata["browser_resume_supported"] = True
+                metadata["resume_ready"] = True
+                metadata["local_worker_recovery_reason"] = "worker_lost"
+                metadata["local_worker_recovery_auto_retry_exhausted"] = True
+                metadata["local_worker_recovery_attempt_count"] = previous_attempts
+                metadata["local_worker_recovery_next_retry_at"] = None
+                metadata["local_worker_recovery_backoff_seconds"] = 0
+                context["metadata"] = metadata
+                run["context"] = context
+                log_queue = run.get("logs")
+                if log_queue is not None:
+                    emit_log_fn(
+                        log_queue,
+                        "error",
+                        "Worker lost connection repeatedly. Automatic checkpoint recovery is paused.",
+                        event="local_worker_recovery_exhausted",
+                        data={
+                            "run_id": run_id,
+                            "worker_id": item.get("worker_id"),
+                            "machine_id": item.get("machine_id"),
+                            "attempt_count": previous_attempts,
+                            "max_auto_retries": max_auto_retries,
+                            "next_action_index": checkpoint.get("next_action_index"),
+                            "session_profile": checkpoint.get("session_profile"),
+                        },
+                    )
+                set_run_status_fn(run_id, "waiting_for_input")
+                continue
+
+            backoff_index = min(max(0, attempt_count - 1), len(backoff_schedule) - 1)
+            backoff_seconds = backoff_schedule[backoff_index]
+            next_retry_at = None
+            if backoff_seconds > 0:
+                try:
+                    next_retry_at = (now + timedelta(seconds=backoff_seconds)).isoformat().replace("+00:00", "Z")
+                except Exception:
+                    next_retry_at = utc_now_iso_fn()
+
+            run["result"] = (
+                "Worker lost connection. Recovery from saved browser checkpoint is delayed before retry."
+                if backoff_seconds > 0
+                else "Worker lost connection. Recovering from saved browser checkpoint."
+            )
             run["result_data"] = {
-                "summary": "Worker lost connection. Recovering from saved browser checkpoint.",
+                "summary": run["result"],
                 "error": "local_worker_lost_recoverable",
                 "resume_available": True,
                 "worker_id": item.get("worker_id"),
@@ -560,10 +625,19 @@ def cleanup_stale_machine_leases(
                 "last_heartbeat_at": item.get("last_heartbeat_at"),
                 "next_action_index": checkpoint.get("next_action_index"),
                 "session_profile": checkpoint.get("session_profile"),
+                "attempt_count": attempt_count,
+                "max_auto_retries": max_auto_retries,
+                "retry_backoff_seconds": backoff_seconds,
+                "next_retry_at": next_retry_at,
             }
             metadata["browser_resume_supported"] = True
             metadata["resume_ready"] = True
             metadata["local_worker_recovery_reason"] = "worker_lost"
+            metadata["local_worker_recovery_attempt_count"] = attempt_count
+            metadata["local_worker_recovery_backoff_seconds"] = backoff_seconds
+            metadata["local_worker_recovery_max_auto_retries"] = max_auto_retries
+            metadata["local_worker_recovery_auto_retry_exhausted"] = False
+            metadata["local_worker_recovery_next_retry_at"] = next_retry_at
             context["metadata"] = metadata
             run["context"] = context
             log_queue = run.get("logs")
@@ -581,9 +655,27 @@ def cleanup_stale_machine_leases(
                         "last_heartbeat_at": item.get("last_heartbeat_at"),
                         "next_action_index": checkpoint.get("next_action_index"),
                         "session_profile": checkpoint.get("session_profile"),
+                        "attempt_count": attempt_count,
+                        "retry_backoff_seconds": backoff_seconds,
+                        "next_retry_at": next_retry_at,
                     },
                 )
             set_run_status_fn(run_id, "waiting_for_input")
+            if backoff_seconds > 0:
+                if log_queue is not None:
+                    emit_log_fn(
+                        log_queue,
+                        "warn",
+                        f"Automatic checkpoint recovery will retry in {backoff_seconds} second(s).",
+                        event="local_worker_recovery_backoff",
+                        data={
+                            "run_id": run_id,
+                            "attempt_count": attempt_count,
+                            "retry_backoff_seconds": backoff_seconds,
+                            "next_retry_at": next_retry_at,
+                        },
+                    )
+                continue
             resumed = False
             if callable(schedule_restored_run_resume_fn):
                 try:
@@ -591,6 +683,11 @@ def cleanup_stale_machine_leases(
                 except Exception:
                     resumed = False
             if resumed:
+                metadata["local_worker_recovery_next_retry_at"] = None
+                metadata["local_worker_recovery_backoff_seconds"] = 0
+                metadata["local_worker_recovery_last_resume_scheduled_at"] = utc_now_iso_fn()
+                context["metadata"] = metadata
+                run["context"] = context
                 if log_queue is not None:
                     emit_log_fn(
                         log_queue,
@@ -603,6 +700,7 @@ def cleanup_stale_machine_leases(
                             "machine_id": item.get("machine_id"),
                             "next_action_index": checkpoint.get("next_action_index"),
                             "session_profile": checkpoint.get("session_profile"),
+                            "attempt_count": attempt_count,
                         },
                     )
                 continue

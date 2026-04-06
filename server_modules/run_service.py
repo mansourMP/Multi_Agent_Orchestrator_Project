@@ -1541,23 +1541,37 @@ def initialize_runtime_services(
 def run_local_runtime_watchdog_pass(
     *,
     cleanup_stale_local_claims_fn: Callable[[], Any],
+    resume_due_checkpoint_recoveries_fn: Optional[Callable[[], Any]],
     update_watchdog_status_fn: Callable[..., Any],
     utc_now_iso_fn: Callable[[], str],
     interval_seconds: int,
 ) -> Dict[str, Any]:
     checked_at = utc_now_iso_fn()
     cleaned_run_ids: List[str] = []
+    resumed_run_ids: List[str] = []
     try:
         result = cleanup_stale_local_claims_fn()
         cleaned_run_ids = [str(item) for item in (result or []) if str(item or "").strip()]
-        summary = (
-            f"Recovered {len(cleaned_run_ids)} stale local claim{'s' if len(cleaned_run_ids) != 1 else ''}."
-            if cleaned_run_ids
-            else "No stale local claims found."
-        )
+        if callable(resume_due_checkpoint_recoveries_fn):
+            resumed = resume_due_checkpoint_recoveries_fn()
+            resumed_run_ids = [str(item) for item in (resumed or []) if str(item or "").strip()]
+        if cleaned_run_ids or resumed_run_ids:
+            summary_parts = []
+            if cleaned_run_ids:
+                summary_parts.append(
+                    f"Recovered {len(cleaned_run_ids)} stale local claim{'s' if len(cleaned_run_ids) != 1 else ''}"
+                )
+            if resumed_run_ids:
+                summary_parts.append(
+                    f"scheduled {len(resumed_run_ids)} checkpoint resum{'es' if len(resumed_run_ids) != 1 else 'e'}"
+                )
+            summary = ". ".join(summary_parts) + "."
+        else:
+            summary = "No stale local claims or due checkpoint resumes found."
         status = "ok"
     except Exception as exc:
         cleaned_run_ids = []
+        resumed_run_ids = []
         summary = f"Local runtime watchdog failed: {exc}"
         status = "error"
     update_watchdog_status_fn(
@@ -1565,6 +1579,7 @@ def run_local_runtime_watchdog_pass(
         status=status,
         summary=summary,
         cleaned_run_ids=cleaned_run_ids,
+        resumed_run_ids=resumed_run_ids,
         interval_seconds=interval_seconds,
     )
     return {
@@ -1572,12 +1587,14 @@ def run_local_runtime_watchdog_pass(
         "status": status,
         "summary": summary,
         "cleaned_run_ids": cleaned_run_ids,
+        "resumed_run_ids": resumed_run_ids,
     }
 
 
 def run_local_runtime_watchdog_forever(
     *,
     cleanup_stale_local_claims_fn: Callable[[], Any],
+    resume_due_checkpoint_recoveries_fn: Optional[Callable[[], Any]],
     update_watchdog_status_fn: Callable[..., Any],
     utc_now_iso_fn: Callable[[], str],
     interval_seconds: int = 5,
@@ -1587,6 +1604,7 @@ def run_local_runtime_watchdog_forever(
     while True:
         run_local_runtime_watchdog_pass(
             cleanup_stale_local_claims_fn=cleanup_stale_local_claims_fn,
+            resume_due_checkpoint_recoveries_fn=resume_due_checkpoint_recoveries_fn,
             update_watchdog_status_fn=update_watchdog_status_fn,
             utc_now_iso_fn=utc_now_iso_fn,
             interval_seconds=safe_interval,

@@ -136,42 +136,35 @@ def _begin_run_pending_approval(
     )
 
 def _persist_weekly_schedules():
-    with SCHEDULES_LOCK:
-        payload = {
-            "version": 1,
-            "updated_at": datetime.utcnow().isoformat() + "Z",
-            "items": list(WEEKLY_SCHEDULES.values()),
-        }
-    _safe_write_json(ORION_SCHEDULES_FILE, payload)
+    return run_service.persist_weekly_schedules(
+        schedules_lock=SCHEDULES_LOCK,
+        weekly_schedules=WEEKLY_SCHEDULES,
+        safe_write_json_fn=_safe_write_json,
+        schedules_file=ORION_SCHEDULES_FILE,
+        utc_now_iso_fn=lambda: datetime.utcnow().isoformat() + "Z",
+    )
 
 
 def _load_weekly_schedules():
-    payload = _safe_read_json(ORION_SCHEDULES_FILE, {"version": 1, "items": []})
-    items = payload.get("items")
-    if not isinstance(items, list):
-        return
-    with SCHEDULES_LOCK:
-        WEEKLY_SCHEDULES.clear()
-        for item in items:
-            if not isinstance(item, dict):
-                continue
-            schedule_id = item.get("id")
-            if isinstance(schedule_id, str) and schedule_id.strip():
-                item["wake_mode"] = str(item.get("wake_mode") or "now").strip().lower() or "now"
-                item["delivery"] = str(item.get("delivery") or "announce").strip().lower() or "announce"
-                item["run_log"] = list(item.get("run_log") or [])[-10:]
-                item["pending_heartbeat"] = bool(item.get("pending_heartbeat"))
-                item["pending_heartbeat_slot"] = str(item.get("pending_heartbeat_slot") or "").strip() or None
-                item["next_run_at"] = str(item.get("next_run_at") or "").strip() or _compute_schedule_next_run_at(item)
-                WEEKLY_SCHEDULES[schedule_id] = item
+    return run_service.load_weekly_schedules(
+        schedules_lock=SCHEDULES_LOCK,
+        weekly_schedules=WEEKLY_SCHEDULES,
+        safe_read_json_fn=_safe_read_json,
+        schedules_file=ORION_SCHEDULES_FILE,
+        compute_schedule_next_run_at_fn=_compute_schedule_next_run_at,
+    )
 
 
 def _persist_schedules():
-    _persist_weekly_schedules()
+    return run_service.persist_schedules(
+        persist_weekly_schedules_fn=_persist_weekly_schedules,
+    )
 
 
 def _load_schedules():
-    _load_weekly_schedules()
+    return run_service.load_schedules(
+        load_weekly_schedules_fn=_load_weekly_schedules,
+    )
 
 
 def _schedule_now_snapshot(now: datetime, tz_mode: str) -> Dict[str, Any]:
@@ -344,206 +337,91 @@ def _append_schedule_run_log(
 
 
 def _run_weekly_scheduler_forever():
-    poll_seconds = max(5, ORION_SCHEDULER_POLL_SECONDS)
-    while True:
-        time.sleep(poll_seconds)
-        now = datetime.now(timezone.utc)
-        window_start = now - timedelta(seconds=poll_seconds + 1)
-        changed = False
-        with SCHEDULES_LOCK:
-            schedule_items = [dict(item) for item in WEEKLY_SCHEDULES.values()]
-
-        for schedule in schedule_items:
-            if not bool(schedule.get("enabled")):
-                continue
-            matched_slot = _latest_schedule_slot_in_window(schedule, window_start, now)
-            if matched_slot is None:
-                continue
-            snapshot = _schedule_now_snapshot(now, _normalized_schedule_timezone(str(schedule.get("timezone") or "local")))
-            slot_key = matched_slot.astimezone(timezone.utc).replace(second=0, microsecond=0).isoformat().replace("+00:00", "Z")
-            if str(schedule.get("last_trigger_slot") or "") == slot_key:
-                continue
-
-            schedule_id = str(schedule.get("id") or "")
-            req_payload = schedule.get("run_request") if isinstance(schedule.get("run_request"), dict) else {}
-            if not schedule_id or not isinstance(req_payload, dict):
-                continue
-
-            try:
-                with SCHEDULES_LOCK:
-                    current = WEEKLY_SCHEDULES.get(schedule_id)
-                    if current is None:
-                        continue
-                    current["last_trigger_slot"] = slot_key
-                    current["last_trigger_date"] = snapshot["date_key"]
-                    wake_mode = str(current.get("wake_mode") or "now").strip().lower() or "now"
-                    if wake_mode == "next-heartbeat":
-                        current["pending_heartbeat"] = True
-                        current["pending_heartbeat_slot"] = slot_key
-                        current["last_error"] = None
-                        current["next_run_at"] = _compute_schedule_next_run_at(current, now_utc=now)
-                        current["updated_at"] = datetime.utcnow().isoformat() + "Z"
-                        WEEKLY_SCHEDULES[schedule_id] = current
-                        changed = True
-                        continue
-                req = RunStartRequest(**req_payload)
-                run_result = _execute_scheduled_run_request(req, schedule_id=schedule_id)
-                with SCHEDULES_LOCK:
-                    current = WEEKLY_SCHEDULES.get(schedule_id)
-                    if current is not None:
-                        current["last_trigger_slot"] = slot_key
-                        current["last_trigger_date"] = snapshot["date_key"]
-                        current["pending_heartbeat"] = False
-                        current["pending_heartbeat_slot"] = None
-                        current = _append_schedule_run_log(
-                            current,
-                            status="started",
-                            now_utc=now,
-                            run_id=str(run_result.get("run_id") or "").strip() or None,
-                            detail="Scheduled run started immediately.",
-                        )
-                        current["updated_at"] = datetime.utcnow().isoformat() + "Z"
-                        WEEKLY_SCHEDULES[schedule_id] = current
-                        changed = True
-            except Exception as exc:
-                with SCHEDULES_LOCK:
-                    current = WEEKLY_SCHEDULES.get(schedule_id)
-                    if current is not None:
-                        current["last_trigger_slot"] = slot_key
-                        current["last_trigger_date"] = snapshot["date_key"]
-                        current = _append_schedule_run_log(
-                            current,
-                            status="failed",
-                            now_utc=now,
-                            detail=str(exc),
-                        )
-                        current["updated_at"] = datetime.utcnow().isoformat() + "Z"
-                        WEEKLY_SCHEDULES[schedule_id] = current
-                        changed = True
-
-        if changed:
-            _persist_schedules()
+    return run_service.run_weekly_scheduler_forever(
+        scheduler_poll_seconds=ORION_SCHEDULER_POLL_SECONDS,
+        schedules_lock=SCHEDULES_LOCK,
+        weekly_schedules=WEEKLY_SCHEDULES,
+        latest_schedule_slot_in_window_fn=_latest_schedule_slot_in_window,
+        schedule_now_snapshot_fn=_schedule_now_snapshot,
+        normalized_schedule_timezone_fn=_normalized_schedule_timezone,
+        run_start_request_class=RunStartRequest,
+        execute_scheduled_run_request_fn=_execute_scheduled_run_request,
+        append_schedule_run_log_fn=_append_schedule_run_log,
+        compute_schedule_next_run_at_fn=_compute_schedule_next_run_at,
+        persist_schedules_fn=_persist_schedules,
+    )
 
 
 def trigger_pending_heartbeat_schedules() -> Dict[str, Any]:
-    now = datetime.now(timezone.utc)
-    started: List[Dict[str, Any]] = []
-    changed = False
-    with SCHEDULES_LOCK:
-        pending_items = [
-            dict(item)
-            for item in WEEKLY_SCHEDULES.values()
-            if bool(item.get("enabled")) and bool(item.get("pending_heartbeat"))
-        ]
-    for schedule in pending_items:
-        schedule_id = str(schedule.get("id") or "").strip()
-        req_payload = schedule.get("run_request") if isinstance(schedule.get("run_request"), dict) else {}
-        if not schedule_id or not isinstance(req_payload, dict):
-            continue
-        try:
-            req = RunStartRequest(**req_payload)
-            run_result = _execute_scheduled_run_request(req, schedule_id=schedule_id)
-            with SCHEDULES_LOCK:
-                current = WEEKLY_SCHEDULES.get(schedule_id)
-                if current is None:
-                    continue
-                current["pending_heartbeat"] = False
-                current["pending_heartbeat_slot"] = None
-                current = _append_schedule_run_log(
-                    current,
-                    status="started",
-                    now_utc=now,
-                    run_id=str(run_result.get("run_id") or "").strip() or None,
-                    detail="Scheduled run started on heartbeat wake.",
-                )
-                current["updated_at"] = datetime.utcnow().isoformat() + "Z"
-                WEEKLY_SCHEDULES[schedule_id] = current
-                changed = True
-            started.append(
-                {
-                    "schedule_id": schedule_id,
-                    "run_id": str(run_result.get("run_id") or "").strip() or None,
-                    "name": str(schedule.get("name") or "").strip() or schedule_id,
-                }
-            )
-        except Exception as exc:
-            with SCHEDULES_LOCK:
-                current = WEEKLY_SCHEDULES.get(schedule_id)
-                if current is None:
-                    continue
-                current["pending_heartbeat"] = False
-                current["pending_heartbeat_slot"] = None
-                current = _append_schedule_run_log(
-                    current,
-                    status="failed",
-                    now_utc=now,
-                    detail=str(exc),
-                )
-                current["updated_at"] = datetime.utcnow().isoformat() + "Z"
-                WEEKLY_SCHEDULES[schedule_id] = current
-                changed = True
-    if changed:
-        _persist_schedules()
-    return {
-        "acted": bool(started),
-        "started": started,
-    }
+    return run_service.trigger_pending_heartbeat_schedules(
+        schedules_lock=SCHEDULES_LOCK,
+        weekly_schedules=WEEKLY_SCHEDULES,
+        run_start_request_class=RunStartRequest,
+        execute_scheduled_run_request_fn=_execute_scheduled_run_request,
+        append_schedule_run_log_fn=_append_schedule_run_log,
+        persist_schedules_fn=_persist_schedules,
+        utc_now_fn=lambda: datetime.now(timezone.utc),
+        utc_now_iso_fn=lambda: datetime.utcnow().isoformat() + "Z",
+    )
 
 
 _runtime_services_initialized = False
 
 
-def initialize_runtime_services() -> None:
-    global _runtime_services_initialized, TELEGRAM_AUTOPILOT_THREAD
-    if _runtime_services_initialized:
-        return
-    init_runtime_state_db(ORION_RUNTIME_STATE_DB)
-    shared.sync_acp_manager_paths(
-        runtime_db_path=ORION_RUNTIME_STATE_DB,
-        setup_sessions_path=ORION_SETUP_SESSIONS_FILE,
-        provider_profiles_path=ORION_PROVIDER_PROFILES_FILE,
-        idempotency_path=ORION_IDEMPOTENCY_FILE,
-    )
-    try:
-        from server_modules.runtime_runs_api import initialize_chat_stream_runtime_state
+def _mark_runtime_services_initialized() -> None:
+    global _runtime_services_initialized
+    _runtime_services_initialized = True
 
-        initialize_chat_stream_runtime_state()
-    except Exception:
-        raise
-    _load_live_runtime_state()
-    _load_run_history()
-    _load_approval_audit()
-    _load_channel_events()
-    _load_schedules()
-    _load_setup_sessions()
-    _load_provider_profiles()
-    _load_idempotency()
-    try:
+
+def _set_telegram_autopilot_thread(thread: Any) -> None:
+    global TELEGRAM_AUTOPILOT_THREAD
+    TELEGRAM_AUTOPILOT_THREAD = thread
+    shared.TELEGRAM_AUTOPILOT_THREAD = thread
+    server_module = sys.modules.get("server")
+    if server_module is not None:
+        setattr(server_module, "TELEGRAM_AUTOPILOT_THREAD", thread)
+
+
+def initialize_runtime_services() -> None:
+    from server_modules.health_diagnostics import _load_runtime_skills_state
+    from server_modules.runtime_runs_api import initialize_chat_stream_runtime_state
+
+    def _recover_orphaned_local_runs_on_startup() -> None:
         from server_modules import local_queue as _local_queue
 
         _local_queue.recover_orphaned_local_runs_on_startup()
-    except Exception:
-        pass
-    from server_modules.health_diagnostics import _load_runtime_skills_state
 
-    _load_runtime_skills_state()
-    _load_telegram_autopilot_state()
-    _load_whatsapp_autopilot_state()
-
-    if ORION_SCHEDULER_ENABLED:
-        _scheduler_thread = threading.Thread(target=_run_weekly_scheduler_forever, daemon=True)
-        _scheduler_thread.start()
-    if ORION_TELEGRAM_AUTOPILOT_ENABLED:
-        telegram_thread = threading.Thread(target=_run_telegram_autopilot_forever, daemon=True)
-        TELEGRAM_AUTOPILOT_THREAD = telegram_thread
-        shared.TELEGRAM_AUTOPILOT_THREAD = telegram_thread
-        server_module = sys.modules.get("server")
-        if server_module is not None:
-            setattr(server_module, "TELEGRAM_AUTOPILOT_THREAD", telegram_thread)
-        telegram_thread.start()
-    if ORION_WHATSAPP_AUTOPILOT_ENABLED:
-        _whatsapp_autopilot_activate()
-    _runtime_services_initialized = True
+    return run_service.initialize_runtime_services(
+        is_initialized_fn=lambda: _runtime_services_initialized,
+        mark_initialized_fn=_mark_runtime_services_initialized,
+        runtime_state_db_path=ORION_RUNTIME_STATE_DB,
+        setup_sessions_path=ORION_SETUP_SESSIONS_FILE,
+        provider_profiles_path=ORION_PROVIDER_PROFILES_FILE,
+        idempotency_path=ORION_IDEMPOTENCY_FILE,
+        init_runtime_state_db_fn=init_runtime_state_db,
+        sync_acp_manager_paths_fn=shared.sync_acp_manager_paths,
+        initialize_chat_stream_runtime_state_fn=initialize_chat_stream_runtime_state,
+        load_live_runtime_state_fn=_load_live_runtime_state,
+        load_run_history_fn=_load_run_history,
+        load_approval_audit_fn=_load_approval_audit,
+        load_channel_events_fn=_load_channel_events,
+        load_schedules_fn=_load_schedules,
+        load_setup_sessions_fn=_load_setup_sessions,
+        load_provider_profiles_fn=_load_provider_profiles,
+        load_idempotency_fn=_load_idempotency,
+        recover_orphaned_local_runs_on_startup_fn=_recover_orphaned_local_runs_on_startup,
+        load_runtime_skills_state_fn=_load_runtime_skills_state,
+        load_telegram_autopilot_state_fn=_load_telegram_autopilot_state,
+        load_whatsapp_autopilot_state_fn=_load_whatsapp_autopilot_state,
+        scheduler_enabled=ORION_SCHEDULER_ENABLED,
+        thread_factory=threading.Thread,
+        run_weekly_scheduler_forever_fn=_run_weekly_scheduler_forever,
+        telegram_autopilot_enabled=ORION_TELEGRAM_AUTOPILOT_ENABLED,
+        run_telegram_autopilot_forever_fn=_run_telegram_autopilot_forever,
+        set_telegram_autopilot_thread_fn=_set_telegram_autopilot_thread,
+        whatsapp_autopilot_enabled=ORION_WHATSAPP_AUTOPILOT_ENABLED,
+        whatsapp_autopilot_activate_fn=_whatsapp_autopilot_activate,
+    )
 
 
 def _strip_wrapping_quotes(value: str) -> str:

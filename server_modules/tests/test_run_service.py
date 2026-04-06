@@ -74,9 +74,13 @@ from server_modules.run_service import (
     local_execution_block_prompt,
     local_execution_confirmation_prompt,
     local_execution_requires_start_confirmation,
+    load_schedules,
+    load_weekly_schedules,
     mark_local_execution_tools_approved,
     normalize_requested_max_iterations,
     precheck_human_action_labels,
+    persist_schedules,
+    persist_weekly_schedules,
     PreparedRunCreationServices,
     RunPreparationServices,
     RunCreationServices,
@@ -106,6 +110,8 @@ from server_modules.run_service import (
     refresh_parent_delegation_state,
     schedule_auto_retry_for_failed_children,
     timeout_stale_delegated_child_runs,
+    trigger_pending_heartbeat_schedules,
+    initialize_runtime_services,
     wait_for_human_response,
 )
 from server_modules.runtime_models import RunStartRequest
@@ -512,6 +518,148 @@ class RunServiceTests(unittest.TestCase):
         self.assertEqual(status_changes, [("cloud-run", "failed")])
         self.assertEqual(removed, ["done-run"])
         self.assertEqual(sync_calls, [True])
+
+    def test_persist_and_load_weekly_schedules_round_trip_normalized_state(self):
+        schedules = {
+            "sched-1": {
+                "id": "sched-1",
+                "wake_mode": "NEXT-HEARTBEAT",
+                "delivery": "",
+                "run_log": list(range(12)),
+                "pending_heartbeat": 1,
+                "pending_heartbeat_slot": "",
+                "next_run_at": "",
+            }
+        }
+        writes = []
+
+        persist_weekly_schedules(
+            schedules_lock=__import__("threading").Lock(),
+            weekly_schedules=schedules,
+            safe_write_json_fn=lambda path, payload: writes.append((path, payload)),
+            schedules_file="schedules.json",
+            utc_now_iso_fn=lambda: "2026-04-06T00:00:00Z",
+        )
+
+        loaded = {}
+        load_weekly_schedules(
+            schedules_lock=__import__("threading").Lock(),
+            weekly_schedules=loaded,
+            safe_read_json_fn=lambda path, default: writes[0][1],
+            schedules_file="schedules.json",
+            compute_schedule_next_run_at_fn=lambda item: "2026-04-07T00:00:00Z",
+        )
+
+        self.assertEqual(writes[0][1]["updated_at"], "2026-04-06T00:00:00Z")
+        self.assertEqual(loaded["sched-1"]["wake_mode"], "next-heartbeat")
+        self.assertEqual(loaded["sched-1"]["delivery"], "announce")
+        self.assertEqual(loaded["sched-1"]["run_log"], list(range(2, 12)))
+        self.assertTrue(loaded["sched-1"]["pending_heartbeat"])
+        self.assertIsNone(loaded["sched-1"]["pending_heartbeat_slot"])
+        self.assertEqual(loaded["sched-1"]["next_run_at"], "2026-04-07T00:00:00Z")
+
+    def test_persist_and_load_schedules_delegate_to_weekly_helpers(self):
+        seen = []
+
+        persist_schedules(
+            persist_weekly_schedules_fn=lambda: seen.append("persist"),
+        )
+        load_schedules(
+            load_weekly_schedules_fn=lambda: seen.append("load"),
+        )
+
+        self.assertEqual(seen, ["persist", "load"])
+
+    def test_trigger_pending_heartbeat_schedules_starts_runs_and_clears_pending(self):
+        schedules = {
+            "sched-1": {
+                "id": "sched-1",
+                "name": "Morning",
+                "enabled": True,
+                "pending_heartbeat": True,
+                "pending_heartbeat_slot": "slot-1",
+                "run_request": {"engine": "orion", "workspace_id": "default", "user_goal": "Check inbox"},
+            }
+        }
+        persisted = []
+
+        result = trigger_pending_heartbeat_schedules(
+            schedules_lock=__import__("threading").Lock(),
+            weekly_schedules=schedules,
+            run_start_request_class=lambda **kwargs: kwargs,
+            execute_scheduled_run_request_fn=lambda request, schedule_id=None: {"run_id": f"run-for-{schedule_id}"},
+            append_schedule_run_log_fn=lambda schedule, **kwargs: {**schedule, "run_log": [kwargs["status"]]},
+            persist_schedules_fn=lambda: persisted.append(True),
+            utc_now_fn=lambda: datetime(2026, 4, 6, 0, 0, 0, tzinfo=timezone.utc),
+            utc_now_iso_fn=lambda: "2026-04-06T00:00:00Z",
+        )
+
+        self.assertTrue(result["acted"])
+        self.assertEqual(result["started"][0]["run_id"], "run-for-sched-1")
+        self.assertFalse(schedules["sched-1"]["pending_heartbeat"])
+        self.assertIsNone(schedules["sched-1"]["pending_heartbeat_slot"])
+        self.assertEqual(schedules["sched-1"]["run_log"], ["started"])
+        self.assertEqual(persisted, [True])
+
+    def test_initialize_runtime_services_bootstraps_and_starts_threads_once(self):
+        calls = []
+        threads = []
+
+        class _Thread:
+            def __init__(self, *, target=None, daemon=None):
+                self.target = target
+                self.daemon = daemon
+                self.started = False
+
+            def start(self):
+                self.started = True
+
+        def _thread_factory(*, target=None, daemon=None):
+            thread = _Thread(target=target, daemon=daemon)
+            threads.append(thread)
+            return thread
+
+        initialized = {"value": False, "telegram_thread": None}
+
+        initialize_runtime_services(
+            is_initialized_fn=lambda: initialized["value"],
+            mark_initialized_fn=lambda: initialized.__setitem__("value", True),
+            runtime_state_db_path="runtime.sqlite3",
+            setup_sessions_path="setup.json",
+            provider_profiles_path="profiles.json",
+            idempotency_path="idempotency.json",
+            init_runtime_state_db_fn=lambda path: calls.append(("init_db", path)),
+            sync_acp_manager_paths_fn=lambda **kwargs: calls.append(("sync_paths", kwargs)),
+            initialize_chat_stream_runtime_state_fn=lambda: calls.append(("chat_stream", None)),
+            load_live_runtime_state_fn=lambda: calls.append(("load_live", None)),
+            load_run_history_fn=lambda: calls.append(("load_history", None)),
+            load_approval_audit_fn=lambda: calls.append(("load_approval", None)),
+            load_channel_events_fn=lambda: calls.append(("load_events", None)),
+            load_schedules_fn=lambda: calls.append(("load_schedules", None)),
+            load_setup_sessions_fn=lambda: calls.append(("load_setup_sessions", None)),
+            load_provider_profiles_fn=lambda: calls.append(("load_provider_profiles", None)),
+            load_idempotency_fn=lambda: calls.append(("load_idempotency", None)),
+            recover_orphaned_local_runs_on_startup_fn=lambda: calls.append(("recover_local", None)),
+            load_runtime_skills_state_fn=lambda: calls.append(("load_skills", None)),
+            load_telegram_autopilot_state_fn=lambda: calls.append(("load_telegram_state", None)),
+            load_whatsapp_autopilot_state_fn=lambda: calls.append(("load_whatsapp_state", None)),
+            scheduler_enabled=True,
+            thread_factory=_thread_factory,
+            run_weekly_scheduler_forever_fn=lambda: None,
+            telegram_autopilot_enabled=True,
+            run_telegram_autopilot_forever_fn=lambda: None,
+            set_telegram_autopilot_thread_fn=lambda thread: initialized.__setitem__("telegram_thread", thread),
+            whatsapp_autopilot_enabled=True,
+            whatsapp_autopilot_activate_fn=lambda: calls.append(("activate_whatsapp", None)),
+        )
+
+        self.assertTrue(initialized["value"])
+        self.assertEqual(calls[0], ("init_db", "runtime.sqlite3"))
+        self.assertIn(("load_schedules", None), calls)
+        self.assertIn(("activate_whatsapp", None), calls)
+        self.assertEqual(len(threads), 2)
+        self.assertTrue(all(thread.started for thread in threads))
+        self.assertIs(initialized["telegram_thread"], threads[1])
 
     def test_safe_int_and_normalize_requested_max_iterations(self):
         self.assertEqual(safe_int("7", 0), 7)

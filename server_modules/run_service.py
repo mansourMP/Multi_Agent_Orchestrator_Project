@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass, field
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 import queue
 import time
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple
@@ -1226,6 +1226,308 @@ def load_live_runtime_state(
         persist_live_run_state_fn(run_id, run)
     if recovered_queue:
         sync_local_runtime_state_snapshot_fn()
+
+
+def persist_weekly_schedules(
+    *,
+    schedules_lock: Any,
+    weekly_schedules: Dict[str, Dict[str, Any]],
+    safe_write_json_fn: Callable[[Any, Any], Any],
+    schedules_file: Any,
+    utc_now_iso_fn: Callable[[], str],
+) -> None:
+    with schedules_lock:
+        payload = {
+            "version": 1,
+            "updated_at": utc_now_iso_fn(),
+            "items": list(weekly_schedules.values()),
+        }
+    safe_write_json_fn(schedules_file, payload)
+
+
+def load_weekly_schedules(
+    *,
+    schedules_lock: Any,
+    weekly_schedules: Dict[str, Dict[str, Any]],
+    safe_read_json_fn: Callable[[Any, Any], Any],
+    schedules_file: Any,
+    compute_schedule_next_run_at_fn: Callable[[Dict[str, Any]], Optional[str]],
+) -> None:
+    payload = safe_read_json_fn(schedules_file, {"version": 1, "items": []})
+    items = payload.get("items")
+    if not isinstance(items, list):
+        return
+    with schedules_lock:
+        weekly_schedules.clear()
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            schedule_id = item.get("id")
+            if isinstance(schedule_id, str) and schedule_id.strip():
+                item["wake_mode"] = str(item.get("wake_mode") or "now").strip().lower() or "now"
+                item["delivery"] = str(item.get("delivery") or "announce").strip().lower() or "announce"
+                item["run_log"] = list(item.get("run_log") or [])[-10:]
+                item["pending_heartbeat"] = bool(item.get("pending_heartbeat"))
+                item["pending_heartbeat_slot"] = str(item.get("pending_heartbeat_slot") or "").strip() or None
+                item["next_run_at"] = str(item.get("next_run_at") or "").strip() or compute_schedule_next_run_at_fn(item)
+                weekly_schedules[schedule_id] = item
+
+
+def persist_schedules(
+    *,
+    persist_weekly_schedules_fn: Callable[[], Any],
+) -> None:
+    persist_weekly_schedules_fn()
+
+
+def load_schedules(
+    *,
+    load_weekly_schedules_fn: Callable[[], Any],
+) -> None:
+    load_weekly_schedules_fn()
+
+
+def trigger_pending_heartbeat_schedules(
+    *,
+    schedules_lock: Any,
+    weekly_schedules: Dict[str, Dict[str, Any]],
+    run_start_request_class: Any,
+    execute_scheduled_run_request_fn: Callable[[Any], Dict[str, Any]],
+    append_schedule_run_log_fn: Callable[..., Dict[str, Any]],
+    persist_schedules_fn: Callable[[], Any],
+    utc_now_fn: Callable[[], datetime],
+    utc_now_iso_fn: Callable[[], str],
+) -> Dict[str, Any]:
+    now = utc_now_fn()
+    started: List[Dict[str, Any]] = []
+    changed = False
+    with schedules_lock:
+        pending_items = [
+            dict(item)
+            for item in weekly_schedules.values()
+            if bool(item.get("enabled")) and bool(item.get("pending_heartbeat"))
+        ]
+    for schedule in pending_items:
+        schedule_id = str(schedule.get("id") or "").strip()
+        req_payload = schedule.get("run_request") if isinstance(schedule.get("run_request"), dict) else {}
+        if not schedule_id or not isinstance(req_payload, dict):
+            continue
+        try:
+            req = run_start_request_class(**req_payload)
+            run_result = execute_scheduled_run_request_fn(req, schedule_id=schedule_id)
+            with schedules_lock:
+                current = weekly_schedules.get(schedule_id)
+                if current is None:
+                    continue
+                current["pending_heartbeat"] = False
+                current["pending_heartbeat_slot"] = None
+                current = append_schedule_run_log_fn(
+                    current,
+                    status="started",
+                    now_utc=now,
+                    run_id=str(run_result.get("run_id") or "").strip() or None,
+                    detail="Scheduled run started on heartbeat wake.",
+                )
+                current["updated_at"] = utc_now_iso_fn()
+                weekly_schedules[schedule_id] = current
+                changed = True
+            started.append(
+                {
+                    "schedule_id": schedule_id,
+                    "run_id": str(run_result.get("run_id") or "").strip() or None,
+                    "name": str(schedule.get("name") or "").strip() or schedule_id,
+                }
+            )
+        except Exception as exc:
+            with schedules_lock:
+                current = weekly_schedules.get(schedule_id)
+                if current is None:
+                    continue
+                current["pending_heartbeat"] = False
+                current["pending_heartbeat_slot"] = None
+                current = append_schedule_run_log_fn(
+                    current,
+                    status="failed",
+                    now_utc=now,
+                    detail=str(exc),
+                )
+                current["updated_at"] = utc_now_iso_fn()
+                weekly_schedules[schedule_id] = current
+                changed = True
+    if changed:
+        persist_schedules_fn()
+    return {
+        "acted": bool(started),
+        "started": started,
+    }
+
+
+def run_weekly_scheduler_forever(
+    *,
+    scheduler_poll_seconds: int,
+    schedules_lock: Any,
+    weekly_schedules: Dict[str, Dict[str, Any]],
+    latest_schedule_slot_in_window_fn: Callable[[Dict[str, Any], datetime, datetime], Optional[datetime]],
+    schedule_now_snapshot_fn: Callable[[datetime, str], Dict[str, Any]],
+    normalized_schedule_timezone_fn: Callable[[str], str],
+    run_start_request_class: Any,
+    execute_scheduled_run_request_fn: Callable[[Any], Dict[str, Any]],
+    append_schedule_run_log_fn: Callable[..., Dict[str, Any]],
+    compute_schedule_next_run_at_fn: Callable[..., Optional[str]],
+    persist_schedules_fn: Callable[[], Any],
+    sleep_fn: Callable[[float], Any] = time.sleep,
+    utc_now_fn: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
+    utc_now_iso_fn: Callable[[], str] = lambda: datetime.utcnow().isoformat() + "Z",
+) -> None:
+    poll_seconds = max(5, scheduler_poll_seconds)
+    while True:
+        sleep_fn(poll_seconds)
+        now = utc_now_fn()
+        window_start = now - timedelta(seconds=poll_seconds + 1)
+        changed = False
+        with schedules_lock:
+            schedule_items = [dict(item) for item in weekly_schedules.values()]
+
+        for schedule in schedule_items:
+            if not bool(schedule.get("enabled")):
+                continue
+            matched_slot = latest_schedule_slot_in_window_fn(schedule, window_start, now)
+            if matched_slot is None:
+                continue
+            snapshot = schedule_now_snapshot_fn(now, normalized_schedule_timezone_fn(str(schedule.get("timezone") or "local")))
+            slot_key = matched_slot.astimezone(timezone.utc).replace(second=0, microsecond=0).isoformat().replace("+00:00", "Z")
+            if str(schedule.get("last_trigger_slot") or "") == slot_key:
+                continue
+
+            schedule_id = str(schedule.get("id") or "")
+            req_payload = schedule.get("run_request") if isinstance(schedule.get("run_request"), dict) else {}
+            if not schedule_id or not isinstance(req_payload, dict):
+                continue
+
+            try:
+                with schedules_lock:
+                    current = weekly_schedules.get(schedule_id)
+                    if current is None:
+                        continue
+                    current["last_trigger_slot"] = slot_key
+                    current["last_trigger_date"] = snapshot["date_key"]
+                    wake_mode = str(current.get("wake_mode") or "now").strip().lower() or "now"
+                    if wake_mode == "next-heartbeat":
+                        current["pending_heartbeat"] = True
+                        current["pending_heartbeat_slot"] = slot_key
+                        current["last_error"] = None
+                        current["next_run_at"] = compute_schedule_next_run_at_fn(current, now_utc=now)
+                        current["updated_at"] = utc_now_iso_fn()
+                        weekly_schedules[schedule_id] = current
+                        changed = True
+                        continue
+                req = run_start_request_class(**req_payload)
+                run_result = execute_scheduled_run_request_fn(req, schedule_id=schedule_id)
+                with schedules_lock:
+                    current = weekly_schedules.get(schedule_id)
+                    if current is not None:
+                        current["last_trigger_slot"] = slot_key
+                        current["last_trigger_date"] = snapshot["date_key"]
+                        current["pending_heartbeat"] = False
+                        current["pending_heartbeat_slot"] = None
+                        current = append_schedule_run_log_fn(
+                            current,
+                            status="started",
+                            now_utc=now,
+                            run_id=str(run_result.get("run_id") or "").strip() or None,
+                            detail="Scheduled run started immediately.",
+                        )
+                        current["updated_at"] = utc_now_iso_fn()
+                        weekly_schedules[schedule_id] = current
+                        changed = True
+            except Exception as exc:
+                with schedules_lock:
+                    current = weekly_schedules.get(schedule_id)
+                    if current is not None:
+                        current["last_trigger_slot"] = slot_key
+                        current["last_trigger_date"] = snapshot["date_key"]
+                        current = append_schedule_run_log_fn(
+                            current,
+                            status="failed",
+                            now_utc=now,
+                            detail=str(exc),
+                        )
+                        current["updated_at"] = utc_now_iso_fn()
+                        weekly_schedules[schedule_id] = current
+                        changed = True
+
+        if changed:
+            persist_schedules_fn()
+
+
+def initialize_runtime_services(
+    *,
+    is_initialized_fn: Callable[[], bool],
+    mark_initialized_fn: Callable[[], Any],
+    runtime_state_db_path: Any,
+    setup_sessions_path: Any,
+    provider_profiles_path: Any,
+    idempotency_path: Any,
+    init_runtime_state_db_fn: Callable[[Any], Any],
+    sync_acp_manager_paths_fn: Callable[..., Any],
+    initialize_chat_stream_runtime_state_fn: Callable[[], Any],
+    load_live_runtime_state_fn: Callable[[], Any],
+    load_run_history_fn: Callable[[], Any],
+    load_approval_audit_fn: Callable[[], Any],
+    load_channel_events_fn: Callable[[], Any],
+    load_schedules_fn: Callable[[], Any],
+    load_setup_sessions_fn: Callable[[], Any],
+    load_provider_profiles_fn: Callable[[], Any],
+    load_idempotency_fn: Callable[[], Any],
+    recover_orphaned_local_runs_on_startup_fn: Callable[[], Any],
+    load_runtime_skills_state_fn: Callable[[], Any],
+    load_telegram_autopilot_state_fn: Callable[[], Any],
+    load_whatsapp_autopilot_state_fn: Callable[[], Any],
+    scheduler_enabled: bool,
+    thread_factory: Callable[..., Any],
+    run_weekly_scheduler_forever_fn: Callable[[], Any],
+    telegram_autopilot_enabled: bool,
+    run_telegram_autopilot_forever_fn: Callable[[], Any],
+    set_telegram_autopilot_thread_fn: Callable[[Any], Any],
+    whatsapp_autopilot_enabled: bool,
+    whatsapp_autopilot_activate_fn: Callable[[], Any],
+) -> None:
+    if is_initialized_fn():
+        return
+    init_runtime_state_db_fn(runtime_state_db_path)
+    sync_acp_manager_paths_fn(
+        runtime_db_path=runtime_state_db_path,
+        setup_sessions_path=setup_sessions_path,
+        provider_profiles_path=provider_profiles_path,
+        idempotency_path=idempotency_path,
+    )
+    initialize_chat_stream_runtime_state_fn()
+    load_live_runtime_state_fn()
+    load_run_history_fn()
+    load_approval_audit_fn()
+    load_channel_events_fn()
+    load_schedules_fn()
+    load_setup_sessions_fn()
+    load_provider_profiles_fn()
+    load_idempotency_fn()
+    try:
+        recover_orphaned_local_runs_on_startup_fn()
+    except Exception:
+        pass
+    load_runtime_skills_state_fn()
+    load_telegram_autopilot_state_fn()
+    load_whatsapp_autopilot_state_fn()
+
+    if scheduler_enabled:
+        scheduler_thread = thread_factory(target=run_weekly_scheduler_forever_fn, daemon=True)
+        scheduler_thread.start()
+    if telegram_autopilot_enabled:
+        telegram_thread = thread_factory(target=run_telegram_autopilot_forever_fn, daemon=True)
+        set_telegram_autopilot_thread_fn(telegram_thread)
+        telegram_thread.start()
+    if whatsapp_autopilot_enabled:
+        whatsapp_autopilot_activate_fn()
+    mark_initialized_fn()
 
 
 async def execute_durable_agent_turn_dispatch(

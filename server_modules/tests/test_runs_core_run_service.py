@@ -6,6 +6,31 @@ from server_modules import runs_core
 
 
 class RunsCoreRunServiceTests(unittest.TestCase):
+    def test_initialize_runtime_services_delegates_bootstrap_to_run_service(self) -> None:
+        with patch.object(runs_core.run_service, "initialize_runtime_services", return_value=None) as bootstrap_mock:
+            runs_core.initialize_runtime_services()
+
+        bootstrap_mock.assert_called_once()
+        _, kwargs = bootstrap_mock.call_args
+        self.assertEqual(kwargs["runtime_state_db_path"], runs_core.ORION_RUNTIME_STATE_DB)
+        self.assertIs(kwargs["load_live_runtime_state_fn"], runs_core._load_live_runtime_state)
+        self.assertIs(kwargs["load_schedules_fn"], runs_core._load_schedules)
+        self.assertEqual(kwargs["scheduler_enabled"], runs_core.ORION_SCHEDULER_ENABLED)
+
+    def test_trigger_pending_heartbeat_schedules_delegates_to_run_service(self) -> None:
+        with patch.object(
+            runs_core.run_service,
+            "trigger_pending_heartbeat_schedules",
+            return_value={"acted": False, "started": []},
+        ) as trigger_mock:
+            payload = runs_core.trigger_pending_heartbeat_schedules()
+
+        self.assertEqual(payload, {"acted": False, "started": []})
+        trigger_mock.assert_called_once()
+        _, kwargs = trigger_mock.call_args
+        self.assertIs(kwargs["weekly_schedules"], runs_core.WEEKLY_SCHEDULES)
+        self.assertIs(kwargs["persist_schedules_fn"], runs_core._persist_schedules)
+
     def test_begin_run_pending_confirmation_delegates_to_run_service(self) -> None:
         run = {
             "run_id": "run-approval-1",

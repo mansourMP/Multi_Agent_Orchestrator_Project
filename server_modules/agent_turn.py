@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Literal, Optional, Protocol
 
+from server_modules.telemetry import get_tracer, set_span_attributes
+
 
 ExecutionMode = Literal["sync", "durable"]
 ResponseMode = Literal["stream", "artifact", "channel_reply"]
@@ -562,17 +564,52 @@ async def agent_turn(
         execute_agent_turn_request,
     )
 
-    services = build_turn_execution_services(
-        run_execution=run_execution_services,
-        direct_chat=direct_chat_services or _build_noop_direct_chat_execution_services(),
-    )
-    return await execute_agent_turn_request(
-        turn_request=turn_request,
-        current_user=current_user,
-        services=services,
-        chat_body=chat_body,
-        run_request=run_request,
-    )
+    tracer = get_tracer("server_modules.agent_turn")
+    with tracer.start_as_current_span("agent_turn.handle") as span:
+        set_span_attributes(
+            span,
+            {
+                "workspace_id": str(turn_request.workspace_id or "").strip() or "default",
+                "session_id": str(turn_request.session_id or "").strip() or "agent-turn",
+                "channel": normalize_channel(turn_request.channel),
+                "tenant_id": str(turn_request.tenant_id or "").strip() or "default",
+                "actor_type": str(turn_request.actor.type or "").strip() or "user",
+                "run_id": (
+                    str(getattr(run_request, "run_id", None) or "").strip()
+                    or str((chat_body or {}).get("run_id") or "").strip()
+                    or None
+                ),
+                "execution_mode": str(turn_request.execution_mode or "").strip() or "sync",
+                "response_mode": str(turn_request.response_mode or "").strip() or "stream",
+            },
+        )
+        try:
+            services = build_turn_execution_services(
+                run_execution=run_execution_services,
+                direct_chat=direct_chat_services or _build_noop_direct_chat_execution_services(),
+            )
+            result = await execute_agent_turn_request(
+                turn_request=turn_request,
+                current_user=current_user,
+                services=services,
+                chat_body=chat_body,
+                run_request=run_request,
+            )
+            if isinstance(result, dict):
+                set_span_attributes(
+                    span,
+                    {
+                        "run_id": str(result.get("run_id") or "").strip() or None,
+                        "turn_status": str(result.get("status") or "").strip() or None,
+                    },
+                )
+            return result
+        except Exception as exc:
+            try:
+                span.record_exception(exc)
+            except Exception:
+                pass
+            raise
 
 
 def bind_agent_turn_request_meta(

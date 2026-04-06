@@ -33,3 +33,6 @@ pyautogui>=0.9.54
 pytesseract>=0.3.10
 pyperclip>=1.9.0
 psutil>=6.0.0
+opentelemetry-api
+opentelemetry-sdk
+opentelemetry-exporter-otlp

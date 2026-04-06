@@ -29,6 +29,7 @@ except ImportError:
 
 try:
     from runtime_policy import (
+        ACTION_RISK_LEVELS,
         browser_automation_plan_hash,
         build_local_operator_execution_binding,
         local_operator_approval_env_snapshot,
@@ -36,6 +37,7 @@ try:
     )
 except ImportError:
     from server_modules.runtime_policy import (  # type: ignore[no-redef]
+        ACTION_RISK_LEVELS,
         browser_automation_plan_hash,
         build_local_operator_execution_binding,
         local_operator_approval_env_snapshot,
@@ -93,6 +95,8 @@ except ImportError:
         screenshot_command,
         supports_capability,
     )
+
+from server_modules.telemetry import get_tracer, set_span_attributes
 
 
 LOCAL_EXECUTION_PACK_ID = "local-execution-v1"
@@ -1429,6 +1433,25 @@ def _run_computer_control_operation(op_index: int, operation: Dict[str, Any]) ->
     raise RuntimeError(f"Unsupported computer control action '{action_name}'.")
 
 
+def _operation_capability_id(operation: Dict[str, Any], tool_id: str) -> str:
+    capability = str(operation.get("capability") or "").strip()
+    if capability:
+        return capability
+    if tool_id == "computer_control":
+        action_name = _normalize_action_id(operation.get("action"))
+        if action_name:
+            return f"computer_control.{action_name}"
+    return tool_id or "unknown"
+
+
+def _operation_risk_level(operation: Dict[str, Any], tool_id: str) -> str:
+    capability = str(operation.get("capability") or "").strip()
+    if capability:
+        resolved_tool = capability_tool_id(capability) or tool_id
+        return str(ACTION_RISK_LEVELS.get(resolved_tool or "", "medium")).strip() or "medium"
+    return str(ACTION_RISK_LEVELS.get(tool_id or "", "medium")).strip() or "medium"
+
+
 def build_local_execution_pack_result(run: Dict[str, Any], metadata: Dict[str, Any], pack_inputs: Dict[str, Any]) -> Tuple[str, Dict[str, Any]]:
     run_id = str(run.get("run_id") or uuid.uuid4()).strip()
     root = _local_execution_root()
@@ -1460,19 +1483,50 @@ def build_local_execution_pack_result(run: Dict[str, Any], metadata: Dict[str, A
         try:
             artifacts: List[Dict[str, Any]] = []
             artifact: Optional[Dict[str, Any]] = None
-            if tool_id == "execute_shell_command":
-                action, artifact = _run_shell_operation(run_id, index, operation_row, root, artifacts_root)
-            elif tool_id == "read_write_files":
-                action, artifact = _run_file_operation(operation_row, root, metadata)
-            elif tool_id == "capture_screenshot":
-                action, artifact = _run_screenshot_operation(run_id, index, operation_row, root, artifacts_root)
-                artifacts = [artifact]
-            elif tool_id == "browser_automation":
-                action, artifacts = _run_browser_operation(run_id, index, operation_row, root, artifacts_root)
-            elif tool_id == "computer_control":
-                action, artifact = _run_computer_control_operation(index, operation_row)
-            else:
-                raise RuntimeError(f"Unsupported local execution tool '{tool_id or 'unknown'}'.")
+            tracer = get_tracer("scripts.orion_local_worker_execution")
+            with tracer.start_as_current_span("local_worker.execute_tool") as span:
+                set_span_attributes(
+                    span,
+                    {
+                        "capability_id": _operation_capability_id(operation_row, tool_id),
+                        "risk_level": _operation_risk_level(operation_row, tool_id),
+                        "run_id": run_id,
+                        "workspace_id": str(
+                            metadata.get("workspace_id")
+                            or (run.get("context") if isinstance(run.get("context"), dict) else {}).get("workspace_id")
+                            or "default"
+                        ).strip()
+                        or "default",
+                        "tenant_id": str(
+                            metadata.get("tenant_id")
+                            or (run.get("context") if isinstance(run.get("context"), dict) else {}).get("tenant_id")
+                            or "default"
+                        ).strip()
+                        or "default",
+                        "actor_type": "worker",
+                        "tool_id": tool_id or "unknown",
+                    },
+                )
+                if tool_id == "execute_shell_command":
+                    action, artifact = _run_shell_operation(run_id, index, operation_row, root, artifacts_root)
+                elif tool_id == "read_write_files":
+                    action, artifact = _run_file_operation(operation_row, root, metadata)
+                elif tool_id == "capture_screenshot":
+                    action, artifact = _run_screenshot_operation(run_id, index, operation_row, root, artifacts_root)
+                    artifacts = [artifact]
+                elif tool_id == "browser_automation":
+                    action, artifacts = _run_browser_operation(run_id, index, operation_row, root, artifacts_root)
+                elif tool_id == "computer_control":
+                    action, artifact = _run_computer_control_operation(index, operation_row)
+                else:
+                    raise RuntimeError(f"Unsupported local execution tool '{tool_id or 'unknown'}'.")
+                set_span_attributes(
+                    span,
+                    {
+                        "tool_status": str(action.get("status") or "completed").strip() or "completed",
+                        "artifact_count": len(artifacts) if tool_id == "browser_automation" else (1 if isinstance(artifact, dict) else 0),
+                    },
+                )
             outputs_actions.append(action)
             if tool_id == "browser_automation":
                 outputs_artifacts.extend(artifacts)

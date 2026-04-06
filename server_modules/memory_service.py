@@ -13,6 +13,7 @@ from fastapi import HTTPException
 
 from server_modules import agent_memory
 from server_modules import runtime_memory
+from server_modules.telemetry import get_tracer, set_span_attributes
 from server_modules.workspace_context import read_workspace_context_files
 
 
@@ -138,39 +139,53 @@ def query_memory(query: MemoryQuery) -> MemoryResult:
     normalized_workspace_id = _normalize_workspace_id(query.workspace_id)
     safe_limit = max(1, min(int(query.limit or 5), 20))
     normalized_query_text = str(query.text or "").strip()
-    items: List[MemoryItem] = []
+    tracer = get_tracer("server_modules.memory_service")
+    with tracer.start_as_current_span("memory_service.query_memory") as span:
+        set_span_attributes(
+            span,
+            {
+                "memory_type": "workspace_query",
+                "workspace_id": normalized_workspace_id,
+                "tenant_id": str(query.tenant_id or "").strip() or "default",
+                "actor_type": str(query.metadata.get("actor_type") or "").strip() or "runtime",
+                "run_id": str(query.metadata.get("run_id") or "").strip() or None,
+                "memory_limit": safe_limit,
+            },
+        )
+        items: List[MemoryItem] = []
 
-    if normalized_query_text:
-        for entry in semantic_search(normalized_workspace_id, normalized_query_text, top_k=safe_limit):
-            key = str(entry.get("key") or "").strip()
-            content = str(entry.get("content") or "").strip()
-            if not content:
-                continue
-            item_text = f"{key}: {content}" if key else content
-            items.append(
-                MemoryItem(
-                    source="workspace_memory",
-                    text=item_text,
-                    score=float(entry.get("score") or 0.0),
-                    metadata={
-                        "key": key,
-                        "content": content,
-                        "created_at": float(entry.get("created_at") or 0.0),
-                        "updated_at": float(entry.get("updated_at") or 0.0),
-                    },
+        if normalized_query_text:
+            for entry in semantic_search(normalized_workspace_id, normalized_query_text, top_k=safe_limit):
+                key = str(entry.get("key") or "").strip()
+                content = str(entry.get("content") or "").strip()
+                if not content:
+                    continue
+                item_text = f"{key}: {content}" if key else content
+                items.append(
+                    MemoryItem(
+                        source="workspace_memory",
+                        text=item_text,
+                        score=float(entry.get("score") or 0.0),
+                        metadata={
+                            "key": key,
+                            "content": content,
+                            "created_at": float(entry.get("created_at") or 0.0),
+                            "updated_at": float(entry.get("updated_at") or 0.0),
+                        },
+                    )
                 )
-            )
 
-    context_blocks: List[str] = []
-    if query.include_workspace_context:
-        memory_text = get_memory(normalized_workspace_id)
-        if memory_text:
-            context_blocks.append(f"Runtime Memory Facts\n{memory_text}")
-        recent_logs = get_recent_logs(normalized_workspace_id, days=7)
-        if recent_logs:
-            context_blocks.append(f"Recent Daily Logs\n{recent_logs[:6000].rstrip()}")
+        context_blocks: List[str] = []
+        if query.include_workspace_context:
+            memory_text = get_memory(normalized_workspace_id)
+            if memory_text:
+                context_blocks.append(f"Runtime Memory Facts\n{memory_text}")
+            recent_logs = get_recent_logs(normalized_workspace_id, days=7)
+            if recent_logs:
+                context_blocks.append(f"Recent Daily Logs\n{recent_logs[:6000].rstrip()}")
 
-    return MemoryResult(items=items, context_blocks=context_blocks)
+        set_span_attributes(span, {"memory_result_count": len(items), "context_block_count": len(context_blocks)})
+        return MemoryResult(items=items, context_blocks=context_blocks)
 
 
 def direct_chat_memory_context_message(workspace_id: str, *, system_prefix: str) -> Dict[str, str] | None:
@@ -455,26 +470,39 @@ def runtime_memory_search(
     session_key: str | None = None,
     k: int = 5,
 ) -> Dict[str, Any]:
-    _memory_manager_or_503()
-    normalized_bucket = _normalize_memory_bucket(bucket, required=False)
-    normalized_workspace_id = _runtime_workspace_id(workspace_id)
-    items = _memory_search_scoped(
-        query=str(query or "").strip(),
-        bucket=normalized_bucket,
-        workspace_id=normalized_workspace_id,
-        profile_id=str(profile_id or "").strip() or None,
-        project_id=str(project_id or "").strip() or None,
-        session_key=str(session_key or "").strip() or None,
-        k=int(k),
-    )
-    return {
-        "ok": True,
-        "query": str(query or "").strip(),
-        "bucket": normalized_bucket,
-        "workspace_id": normalized_workspace_id,
-        "count": len(items),
-        "items": items,
-    }
+    tracer = get_tracer("server_modules.memory_service")
+    with tracer.start_as_current_span("memory_service.runtime_memory_search") as span:
+        _memory_manager_or_503()
+        normalized_bucket = _normalize_memory_bucket(bucket, required=False)
+        normalized_workspace_id = _runtime_workspace_id(workspace_id)
+        set_span_attributes(
+            span,
+            {
+                "memory_type": normalized_bucket or "scoped_search",
+                "workspace_id": normalized_workspace_id,
+                "tenant_id": "default",
+                "actor_type": "runtime",
+                "memory_limit": int(k),
+            },
+        )
+        items = _memory_search_scoped(
+            query=str(query or "").strip(),
+            bucket=normalized_bucket,
+            workspace_id=normalized_workspace_id,
+            profile_id=str(profile_id or "").strip() or None,
+            project_id=str(project_id or "").strip() or None,
+            session_key=str(session_key or "").strip() or None,
+            k=int(k),
+        )
+        set_span_attributes(span, {"memory_result_count": len(items)})
+        return {
+            "ok": True,
+            "query": str(query or "").strip(),
+            "bucket": normalized_bucket,
+            "workspace_id": normalized_workspace_id,
+            "count": len(items),
+            "items": items,
+        }
 
 
 def runtime_memory_upsert(
@@ -581,48 +609,68 @@ def _memory_search_scoped(
     session_key: Optional[str] = None,
     k: int = 5,
 ) -> List[Dict[str, Any]]:
-    manager = runtime_memory._memory_manager()
-    if manager is None:
-        return []
-    try:
-        fetch_limit = max(int(k), 1)
-        fetch_limit = min(max(fetch_limit * 8, 24), 120)
-        raw_results = manager.search_memory(query, fetch_limit)
-    except Exception:
-        return []
-    if not isinstance(raw_results, list):
-        return []
-
-    out: List[Dict[str, Any]] = []
-    seen_ids: Set[str] = set()
-    for item in raw_results:
-        if not isinstance(item, dict):
-            continue
-        mem_id = str(item.get("id") or "").strip()
-        if not mem_id or mem_id in seen_ids:
-            continue
-        metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
-        if not _memory_item_matches_scope(
-            metadata,
-            bucket=bucket,
-            workspace_id=workspace_id,
-            profile_id=profile_id,
-            project_id=project_id,
-            session_key=session_key,
-        ):
-            continue
-        seen_ids.add(mem_id)
-        out.append(
+    tracer = get_tracer("server_modules.memory_service")
+    with tracer.start_as_current_span("memory_service.search_scoped") as span:
+        set_span_attributes(
+            span,
             {
-                "id": mem_id,
-                "text": str(item.get("text") or ""),
-                "score": item.get("score"),
-                "metadata": metadata,
-            }
+                "memory_type": str(bucket or "scoped_search").strip() or "scoped_search",
+                "workspace_id": str(workspace_id or "default").strip() or "default",
+                "tenant_id": "default",
+                "actor_type": "runtime",
+                "run_id": None,
+                "memory_limit": int(k),
+            },
         )
-        if len(out) >= int(k):
-            break
-    return out
+        manager = runtime_memory._memory_manager()
+        if manager is None:
+            set_span_attributes(span, {"memory_result_count": 0})
+            return []
+        try:
+            fetch_limit = max(int(k), 1)
+            fetch_limit = min(max(fetch_limit * 8, 24), 120)
+            raw_results = manager.search_memory(query, fetch_limit)
+        except Exception as exc:
+            try:
+                span.record_exception(exc)
+            except Exception:
+                pass
+            return []
+        if not isinstance(raw_results, list):
+            set_span_attributes(span, {"memory_result_count": 0})
+            return []
+
+        out: List[Dict[str, Any]] = []
+        seen_ids: Set[str] = set()
+        for item in raw_results:
+            if not isinstance(item, dict):
+                continue
+            mem_id = str(item.get("id") or "").strip()
+            if not mem_id or mem_id in seen_ids:
+                continue
+            metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
+            if not _memory_item_matches_scope(
+                metadata,
+                bucket=bucket,
+                workspace_id=workspace_id,
+                profile_id=profile_id,
+                project_id=project_id,
+                session_key=session_key,
+            ):
+                continue
+            seen_ids.add(mem_id)
+            out.append(
+                {
+                    "id": mem_id,
+                    "text": str(item.get("text") or ""),
+                    "score": item.get("score"),
+                    "metadata": metadata,
+                }
+            )
+            if len(out) >= int(k):
+                break
+        set_span_attributes(span, {"memory_result_count": len(out)})
+        return out
 
 
 def memory_search_scoped(
@@ -750,84 +798,97 @@ def _hydrate_run_memory_context(run_id: str, run: Dict[str, Any]) -> None:
         "memory_trace",
         {"enabled": runtime_memory.ORION_MEMORY_ENABLED, "reads": [], "writes": [], "last_error": None, "updated_at": None},
     )
-    if not runtime_memory.ORION_MEMORY_ENABLED:
-        trace["enabled"] = False
-        trace["updated_at"] = _runtime_utc_now_iso()
-        return
-    manager = runtime_memory._memory_manager()
-    if manager is None:
-        trace["last_error"] = runtime_memory.MEMORY_MANAGER_ERROR or "memory_unavailable"
-        trace["updated_at"] = _runtime_utc_now_iso()
-        return
-
     context = run.get("context") if isinstance(run.get("context"), dict) else {}
     metadata = context.get("metadata") if isinstance(context.get("metadata"), dict) else {}
-    if str(metadata.get("memory_read_enabled") or "1").strip().lower() in {"0", "false", "no", "off"}:
-        trace["updated_at"] = _runtime_utc_now_iso()
-        return
-
-    user_goal = str(context.get("user_goal") or "").strip()
-    business_plan = str(context.get("business_plan") or "").strip()
-    query = "\n".join([part for part in [user_goal, business_plan] if part]).strip() or "recent context"
-    try:
-        read_k = max(1, min(int(metadata.get("memory_read_k") or runtime_memory.ORION_MEMORY_READ_K), 20))
-    except Exception:
-        read_k = runtime_memory.ORION_MEMORY_READ_K
-
-    scope = _memory_scope_from_context(context)
-    bucket_queries: List[tuple[str, Dict[str, Optional[str]]]] = []
-    if scope.get("profile_id"):
-        bucket_queries.append(("profile", {"profile_id": scope.get("profile_id")}))
-    if scope.get("project_id"):
-        bucket_queries.append(("project", {"project_id": scope.get("project_id")}))
-    if scope.get("session_key"):
-        bucket_queries.append(("session", {"session_key": scope.get("session_key")}))
-    if not bucket_queries:
-        bucket_queries.append(("session", {"session_key": f"run:{run_id}"}))
-
-    aggregated: List[Dict[str, Any]] = []
-    read_records: List[Dict[str, Any]] = []
-    seen_ids: Set[str] = set()
-    for bucket, bucket_scope in bucket_queries:
-        items = _memory_search_scoped(
-            query,
-            bucket=bucket,
-            workspace_id=scope.get("workspace_id"),
-            profile_id=bucket_scope.get("profile_id"),
-            project_id=bucket_scope.get("project_id"),
-            session_key=bucket_scope.get("session_key"),
-            k=read_k,
+    tracer = get_tracer("server_modules.memory_service")
+    with tracer.start_as_current_span("memory_service.hydrate_run_context") as span:
+        set_span_attributes(
+            span,
+            {
+                "memory_type": "run_context",
+                "workspace_id": _runtime_workspace_id(context.get("workspace_id") or metadata.get("workspace_id")),
+                "tenant_id": str(context.get("tenant_id") or metadata.get("tenant_id") or "default").strip() or "default",
+                "actor_type": str(metadata.get("request_actor_type") or "").strip() or "runtime",
+                "run_id": str(run_id or "").strip() or None,
+            },
         )
-        read_records.append({"bucket": bucket, "count": len(items), "k": read_k})
-        for item in items:
-            mem_id = str(item.get("id") or "").strip()
-            if not mem_id or mem_id in seen_ids:
-                continue
-            seen_ids.add(mem_id)
-            aggregated.append(item)
+        if not runtime_memory.ORION_MEMORY_ENABLED:
+            trace["enabled"] = False
+            trace["updated_at"] = _runtime_utc_now_iso()
+            return
+        manager = runtime_memory._memory_manager()
+        if manager is None:
+            trace["last_error"] = runtime_memory.MEMORY_MANAGER_ERROR or "memory_unavailable"
+            trace["updated_at"] = _runtime_utc_now_iso()
+            return
 
-    memory_context = {
-        "query": runtime_memory._compact_event_text(query, limit=500),
-        "scope": scope,
-        "items": aggregated[: max(1, read_k * 2)],
-        "count": len(aggregated),
-    }
-    metadata["memory_context"] = memory_context
-    context["metadata"] = metadata
-    run["context"] = context
-    trace_reads = trace.get("reads") if isinstance(trace.get("reads"), list) else []
-    trace_reads.extend(read_records)
-    trace["reads"] = trace_reads[-20:]
-    trace["updated_at"] = _runtime_utc_now_iso()
-    run["memory_trace"] = trace
+        if str(metadata.get("memory_read_enabled") or "1").strip().lower() in {"0", "false", "no", "off"}:
+            trace["updated_at"] = _runtime_utc_now_iso()
+            return
 
-    runtime_memory._emit_log(
-        run["logs"],
-        "info",
-        f"Memory context loaded: {len(aggregated)} item(s).",
-        event="memory_context",
-        data={"query": memory_context["query"], "scope": scope, "count": len(aggregated)},
-    )
+        user_goal = str(context.get("user_goal") or "").strip()
+        business_plan = str(context.get("business_plan") or "").strip()
+        query = "\n".join([part for part in [user_goal, business_plan] if part]).strip() or "recent context"
+        try:
+            read_k = max(1, min(int(metadata.get("memory_read_k") or runtime_memory.ORION_MEMORY_READ_K), 20))
+        except Exception:
+            read_k = runtime_memory.ORION_MEMORY_READ_K
+
+        scope = _memory_scope_from_context(context)
+        bucket_queries: List[tuple[str, Dict[str, Optional[str]]]] = []
+        if scope.get("profile_id"):
+            bucket_queries.append(("profile", {"profile_id": scope.get("profile_id")}))
+        if scope.get("project_id"):
+            bucket_queries.append(("project", {"project_id": scope.get("project_id")}))
+        if scope.get("session_key"):
+            bucket_queries.append(("session", {"session_key": scope.get("session_key")}))
+        if not bucket_queries:
+            bucket_queries.append(("session", {"session_key": f"run:{run_id}"}))
+
+        aggregated: List[Dict[str, Any]] = []
+        read_records: List[Dict[str, Any]] = []
+        seen_ids: Set[str] = set()
+        for bucket, bucket_scope in bucket_queries:
+            items = _memory_search_scoped(
+                query,
+                bucket=bucket,
+                workspace_id=scope.get("workspace_id"),
+                profile_id=bucket_scope.get("profile_id"),
+                project_id=bucket_scope.get("project_id"),
+                session_key=bucket_scope.get("session_key"),
+                k=read_k,
+            )
+            read_records.append({"bucket": bucket, "count": len(items), "k": read_k})
+            for item in items:
+                mem_id = str(item.get("id") or "").strip()
+                if not mem_id or mem_id in seen_ids:
+                    continue
+                seen_ids.add(mem_id)
+                aggregated.append(item)
+
+        memory_context = {
+            "query": runtime_memory._compact_event_text(query, limit=500),
+            "scope": scope,
+            "items": aggregated[: max(1, read_k * 2)],
+            "count": len(aggregated),
+        }
+        metadata["memory_context"] = memory_context
+        context["metadata"] = metadata
+        run["context"] = context
+        trace_reads = trace.get("reads") if isinstance(trace.get("reads"), list) else []
+        trace_reads.extend(read_records)
+        trace["reads"] = trace_reads[-20:]
+        trace["updated_at"] = _runtime_utc_now_iso()
+        run["memory_trace"] = trace
+
+        runtime_memory._emit_log(
+            run["logs"],
+            "info",
+            f"Memory context loaded: {len(aggregated)} item(s).",
+            event="memory_context",
+            data={"query": memory_context["query"], "scope": scope, "count": len(aggregated)},
+        )
+        set_span_attributes(span, {"memory_result_count": len(aggregated)})
 
 
 def hydrate_run_memory_context(run_id: str, run: Dict[str, Any]) -> None:

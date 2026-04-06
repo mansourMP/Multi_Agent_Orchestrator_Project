@@ -31,7 +31,7 @@ class RuntimeRunQueryServiceTests(unittest.TestCase):
                 "MemoryServiceModule",
                 (),
                 {
-                    "_trim_memory_trace": staticmethod(lambda value: {"trimmed": True}),
+                    "trim_memory_trace": staticmethod(lambda value: {"trimmed": True}),
                 },
             )(),
         }

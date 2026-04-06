@@ -625,6 +625,27 @@ def _memory_search_scoped(
     return out
 
 
+def memory_search_scoped(
+    query: str,
+    *,
+    bucket: Optional[str] = None,
+    workspace_id: Optional[str] = None,
+    profile_id: Optional[str] = None,
+    project_id: Optional[str] = None,
+    session_key: Optional[str] = None,
+    k: int = 5,
+) -> List[Dict[str, Any]]:
+    return _memory_search_scoped(
+        query,
+        bucket=bucket,
+        workspace_id=workspace_id,
+        profile_id=profile_id,
+        project_id=project_id,
+        session_key=session_key,
+        k=k,
+    )
+
+
 def _memory_scope_from_context(context: Dict[str, Any]) -> Dict[str, str]:
     metadata = context.get("metadata") if isinstance(context.get("metadata"), dict) else {}
     workspace_id = _runtime_workspace_id(context.get("workspace_id") or metadata.get("workspace_id"))
@@ -653,6 +674,10 @@ def _trim_memory_trace(trace: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def trim_memory_trace(trace: Dict[str, Any]) -> Dict[str, Any]:
+    return _trim_memory_trace(trace)
+
+
 def _memory_prompt_context_block(context: Dict[str, Any], max_items: int = 6) -> str:
     metadata = context.get("metadata") if isinstance(context.get("metadata"), dict) else {}
     memory_ctx = metadata.get("memory_context") if isinstance(metadata.get("memory_context"), dict) else {}
@@ -671,6 +696,10 @@ def _memory_prompt_context_block(context: Dict[str, Any], max_items: int = 6) ->
     if not lines:
         return "Memory Context:\n- none"
     return "Memory Context:\n" + "\n".join(lines)
+
+
+def memory_prompt_context_block(context: Dict[str, Any], max_items: int = 6) -> str:
+    return _memory_prompt_context_block(context, max_items=max_items)
 
 
 def _run_result_summary(run: Dict[str, Any]) -> str:
@@ -710,6 +739,10 @@ def _memory_health_snapshot() -> Dict[str, Any]:
         "lancedb_uri": runtime_memory.ORION_MEMORY_LANCEDB_URI,
         "lancedb_initialized": lancedb_initialized,
     }
+
+
+def memory_health_snapshot() -> Dict[str, Any]:
+    return _memory_health_snapshot()
 
 
 def _hydrate_run_memory_context(run_id: str, run: Dict[str, Any]) -> None:
@@ -797,6 +830,10 @@ def _hydrate_run_memory_context(run_id: str, run: Dict[str, Any]) -> None:
     )
 
 
+def hydrate_run_memory_context(run_id: str, run: Dict[str, Any]) -> None:
+    _hydrate_run_memory_context(run_id, run)
+
+
 def _persist_run_memory(run_id: str, run: Dict[str, Any]) -> None:
     trace = run.setdefault(
         "memory_trace",
@@ -878,3 +915,7 @@ def _persist_run_memory(run_id: str, run: Dict[str, Any]) -> None:
             event="memory_write",
             data={"writes": writes[-len(targets):]},
         )
+
+
+def persist_run_memory(run_id: str, run: Dict[str, Any]) -> None:
+    _persist_run_memory(run_id, run)

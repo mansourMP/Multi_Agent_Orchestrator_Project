@@ -49,10 +49,7 @@ class DirectChatRuntimeFacadeCallbacks:
     direct_chat_compaction_token_limit: int
     with_context_used: Callable[[Dict[str, Any], Dict[str, Any]], Dict[str, Any]]
     connected_provider_tokens: Callable[[str], List[str]]
-    list_memory_entries: Callable[[str], List[Any]]
     active_run_count: Callable[[str], int]
-    get_memory: Callable[[str], str]
-    delete_memory: Callable[[str, str], bool]
     slash_command_help_text: Callable[[], str]
     execute_direct_tool_calls: Callable[..., str]
     direct_chat_credentials: Callable[[str, str], Dict[str, Any]]
@@ -186,10 +183,7 @@ def build_direct_chat_response_services(
         with_context_used=callbacks.with_context_used,
         build_context_used=callbacks.build_context_used,
         connected_provider_tokens=callbacks.connected_provider_tokens,
-        list_memory_entries=callbacks.list_memory_entries,
         active_run_count=callbacks.active_run_count,
-        get_memory=callbacks.get_memory,
-        delete_memory=callbacks.delete_memory,
         slash_command_help_text=callbacks.slash_command_help_text,
         execute_direct_tool_calls=callbacks.execute_direct_tool_calls,
         direct_chat_credentials=callbacks.direct_chat_credentials,

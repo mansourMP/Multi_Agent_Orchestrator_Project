@@ -69,7 +69,7 @@ def build_default_run_detail_response_callbacks(
     )
     memory_service = import_module(
         "server_modules.memory_service",
-        fromlist=["_trim_memory_trace"],
+        fromlist=["trim_memory_trace"],
     )
     return build_run_detail_response_callbacks(
         get_replay_payload=runs_output._get_replay_payload,
@@ -83,7 +83,7 @@ def build_default_run_detail_response_callbacks(
         redact_sensitive=runs_output.redact_sensitive,
         limited_result_data_view_fn=limited_result_data_view_fn,
         limited_node_states_view_fn=runs_output._limited_node_states_view,
-        trim_memory_trace_fn=memory_service._trim_memory_trace,
+        trim_memory_trace_fn=memory_service.trim_memory_trace,
         get_pending_confirmation_fn=get_pending_confirmation_fn,
         build_archived_run_detail_response=build_archived_run_detail_response,
         build_live_run_detail_response=build_live_run_detail_response,

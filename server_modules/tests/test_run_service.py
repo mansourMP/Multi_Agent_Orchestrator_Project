@@ -56,10 +56,13 @@ from server_modules.run_service import (
     build_run_relation_summary,
     build_live_run_record,
     clear_pending_confirmation,
+    create_workflow_child_local_run,
     get_pending_confirmation,
     register_live_run,
     activate_live_run,
     execute_workflow_human_node,
+    execute_workflow_local_tool,
+    execute_workflow_subflow_node,
     set_pending_confirmation,
     transition_live_run_status,
     prepare_legacy_run_start_request,
@@ -113,6 +116,7 @@ from server_modules.run_service import (
     timeout_stale_delegated_child_runs,
     trigger_pending_heartbeat_schedules,
     initialize_runtime_services,
+    wait_for_workflow_child_run,
     wait_for_human_response,
 )
 from server_modules.runtime_models import RunStartRequest
@@ -725,6 +729,163 @@ class RunServiceTests(unittest.TestCase):
         self.assertFalse(updates[1][1]["waiting_for_approval"])
         self.assertEqual(state["last_data"]["human_response"]["note"], "Please fix tone")
         self.assertEqual(emitted[0][1]["event"], "workflow_human_resolved")
+
+    def test_create_workflow_child_local_run_builds_local_child_request(self):
+        captured = []
+
+        child_run_id = create_workflow_child_local_run(
+            run_id="run-parent",
+            context={
+                "engine": "orion",
+                "workspace_id": "ws-1",
+                "business_plan": "plan",
+                "agent_role": "builder",
+                "provider": "openai",
+                "model": "gpt-test",
+                "credential_id": "cred-1",
+                "metadata": {"existing": True},
+            },
+            label="Write file",
+            operation={"tool": "read_write_files", "path": "README.md", "mode": "write"},
+            summary="Write README",
+            execute_workflow_child_run_request_fn=lambda request: captured.append(request) or {
+                "run_id": "child-1",
+                "route": {"selected": "local_companion"},
+            },
+            local_execution_pack_id="local-execution-v1",
+            execution_target_local_companion="local_companion",
+            trust_mode_auto="auto",
+            metadata_overrides={"browser_session_profile": "default"},
+        )
+
+        self.assertEqual(child_run_id, "child-1")
+        request = captured[0]
+        self.assertEqual(request.parent_run_id, "run-parent")
+        self.assertEqual(request.user_goal, "Write README")
+        self.assertEqual(request.metadata["outcome_pack"], "local-execution-v1")
+        self.assertEqual(request.metadata["pack_inputs"]["operations"][0]["tool"], "read_write_files")
+        self.assertEqual(request.metadata["browser_session_profile"], "default")
+
+    def test_wait_for_workflow_child_run_emits_wait_and_resume_callbacks(self):
+        runs_by_id = [
+            {"status": "waiting_for_input", "pending_approval": {"approval_id": "approval-1"}},
+            {"status": "running"},
+            {"status": "completed", "result": "done"},
+        ]
+        waiting = []
+        resumed = []
+        ticks = {"value": 0}
+
+        def _load_run(_run_id):
+            if len(runs_by_id) > 1:
+                return runs_by_id.pop(0)
+            return runs_by_id[0]
+
+        def _monotonic():
+            ticks["value"] += 1
+            return float(ticks["value"])
+
+        result = wait_for_workflow_child_run(
+            child_run_id="child-1",
+            timeout_seconds=30,
+            load_run_fn=_load_run,
+            monotonic_fn=_monotonic,
+            sleep_fn=lambda _seconds: None,
+            on_waiting_for_input=lambda run_id, child_run: waiting.append((run_id, child_run["status"])),
+            on_resumed=lambda run_id, child_run: resumed.append((run_id, child_run["status"])),
+        )
+
+        self.assertEqual(result["status"], "completed")
+        self.assertEqual(waiting, [("child-1", "waiting_for_input")])
+        self.assertEqual(resumed, [("child-1", "running")])
+
+    def test_execute_workflow_subflow_node_updates_state_from_child_run(self):
+        updates = []
+        emitted = []
+        state = {"last_text": "Initial text"}
+        requests = []
+
+        result = execute_workflow_subflow_node(
+            run_id="run-parent",
+            node_id="subflow_1",
+            label="Call child workflow",
+            context={
+                "engine": "orion",
+                "workflow_id": "wf-parent",
+                "workspace_id": "ws-1",
+                "user_goal": "Do work",
+                "business_plan": "Plan work",
+                "metadata": {},
+            },
+            config={"workflow_id": "wf-child", "mode": "sync", "timeout_seconds": 45},
+            current_text="Parent text",
+            state=state,
+            update_node_state_fn=lambda *args, **kwargs: updates.append((args, kwargs)),
+            emit_log_fn=lambda *args, **kwargs: emitted.append((args, kwargs)),
+            workflow_text_payload_fn=lambda value: str(value or ""),
+            node_preview_text_fn=lambda value: str(value or ""),
+            execute_workflow_child_run_request_fn=lambda request: requests.append(request) or {
+                "run_id": "child-run-1",
+                "route": {"selected": "cloud"},
+            },
+            load_run_fn=lambda _run_id: {
+                "status": "completed",
+                "result": "Child result",
+                "result_data": {"summary": "ok"},
+            },
+            log_queue=queue.Queue(),
+            execution_target_local_companion="local_companion",
+        )
+
+        self.assertEqual(result, "Child result")
+        self.assertEqual(requests[0].workflow_id, "wf-child")
+        self.assertEqual(state["last_text"], "Child result")
+        self.assertEqual(state["last_data"]["child_workflow_id"], "wf-child")
+        self.assertEqual(emitted[0][1]["event"], "workflow_subflow_start")
+        self.assertEqual(emitted[1][1]["event"], "workflow_subflow_complete")
+        self.assertEqual(updates[-1][1]["status"], "succeeded")
+
+    def test_execute_workflow_local_tool_runs_via_child_local_run_lifecycle(self):
+        requests = []
+
+        result = execute_workflow_local_tool(
+            run_id="run-local",
+            context={"metadata": {}},
+            config={
+                "path": "README.md",
+                "mode": "write",
+                "execution_target": "local_companion",
+                "permissions": {"file_mount_grants": []},
+                "timeout_seconds": 30,
+            },
+            label="Write file",
+            variant="file",
+            current_text="Hello",
+            normalize_execution_target_fn=lambda value: str(value or ""),
+            assert_file_mount_access_fn=lambda path, mode, grants, target: {"mode": mode, "mount": {"root": ".", "path": path, "target": target}},
+            browser_automation_policy_from_operations_fn=lambda operations: {},
+            normalize_action_id_fn=lambda value: str(value or "").strip(),
+            workflow_text_payload_fn=lambda value: str(value or ""),
+            json_safe_fn=lambda value: value,
+            execute_workflow_child_run_request_fn=lambda request: requests.append(request) or {
+                "run_id": "child-local-1",
+                "route": {"selected": "local_companion"},
+            },
+            local_execution_pack_id="local-execution-v1",
+            execution_target_local_companion="local_companion",
+            execution_target_cloud="cloud",
+            trust_mode_auto="auto",
+            browser_auth_actions=set(),
+            load_run_fn=lambda _run_id: {
+                "status": "completed",
+                "result": "Local tool finished",
+                "result_data": {"ok": True},
+            },
+        )
+
+        self.assertEqual(result["summary"], "Local tool finished")
+        self.assertEqual(result["result_data"]["local_child_run_id"], "child-local-1")
+        self.assertEqual(requests[0].metadata["pack_inputs"]["operations"][0]["tool"], "read_write_files")
 
     def test_safe_int_and_normalize_requested_max_iterations(self):
         self.assertEqual(safe_int("7", 0), 7)

@@ -1214,7 +1214,7 @@ class RunsExecutionGraphTests(unittest.TestCase):
 
         self.assertIn("cannot target cloud directly", str(ctx.exception))
 
-    @patch("server_modules.runs_execution._workflow_tool_create_child_local_run")
+    @patch("server_modules.run_service.create_workflow_child_local_run")
     def test_local_code_tool_requires_reviewed_execution_path(self, create_child_run_mock):
         with self.assertRaises(RuntimeError) as ctx:
             runs_execution._workflow_execute_local_tool(
@@ -1233,7 +1233,7 @@ class RunsExecutionGraphTests(unittest.TestCase):
         self.assertIn("reviewed higher-trust execution path", str(ctx.exception))
         create_child_run_mock.assert_not_called()
 
-    @patch("server_modules.runs_execution._workflow_tool_create_child_local_run")
+    @patch("server_modules.run_service.create_workflow_child_local_run")
     def test_local_code_tool_rejects_shell_fields(self, create_child_run_mock):
         with self.assertRaises(RuntimeError) as ctx:
             runs_execution._workflow_execute_local_tool(
@@ -1368,7 +1368,7 @@ class RunsExecutionGraphTests(unittest.TestCase):
         self.assertEqual(result["result_data"]["workflow_execution"]["final_node_id"], "tool_1")
 
     @patch("server_modules.runs_execution.wait_for_human_response")
-    @patch("server_modules.runs_execution._workflow_wait_for_child_run")
+    @patch("server_modules.run_service.wait_for_workflow_child_run")
     @patch("server_modules.runs_delegation._create_run_from_request")
     def test_launch_gate_subflow_review_workflow(self, create_child_mock, wait_child_mock, human_mock):
         create_child_mock.return_value = {"run_id": "child-1", "route": {"selected": "cloud"}}
@@ -1419,7 +1419,7 @@ class RunsExecutionGraphTests(unittest.TestCase):
         self.assertIn("Final handoff", result["result_text"])
         self.assertIn("Please publish after legal review", result["result_text"])
 
-    @patch("server_modules.runs_execution._workflow_execute_local_tool")
+    @patch("server_modules.runs_execution.run_service.execute_workflow_local_tool")
     def test_execute_workflow_graph_runs_local_tool_variant(self, local_tool_mock):
         local_tool_mock.return_value = {
             "summary": "Local tool node completed: Write file.",
@@ -1452,7 +1452,7 @@ class RunsExecutionGraphTests(unittest.TestCase):
         self.assertIn("Local tool node completed", result["result_text"])
         self.assertEqual(result["result_data"]["workflow_execution"]["final_node_id"], "tool_1")
 
-    @patch("server_modules.runs_execution._workflow_tool_create_child_local_run")
+    @patch("server_modules.run_service.create_workflow_child_local_run")
     def test_local_file_tool_blocks_local_root_without_grant(self, create_child_run_mock):
         with self.assertRaises(RuntimeError):
             runs_execution._workflow_execute_local_tool(
@@ -1471,7 +1471,7 @@ class RunsExecutionGraphTests(unittest.TestCase):
 
         create_child_run_mock.assert_not_called()
 
-    @patch("server_modules.runs_execution._workflow_tool_create_child_local_run")
+    @patch("server_modules.run_service.create_workflow_child_local_run")
     def test_local_shell_tool_blocks_absolute_cwd_without_local_root_grant(self, create_child_run_mock):
         with self.assertRaises(RuntimeError):
             runs_execution._workflow_execute_local_tool(
@@ -1490,7 +1490,7 @@ class RunsExecutionGraphTests(unittest.TestCase):
 
         create_child_run_mock.assert_not_called()
 
-    @patch("server_modules.runs_execution._workflow_tool_create_child_local_run")
+    @patch("server_modules.run_service.create_workflow_child_local_run")
     def test_local_shell_tool_rejects_mixed_capability_and_command(self, create_child_run_mock):
         with self.assertRaises(RuntimeError):
             runs_execution._workflow_execute_local_tool(
@@ -1509,7 +1509,7 @@ class RunsExecutionGraphTests(unittest.TestCase):
 
         create_child_run_mock.assert_not_called()
 
-    @patch("server_modules.runs_execution._workflow_tool_create_child_local_run")
+    @patch("server_modules.run_service.create_workflow_child_local_run")
     def test_browser_tool_requires_explicit_browser_permission_for_session_profile(self, create_child_run_mock):
         with self.assertRaises(RuntimeError):
             runs_execution._workflow_execute_local_tool(
@@ -1532,8 +1532,8 @@ class RunsExecutionGraphTests(unittest.TestCase):
 
         create_child_run_mock.assert_not_called()
 
-    @patch("server_modules.runs_execution._workflow_wait_for_child_run")
-    @patch("server_modules.runs_execution._workflow_tool_create_child_local_run")
+    @patch("server_modules.run_service.wait_for_workflow_child_run")
+    @patch("server_modules.run_service.create_workflow_child_local_run")
     def test_browser_tool_passes_reviewed_interactive_metadata_to_child_run(self, create_child_run_mock, wait_child_mock):
         create_child_run_mock.return_value = "child-browser-run"
         wait_child_mock.return_value = {
@@ -1566,7 +1566,7 @@ class RunsExecutionGraphTests(unittest.TestCase):
         self.assertTrue(metadata_overrides["browser_reviewed_approval_required"])
         self.assertTrue(metadata_overrides["browser_immutable_plan_hash"])
 
-    @patch("server_modules.runs_execution._workflow_execute_local_tool")
+    @patch("server_modules.runs_execution.run_service.execute_workflow_local_tool")
     @patch("server_modules.runs_execution.wait_for_human_decision", return_value=True)
     def test_execute_workflow_graph_requires_approval_for_session_backed_browser_tool(self, approval_mock, local_tool_mock):
         local_tool_mock.return_value = {
@@ -1648,26 +1648,29 @@ class RunsExecutionGraphTests(unittest.TestCase):
         self.assertEqual(result["result_text"], "Child workflow finished.")
         self.assertEqual(result["result_data"]["workflow_execution"]["final_node_id"], "subflow_1")
 
+    @patch("server_modules.run_service.wait_for_workflow_child_run")
     @patch("server_modules.runs_delegation._create_run_from_request")
-    @patch("server_modules.runs_execution.time.sleep")
-    def test_execute_workflow_graph_waits_for_subflow_human_input_and_resumes(self, sleep_mock, create_child_run_mock):
+    def test_execute_workflow_graph_waits_for_subflow_human_input_and_resumes(self, create_child_run_mock, wait_child_mock):
         create_child_run_mock.return_value = {
             "run_id": "child-run-wait",
             "route": {"selected": "cloud"},
         }
-        runs_execution.runs["child-run-wait"] = {
-            "status": "waiting_for_input",
-            "pending_approval": {"approval_id": "approval-child-1"},
-            "result": None,
-            "result_data": {},
+        wait_child_mock.side_effect = lambda **kwargs: kwargs["on_waiting_for_input"](
+            "child-run-wait",
+            {
+                "status": "waiting_for_input",
+                "pending_approval": {"approval_id": "approval-child-1"},
+                "result": None,
+                "result_data": {},
+            },
+        ) or kwargs["on_resumed"](
+            "child-run-wait",
+            {"status": "running"},
+        ) or {
+            "status": "completed",
+            "result": "Child workflow finished after approval.",
+            "result_data": {"summary": "Child workflow finished after approval."},
         }
-
-        def _sleep(_seconds):
-            runs_execution.runs["child-run-wait"]["status"] = "completed"
-            runs_execution.runs["child-run-wait"]["result"] = "Child workflow finished after approval."
-            runs_execution.runs["child-run-wait"]["result_data"] = {"summary": "Child workflow finished after approval."}
-
-        sleep_mock.side_effect = _sleep
         log_queue = self._register_live_run("run-parent-wait")
         definition = {
             "version": "empyralist.workflow.v2",

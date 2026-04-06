@@ -72,6 +72,68 @@ class RunsExecutionRunServiceTests(unittest.TestCase):
         self.assertEqual(kwargs["node_id"], "review_1")
         self.assertEqual(kwargs["variant"], "review")
 
+    def test_workflow_subflow_node_delegates_to_run_service(self) -> None:
+        definition = {
+            "version": "empyralist.workflow.v2",
+            "nodes": [
+                {"id": "trigger_1", "type": "trigger", "variant": "manual", "config": {}},
+                {"id": "subflow_1", "type": "subflow", "variant": "call_workflow", "config": {"workflow_id": "wf-child"}},
+            ],
+            "edges": [{"id": "e1", "source": "trigger_1", "target": "subflow_1"}],
+        }
+
+        with patch.object(
+            runs_execution.run_service,
+            "execute_workflow_subflow_node",
+            side_effect=lambda **kwargs: kwargs["state"].__setitem__(
+                "last_data",
+                {"node_id": "subflow_1", "child_workflow_id": "wf-child"},
+            ) or kwargs["state"].__setitem__("last_text", "Subflow reply") or "Subflow reply",
+        ) as helper_mock:
+            result = runs_execution._execute_workflow_graph(
+                "run-subflow-delegate",
+                {"workflow_id": "wf-parent", "user_goal": "Run child", "metadata": {}},
+                __import__("queue").Queue(),
+                definition,
+                _track_node_states=False,
+            )
+
+        self.assertEqual(result["result_text"], "Subflow reply")
+        helper_mock.assert_called_once()
+        _, kwargs = helper_mock.call_args
+        self.assertEqual(kwargs["run_id"], "run-subflow-delegate")
+        self.assertEqual(kwargs["node_id"], "subflow_1")
+
+    def test_workflow_local_tool_node_delegates_to_run_service(self) -> None:
+        definition = {
+            "version": "empyralist.workflow.v2",
+            "nodes": [
+                {"id": "trigger_1", "type": "trigger", "variant": "manual", "config": {}},
+                {"id": "tool_1", "type": "tool", "variant": "file", "config": {"path": "README.md", "mode": "write"}},
+            ],
+            "edges": [{"id": "e1", "source": "trigger_1", "target": "tool_1"}],
+        }
+
+        with patch.object(
+            runs_execution.run_service,
+            "execute_workflow_local_tool",
+            return_value={"summary": "Local tool finished", "result_data": {"local_child_run_id": "child-1"}},
+        ) as helper_mock:
+            result = runs_execution._execute_workflow_graph(
+                "run-tool-delegate",
+                {"workflow_id": "wf-tool", "user_goal": "Write file", "metadata": {}},
+                __import__("queue").Queue(),
+                definition,
+                _track_node_states=False,
+            )
+
+        self.assertEqual(result["result_text"], "Local tool finished")
+        helper_mock.assert_called_once()
+        _, kwargs = helper_mock.call_args
+        self.assertEqual(kwargs["run_id"], "run-tool-delegate")
+        self.assertEqual(kwargs["label"], "tool_1")
+        self.assertEqual(kwargs["variant"], "file")
+
 
 if __name__ == "__main__":
     unittest.main()

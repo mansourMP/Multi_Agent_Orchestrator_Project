@@ -1782,42 +1782,18 @@ def _workflow_tool_create_child_local_run(
     summary: str,
     metadata_overrides: Optional[Dict[str, Any]] = None,
 ) -> str:
-    from server_modules.runtime_models import RunStartRequest
-
-    child_metadata = dict(context.get("metadata") if isinstance(context.get("metadata"), dict) else {})
-    child_metadata.update(
-        {
-            "outcome_pack": LOCAL_EXECUTION_PACK_ID,
-            "execution_target": EXECUTION_TARGET_LOCAL_COMPANION,
-            "trust_mode": TRUST_MODE_AUTO,
-            "pack_inputs": {"operations": [operation]},
-            "subflow_parent_run_id": run_id,
-            "workflow_tool_parent_run_id": run_id,
-        }
+    return run_service.create_workflow_child_local_run(
+        run_id=run_id,
+        context=context,
+        label=label,
+        operation=operation,
+        summary=summary,
+        execute_workflow_child_run_request_fn=_execute_workflow_child_run_request,
+        local_execution_pack_id=LOCAL_EXECUTION_PACK_ID,
+        execution_target_local_companion=EXECUTION_TARGET_LOCAL_COMPANION,
+        trust_mode_auto=TRUST_MODE_AUTO,
+        metadata_overrides=metadata_overrides,
     )
-    if isinstance(metadata_overrides, dict):
-        child_metadata.update(metadata_overrides)
-    child_req = RunStartRequest(
-        engine=str(context.get("engine") or "orion"),
-        workflow_id=None,
-        workspace_id=context.get("workspace_id"),
-        user_goal=summary or f"Execute local workflow tool node: {label}",
-        business_plan=context.get("business_plan"),
-        agent_role=context.get("agent_role"),
-        provider=context.get("provider"),
-        model=context.get("model"),
-        credential_id=context.get("credential_id"),
-        parent_run_id=run_id,
-        metadata=child_metadata,
-    )
-    child_result = _execute_workflow_child_run_request(child_req)
-    route = child_result.get("route") if isinstance(child_result.get("route"), dict) else {}
-    if str(route.get("selected") or "").strip().lower() != EXECUTION_TARGET_LOCAL_COMPANION:
-        raise RuntimeError(f"Local tool node '{label}' requires a local_companion route.")
-    child_run_id = str(child_result.get("run_id") or "").strip()
-    if not child_run_id:
-        raise RuntimeError(f"Local tool node '{label}' did not produce a child run id.")
-    return child_run_id
 
 
 def _workflow_wait_for_child_run(
@@ -1827,30 +1803,13 @@ def _workflow_wait_for_child_run(
     on_waiting_for_input: Optional[Callable[[str, Dict[str, Any]], None]] = None,
     on_resumed: Optional[Callable[[str, Dict[str, Any]], None]] = None,
 ) -> Dict[str, Any]:
-    deadline = time.monotonic() + max(5, int(timeout_seconds or 300))
-    waiting_emitted = False
-    while True:
-        if time.monotonic() > deadline:
-            raise RuntimeError(f"Child run '{child_run_id}' did not finish within {timeout_seconds}s.")
-        child_run = runs.get(child_run_id)
-        if not isinstance(child_run, dict):
-            time.sleep(0.25)
-            continue
-        child_status = str(child_run.get("status") or "").strip().lower()
-        if child_status == "waiting_for_input":
-            if not waiting_emitted and callable(on_waiting_for_input):
-                on_waiting_for_input(child_run_id, child_run)
-            waiting_emitted = True
-            time.sleep(0.25)
-            continue
-        if waiting_emitted and callable(on_resumed):
-            on_resumed(child_run_id, child_run)
-            waiting_emitted = False
-        if child_status == "completed":
-            return child_run
-        if child_status in {"failed", "timeout", "cancelled", "stopped"}:
-            raise RuntimeError(f"Child run '{child_run_id}' ended with status '{child_status}'.")
-        time.sleep(0.25)
+    return run_service.wait_for_workflow_child_run(
+        child_run_id=child_run_id,
+        timeout_seconds=timeout_seconds,
+        load_run_fn=runs.get,
+        on_waiting_for_input=on_waiting_for_input,
+        on_resumed=on_resumed,
+    )
 
 
 def _workflow_execute_connector_action(
@@ -3749,169 +3708,29 @@ def _workflow_execute_local_tool(
     on_waiting_for_input: Optional[Callable[[str, Dict[str, Any]], None]] = None,
     on_resumed: Optional[Callable[[str, Dict[str, Any]], None]] = None,
 ) -> Dict[str, Any]:
-    execution_target = normalize_execution_target(
-        config.get("execution_target")
-        or context.get("metadata", {}).get("execution_target_selected")
-        or context.get("metadata", {}).get("execution_target")
-        or "auto"
-    )
-    permissions = config.get("permissions") if isinstance(config.get("permissions"), dict) else {}
-    file_mount_grants = (
-        permissions.get("file_mount_grants")
-        if isinstance(permissions.get("file_mount_grants"), list)
-        else context.get("metadata", {}).get("file_mount_grants")
-    )
-    if variant in {"shell", "browser", "computer", "code"} and execution_target == EXECUTION_TARGET_CLOUD:
-        raise RuntimeError(f"{variant.title()} tool nodes cannot target cloud directly; use local_companion or auto.")
-    if variant in {"shell", "code"}:
-        has_command = bool(str(config.get("command") or "").strip())
-        has_argv = isinstance(config.get("argv"), list) and any(str(item or "").strip() for item in (config.get("argv") or []))
-        has_capability = bool(str(config.get("capability") or "").strip())
-        if has_capability and (has_command or has_argv):
-            raise RuntimeError(f"{variant.title()} tool nodes cannot mix capability with command or argv.")
-    if variant == "code":
-        has_command = bool(str(config.get("command") or "").strip())
-        has_argv = isinstance(config.get("argv"), list) and any(str(item or "").strip() for item in (config.get("argv") or []))
-        has_capability = bool(str(config.get("capability") or "").strip())
-        if has_command or has_argv or has_capability:
-            raise RuntimeError("Code tool nodes cannot use command, argv, or capability in the current runtime.")
-        raise RuntimeError(
-            "Code tool nodes are not executable in local companion V1; they require a reviewed higher-trust execution path."
-        )
-    if variant == "file":
-        file_access = assert_file_mount_access(
-            config.get("path") or config.get("file_path"),
-            config.get("mode") or config.get("operation") or "read",
-            file_mount_grants,
-            execution_target,
-        )
-        operation = {
-            "tool": "read_write_files",
-            "mode": file_access["mode"],
-            "path": str(config.get("path") or config.get("file_path") or "").strip(),
-            "content": str(config.get("content") or current_text or ""),
-            "overwrite": bool(config.get("overwrite")),
-            "file_mount_grants": file_mount_grants if isinstance(file_mount_grants, list) else [],
-            "mount": file_access["mount"],
-        }
-        if not operation["path"]:
-            raise RuntimeError("File tool node requires path or file_path.")
-    elif variant == "shell":
-        cwd_access = assert_file_mount_access(
-            config.get("cwd") or ".",
-            "read",
-            file_mount_grants,
-            execution_target,
-        )
-        operation = {
-            "tool": "execute_shell_command",
-            "command": str(config.get("command") or "").strip() or None,
-            "argv": list(config.get("argv") or []) if isinstance(config.get("argv"), list) else None,
-            "cwd": str(config.get("cwd") or ".").strip() or ".",
-            "timeout_seconds": int(config.get("timeout_seconds") or 60),
-            "capability": str(config.get("capability") or "").strip() or None,
-            "file_mount_grants": file_mount_grants if isinstance(file_mount_grants, list) else [],
-            "cwd_mount": cwd_access["mount"],
-        }
-        if not operation["command"] and not operation["argv"]:
-            raise RuntimeError(f"{variant.title()} tool nodes require command or argv in the current runtime.")
-    elif variant == "browser":
-        browser_path = str(config.get("path") or "").strip()
-        browser_path_mount: Optional[Dict[str, str]] = None
-        if browser_path:
-            browser_path_mount = assert_file_mount_access(
-                browser_path,
-                "write",
-                file_mount_grants,
-                execution_target,
-            )
-        browser_permissions = permissions.get("browser_permissions") if isinstance(permissions.get("browser_permissions"), dict) else {}
-        browser_actions = config.get("browser_actions") if isinstance(config.get("browser_actions"), list) else None
-        session_profile = str(config.get("session_profile") or "").strip()
-        if (session_profile or browser_actions) and not bool(browser_permissions.get("allow")):
-            raise RuntimeError("Browser tool nodes with session_profile or browser_actions require browser_permissions.allow = true.")
-        normalized_browser_actions = [
-            normalize_action_id(item.get("action"))
-            for item in (browser_actions or [])
-            if isinstance(item, dict) and normalize_action_id(item.get("action"))
-        ]
-        interactive_actions = [action for action in normalized_browser_actions if action in _BROWSER_AUTH_ACTIONS]
-        browser_policy = _browser_automation_policy_from_operations(
-            [
-                {
-                    "tool": "browser_automation",
-                    "mode": str(config.get("mode") or "extract_text").strip() or "extract_text",
-                    "url": str(config.get("url") or "").strip(),
-                    "session_profile": session_profile,
-                    "browser_actions": browser_actions or [],
-                }
-            ]
-        )
-        operation = {
-            "tool": "browser_automation",
-            "mode": str(config.get("mode") or "extract_text").strip() or "extract_text",
-            "url": str(config.get("url") or "").strip(),
-            "path": browser_path or None,
-            "session_profile": session_profile or None,
-            "browser_actions": browser_actions,
-            "file_mount_grants": file_mount_grants if isinstance(file_mount_grants, list) else [],
-            "path_mount": browser_path_mount["mount"] if browser_path_mount else None,
-            "browser_permissions": browser_permissions if isinstance(browser_permissions, dict) else {"allow": False},
-        }
-        if not operation["url"]:
-            raise RuntimeError("Browser tool node requires a URL.")
-    elif variant == "computer":
-        operation = {
-            "tool": "computer_control",
-            "action": str(config.get("action") or "").strip(),
-            "region": config.get("region"),
-            "x": config.get("x"),
-            "y": config.get("y"),
-            "text": config.get("text"),
-            "script": config.get("script"),
-            "title": config.get("title"),
-            "message": config.get("message"),
-            "name_or_path": config.get("name_or_path"),
-        }
-        if not operation["action"]:
-            raise RuntimeError("Computer tool node requires an action.")
-    else:
-        raise RuntimeError(f"Local tool variant '{variant}' is not supported.")
-
-    operation = {key: value for key, value in operation.items() if value is not None}
-    child_run_id = _workflow_tool_create_child_local_run(
-        run_id,
-        context,
+    return run_service.execute_workflow_local_tool(
+        run_id=run_id,
+        context=context,
+        config=config,
         label=label,
-        operation=operation,
-        summary=str(config.get("summary") or f"Execute {variant} tool node {label}").strip(),
-        metadata_overrides=(
-            {
-                "browser_session_profile": session_profile or None,
-                "browser_interactive_actions": interactive_actions or None,
-                "browser_immutable_plan_hash": browser_policy.get("immutable_plan_hash") if variant == "browser" else None,
-                "browser_reviewed_approval_required": bool(browser_policy.get("reviewed_approval_required")) if variant == "browser" else False,
-            }
-            if variant == "browser"
-            else None
-        ),
-    )
-    child_run = _workflow_wait_for_child_run(
-        child_run_id,
-        timeout_seconds=int(config.get("timeout_seconds") or 300),
+        variant=variant,
+        current_text=current_text,
+        normalize_execution_target_fn=normalize_execution_target,
+        assert_file_mount_access_fn=assert_file_mount_access,
+        browser_automation_policy_from_operations_fn=_browser_automation_policy_from_operations,
+        normalize_action_id_fn=normalize_action_id,
+        workflow_text_payload_fn=_workflow_text_payload,
+        json_safe_fn=_json_safe,
+        execute_workflow_child_run_request_fn=_execute_workflow_child_run_request,
+        local_execution_pack_id=LOCAL_EXECUTION_PACK_ID,
+        execution_target_local_companion=EXECUTION_TARGET_LOCAL_COMPANION,
+        execution_target_cloud=EXECUTION_TARGET_CLOUD,
+        trust_mode_auto=TRUST_MODE_AUTO,
+        browser_auth_actions=_BROWSER_AUTH_ACTIONS,
         on_waiting_for_input=on_waiting_for_input,
         on_resumed=on_resumed,
+        load_run_fn=runs.get,
     )
-    result_text = _workflow_text_payload(child_run.get("result") or "")
-    result_data = child_run.get("result_data") if isinstance(child_run.get("result_data"), dict) else {}
-    return {
-        "summary": result_text or f"Local tool node completed: {label}",
-        "result_data": {
-            "local_child_run_id": child_run_id,
-            "tool_variant": variant,
-            "child_result": _json_safe(result_data),
-        },
-    }
 
 
 def _workflow_final_result_data(
@@ -4168,101 +3987,22 @@ def _execute_workflow_graph(
                 )
 
             elif node_type == "subflow":
-                child_workflow_id = str(config.get("workflow_id") or "").strip()
-                if not child_workflow_id:
-                    raise RuntimeError(f"Subflow node '{label}' is missing workflow_id.")
-                if child_workflow_id == str(context.get("workflow_id") or "").strip():
-                    raise RuntimeError("Recursive subflow calls are not allowed.")
-                from server_modules.runtime_models import RunStartRequest
-
-                child_metadata = dict(context.get("metadata") if isinstance(context.get("metadata"), dict) else {})
-                child_metadata["subflow_parent_run_id"] = run_id
-                child_metadata["subflow_parent_workflow_id"] = str(context.get("workflow_id") or "").strip() or None
-                child_req = RunStartRequest(
-                    engine=str(context.get("engine") or "orion"),
-                    workflow_id=child_workflow_id,
-                    workspace_id=context.get("workspace_id"),
-                    user_goal=current_text or context.get("user_goal"),
-                    business_plan=current_text or context.get("business_plan"),
-                    agent_role=context.get("agent_role"),
-                    provider=context.get("provider"),
-                    model=context.get("model"),
-                    credential_id=context.get("credential_id"),
-                    parent_run_id=run_id,
-                    metadata=child_metadata,
-                )
-                child_result = _execute_workflow_child_run_request(child_req)
-                route = child_result.get("route") if isinstance(child_result.get("route"), dict) else {}
-                if str(route.get("selected") or "").strip().lower() == EXECUTION_TARGET_LOCAL_COMPANION:
-                    raise RuntimeError("Synchronous subflow execution does not yet support local_companion routing.")
-                child_run_id = str(child_result.get("run_id") or "").strip()
-                if not child_run_id:
-                    raise RuntimeError("Subflow execution did not return a child run id.")
-                emit_log(log_queue, "info", f"Subflow started: {child_workflow_id}", event="workflow_subflow_start", data={"node_id": node_id, "child_run_id": child_run_id, "workflow_id": child_workflow_id})
-                update_node_state(
-                    run_id,
-                    node_id,
-                    summary=f"Waiting for subflow {child_workflow_id}",
-                    detail={"mode": str(config.get("mode") or "sync").strip() or "sync"},
-                    child_run_id=child_run_id,
-                    child_workflow_id=child_workflow_id,
-                )
-                child_timeout = max(30, int(config.get("timeout_seconds") or 300))
-                child_run = _workflow_wait_for_child_run(
-                    child_run_id,
-                    timeout_seconds=child_timeout,
-                    on_waiting_for_input=lambda active_child_run_id, child_run: update_node_state(
-                        run_id,
-                        node_id,
-                        status="waiting_human",
-                        summary=f"Subflow waiting for input: {child_workflow_id}",
-                        detail={
-                            "mode": str(config.get("mode") or "sync").strip() or "sync",
-                            "child_status": "waiting_for_input",
-                            "child_pending_approval_id": str(
-                                ((child_run.get("pending_approval") or {}) if isinstance(child_run, dict) else {}).get("approval_id") or ""
-                            ).strip() or None,
-                        },
-                        child_run_id=active_child_run_id,
-                        child_workflow_id=child_workflow_id,
-                        waiting_for_approval=True,
-                    ),
-                    on_resumed=lambda active_child_run_id, _child_run: update_node_state(
-                        run_id,
-                        node_id,
-                        status="running",
-                        activate=True,
-                        summary=f"Subflow resumed: {child_workflow_id}",
-                        child_run_id=active_child_run_id,
-                        child_workflow_id=child_workflow_id,
-                        waiting_for_approval=False,
-                    ),
-                )
-                child_status = str(child_run.get("status") or "").strip().lower()
-                child_result_text = _workflow_text_payload(child_run.get("result") or "")
-                child_result_data = child_run.get("result_data") if isinstance(child_run.get("result_data"), dict) else {}
-                current_text = child_result_text or current_text
-                state["last_text"] = current_text
-                state["last_data"] = {
-                    "node_id": node_id,
-                    "node_type": node_type,
-                    "variant": variant,
-                    "child_run_id": child_run_id,
-                    "child_workflow_id": child_workflow_id,
-                    "child_status": child_status,
-                    "child_result_data": child_result_data,
-                }
-                emit_log(log_queue, "info", f"Subflow completed: {child_workflow_id}", event="workflow_subflow_complete", data={"node_id": node_id, "child_run_id": child_run_id})
-                update_node_state(
-                    run_id,
-                    node_id,
-                    status="succeeded",
-                    finalize=True,
-                    output_preview=_node_preview_text(current_text),
-                    summary=f"Subflow completed: {child_workflow_id}",
-                    detail={"child_status": child_status},
-                    child_run_id=child_run_id,
-                    child_workflow_id=child_workflow_id,
+                current_text = run_service.execute_workflow_subflow_node(
+                    run_id=run_id,
+                    node_id=node_id,
+                    label=label,
+                    context=context,
+                    config=config,
+                    current_text=current_text,
+                    state=state,
+                    update_node_state_fn=update_node_state,
+                    emit_log_fn=emit_log,
+                    workflow_text_payload_fn=_workflow_text_payload,
+                    node_preview_text_fn=_node_preview_text,
+                    execute_workflow_child_run_request_fn=_execute_workflow_child_run_request,
+                    load_run_fn=runs.get,
+                    log_queue=log_queue,
+                    execution_target_local_companion=EXECUTION_TARGET_LOCAL_COMPANION,
                 )
 
             elif node_type == "loop":
@@ -4491,13 +4231,25 @@ def _execute_workflow_graph(
                         detail={"tool_id": tool_id or variant, "result": tool_result.get("result_data")},
                     )
                 elif variant in {"file", "shell", "browser", "code"}:
-                    tool_result = _workflow_execute_local_tool(
-                        run_id,
-                        context,
-                        config,
+                    tool_result = run_service.execute_workflow_local_tool(
+                        run_id=run_id,
+                        context=context,
+                        config=config,
                         label=label,
                         variant=variant,
                         current_text=current_text,
+                        normalize_execution_target_fn=normalize_execution_target,
+                        assert_file_mount_access_fn=assert_file_mount_access,
+                        browser_automation_policy_from_operations_fn=_browser_automation_policy_from_operations,
+                        normalize_action_id_fn=normalize_action_id,
+                        workflow_text_payload_fn=_workflow_text_payload,
+                        json_safe_fn=_json_safe,
+                        execute_workflow_child_run_request_fn=_execute_workflow_child_run_request,
+                        local_execution_pack_id=LOCAL_EXECUTION_PACK_ID,
+                        execution_target_local_companion=EXECUTION_TARGET_LOCAL_COMPANION,
+                        execution_target_cloud=EXECUTION_TARGET_CLOUD,
+                        trust_mode_auto=TRUST_MODE_AUTO,
+                        browser_auth_actions=_BROWSER_AUTH_ACTIONS,
                         on_waiting_for_input=lambda active_child_run_id, child_run: update_node_state(
                             run_id,
                             node_id,
@@ -4523,6 +4275,7 @@ def _execute_workflow_graph(
                             child_run_id=active_child_run_id,
                             waiting_for_approval=False,
                         ),
+                        load_run_fn=runs.get,
                     )
                     current_text = _workflow_text_payload(tool_result.get("summary") or current_text)
                     state["last_text"] = current_text

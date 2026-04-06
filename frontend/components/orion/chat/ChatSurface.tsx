@@ -948,6 +948,11 @@ export function ChatSurface({
     voiceError,
   ]);
   const artifacts = messageArtifacts.allArtifacts;
+  const inlineComposerNotice = useMemo(() => {
+    if (!shellNotice) return null;
+    if (shellNotice.tone !== 'warn' && shellNotice.tone !== 'error') return null;
+    return shellNotice;
+  }, [shellNotice]);
   const selectedArtifact = useMemo(
     () => artifacts.find((artifact) => artifact.id === selectedArtifactId) || null,
     [artifacts, selectedArtifactId],
@@ -1679,6 +1684,28 @@ export function ChatSurface({
               </div>
             ) : null}
             <div className={`orion-chat-v2-composer-shell${hasMessages ? ' is-docked' : ' is-empty'}`}>
+              {inlineComposerNotice ? (
+                <div
+                  style={{
+                    marginBottom: 12,
+                    padding: '12px 14px',
+                    borderRadius: 14,
+                    border: inlineComposerNotice.tone === 'error'
+                      ? '1px solid rgba(214, 73, 73, 0.28)'
+                      : '1px solid rgba(199, 136, 43, 0.28)',
+                    background: inlineComposerNotice.tone === 'error'
+                      ? 'rgba(214, 73, 73, 0.08)'
+                      : 'rgba(199, 136, 43, 0.08)',
+                    color: 'var(--text-primary)',
+                    fontSize: 13,
+                    lineHeight: 1.45,
+                    whiteSpace: 'pre-wrap',
+                    wordBreak: 'break-word',
+                  }}
+                >
+                  {inlineComposerNotice.detail || inlineComposerNotice.label}
+                </div>
+              ) : null}
               <div className="orion-chat-v2-composer-frame">
             <div className="orion-chat-v2-composer">
               <textarea

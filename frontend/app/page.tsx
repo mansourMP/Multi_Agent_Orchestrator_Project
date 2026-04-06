@@ -2708,6 +2708,7 @@ export function AutopilotWorkspace() {
     appendSimpleChatMessage(sessionId, placeholder);
     setPendingSimpleChat({ sessionId, messageId: placeholderId, goal: text });
     setGoal('');
+    setTopError(null);
     let streamedSteps: NonNullable<WorkbenchAgentChatMessage['steps']> = [];
     try {
       let streamedReply = '';
@@ -2734,6 +2735,7 @@ export function AutopilotWorkspace() {
       });
       setChatAuthRequiredMessage(null);
       setChatNoProviderStatus(false);
+      setTopError(null);
       patchSimpleChatMessage(sessionId, placeholderId, {
         content: payload.reply || streamedReply || 'I couldn’t form a clean reply just now.',
         status: 'completed',

@@ -260,6 +260,12 @@ class AutopilotConnectorShellService:
                 normalize_execution_target=self.normalize_execution_target,
                 decide_execution_target=self.decide_execution_target,
                 apply_execution_route_metadata=self.apply_execution_route_metadata,
+                run_start_request_class=lambda **kwargs: __import__("server_modules.runtime_models", fromlist=["RunStartRequest"]).RunStartRequest(**kwargs),
+                start_run_request=lambda request: self._g("execute_system_run_start_request_via_turn_runtime")(
+                    request,
+                    stamp_request_owner_fn=self._g("_stamp_request_owner"),
+                    services=self._g("_run_execution_services")(),
+                ) if callable(self._g("execute_system_run_start_request_via_turn_runtime", None)) and callable(self._g("_run_execution_services", None)) else None,
                 create_run=self.create_run,
                 inherit_owner_user_id=lambda owner_user_id=None: __import__("server_modules.runtime_config", fromlist=["x"]).agent_machine_inherited_owner_user_id(owner_user_id),
                 agent_machine_full_trust_enabled=lambda owner_user_id: __import__("server_modules.runtime_config", fromlist=["x"]).agent_machine_full_trust_enabled(owner_user_id),

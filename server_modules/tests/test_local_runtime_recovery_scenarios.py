@@ -274,6 +274,79 @@ class LocalRuntimeRecoveryScenarioTests(unittest.TestCase):
         self.assertIsNone(run["pending_confirmation"])
         self.assertIsNone(run["pending_approval"])
 
+    def test_cold_boot_recovery_preserves_backoff_until_watchdog_retry_is_due(self) -> None:
+        run = {
+            "status": "running_local",
+            "logs": object(),
+            "browser_checkpoint": {"next_action_index": 4, "session_profile": "qa-browser"},
+            "context": {
+                "metadata": {
+                    "execution_target_selected": "local_companion",
+                    "local_worker_recovery_reason": "worker_lost",
+                    "local_worker_recovery_attempt_count": 2,
+                    "local_worker_recovery_max_auto_retries": 3,
+                    "local_worker_recovery_backoff_seconds": 10,
+                    "local_worker_recovery_next_retry_at": "2026-04-06T00:01:10Z",
+                }
+            },
+        }
+
+        original_server = local_queue._server
+        original_done = local_queue._COLD_BOOT_RECOVERY_DONE
+        try:
+            local_queue._server = SimpleNamespace(
+                runs={"run-1": run},
+                LOCAL_QUEUE_LOCK=threading.Lock(),
+                LOCAL_CLAIMED_RUNS={},
+                LOCAL_PENDING_RUN_IDS=[],
+                LOCAL_WORKER_REGISTRY={},
+                ORION_LOCAL_LEASE_SECONDS=30,
+                _utc_now=lambda: datetime.fromisoformat("2026-04-06T00:01:00"),
+                _utc_now_iso=lambda: "2026-04-06T00:01:00Z",
+                _parse_utc_ts=lambda value: datetime.fromisoformat(str(value).replace("Z", "")) if value else None,
+                emit_log=lambda *args, **kwargs: None,
+                _persist_live_run_state=lambda run_id, live_run: None,
+            )
+            local_queue._COLD_BOOT_RECOVERY_DONE = False
+
+            recovered = local_queue.recover_orphaned_local_runs_on_startup()
+            self.assertEqual(recovered, ["run-1"])
+            self.assertEqual(run["status"], "waiting_for_input")
+            self.assertEqual(run["result_data"]["error"], "local_worker_lost_recoverable")
+            self.assertEqual(run["result_data"]["next_retry_at"], "2026-04-06T00:01:10Z")
+
+            with patch(
+                "server_modules.runtime_runs_api._schedule_restored_run_resume",
+                side_effect=lambda run_id, live_run: self.fail("recovery must not resume before retry time"),
+            ):
+                self.assertEqual(local_queue._resume_due_checkpoint_recoveries(), [])
+
+            local_queue._server = SimpleNamespace(
+                runs={"run-1": run},
+                LOCAL_QUEUE_LOCK=threading.Lock(),
+                LOCAL_CLAIMED_RUNS={},
+                LOCAL_PENDING_RUN_IDS=[],
+                LOCAL_WORKER_REGISTRY={},
+                ORION_LOCAL_LEASE_SECONDS=30,
+                _utc_now=lambda: datetime.fromisoformat("2026-04-06T00:01:11"),
+                _utc_now_iso=lambda: "2026-04-06T00:01:11Z",
+                _parse_utc_ts=lambda value: datetime.fromisoformat(str(value).replace("Z", "")) if value else None,
+                emit_log=lambda *args, **kwargs: None,
+                _persist_live_run_state=lambda run_id, live_run: None,
+            )
+            scheduled = []
+            with patch(
+                "server_modules.runtime_runs_api._schedule_restored_run_resume",
+                side_effect=lambda run_id, live_run: scheduled.append(run_id) or True,
+            ):
+                resumed = local_queue._resume_due_checkpoint_recoveries()
+        finally:
+            local_queue._server = original_server
+            local_queue._COLD_BOOT_RECOVERY_DONE = original_done
+
+        self.assertEqual(resumed, ["run-1"])
+        self.assertEqual(scheduled, ["run-1"])
+
 
 if __name__ == "__main__":
     unittest.main()

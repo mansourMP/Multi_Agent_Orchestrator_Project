@@ -67,6 +67,8 @@ class AutopilotRuntimeRegistryBridgeServiceTests(unittest.TestCase):
             normalize_execution_target=lambda value: str(value),
             decide_execution_target=lambda metadata: {"selected": "cloud", "metadata": metadata},
             apply_execution_route_metadata=lambda metadata, route: {**metadata, "route": route},
+            run_start_request_class=lambda **kwargs: kwargs,
+            start_run_request=lambda request: {"run_id": "run-via-turn", "route": {"selected": "cloud"}, "request": request},
             create_run=lambda **kwargs: kwargs,
             whatsapp_session_key=lambda inbound_from, inbound_to: f"wa:{inbound_from}:{inbound_to}",
             inherit_owner_user_id=lambda owner_user_id=None: owner_user_id or "owner-1",

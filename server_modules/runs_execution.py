@@ -103,7 +103,7 @@ from server_modules.runs_engine import (
 )
 from server_modules.connector_metadata import _connector_identity_signature
 from server_modules.runs_output import _compact_event_text, _json_safe, _persist_live_run_state
-from server_modules.health_diagnostics import _build_skill_contract_from_metadata
+from server_modules.health_diagnostics import _build_skill_contract_from_metadata, _inject_runtime_skill_defaults
 from server_modules.run_service import RunExecutionServices
 from server_modules.runs_core import set_run_status, emit_log
 from server_modules.external_write_safety import execute_external_write_once, stable_value_fingerprint
@@ -864,78 +864,17 @@ def _enqueue_local_companion_run(run_id: str, *, message: str = "Run queued for 
 
 
 def create_run(engine: str, context: Optional[dict] = None, *, defer_local_enqueue: bool = False) -> str:
-    shared.sync_acp_manager_paths(runtime_db_path=ORION_RUNTIME_STATE_DB)
-    run_id = str(uuid.uuid4())
-    now = datetime.utcnow().isoformat() + "Z"
-    started_mono = time.monotonic()
-    log_queue: queue.Queue = queue.Queue()
-    run_context = context or {}
-    if isinstance(run_context, dict):
-        try:
-            _inject_runtime_skill_defaults(run_context)
-        except Exception:
-            pass
-    if engine == "orion" and isinstance(run_context, dict):
-        metadata = run_context.get("metadata") if isinstance(run_context.get("metadata"), dict) else {}
-        if isinstance(metadata, dict) and not isinstance(metadata.get("tool_policy_precheck"), dict):
-            try:
-                metadata["tool_policy_precheck"] = _compute_tool_policy_precheck(run_context)
-                run_context["metadata"] = metadata
-            except Exception:
-                pass
-    metadata = run_context.get("metadata") if isinstance(run_context.get("metadata"), dict) else {}
-    runtime_profile_id = str(
-        metadata.get("runtime_profile_id") or metadata.get("profile_id") or ""
-    ).strip()
-    runtime_profile = PROVIDER_PROFILES.get(runtime_profile_id) if runtime_profile_id else None
-    runtime_profile_row = runtime_profile if isinstance(runtime_profile, dict) else {}
-    initial_active_provider = str(
-        runtime_profile_row.get("provider")
-        or metadata.get("runtime_profile_provider")
-        or run_context.get("provider")
-        or ""
-    ).strip()
-    initial_active_model = str(
-        runtime_profile_row.get("model")
-        or metadata.get("runtime_profile_model")
-        or run_context.get("model")
-        or ""
-    ).strip()
-    initial_active_label = str(
-        runtime_profile_row.get("label")
-        or metadata.get("runtime_profile_label")
-        or ""
-    ).strip()
-    selected_target = selected_execution_target_from_context(run_context)
-    run = run_service.build_live_run_record(
-        run_id=run_id,
-        engine=engine,
-        context=run_context,
-        now_iso=now,
-        started_mono=started_mono,
-        log_queue=log_queue,
-        input_queue=queue.Queue(),
-        memory_enabled=ORION_MEMORY_ENABLED,
-        memory_updated_at=_utc_now_iso(),
-        active_profile_id=runtime_profile_id or None,
-        active_profile_label=initial_active_label or None,
-        active_provider=initial_active_provider or None,
-        active_model=initial_active_model or None,
-    )
-    run_service.register_live_run(
-        run_id,
-        run,
+    return run_service.create_live_run(
+        engine,
+        context,
+        defer_local_enqueue=defer_local_enqueue,
+        runtime_db_path=ORION_RUNTIME_STATE_DB,
+        sync_acp_manager_paths_fn=shared.sync_acp_manager_paths,
+        selected_execution_target_from_context_fn=selected_execution_target_from_context,
         runs_by_id=runs,
         run_queue_index=RUN_QUEUE_INDEX,
         metrics_inc_fn=metrics_inc,
         persist_live_run_state_fn=_persist_live_run_state,
-    )
-    return run_service.activate_live_run(
-        run_id,
-        run,
-        selected_target=selected_target,
-        local_companion_target=EXECUTION_TARGET_LOCAL_COMPANION,
-        defer_local_enqueue=defer_local_enqueue,
         hydrate_run_memory_context_fn=_hydrate_run_memory_context,
         enqueue_local_companion_run_fn=_enqueue_local_companion_run,
         start_background_run_fn=lambda active_run_id: threading.Thread(
@@ -943,6 +882,12 @@ def create_run(engine: str, context: Optional[dict] = None, *, defer_local_enque
             args=(active_run_id,),
             daemon=True,
         ).start(),
+        local_companion_target=EXECUTION_TARGET_LOCAL_COMPANION,
+        provider_profiles=PROVIDER_PROFILES,
+        memory_enabled=ORION_MEMORY_ENABLED,
+        utc_now_iso_fn=_utc_now_iso,
+        inject_runtime_skill_defaults_fn=_inject_runtime_skill_defaults,
+        compute_tool_policy_precheck_fn=_compute_tool_policy_precheck,
     )
 
 

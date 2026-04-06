@@ -9,6 +9,7 @@ from server_modules.runs_engine import ENGINE_REGISTRY, ORION_ENGINE_VALIDATION_
 from server_modules.runs_output import (
     _get_archived_run_history_item,
     _get_replay_payload,
+    _persist_live_run_state,
     _prefer_archived_snapshot,
     _refresh_archived_run_snapshot,
     _serialize_run_snapshot,
@@ -169,8 +170,16 @@ def _child_retry_count(child: Dict[str, Any]) -> int:
 
 
 def _parent_pending_retry_lineages(parent_run_id: str) -> Set[str]:
+    pending: Set[str] = set()
+    run = runs.get(str(parent_run_id or "").strip())
+    if isinstance(run, dict):
+        context = run.get("context") if isinstance(run.get("context"), dict) else {}
+        metadata = context.get("metadata") if isinstance(context.get("metadata"), dict) else {}
+        pending_state = metadata.get("delegation_pending_retries") if isinstance(metadata.get("delegation_pending_retries"), dict) else {}
+        pending |= {str(lineage).strip() for lineage in pending_state.keys() if str(lineage).strip()}
     with _AUTO_RETRY_PENDING_LOCK:
-        return {lineage for parent, lineage in _AUTO_RETRY_PENDING if parent == str(parent_run_id or "").strip()}
+        pending |= {lineage for parent, lineage in _AUTO_RETRY_PENDING if parent == str(parent_run_id or "").strip()}
+    return pending
 
 
 def _auto_retry_attempt_count(parent_run_id: str, lineage_key: str, fallback: int = 0) -> int:
@@ -442,6 +451,7 @@ def _schedule_auto_retry_for_failed_children(
         find_run_relationships_fn=_find_run_relationships,
         refresh_parent_delegation_state_fn=_refresh_parent_delegation_state,
         timer_factory=threading.Timer,
+        persist_live_run_state_fn=_persist_live_run_state,
         triggering_run_id=triggering_run_id,
     )
 
@@ -461,6 +471,23 @@ def _refresh_parent_delegation_state(parent_run_id: str, *, triggering_run_id: O
         utc_now_iso_fn=_utc_now_iso,
         triggering_run_id=triggering_run_id,
     )
+
+
+def recover_pending_delegation_retries_on_startup() -> List[str]:
+    recovered: List[str] = []
+    for run_id, run in list(runs.items()):
+        if not isinstance(run, dict):
+            continue
+        context = run.get("context") if isinstance(run.get("context"), dict) else {}
+        metadata = context.get("metadata") if isinstance(context.get("metadata"), dict) else {}
+        agent_role = normalize_agent_role(run.get("agent_role") or metadata.get("agent_role"))
+        pending_state = metadata.get("delegation_pending_retries") if isinstance(metadata.get("delegation_pending_retries"), dict) else {}
+        if agent_role != "orchestrator" and not pending_state:
+            continue
+        summary = _refresh_parent_delegation_state(str(run_id or "").strip())
+        if summary is not None and pending_state:
+            recovered.append(str(run_id or "").strip())
+    return recovered
 
 
 def _build_retry_child_payload(parent_snapshot: Dict[str, Any], child_snapshot: Dict[str, Any], *, note: Optional[str] = None) -> Dict[str, Any]:

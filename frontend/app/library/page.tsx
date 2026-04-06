@@ -14,6 +14,7 @@ import {
   Upload,
 } from 'lucide-react';
 import { PageHero } from '@/components/orion/page/PageHero';
+import SectionOwnershipPanel from '@/components/orion/page/SectionOwnershipPanel';
 import { MetricStrip } from '@/components/ui/MetricStrip';
 import { ensureControlPlaneSession } from '@/lib/controlPlaneSession';
 
@@ -256,6 +257,8 @@ export default function LibraryPage() {
           </button>
         }
       />
+
+      <SectionOwnershipPanel sectionId="library" />
 
       <MetricStrip
         items={[

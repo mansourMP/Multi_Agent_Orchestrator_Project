@@ -209,6 +209,43 @@ def build_agent_turn_request(payload: Dict[str, Any]) -> AgentTurnRequest:
     )
 
 
+def build_inbound_agent_turn_request(
+    *,
+    tenant_id: str = "",
+    workspace_id: str,
+    session_id: str,
+    channel: str,
+    actor_type: str,
+    actor_id: str,
+    actor_display_name: str = "",
+    message: str,
+    attachments: Optional[List[Dict[str, Any]]] = None,
+    context_hints: Optional[Dict[str, Any]] = None,
+    execution_mode: ExecutionMode = "sync",
+    response_mode: ResponseMode = "stream",
+    machine_target: Optional[str] = None,
+    policy_context: Optional[Dict[str, Any]] = None,
+) -> AgentTurnRequest:
+    return AgentTurnRequest(
+        tenant_id=str(tenant_id or actor_id or "default").strip() or "default",
+        workspace_id=str(workspace_id or "default").strip() or "default",
+        session_id=str(session_id or "agent-turn").strip() or "agent-turn",
+        channel=normalize_channel(channel),
+        actor=TurnActor(
+            type=str(actor_type or "user").strip() or "user",
+            id=str(actor_id or "").strip(),
+            display_name=str(actor_display_name or actor_id or "").strip(),
+        ),
+        message=str(message or ""),
+        attachments=_attachments_from_payload(attachments or []),
+        context_hints=dict(context_hints or {}),
+        execution_mode=execution_mode,
+        response_mode=response_mode,
+        machine_target=str(machine_target or "").strip() or None,
+        policy_context=dict(policy_context or {}),
+    )
+
+
 def build_direct_chat_turn_request(
     *,
     current_user: Any,
@@ -248,6 +285,97 @@ def build_direct_chat_turn_request(
         response_mode="stream",
         machine_target=str(body.get("machine_target") or "").strip() or None,
         policy_context=policy_context,
+    )
+
+
+def build_local_worker_turn_request(
+    *,
+    worker_id: str,
+    run: Optional[Dict[str, Any]],
+    context: Optional[Dict[str, Any]],
+    metadata: Optional[Dict[str, Any]],
+    goal: str,
+) -> AgentTurnRequest:
+    run_payload = run if isinstance(run, dict) else {}
+    context_payload = context if isinstance(context, dict) else {}
+    metadata_payload = metadata if isinstance(metadata, dict) else {}
+    run_id = str(run_payload.get("id") or "").strip()
+    machine_target = (
+        str(metadata_payload.get("machine_target") or "").strip()
+        or str(metadata_payload.get("execution_target_selected") or "").strip()
+        or str(metadata_payload.get("execution_target") or "").strip()
+        or None
+    )
+    return build_inbound_agent_turn_request(
+        tenant_id=str(metadata_payload.get("tenant_id") or worker_id or "default").strip(),
+        workspace_id=str(context_payload.get("workspace_id") or metadata_payload.get("workspace_id") or "default").strip() or "default",
+        session_id=(
+            str(metadata_payload.get("session_id") or "").strip()
+            or str(metadata_payload.get("thread_id") or "").strip()
+            or run_id
+            or str(worker_id or "local-worker").strip()
+        ),
+        channel=str(metadata_payload.get("channel") or "local_worker").strip() or "local_worker",
+        actor_type="worker",
+        actor_id=str(worker_id or "").strip(),
+        actor_display_name=str(worker_id or "local-worker").strip(),
+        message=str(goal or ""),
+        context_hints={
+            "run_id": run_id or None,
+            "metadata": metadata_payload,
+        },
+        execution_mode="sync",
+        response_mode="artifact",
+        machine_target=machine_target,
+        policy_context={
+            "execution_target": str(metadata_payload.get("execution_target") or "").strip() or None,
+            "trust_mode": str(metadata_payload.get("trust_mode") or "").strip() or None,
+        },
+    )
+
+
+def build_discord_turn_request(
+    *,
+    parsed: Dict[str, Any],
+    connector_entry: Dict[str, Any],
+    goal: str,
+    trace_id: str,
+) -> AgentTurnRequest:
+    metadata = connector_entry.get("metadata") if isinstance(connector_entry.get("metadata"), dict) else {}
+    workspace_id = str(connector_entry.get("workspace_id") or metadata.get("workspace_id") or "default").strip() or "default"
+    session_id = (
+        str(parsed.get("channel_id") or "").strip()
+        or str(parsed.get("guild_id") or "").strip()
+        or "discord"
+    )
+    return build_inbound_agent_turn_request(
+        tenant_id=str(metadata.get("tenant_id") or "default").strip() or "default",
+        workspace_id=workspace_id,
+        session_id=session_id,
+        channel="discord",
+        actor_type="user",
+        actor_id=str(parsed.get("user_id") or "").strip() or "discord-user",
+        actor_display_name=str(parsed.get("username") or parsed.get("user_id") or "discord-user").strip(),
+        message=str(goal or ""),
+        context_hints={
+            "trace_id": f"discord:{trace_id}",
+            "source": "discord_connector",
+            "discord": {
+                "channel_id": str(parsed.get("channel_id") or "").strip() or None,
+                "guild_id": str(parsed.get("guild_id") or "").strip() or None,
+                "message_id": str(parsed.get("message_id") or "").strip() or None,
+                "interaction_id": str(parsed.get("interaction_id") or "").strip() or None,
+                "event_type": str(parsed.get("event_type") or "").strip() or None,
+            },
+            "metadata": metadata,
+        },
+        execution_mode="durable",
+        response_mode="artifact",
+        machine_target=str(metadata.get("machine_target") or "").strip() or None,
+        policy_context={
+            "execution_target": str(metadata.get("execution_target") or "").strip() or None,
+            "trust_mode": str(metadata.get("trust_mode") or "").strip() or None,
+        },
     )
 
 
@@ -403,6 +531,48 @@ def bind_agent_turn_metadata(
     if request.actor.id and not str(bound.get("request_actor_id") or "").strip():
         bound["request_actor_id"] = str(request.actor.id).strip()
     return bound
+
+
+def _build_noop_direct_chat_execution_services():
+    from server_modules.direct_chat_service import build_direct_chat_execution_services
+
+    def _unreachable(*args: Any, **kwargs: Any):
+        raise RuntimeError("Direct chat services are unavailable for this agent_turn dispatch.")
+
+    return build_direct_chat_execution_services(
+        chat_stream_key=_unreachable,
+        session_manager_enabled=lambda: False,
+        session_manager_factory=_unreachable,
+        build_direct_operator_reply=_unreachable,
+        build_chat_turn_event_stream=_unreachable,
+    )
+
+
+async def agent_turn(
+    *,
+    turn_request: AgentTurnRequest,
+    current_user: Any,
+    run_execution_services: Any,
+    direct_chat_services: Any = None,
+    chat_body: Optional[Dict[str, Any]] = None,
+    run_request: Optional[Any] = None,
+) -> Dict[str, Any]:
+    from server_modules.turn_runtime import (
+        build_turn_execution_services,
+        execute_agent_turn_request,
+    )
+
+    services = build_turn_execution_services(
+        run_execution=run_execution_services,
+        direct_chat=direct_chat_services or _build_noop_direct_chat_execution_services(),
+    )
+    return await execute_agent_turn_request(
+        turn_request=turn_request,
+        current_user=current_user,
+        services=services,
+        chat_body=chat_body,
+        run_request=run_request,
+    )
 
 
 def bind_agent_turn_request_meta(

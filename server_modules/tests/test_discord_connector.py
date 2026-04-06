@@ -3,6 +3,7 @@ import json
 import sys
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 
 from server_modules.connectors import discord_connector
 
@@ -97,6 +98,51 @@ class DiscordConnectorTests(unittest.TestCase):
         self.assertEqual(created[0]["user_goal"], "please investigate this")
         self.assertEqual(appended[0]["channel"], "discord")
         self.assertEqual(appended[0]["direction"], "inbound")
+
+    def test_inbound_message_prefers_canonical_run_start_request_when_available(self):
+        parsed = discord_connector.parse_inbound_event(
+            {
+                "t": "MESSAGE_CREATE",
+                "d": {
+                    "id": "msg-1",
+                    "channel_id": "123",
+                    "guild_id": "456",
+                    "content": "<@999> please investigate this",
+                    "author": {"id": "321", "username": "alice"},
+                    "mentions": [{"id": "999"}],
+                },
+            }
+        )
+
+        captured = {}
+        legacy_calls = []
+
+        def fake_start_run(request):
+            captured["request"] = request
+            return {"run_id": "run-discord-2", "status": "starting"}
+
+        def fake_create_run(*, context):
+            legacy_calls.append(context)
+            return "run-legacy"
+
+        result = discord_connector.dispatch_inbound_event(
+            parsed,
+            connector_entry={"id": "cred-discord", "workspace_id": "default", "metadata": {}},
+            credentials={"bot_token": "discord-token", "channel_id": "123", "guild_id": "456"},
+            append_event_fn=None,
+            run_start_request_class=lambda **kwargs: SimpleNamespace(**kwargs),
+            start_run_request=fake_start_run,
+            create_run_fn=fake_create_run,
+        )
+
+        self.assertTrue(result["triggered"])
+        self.assertEqual(result["run_id"], "run-discord-2")
+        self.assertEqual(captured["request"].workspace_id, "default")
+        self.assertEqual(captured["request"].user_goal, "please investigate this")
+        self.assertEqual(captured["request"].metadata["channel"], "discord")
+        self.assertEqual(captured["request"].metadata["agent_turn_request"]["channel"], "discord")
+        self.assertEqual(captured["request"].metadata["agent_turn_request"]["message"], "please investigate this")
+        self.assertEqual(legacy_calls, [])
 
     def test_guild_list_parsed(self):
         calls = []

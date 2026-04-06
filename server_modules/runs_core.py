@@ -400,6 +400,11 @@ def initialize_runtime_services() -> None:
 
         _local_queue.recover_orphaned_local_runs_on_startup()
 
+    def _recover_delegation_retries_on_startup() -> None:
+        from server_modules import runs_delegation as _runs_delegation
+
+        _runs_delegation.recover_pending_delegation_retries_on_startup()
+
     def _run_local_runtime_watchdog_forever() -> None:
         from server_modules import local_queue as _local_queue
 
@@ -430,6 +435,7 @@ def initialize_runtime_services() -> None:
         load_provider_profiles_fn=_load_provider_profiles,
         load_idempotency_fn=_load_idempotency,
         recover_orphaned_local_runs_on_startup_fn=_recover_orphaned_local_runs_on_startup,
+        recover_delegation_retries_on_startup_fn=_recover_delegation_retries_on_startup,
         load_runtime_skills_state_fn=_load_runtime_skills_state,
         load_telegram_autopilot_state_fn=_load_telegram_autopilot_state,
         load_whatsapp_autopilot_state_fn=_load_whatsapp_autopilot_state,

@@ -345,6 +345,67 @@ class RunsDelegationTests(unittest.TestCase):
         create_mock.assert_not_called()
 
     @patch.object(runs_delegation.threading, "Timer", _ImmediateTimer)
+    def test_recover_pending_delegation_retries_on_startup_rehydrates_archived_failure(self):
+        parent_run_id = "11111111-1111-4111-8111-111111111111"
+        failed_child_run_id = "22222222-2222-4222-8222-222222222222"
+        parent_logs = queue.Queue()
+        runs_delegation.runs[parent_run_id] = {
+            "run_id": parent_run_id,
+            "status": "running",
+            "agent_role": "orchestrator",
+            "logs": parent_logs,
+            "events": [],
+            "_event_seq": 0,
+            "context": {
+                "metadata": {
+                    "delegation_pending_retries": {
+                        "22222222-2222-4222-8222-222222222222": {
+                            "failed_child_run_id": failed_child_run_id,
+                            "attempt": 1,
+                            "next_retry_at": "2026-04-02T00:00:00Z",
+                        }
+                    }
+                }
+            },
+            "result_data": {},
+        }
+        runs_delegation.RUN_QUEUE_INDEX[id(parent_logs)] = parent_run_id
+        with runs_delegation.RUN_HISTORY_LOCK:
+            runs_delegation.RUN_HISTORY.append(
+                {
+                    "run_id": failed_child_run_id,
+                    "status": "failed",
+                    "agent_role": "research",
+                    "created_at": "2026-04-02T00:00:00Z",
+                    "updated_at": "2026-04-02T00:00:00Z",
+                    "parent_run_id": parent_run_id,
+                    "context": {
+                        "user_goal": "Research the market",
+                        "metadata": {
+                            "parent_run_id": parent_run_id,
+                            "agent_role": "research",
+                            "delegated_by_role": "orchestrator",
+                        },
+                    },
+                }
+            )
+
+        created = []
+
+        def _fake_create(req):
+            created.append(req)
+            return {"run_id": "33333333-3333-4333-8333-333333333333", "status": "starting"}
+
+        with patch.object(runs_delegation, "_create_run_from_request", side_effect=_fake_create):
+            recovered = runs_delegation.recover_pending_delegation_retries_on_startup()
+
+        self.assertEqual(recovered, [parent_run_id])
+        self.assertEqual(len(created), 1)
+        self.assertEqual(created[0].metadata.get("retry_count"), 1)
+        pending_state = runs_delegation.runs[parent_run_id]["context"]["metadata"].get("delegation_pending_retries") or {}
+        self.assertEqual(pending_state, {})
+
+    @patch.object(runs_delegation.threading, "Timer", _ImmediateTimer)
     def test_stale_child_run_triggers_timeout_failure(self):
         parent_run_id = "11111111-1111-4111-8111-111111111111"
         child_run_id = "22222222-2222-4222-8222-222222222222"

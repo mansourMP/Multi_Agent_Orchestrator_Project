@@ -777,6 +777,111 @@ def activate_live_run(
     return run_id
 
 
+def create_live_run(
+    engine: str,
+    context: Optional[dict] = None,
+    *,
+    defer_local_enqueue: bool = False,
+    runtime_db_path: Any,
+    sync_acp_manager_paths_fn: Callable[..., Any],
+    selected_execution_target_from_context_fn: Callable[[Dict[str, Any]], str],
+    runs_by_id: Dict[str, Dict[str, Any]],
+    run_queue_index: Dict[int, str],
+    metrics_inc_fn: Callable[[str, int], Any],
+    persist_live_run_state_fn: Callable[[str, Dict[str, Any]], Any],
+    hydrate_run_memory_context_fn: Callable[[str, Dict[str, Any]], Any],
+    enqueue_local_companion_run_fn: Callable[[str], Any],
+    start_background_run_fn: Callable[[str], Any],
+    local_companion_target: str,
+    provider_profiles: Dict[str, Any],
+    memory_enabled: bool,
+    utc_now_iso_fn: Callable[[], str],
+    inject_runtime_skill_defaults_fn: Optional[Callable[[Dict[str, Any]], Any]] = None,
+    compute_tool_policy_precheck_fn: Optional[Callable[[Dict[str, Any]], Dict[str, Any]]] = None,
+    log_queue_factory: Callable[[], Any] = queue.Queue,
+    input_queue_factory: Callable[[], Any] = queue.Queue,
+    uuid4_fn: Callable[[], Any] = uuid.uuid4,
+    utcnow_fn: Callable[[], datetime] = datetime.utcnow,
+    monotonic_fn: Callable[[], float] = time.monotonic,
+) -> str:
+    sync_acp_manager_paths_fn(runtime_db_path=runtime_db_path)
+    run_id = str(uuid4_fn())
+    now = utcnow_fn().isoformat() + "Z"
+    started_mono = monotonic_fn()
+    log_queue = log_queue_factory()
+    run_context = context or {}
+    if isinstance(run_context, dict) and callable(inject_runtime_skill_defaults_fn):
+        try:
+            inject_runtime_skill_defaults_fn(run_context)
+        except Exception:
+            pass
+    if engine == "orion" and isinstance(run_context, dict) and callable(compute_tool_policy_precheck_fn):
+        metadata = run_context.get("metadata") if isinstance(run_context.get("metadata"), dict) else {}
+        if isinstance(metadata, dict) and not isinstance(metadata.get("tool_policy_precheck"), dict):
+            try:
+                metadata["tool_policy_precheck"] = compute_tool_policy_precheck_fn(run_context)
+                run_context["metadata"] = metadata
+            except Exception:
+                pass
+    metadata = run_context.get("metadata") if isinstance(run_context.get("metadata"), dict) else {}
+    runtime_profile_id = str(
+        metadata.get("runtime_profile_id") or metadata.get("profile_id") or ""
+    ).strip()
+    runtime_profile = provider_profiles.get(runtime_profile_id) if runtime_profile_id else None
+    runtime_profile_row = runtime_profile if isinstance(runtime_profile, dict) else {}
+    initial_active_provider = str(
+        runtime_profile_row.get("provider")
+        or metadata.get("runtime_profile_provider")
+        or run_context.get("provider")
+        or ""
+    ).strip()
+    initial_active_model = str(
+        runtime_profile_row.get("model")
+        or metadata.get("runtime_profile_model")
+        or run_context.get("model")
+        or ""
+    ).strip()
+    initial_active_label = str(
+        runtime_profile_row.get("label")
+        or metadata.get("runtime_profile_label")
+        or ""
+    ).strip()
+    selected_target = selected_execution_target_from_context_fn(run_context)
+    run = build_live_run_record(
+        run_id=run_id,
+        engine=engine,
+        context=run_context,
+        now_iso=now,
+        started_mono=started_mono,
+        log_queue=log_queue,
+        input_queue=input_queue_factory(),
+        memory_enabled=memory_enabled,
+        memory_updated_at=utc_now_iso_fn(),
+        active_profile_id=runtime_profile_id or None,
+        active_profile_label=initial_active_label or None,
+        active_provider=initial_active_provider or None,
+        active_model=initial_active_model or None,
+    )
+    register_live_run(
+        run_id,
+        run,
+        runs_by_id=runs_by_id,
+        run_queue_index=run_queue_index,
+        metrics_inc_fn=metrics_inc_fn,
+        persist_live_run_state_fn=persist_live_run_state_fn,
+    )
+    return activate_live_run(
+        run_id,
+        run,
+        selected_target=selected_target,
+        local_companion_target=local_companion_target,
+        defer_local_enqueue=defer_local_enqueue,
+        hydrate_run_memory_context_fn=hydrate_run_memory_context_fn,
+        enqueue_local_companion_run_fn=enqueue_local_companion_run_fn,
+        start_background_run_fn=start_background_run_fn,
+    )
+
+
 def transition_live_run_status(
     run_id: str,
     status: str,
@@ -1494,6 +1599,7 @@ def initialize_runtime_services(
     local_runtime_watchdog_enabled: bool = False,
     run_local_runtime_watchdog_forever_fn: Optional[Callable[[], Any]] = None,
     set_local_runtime_watchdog_thread_fn: Optional[Callable[[Any], Any]] = None,
+    recover_delegation_retries_on_startup_fn: Optional[Callable[[], Any]] = None,
 ) -> None:
     if is_initialized_fn():
         return
@@ -1517,6 +1623,11 @@ def initialize_runtime_services(
         recover_orphaned_local_runs_on_startup_fn()
     except Exception:
         pass
+    if callable(recover_delegation_retries_on_startup_fn):
+        try:
+            recover_delegation_retries_on_startup_fn()
+        except Exception:
+            pass
     load_runtime_skills_state_fn()
     load_telegram_autopilot_state_fn()
     load_whatsapp_autopilot_state_fn()
@@ -1896,9 +2007,6 @@ def execute_workflow_subflow_node(
         metadata=child_metadata,
     )
     child_result = execute_workflow_child_run_request_fn(child_req)
-    route = child_result.get("route") if isinstance(child_result.get("route"), dict) else {}
-    if str(route.get("selected") or "").strip().lower() == execution_target_local_companion:
-        raise RuntimeError("Synchronous subflow execution does not yet support local_companion routing.")
     child_run_id = str(child_result.get("run_id") or "").strip()
     if not child_run_id:
         raise RuntimeError("Subflow execution did not return a child run id.")
@@ -3535,9 +3643,10 @@ def schedule_auto_retry_for_failed_children(
     find_run_relationships_fn: Callable[[str, Dict[str, Any]], Any],
     refresh_parent_delegation_state_fn: Callable[..., Any],
     timer_factory: Callable[..., Any],
+    persist_live_run_state_fn: Optional[Callable[[str, Dict[str, Any]], Any]] = None,
     triggering_run_id: Optional[str] = None,
 ) -> set[str]:
-    from datetime import datetime, timezone
+    from datetime import datetime, timedelta, timezone
 
     parent_run_id = str(parent_snapshot.get("run_id") or "").strip()
     if not parent_run_id:
@@ -3561,43 +3670,46 @@ def schedule_auto_retry_for_failed_children(
     scheduled: set[str] = set()
     live_parent = runs_by_id.get(parent_run_id)
     log_queue = live_parent.get("logs") if isinstance(live_parent, dict) else None
+    parent_context = live_parent.get("context") if isinstance(live_parent, dict) and isinstance(live_parent.get("context"), dict) else {}
+    parent_metadata = parent_context.get("metadata") if isinstance(parent_context, dict) and isinstance(parent_context.get("metadata"), dict) else {}
+    if not isinstance(parent_metadata, dict):
+        parent_metadata = {}
+    pending_retry_state = (
+        dict(parent_metadata.get("delegation_pending_retries"))
+        if isinstance(parent_metadata.get("delegation_pending_retries"), dict)
+        else {}
+    )
 
-    for lineage_key, child in latest_by_lineage.items():
-        status = str(child.get("status") or "").strip().lower()
-        if not failure_status(status) or not lineage_key:
-            continue
+    def _persist_parent_retry_state() -> None:
+        if not isinstance(live_parent, dict):
+            return
+        context = live_parent.setdefault("context", {})
+        if not isinstance(context, dict):
+            context = {}
+            live_parent["context"] = context
+        metadata = context.setdefault("metadata", {})
+        if not isinstance(metadata, dict):
+            metadata = {}
+            context["metadata"] = metadata
+        metadata["delegation_pending_retries"] = dict(pending_retry_state)
+        if callable(persist_live_run_state_fn):
+            persist_live_run_state_fn(parent_run_id, live_parent)
+
+    def _schedule_retry_timer(
+        *,
+        failed_child: Dict[str, Any],
+        pending: tuple[str, str],
+        delay_seconds: float,
+        attempt: int,
+    ) -> None:
         with auto_retry_pending_lock:
-            pending_key = (parent_run_id, lineage_key)
-            retry_count = max(
-                child_retry_count(child),
-                safe_int(auto_retry_attempts.get(pending_key), 0),
-            )
-            if retry_count >= auto_retry_max_retries:
-                continue
-            if pending_key in auto_retry_pending:
-                continue
-            auto_retry_pending.add(pending_key)
-            auto_retry_attempts[pending_key] = retry_count + 1
-        child_run_id = str(child.get("run_id") or "").strip()
-        scheduled.add(lineage_key)
-        if log_queue is not None:
-            emit_log(
-                log_queue,
-                "info",
-                f"Child run {child_run_id} failed, retrying (attempt {retry_count + 2}/{auto_retry_max_retries + 1})...",
-                event="delegation_retry",
-                data={
-                    "parent_run_id": parent_run_id,
-                    "triggering_run_id": triggering_run_id,
-                    "child_run_id": child_run_id,
-                    "retry_count": retry_count + 1,
-                },
-            )
+            auto_retry_pending.add(pending)
+            auto_retry_attempts[pending] = max(safe_int(auto_retry_attempts.get(pending), 0), safe_int(attempt, 0))
 
         def _retry_job(
             parent_id: str = parent_run_id,
-            failed_child: Dict[str, Any] = dict(child),
-            pending: tuple[str, str] = pending_key,
+            failed_child: Dict[str, Any] = dict(failed_child),
+            pending: tuple[str, str] = pending,
         ) -> None:
             try:
                 current_parent_snapshot = lookup_run_snapshot_fn(parent_id)
@@ -3654,14 +3766,98 @@ def schedule_auto_retry_for_failed_children(
             finally:
                 with auto_retry_pending_lock:
                     auto_retry_pending.discard(pending)
+                pending_retry_state.pop(pending[1], None)
+                _persist_parent_retry_state()
                 refresh_parent_delegation_state_fn(
                     parent_id,
                     triggering_run_id=str(failed_child.get("run_id") or "").strip() or None,
                 )
 
-        timer = timer_factory(auto_retry_delay_seconds, _retry_job)
+        timer = timer_factory(max(0.0, float(delay_seconds or 0.0)), _retry_job)
         timer.daemon = True
         timer.start()
+
+    stale_lineages = {
+        lineage_key
+        for lineage_key in list(pending_retry_state.keys())
+        if lineage_key not in latest_by_lineage or not failure_status((latest_by_lineage.get(lineage_key) or {}).get("status"))
+    }
+    for lineage_key in stale_lineages:
+        pending_retry_state.pop(lineage_key, None)
+    if stale_lineages:
+        _persist_parent_retry_state()
+
+    for lineage_key, child in latest_by_lineage.items():
+        status = str(child.get("status") or "").strip().lower()
+        if not failure_status(status) or not lineage_key:
+            continue
+        pending_key = (parent_run_id, lineage_key)
+        pending_info = pending_retry_state.get(lineage_key) if isinstance(pending_retry_state.get(lineage_key), dict) else None
+        if pending_info is not None:
+            pending_failed_child_run_id = str(pending_info.get("failed_child_run_id") or "").strip()
+            if pending_failed_child_run_id and pending_failed_child_run_id != str(child.get("run_id") or "").strip():
+                pending_retry_state.pop(lineage_key, None)
+                _persist_parent_retry_state()
+                pending_info = None
+        if pending_info is not None:
+            attempt = max(1, safe_int(pending_info.get("attempt"), 1))
+            if attempt > auto_retry_max_retries:
+                pending_retry_state.pop(lineage_key, None)
+                _persist_parent_retry_state()
+                continue
+            with auto_retry_pending_lock:
+                if pending_key in auto_retry_pending:
+                    scheduled.add(lineage_key)
+                    continue
+            next_retry_at = parse_utc_ts(pending_info.get("next_retry_at"))
+            now = datetime.now(timezone.utc)
+            delay_seconds = max(0.0, (next_retry_at - now).total_seconds()) if next_retry_at is not None else 0.0
+            _schedule_retry_timer(
+                failed_child=child,
+                pending=pending_key,
+                delay_seconds=delay_seconds,
+                attempt=attempt,
+            )
+            scheduled.add(lineage_key)
+            continue
+        with auto_retry_pending_lock:
+            retry_count = max(
+                child_retry_count(child),
+                safe_int(auto_retry_attempts.get(pending_key), 0),
+            )
+            if retry_count >= auto_retry_max_retries:
+                continue
+        child_run_id = str(child.get("run_id") or "").strip()
+        scheduled.add(lineage_key)
+        attempt = retry_count + 1
+        next_retry_at = None
+        if auto_retry_delay_seconds > 0:
+            next_retry_at = (datetime.now(timezone.utc) + timedelta(seconds=float(auto_retry_delay_seconds))).isoformat().replace("+00:00", "Z")
+        pending_retry_state[lineage_key] = {
+            "failed_child_run_id": child_run_id,
+            "attempt": attempt,
+            "next_retry_at": next_retry_at,
+        }
+        _persist_parent_retry_state()
+        if log_queue is not None:
+            emit_log(
+                log_queue,
+                "info",
+                f"Child run {child_run_id} failed, retrying (attempt {retry_count + 2}/{auto_retry_max_retries + 1})...",
+                event="delegation_retry",
+                data={
+                    "parent_run_id": parent_run_id,
+                    "triggering_run_id": triggering_run_id,
+                    "child_run_id": child_run_id,
+                    "retry_count": retry_count + 1,
+                },
+            )
+        _schedule_retry_timer(
+            failed_child=child,
+            pending=pending_key,
+            delay_seconds=float(auto_retry_delay_seconds or 0.0),
+            attempt=attempt,
+        )
 
     return scheduled
 

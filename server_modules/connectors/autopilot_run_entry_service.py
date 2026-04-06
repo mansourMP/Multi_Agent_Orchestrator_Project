@@ -16,6 +16,8 @@ class AutopilotRunEntryService:
         normalize_execution_target: Callable[[str], str],
         decide_execution_target: Callable[[Dict[str, Any]], Any],
         apply_execution_route_metadata: Callable[[Dict[str, Any], Any], Dict[str, Any]],
+        run_start_request_class: Optional[Callable[..., Any]] = None,
+        start_run_request: Optional[Callable[[Any], Dict[str, Any]]] = None,
         create_run: Callable[..., str],
         record_channel_event: Callable[..., Any],
         telegram_session_key: Callable[[str], str],
@@ -34,6 +36,8 @@ class AutopilotRunEntryService:
         self.normalize_execution_target = normalize_execution_target
         self.decide_execution_target = decide_execution_target
         self.apply_execution_route_metadata = apply_execution_route_metadata
+        self.run_start_request_class = run_start_request_class
+        self.start_run_request = start_run_request
         self.create_run = create_run
         self.record_channel_event = record_channel_event
         self.telegram_session_key = telegram_session_key
@@ -188,14 +192,18 @@ class AutopilotRunEntryService:
             metadata["agent_role_source"] = "connector_assignment"
         metadata["trust_mode"] = self.normalize_trust_mode(trust_mode_value)
         metadata["execution_target"] = self.normalize_execution_target(execution_target_value)
-        route = self._apply_route_metadata(metadata)
-        # trust/execution source strings above are placeholders only; actual values are passed in by wrappers.
-        run_id = self._create_run_record(
+        created = self._create_run_record(
             engine=self.telegram_engine,
             workspace_id=workspace_id,
             goal=goal,
             metadata=metadata,
         )
+        run_id = str(created.get("run_id") or "").strip()
+        if not run_id:
+            raise RuntimeError("Telegram channel run did not produce a run id.")
+        route = created.get("route") if isinstance(created.get("route"), dict) else {
+            "selected": str(metadata.get("execution_target_selected") or metadata.get("execution_target") or "").strip() or None
+        }
         self.telegram_runs_started()
         self.record_channel_event(
             channel="telegram",
@@ -260,13 +268,18 @@ class AutopilotRunEntryService:
             metadata["agent_role_source"] = "connector_assignment"
         metadata["trust_mode"] = self.normalize_trust_mode(trust_mode_value)
         metadata["execution_target"] = self.normalize_execution_target(execution_target_value)
-        route = self._apply_route_metadata(metadata)
-        run_id = self._create_run_record(
+        created = self._create_run_record(
             engine=self.whatsapp_engine,
             workspace_id=workspace_id,
             goal=goal,
             metadata=metadata,
         )
+        run_id = str(created.get("run_id") or "").strip()
+        if not run_id:
+            raise RuntimeError("WhatsApp channel run did not produce a run id.")
+        route = created.get("route") if isinstance(created.get("route"), dict) else {
+            "selected": str(metadata.get("execution_target_selected") or metadata.get("execution_target") or "").strip() or None
+        }
         self.whatsapp_runs_started()
         self.record_channel_event(
             channel="whatsapp",
@@ -307,8 +320,22 @@ class AutopilotRunEntryService:
         workspace_id: str,
         goal: str,
         metadata: Dict[str, Any],
-    ) -> str:
-        return self.create_run(
+    ) -> Dict[str, Any]:
+        if callable(self.start_run_request) and callable(self.run_start_request_class):
+            request = self.run_start_request_class(
+                engine=engine,
+                workspace_id=workspace_id,
+                user_goal=goal,
+                metadata=metadata,
+            )
+            result = self.start_run_request(request)
+            if isinstance(result, dict) and str(result.get("run_id") or "").strip():
+                return dict(result)
+            if result is not None:
+                return {"result": result}
+
+        route = self._apply_route_metadata(metadata)
+        run_id = self.create_run(
             engine=engine,
             context={
                 "workflow_id": None,
@@ -322,3 +349,4 @@ class AutopilotRunEntryService:
                 "metadata": metadata,
             },
         )
+        return {"run_id": run_id, "route": route}

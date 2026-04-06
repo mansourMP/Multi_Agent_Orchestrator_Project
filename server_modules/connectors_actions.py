@@ -414,6 +414,9 @@ async def discord_webhook(request: Request):
             return {"type": 1}
 
         append_fn = globals().get("_append_channel_event")
+        from server_modules.runtime_models import RunStartRequest
+        from server_modules.runtime_runs_api import _run_execution_services
+        from server_modules.turn_runtime import execute_system_run_start_request_via_turn_runtime
         from server_modules.runs_execution import create_run as create_run_fn
 
         handled = 0
@@ -436,6 +439,12 @@ async def discord_webhook(request: Request):
                 connector_entry=row,
                 credentials=secret,
                 append_event_fn=append_fn if callable(append_fn) else None,
+                run_start_request_class=RunStartRequest,
+                start_run_request=lambda request: execute_system_run_start_request_via_turn_runtime(
+                    request,
+                    stamp_request_owner_fn=lambda req, current_user: req,
+                    services=_run_execution_services(),
+                ),
                 create_run_fn=lambda *, context: create_run_fn(engine="orion", context=context),
             )
             handled += 1

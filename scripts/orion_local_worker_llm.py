@@ -18,6 +18,11 @@ ROOT_DIR = Path(__file__).resolve().parents[1]
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
+from server_modules.agent_turn import (
+    AgentTurnRequest,
+    bind_agent_turn_metadata,
+    resolve_agent_turn_request,
+)
 from server_modules.usage_reporting import build_usage_record
 
 SUPPORTED_PROVIDERS = ("codex_cli", "claude_code_cli", "openai", "anthropic", "gemini", "ollama", "qwen", "deepseek", "mistral")
@@ -1992,6 +1997,34 @@ def generate_chat_reply_with_provider_fallback(
         else:
             last_error = f"{provider} generation failed"
     return "", None, ",".join(attempted), last_error
+
+
+def generate_chat_reply_for_turn_request(
+    *,
+    turn_request: Any,
+    context: Dict[str, Any],
+    metadata: Dict[str, Any],
+    system_prompt: Optional[str],
+    prior_messages: Any = None,
+) -> Tuple[str, Optional[Dict[str, Any]], str, str]:
+    resolved = resolve_agent_turn_request(turn_request)
+    if not isinstance(resolved, AgentTurnRequest):
+        raise ValueError("A valid AgentTurnRequest is required for local worker chat dispatch.")
+
+    next_context = dict(context or {})
+    next_metadata = bind_agent_turn_metadata(
+        dict(metadata or {}),
+        resolved,
+        source="local_worker",
+    )
+    next_context["metadata"] = next_metadata
+    return generate_chat_reply_with_provider_fallback(
+        context=next_context,
+        metadata=next_metadata,
+        user_goal=resolved.message,
+        system_prompt=system_prompt,
+        prior_messages=prior_messages,
+    )
 
 
 def generate_chat_reply_stream_with_provider_fallback(

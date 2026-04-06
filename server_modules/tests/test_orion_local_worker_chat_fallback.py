@@ -24,7 +24,7 @@ worker = _load_module()
 
 
 class LocalWorkerChatFallbackTests(TestCase):
-    @patch.object(worker, "generate_chat_reply_with_provider_fallback", return_value=(None, None, "openai,codex_cli", "llm unavailable"))
+    @patch.object(worker, "generate_chat_reply_for_turn_request", return_value=(None, None, "openai,codex_cli", "llm unavailable"))
     def test_fallback_returns_minimal_model_error_message(self, _mock_generate):
         run = {
             "context": {
@@ -40,7 +40,7 @@ class LocalWorkerChatFallbackTests(TestCase):
         self.assertEqual(data["generation"]["mode"], "deterministic_fallback")
         self.assertEqual(usage, None)
 
-    @patch.object(worker, "generate_chat_reply_with_provider_fallback", return_value=(None, None, "openai,codex_cli", "llm unavailable"))
+    @patch.object(worker, "generate_chat_reply_for_turn_request", return_value=(None, None, "openai,codex_cli", "llm unavailable"))
     def test_generic_fallback_no_longer_uses_meta_phrase(self, _mock_generate):
         run = {
             "context": {

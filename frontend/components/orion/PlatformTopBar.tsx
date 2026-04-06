@@ -6,27 +6,9 @@ import { Bell, SquarePen } from 'lucide-react';
 import { forwardWheelToMainScroll } from '@/lib/shell/forwardWheelToMainScroll';
 import { useShellChromeVisibility } from '@/lib/shell/useShellChromeVisibility';
 import { usePlatformShell } from './PlatformShellContext';
+import { resolveProductRoute } from '@/lib/productArchitecture';
 
 export const EMPYRALIS_NEW_CHAT_EVENT = 'empyralis:new-chat';
-
-function routeTitle(pathname: string): string {
-  if (pathname === '/') return 'Chat';
-  if (pathname === '/home') return 'Home';
-  if (pathname === '/agents') return 'Agents';
-  if (pathname === '/library' || pathname === '/skills') return 'Library';
-  if (pathname === '/connectors' || pathname === '/credentials' || pathname === '/connect-ai') return 'Integrations';
-  if (pathname === '/usage') return 'Usage';
-  if (pathname === '/settings') return 'Settings';
-  if (pathname === '/account') return 'Account';
-
-  const segments = pathname.split('/').filter(Boolean);
-  if (segments.length === 0) return 'Chat';
-  return segments[segments.length - 1]!
-    .split('-')
-    .filter(Boolean)
-    .map((part) => part.slice(0, 1).toUpperCase() + part.slice(1))
-    .join(' ');
-}
 
 export default function PlatformTopBar() {
   const pathname = usePathname() ?? '/';
@@ -34,6 +16,8 @@ export default function PlatformTopBar() {
   const { hideShellChrome } = useShellChromeVisibility(pathname);
   const { chatTopControls } = usePlatformShell();
   const showRouteTitle = pathname !== '/';
+  const route = resolveProductRoute(pathname);
+  const showSectionLabel = route.section.label !== route.title;
   const topNotice = chatTopControls?.notices.find(
     (notice) => notice.id !== 'provider'
       && (notice.tone === 'warn' || notice.tone === 'error')
@@ -80,7 +64,20 @@ export default function PlatformTopBar() {
           {showRouteTitle ? (
             <div className="orion-shellbar-page">
               <div className="orion-shellbar-page-row">
-                <span className="orion-shellbar-title">{routeTitle(pathname)}</span>
+                {showSectionLabel ? (
+                  <span
+                    style={{
+                      fontSize: 11,
+                      fontWeight: 700,
+                      letterSpacing: '0.08em',
+                      textTransform: 'uppercase',
+                      color: 'var(--text-tertiary)',
+                    }}
+                  >
+                    {route.section.label}
+                  </span>
+                ) : null}
+                <span className="orion-shellbar-title">{route.title}</span>
               </div>
             </div>
           ) : null}

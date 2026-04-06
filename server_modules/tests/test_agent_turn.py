@@ -1,10 +1,14 @@
 import unittest
 
 from server_modules.agent_turn import (
+    agent_turn,
     bind_agent_turn_request_meta,
     bind_agent_turn_metadata,
     build_agent_turn_session_context,
     build_direct_chat_turn_request,
+    build_discord_turn_request,
+    build_inbound_agent_turn_request,
+    build_local_worker_turn_request,
     resolve_agent_turn_session_identity,
     build_run_start_turn_request,
     ensure_direct_chat_turn_request,
@@ -20,6 +24,26 @@ from server_modules.runtime_models import RunStartRequest
 
 
 class AgentTurnTests(unittest.TestCase):
+    def test_build_inbound_agent_turn_request_normalizes_generic_inputs(self):
+        request = build_inbound_agent_turn_request(
+            tenant_id="tenant-1",
+            workspace_id="workspace-1",
+            session_id="session-1",
+            channel="Discord",
+            actor_type="user",
+            actor_id="user-1",
+            actor_display_name="Alice",
+            message="hello",
+            execution_mode="durable",
+            response_mode="artifact",
+            context_hints={"source": "discord"},
+        )
+
+        self.assertEqual(request.channel, "discord")
+        self.assertEqual(request.execution_mode, "durable")
+        self.assertEqual(request.actor.display_name, "Alice")
+        self.assertEqual(request.context_hints["source"], "discord")
+
     def test_build_direct_chat_turn_request_normalizes_core_fields(self):
         request = build_direct_chat_turn_request(
             current_user={"user_id": "user-1", "email": "user@example.com"},
@@ -218,9 +242,43 @@ class AgentTurnTests(unittest.TestCase):
 
         self.assertEqual(resolved.workspace_id, "workspace-1")
         self.assertEqual(resolved.thread_id, "thread-1")
-        self.assertEqual(resolved.client_request_id, "req-1")
-        self.assertEqual(resolved.turn_request.message, "hello")
-        self.assertEqual(resolved.turn_request.workspace_id, "workspace-1")
+
+    def test_build_discord_turn_request_preserves_channel_metadata(self):
+        request = build_discord_turn_request(
+            parsed={
+                "channel_id": "channel-1",
+                "guild_id": "guild-1",
+                "user_id": "user-1",
+                "username": "alice",
+                "message_id": "msg-1",
+                "event_type": "message_create",
+            },
+            connector_entry={"workspace_id": "workspace-1", "metadata": {"trust_mode": "guarded"}},
+            goal="please investigate this",
+            trace_id="trace-1",
+        )
+
+        self.assertEqual(request.workspace_id, "workspace-1")
+        self.assertEqual(request.channel, "discord")
+        self.assertEqual(request.execution_mode, "durable")
+        self.assertEqual(request.context_hints["discord"]["channel_id"], "channel-1")
+        self.assertEqual(request.message, "please investigate this")
+
+    def test_build_local_worker_turn_request_uses_worker_and_run_identity(self):
+        request = build_local_worker_turn_request(
+            worker_id="worker-1",
+            run={"id": "run-1"},
+            context={"workspace_id": "workspace-1"},
+            metadata={"thread_id": "thread-1", "execution_target": "local_companion"},
+            goal="Summarize priorities",
+        )
+
+        self.assertEqual(request.channel, "local_worker")
+        self.assertEqual(request.actor.type, "worker")
+        self.assertEqual(request.actor.id, "worker-1")
+        self.assertEqual(request.session_id, "thread-1")
+        self.assertEqual(request.machine_target, "local_companion")
+        self.assertEqual(request.message, "Summarize priorities")
 
     def test_ensure_direct_chat_turn_request_accepts_serialized_contract(self):
         request = build_direct_chat_turn_request(

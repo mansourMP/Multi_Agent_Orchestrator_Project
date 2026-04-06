@@ -20,8 +20,10 @@ import {
 import { useShellChromeVisibility } from '@/lib/shell/useShellChromeVisibility';
 import { forwardWheelToMainScroll } from '@/lib/shell/forwardWheelToMainScroll';
 import { useSidebarCollapsed } from '@/lib/useSidebarCollapsed';
+import { resolveProductSection, type ProductSectionId } from '@/lib/productArchitecture';
 
 type NavItem = {
+  sectionId: ProductSectionId;
   label: string;
   href: string;
   icon: LucideIcon;
@@ -31,26 +33,18 @@ const EXPANDED_WIDTH = 220;
 const COLLAPSED_WIDTH = 56;
 
 const MAIN_NAV: NavItem[] = [
-  { label: 'Home', href: '/home', icon: House },
-  { label: 'Chat', href: '/', icon: MessageSquare },
-  { label: 'Agents', href: '/agents', icon: Bot },
-  { label: 'Library', href: '/library', icon: BookOpen },
-  { label: 'Integrations', href: '/connectors', icon: Plug },
-  { label: 'Usage', href: '/usage', icon: BarChart2 },
+  { sectionId: 'home', label: 'Home', href: '/home', icon: House },
+  { sectionId: 'chat', label: 'Chat', href: '/', icon: MessageSquare },
+  { sectionId: 'agents', label: 'Agents', href: '/agents', icon: Bot },
+  { sectionId: 'library', label: 'Library', href: '/library', icon: BookOpen },
+  { sectionId: 'integrations', label: 'Integrations', href: '/connectors', icon: Plug },
+  { sectionId: 'usage', label: 'Usage', href: '/usage', icon: BarChart2 },
 ];
 
 const BOTTOM_NAV: NavItem[] = [
-  { label: 'Account', href: '/account', icon: User },
-  { label: 'Settings', href: '/settings', icon: Settings },
+  { sectionId: 'account', label: 'Account', href: '/account', icon: User },
+  { sectionId: 'settings', label: 'Settings', href: '/settings', icon: Settings },
 ];
-
-function isActivePath(pathname: string, href: string): boolean {
-  if (href === '/') return pathname === '/';
-  if (href === '/agents') return pathname === '/agents' || pathname === '/builder' || pathname.startsWith('/builder/');
-  if (href === '/library') return pathname === '/library' || pathname === '/skills';
-  if (href === '/connectors') return pathname === '/connectors' || pathname === '/credentials' || pathname === '/connect-ai';
-  return pathname === href;
-}
 
 function SidebarLink({
   item,
@@ -61,7 +55,7 @@ function SidebarLink({
   pathname: string;
   collapsed: boolean;
 }) {
-  const active = isActivePath(pathname, item.href);
+  const active = resolveProductSection(pathname) === item.sectionId;
   const Icon = item.icon;
 
   return (

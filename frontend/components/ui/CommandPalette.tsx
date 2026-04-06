@@ -14,7 +14,8 @@ import {
   useKBar,
   useMatches,
 } from 'kbar';
-import { Home, MessageSquare, PlusSquare, PlugZap, Search, Settings, Workflow } from 'lucide-react';
+import { BarChart2, BookOpen, Bot, Home, MessageSquare, PlusSquare, PlugZap, Search, Settings, User, Workflow, Wrench } from 'lucide-react';
+import { PRODUCT_SECTIONS, getProductSection } from '@/lib/productArchitecture';
 
 const EMPYRALIS_NEW_CHAT_EVENT = 'empyralis:new-chat';
 export const EMPYRALIS_COMMAND_PALETTE_TOGGLE_EVENT = 'empyralis:command-palette-toggle';
@@ -210,62 +211,110 @@ export default function CommandPaletteProvider({ children }: { children: React.R
   }, [pathname, router]);
 
   const actions = React.useMemo(
-    () => [
-      {
-        id: 'home',
-        name: 'Home',
-        shortcut: ['h'],
-        keywords: 'dashboard workspace',
-        section: 'Navigation',
-        perform: () => router.push('/home'),
-        icon: <Home size={16} />,
-      },
-      {
-        id: 'chat',
-        name: 'Chat',
-        shortcut: ['c'],
-        keywords: 'assistant conversation',
-        section: 'Navigation',
-        perform: () => router.push('/'),
-        icon: <MessageSquare size={16} />,
-      },
-      {
-        id: 'new-chat',
-        name: 'New chat',
-        shortcut: ['n'],
-        keywords: 'reset conversation fresh thread',
-        section: 'Navigation',
-        perform: startNewChat,
-        icon: <PlusSquare size={16} />,
-      },
-      {
-        id: 'workflows',
-        name: 'Workflows',
-        shortcut: ['w'],
-        keywords: 'automation flows builder',
-        section: 'Navigation',
-        perform: () => router.push('/workflows'),
-        icon: <Workflow size={16} />,
-      },
-      {
-        id: 'settings',
-        name: 'Settings',
-        shortcut: ['s'],
-        keywords: 'preferences machines account',
-        section: 'Navigation',
-        perform: () => router.push('/settings'),
-        icon: <Settings size={16} />,
-      },
-      {
-        id: 'connectors',
-        name: 'Connectors',
-        shortcut: ['i'],
-        keywords: 'integrations credentials accounts',
-        section: 'Navigation',
-        perform: () => router.push('/connectors'),
-        icon: <PlugZap size={16} />,
-      },
-    ],
+    () => {
+      const baseActions = PRODUCT_SECTIONS.map((section) => {
+        const shortcuts: Record<string, string[]> = {
+          home: ['h'],
+          chat: ['c'],
+          agents: ['a'],
+          library: ['l'],
+          integrations: ['i'],
+          usage: ['u'],
+          account: ['p'],
+          settings: ['s'],
+        };
+        const icons = {
+          home: <Home size={16} />,
+          chat: <MessageSquare size={16} />,
+          agents: <Bot size={16} />,
+          library: <BookOpen size={16} />,
+          integrations: <PlugZap size={16} />,
+          usage: <BarChart2 size={16} />,
+          account: <User size={16} />,
+          settings: <Settings size={16} />,
+        };
+        return {
+          id: `section-${section.id}`,
+          name: section.label,
+          shortcut: shortcuts[section.id],
+          keywords: `${section.label.toLowerCase()} ${section.role.replace(/_/g, ' ')}`,
+          subtitle: section.summary,
+          section: 'Navigation',
+          perform: () => router.push(section.href),
+          icon: icons[section.id],
+        };
+      });
+
+      return [
+        ...baseActions,
+        {
+          id: 'new-chat',
+          name: 'New chat',
+          shortcut: ['n'],
+          keywords: 'chat fresh conversation work now',
+          subtitle: getProductSection('chat').summary,
+          section: 'Chat',
+          perform: startNewChat,
+          icon: <PlusSquare size={16} />,
+        },
+        {
+          id: 'runs',
+          name: 'Runs',
+          shortcut: ['r'],
+          keywords: 'home work now active blocked execution history',
+          subtitle: 'Operational work in motion, blocked work, and completed work.',
+          section: 'Home',
+          perform: () => router.push('/runs'),
+          icon: <Wrench size={16} />,
+        },
+        {
+          id: 'approvals',
+          name: 'Approvals',
+          keywords: 'home blocked confirm attention inbox',
+          subtitle: 'Approvals and interventions that need your attention now.',
+          section: 'Home',
+          perform: () => router.push('/approvals'),
+          icon: <Wrench size={16} />,
+        },
+        {
+          id: 'workflows',
+          name: 'Workflows',
+          shortcut: ['w'],
+          keywords: 'library reusable assets automation flows templates',
+          subtitle: 'Reusable workflow assets that belong to the Library.',
+          section: 'Library',
+          perform: () => router.push('/workflows'),
+          icon: <Workflow size={16} />,
+        },
+        {
+          id: 'builder',
+          name: 'Builder',
+          keywords: 'library create asset workflow template',
+          subtitle: 'Asset editing surface for reusable agents and workflows.',
+          section: 'Library',
+          perform: () => router.push('/builder'),
+          icon: <Workflow size={16} />,
+        },
+        {
+          id: 'machines',
+          name: 'Machines',
+          keywords: 'integrations local runtime machine capability',
+          subtitle: 'Workspace runtime targets and local machine availability.',
+          section: 'Integrations',
+          perform: () => router.push('/machines'),
+          icon: <PlugZap size={16} />,
+        },
+        {
+          id: 'health',
+          name: 'Health',
+          keywords: 'integrations runtime doctor diagnostics machine health',
+          subtitle: 'Operational health for connected runtimes and workspace capabilities.',
+          section: 'Integrations',
+          perform: () => router.push('/health'),
+          icon: <PlugZap size={16} />,
+        },
+      ];
+    },
     [router, startNewChat],
   );
 

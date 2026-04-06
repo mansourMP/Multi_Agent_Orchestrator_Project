@@ -7,7 +7,7 @@ from typing import Any, Optional
 from fastapi import Depends, Request
 from sse_starlette.sse import EventSourceResponse
 
-from server_modules.agent_turn import resolve_direct_chat_turn_request
+from server_modules.agent_turn import agent_turn as execute_canonical_agent_turn, resolve_direct_chat_turn_request
 from server_modules.direct_chat_service import (
     build_direct_chat_execution_services,
     build_direct_chat_event_producer as _service_build_direct_chat_event_producer,
@@ -28,7 +28,6 @@ from server_modules.run_service import (
 )
 from server_modules.turn_runtime import (
     build_turn_execution_services,
-    execute_agent_turn_request,
     execute_run_start_request_via_turn_runtime,
     execute_system_run_start_request_via_turn_runtime,
 )
@@ -231,7 +230,7 @@ _direct_chat_stream_runtime_bindings = chat_stream_runtime_service.build_direct_
     chat_stream_key=_chat_stream_key,
     resolve_direct_chat_turn_request=resolve_direct_chat_turn_request,
     chat_stream_request_signature=_chat_stream_request_signature,
-    execute_agent_turn_request=execute_agent_turn_request,
+    execute_agent_turn_request=execute_canonical_agent_turn,
     build_turn_execution_services=build_turn_execution_services,
     run_execution_services=_run_execution_services,
     extract_direct_chat_error_response=lambda *args, **kwargs: _extract_direct_chat_error_response(*args, **kwargs),

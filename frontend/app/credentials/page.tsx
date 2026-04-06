@@ -34,6 +34,7 @@ import { ConnectorLogoMark } from '@/components/orion/connections/ConnectionMark
 import { PageFilterBar } from '@/components/orion/page/PageFilterBar';
 import { PageHero } from '@/components/orion/page/PageHero';
 import { PageHeroCard } from '@/components/orion/page/PageHeroCard';
+import SectionOwnershipPanel from '@/components/orion/page/SectionOwnershipPanel';
 import { PageSection } from '@/components/orion/page/PageSection';
 import { PageStatePanel } from '@/components/orion/page/PageStatePanel';
 
@@ -1798,6 +1799,8 @@ function buildCredentialsPayload(state: ConnectModalState): Record<string, unkno
           </>
         }
       />
+
+      <SectionOwnershipPanel sectionId="integrations" />
 
       <section
         style={{

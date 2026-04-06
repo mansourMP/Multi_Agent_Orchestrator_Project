@@ -55,6 +55,7 @@ from server_modules.run_service import (
     build_delegation_summary,
     build_run_relation_summary,
     build_live_run_record,
+    create_live_run,
     clear_pending_confirmation,
     create_workflow_child_local_run,
     get_pending_confirmation,
@@ -646,6 +647,7 @@ class RunServiceTests(unittest.TestCase):
             load_provider_profiles_fn=lambda: calls.append(("load_provider_profiles", None)),
             load_idempotency_fn=lambda: calls.append(("load_idempotency", None)),
             recover_orphaned_local_runs_on_startup_fn=lambda: calls.append(("recover_local", None)),
+            recover_delegation_retries_on_startup_fn=lambda: calls.append(("recover_delegation", None)),
             load_runtime_skills_state_fn=lambda: calls.append(("load_skills", None)),
             load_telegram_autopilot_state_fn=lambda: calls.append(("load_telegram_state", None)),
             load_whatsapp_autopilot_state_fn=lambda: calls.append(("load_whatsapp_state", None)),
@@ -665,6 +667,7 @@ class RunServiceTests(unittest.TestCase):
         self.assertTrue(initialized["value"])
         self.assertEqual(calls[0], ("init_db", "runtime.sqlite3"))
         self.assertIn(("load_schedules", None), calls)
+        self.assertIn(("recover_delegation", None), calls)
         self.assertIn(("activate_whatsapp", None), calls)
         self.assertEqual(len(threads), 3)
         self.assertTrue(all(thread.started for thread in threads))
@@ -882,6 +885,50 @@ class RunServiceTests(unittest.TestCase):
         self.assertEqual(emitted[0][1]["event"], "workflow_subflow_start")
         self.assertEqual(emitted[1][1]["event"], "workflow_subflow_complete")
         self.assertEqual(updates[-1][1]["status"], "succeeded")
+
+    def test_execute_workflow_subflow_node_supports_local_companion_child_runs(self):
+        state = {"last_text": "Initial text"}
+        requests = []
+
+        result = execute_workflow_subflow_node(
+            run_id="run-parent-local",
+            node_id="subflow_local",
+            label="Call local child workflow",
+            context={
+                "engine": "orion",
+                "workflow_id": "wf-parent",
+                "workspace_id": "ws-1",
+                "user_goal": "Do local work",
+                "business_plan": "Plan local work",
+                "metadata": {
+                    "execution_target": "local_companion",
+                    "execution_target_selected": "local_companion",
+                },
+            },
+            config={"workflow_id": "wf-child-local", "mode": "sync", "timeout_seconds": 45},
+            current_text="Parent text",
+            state=state,
+            update_node_state_fn=lambda *args, **kwargs: None,
+            emit_log_fn=lambda *args, **kwargs: None,
+            workflow_text_payload_fn=lambda value: str(value or ""),
+            node_preview_text_fn=lambda value: str(value or ""),
+            execute_workflow_child_run_request_fn=lambda request: requests.append(request) or {
+                "run_id": "child-local-run-1",
+                "route": {"selected": "local_companion"},
+            },
+            load_run_fn=lambda _run_id: {
+                "status": "completed",
+                "result": "Local child result",
+                "result_data": {"summary": "local ok"},
+            },
+            log_queue=queue.Queue(),
+            execution_target_local_companion="local_companion",
+        )
+
+        self.assertEqual(result, "Local child result")
+        self.assertEqual(requests[0].workflow_id, "wf-child-local")
+        self.assertEqual(requests[0].metadata["execution_target"], "local_companion")
+        self.assertEqual(state["last_data"]["child_run_id"], "child-local-run-1")
 
     def test_execute_workflow_local_tool_runs_via_child_local_run_lifecycle(self):
         requests = []
@@ -1429,6 +1476,73 @@ class RunServiceTests(unittest.TestCase):
         self.assertEqual(creation.compute_tool_policy_precheck({})["blocked_count"], 4)
         self.assertEqual(creation.begin_run_pending_confirmation()["approval_id"], "approval-4")
         self.assertEqual(creation.create_run(), "run-4")
+
+    def test_create_live_run_bootstraps_live_record_lifecycle(self):
+        runs_by_id = {}
+        run_queue_index = {}
+        started = []
+        run_id = create_live_run(
+            "orion",
+            {"workspace_id": "default", "metadata": {}},
+            runtime_db_path="runtime.sqlite3",
+            sync_acp_manager_paths_fn=lambda **kwargs: None,
+            selected_execution_target_from_context_fn=lambda context: "cloud",
+            runs_by_id=runs_by_id,
+            run_queue_index=run_queue_index,
+            metrics_inc_fn=lambda key, amount: None,
+            persist_live_run_state_fn=lambda run_id, run: None,
+            hydrate_run_memory_context_fn=lambda run_id, run: None,
+            enqueue_local_companion_run_fn=lambda run_id: None,
+            start_background_run_fn=lambda active_run_id: started.append(active_run_id),
+            local_companion_target="local_companion",
+            provider_profiles={"profile-1": {"provider": "openai", "model": "gpt-5", "label": "Fast"}},
+            memory_enabled=True,
+            utc_now_iso_fn=lambda: "2026-04-06T00:00:01Z",
+            inject_runtime_skill_defaults_fn=lambda context: context.setdefault("metadata", {}).update({"skill_defaults": True}),
+            compute_tool_policy_precheck_fn=lambda context: {"blocked_count": 0},
+            uuid4_fn=lambda: "run-live-1",
+            utcnow_fn=lambda: datetime(2026, 4, 6, 0, 0, 0),
+            monotonic_fn=lambda: 123.0,
+        )
+
+        self.assertEqual(run_id, "run-live-1")
+        self.assertEqual(started, ["run-live-1"])
+        self.assertIn("run-live-1", runs_by_id)
+        live_run = runs_by_id["run-live-1"]
+        self.assertEqual(live_run["status"], "starting")
+        self.assertEqual(live_run["active_provider"], None)
+        self.assertEqual(live_run["context"]["metadata"]["tool_policy_precheck"]["blocked_count"], 0)
+        self.assertTrue(live_run["context"]["metadata"]["skill_defaults"])
+
+    def test_create_live_run_queues_local_companion_target_without_background_start(self):
+        enqueued = []
+        started = []
+
+        run_id = create_live_run(
+            "orion",
+            {"workspace_id": "default", "metadata": {}},
+            runtime_db_path="runtime.sqlite3",
+            sync_acp_manager_paths_fn=lambda **kwargs: None,
+            selected_execution_target_from_context_fn=lambda context: "local_companion",
+            runs_by_id={},
+            run_queue_index={},
+            metrics_inc_fn=lambda key, amount: None,
+            persist_live_run_state_fn=lambda run_id, run: None,
+            hydrate_run_memory_context_fn=lambda run_id, run: run.setdefault("hydrated", True),
+            enqueue_local_companion_run_fn=lambda active_run_id: enqueued.append(active_run_id),
+            start_background_run_fn=lambda active_run_id: started.append(active_run_id),
+            local_companion_target="local_companion",
+            provider_profiles={},
+            memory_enabled=False,
+            utc_now_iso_fn=lambda: "2026-04-06T00:00:01Z",
+            uuid4_fn=lambda: "run-live-local",
+            utcnow_fn=lambda: datetime(2026, 4, 6, 0, 0, 0),
+            monotonic_fn=lambda: 123.0,
+        )
+
+        self.assertEqual(run_id, "run-live-local")
+        self.assertEqual(enqueued, ["run-live-local"])
+        self.assertEqual(started, [])
 
     def test_build_runs_core_legacy_preparation_services_preserves_postprocess(self):
         services = build_runs_core_legacy_preparation_services(
@@ -2231,6 +2345,79 @@ class RunServiceTests(unittest.TestCase):
         self.assertEqual(refresh_calls, [("parent-run", "child-run")])
         self.assertEqual(auto_retry_pending, set())
         self.assertEqual(auto_retry_attempts[("parent-run", "lineage-1")], 1)
+
+    def test_schedule_auto_retry_for_failed_children_rehydrates_persisted_retry_after_restart(self):
+        recorded_timers = []
+        persisted_states = []
+        runs_by_id = {
+            "parent-run": {
+                "run_id": "parent-run",
+                "context": {
+                    "metadata": {
+                        "delegation_pending_retries": {
+                            "lineage-1": {
+                                "failed_child_run_id": "child-run",
+                                "attempt": 1,
+                                "next_retry_at": "2026-04-02T00:00:05Z",
+                            }
+                        }
+                    }
+                },
+                "logs": queue.Queue(),
+            },
+        }
+
+        class _RecordingTimer:
+            def __init__(self, delay, func, args=None, kwargs=None):
+                recorded_timers.append((delay, func, args or (), kwargs or {}))
+                self.daemon = False
+
+            def start(self):
+                return None
+
+        scheduled = schedule_auto_retry_for_failed_children(
+            {"run_id": "parent-run"},
+            [
+                {
+                    "run_id": "child-run",
+                    "status": "failed",
+                    "created_at": "2026-04-02T00:00:00Z",
+                    "updated_at": "2026-04-02T00:00:00Z",
+                    "context": {"metadata": {}},
+                }
+            ],
+            runs_by_id=runs_by_id,
+            parse_utc_ts=lambda value: datetime.fromisoformat(str(value).replace("Z", "+00:00")) if value else None,
+            child_lineage_key=lambda child: "lineage-1",
+            failure_status=lambda status: str(status or "").strip().lower() == "failed",
+            child_retry_count=lambda child: 0,
+            safe_int=lambda value, default=0: int(value) if value is not None else default,
+            auto_retry_pending=set(),
+            auto_retry_attempts={},
+            auto_retry_pending_lock=__import__("threading").Lock(),
+            auto_retry_max_retries=1,
+            auto_retry_delay_seconds=3.0,
+            emit_log=lambda *args, **kwargs: None,
+            build_retry_child_payload_fn=lambda *args, **kwargs: {"metadata": {}},
+            build_delegated_child_run_request_fn=lambda *args, **kwargs: RunStartRequest(
+                engine="orion",
+                workspace_id="default",
+                user_goal="retry",
+                metadata={"auto_retry": True},
+            ),
+            execute_delegated_run_request_fn=lambda req: {"status": "starting"},
+            lookup_run_snapshot_fn=lambda run_id: {"run_id": run_id},
+            find_run_relationships_fn=lambda run_id, snapshot: (snapshot, []),
+            refresh_parent_delegation_state_fn=lambda parent_id, triggering_run_id=None: None,
+            timer_factory=_RecordingTimer,
+            persist_live_run_state_fn=lambda run_id, run: persisted_states.append((run_id, dict(run.get("context", {}).get("metadata", {})))),
+            triggering_run_id="child-run",
+        )
+
+        self.assertEqual(scheduled, {"lineage-1"})
+        self.assertEqual(len(recorded_timers), 1)
+        self.assertGreaterEqual(recorded_timers[0][0], 0.0)
+        self.assertEqual(persisted_states, [])
 
     def test_build_delegation_summary_reports_retrying_and_failed_children(self):
         summary = build_delegation_summary(

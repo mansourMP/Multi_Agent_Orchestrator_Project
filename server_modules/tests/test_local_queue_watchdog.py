@@ -7,6 +7,32 @@ from server_modules import local_queue
 
 
 class LocalQueueWatchdogTests(unittest.TestCase):
+    def _run_cold_boot_recovery(self, run: dict, *, now_iso: str = "2026-04-06T12:00:00Z"):
+        emitted = []
+        persisted = []
+        original_server = local_queue._server
+        original_done = local_queue._COLD_BOOT_RECOVERY_DONE
+        local_queue._server = SimpleNamespace(
+            runs={"run-1": run},
+            LOCAL_QUEUE_LOCK=__import__("threading").Lock(),
+            LOCAL_CLAIMED_RUNS={},
+            LOCAL_PENDING_RUN_IDS=[],
+            LOCAL_WORKER_REGISTRY={},
+            _utc_now=lambda: datetime.fromisoformat(now_iso.replace("Z", "")),
+            _utc_now_iso=lambda: now_iso,
+            _parse_utc_ts=lambda value: datetime.fromisoformat(str(value).replace("Z", "")) if value else None,
+            ORION_LOCAL_LEASE_SECONDS=30,
+            emit_log=lambda log_queue, level, message, **kwargs: emitted.append((level, message, kwargs)),
+            _persist_live_run_state=lambda run_id, live_run: persisted.append((run_id, live_run.get("status"))),
+        )
+        local_queue._COLD_BOOT_RECOVERY_DONE = False
+        try:
+            recovered = local_queue.recover_orphaned_local_runs_on_startup()
+        finally:
+            local_queue._server = original_server
+            local_queue._COLD_BOOT_RECOVERY_DONE = original_done
+        return recovered, emitted, persisted
+
     def test_watchdog_status_snapshot_reflects_last_recorded_pass(self) -> None:
         local_queue._record_local_runtime_watchdog_status(
             checked_at="2026-04-06T12:00:00Z",
@@ -61,6 +87,60 @@ class LocalQueueWatchdogTests(unittest.TestCase):
         self.assertEqual(resumed, ["run-1"])
         self.assertEqual(scheduled, [("run-1", "waiting_for_input")])
         self.assertEqual(emitted[0][2]["event"], "local_resume_scheduled_after_backoff")
+
+    def test_cold_boot_recovery_preserves_worker_loss_backoff_state(self) -> None:
+        run = {
+            "status": "running_local",
+            "logs": object(),
+            "browser_checkpoint": {"next_action_index": 4, "session_profile": "qa-browser"},
+            "context": {
+                "metadata": {
+                    "execution_target_selected": "local_companion",
+                    "local_worker_recovery_reason": "worker_lost",
+                    "local_worker_recovery_attempt_count": 2,
+                    "local_worker_recovery_backoff_seconds": 10,
+                    "local_worker_recovery_max_auto_retries": 3,
+                    "local_worker_recovery_next_retry_at": "2026-04-06T12:00:10Z",
+                }
+            },
+        }
+
+        recovered, emitted, persisted = self._run_cold_boot_recovery(run)
+
+        self.assertEqual(recovered, ["run-1"])
+        self.assertEqual(persisted, [("run-1", "waiting_for_input")])
+        self.assertEqual(run["status"], "waiting_for_input")
+        self.assertEqual(run["result_data"]["error"], "local_worker_lost_recoverable")
+        self.assertEqual(run["result_data"]["retry_backoff_seconds"], 10)
+        self.assertEqual(run["result_data"]["next_retry_at"], "2026-04-06T12:00:10Z")
+        self.assertTrue(run["context"]["metadata"]["cold_boot_recovered"])
+        self.assertEqual(emitted[0][2]["event"], "local_cold_boot_recovered_backoff")
+
+    def test_cold_boot_recovery_preserves_manual_confirmation_gate(self) -> None:
+        run = {
+            "status": "running_local",
+            "logs": object(),
+            "browser_checkpoint": {"next_action_index": 9, "session_profile": "qa-browser"},
+            "context": {
+                "metadata": {
+                    "execution_target_selected": "local_companion",
+                    "local_worker_recovery_reason": "worker_lost",
+                    "local_worker_recovery_attempt_count": 3,
+                    "local_worker_recovery_max_auto_retries": 3,
+                    "local_worker_recovery_auto_retry_exhausted": True,
+                    "local_worker_recovery_manual_confirmation_required": True,
+                }
+            },
+        }
+
+        recovered, emitted, _persisted = self._run_cold_boot_recovery(run)
+
+        self.assertEqual(recovered, ["run-1"])
+        self.assertEqual(run["status"], "waiting_for_input")
+        self.assertEqual(run["result_data"]["error"], "local_worker_recovery_exhausted")
+        self.assertTrue(run["result_data"]["manual_confirmation_required"])
+        self.assertTrue(run["context"]["metadata"]["local_worker_recovery_manual_confirmation_required"])
+        self.assertEqual(emitted[0][2]["event"], "local_cold_boot_recovered_manual_gate")
 
 
 if __name__ == "__main__":

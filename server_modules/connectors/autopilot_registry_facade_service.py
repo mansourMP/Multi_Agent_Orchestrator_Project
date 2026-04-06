@@ -96,6 +96,8 @@ class AutopilotRegistryFacadeService:
         normalize_execution_target: Callable[[Any], str],
         decide_execution_target: Callable[[Dict[str, Any]], Dict[str, Any]],
         apply_execution_route_metadata: Callable[[Dict[str, Any], Dict[str, Any]], Dict[str, Any]],
+        run_start_request_class: Optional[Callable[..., Any]] = None,
+        start_run_request: Optional[Callable[[Any], Dict[str, Any]]] = None,
         create_run: Callable[..., Any],
         inherit_owner_user_id: Callable[[Optional[str]], Optional[str]],
         agent_machine_full_trust_enabled: Callable[[Optional[str]], bool],
@@ -207,6 +209,8 @@ class AutopilotRegistryFacadeService:
         self.normalize_execution_target = normalize_execution_target
         self.decide_execution_target = decide_execution_target
         self.apply_execution_route_metadata = apply_execution_route_metadata
+        self.run_start_request_class = run_start_request_class
+        self.start_run_request = start_run_request
         self.create_run = create_run
         self.inherit_owner_user_id = inherit_owner_user_id
         self.agent_machine_full_trust_enabled = agent_machine_full_trust_enabled
@@ -446,6 +450,8 @@ class AutopilotRegistryFacadeService:
                 normalize_execution_target=self.normalize_execution_target,
                 decide_execution_target=self.decide_execution_target,
                 apply_execution_route_metadata=self.apply_execution_route_metadata,
+                run_start_request_class=self.run_start_request_class,
+                start_run_request=self.start_run_request,
                 create_run=self.create_run,
                 whatsapp_session_key=lambda from_number, to_number: self.channel_support_service().whatsapp_session_key(from_number, to_number),
                 inherit_owner_user_id=self.inherit_owner_user_id,

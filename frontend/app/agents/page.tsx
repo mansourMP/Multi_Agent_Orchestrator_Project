@@ -8,6 +8,7 @@ import { type AgentRoleId, isAgentRoleId } from '@/app/page.catalog';
 import { PageCollection } from '@/components/orion/page/PageCollection';
 import { PageHero } from '@/components/orion/page/PageHero';
 import { PageHeroCard } from '@/components/orion/page/PageHeroCard';
+import SectionOwnershipPanel from '@/components/orion/page/SectionOwnershipPanel';
 import { EmptyState } from '@/components/orion/state/EmptyState';
 import { ErrorState } from '@/components/orion/state/ErrorState';
 import { LoadingState } from '@/components/orion/state/LoadingState';
@@ -189,6 +190,8 @@ export default function AgentsPage() {
           </Link>
         }
       />
+
+      <SectionOwnershipPanel sectionId="agents" />
 
       <section style={{ display: 'grid', gap: 12, marginBottom: 12 }}>
         <PageHeroCard label="Agent library">

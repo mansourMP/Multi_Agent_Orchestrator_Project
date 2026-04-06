@@ -17,6 +17,7 @@ if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
 from server_modules.usage_reporting import build_usage_record, enrich_usage_record
+from server_modules.agent_turn import build_local_worker_turn_request
 
 from orion_local_worker_content import normalize_content_plan_items
 from orion_local_worker_execution import (
@@ -25,6 +26,7 @@ from orion_local_worker_execution import (
     registered_local_worker_tool_names,
 )
 from orion_local_worker_llm import (
+    generate_chat_reply_for_turn_request,
     generate_chat_reply_with_provider_fallback,
     generate_pack_with_provider_fallback,
 )
@@ -345,10 +347,17 @@ def build_pack_result(run: Dict[str, Any], worker_id: str) -> Tuple[str, Optiona
     llm_error = ""
     if use_llm:
         system_prompt = build_operator_system_prompt() or None
-        reply, usage_masked, attempted_providers, llm_error = generate_chat_reply_with_provider_fallback(
+        turn_request = build_local_worker_turn_request(
+            worker_id=worker_id,
+            run=run,
             context=context,
             metadata=metadata,
-            user_goal=goal,
+            goal=goal,
+        )
+        reply, usage_masked, attempted_providers, llm_error = generate_chat_reply_for_turn_request(
+            turn_request=turn_request,
+            context=context,
+            metadata=metadata,
             system_prompt=system_prompt,
         )
         if reply:

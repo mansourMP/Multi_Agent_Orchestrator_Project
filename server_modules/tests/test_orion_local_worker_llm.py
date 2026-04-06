@@ -5,6 +5,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from server_modules.agent_turn import build_inbound_agent_turn_request
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
 SCRIPTS_DIR = ROOT_DIR / "scripts"
@@ -15,6 +16,37 @@ import orion_local_worker_llm as worker_llm
 
 
 class OrionLocalWorkerLlmTests(unittest.TestCase):
+    def test_generate_chat_for_turn_request_binds_agent_turn_metadata(self):
+        turn_request = build_inbound_agent_turn_request(
+            workspace_id="workspace-1",
+            session_id="thread-1",
+            channel="local_worker",
+            actor_type="worker",
+            actor_id="worker-1",
+            message="Summarize this",
+            response_mode="artifact",
+        )
+
+        with patch.object(
+            worker_llm,
+            "generate_chat_reply_with_provider_fallback",
+            return_value=("ok", {"provider": "openai"}, "openai", ""),
+        ) as generate_mock:
+            text, usage, attempted, error = worker_llm.generate_chat_reply_for_turn_request(
+                turn_request=turn_request,
+                context={"workspace_id": "workspace-1"},
+                metadata={},
+                system_prompt="You are concise.",
+            )
+
+        self.assertEqual(text, "ok")
+        self.assertEqual(usage["provider"], "openai")
+        self.assertEqual(attempted, "openai")
+        self.assertEqual(error, "")
+        passed_metadata = generate_mock.call_args.kwargs["metadata"]
+        self.assertEqual(passed_metadata["agent_turn_request"]["workspace_id"], "workspace-1")
+        self.assertEqual(passed_metadata["agent_turn_request"]["channel"], "local_worker")
+
     def test_codex_account_id_from_token_extracts_chatgpt_account(self):
         token = (
             "header."

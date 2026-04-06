@@ -27,6 +27,8 @@ except Exception:  # pragma: no cover
 DiscordHttpRequest = Callable[..., Dict[str, Any]]
 DiscordAppendEvent = Callable[..., Dict[str, Any]]
 DiscordCreateRun = Callable[..., str]
+DiscordRunStartRequestFactory = Callable[..., Any]
+DiscordStartRunRequest = Callable[[Any], Dict[str, Any]]
 
 DISCORD_API_BASE = "https://discord.com/api/v10"
 DISCORD_ALLOWED_WRITE_APPROVAL_ACTIONS = {"send_message", "send_dm", "delete_message"}
@@ -793,7 +795,12 @@ def dispatch_inbound_event(
     credentials: Dict[str, Any],
     append_event_fn: Optional[DiscordAppendEvent] = None,
     create_run_fn: Optional[DiscordCreateRun] = None,
+    run_start_request_class: Optional[DiscordRunStartRequestFactory] = None,
+    start_run_request: Optional[DiscordStartRunRequest] = None,
 ) -> Dict[str, Any]:
+    from server_modules.agent_turn import bind_agent_turn_metadata, build_discord_turn_request
+    from server_modules.run_service import build_run_start_request_from_turn
+
     metadata = connector_entry.get("metadata") if isinstance(connector_entry.get("metadata"), dict) else {}
     workspace_id = str(connector_entry.get("workspace_id") or "default").strip() or "default"
     trace_id = (
@@ -825,18 +832,12 @@ def dispatch_inbound_event(
     if not goal:
         return {"ok": True, "triggered": False}
 
-    run_creator = create_run_fn
-    if not callable(run_creator):
-        from server_modules.runs_engine import ENGINE_REGISTRY
-        from server_modules.runs_execution import create_run as _create_run
-
-        engine = "orion" if "orion" in ENGINE_REGISTRY else next(iter(ENGINE_REGISTRY.keys()), "orion")
-
-        def _default_create_run(*, context: Dict[str, Any]) -> str:
-            return _create_run(engine=engine, context=context)
-
-        run_creator = _default_create_run
-
+    turn_request = build_discord_turn_request(
+        parsed=parsed,
+        connector_entry=connector_entry,
+        goal=goal,
+        trace_id=trace_id,
+    )
     context = {
         "workflow_id": None,
         "workspace_id": workspace_id,
@@ -865,12 +866,47 @@ def dispatch_inbound_event(
             },
         },
     }
+    context["metadata"] = bind_agent_turn_metadata(
+        context["metadata"],
+        turn_request,
+        source="discord_connector",
+    )
     from server_modules import runtime_config as _runtime_config
 
     owner_user_id = _runtime_config.agent_machine_inherited_owner_user_id()
     if owner_user_id:
         context["metadata"]["owner_user_id"] = owner_user_id
-    run_id = str(run_creator(context=context) or "").strip()
+
+    run_id = ""
+    if callable(start_run_request) and callable(run_start_request_class):
+        base_request = run_start_request_class(
+            engine="orion",
+            workspace_id=workspace_id,
+            user_goal=goal,
+            metadata=context["metadata"],
+        )
+        request = build_run_start_request_from_turn(turn_request, base_request=base_request)
+        created = start_run_request(request)
+        if isinstance(created, dict):
+            run_id = str(created.get("run_id") or "").strip()
+        elif created is not None:
+            run_id = str(created or "").strip()
+
+    if not run_id:
+        run_creator = create_run_fn
+        if not callable(run_creator):
+            from server_modules.runs_engine import ENGINE_REGISTRY
+            from server_modules.runs_execution import create_run as _create_run
+
+            engine = "orion" if "orion" in ENGINE_REGISTRY else next(iter(ENGINE_REGISTRY.keys()), "orion")
+
+            def _default_create_run(*, context: Dict[str, Any]) -> str:
+                return _create_run(engine=engine, context=context)
+
+            run_creator = _default_create_run
+
+        run_id = str(run_creator(context=context) or "").strip()
+
     if callable(append_event_fn) and run_id:
         append_event_fn(
             channel="discord",

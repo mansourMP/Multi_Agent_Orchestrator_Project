@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from server_modules import autopilot_connectors, operator_chat, runtime_config, runtime_runs_api, runs_core, runs_engine
@@ -310,58 +311,62 @@ class AgentMachineModeTests(unittest.TestCase):
     def test_telegram_autopilot_run_inherits_machine_owner(self):
         captured: dict[str, object] = {}
 
-        def _fake_create_run(*, engine, context):
-            captured["engine"] = engine
-            captured["context"] = context
-            return "run-telegram-1"
+        def _fake_execute_system_run_start_request(request, **kwargs):
+            captured["request"] = request
+            captured["execute_kwargs"] = kwargs
+            return {"run_id": "run-telegram-1", "route": {"selected": "cloud"}}
 
         with patch.object(runtime_config, "AGENT_MACHINE_MODE", "agent"):
             with patch.object(runtime_config, "AGENT_MACHINE_OWNER", "user-123"):
                 autopilot_connectors._init()
                 with patch("server_modules.autopilot_connectors.decide_execution_target", return_value={"selected": "cloud"}, create=True):
                     with patch("server_modules.autopilot_connectors.apply_execution_route_metadata", side_effect=lambda metadata, route: metadata, create=True):
-                        with patch("server_modules.autopilot_connectors.create_run", side_effect=_fake_create_run, create=True):
-                            autopilot_connectors._autopilot_run_entry_service().create_telegram_run(
-                                goal="Investigate this issue",
-                                workspace_id="default",
-                                connector_id="cred-telegram",
-                                chat_id="123",
-                                sender_id="456",
-                                update_id=1,
-                                media_max_items=autopilot_connectors.ORION_TELEGRAM_MEDIA_MAX_ITEMS,
-                                trust_mode_value=autopilot_connectors.ORION_TELEGRAM_AUTOPILOT_TRUST_MODE,
-                                execution_target_value=autopilot_connectors.ORION_TELEGRAM_AUTOPILOT_EXECUTION_TARGET,
-                            )
+                        with patch("server_modules.autopilot_connectors.execute_system_run_start_request_via_turn_runtime", side_effect=_fake_execute_system_run_start_request, create=True):
+                            with patch("server_modules.autopilot_connectors._stamp_request_owner", side_effect=lambda req, current_user: req, create=True):
+                                with patch("server_modules.autopilot_connectors._run_execution_services", side_effect=lambda: object(), create=True):
+                                    autopilot_connectors._autopilot_run_entry_service().create_telegram_run(
+                                        goal="Investigate this issue",
+                                        workspace_id="default",
+                                        connector_id="cred-telegram",
+                                        chat_id="123",
+                                        sender_id="456",
+                                        update_id=1,
+                                        media_max_items=autopilot_connectors.ORION_TELEGRAM_MEDIA_MAX_ITEMS,
+                                        trust_mode_value=autopilot_connectors.ORION_TELEGRAM_AUTOPILOT_TRUST_MODE,
+                                        execution_target_value=autopilot_connectors.ORION_TELEGRAM_AUTOPILOT_EXECUTION_TARGET,
+                                    )
 
-        self.assertEqual(captured["context"]["metadata"]["owner_user_id"], "user-123")
+        self.assertEqual(captured["request"].metadata["owner_user_id"], "user-123")
 
     def test_whatsapp_autopilot_run_inherits_machine_owner(self):
         captured: dict[str, object] = {}
 
-        def _fake_create_run(*, engine, context):
-            captured["engine"] = engine
-            captured["context"] = context
-            return "run-whatsapp-1"
+        def _fake_execute_system_run_start_request(request, **kwargs):
+            captured["request"] = request
+            captured["execute_kwargs"] = kwargs
+            return {"run_id": "run-whatsapp-1", "route": {"selected": "cloud"}}
 
         with patch.object(runtime_config, "AGENT_MACHINE_MODE", "agent"):
             with patch.object(runtime_config, "AGENT_MACHINE_OWNER", "user-123"):
                 autopilot_connectors._init()
                 with patch("server_modules.autopilot_connectors.decide_execution_target", return_value={"selected": "cloud"}, create=True):
                     with patch("server_modules.autopilot_connectors.apply_execution_route_metadata", side_effect=lambda metadata, route: metadata, create=True):
-                        with patch("server_modules.autopilot_connectors.create_run", side_effect=_fake_create_run, create=True):
-                            autopilot_connectors._autopilot_run_entry_service().create_whatsapp_run(
-                                goal="Handle this request",
-                                workspace_id="default",
-                                connector_id="cred-whatsapp",
-                                from_number="whatsapp:+15551230000",
-                                to_number="whatsapp:+15559870000",
-                                message_sid="SM123",
-                                account_sid="AC123",
-                                trust_mode_value=autopilot_connectors.ORION_WHATSAPP_AUTOPILOT_TRUST_MODE,
-                                execution_target_value=autopilot_connectors.ORION_WHATSAPP_AUTOPILOT_EXECUTION_TARGET,
-                            )
+                        with patch("server_modules.autopilot_connectors.execute_system_run_start_request_via_turn_runtime", side_effect=_fake_execute_system_run_start_request, create=True):
+                            with patch("server_modules.autopilot_connectors._stamp_request_owner", side_effect=lambda req, current_user: req, create=True):
+                                with patch("server_modules.autopilot_connectors._run_execution_services", side_effect=lambda: object(), create=True):
+                                    autopilot_connectors._autopilot_run_entry_service().create_whatsapp_run(
+                                        goal="Handle this request",
+                                        workspace_id="default",
+                                        connector_id="cred-whatsapp",
+                                        from_number="whatsapp:+15551230000",
+                                        to_number="whatsapp:+15559870000",
+                                        message_sid="SM123",
+                                        account_sid="AC123",
+                                        trust_mode_value=autopilot_connectors.ORION_WHATSAPP_AUTOPILOT_TRUST_MODE,
+                                        execution_target_value=autopilot_connectors.ORION_WHATSAPP_AUTOPILOT_EXECUTION_TARGET,
+                                    )
 
-        self.assertEqual(captured["context"]["metadata"]["owner_user_id"], "user-123")
+        self.assertEqual(captured["request"].metadata["owner_user_id"], "user-123")
 
     def test_discord_inbound_run_inherits_machine_owner(self):
         parsed = discord_connector.parse_inbound_event(
@@ -395,6 +400,41 @@ class AgentMachineModeTests(unittest.TestCase):
 
         self.assertTrue(result["triggered"])
         self.assertEqual(created[0]["metadata"]["owner_user_id"], "user-123")
+
+    def test_discord_inbound_canonical_run_start_inherits_machine_owner(self):
+        parsed = discord_connector.parse_inbound_event(
+            {
+                "t": "MESSAGE_CREATE",
+                "d": {
+                    "id": "msg-1",
+                    "channel_id": "123",
+                    "guild_id": "456",
+                    "content": "<@999> please investigate this",
+                    "author": {"id": "321", "username": "alice"},
+                    "mentions": [{"id": "999"}],
+                },
+            }
+        )
+        captured: dict[str, object] = {}
+
+        def _fake_start_run(request):
+            captured["request"] = request
+            return {"run_id": "run-discord-2"}
+
+        with patch.object(runtime_config, "AGENT_MACHINE_MODE", "agent"):
+            with patch.object(runtime_config, "AGENT_MACHINE_OWNER", "user-123"):
+                result = discord_connector.dispatch_inbound_event(
+                    parsed,
+                    connector_entry={"id": "cred-discord", "workspace_id": "default", "metadata": {}},
+                    credentials={"bot_token": "discord-token", "channel_id": "123", "guild_id": "456"},
+                    append_event_fn=None,
+                    run_start_request_class=lambda **kwargs: SimpleNamespace(**kwargs),
+                    start_run_request=_fake_start_run,
+                )
+
+        self.assertTrue(result["triggered"])
+        request = captured["request"]
+        self.assertEqual(request.metadata["owner_user_id"], "user-123")
 
 
 if __name__ == "__main__":

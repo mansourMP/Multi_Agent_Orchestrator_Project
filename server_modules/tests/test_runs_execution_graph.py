@@ -1648,6 +1648,52 @@ class RunsExecutionGraphTests(unittest.TestCase):
         self.assertEqual(result["result_text"], "Child workflow finished.")
         self.assertEqual(result["result_data"]["workflow_execution"]["final_node_id"], "subflow_1")
 
+    @patch("server_modules.runs_delegation._create_run_from_request")
+    def test_execute_workflow_graph_waits_for_local_companion_subflow_completion(self, create_child_run_mock):
+        create_child_run_mock.return_value = {
+            "run_id": "child-run-local-1",
+            "route": {"selected": "local_companion"},
+        }
+        runs_execution.runs["child-run-local-1"] = {
+            "status": "completed",
+            "result": "Local child workflow finished.",
+            "result_data": {"summary": "Local child workflow finished."},
+        }
+        definition = {
+            "version": "empyralist.workflow.v2",
+            "nodes": [
+                {"id": "trigger_1", "type": "trigger", "variant": "manual", "config": {}},
+                {
+                    "id": "subflow_1",
+                    "type": "subflow",
+                    "variant": "call_workflow",
+                    "config": {"workflow_id": "wf_child_local", "mode": "sync"},
+                },
+            ],
+            "edges": [{"id": "e1", "source": "trigger_1", "target": "subflow_1"}],
+        }
+
+        result = runs_execution._execute_workflow_graph(
+            "run-parent-local-subflow",
+            {
+                "engine": "orion",
+                "workflow_id": "wf_parent_local",
+                "workspace_id": "default",
+                "user_goal": "Run local child workflow",
+                "metadata": {
+                    "execution_target": "local_companion",
+                    "execution_target_selected": "local_companion",
+                },
+            },
+            queue.Queue(),
+            definition,
+        )
+
+        self.assertEqual(result["result_text"], "Local child workflow finished.")
+        self.assertEqual(result["result_data"]["workflow_execution"]["final_node_id"], "subflow_1")
+        request = create_child_run_mock.call_args.args[0]
+        self.assertEqual(request.metadata["execution_target"], "local_companion")
+
     @patch("server_modules.run_service.wait_for_workflow_child_run")
     @patch("server_modules.runs_delegation._create_run_from_request")
     def test_execute_workflow_graph_waits_for_subflow_human_input_and_resumes(self, create_child_run_mock, wait_child_mock):

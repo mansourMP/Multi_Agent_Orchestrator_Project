@@ -61,6 +61,8 @@ class AutopilotRuntimeRegistryBridgeService:
         normalize_execution_target: Callable[[Any], str],
         decide_execution_target: Callable[[Dict[str, Any]], Dict[str, Any]],
         apply_execution_route_metadata: Callable[[Dict[str, Any], Dict[str, Any]], Dict[str, Any]],
+        run_start_request_class: Optional[Callable[..., Any]],
+        start_run_request: Optional[Callable[[Any], Dict[str, Any]]],
         create_run: Callable[..., Any],
         whatsapp_session_key: Callable[[str, str], str],
         inherit_owner_user_id: Callable[[Optional[str]], Optional[str]],
@@ -132,6 +134,8 @@ class AutopilotRuntimeRegistryBridgeService:
         self.normalize_execution_target = normalize_execution_target
         self.decide_execution_target = decide_execution_target
         self.apply_execution_route_metadata = apply_execution_route_metadata
+        self.run_start_request_class = run_start_request_class
+        self.start_run_request = start_run_request
         self.create_run = create_run
         self.whatsapp_session_key = whatsapp_session_key
         self.inherit_owner_user_id = inherit_owner_user_id
@@ -215,6 +219,8 @@ class AutopilotRuntimeRegistryBridgeService:
                     normalize_execution_target=self.normalize_execution_target,
                     decide_execution_target=self.decide_execution_target,
                     apply_execution_route_metadata=self.apply_execution_route_metadata,
+                    run_start_request_class=self.run_start_request_class,
+                    start_run_request=self.start_run_request,
                     create_run=self.create_run,
                     record_channel_event=self.record_channel_event,
                     telegram_session_key=self.telegram_session_key,

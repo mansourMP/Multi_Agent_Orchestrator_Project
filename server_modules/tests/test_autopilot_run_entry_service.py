@@ -22,6 +22,8 @@ class AutopilotRunEntryServiceTests(unittest.TestCase):
                 "apply_execution_route_metadata",
                 lambda metadata, route: {**metadata, "route_selected": route.get("selected")},
             ),
+            run_start_request_class=overrides.pop("run_start_request_class", None),
+            start_run_request=overrides.pop("start_run_request", None),
             create_run=overrides.pop(
                 "create_run",
                 lambda **kwargs: self.created.append(kwargs) or f"run-{len(self.created)}",
@@ -76,6 +78,41 @@ class AutopilotRunEntryServiceTests(unittest.TestCase):
         self.assertEqual(metadata["owner_user_id"], "user-123")
         self.assertEqual(metadata["route_selected"], "cloud")
         self.assertEqual(len(self.whatsapp_started), 1)
+
+    def test_create_telegram_run_can_start_via_canonical_run_request(self) -> None:
+        started_requests = []
+
+        class _RunStartRequest:
+            def __init__(self, **kwargs):
+                for key, value in kwargs.items():
+                    setattr(self, key, value)
+
+        service = self._make_service(
+            run_start_request_class=_RunStartRequest,
+            start_run_request=lambda request: started_requests.append(request) or {
+                "run_id": "run-canonical-1",
+                "route": {"selected": "local_companion"},
+            },
+        )
+
+        result = service.create_telegram_run(
+            goal="Investigate",
+            workspace_id="default",
+            connector_id="cred-telegram",
+            chat_id="123",
+            sender_id="456",
+            update_id=1,
+            trust_mode_value="agent",
+            execution_target_value="local_companion",
+        )
+
+        self.assertEqual(result["run_id"], "run-canonical-1")
+        self.assertEqual(started_requests[0].workspace_id, "default")
+        self.assertEqual(started_requests[0].user_goal, "Investigate")
+        self.assertEqual(started_requests[0].metadata["channel"], "telegram")
+        self.assertEqual(started_requests[0].metadata["execution_target"], "local_companion")
+        self.assertEqual(started_requests[0].metadata["owner_user_id"], "user-123")
+        self.assertEqual(len(self.created), 0)
 
     def test_can_auto_approve_wait_requires_matching_owner_and_approval(self) -> None:
         service = self._make_service()

@@ -514,6 +514,104 @@ def _resume_due_checkpoint_recoveries() -> List[str]:
     return resumed_run_ids
 
 
+def _apply_cold_boot_checkpoint_recovery_state(run_id: str, run: Dict[str, Any], checkpoint: Dict[str, Any], metadata: Dict[str, Any]) -> str:
+    checkpoint_next_action_index = checkpoint.get("next_action_index")
+    checkpoint_session_profile = checkpoint.get("session_profile")
+    recovery_reason = str(metadata.get("local_worker_recovery_reason") or "").strip().lower()
+    attempt_count = int(metadata.get("local_worker_recovery_attempt_count") or 0)
+    max_auto_retries = int(
+        metadata.get("local_worker_recovery_max_auto_retries")
+        or attempt_count
+        or LOCAL_CHECKPOINT_RECOVERY_MAX_AUTO_RETRIES
+    )
+    backoff_seconds = max(0, int(metadata.get("local_worker_recovery_backoff_seconds") or 0))
+    next_retry_at = metadata.get("local_worker_recovery_next_retry_at")
+    manual_confirmation_required = bool(metadata.get("local_worker_recovery_manual_confirmation_required"))
+    auto_retry_exhausted = bool(metadata.get("local_worker_recovery_auto_retry_exhausted"))
+
+    run["status"] = "waiting_for_input"
+    machine_lease_service.clear_active_machine_lease_binding(run)
+    metadata["browser_resume_supported"] = True
+    metadata["resume_ready"] = True
+    metadata["cold_boot_recovered"] = True
+
+    if recovery_reason == "worker_lost" and (manual_confirmation_required or auto_retry_exhausted):
+        run["result"] = (
+            "Local operator recovered after runtime restart. Automatic checkpoint recovery remains paused after repeated worker loss."
+        )
+        run["result_data"] = {
+            "summary": run["result"],
+            "error": "local_worker_recovery_exhausted",
+            "resume_available": True,
+            "manual_confirmation_required": True,
+            "attempt_count": attempt_count,
+            "max_auto_retries": max_auto_retries,
+            "next_action_index": checkpoint_next_action_index,
+            "session_profile": checkpoint_session_profile,
+        }
+        metadata["local_worker_recovery_auto_retry_exhausted"] = True
+        metadata["local_worker_recovery_manual_confirmation_required"] = True
+        event = "local_cold_boot_recovered_manual_gate"
+        message = run["result"]
+    elif recovery_reason == "worker_lost":
+        delayed_retry = bool(next_retry_at or backoff_seconds > 0)
+        run["result"] = (
+            "Local operator recovered after runtime restart. Automatic checkpoint recovery remains delayed before retry."
+            if delayed_retry
+            else "Local operator recovered after runtime restart. Automatic checkpoint recovery remains available."
+        )
+        run["result_data"] = {
+            "summary": run["result"],
+            "error": "local_worker_lost_recoverable",
+            "resume_available": True,
+            "attempt_count": attempt_count,
+            "max_auto_retries": max_auto_retries,
+            "retry_backoff_seconds": backoff_seconds,
+            "next_retry_at": next_retry_at,
+            "next_action_index": checkpoint_next_action_index,
+            "session_profile": checkpoint_session_profile,
+        }
+        metadata["local_worker_recovery_manual_confirmation_required"] = False
+        metadata["local_worker_recovery_auto_retry_exhausted"] = False
+        event = "local_cold_boot_recovered_backoff" if delayed_retry else "local_cold_boot_recovered"
+        message = run["result"]
+    else:
+        run["result"] = "Local operator paused at saved checkpoint after runtime restart."
+        run["result_data"] = {
+            "summary": run["result"],
+            "resume_available": True,
+            "error": "local_worker_orphaned_recovered",
+            "next_action_index": checkpoint_next_action_index,
+            "session_profile": checkpoint_session_profile,
+        }
+        event = "local_cold_boot_recovered"
+        message = "Recovered local run from durable checkpoint after runtime restart."
+
+    context = run.get("context") if isinstance(run.get("context"), dict) else {}
+    context["metadata"] = metadata
+    run["context"] = context
+
+    log_queue = run.get("logs")
+    if log_queue is not None:
+        _server.emit_log(
+            log_queue,
+            "warn",
+            message,
+            event=event,
+            data={
+                "run_id": run_id,
+                "attempt_count": attempt_count,
+                "max_auto_retries": max_auto_retries,
+                "retry_backoff_seconds": backoff_seconds,
+                "next_retry_at": next_retry_at,
+                "manual_confirmation_required": bool(metadata.get("local_worker_recovery_manual_confirmation_required")),
+                "next_action_index": checkpoint_next_action_index,
+                "session_profile": checkpoint_session_profile,
+            },
+        )
+    return event
+
+
 def recover_orphaned_local_runs_on_startup() -> List[str]:
     global _COLD_BOOT_RECOVERY_DONE
     _init()
@@ -559,33 +657,7 @@ def recover_orphaned_local_runs_on_startup() -> List[str]:
             continue
         if not checkpoint:
             continue
-        run["status"] = "waiting_for_input"
-        machine_lease_service.clear_active_machine_lease_binding(run)
-        run["result"] = "Local operator paused at saved checkpoint after runtime restart."
-        run["result_data"] = {
-            "summary": "Local operator paused at saved checkpoint after runtime restart.",
-            "resume_available": True,
-            "error": "local_worker_orphaned_recovered",
-            "next_action_index": checkpoint.get("next_action_index"),
-            "session_profile": checkpoint.get("session_profile"),
-        }
-        metadata["resume_ready"] = True
-        metadata["cold_boot_recovered"] = True
-        context["metadata"] = metadata
-        run["context"] = context
-        log_queue = run.get("logs")
-        if log_queue is not None:
-            _server.emit_log(
-                log_queue,
-                "warn",
-                "Recovered local run from durable checkpoint after runtime restart.",
-                event="local_cold_boot_recovered",
-                data={
-                    "run_id": run_id,
-                    "next_action_index": checkpoint.get("next_action_index"),
-                    "session_profile": checkpoint.get("session_profile"),
-                },
-            )
+        _apply_cold_boot_checkpoint_recovery_state(run_id, run, checkpoint, metadata)
         recovered.append(run_id)
         _server._persist_live_run_state(run_id, run)
 

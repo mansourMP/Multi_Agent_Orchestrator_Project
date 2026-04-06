@@ -39,7 +39,11 @@ class RuntimeClient:
         self.runtime_instance_id: Optional[str] = None
         self._registration: Optional[Dict[str, Any]] = None
         if session_root is None:
-            session_root = Path(__file__).resolve().parents[1] / ".orion-stack" / "runtime_sessions"
+            env_session_root = str(os.getenv("ORION_RUNTIME_SESSION_ROOT") or "").strip()
+            if env_session_root:
+                session_root = Path(env_session_root)
+            else:
+                session_root = Path(__file__).resolve().parents[1] / ".orion-stack" / "runtime_sessions"
         self.session_root = Path(session_root).expanduser()
 
     def _session_store_path(self, runtime_id: str) -> Path:

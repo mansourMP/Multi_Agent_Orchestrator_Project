@@ -6,6 +6,8 @@ import re
 from typing import Any, Dict, List
 from uuid import uuid4
 
+from server_modules.capability_registry import resolve_capability
+
 
 @dataclass(slots=True)
 class CapabilityDescriptor:
@@ -31,6 +33,9 @@ class ToolDescriptor:
     connector_id: str
     action_id: str
     description: str
+    capability_id: str = ""
+    risk_level: str = "medium"
+    requires_approval: bool = False
     parameters: Dict[str, Any] = field(default_factory=dict)
     requires_runtime: bool = False
     metadata: Dict[str, Any] = field(default_factory=dict)
@@ -67,10 +72,12 @@ def capability_descriptor_from_payload(item: Any) -> CapabilityDescriptor | None
     connected = bool(item.get("connected"))
     authenticated = item.get("authenticated") if isinstance(item.get("authenticated"), bool) else None
     runtime_usable = item.get("runtime_usable") if isinstance(item.get("runtime_usable"), bool) else None
+    contract = resolve_capability(capability_id)
     return CapabilityDescriptor(
         capability_id=capability_id,
         label=str(item.get("label") or capability_id).strip() or capability_id,
-        requires_approval=bool(approval_actions),
+        risk_level=(contract.risk_level if contract is not None else "medium"),
+        requires_approval=bool(approval_actions) or bool(contract and contract.requires_approval),
         metadata={
             "connected": connected,
             "authenticated": authenticated,
@@ -87,6 +94,8 @@ def capability_payload_from_descriptor(descriptor: CapabilityDescriptor) -> Dict
     return {
         "id": descriptor.capability_id,
         "label": str(descriptor.label or descriptor.capability_id).strip() or descriptor.capability_id,
+        "risk_level": str(descriptor.risk_level or "medium").strip() or "medium",
+        "requires_approval": bool(descriptor.requires_approval),
         "connected": bool(metadata.get("connected")),
         "authenticated": metadata.get("authenticated") if isinstance(metadata.get("authenticated"), bool) else None,
         "runtime_usable": metadata.get("runtime_usable") if isinstance(metadata.get("runtime_usable"), bool) else None,
@@ -289,9 +298,13 @@ def resolve_workspace_capability_payloads(
 
 
 def _tool_payload_from_descriptor(descriptor: ToolDescriptor) -> Dict[str, Any]:
+    contract = resolve_capability(descriptor.capability_id)
     return {
         "name": descriptor.tool_name,
         "description": descriptor.description,
+        "capability_id": descriptor.capability_id or None,
+        "risk_level": (contract.risk_level if contract is not None else str(descriptor.risk_level or "medium").strip() or "medium"),
+        "requires_approval": bool(contract.requires_approval) if contract is not None else bool(descriptor.requires_approval),
         "parameters": descriptor.parameters if isinstance(descriptor.parameters, dict) else {},
     }
 
@@ -304,6 +317,7 @@ def _local_tool_descriptors() -> List[ToolDescriptor]:
             connector_id="file",
             action_id="read",
             description="Read a file from the local machine",
+            capability_id="filesystem.read",
             requires_runtime=True,
             parameters={"type": "object", "properties": {"path": {"type": "string", "description": "File path to read"}}, "required": ["path"]},
         ),
@@ -313,6 +327,7 @@ def _local_tool_descriptors() -> List[ToolDescriptor]:
             connector_id="file",
             action_id="write",
             description="Write content to a file on the local machine",
+            capability_id="filesystem.write",
             requires_runtime=True,
             parameters={
                 "type": "object",
@@ -329,6 +344,7 @@ def _local_tool_descriptors() -> List[ToolDescriptor]:
             connector_id="shell",
             action_id="exec",
             description="Execute a shell command on the local machine",
+            capability_id="shell.execute",
             requires_runtime=True,
             parameters={"type": "object", "properties": {"command": {"type": "string", "description": "Shell command to run"}}, "required": ["command"]},
         ),
@@ -338,6 +354,7 @@ def _local_tool_descriptors() -> List[ToolDescriptor]:
             connector_id="screenshot",
             action_id="capture",
             description="Take a screenshot of the current screen",
+            capability_id="screenshot.capture",
             requires_runtime=True,
             parameters={"type": "object", "properties": {}},
         ),
@@ -347,6 +364,7 @@ def _local_tool_descriptors() -> List[ToolDescriptor]:
             connector_id="computer",
             action_id="ocr",
             description="Read visible text from the screen using OCR",
+            capability_id="computer_control.ocr",
             requires_runtime=True,
             parameters={
                 "type": "object",
@@ -369,6 +387,7 @@ def _local_tool_descriptors() -> List[ToolDescriptor]:
             connector_id="computer",
             action_id="click",
             description="Click on the screen by coordinates or visible text",
+            capability_id="computer_control.click",
             requires_runtime=True,
             parameters={"type": "object", "properties": {"x": {"type": "integer"}, "y": {"type": "integer"}, "text": {"type": "string"}}},
         ),
@@ -378,6 +397,7 @@ def _local_tool_descriptors() -> List[ToolDescriptor]:
             connector_id="computer",
             action_id="type",
             description="Type text into the active application",
+            capability_id="computer_control.type",
             requires_runtime=True,
             parameters={"type": "object", "properties": {"text": {"type": "string"}}, "required": ["text"]},
         ),
@@ -387,6 +407,7 @@ def _local_tool_descriptors() -> List[ToolDescriptor]:
             connector_id="computer",
             action_id="applescript",
             description="Run AppleScript on macOS",
+            capability_id="computer_control.applescript",
             requires_runtime=True,
             parameters={"type": "object", "properties": {"script": {"type": "string"}}, "required": ["script"]},
         ),
@@ -396,6 +417,7 @@ def _local_tool_descriptors() -> List[ToolDescriptor]:
             connector_id="computer",
             action_id="clipboard_read",
             description="Read the current system clipboard",
+            capability_id="computer_control.clipboard_read",
             requires_runtime=True,
             parameters={"type": "object", "properties": {}},
         ),
@@ -405,6 +427,7 @@ def _local_tool_descriptors() -> List[ToolDescriptor]:
             connector_id="computer",
             action_id="clipboard_write",
             description="Write text to the system clipboard",
+            capability_id="computer_control.clipboard_write",
             requires_runtime=True,
             parameters={"type": "object", "properties": {"text": {"type": "string"}}, "required": ["text"]},
         ),
@@ -414,6 +437,7 @@ def _local_tool_descriptors() -> List[ToolDescriptor]:
             connector_id="computer",
             action_id="notify",
             description="Send a system notification",
+            capability_id="computer_control.notify",
             requires_runtime=True,
             parameters={"type": "object", "properties": {"title": {"type": "string"}, "message": {"type": "string"}}, "required": ["title", "message"]},
         ),
@@ -423,6 +447,7 @@ def _local_tool_descriptors() -> List[ToolDescriptor]:
             connector_id="computer",
             action_id="list_apps",
             description="List running applications and processes",
+            capability_id="computer_control.list_apps",
             requires_runtime=True,
             parameters={"type": "object", "properties": {}},
         ),
@@ -432,6 +457,7 @@ def _local_tool_descriptors() -> List[ToolDescriptor]:
             connector_id="computer",
             action_id="launch_app",
             description="Launch an application by name or path",
+            capability_id="computer_control.launch_app",
             requires_runtime=True,
             parameters={"type": "object", "properties": {"name_or_path": {"type": "string"}}, "required": ["name_or_path"]},
         ),
@@ -441,6 +467,7 @@ def _local_tool_descriptors() -> List[ToolDescriptor]:
             connector_id="computer",
             action_id="speak",
             description="Speak text aloud using the local system voice",
+            capability_id="computer_control.speak",
             requires_runtime=True,
             parameters={"type": "object", "properties": {"text": {"type": "string"}, "voice": {"type": "string"}}, "required": ["text"]},
         ),

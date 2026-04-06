@@ -45,6 +45,11 @@ except ImportError:
     )
 
 try:
+    from capability_registry import resolve_capability
+except ImportError:
+    from server_modules.capability_registry import resolve_capability  # type: ignore[no-redef]
+
+try:
     from computer_control import (
         click_element_by_text,
         keyboard_type,
@@ -1445,10 +1450,10 @@ def _operation_capability_id(operation: Dict[str, Any], tool_id: str) -> str:
 
 
 def _operation_risk_level(operation: Dict[str, Any], tool_id: str) -> str:
-    capability = str(operation.get("capability") or "").strip()
-    if capability:
-        resolved_tool = capability_tool_id(capability) or tool_id
-        return str(ACTION_RISK_LEVELS.get(resolved_tool or "", "medium")).strip() or "medium"
+    capability_id = _operation_capability_id(operation, tool_id)
+    contract = resolve_capability(capability_id)
+    if contract is not None:
+        return str(contract.risk_level or "medium").strip() or "medium"
     return str(ACTION_RISK_LEVELS.get(tool_id or "", "medium")).strip() or "medium"
 
 

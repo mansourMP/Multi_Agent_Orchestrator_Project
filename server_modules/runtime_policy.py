@@ -5,6 +5,7 @@ from typing import Any, Dict, List, Optional, Set
 from pathlib import Path
 
 from scripts.platform_execution import capability_metadata
+from server_modules.capability_registry import resolve_capability
 
 _server = None
 def _init():
@@ -462,6 +463,14 @@ PACK_PHASES = {
     ],
 }
 
+
+def _registry_risk_level(capability_id: str, default: str) -> str:
+    contract = resolve_capability(capability_id)
+    if contract is None:
+        return default
+    return str(contract.risk_level or default).strip() or default
+
+
 ACTION_RISK_LEVELS: Dict[str, str] = {
     "send_message": "medium",
     "draft_email": "medium",
@@ -476,11 +485,11 @@ ACTION_RISK_LEVELS: Dict[str, str] = {
     "document_update": "medium",
     "presentation_create": "medium",
     "presentation_update": "medium",
-    "read_write_files": "medium",
-    "browser_automation": "medium",
-    "capture_screenshot": "medium",
-    "computer_control": "critical",
-    "execute_shell_command": "critical",
+    "read_write_files": _registry_risk_level("read_write_files", "medium"),
+    "browser_automation": _registry_risk_level("browser_automation", "medium"),
+    "capture_screenshot": _registry_risk_level("capture_screenshot", "medium"),
+    "computer_control": _registry_risk_level("computer_control", "critical"),
+    "execute_shell_command": _registry_risk_level("execute_shell_command", "critical"),
     "delete_files": "critical",
     "delete_records": "critical",
     "transfer_funds": "critical",
@@ -1482,6 +1491,7 @@ def classify_runtime_action(
     target: Optional[str] = None,
 ) -> Dict[str, Any]:
     normalized = normalize_action_id(action_id) or str(action_id or "").strip().lower()
+    contract = resolve_capability(normalized)
     classification_map: Dict[str, Dict[str, Any]] = {
         "external_research": {
             "action_type": ACTION_TYPE_READ,
@@ -1643,6 +1653,8 @@ def classify_runtime_action(
             },
         )
     )
+    if contract is not None:
+        base["reversibility"] = bool(contract.reversible)
     base["action_id"] = normalized
     base["bulk_risk"] = bool(int(count or 0) > 5)
     base["target"] = normalize_execution_target(target)
@@ -2570,13 +2582,16 @@ TOOL_POLICY.register_sensitive("document_create")
 TOOL_POLICY.register_sensitive("document_update")
 TOOL_POLICY.register_sensitive("presentation_create")
 TOOL_POLICY.register_sensitive("presentation_update")
-TOOL_POLICY.register_sensitive("read_write_files")
-TOOL_POLICY.register_sensitive("capture_screenshot")
-TOOL_POLICY.register_critical("computer_control")
-TOOL_POLICY.register_critical("execute_shell_command")
 TOOL_POLICY.register_critical("delete_files")
 TOOL_POLICY.register_critical("delete_records")
 TOOL_POLICY.register_critical("transfer_funds")
+for _tool_id in ("read_write_files", "capture_screenshot", "computer_control", "execute_shell_command"):
+    _contract = resolve_capability(_tool_id)
+    _risk_level = str(_contract.risk_level).strip().lower() if _contract is not None else ""
+    if _risk_level == "critical":
+        TOOL_POLICY.register_critical(_tool_id)
+    elif _contract is not None:
+        TOOL_POLICY.register_sensitive(_tool_id)
 
 
 def evaluate_tool_policy_decision(

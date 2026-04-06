@@ -55,6 +55,7 @@ class SkillsServiceTests(unittest.TestCase):
         self.assertEqual(descriptor.capability_id, "slack")
         self.assertEqual(descriptor.label, "Slack Live")
         self.assertTrue(descriptor.requires_approval)
+        self.assertEqual(descriptor.risk_level, "medium")
         self.assertEqual(descriptor.metadata["read_actions"], ["history.read"])
         self.assertEqual(descriptor.metadata["write_actions"], ["post_message"])
         self.assertEqual(descriptor.metadata["approval_required_actions"], ["post_message"])
@@ -68,7 +69,23 @@ class SkillsServiceTests(unittest.TestCase):
             ]
         )
 
-        self.assertEqual(payload, [{"id": "browser", "label": "browser", "connected": True, "authenticated": None, "runtime_usable": None, "read_actions": [], "write_actions": [], "approval_required_actions": []}])
+        self.assertEqual(
+            payload,
+            [
+                {
+                    "id": "browser",
+                    "label": "browser",
+                    "risk_level": "medium",
+                    "requires_approval": False,
+                    "connected": True,
+                    "authenticated": None,
+                    "runtime_usable": None,
+                    "read_actions": [],
+                    "write_actions": [],
+                    "approval_required_actions": [],
+                }
+            ],
+        )
 
     def test_resolve_workspace_capability_payloads_normalizes_resolver_result(self) -> None:
         payload = skills_service.resolve_workspace_capability_payloads(
@@ -213,6 +230,14 @@ class SkillsServiceTests(unittest.TestCase):
         self.assertEqual([item["name"] for item in connector_tools], ["slack__post_message"])
         self.assertTrue(any(item["name"] == "file__read" for item in local_tools))
         self.assertTrue(any(item["name"] == "computer__click" for item in local_tools))
+        file_read = next(item for item in local_tools if item["name"] == "file__read")
+        computer_click = next(item for item in local_tools if item["name"] == "computer__click")
+        self.assertEqual(file_read["capability_id"], "filesystem.read")
+        self.assertEqual(file_read["risk_level"], "medium")
+        self.assertTrue(file_read["requires_approval"])
+        self.assertEqual(computer_click["capability_id"], "computer_control.click")
+        self.assertEqual(computer_click["risk_level"], "critical")
+        self.assertTrue(computer_click["requires_approval"])
 
     def test_tool_registry_resolves_local_and_http_action_availability(self) -> None:
         self.assertTrue(skills_service.tool_write_action_available("file", "read", []))

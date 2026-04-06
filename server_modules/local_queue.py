@@ -467,6 +467,8 @@ def _resume_due_checkpoint_recoveries() -> List[str]:
         metadata = context.get("metadata") if isinstance(context.get("metadata"), dict) else {}
         if str(metadata.get("local_worker_recovery_reason") or "").strip().lower() != "worker_lost":
             continue
+        if bool(metadata.get("local_worker_recovery_manual_confirmation_required")):
+            continue
         if bool(metadata.get("local_worker_recovery_auto_retry_exhausted")):
             continue
         selected_target = str(

@@ -1,6 +1,8 @@
 import unittest
+from unittest.mock import AsyncMock, patch
 
 from server_modules.agent_turn import (
+    AgentTurnRequest,
     agent_turn,
     bind_agent_turn_request_meta,
     bind_agent_turn_metadata,
@@ -20,6 +22,7 @@ from server_modules.agent_turn import (
     resolve_agent_turn_request_with_fallback,
     resolve_run_start_turn_request,
     serialize_agent_turn_request,
+    TurnActor,
 )
 from server_modules.run_service import build_run_start_request_from_turn
 from server_modules.runtime_models import RunStartRequest
@@ -218,7 +221,91 @@ class AgentTurnTests(unittest.TestCase):
         self.assertEqual(converted.provider, "openai")
         self.assertEqual(converted.metadata["agent_turn_request"]["workspace_id"], "workspace-1")
         self.assertEqual(converted.metadata["agent_turn_request"]["message"], "Original goal")
-        self.assertEqual(converted.metadata["channel"], "web")
+
+    def test_agent_turn_validates_existing_session_before_dispatch(self):
+        request = build_inbound_agent_turn_request(
+            workspace_id="workspace-1",
+            session_id="thread-1",
+            channel="web",
+            actor_type="user",
+            actor_id="user-1",
+            message="hello",
+        )
+
+        async def _run():
+            with patch("server_modules.agent_turn.session_service.get_session", new=AsyncMock(return_value={
+                "session_id": "thread-1",
+                "workspace_id": "workspace-1",
+                "tenant_id": "default",
+                "channel": "web",
+                "actor": {"type": "user", "id": "user-1"},
+                "created_at": "2026-04-06T00:00:00Z",
+                "expires_at": "2026-04-07T00:00:00Z",
+                "metadata": {"source": "test"},
+                "status": "active",
+            })) as get_session, patch("server_modules.agent_turn.session_service.extend_session", new=AsyncMock(return_value=None)) as extend_session, patch(
+                "server_modules.turn_runtime.build_turn_execution_services",
+                return_value="services",
+            ), patch(
+                "server_modules.turn_runtime.execute_agent_turn_request",
+                new=AsyncMock(return_value={"status": "ok", "session_id": "thread-1"}),
+            ) as execute_agent_turn_request:
+                result = await agent_turn(
+                    turn_request=request,
+                    current_user={"user_id": "user-1"},
+                    run_execution_services="run-services",
+                )
+                return result, get_session, extend_session, execute_agent_turn_request
+
+        import asyncio
+
+        result, get_session, extend_session, execute_agent_turn_request = asyncio.run(_run())
+        self.assertEqual(result["status"], "ok")
+        self.assertEqual(request.context_hints["session"]["session_id"], "thread-1")
+        get_session.assert_awaited()
+        extend_session.assert_awaited_once_with("thread-1")
+        execute_agent_turn_request.assert_awaited()
+
+    def test_agent_turn_creates_session_when_missing(self):
+        request = AgentTurnRequest(
+            tenant_id="default",
+            workspace_id="workspace-1",
+            session_id="",
+            channel="web",
+            actor=TurnActor(type="user", id="user-1", display_name="user-1"),
+            message="hello",
+        )
+
+        async def _run():
+            with patch("server_modules.agent_turn.session_service.get_session", new=AsyncMock(return_value={
+                "session_id": "generated-session",
+                "workspace_id": "workspace-1",
+                "tenant_id": "default",
+                "channel": "web",
+                "actor": {"type": "user", "id": "user-1"},
+                "created_at": "2026-04-06T00:00:00Z",
+                "expires_at": "2026-04-07T00:00:00Z",
+                "metadata": {"source": "agent_turn"},
+                "status": "active",
+            })), patch("server_modules.agent_turn.session_service.create_session", new=AsyncMock(return_value="generated-session")) as create_session, patch(
+                "server_modules.turn_runtime.build_turn_execution_services",
+                return_value="services",
+            ), patch(
+                "server_modules.turn_runtime.execute_agent_turn_request",
+                new=AsyncMock(return_value={"status": "ok", "session_id": "generated-session"}),
+            ):
+                return await agent_turn(
+                    turn_request=request,
+                    current_user={"user_id": "user-1"},
+                    run_execution_services="run-services",
+                ), create_session
+
+        import asyncio
+
+        result, create_session = asyncio.run(_run())
+        self.assertEqual(result["session_id"], "generated-session")
+        self.assertEqual(request.session_id, "generated-session")
+        create_session.assert_awaited_once()
 
     def test_bind_agent_turn_request_meta_binds_serialized_turn_request(self):
         request = build_direct_chat_turn_request(

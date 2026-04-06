@@ -48,8 +48,20 @@ CREATE TABLE IF NOT EXISTS run_archive (
     completed_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+CREATE TABLE IF NOT EXISTS runtime_sessions (
+    session_id TEXT PRIMARY KEY,
+    workspace_id TEXT NOT NULL,
+    tenant_id TEXT NOT NULL,
+    channel TEXT NOT NULL,
+    actor JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    expires_at TIMESTAMPTZ NOT NULL,
+    metadata JSONB NOT NULL DEFAULT '{}'::jsonb
+);
+
 CREATE INDEX IF NOT EXISTS idx_live_runs_workspace_state ON live_runs(workspace_id, state);
 CREATE INDEX IF NOT EXISTS idx_run_transitions_run_id ON run_transitions(run_id, timestamp DESC);
 CREATE INDEX IF NOT EXISTS idx_run_approvals_run_id ON run_approvals(run_id, requested_at DESC);
 CREATE INDEX IF NOT EXISTS idx_local_queue_claims_worker_id ON local_queue_claims(worker_id, claimed_at DESC);
 CREATE INDEX IF NOT EXISTS idx_run_archive_workspace_state ON run_archive(workspace_id, final_state, completed_at DESC);
+CREATE INDEX IF NOT EXISTS idx_runtime_sessions_workspace_expires ON runtime_sessions(workspace_id, expires_at DESC);

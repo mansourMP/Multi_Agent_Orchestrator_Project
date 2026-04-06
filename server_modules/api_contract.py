@@ -129,6 +129,28 @@ class ApiArtifactPreviewResponse(BaseModel):
     note: Optional[str] = None
 
 
+class ApiSessionRequest(BaseModel):
+    tenant_id: str = "default"
+    workspace_id: str = "default"
+    channel: str = "web"
+    actor: ApiTurnActor = Field(default_factory=ApiTurnActor)
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+    session_id: Optional[str] = None
+
+
+class ApiSessionResponse(BaseModel):
+    ok: bool = True
+    session_id: str
+    workspace_id: str = "default"
+    tenant_id: str = "default"
+    channel: str = "web"
+    actor: Dict[str, Any] = Field(default_factory=dict)
+    created_at: Optional[str] = None
+    expires_at: Optional[str] = None
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+    status: str = "active"
+
+
 CANONICAL_API_ENDPOINTS: Dict[str, Dict[str, Any]] = {
     "turn": {
         "method": "POST",
@@ -168,10 +190,11 @@ CANONICAL_API_ENDPOINTS: Dict[str, Dict[str, Any]] = {
         "notes": "Canonical artifact download endpoint; legacy alias /artifacts/file remains supported.",
     },
     "sessions": {
-        "method": "mixed",
-        "path": "/setup/sessions and /onboarding/sessions",
-        "response_model": "varies",
-        "notes": "Session endpoints still exist but are not yet unified into one canonical runtime surface.",
+        "method": "POST/GET/DELETE",
+        "path": "/sessions and /sessions/{session_id}",
+        "request_model": "ApiSessionRequest",
+        "response_model": "ApiSessionResponse",
+        "notes": "Canonical runtime session bootstrap and lookup surface.",
     },
     "machines": {
         "method": "GET",
@@ -264,3 +287,18 @@ def normalize_agent_turn_result(
         metadata=dict(result.get("metadata") or {}),
     )
     return ApiAgentTurnResponse(**model_to_dict(normalized))
+
+
+def normalize_session_record(record: Dict[str, Any]) -> ApiSessionResponse:
+    payload = dict(record or {})
+    return ApiSessionResponse(
+        session_id=str(payload.get("session_id") or "").strip(),
+        workspace_id=str(payload.get("workspace_id") or "default").strip() or "default",
+        tenant_id=str(payload.get("tenant_id") or "default").strip() or "default",
+        channel=str(payload.get("channel") or "web").strip() or "web",
+        actor=dict(payload.get("actor") or {}),
+        created_at=str(payload.get("created_at") or "").strip() or None,
+        expires_at=str(payload.get("expires_at") or "").strip() or None,
+        metadata=dict(payload.get("metadata") or {}),
+        status=str(payload.get("status") or "active").strip() or "active",
+    )

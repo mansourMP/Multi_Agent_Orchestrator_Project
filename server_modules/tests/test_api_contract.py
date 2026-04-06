@@ -4,6 +4,7 @@ from server_modules.agent_turn import build_inbound_agent_turn_request
 from server_modules.api_contract import (
     ApiAgentTurnRequest,
     build_turn_chat_body,
+    normalize_session_record,
     normalize_agent_turn_result,
     request_body_to_turn_request,
 )
@@ -80,6 +81,25 @@ class ApiContractTests(unittest.TestCase):
         self.assertEqual(payload.run_id, "run-1")
         self.assertEqual(payload.status, "starting")
         self.assertEqual(payload.metadata["kind"], "durable_run")
+
+    def test_normalize_session_record_shapes_canonical_response(self):
+        payload = normalize_session_record(
+            {
+                "session_id": "session-1",
+                "workspace_id": "workspace-1",
+                "tenant_id": "tenant-1",
+                "channel": "web",
+                "actor": {"type": "user", "id": "user-1"},
+                "created_at": "2026-04-06T00:00:00Z",
+                "expires_at": "2026-04-07T00:00:00Z",
+                "metadata": {"source": "test"},
+                "status": "active",
+            }
+        )
+
+        self.assertEqual(payload.session_id, "session-1")
+        self.assertEqual(payload.actor["id"], "user-1")
+        self.assertEqual(payload.metadata["source"], "test")
 
 
 if __name__ == "__main__":

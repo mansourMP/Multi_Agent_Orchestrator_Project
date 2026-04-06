@@ -12,10 +12,14 @@ from server_modules.api_contract import (
     ApiAgentTurnRequest,
     ApiAgentTurnResponse,
     ApiRunListResponse,
+    ApiSessionRequest,
+    ApiSessionResponse,
     build_turn_chat_body,
     normalize_agent_turn_result,
+    normalize_session_record,
     request_body_to_turn_request,
 )
+from server_modules import session_service
 from server_modules.direct_chat_service import (
     build_direct_chat_execution_services,
     build_direct_chat_event_producer as _service_build_direct_chat_event_producer,
@@ -448,3 +452,55 @@ def register_run_routes(app) -> None:
             summarize_history_item=_late_server_export("_summarize_history_item"),
             parse_utc_ts=_late_server_export("_parse_utc_ts"),
         )
+
+    @app.post("/sessions", dependencies=[Depends(_server.require_api_key)], response_model=ApiSessionResponse)
+    async def create_runtime_session(
+        body: ApiSessionRequest,
+        current_user=Depends(_server.require_api_key),
+    ):
+        payload = body.model_dump() if hasattr(body, "model_dump") else body.dict()
+        actor = dict(payload.get("actor") or {})
+        if not str(actor.get("id") or "").strip():
+            actor["id"] = str((current_user or {}).get("user_id") or (current_user or {}).get("email") or "anonymous").strip()
+        if not str(actor.get("display_name") or "").strip():
+            actor["display_name"] = str((current_user or {}).get("email") or actor.get("id") or "").strip()
+        session_id = await session_service.create_session(
+            workspace_id=str(payload.get("workspace_id") or "default").strip() or "default",
+            tenant_id=str(payload.get("tenant_id") or "default").strip() or "default",
+            actor=actor,
+            channel=str(payload.get("channel") or "web").strip() or "web",
+            metadata=dict(payload.get("metadata") or {}),
+            session_id=str(payload.get("session_id") or "").strip() or None,
+        )
+        record = await session_service.get_session(session_id) or {
+            "session_id": session_id,
+            "workspace_id": str(payload.get("workspace_id") or "default").strip() or "default",
+            "tenant_id": str(payload.get("tenant_id") or "default").strip() or "default",
+            "channel": str(payload.get("channel") or "web").strip() or "web",
+            "actor": actor,
+            "metadata": dict(payload.get("metadata") or {}),
+            "status": "active",
+        }
+        return normalize_session_record(record)
+
+    @app.get("/sessions/{session_id}", dependencies=[Depends(_server.require_api_key)], response_model=ApiSessionResponse)
+    async def get_runtime_session(
+        session_id: str,
+        current_user=Depends(_server.require_api_key),
+    ):
+        del current_user
+        record = await session_service.get_session(session_id)
+        if not isinstance(record, dict):
+            from fastapi import HTTPException
+
+            raise HTTPException(status_code=404, detail="Session not found.")
+        return normalize_session_record(record)
+
+    @app.delete("/sessions/{session_id}", dependencies=[Depends(_server.require_api_key)])
+    async def delete_runtime_session(
+        session_id: str,
+        current_user=Depends(_server.require_api_key),
+    ):
+        del current_user
+        await session_service.terminate_session(session_id)
+        return {"ok": True, "session_id": str(session_id or "").strip()}

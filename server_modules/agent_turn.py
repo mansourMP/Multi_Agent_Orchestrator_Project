@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Literal, Optional, Protocol
 
+from server_modules import session_service
 from server_modules.telemetry import get_tracer, set_span_attributes
 
 
@@ -662,22 +663,59 @@ async def agent_turn(
     )
 
     tracer = get_tracer("server_modules.agent_turn")
+    resolved_turn_request = turn_request
+    preferred_session_id = str(turn_request.session_id or "").strip()
+    session_record = None
+    if preferred_session_id:
+        session_record = await session_service.get_session(preferred_session_id)
+        if isinstance(session_record, dict) and str(session_record.get("status") or "").strip().lower() != "expired":
+            await session_service.extend_session(preferred_session_id)
+        else:
+            resolved_turn_request.session_id = await session_service.create_session(
+                workspace_id=turn_request.workspace_id,
+                tenant_id=turn_request.tenant_id,
+                actor=serialize_turn_actor(turn_request.actor),
+                channel=turn_request.channel,
+                metadata={
+                    "source": "agent_turn",
+                    "machine_target": turn_request.machine_target,
+                },
+                session_id=preferred_session_id,
+            )
+            session_record = await session_service.get_session(resolved_turn_request.session_id)
+    else:
+        resolved_turn_request.session_id = await session_service.create_session(
+            workspace_id=turn_request.workspace_id,
+            tenant_id=turn_request.tenant_id,
+            actor=serialize_turn_actor(turn_request.actor),
+            channel=turn_request.channel,
+            metadata={
+                "source": "agent_turn",
+                "machine_target": turn_request.machine_target,
+            },
+        )
+        session_record = await session_service.get_session(resolved_turn_request.session_id)
+    if isinstance(session_record, dict):
+        context_hints = dict(resolved_turn_request.context_hints or {})
+        if not isinstance(context_hints.get("session"), dict):
+            context_hints["session"] = dict(session_record)
+        resolved_turn_request.context_hints = context_hints
     with tracer.start_as_current_span("agent_turn.handle") as span:
         set_span_attributes(
             span,
             {
-                "workspace_id": str(turn_request.workspace_id or "").strip() or "default",
-                "session_id": str(turn_request.session_id or "").strip() or "agent-turn",
-                "channel": normalize_channel(turn_request.channel),
-                "tenant_id": str(turn_request.tenant_id or "").strip() or "default",
-                "actor_type": str(turn_request.actor.type or "").strip() or "user",
+                "workspace_id": str(resolved_turn_request.workspace_id or "").strip() or "default",
+                "session_id": str(resolved_turn_request.session_id or "").strip() or "agent-turn",
+                "channel": normalize_channel(resolved_turn_request.channel),
+                "tenant_id": str(resolved_turn_request.tenant_id or "").strip() or "default",
+                "actor_type": str(resolved_turn_request.actor.type or "").strip() or "user",
                 "run_id": (
                     str(getattr(run_request, "run_id", None) or "").strip()
                     or str((chat_body or {}).get("run_id") or "").strip()
                     or None
                 ),
-                "execution_mode": str(turn_request.execution_mode or "").strip() or "sync",
-                "response_mode": str(turn_request.response_mode or "").strip() or "stream",
+                "execution_mode": str(resolved_turn_request.execution_mode or "").strip() or "sync",
+                "response_mode": str(resolved_turn_request.response_mode or "").strip() or "stream",
             },
         )
         try:
@@ -686,7 +724,7 @@ async def agent_turn(
                 direct_chat=direct_chat_services or _build_noop_direct_chat_execution_services(),
             )
             result = await execute_agent_turn_request(
-                turn_request=turn_request,
+                turn_request=resolved_turn_request,
                 current_user=current_user,
                 services=services,
                 chat_body=chat_body,

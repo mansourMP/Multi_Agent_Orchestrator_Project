@@ -1,0 +1,329 @@
+from __future__ import annotations
+
+import asyncio
+from datetime import datetime, timedelta, timezone
+import json
+import logging
+import os
+from pathlib import Path
+from typing import Any, Dict, Optional
+import uuid
+
+from server_modules import db as runtime_db
+from server_modules.runtime_state_store import (
+    delete_runtime_session,
+    get_runtime_session as get_sqlite_runtime_session,
+    init_runtime_state_db,
+    upsert_runtime_session,
+)
+
+
+LOGGER = logging.getLogger(__name__)
+
+DEFAULT_SESSION_TTL_SECONDS = max(60, int(str(os.getenv("ORION_SESSION_TTL_SECONDS") or "86400").strip() or "86400"))
+_SCHEMA_READY = False
+_SCHEMA_LOCK: asyncio.Lock = asyncio.Lock()
+_RUNTIME_SESSIONS_SCHEMA_SQL = """
+CREATE TABLE IF NOT EXISTS runtime_sessions (
+    session_id TEXT PRIMARY KEY,
+    workspace_id TEXT NOT NULL,
+    tenant_id TEXT NOT NULL,
+    channel TEXT NOT NULL,
+    actor JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    expires_at TIMESTAMPTZ NOT NULL,
+    metadata JSONB NOT NULL DEFAULT '{}'::jsonb
+);
+CREATE INDEX IF NOT EXISTS idx_runtime_sessions_workspace_expires
+    ON runtime_sessions(workspace_id, expires_at DESC);
+"""
+
+
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _utc_now_iso() -> str:
+    return _utc_now().isoformat().replace("+00:00", "Z")
+
+
+def _expires_at_iso(ttl_seconds: int) -> str:
+    return (_utc_now() + timedelta(seconds=max(60, int(ttl_seconds or DEFAULT_SESSION_TTL_SECONDS)))).isoformat().replace("+00:00", "Z")
+
+
+def _normalized_runtime_state_db_path() -> Path:
+    raw = str(os.getenv("ORION_RUNTIME_STATE_DB") or ".orion_runtime_state.db").strip()
+    return Path(raw).expanduser().resolve()
+
+
+def _coerce_dict(value: Any) -> Dict[str, Any]:
+    return dict(value or {}) if isinstance(value, dict) else {}
+
+
+def _coerce_actor(value: Any) -> Dict[str, Any]:
+    payload = _coerce_dict(value)
+    return {
+        "type": str(payload.get("type") or "user").strip() or "user",
+        "id": str(payload.get("id") or "").strip(),
+        "display_name": str(payload.get("display_name") or "").strip(),
+    }
+
+
+def _canonical_session_record(
+    *,
+    session_id: str,
+    workspace_id: str,
+    tenant_id: str,
+    channel: str,
+    actor: Any,
+    created_at: str,
+    expires_at: str,
+    metadata: Any,
+    status: str = "active",
+) -> Dict[str, Any]:
+    return {
+        "session_id": str(session_id or "").strip(),
+        "workspace_id": str(workspace_id or "default").strip() or "default",
+        "tenant_id": str(tenant_id or "default").strip() or "default",
+        "channel": str(channel or "web").strip().lower() or "web",
+        "actor": _coerce_actor(actor),
+        "created_at": str(created_at or "").strip() or _utc_now_iso(),
+        "expires_at": str(expires_at or "").strip() or _expires_at_iso(DEFAULT_SESSION_TTL_SECONDS),
+        "metadata": _coerce_dict(metadata),
+        "status": str(status or "active").strip() or "active",
+    }
+
+
+def _sqlite_payload_from_session(record: Dict[str, Any]) -> Dict[str, Any]:
+    actor = _coerce_actor(record.get("actor"))
+    metadata = _coerce_dict(record.get("metadata"))
+    metadata.setdefault("tenant_id", record.get("tenant_id"))
+    metadata.setdefault("channel", record.get("channel"))
+    metadata.setdefault("actor", actor)
+    metadata.setdefault("expires_at", record.get("expires_at"))
+    return {
+        "session_id": str(record.get("session_id") or "").strip(),
+        "actor_key": str(actor.get("id") or record.get("session_id") or "").strip(),
+        "workspace_id": str(record.get("workspace_id") or "default").strip() or "default",
+        "user_id": str(actor.get("id") or "").strip(),
+        "status": str(record.get("status") or "active").strip() or "active",
+        "runtime_options": {},
+        "created_at": str(record.get("created_at") or "").strip() or _utc_now_iso(),
+        "updated_at": _utc_now_iso(),
+        "last_touched_at": _utc_now_iso(),
+        "last_error": "",
+        "meta": metadata,
+    }
+
+
+def _session_from_sqlite(row: Any) -> Optional[Dict[str, Any]]:
+    payload = _coerce_dict(row)
+    session_id = str(payload.get("session_id") or "").strip()
+    if not session_id:
+        return None
+    metadata = _coerce_dict(payload.get("meta"))
+    actor = _coerce_actor(metadata.get("actor"))
+    if not actor.get("id"):
+        actor["id"] = str(payload.get("user_id") or "").strip()
+    return _canonical_session_record(
+        session_id=session_id,
+        workspace_id=str(payload.get("workspace_id") or "default").strip() or "default",
+        tenant_id=str(metadata.get("tenant_id") or "default").strip() or "default",
+        channel=str(metadata.get("channel") or "web").strip() or "web",
+        actor=actor,
+        created_at=str(payload.get("created_at") or "").strip() or _utc_now_iso(),
+        expires_at=str(metadata.get("expires_at") or "").strip() or _expires_at_iso(DEFAULT_SESSION_TTL_SECONDS),
+        metadata=metadata,
+        status=str(payload.get("status") or "active").strip() or "active",
+    )
+
+
+def _session_from_pg(row: Any) -> Optional[Dict[str, Any]]:
+    payload = dict(row or {})
+    session_id = str(payload.get("session_id") or "").strip()
+    if not session_id:
+        return None
+    return _canonical_session_record(
+        session_id=session_id,
+        workspace_id=str(payload.get("workspace_id") or "default").strip() or "default",
+        tenant_id=str(payload.get("tenant_id") or "default").strip() or "default",
+        channel=str(payload.get("channel") or "web").strip() or "web",
+        actor=payload.get("actor"),
+        created_at=str(payload.get("created_at") or "").strip() or _utc_now_iso(),
+        expires_at=str(payload.get("expires_at") or "").strip() or _expires_at_iso(DEFAULT_SESSION_TTL_SECONDS),
+        metadata=payload.get("metadata"),
+    )
+
+
+def _is_expired(record: Dict[str, Any]) -> bool:
+    expires_at = str(record.get("expires_at") or "").strip()
+    if not expires_at:
+        return False
+    try:
+        return datetime.fromisoformat(expires_at.replace("Z", "+00:00")) <= _utc_now()
+    except Exception:
+        return False
+
+
+async def _ensure_runtime_sessions_table() -> Any:
+    global _SCHEMA_READY
+    pool = await runtime_db.get_pool()
+    if pool is None:
+        return None
+    if _SCHEMA_READY:
+        return pool
+    async with _SCHEMA_LOCK:
+        if _SCHEMA_READY:
+            return pool
+        try:
+            await pool.execute(_RUNTIME_SESSIONS_SCHEMA_SQL)
+            _SCHEMA_READY = True
+        except Exception as exc:
+            LOGGER.warning("Failed to ensure runtime_sessions schema: %s", exc)
+            return None
+    return pool
+
+
+def _persist_sqlite_session(record: Dict[str, Any]) -> None:
+    try:
+        db_path = _normalized_runtime_state_db_path()
+        init_runtime_state_db(db_path)
+        upsert_runtime_session(db_path, _sqlite_payload_from_session(record))
+    except Exception as exc:
+        LOGGER.warning("SQLite session mirror write failed for %s: %s", record.get("session_id"), exc)
+
+
+def _delete_sqlite_session(session_id: str) -> None:
+    try:
+        db_path = _normalized_runtime_state_db_path()
+        init_runtime_state_db(db_path)
+        delete_runtime_session(db_path, session_id)
+    except Exception as exc:
+        LOGGER.warning("SQLite session mirror delete failed for %s: %s", session_id, exc)
+
+
+async def create_session(
+    workspace_id: str,
+    tenant_id: str,
+    actor: Any,
+    channel: str,
+    metadata: Any = None,
+    *,
+    session_id: Optional[str] = None,
+    ttl_seconds: int = DEFAULT_SESSION_TTL_SECONDS,
+) -> str:
+    token = str(session_id or "").strip() or uuid.uuid4().hex
+    record = _canonical_session_record(
+        session_id=token,
+        workspace_id=workspace_id,
+        tenant_id=tenant_id,
+        channel=channel,
+        actor=actor,
+        created_at=_utc_now_iso(),
+        expires_at=_expires_at_iso(ttl_seconds),
+        metadata=metadata,
+    )
+    pool = await _ensure_runtime_sessions_table()
+    if pool is not None:
+        try:
+            await pool.execute(
+                """
+                INSERT INTO runtime_sessions (
+                    session_id, workspace_id, tenant_id, channel, actor, created_at, expires_at, metadata
+                )
+                VALUES ($1, $2, $3, $4, $5::jsonb, $6::timestamptz, $7::timestamptz, $8::jsonb)
+                ON CONFLICT (session_id) DO UPDATE SET
+                    workspace_id = EXCLUDED.workspace_id,
+                    tenant_id = EXCLUDED.tenant_id,
+                    channel = EXCLUDED.channel,
+                    actor = EXCLUDED.actor,
+                    created_at = EXCLUDED.created_at,
+                    expires_at = EXCLUDED.expires_at,
+                    metadata = EXCLUDED.metadata
+                """,
+                record["session_id"],
+                record["workspace_id"],
+                record["tenant_id"],
+                record["channel"],
+                json.dumps(record["actor"], ensure_ascii=False, separators=(",", ":"), default=str),
+                record["created_at"],
+                record["expires_at"],
+                json.dumps(record["metadata"], ensure_ascii=False, separators=(",", ":"), default=str),
+            )
+        except Exception as exc:
+            LOGGER.warning("Postgres create_session failed for %s: %s", token, exc)
+    _persist_sqlite_session(record)
+    return token
+
+
+async def get_session(session_id: str) -> Optional[Dict[str, Any]]:
+    token = str(session_id or "").strip()
+    if not token:
+        return None
+    pool = await _ensure_runtime_sessions_table()
+    if pool is not None:
+        try:
+            row = await pool.fetchrow(
+                """
+                SELECT session_id, workspace_id, tenant_id, channel, actor, created_at, expires_at, metadata
+                FROM runtime_sessions
+                WHERE session_id = $1
+                LIMIT 1
+                """,
+                token,
+            )
+            record = _session_from_pg(row)
+            if isinstance(record, dict):
+                record["status"] = "expired" if _is_expired(record) else "active"
+                return record
+        except Exception as exc:
+            LOGGER.warning("Postgres get_session failed for %s: %s", token, exc)
+    try:
+        db_path = _normalized_runtime_state_db_path()
+        init_runtime_state_db(db_path)
+        record = _session_from_sqlite(get_sqlite_runtime_session(db_path, token))
+        if isinstance(record, dict):
+            record["status"] = "expired" if _is_expired(record) else str(record.get("status") or "active")
+        return record
+    except Exception as exc:
+        LOGGER.warning("SQLite get_session fallback failed for %s: %s", token, exc)
+        return None
+
+
+async def extend_session(session_id: str) -> Optional[Dict[str, Any]]:
+    existing = await get_session(session_id)
+    if not isinstance(existing, dict):
+        return None
+    existing["expires_at"] = _expires_at_iso(DEFAULT_SESSION_TTL_SECONDS)
+    existing["status"] = "active"
+    pool = await _ensure_runtime_sessions_table()
+    if pool is not None:
+        try:
+            await pool.execute(
+                """
+                UPDATE runtime_sessions
+                SET expires_at = $2::timestamptz, metadata = $3::jsonb
+                WHERE session_id = $1
+                """,
+                existing["session_id"],
+                existing["expires_at"],
+                json.dumps(existing.get("metadata") or {}, ensure_ascii=False, separators=(",", ":"), default=str),
+            )
+        except Exception as exc:
+            LOGGER.warning("Postgres extend_session failed for %s: %s", session_id, exc)
+    _persist_sqlite_session(existing)
+    return existing
+
+
+async def terminate_session(session_id: str) -> None:
+    token = str(session_id or "").strip()
+    if not token:
+        return None
+    pool = await _ensure_runtime_sessions_table()
+    if pool is not None:
+        try:
+            await pool.execute("DELETE FROM runtime_sessions WHERE session_id = $1", token)
+        except Exception as exc:
+            LOGGER.warning("Postgres terminate_session failed for %s: %s", token, exc)
+    _delete_sqlite_session(token)
+    return None

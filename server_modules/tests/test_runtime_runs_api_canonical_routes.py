@@ -24,6 +24,9 @@ class _FakeApp:
     def post(self, path, **kwargs):
         return self._register("POST", path, **kwargs)
 
+    def delete(self, path, **kwargs):
+        return self._register("DELETE", path, **kwargs)
+
 
 class RuntimeRunsApiCanonicalRouteTests(unittest.TestCase):
     def test_register_run_routes_adds_turn_and_runs(self):
@@ -91,6 +94,9 @@ class RuntimeRunsApiCanonicalRouteTests(unittest.TestCase):
 
             self.assertIn(("POST", "/turn"), app.routes)
             self.assertIn(("GET", "/runs"), app.routes)
+            self.assertIn(("POST", "/sessions"), app.routes)
+            self.assertIn(("GET", "/sessions/{session_id}"), app.routes)
+            self.assertIn(("DELETE", "/sessions/{session_id}"), app.routes)
 
             turn_payload = self._run_async(
                 app.routes[("POST", "/turn")](
@@ -111,6 +117,48 @@ class RuntimeRunsApiCanonicalRouteTests(unittest.TestCase):
             self.assertEqual(runs_payload["count"], 2)
             self.assertEqual(runs_payload["items"][0]["source"], "live")
             self.assertEqual(runs_payload["items"][1]["source"], "history")
+
+            original_create_session = runtime_runs_api.session_service.create_session
+            original_get_session = runtime_runs_api.session_service.get_session
+            original_terminate_session = runtime_runs_api.session_service.terminate_session
+            try:
+                runtime_runs_api.session_service.create_session = self._fake_create_session
+                runtime_runs_api.session_service.get_session = self._fake_get_session
+                runtime_runs_api.session_service.terminate_session = self._fake_terminate_session
+
+                session_payload = self._run_async(
+                    app.routes[("POST", "/sessions")](
+                        runtime_runs_api.ApiSessionRequest(
+                            workspace_id="default",
+                            tenant_id="tenant-1",
+                            channel="web",
+                            actor={"type": "user", "id": "user-1"},
+                            metadata={"source": "test"},
+                        ),
+                        current_user={"user_id": "user-1", "email": "user@example.com"},
+                    )
+                )
+                self.assertEqual(session_payload.session_id, "session-created")
+
+                fetched_session = self._run_async(
+                    app.routes[("GET", "/sessions/{session_id}")](
+                        "session-created",
+                        current_user={"user_id": "user-1"},
+                    )
+                )
+                self.assertEqual(fetched_session.session_id, "session-created")
+
+                deleted_session = self._run_async(
+                    app.routes[("DELETE", "/sessions/{session_id}")](
+                        "session-created",
+                        current_user={"user_id": "user-1"},
+                    )
+                )
+                self.assertTrue(deleted_session["ok"])
+            finally:
+                runtime_runs_api.session_service.create_session = original_create_session
+                runtime_runs_api.session_service.get_session = original_get_session
+                runtime_runs_api.session_service.terminate_session = original_terminate_session
         finally:
             runtime_runs_api.runtime_route_registration_service.register_runtime_run_routes_from_api = original_register
             runtime_runs_api._refresh_server_exports = original_refresh
@@ -133,6 +181,25 @@ class RuntimeRunsApiCanonicalRouteTests(unittest.TestCase):
             "thread_id": "thread-1",
             "client_request_id": "req-1",
         }
+
+    async def _fake_create_session(self, *args, **kwargs):
+        return "session-created"
+
+    async def _fake_get_session(self, session_id):
+        return {
+            "session_id": session_id,
+            "workspace_id": "default",
+            "tenant_id": "tenant-1",
+            "channel": "web",
+            "actor": {"type": "user", "id": "user-1"},
+            "created_at": "2026-04-06T00:00:00Z",
+            "expires_at": "2026-04-07T00:00:00Z",
+            "metadata": {"source": "test"},
+            "status": "active",
+        }
+
+    async def _fake_terminate_session(self, session_id):
+        return None
 
     def _run_async(self, coroutine):
         import asyncio

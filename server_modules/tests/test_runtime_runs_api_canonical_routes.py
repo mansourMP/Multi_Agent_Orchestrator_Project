@@ -59,6 +59,7 @@ class RuntimeRunsApiCanonicalRouteTests(unittest.TestCase):
         original_late_export = runtime_runs_api._late_server_export
         original_privileged = runtime_runs_api._current_user_is_privileged
         original_extract_owner = runtime_runs_api._extract_run_owner_user_id
+        original_list_live_runs = runtime_runs_api.run_state_repository.sync_list_live_runs
         try:
             runtime_runs_api.runtime_route_registration_service.register_runtime_run_routes_from_api = lambda *args, **kwargs: None
             runtime_runs_api._refresh_server_exports = lambda: fake_server
@@ -69,6 +70,16 @@ class RuntimeRunsApiCanonicalRouteTests(unittest.TestCase):
             runtime_runs_api._direct_chat_stream_response_services = lambda: "stream-services"
             runtime_runs_api._current_user_is_privileged = lambda current_user: False
             runtime_runs_api._extract_run_owner_user_id = lambda item: str(item.get("owner_user_id") or "")
+            runtime_runs_api.run_state_repository.sync_list_live_runs = lambda: [
+                {
+                    "run_id": "run-live",
+                    "status": "running",
+                    "owner_user_id": "user-1",
+                    "workspace_id": "default",
+                    "created_at": "2026-04-06T09:00:00Z",
+                    "updated_at": "2026-04-06T10:00:00Z",
+                }
+            ]
             runtime_runs_api._late_server_export = lambda name: {
                 "runs": {
                     "run-live": {
@@ -251,6 +262,7 @@ class RuntimeRunsApiCanonicalRouteTests(unittest.TestCase):
             runtime_runs_api._late_server_export = original_late_export
             runtime_runs_api._current_user_is_privileged = original_privileged
             runtime_runs_api._extract_run_owner_user_id = original_extract_owner
+            runtime_runs_api.run_state_repository.sync_list_live_runs = original_list_live_runs
             if previous_server is None:
                 sys.modules.pop("server", None)
             else:

@@ -12,6 +12,7 @@ from urllib.parse import urlencode
 from scripts.platform_execution import current_platform_context, supported_device_actions
 from server_modules.api_contract import ApiArtifactListResponse, ApiArtifactPreviewResponse
 from server_modules.auth import enforce_workspace_access
+from server_modules import run_state_repository
 from server_modules.run_service import RunExecutionServices, build_server_system_run_execution_services
 from server_modules.schemas import DeviceExecuteRequest, WorkspaceFileDeleteRequest, WorkspaceFileWriteRequest
 from server_modules.turn_runtime import (
@@ -956,9 +957,13 @@ def register_agent_workspace_routes(app) -> None:
         active_runs: List[Dict[str, Any]] = []
         pending_approvals: List[Dict[str, Any]] = []
         run_ids_for_workspace: Set[str] = set()
+        live_runs = run_state_repository.sync_list_live_runs()
 
-        for run_id, run in list(runs.items()):
+        for run in live_runs:
             if not isinstance(run, dict):
+                continue
+            run_id = str(run.get("run_id") or "").strip()
+            if not run_id:
                 continue
             context = run.get("context") if isinstance(run.get("context"), dict) else {}
             metadata = context.get("metadata") if isinstance(context.get("metadata"), dict) else {}
@@ -1138,9 +1143,13 @@ def register_agent_workspace_routes(app) -> None:
         active_runs: List[Dict[str, Any]] = []
         pending_approvals: List[Dict[str, Any]] = []
         scoped_run_ids: Set[str] = set()
+        live_runs = run_state_repository.sync_list_live_runs()
 
-        for run_id, run in list(runs.items()):
+        for run in live_runs:
             if not isinstance(run, dict):
+                continue
+            run_id = str(run.get("run_id") or "").strip()
+            if not run_id:
                 continue
             snapshot = _hydrate_workspace_item_role(_serialize_run_snapshot(run_id, run))
             run_workspace = _normalize_workspace_id(snapshot.get("workspace_id"))
@@ -1407,8 +1416,11 @@ def register_agent_workspace_routes(app) -> None:
                 break
 
         active_statuses = {"starting", "running", "running_local", "queued_local", "waiting_for_input"}
-        for run_id, run in list(runs.items()):
+        for run in run_state_repository.sync_list_live_runs():
             if not isinstance(run, dict):
+                continue
+            run_id = str(run.get("run_id") or "").strip()
+            if not run_id:
                 continue
             snapshot = _hydrate_workspace_item_role(_serialize_run_snapshot(run_id, run))
             if workspace_filter and _normalize_workspace_id(snapshot.get("workspace_id")) != workspace_filter:

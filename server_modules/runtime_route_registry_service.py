@@ -20,6 +20,7 @@ from server_modules import runtime_run_replay_service as _runtime_run_replay_ser
 from server_modules import runtime_usage_service as _runtime_usage_service
 from server_modules import runtime_webhook_trigger_service as _runtime_webhook_trigger_service
 from server_modules import runtime_workspace_service as _runtime_workspace_service
+from server_modules import run_state_repository
 
 
 def register_runtime_run_routes(
@@ -282,6 +283,7 @@ def register_runtime_run_routes(
             str(run_id),
             current_user=current_user,
             runs=runs,
+            get_live_run_fn=run_state_repository.sync_get_live_run,
             **run_detail_callbacks,
         )
 

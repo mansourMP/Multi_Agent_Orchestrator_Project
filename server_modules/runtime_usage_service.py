@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any, Callable
 
 from fastapi import HTTPException
+from server_modules import run_state_repository
 
 
 def normalize_usage_period(period: Any) -> str:
@@ -17,6 +18,7 @@ def usage_snapshots_for_user(
     run_history_lock: Any,
     run_history: list[Any],
     runs: dict[str, Any],
+    list_live_runs_fn: Callable[[], list[dict[str, Any]]] | None = None,
     serialize_snapshot: Callable[[str, Any], dict[str, Any]],
     current_user_is_privileged: Callable[[Any], bool],
     extract_run_owner_user_id: Callable[[Any], str],
@@ -31,13 +33,25 @@ def usage_snapshots_for_user(
             if run_id:
                 combined[run_id] = item
 
-    for run_id, run in list(runs.items()):
+    live_runs = list_live_runs_fn() if callable(list_live_runs_fn) else run_state_repository.sync_list_live_runs()
+    live_run_items: list[tuple[str, Any]] = []
+    if live_runs:
+        live_run_items = [
+            (str(run.get("run_id") or "").strip(), run)
+            for run in live_runs
+            if isinstance(run, dict)
+        ]
+    elif isinstance(runs, dict):
+        live_run_items = [(str(run_id or "").strip(), run) for run_id, run in runs.items()]
+    for run_id, run in live_run_items:
         if not isinstance(run, dict):
             continue
         if not isinstance(run.get("usage_masked"), dict):
             continue
+        if not run_id:
+            continue
         try:
-            snapshot = serialize_snapshot(str(run_id), run)
+            snapshot = serialize_snapshot(run_id, run)
         except Exception:
             continue
         snapshot_run_id = str(snapshot.get("run_id") or run_id).strip()

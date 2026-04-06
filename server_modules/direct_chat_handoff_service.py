@@ -156,6 +156,13 @@ def direct_chat_run_snapshot(
     lookup_run_snapshot_fn: Callable[[str], Any],
     serialize_run_snapshot_fn: Callable[[str, Dict[str, Any]], Dict[str, Any]],
 ) -> tuple[Optional[Dict[str, Any]], Dict[str, Any]]:
+    try:
+        snapshot = lookup_run_snapshot_fn(run_id)
+        if isinstance(snapshot, dict):
+            run = runs_mapping.get(run_id)
+            return (run if isinstance(run, dict) else None), snapshot
+    except Exception:
+        pass
     run = runs_mapping.get(run_id)
     if isinstance(run, dict):
         try:

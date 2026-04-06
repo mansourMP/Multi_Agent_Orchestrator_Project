@@ -1,6 +1,7 @@
 from server_modules import runtime_config as config
 from server_modules import shared as shared
 from server_modules import runtime_common as common
+from server_modules import run_state_repository
 from server_modules.runs_output import _compact_event_text, _json_safe
 
 globals().update({key: value for key, value in vars(config).items() if not key.startswith("__")})
@@ -41,9 +42,9 @@ def _owned_run_ids_for_user(user_id: str) -> set[str]:
     owned: set[str] = set()
     if not user_id:
         return owned
-    for run_id, run in list(runs.items()):
+    for run in run_state_repository.sync_list_live_runs():
         if _extract_owner_user_id(run) == user_id:
-            token = str(run_id or "").strip()
+            token = str(run.get("run_id") or "").strip()
             if token:
                 owned.add(token)
     with RUN_HISTORY_LOCK:
@@ -299,8 +300,11 @@ async def list_pending_approvals(
         if not owner_user_id:
             raise HTTPException(status_code=401, detail="Authenticated user id is required.")
     pending_items: List[Dict[str, Any]] = []
-    for run_id, run in list(runs.items()):
+    for run in run_state_repository.sync_list_live_runs():
         if not isinstance(run, dict):
+            continue
+        run_id = str(run.get("run_id") or "").strip()
+        if not run_id:
             continue
         context = run.get("context") if isinstance(run.get("context"), dict) else {}
         metadata = context.get("metadata") if isinstance(context.get("metadata"), dict) else {}

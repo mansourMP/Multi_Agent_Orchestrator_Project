@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any, Callable
 
 from fastapi import HTTPException
+from server_modules import run_state_repository
 
 
 def build_run_detail_response_callbacks(
@@ -95,6 +96,7 @@ def build_run_detail_response(
     *,
     current_user: Any,
     runs: dict[str, dict[str, Any]],
+    get_live_run_fn: Callable[[str], dict[str, Any] | None] | None = None,
     get_replay_payload: Callable[[str], dict[str, Any]],
     serialize_run_snapshot: Callable[[str, dict[str, Any]], dict[str, Any]],
     enforce_run_owner_access: Callable[[Any, Any], None],
@@ -112,7 +114,10 @@ def build_run_detail_response(
     build_live_run_detail_response: Callable[..., dict[str, Any]],
 ) -> dict[str, Any]:
     include_sensitive = can_view_sensitive_run_payload(current_user)
-    run = runs.get(run_id)
+    fetch_live_run = get_live_run_fn or run_state_repository.sync_get_live_run
+    run = fetch_live_run(run_id)
+    if not isinstance(run, dict):
+        run = runs.get(run_id)
 
     if run is None:
         try:
@@ -173,6 +178,7 @@ def build_run_list_response(
     pack_id: str | None,
     current_user: Any,
     runs: dict[str, dict[str, Any]],
+    list_live_runs_fn: Callable[[], list[dict[str, Any]]] | None = None,
     run_history_lock: Any,
     run_history: list[dict[str, Any]],
     serialize_run_snapshot: Callable[[str, dict[str, Any]], dict[str, Any]],
@@ -197,8 +203,12 @@ def build_run_list_response(
     items: list[dict[str, Any]] = []
     seen_run_ids: set[str] = set()
 
-    for run_id, run in list(runs.items()):
+    live_runs = list_live_runs_fn() if callable(list_live_runs_fn) else list(runs.values())
+    for run in live_runs:
         if not isinstance(run, dict):
+            continue
+        run_id = str(run.get("run_id") or "").strip()
+        if not run_id:
             continue
         snapshot = serialize_run_snapshot(run_id, run)
         if not history_item_matches(snapshot, workspace_id, status, pack_id):

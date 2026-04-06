@@ -21,6 +21,7 @@ from server_modules.api_contract import (
     request_body_to_turn_request,
 )
 from server_modules import session_service
+from server_modules import run_state_repository
 from server_modules.direct_chat_stream_response_service import build_direct_chat_stream_response
 from server_modules.direct_chat_service import (
     build_direct_chat_execution_services,
@@ -177,6 +178,7 @@ _usage_snapshots_for_user = lambda current_user: runtime_usage_service.usage_sna
     run_history_lock=RUN_HISTORY_LOCK,
     run_history=RUN_HISTORY,
     runs=runs,
+    list_live_runs_fn=run_state_repository.sync_list_live_runs,
     serialize_snapshot=_late_server_export("_serialize_run_snapshot"),
     current_user_is_privileged=_current_user_is_privileged,
     extract_run_owner_user_id=_extract_run_owner_user_id,
@@ -489,6 +491,7 @@ def register_run_routes(app) -> None:
             pack_id=pack_id,
             current_user=current_user,
             runs=_late_server_export("runs"),
+            list_live_runs_fn=run_state_repository.sync_list_live_runs,
             run_history_lock=_late_server_export("RUN_HISTORY_LOCK"),
             run_history=_late_server_export("RUN_HISTORY"),
             serialize_run_snapshot=_late_server_export("_serialize_run_snapshot"),

@@ -617,6 +617,8 @@ def recover_orphaned_local_runs_on_startup() -> List[str]:
     _init()
     if _COLD_BOOT_RECOVERY_DONE:
         return []
+    from server_modules import run_state_repository
+
     recovered: List[str] = []
     now = _server._utc_now()
     with _server.LOCAL_QUEUE_LOCK:
@@ -632,8 +634,28 @@ def recover_orphaned_local_runs_on_startup() -> List[str]:
         }
         pending_ids = set(str(run_id) for run_id in _server.LOCAL_PENDING_RUN_IDS)
 
+    recoverable_states = [
+        "queued",
+        "planning",
+        "executing",
+        "machine_allocating",
+        "retrying",
+        "blocked",
+        "starting",
+        "queued_local",
+        "running_local",
+        "waiting_for_input",
+    ]
+    recoverable_run_ids = {
+        str(item.get("run_id") or "").strip()
+        for item in run_state_repository.sync_list_live_runs_by_state(recoverable_states)
+        if isinstance(item, dict) and str(item.get("run_id") or "").strip()
+    }
+
     for run_id, run in list(_server.runs.items()):
         if not isinstance(run, dict):
+            continue
+        if recoverable_run_ids and str(run_id or "").strip() not in recoverable_run_ids:
             continue
         status = str(run.get("status") or "").strip().lower()
         checkpoint = run.get("browser_checkpoint") if isinstance(run.get("browser_checkpoint"), dict) else {}

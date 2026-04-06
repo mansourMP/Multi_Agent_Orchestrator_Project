@@ -4,6 +4,7 @@ from typing import Any, Dict, List, Optional
 
 from server_modules import direct_chat_context_service
 from server_modules import direct_chat_metadata_service
+from server_modules import run_state_repository
 from server_modules import skills_service
 
 
@@ -35,10 +36,17 @@ def local_worker_available(availability: Dict[str, Any]) -> bool:
 
 def active_run_count(workspace_id: str) -> int:
     try:
-        from server_modules.shared import runs as live_runs
+        live_runs = run_state_repository.sync_list_live_runs()
     except Exception:
-        return 0
-    return direct_chat_context_service.active_run_count(workspace_id, live_runs=live_runs)
+        live_runs = []
+    return direct_chat_context_service.active_run_count(
+        workspace_id,
+        live_runs={
+            str(item.get("run_id") or idx): item
+            for idx, item in enumerate(live_runs)
+            if isinstance(item, dict)
+        },
+    )
 
 
 def recent_run_prompts_for_suggestions(workspace_id: str) -> List[str]:

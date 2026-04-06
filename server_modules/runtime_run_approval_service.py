@@ -4,6 +4,7 @@ from types import SimpleNamespace
 from typing import Any, Callable
 
 from fastapi import HTTPException
+from server_modules import run_state_repository
 
 
 def build_submit_run_decision_callbacks(
@@ -274,17 +275,18 @@ def resolve_standalone_approval(
     reason = str(payload.get("reason") or payload.get("note") or "")
     decision = "approve" if resolution == "approved" else "reject"
 
-    matched_run_id = ""
-    matched_run: dict[str, Any] | None = None
-    for run_id, run in (runs or {}).items():
-        if not isinstance(run, dict):
-            continue
-        pending_confirmation = run.get("pending_confirmation") if isinstance(run.get("pending_confirmation"), dict) else {}
-        pending_approval = run.get("pending_approval") if isinstance(run.get("pending_approval"), dict) else {}
-        if str(pending_confirmation.get("approval_id") or "").strip() == approval_token or str(pending_approval.get("approval_id") or "").strip() == approval_token:
-            matched_run_id = str(run_id or "").strip()
-            matched_run = run
-            break
+    matched_run = run_state_repository.sync_find_live_run_by_approval_id(approval_token)
+    matched_run_id = str((matched_run or {}).get("run_id") or "").strip() if isinstance(matched_run, dict) else ""
+    if (not matched_run_id or not isinstance(matched_run, dict)) and isinstance(runs, dict):
+        for run_id, run in (runs or {}).items():
+            if not isinstance(run, dict):
+                continue
+            pending_confirmation = run.get("pending_confirmation") if isinstance(run.get("pending_confirmation"), dict) else {}
+            pending_approval = run.get("pending_approval") if isinstance(run.get("pending_approval"), dict) else {}
+            if str(pending_confirmation.get("approval_id") or "").strip() == approval_token or str(pending_approval.get("approval_id") or "").strip() == approval_token:
+                matched_run_id = str(run_id or "").strip()
+                matched_run = run
+                break
     if not matched_run_id or not isinstance(matched_run, dict):
         raise HTTPException(status_code=404, detail="approval_id not found")
 

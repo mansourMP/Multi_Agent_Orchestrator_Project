@@ -1081,8 +1081,8 @@ def _prefer_archived_snapshot(active_snapshot: Optional[Dict[str, Any]], archive
 
 
 def _get_replay_payload(run_id: str) -> Dict[str, Any]:
-    active = runs.get(run_id)
-    archived_item = _get_archived_run_history_item(run_id)
+    active = run_state_repository.sync_get_live_run(run_id)
+    archived_item = run_state_repository.sync_get_archived_run(run_id) or _get_archived_run_history_item(run_id)
     active_snapshot = _serialize_run_snapshot(run_id, active) if isinstance(active, dict) else None
     chosen_snapshot = _prefer_archived_snapshot(active_snapshot, archived_item)
     if isinstance(chosen_snapshot, dict):

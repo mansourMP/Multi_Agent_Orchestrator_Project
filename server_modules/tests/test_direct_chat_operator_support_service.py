@@ -46,16 +46,16 @@ class DirectChatOperatorSupportServiceTests(unittest.TestCase):
         self.assertTrue(service.local_worker_available({}))
         self.assertFalse(service.local_worker_available({"runtime_ok": False}))
 
-    def test_active_run_count_reads_live_runs_from_shared_module(self) -> None:
-        fake_shared = types.SimpleNamespace(
-            runs={
-                "1": {"status": "running", "context": {"workspace_id": "default"}},
-                "2": {"status": "completed", "context": {"workspace_id": "default"}},
-                "3": {"status": "queued", "context": {"workspace_id": "other"}},
-            }
-        )
-
-        with mock.patch.dict("sys.modules", {"server_modules.shared": fake_shared}):
+    def test_active_run_count_reads_live_runs_from_repository(self) -> None:
+        with mock.patch.object(
+            service.run_state_repository,
+            "sync_list_live_runs",
+            return_value=[
+                {"run_id": "1", "status": "running", "context": {"workspace_id": "default"}},
+                {"run_id": "2", "status": "completed", "context": {"workspace_id": "default"}},
+                {"run_id": "3", "status": "queued", "context": {"workspace_id": "other"}},
+            ],
+        ):
             self.assertEqual(service.active_run_count("default"), 1)
 
     def test_recent_run_prompts_reads_history_from_shared_module(self) -> None:

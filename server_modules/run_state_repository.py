@@ -166,6 +166,41 @@ async def get_live_run(run_id: str) -> Optional[Dict[str, Any]]:
     return None
 
 
+async def get_archived_run(run_id: str) -> Optional[Dict[str, Any]]:
+    token = str(run_id or "").strip()
+    if not token:
+        return None
+    pool = await runtime_db.get_pool()
+    if pool is None:
+        return None
+    try:
+        row = await pool.fetchrow(
+            """
+            SELECT payload
+            FROM run_archive
+            WHERE run_id = $1
+            LIMIT 1
+            """,
+            token,
+        )
+    except Exception as exc:
+        LOGGER.warning("Postgres get_archived_run failed for %s: %s", token, exc)
+        return None
+    if row is None:
+        return None
+    payload = row["payload"]
+    if isinstance(payload, dict):
+        return payload
+    if isinstance(payload, str):
+        try:
+            parsed = json.loads(payload)
+        except Exception:
+            parsed = None
+        if isinstance(parsed, dict):
+            return parsed
+    return None
+
+
 async def delete_live_run(run_id: str) -> None:
     token = str(run_id or "").strip()
     if not token:
@@ -218,6 +253,42 @@ async def list_live_runs() -> list[Dict[str, Any]]:
     return items
 
 
+async def list_live_runs_by_state(states: list[str]) -> list[Dict[str, Any]]:
+    normalized_states = [str(state or "").strip().lower() for state in (states or []) if str(state or "").strip()]
+    if not normalized_states:
+        return await list_live_runs()
+    pool = await runtime_db.get_pool()
+    if pool is None:
+        return []
+    try:
+        rows = await pool.fetch(
+            """
+            SELECT payload
+            FROM live_runs
+            WHERE LOWER(COALESCE(state, '')) = ANY($1::text[])
+            ORDER BY updated_at DESC, created_at DESC
+            """,
+            normalized_states,
+        )
+    except Exception as exc:
+        LOGGER.warning("Postgres list_live_runs_by_state failed: %s", exc)
+        return []
+    items: list[Dict[str, Any]] = []
+    for row in rows or []:
+        payload = row["payload"]
+        if isinstance(payload, dict):
+            items.append(payload)
+            continue
+        if isinstance(payload, str):
+            try:
+                parsed = json.loads(payload)
+            except Exception:
+                parsed = None
+            if isinstance(parsed, dict):
+                items.append(parsed)
+    return items
+
+
 async def list_run_archive(limit: int = 200) -> list[Dict[str, Any]]:
     pool = await runtime_db.get_pool()
     if pool is None:
@@ -249,6 +320,44 @@ async def list_run_archive(limit: int = 200) -> list[Dict[str, Any]]:
             if isinstance(parsed, dict):
                 items.append(parsed)
     return items
+
+
+async def find_live_run_by_approval_id(approval_id: str) -> Optional[Dict[str, Any]]:
+    approval_token = str(approval_id or "").strip()
+    if not approval_token:
+        return None
+    pool = await runtime_db.get_pool()
+    if pool is None:
+        return None
+    try:
+        row = await pool.fetchrow(
+            """
+            SELECT payload
+            FROM live_runs
+            WHERE
+                payload @> jsonb_build_object('pending_confirmation', jsonb_build_object('approval_id', $1)) OR
+                payload @> jsonb_build_object('pending_approval', jsonb_build_object('approval_id', $1))
+            ORDER BY updated_at DESC
+            LIMIT 1
+            """,
+            approval_token,
+        )
+    except Exception as exc:
+        LOGGER.warning("Postgres find_live_run_by_approval_id failed for %s: %s", approval_token, exc)
+        return None
+    if row is None:
+        return None
+    payload = row["payload"]
+    if isinstance(payload, dict):
+        return payload
+    if isinstance(payload, str):
+        try:
+            parsed = json.loads(payload)
+        except Exception:
+            parsed = None
+        if isinstance(parsed, dict):
+            return parsed
+    return None
 
 
 async def record_transition(
@@ -456,11 +565,43 @@ def sync_list_live_runs() -> list[Dict[str, Any]]:
     return _run_sync(lambda: list_live_runs(), operation="sync_list_live_runs", fallback=[])
 
 
+def sync_get_live_run(run_id: str) -> Optional[Dict[str, Any]]:
+    return _run_sync(
+        lambda: get_live_run(run_id),
+        operation="sync_get_live_run",
+        fallback=None,
+    )
+
+
+def sync_get_archived_run(run_id: str) -> Optional[Dict[str, Any]]:
+    return _run_sync(
+        lambda: get_archived_run(run_id),
+        operation="sync_get_archived_run",
+        fallback=None,
+    )
+
+
+def sync_list_live_runs_by_state(states: list[str]) -> list[Dict[str, Any]]:
+    return _run_sync(
+        lambda: list_live_runs_by_state(states),
+        operation="sync_list_live_runs_by_state",
+        fallback=[],
+    )
+
+
 def sync_list_run_archive(limit: int = 200) -> list[Dict[str, Any]]:
     return _run_sync(
         lambda: list_run_archive(limit),
         operation="sync_list_run_archive",
         fallback=[],
+    )
+
+
+def sync_find_live_run_by_approval_id(approval_id: str) -> Optional[Dict[str, Any]]:
+    return _run_sync(
+        lambda: find_live_run_by_approval_id(approval_id),
+        operation="sync_find_live_run_by_approval_id",
+        fallback=None,
     )
 
 

@@ -17,6 +17,7 @@ import {
 } from '@/lib/authenticatedEventStream';
 import { ensureControlPlaneSession } from '@/lib/controlPlaneSession';
 import { LocalCompanionRunPanel } from '@/components/orion/runs/LocalCompanionRunPanel';
+import { RunRemediationGuide, shouldShowRunRemediationGuide } from '@/components/orion/runs/RunRemediationGuide';
 const TERMINAL_RUN_STATUSES = new Set(['completed', 'failed', 'error', 'stopped', 'timeout', 'cancelled']);
 
 type HistoryItem = {
@@ -672,6 +673,14 @@ export default function RunDetailPage() {
   const retryableFailedChildren = Math.max(0, Number(runDetail?.delegation_summary?.retryable_failed_children || 0));
   const canResumeRun = effectiveStatus === 'waiting_for_input' && !pendingConfirmation?.approval_id && Boolean(runDiagnostics?.browser_resume_supported);
   const needsLocalMachineAttention = ['local_runtime_wait', 'local_capacity_wait', 'local_queue', 'local_running'].includes(String(runDiagnostics?.category || ''));
+  const showRemediationGuide = shouldShowRunRemediationGuide({
+    diagnostics: runDiagnostics,
+    status: effectiveStatus,
+    hasPendingApproval: Boolean(pendingConfirmation?.approval_id),
+    canResumeRun,
+    retryableFailedChildren,
+    needsLocalMachineAttention,
+  });
   const plainLanguageSummary = useMemo(() => {
     if (executionTargetWaitingForCapacity) {
       return compactText(
@@ -882,65 +891,71 @@ export default function RunDetailPage() {
                 </div>
               ) : null}
 
-              {(pendingConfirmation?.approval_id || canResumeRun || retryableFailedChildren > 0 || needsLocalMachineAttention) ? (
+              {showRemediationGuide ? (
                 <div className="orion-panel muted" style={{ marginTop: 14 }}>
-                  <div className="orion-panel-title">Recommended actions</div>
-                  <div className="orion-panel-copy">
-                    {runDiagnostics?.next_step || 'Use the controls below to unblock this run faster.'}
-                  </div>
-                  <div style={{ marginTop: 10, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                    {pendingConfirmation?.approval_id ? (
+                  <RunRemediationGuide
+                    diagnostics={runDiagnostics}
+                    status={effectiveStatus}
+                    hasPendingApproval={Boolean(pendingConfirmation?.approval_id)}
+                    canResumeRun={canResumeRun}
+                    retryableFailedChildren={retryableFailedChildren}
+                    needsLocalMachineAttention={needsLocalMachineAttention}
+                    actions={(
                       <>
-                        <button
-                          type="button"
-                          className="btn-primary"
-                          onClick={() => void handleResolveApproval('Proceed')}
-                          disabled={approvalBusy !== null || resumeBusy || retryBusy}
-                        >
-                          {approvalBusy === 'Proceed' ? 'Confirming…' : 'Confirm once'}
-                        </button>
-                        <button
-                          type="button"
-                          className="btn-secondary"
-                          onClick={() => void handleResolveApproval('Hold')}
-                          disabled={approvalBusy !== null || resumeBusy || retryBusy}
-                        >
-                          {approvalBusy === 'Hold' ? 'Declining…' : 'Decline'}
-                        </button>
-                        <Link href="/approvals" className="btn-secondary">Open approvals</Link>
+                        {pendingConfirmation?.approval_id ? (
+                          <>
+                            <button
+                              type="button"
+                              className="btn-primary"
+                              onClick={() => void handleResolveApproval('Proceed')}
+                              disabled={approvalBusy !== null || resumeBusy || retryBusy}
+                            >
+                              {approvalBusy === 'Proceed' ? 'Confirming…' : 'Confirm once'}
+                            </button>
+                            <button
+                              type="button"
+                              className="btn-secondary"
+                              onClick={() => void handleResolveApproval('Hold')}
+                              disabled={approvalBusy !== null || resumeBusy || retryBusy}
+                            >
+                              {approvalBusy === 'Hold' ? 'Declining…' : 'Decline'}
+                            </button>
+                            <Link href="/approvals" className="btn-secondary">Open approvals</Link>
+                          </>
+                        ) : null}
+                        {canResumeRun ? (
+                          <button
+                            type="button"
+                            className="btn-primary"
+                            onClick={() => void handleResumeRun()}
+                            disabled={resumeBusy || approvalBusy !== null || retryBusy}
+                          >
+                            {resumeBusy ? 'Resuming…' : 'Resume run'}
+                          </button>
+                        ) : null}
+                        {retryableFailedChildren > 0 ? (
+                          <button
+                            type="button"
+                            className="btn-secondary"
+                            onClick={() => void handleRetryFailedDelegation()}
+                            disabled={retryBusy || approvalBusy !== null || resumeBusy}
+                          >
+                            {retryBusy ? 'Retrying…' : `Retry failed (${String(retryableFailedChildren)})`}
+                          </button>
+                        ) : null}
+                        {needsLocalMachineAttention ? (
+                          <>
+                            <Link href="/machines" className="btn-secondary">Open machines</Link>
+                            <Link href="/health" className="btn-secondary">Open machine health</Link>
+                          </>
+                        ) : null}
+                        <Link href={`/runs/${encodeURIComponent(runId)}/inspect`} className="btn-secondary">Open inspect</Link>
                       </>
+                    )}
+                    feedback={actionNotice ? (
+                      <div style={{ color: 'var(--success-fg)', fontSize: 12 }}>{actionNotice}</div>
                     ) : null}
-                    {canResumeRun ? (
-                      <button
-                        type="button"
-                        className="btn-primary"
-                        onClick={() => void handleResumeRun()}
-                        disabled={resumeBusy || approvalBusy !== null || retryBusy}
-                      >
-                        {resumeBusy ? 'Resuming…' : 'Resume run'}
-                      </button>
-                    ) : null}
-                    {retryableFailedChildren > 0 ? (
-                      <button
-                        type="button"
-                        className="btn-secondary"
-                        onClick={() => void handleRetryFailedDelegation()}
-                        disabled={retryBusy || approvalBusy !== null || resumeBusy}
-                      >
-                        {retryBusy ? 'Retrying…' : `Retry failed (${String(retryableFailedChildren)})`}
-                      </button>
-                    ) : null}
-                    {needsLocalMachineAttention ? (
-                      <>
-                        <Link href="/machines" className="btn-secondary">Open machines</Link>
-                        <Link href="/health" className="btn-secondary">Open machine health</Link>
-                      </>
-                    ) : null}
-                    <Link href={`/runs/${encodeURIComponent(runId)}/inspect`} className="btn-secondary">Open inspect</Link>
-                  </div>
-                  {actionNotice ? (
-                    <div style={{ marginTop: 10, color: 'var(--success-fg)', fontSize: 12 }}>{actionNotice}</div>
-                  ) : null}
+                  />
                 </div>
               ) : null}
             </div>

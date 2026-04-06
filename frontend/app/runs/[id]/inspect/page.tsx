@@ -29,6 +29,7 @@ import { resolveSkillsByIds } from '@/lib/skills';
 import { SINGLE_AGENT_MODE } from '@/lib/appFlags';
 import { getLocalExecutionCapabilityTitle } from '@/lib/localExecutionCapabilities';
 import { LocalCompanionRunPanel } from '@/components/orion/runs/LocalCompanionRunPanel';
+import { RunRemediationGuide, shouldShowRunRemediationGuide } from '@/components/orion/runs/RunRemediationGuide';
 
 type HistoryItem = {
   run_id: string;
@@ -1521,6 +1522,14 @@ export default function RunInspectPage() {
   );
   const canResumeRun = effectiveRunStatus === 'waiting_for_input' && !pendingConfirmation?.approval_id && Boolean(runDiagnostics?.browser_resume_supported);
   const needsLocalMachineAttention = ['local_runtime_wait', 'local_capacity_wait', 'local_queue', 'local_running'].includes(String(runDiagnostics?.category || ''));
+  const showRemediationGuide = shouldShowRunRemediationGuide({
+    diagnostics: runDiagnostics,
+    status: effectiveRunStatus,
+    hasPendingApproval: Boolean(pendingConfirmation?.approval_id),
+    canResumeRun,
+    retryableFailedChildren: Number(delegationSummary?.retryable_failed_children || 0),
+    needsLocalMachineAttention,
+  });
   const runtimePolicyNotes = useMemo(() => {
     const notes: Array<{ label: string; value: string; tone?: 'default' | 'warning' }> = [];
     if (runSkillSummary.scope) notes.push({ label: 'Skill scope', value: runSkillSummary.scope });
@@ -1885,66 +1894,79 @@ export default function RunInspectPage() {
                   ))}
                 </div>
               ) : null}
-              {(pendingConfirmation?.approval_id || canResumeRun || (delegationSummary?.retryable_failed_children || 0) > 0 || needsLocalMachineAttention) ? (
-                <div style={{ marginTop: 12, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                  {pendingConfirmation?.approval_id ? (
-                    <>
-                      <button
-                        className="orion-btn orion-btn-primary"
-                        style={{ minHeight: 44, paddingInline: 12 }}
-                        onClick={() => void handleResolveApproval('Proceed')}
-                        disabled={approvalBusy !== null || resumeBusy || retryingDelegation || autoDelegating || delegating}
-                      >
-                        {approvalBusy === 'Proceed' ? 'Confirming...' : 'Confirm once'}
-                      </button>
-                      <button
-                        className="orion-btn orion-btn-ghost"
-                        style={{ minHeight: 44, paddingInline: 12 }}
-                        onClick={() => void handleResolveApproval('Hold')}
-                        disabled={approvalBusy !== null || resumeBusy || retryingDelegation || autoDelegating || delegating}
-                      >
-                        {approvalBusy === 'Hold' ? 'Declining...' : 'Decline'}
-                      </button>
-                      <Link className="orion-btn orion-btn-ghost" style={{ minHeight: 44, paddingInline: 12 }} href="/approvals">
-                        Open approvals
-                      </Link>
-                    </>
-                  ) : null}
-                  {canResumeRun ? (
-                    <button
-                      className="orion-btn orion-btn-primary"
-                      style={{ minHeight: 44, paddingInline: 12 }}
-                      onClick={() => void handleResumeRun()}
-                      disabled={resumeBusy || approvalBusy !== null || retryingDelegation || autoDelegating || delegating}
-                    >
-                      {resumeBusy ? 'Resuming...' : 'Resume run'}
-                    </button>
-                  ) : null}
-                  {(delegationSummary?.retryable_failed_children || 0) > 0 ? (
-                    <button
-                      className="orion-btn orion-btn-ghost"
-                      style={{ minHeight: 44, paddingInline: 12 }}
-                      onClick={() => void handleRetryFailedDelegation()}
-                      disabled={retryingDelegation || approvalBusy !== null || resumeBusy || autoDelegating || delegating}
-                    >
-                      {retryingDelegation
-                        ? 'Retrying...'
-                        : `Retry failed (${String(delegationSummary?.retryable_failed_children || 0)})`}
-                    </button>
-                  ) : null}
-                  {needsLocalMachineAttention ? (
-                    <>
-                      <Link className="orion-btn orion-btn-ghost" style={{ minHeight: 44, paddingInline: 12 }} href="/machines">
-                        Open machines
-                      </Link>
-                      <Link className="orion-btn orion-btn-ghost" style={{ minHeight: 44, paddingInline: 12 }} href="/health">
-                        Open machine health
-                      </Link>
-                    </>
-                  ) : null}
-                </div>
-              ) : null}
             </article>
+
+            {showRemediationGuide ? (
+              <article className="orion-panel muted">
+                <RunRemediationGuide
+                  diagnostics={runDiagnostics}
+                  status={effectiveRunStatus}
+                  hasPendingApproval={Boolean(pendingConfirmation?.approval_id)}
+                  canResumeRun={canResumeRun}
+                  retryableFailedChildren={Number(delegationSummary?.retryable_failed_children || 0)}
+                  needsLocalMachineAttention={needsLocalMachineAttention}
+                  actions={(
+                    <>
+                      {pendingConfirmation?.approval_id ? (
+                        <>
+                          <button
+                            className="orion-btn orion-btn-primary"
+                            style={{ minHeight: 44, paddingInline: 12 }}
+                            onClick={() => void handleResolveApproval('Proceed')}
+                            disabled={approvalBusy !== null || resumeBusy || retryingDelegation || autoDelegating || delegating}
+                          >
+                            {approvalBusy === 'Proceed' ? 'Confirming...' : 'Confirm once'}
+                          </button>
+                          <button
+                            className="orion-btn orion-btn-ghost"
+                            style={{ minHeight: 44, paddingInline: 12 }}
+                            onClick={() => void handleResolveApproval('Hold')}
+                            disabled={approvalBusy !== null || resumeBusy || retryingDelegation || autoDelegating || delegating}
+                          >
+                            {approvalBusy === 'Hold' ? 'Declining...' : 'Decline'}
+                          </button>
+                          <Link className="orion-btn orion-btn-ghost" style={{ minHeight: 44, paddingInline: 12 }} href="/approvals">
+                            Open approvals
+                          </Link>
+                        </>
+                      ) : null}
+                      {canResumeRun ? (
+                        <button
+                          className="orion-btn orion-btn-primary"
+                          style={{ minHeight: 44, paddingInline: 12 }}
+                          onClick={() => void handleResumeRun()}
+                          disabled={resumeBusy || approvalBusy !== null || retryingDelegation || autoDelegating || delegating}
+                        >
+                          {resumeBusy ? 'Resuming...' : 'Resume run'}
+                        </button>
+                      ) : null}
+                      {(delegationSummary?.retryable_failed_children || 0) > 0 ? (
+                        <button
+                          className="orion-btn orion-btn-ghost"
+                          style={{ minHeight: 44, paddingInline: 12 }}
+                          onClick={() => void handleRetryFailedDelegation()}
+                          disabled={retryingDelegation || approvalBusy !== null || resumeBusy || autoDelegating || delegating}
+                        >
+                          {retryingDelegation
+                            ? 'Retrying...'
+                            : `Retry failed (${String(delegationSummary?.retryable_failed_children || 0)})`}
+                        </button>
+                      ) : null}
+                      {needsLocalMachineAttention ? (
+                        <>
+                          <Link className="orion-btn orion-btn-ghost" style={{ minHeight: 44, paddingInline: 12 }} href="/machines">
+                            Open machines
+                          </Link>
+                          <Link className="orion-btn orion-btn-ghost" style={{ minHeight: 44, paddingInline: 12 }} href="/health">
+                            Open machine health
+                          </Link>
+                        </>
+                      ) : null}
+                    </>
+                  )}
+                />
+              </article>
+            ) : null}
 
             <LocalCompanionRunPanel
               runId={runId}

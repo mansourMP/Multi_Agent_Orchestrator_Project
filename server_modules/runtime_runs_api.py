@@ -15,11 +15,13 @@ from server_modules.api_contract import (
     ApiSessionRequest,
     ApiSessionResponse,
     build_turn_chat_body,
+    model_to_dict,
     normalize_agent_turn_result,
     normalize_session_record,
     request_body_to_turn_request,
 )
 from server_modules import session_service
+from server_modules.direct_chat_stream_response_service import build_direct_chat_stream_response
 from server_modules.direct_chat_service import (
     build_direct_chat_execution_services,
     build_direct_chat_event_producer as _service_build_direct_chat_event_producer,
@@ -409,13 +411,57 @@ def register_run_routes(app) -> None:
         enforce_run_owner_access=_enforce_run_owner_access,
     )
 
+    def _looks_like_legacy_direct_chat_body(payload: dict[str, Any]) -> bool:
+        if not isinstance(payload, dict):
+            return False
+        if any(
+            key in payload
+            for key in (
+                "thread_id",
+                "prior_messages",
+                "approved_action",
+                "availability",
+                "last_event_id",
+            )
+        ):
+            return True
+        return "message" in payload and "session_id" not in payload and "actor" not in payload
+
     @app.post("/turn", dependencies=[Depends(_server.require_api_key)], response_model=ApiAgentTurnResponse)
     async def canonical_turn(
-        body: ApiAgentTurnRequest,
+        request: Request,
+        body: Optional[dict[str, Any]] = None,
         current_user=Depends(_server.require_api_key),
     ):
         _refresh_server_exports()
-        turn_request = request_body_to_turn_request(body)
+        payload = dict(body or {})
+        if not payload:
+            payload = await request.json()
+            if not isinstance(payload, dict):
+                from fastapi import HTTPException
+
+                raise HTTPException(status_code=400, detail="Invalid turn payload")
+
+        if _looks_like_legacy_direct_chat_body(payload):
+            return await build_direct_chat_stream_response(
+                current_user=current_user,
+                body=payload,
+                last_event_id=request.headers.get("last-event-id") or payload.get("last_event_id"),
+                services=_direct_chat_stream_response_services(),
+            )
+
+        turn_request = request_body_to_turn_request(payload)
+        if (
+            str(turn_request.execution_mode or "").strip().lower() == "sync"
+            and str(turn_request.response_mode or "").strip().lower() == "stream"
+        ):
+            return await build_direct_chat_stream_response(
+                current_user=current_user,
+                body=build_turn_chat_body(turn_request),
+                last_event_id=request.headers.get("last-event-id") or model_to_dict(turn_request.context_hints).get("last_event_id"),
+                services=_direct_chat_stream_response_services(),
+            )
+
         result = await execute_canonical_agent_turn(
             turn_request=turn_request,
             current_user=current_user,

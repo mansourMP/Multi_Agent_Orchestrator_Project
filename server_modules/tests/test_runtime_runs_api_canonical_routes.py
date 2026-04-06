@@ -28,6 +28,15 @@ class _FakeApp:
         return self._register("DELETE", path, **kwargs)
 
 
+class _FakeRequest:
+    def __init__(self, payload=None, *, headers=None) -> None:
+        self._payload = payload or {}
+        self.headers = headers or {}
+
+    async def json(self):
+        return self._payload
+
+
 class RuntimeRunsApiCanonicalRouteTests(unittest.TestCase):
     def test_register_run_routes_adds_turn_and_runs(self):
         fake_server = types.ModuleType("server")
@@ -45,6 +54,8 @@ class RuntimeRunsApiCanonicalRouteTests(unittest.TestCase):
         original_turn = runtime_runs_api.execute_canonical_agent_turn
         original_run_services = runtime_runs_api._run_execution_services
         original_direct_chat_services = runtime_runs_api._direct_chat_execution_services
+        original_stream_response = runtime_runs_api.build_direct_chat_stream_response
+        original_stream_services = runtime_runs_api._direct_chat_stream_response_services
         original_late_export = runtime_runs_api._late_server_export
         original_privileged = runtime_runs_api._current_user_is_privileged
         original_extract_owner = runtime_runs_api._extract_run_owner_user_id
@@ -54,6 +65,8 @@ class RuntimeRunsApiCanonicalRouteTests(unittest.TestCase):
             runtime_runs_api.execute_canonical_agent_turn = self._fake_agent_turn
             runtime_runs_api._run_execution_services = lambda: "run-services"
             runtime_runs_api._direct_chat_execution_services = lambda: "chat-services"
+            runtime_runs_api.build_direct_chat_stream_response = self._fake_stream_response
+            runtime_runs_api._direct_chat_stream_response_services = lambda: "stream-services"
             runtime_runs_api._current_user_is_privileged = lambda current_user: False
             runtime_runs_api._extract_run_owner_user_id = lambda item: str(item.get("owner_user_id") or "")
             runtime_runs_api._late_server_export = lambda name: {
@@ -100,18 +113,86 @@ class RuntimeRunsApiCanonicalRouteTests(unittest.TestCase):
 
             turn_payload = self._run_async(
                 app.routes[("POST", "/turn")](
-                    ApiAgentTurnRequest(
-                        workspace_id="default",
-                        session_id="thread-1",
-                        channel="web",
-                        actor={"type": "user", "id": "user-1"},
-                        message="hello",
+                    _FakeRequest(
+                        {
+                            "workspace_id": "default",
+                            "session_id": "thread-1",
+                            "channel": "web",
+                            "actor": {"type": "user", "id": "user-1"},
+                            "message": "hello",
+                            "execution_mode": "durable",
+                            "response_mode": "artifact",
+                        }
                     ),
+                    {
+                        "workspace_id": "default",
+                        "session_id": "thread-1",
+                        "channel": "web",
+                        "actor": {"type": "user", "id": "user-1"},
+                        "message": "hello",
+                        "execution_mode": "durable",
+                        "response_mode": "artifact",
+                    },
                     current_user={"user_id": "user-1"},
                 )
             )
             self.assertEqual(turn_payload.status, "stream_ready")
             self.assertEqual(turn_payload.metadata["kind"], "direct_chat_stream")
+
+            stream_payload = self._run_async(
+                app.routes[("POST", "/turn")](
+                    _FakeRequest(
+                        {
+                            "workspace_id": "default",
+                            "session_id": "thread-2",
+                            "channel": "web",
+                            "actor": {"type": "user", "id": "user-1"},
+                            "message": "stream hello",
+                        },
+                        headers={"last-event-id": "evt-7"},
+                    ),
+                    {
+                        "workspace_id": "default",
+                        "session_id": "thread-2",
+                        "channel": "web",
+                        "actor": {"type": "user", "id": "user-1"},
+                        "message": "stream hello",
+                    },
+                    current_user={"user_id": "user-1"},
+                )
+            )
+            self.assertEqual(stream_payload["kind"], "stream")
+            self.assertEqual(stream_payload["last_event_id"], "evt-7")
+            self.assertEqual(stream_payload["services"], "stream-services")
+            self.assertEqual(stream_payload["body"]["thread_id"], "thread-2")
+            self.assertEqual(stream_payload["body"]["message"], "stream hello")
+
+            legacy_stream_payload = self._run_async(
+                app.routes[("POST", "/turn")](
+                    _FakeRequest(
+                        {
+                            "workspace_id": "default",
+                            "thread_id": "legacy-thread",
+                            "channel": "web",
+                            "message": "legacy hello",
+                            "provider": "anthropic",
+                        },
+                        headers={"last-event-id": "evt-8"},
+                    ),
+                    {
+                        "workspace_id": "default",
+                        "thread_id": "legacy-thread",
+                        "channel": "web",
+                        "message": "legacy hello",
+                        "provider": "anthropic",
+                    },
+                    current_user={"user_id": "user-1"},
+                )
+            )
+            self.assertEqual(legacy_stream_payload["kind"], "stream")
+            self.assertEqual(legacy_stream_payload["last_event_id"], "evt-8")
+            self.assertEqual(legacy_stream_payload["body"]["thread_id"], "legacy-thread")
+            self.assertEqual(legacy_stream_payload["body"]["provider"], "anthropic")
 
             runs_payload = self._run_async(app.routes[("GET", "/runs")](current_user={"user_id": "user-1"}))
             self.assertEqual(runs_payload["count"], 2)
@@ -165,6 +246,8 @@ class RuntimeRunsApiCanonicalRouteTests(unittest.TestCase):
             runtime_runs_api.execute_canonical_agent_turn = original_turn
             runtime_runs_api._run_execution_services = original_run_services
             runtime_runs_api._direct_chat_execution_services = original_direct_chat_services
+            runtime_runs_api.build_direct_chat_stream_response = original_stream_response
+            runtime_runs_api._direct_chat_stream_response_services = original_stream_services
             runtime_runs_api._late_server_export = original_late_export
             runtime_runs_api._current_user_is_privileged = original_privileged
             runtime_runs_api._extract_run_owner_user_id = original_extract_owner
@@ -180,6 +263,14 @@ class RuntimeRunsApiCanonicalRouteTests(unittest.TestCase):
             "session_key": "session-1",
             "thread_id": "thread-1",
             "client_request_id": "req-1",
+        }
+
+    async def _fake_stream_response(self, **kwargs):
+        return {
+            "kind": "stream",
+            "body": kwargs["body"],
+            "last_event_id": kwargs["last_event_id"],
+            "services": kwargs["services"],
         }
 
     async def _fake_create_session(self, *args, **kwargs):

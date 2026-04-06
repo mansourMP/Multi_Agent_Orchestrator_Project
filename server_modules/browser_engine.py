@@ -15,6 +15,13 @@ def _repo_root() -> Path:
     return Path(__file__).resolve().parents[1]
 
 
+def _engine_root() -> Path:
+    configured = str(os.environ.get("ORION_BROWSER_ENGINE_ROOT") or "").strip()
+    if configured:
+        return Path(configured).expanduser().resolve()
+    return (_repo_root() / ".orion-stack").resolve()
+
+
 def _now_token() -> str:
     return time.strftime("%Y%m%d_%H%M%S")
 
@@ -43,10 +50,11 @@ class BrowserEngine:
         if getattr(self, "_initialized", False):
             return
         self.headless = not (os.environ.get("DISPLAY") or os.environ.get("TAURI_ENV"))
-        self.profile_dir = (_repo_root() / ".orion-stack" / "browser-profile").resolve()
-        self.screenshots_dir = (_repo_root() / ".orion-stack" / "screenshots").resolve()
-        self.downloads_dir = (_repo_root() / ".orion-stack" / "downloads").resolve()
-        self.pdf_dir = (_repo_root() / ".orion-stack" / "pdf").resolve()
+        engine_root = _engine_root()
+        self.profile_dir = (engine_root / "browser-profile").resolve()
+        self.screenshots_dir = (engine_root / "screenshots").resolve()
+        self.downloads_dir = (engine_root / "downloads").resolve()
+        self.pdf_dir = (engine_root / "pdf").resolve()
         self.profile_dir.mkdir(parents=True, exist_ok=True)
         self.screenshots_dir.mkdir(parents=True, exist_ok=True)
         self.downloads_dir.mkdir(parents=True, exist_ok=True)

@@ -48,6 +48,7 @@ def ensure_trailing_slashless(url: str) -> str:
 
 def build_runtime_capabilities() -> List[str]:
     return [
+        "browser_automation",
         "filesystem.read",
         "filesystem.write",
         "shell.exec",

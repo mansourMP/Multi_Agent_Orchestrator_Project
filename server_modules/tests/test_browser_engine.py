@@ -1,6 +1,7 @@
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from server_modules.browser_engine import BrowserEngine
 
@@ -174,3 +175,12 @@ class BrowserEngineTests(unittest.IsolatedAsyncioTestCase):
     async def test_save_pdf_creates_file(self):
         path = await self.engine.save_pdf()
         self.assertTrue(Path(path).exists())
+
+    async def test_env_override_changes_engine_root(self):
+        with tempfile.TemporaryDirectory(prefix="browser-engine-root-") as tmpdir:
+            BrowserEngine._instance = None
+            with patch.dict("os.environ", {"ORION_BROWSER_ENGINE_ROOT": tmpdir}, clear=False):
+                engine = BrowserEngine()
+            self.assertEqual(engine.profile_dir, (Path(tmpdir) / "browser-profile").resolve())
+            self.assertEqual(engine.screenshots_dir, (Path(tmpdir) / "screenshots").resolve())
+            BrowserEngine._instance = None

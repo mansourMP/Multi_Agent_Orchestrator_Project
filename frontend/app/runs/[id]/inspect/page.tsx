@@ -853,6 +853,8 @@ export default function RunInspectPage() {
   const [delegateRole, setDelegateRole] = useState<string>('support');
   const [delegateGoal, setDelegateGoal] = useState('');
   const [delegateNote, setDelegateNote] = useState('');
+  const [approvalBusy, setApprovalBusy] = useState<'Proceed' | 'Hold' | null>(null);
+  const [resumeBusy, setResumeBusy] = useState(false);
   const [delegating, setDelegating] = useState(false);
   const [autoDelegating, setAutoDelegating] = useState(false);
   const [retryingDelegation, setRetryingDelegation] = useState(false);
@@ -1237,6 +1239,57 @@ export default function RunInspectPage() {
     }
   }, [delegateNote, failedDelegationRunIds, load, runId]);
 
+  const handleResolveApproval = useCallback(async (decision: 'Proceed' | 'Hold') => {
+    if (!runId || !pendingConfirmation?.approval_id) return;
+    setApprovalBusy(decision);
+    setDelegateError(null);
+    setDelegateNotice(null);
+    try {
+      await ensureControlPlaneSession();
+      const response = await fetch('/api/approvals/resolve', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          runId,
+          approvalId: pendingConfirmation.approval_id,
+          decision,
+          note: 'Resolved from Run Inspect',
+        }),
+      });
+      if (!response.ok) {
+        const payload = await response.json().catch(() => null) as { detail?: string } | null;
+        throw new Error(payload?.detail || 'Failed to resolve this confirmation.');
+      }
+      setDelegateNotice(decision === 'Proceed' ? 'Confirmed. The run can continue.' : 'Declined. The run will stay blocked.');
+      await load();
+    } catch (nextError: unknown) {
+      setDelegateError(nextError instanceof Error ? nextError.message : 'Failed to resolve this confirmation.');
+    } finally {
+      setApprovalBusy(null);
+    }
+  }, [load, pendingConfirmation?.approval_id, runId]);
+
+  const handleResumeRun = useCallback(async () => {
+    if (!runId) return;
+    setResumeBusy(true);
+    setDelegateError(null);
+    setDelegateNotice(null);
+    try {
+      await ensureControlPlaneSession();
+      const response = await fetch(`/api/runs/${encodeURIComponent(runId)}/resume`, { method: 'POST' });
+      if (!response.ok) {
+        const payload = await response.json().catch(() => null) as { detail?: string } | null;
+        throw new Error(payload?.detail || 'Failed to resume this run.');
+      }
+      setDelegateNotice('Resume requested. The run is re-entering execution from its saved checkpoint.');
+      await load();
+    } catch (nextError: unknown) {
+      setDelegateError(nextError instanceof Error ? nextError.message : 'Failed to resume this run.');
+    } finally {
+      setResumeBusy(false);
+    }
+  }, [load, runId]);
+
   const timelineEvents = useMemo((): TimelineEvent[] => {
     const replayEvents = Array.isArray(replayItem?.events) ? replayItem.events : [];
     const combined: TimelineEvent[] = [];
@@ -1444,6 +1497,8 @@ export default function RunInspectPage() {
     }
     return rows;
   }, [runDiagnostics]);
+  const canResumeRun = effectiveRunStatus === 'waiting_for_input' && !pendingConfirmation?.approval_id && Boolean(runDiagnostics?.browser_resume_supported);
+  const needsLocalMachineAttention = ['local_runtime_wait', 'local_capacity_wait', 'local_queue', 'local_running'].includes(String(runDiagnostics?.category || ''));
   const runtimePolicyNotes = useMemo(() => {
     const notes: Array<{ label: string; value: string; tone?: 'default' | 'warning' }> = [];
     if (runSkillSummary.scope) notes.push({ label: 'Skill scope', value: runSkillSummary.scope });
@@ -1806,6 +1861,65 @@ export default function RunInspectPage() {
                       {item.label} {item.value}
                     </div>
                   ))}
+                </div>
+              ) : null}
+              {(pendingConfirmation?.approval_id || canResumeRun || (delegationSummary?.retryable_failed_children || 0) > 0 || needsLocalMachineAttention) ? (
+                <div style={{ marginTop: 12, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                  {pendingConfirmation?.approval_id ? (
+                    <>
+                      <button
+                        className="orion-btn orion-btn-primary"
+                        style={{ minHeight: 44, paddingInline: 12 }}
+                        onClick={() => void handleResolveApproval('Proceed')}
+                        disabled={approvalBusy !== null || resumeBusy || retryingDelegation || autoDelegating || delegating}
+                      >
+                        {approvalBusy === 'Proceed' ? 'Confirming...' : 'Confirm once'}
+                      </button>
+                      <button
+                        className="orion-btn orion-btn-ghost"
+                        style={{ minHeight: 44, paddingInline: 12 }}
+                        onClick={() => void handleResolveApproval('Hold')}
+                        disabled={approvalBusy !== null || resumeBusy || retryingDelegation || autoDelegating || delegating}
+                      >
+                        {approvalBusy === 'Hold' ? 'Declining...' : 'Decline'}
+                      </button>
+                      <Link className="orion-btn orion-btn-ghost" style={{ minHeight: 44, paddingInline: 12 }} href="/approvals">
+                        Open approvals
+                      </Link>
+                    </>
+                  ) : null}
+                  {canResumeRun ? (
+                    <button
+                      className="orion-btn orion-btn-primary"
+                      style={{ minHeight: 44, paddingInline: 12 }}
+                      onClick={() => void handleResumeRun()}
+                      disabled={resumeBusy || approvalBusy !== null || retryingDelegation || autoDelegating || delegating}
+                    >
+                      {resumeBusy ? 'Resuming...' : 'Resume run'}
+                    </button>
+                  ) : null}
+                  {(delegationSummary?.retryable_failed_children || 0) > 0 ? (
+                    <button
+                      className="orion-btn orion-btn-ghost"
+                      style={{ minHeight: 44, paddingInline: 12 }}
+                      onClick={() => void handleRetryFailedDelegation()}
+                      disabled={retryingDelegation || approvalBusy !== null || resumeBusy || autoDelegating || delegating}
+                    >
+                      {retryingDelegation
+                        ? 'Retrying...'
+                        : `Retry failed (${String(delegationSummary?.retryable_failed_children || 0)})`}
+                    </button>
+                  ) : null}
+                  {needsLocalMachineAttention ? (
+                    <>
+                      <Link className="orion-btn orion-btn-ghost" style={{ minHeight: 44, paddingInline: 12 }} href="/machines">
+                        Open machines
+                      </Link>
+                      <Link className="orion-btn orion-btn-ghost" style={{ minHeight: 44, paddingInline: 12 }} href="/health">
+                        Open machine health
+                      </Link>
+                    </>
+                  ) : null}
                 </div>
               ) : null}
             </article>

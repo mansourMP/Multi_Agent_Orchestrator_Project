@@ -90,6 +90,10 @@ type RunDiagnostics = {
   archived?: boolean;
 } | null;
 
+type DelegationSummary = {
+  retryable_failed_children?: number | null;
+} | null;
+
 type RunDetailPayload = {
   run_id?: string;
   status?: string;
@@ -176,6 +180,7 @@ type RunDetailPayload = {
   /** @deprecated compatibility alias; use `pending_confirmation`. */
   pending_approval?: ApprovalState;
   diagnostics?: RunDiagnostics;
+  delegation_summary?: DelegationSummary;
   result_data?: unknown;
   node_states?: RunNodeStatesPayload | null;
 };
@@ -342,6 +347,9 @@ export default function RunDetailPage() {
   const [replayItem, setReplayItem] = useState<ReplayPayload['item']>(null);
   const [, setLiveEvents] = useState<ReplayEvent[]>([]);
   const [approvalBusy, setApprovalBusy] = useState<'Proceed' | 'Hold' | null>(null);
+  const [resumeBusy, setResumeBusy] = useState(false);
+  const [retryBusy, setRetryBusy] = useState(false);
+  const [actionNotice, setActionNotice] = useState('');
   const pendingConfirmation = runDetail?.pending_confirmation ?? runDetail?.pending_approval ?? null;
   const runDiagnostics = runDetail?.diagnostics ?? null;
   const detailContract = runDetail?.run_detail_contract ?? null;
@@ -660,6 +668,9 @@ export default function RunDetailPage() {
     }
     return rows;
   }, [runDiagnostics]);
+  const retryableFailedChildren = Math.max(0, Number(runDetail?.delegation_summary?.retryable_failed_children || 0));
+  const canResumeRun = effectiveStatus === 'waiting_for_input' && !pendingConfirmation?.approval_id && Boolean(runDiagnostics?.browser_resume_supported);
+  const needsLocalMachineAttention = ['local_runtime_wait', 'local_capacity_wait', 'local_queue', 'local_running'].includes(String(runDiagnostics?.category || ''));
   const plainLanguageSummary = useMemo(() => {
     if (executionTargetWaitingForCapacity) {
       return compactText(
@@ -724,6 +735,7 @@ export default function RunDetailPage() {
   const handleResolveApproval = useCallback(async (decision: 'Proceed' | 'Hold') => {
     if (!runId || !pendingConfirmation?.approval_id) return;
     setApprovalBusy(decision);
+    setActionNotice('');
     try {
       await ensureControlPlaneSession();
       const response = await fetch('/api/approvals/resolve', {
@@ -740,6 +752,7 @@ export default function RunDetailPage() {
         const message = await response.text().catch(() => '');
         throw new Error(message || 'Failed to resolve this confirmation.');
       }
+      setActionNotice(decision === 'Proceed' ? 'Confirmed. The run can continue.' : 'Declined. The run will stay blocked.');
       await load();
     } catch (nextError) {
       setError(nextError instanceof Error ? nextError.message : 'Failed to resolve this confirmation.');
@@ -747,6 +760,58 @@ export default function RunDetailPage() {
       setApprovalBusy(null);
     }
   }, [load, pendingConfirmation?.approval_id, runId]);
+
+  const handleResumeRun = useCallback(async () => {
+    if (!runId) return;
+    setResumeBusy(true);
+    setActionNotice('');
+    setError('');
+    try {
+      await ensureControlPlaneSession();
+      const response = await fetch(`/api/runs/${encodeURIComponent(runId)}/resume`, { method: 'POST' });
+      if (!response.ok) {
+        const payload = await response.json().catch(() => null) as { detail?: string } | null;
+        throw new Error(payload?.detail || 'Failed to resume this run.');
+      }
+      setActionNotice('Resume requested. The run is re-entering execution from its saved checkpoint.');
+      await load();
+    } catch (nextError) {
+      setError(nextError instanceof Error ? nextError.message : 'Failed to resume this run.');
+    } finally {
+      setResumeBusy(false);
+    }
+  }, [load, runId]);
+
+  const handleRetryFailedDelegation = useCallback(async () => {
+    if (!runId) return;
+    setRetryBusy(true);
+    setActionNotice('');
+    setError('');
+    try {
+      await ensureControlPlaneSession();
+      const response = await fetch(`/api/runs/${encodeURIComponent(runId)}/delegate/retry-failed`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+      });
+      if (!response.ok) {
+        const text = await response.text().catch(() => '');
+        throw new Error(text || 'Failed to retry failed child runs.');
+      }
+      const payload = await response.json().catch(() => null) as { items?: unknown[] } | null;
+      const items = Array.isArray(payload?.items) ? payload.items : [];
+      setActionNotice(
+        items.length > 0
+          ? `Created ${items.length} retry run${items.length === 1 ? '' : 's'} for failed child work.`
+          : 'Retry run requested.',
+      );
+      await load();
+    } catch (nextError) {
+      setError(nextError instanceof Error ? nextError.message : 'Failed to retry failed child runs.');
+    } finally {
+      setRetryBusy(false);
+    }
+  }, [load, runId]);
 
   return (
     <div className="orion-page-shell narrow orion-animate-in">
@@ -813,6 +878,68 @@ export default function RunDetailPage() {
                       ? 'This run stopped before it produced a final preview.'
                       : 'This run finished, but the current payload does not include a previewable result.'}
                   </div>
+                </div>
+              ) : null}
+
+              {(pendingConfirmation?.approval_id || canResumeRun || retryableFailedChildren > 0 || needsLocalMachineAttention) ? (
+                <div className="orion-panel muted" style={{ marginTop: 14 }}>
+                  <div className="orion-panel-title">Recommended actions</div>
+                  <div className="orion-panel-copy">
+                    {runDiagnostics?.next_step || 'Use the controls below to unblock this run faster.'}
+                  </div>
+                  <div style={{ marginTop: 10, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                    {pendingConfirmation?.approval_id ? (
+                      <>
+                        <button
+                          type="button"
+                          className="btn-primary"
+                          onClick={() => void handleResolveApproval('Proceed')}
+                          disabled={approvalBusy !== null || resumeBusy || retryBusy}
+                        >
+                          {approvalBusy === 'Proceed' ? 'Confirming…' : 'Confirm once'}
+                        </button>
+                        <button
+                          type="button"
+                          className="btn-secondary"
+                          onClick={() => void handleResolveApproval('Hold')}
+                          disabled={approvalBusy !== null || resumeBusy || retryBusy}
+                        >
+                          {approvalBusy === 'Hold' ? 'Declining…' : 'Decline'}
+                        </button>
+                        <Link href="/approvals" className="btn-secondary">Open approvals</Link>
+                      </>
+                    ) : null}
+                    {canResumeRun ? (
+                      <button
+                        type="button"
+                        className="btn-primary"
+                        onClick={() => void handleResumeRun()}
+                        disabled={resumeBusy || approvalBusy !== null || retryBusy}
+                      >
+                        {resumeBusy ? 'Resuming…' : 'Resume run'}
+                      </button>
+                    ) : null}
+                    {retryableFailedChildren > 0 ? (
+                      <button
+                        type="button"
+                        className="btn-secondary"
+                        onClick={() => void handleRetryFailedDelegation()}
+                        disabled={retryBusy || approvalBusy !== null || resumeBusy}
+                      >
+                        {retryBusy ? 'Retrying…' : `Retry failed (${String(retryableFailedChildren)})`}
+                      </button>
+                    ) : null}
+                    {needsLocalMachineAttention ? (
+                      <>
+                        <Link href="/machines" className="btn-secondary">Open machines</Link>
+                        <Link href="/health" className="btn-secondary">Open machine health</Link>
+                      </>
+                    ) : null}
+                    <Link href={`/runs/${encodeURIComponent(runId)}/inspect`} className="btn-secondary">Open inspect</Link>
+                  </div>
+                  {actionNotice ? (
+                    <div style={{ marginTop: 10, color: 'var(--success-fg)', fontSize: 12 }}>{actionNotice}</div>
+                  ) : null}
                 </div>
               ) : null}
             </div>

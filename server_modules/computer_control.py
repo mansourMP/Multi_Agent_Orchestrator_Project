@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import os
 import shutil
 import subprocess
@@ -7,8 +8,46 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+import requests
+
+try:
+    from . import supervisor_client
+except ImportError:
+    import supervisor_client  # type: ignore[no-redef]
+
 
 _CLIPBOARD_FALLBACK_TEXT = ""
+_SUPERVISOR_HEALTH_TIMEOUT_SECONDS = 2
+logger = logging.getLogger(__name__)
+
+
+def _check_supervisor_health() -> None:
+    try:
+        response = requests.get(
+            f"{supervisor_client.SUPERVISOR_URL}/health",
+            timeout=_SUPERVISOR_HEALTH_TIMEOUT_SECONDS,
+        )
+        response.raise_for_status()
+    except Exception as exc:
+        logger.warning("empyralis-supervisor is unreachable at import time: %s", exc)
+
+
+def _supervisor_call(func, *args, **kwargs) -> Dict[str, Any]:
+    try:
+        result = func(*args, **kwargs)
+    except RuntimeError as exc:
+        message = str(exc or "").strip()
+        if message == supervisor_client.SUPERVISOR_UNREACHABLE_MESSAGE:
+            return {"error": "Supervisor not running", "success": False}
+        return {"error": message or "Supervisor request failed", "success": False}
+    if isinstance(result, dict):
+        normalized = dict(result)
+        normalized.setdefault("success", True)
+        return normalized
+    return {"result": result, "success": True}
+
+
+_check_supervisor_health()
 
 
 def _coerce_region(region: Any) -> Optional[Tuple[int, int, int, int]]:
@@ -106,11 +145,65 @@ def screen_ocr(region: Any = None) -> str:
     return text
 
 
+def capture_screenshot(monitor: str = "primary", region: Any = None) -> Dict[str, Any]:
+    return _supervisor_call(
+        supervisor_client.capture_screenshot,
+        monitor=monitor,
+        region=region,
+    )
+
+
+def computer_control_click(
+    x: Any,
+    y: Any,
+    button: str = "left",
+    double: bool = False,
+) -> Dict[str, Any]:
+    return _supervisor_call(
+        supervisor_client.click,
+        int(x),
+        int(y),
+        button=button,
+        double=bool(double),
+    )
+
+
+def computer_control_type(text: str, delay_ms: Optional[int] = None) -> Dict[str, Any]:
+    return _supervisor_call(
+        supervisor_client.type_text,
+        str(text or ""),
+        delay_ms=delay_ms,
+    )
+
+
+def computer_control_clipboard_read() -> Dict[str, Any]:
+    return _supervisor_call(supervisor_client.clipboard_read)
+
+
+def computer_control_clipboard_write(text: str) -> Dict[str, Any]:
+    return _supervisor_call(supervisor_client.clipboard_write, str(text or ""))
+
+
+def computer_control_list_apps() -> Dict[str, Any]:
+    return _supervisor_call(supervisor_client.list_windows)
+
+
+def computer_control_launch_app(name_or_path: str) -> Dict[str, Any]:
+    return _supervisor_call(supervisor_client.launch, str(name_or_path or ""))
+
+
 def mouse_click(x: Any, y: Any) -> str:
-    pyautogui = _import_pyautogui()
+    # LEGACY:
+    # pyautogui = _import_pyautogui()
+    # click_x = int(x)
+    # click_y = int(y)
+    # pyautogui.click(x=click_x, y=click_y)
+    # return f"Clicked at ({click_x}, {click_y})."
+    result = computer_control_click(x, y)
+    if not result.get("success", False):
+        return result  # type: ignore[return-value]
     click_x = int(x)
     click_y = int(y)
-    pyautogui.click(x=click_x, y=click_y)
     return f"Clicked at ({click_x}, {click_y})."
 
 
@@ -152,11 +245,17 @@ def click_element_by_text(text: str) -> str:
 
 
 def keyboard_type(text: str) -> str:
+    # LEGACY:
+    # payload = str(text or "")
+    # if not payload:
+    #     raise RuntimeError("Text is required.")
+    # pyautogui = _import_pyautogui()
+    # pyautogui.write(payload, interval=0.01)
+    # return f"Typed {len(payload)} characters."
     payload = str(text or "")
-    if not payload:
-        raise RuntimeError("Text is required.")
-    pyautogui = _import_pyautogui()
-    pyautogui.write(payload, interval=0.01)
+    result = computer_control_type(payload)
+    if not result.get("success", False):
+        return result  # type: ignore[return-value]
     return f"Typed {len(payload)} characters."
 
 
@@ -178,32 +277,49 @@ def run_applescript(script: str) -> str:
 
 
 def read_clipboard() -> str:
+    # LEGACY:
+    # global _CLIPBOARD_FALLBACK_TEXT
+    # try:
+    #     text = str(_import_pyperclip().paste() or "")
+    #     if text:
+    #         _CLIPBOARD_FALLBACK_TEXT = text
+    #     return text
+    # except Exception:
+    #     try:
+    #         text = _clipboard_read_fallback()
+    #         _CLIPBOARD_FALLBACK_TEXT = text
+    #         return text
+    #     except Exception:
+    #         return _CLIPBOARD_FALLBACK_TEXT
     global _CLIPBOARD_FALLBACK_TEXT
-    try:
-        text = str(_import_pyperclip().paste() or "")
-        if text:
-            _CLIPBOARD_FALLBACK_TEXT = text
-        return text
-    except Exception:
-        try:
-            text = _clipboard_read_fallback()
-            _CLIPBOARD_FALLBACK_TEXT = text
-            return text
-        except Exception:
-            return _CLIPBOARD_FALLBACK_TEXT
+    result = computer_control_clipboard_read()
+    if not result.get("success", False):
+        return result  # type: ignore[return-value]
+    text = str(result.get("text") or "")
+    if text:
+        _CLIPBOARD_FALLBACK_TEXT = text
+    return text
 
 
 def write_clipboard(text: str) -> str:
+    # LEGACY:
+    # global _CLIPBOARD_FALLBACK_TEXT
+    # payload = str(text or "")
+    # _CLIPBOARD_FALLBACK_TEXT = payload
+    # try:
+    #     _import_pyperclip().copy(payload)
+    # except Exception:
+    #     try:
+    #         _clipboard_write_fallback(payload)
+    #     except Exception:
+    #         pass
+    # return "Clipboard updated."
     global _CLIPBOARD_FALLBACK_TEXT
     payload = str(text or "")
+    result = computer_control_clipboard_write(payload)
+    if not result.get("success", False):
+        return result  # type: ignore[return-value]
     _CLIPBOARD_FALLBACK_TEXT = payload
-    try:
-        _import_pyperclip().copy(payload)
-    except Exception:
-        try:
-            _clipboard_write_fallback(payload)
-        except Exception:
-            pass
     return "Clipboard updated."
 
 
@@ -246,65 +362,41 @@ def speak_text(text: str, voice: Optional[str] = None) -> str:
 
 
 def list_running_apps() -> List[Dict[str, Any]]:
-    items: List[Dict[str, Any]] = []
-    try:
-        psutil = _import_psutil()
-        iterator = psutil.process_iter(attrs=["pid", "name", "exe"])
-    except Exception:
-        iterator = []
-    try:
-        for process in iterator:
-            try:
-                info = process.info if isinstance(process.info, dict) else {}
-                items.append(
-                    {
-                        "pid": int(info.get("pid") or 0),
-                        "name": str(info.get("name") or "").strip(),
-                        "exe": str(info.get("exe") or "").strip(),
-                    }
-                )
-            except Exception:
-                continue
-    except PermissionError:
-        items = []
-    if not items:
-        try:
-            completed = subprocess.run(
-                ["ps", "-ax", "-o", "pid=,comm="],
-                capture_output=True,
-                text=True,
-                check=False,
-            )
-            if completed.returncode == 0:
-                for line in str(completed.stdout or "").splitlines():
-                    stripped = line.strip()
-                    if not stripped:
-                        continue
-                    parts = stripped.split(None, 1)
-                    if not parts:
-                        continue
-                    pid = int(parts[0]) if parts[0].isdigit() else 0
-                    command = parts[1].strip() if len(parts) > 1 else ""
-                    name = Path(command).name if command else ""
-                    items.append({"pid": pid, "name": name, "exe": command})
-        except Exception:
-            pass
-    items.sort(key=lambda item: (str(item.get("name") or "").lower(), int(item.get("pid") or 0)))
-    return items
+    # LEGACY:
+    # items: List[Dict[str, Any]] = []
+    # try:
+    #     psutil = _import_psutil()
+    #     iterator = psutil.process_iter(attrs=["pid", "name", "exe"])
+    # except Exception:
+    #     iterator = []
+    # ... fallback to `ps -ax -o pid=,comm=`
+    result = computer_control_list_apps()
+    if not result.get("success", False):
+        return result  # type: ignore[return-value]
+    windows = result.get("windows")
+    if isinstance(windows, list):
+        return windows  # type: ignore[return-value]
+    return []
 
 
 def launch_app(name_or_path: str) -> str:
+    # LEGACY:
+    # target = str(name_or_path or "").strip()
+    # if not target:
+    #     raise RuntimeError("App name or path is required.")
+    # if sys.platform == "darwin":
+    #     if Path(target).expanduser().exists():
+    #         subprocess.Popen(["open", str(Path(target).expanduser())])
+    #     else:
+    #         subprocess.Popen(["open", "-a", target])
+    #     return f"Launched {target}."
+    # if os.name == "nt":
+    #     os.startfile(target)  # type: ignore[attr-defined]
+    #     return f"Launched {target}."
+    # subprocess.Popen([target])
+    # return f"Launched {target}."
     target = str(name_or_path or "").strip()
-    if not target:
-        raise RuntimeError("App name or path is required.")
-    if sys.platform == "darwin":
-        if Path(target).expanduser().exists():
-            subprocess.Popen(["open", str(Path(target).expanduser())])
-        else:
-            subprocess.Popen(["open", "-a", target])
-        return f"Launched {target}."
-    if os.name == "nt":
-        os.startfile(target)  # type: ignore[attr-defined]
-        return f"Launched {target}."
-    subprocess.Popen([target])
+    result = computer_control_launch_app(target)
+    if not result.get("success", False):
+        return result  # type: ignore[return-value]
     return f"Launched {target}."

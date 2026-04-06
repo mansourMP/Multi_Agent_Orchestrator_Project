@@ -1530,6 +1530,164 @@ def initialize_runtime_services(
     mark_initialized_fn()
 
 
+def execute_workflow_human_node(
+    *,
+    run_id: str,
+    node_id: str,
+    label: str,
+    variant: str,
+    config: Dict[str, Any],
+    current_text: str,
+    state: Dict[str, Any],
+    context: Dict[str, Any],
+    log_queue: Any,
+    update_node_state_fn: Callable[..., Any],
+    wait_for_human_response_fn: Callable[..., Dict[str, Any]],
+    agent_machine_full_trust_for_context_fn: Callable[[Optional[Dict[str, Any]]], bool],
+    node_preview_text_fn: Callable[[Any], Optional[str]],
+    json_safe_fn: Callable[[Any], Any],
+    emit_log_fn: Callable[..., Any],
+) -> str:
+    title = str(config.get("title") or label or "Approval required").strip() or "Approval required"
+    instructions = str(config.get("instructions") or "").strip()
+    decision_options = config.get("decision_options") if isinstance(config.get("decision_options"), list) else []
+    option_text = ", ".join(str(item).strip() for item in decision_options if str(item).strip()) or "approve / reject"
+    if variant == "wait_for_reply":
+        prompt = (
+            f"{title}. {instructions} "
+            f"Current workflow context: {current_text or 'No current output.'} "
+            "Reply with the information needed to continue."
+        ).strip()
+    elif variant == "review":
+        prompt = (
+            f"{title}. {instructions} "
+            f"Current workflow context: {current_text or 'No current output.'} "
+            f"Reply with feedback or choose one of: {option_text}."
+        ).strip()
+    else:
+        prompt = (
+            f"{title}. {instructions} "
+            f"Current workflow context: {current_text or 'No current output.'} "
+            f"Reply with one of: {option_text}."
+        ).strip()
+    resolved_variant = variant or "approval"
+    if variant == "approval" and agent_machine_full_trust_for_context_fn(context):
+        current_text = f"{title}: approved"
+        summary_text = f"{title}: approved"
+        output_preview = node_preview_text_fn(current_text)
+        state["last_text"] = current_text
+        state["last_data"] = {
+            "node_id": node_id,
+            "node_type": "human",
+            "variant": variant,
+            "decision": "proceed",
+            "raw_decision": "Proceed",
+            "note": "Agent machine mode bypassed confirmation.",
+            "human_response": {
+                "approved": True,
+                "decision": "proceed",
+                "raw_decision": "Proceed",
+                "note": "Agent machine mode bypassed confirmation.",
+            },
+        }
+        emit_log_fn(
+            log_queue,
+            "info",
+            current_text,
+            event="workflow_human_bypassed",
+            data={"node_id": node_id, "variant": resolved_variant},
+        )
+        update_node_state_fn(
+            run_id,
+            node_id,
+            status="succeeded",
+            finalize=True,
+            output_preview=output_preview,
+            summary=summary_text,
+            detail={
+                "decision": "proceed",
+                "note": "Agent machine mode bypassed confirmation.",
+                "variant": resolved_variant,
+                "decision_options": decision_options,
+            },
+            waiting_for_approval=False,
+        )
+        return current_text
+
+    update_node_state_fn(
+        run_id,
+        node_id,
+        status="waiting_human",
+        summary=title,
+        detail={"variant": resolved_variant, "decision_options": decision_options},
+        waiting_for_approval=True,
+    )
+    human_response = wait_for_human_response_fn(
+        run_id,
+        prompt,
+        source="workflow_human_node",
+        metadata={
+            "node_id": node_id,
+            "node_label": label,
+            "variant": resolved_variant,
+            "decision_options": decision_options,
+        },
+    )
+    response_decision = str(human_response.get("decision") or "").strip().lower()
+    response_raw_decision = str(human_response.get("raw_decision") or "").strip()
+    response_note = str(human_response.get("note") or "").strip()
+    if variant == "approval":
+        if not bool(human_response.get("approved")):
+            raise RuntimeError(f"Workflow stopped at human node '{label}'.")
+        current_text = f"{title}: approved"
+        summary_text = f"{title}: approved"
+        output_preview = node_preview_text_fn(current_text)
+    else:
+        reply_text = response_note or response_raw_decision or response_decision
+        if not reply_text:
+            raise RuntimeError(f"Human node '{label}' did not receive a usable response.")
+        current_text = reply_text
+        summary_text = (
+            f"Reply received: {title}"
+            if variant == "wait_for_reply"
+            else f"Review received: {title}"
+        )
+        output_preview = node_preview_text_fn(reply_text)
+    state["last_text"] = current_text
+    state["last_data"] = {
+        "node_id": node_id,
+        "node_type": "human",
+        "variant": variant,
+        "decision": response_decision or None,
+        "raw_decision": response_raw_decision or None,
+        "note": response_note or None,
+        "human_response": json_safe_fn(human_response),
+    }
+    emit_log_fn(
+        log_queue,
+        "info",
+        current_text,
+        event="workflow_human_resolved",
+        data={"node_id": node_id, "variant": resolved_variant, "decision": response_decision or None},
+    )
+    update_node_state_fn(
+        run_id,
+        node_id,
+        status="succeeded",
+        finalize=True,
+        output_preview=output_preview,
+        summary=summary_text,
+        detail={
+            "decision": response_decision or None,
+            "note": response_note or None,
+            "variant": resolved_variant,
+            "decision_options": decision_options,
+        },
+        waiting_for_approval=False,
+    )
+    return current_text
+
+
 async def execute_durable_agent_turn_dispatch(
     *,
     turn_request: AgentTurnRequest,

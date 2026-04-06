@@ -59,6 +59,7 @@ from server_modules.run_service import (
     get_pending_confirmation,
     register_live_run,
     activate_live_run,
+    execute_workflow_human_node,
     set_pending_confirmation,
     transition_live_run_status,
     prepare_legacy_run_start_request,
@@ -660,6 +661,70 @@ class RunServiceTests(unittest.TestCase):
         self.assertEqual(len(threads), 2)
         self.assertTrue(all(thread.started for thread in threads))
         self.assertIs(initialized["telegram_thread"], threads[1])
+
+    def test_execute_workflow_human_node_bypasses_approval_for_full_trust(self):
+        updates = []
+        emitted = []
+        state = {}
+
+        result = execute_workflow_human_node(
+            run_id="run-1",
+            node_id="approval_1",
+            label="Approve draft",
+            variant="approval",
+            config={"title": "Approve draft", "decision_options": ["approve", "reject"]},
+            current_text="Draft ready",
+            state=state,
+            context={"metadata": {}},
+            log_queue=queue.Queue(),
+            update_node_state_fn=lambda *args, **kwargs: updates.append((args, kwargs)),
+            wait_for_human_response_fn=lambda *args, **kwargs: self.fail("approval wait should be bypassed"),
+            agent_machine_full_trust_for_context_fn=lambda context: True,
+            node_preview_text_fn=lambda value: str(value),
+            json_safe_fn=lambda value: value,
+            emit_log_fn=lambda *args, **kwargs: emitted.append((args, kwargs)),
+        )
+
+        self.assertEqual(result, "Approve draft: approved")
+        self.assertEqual(state["last_data"]["decision"], "proceed")
+        self.assertEqual(emitted[0][1]["event"], "workflow_human_bypassed")
+        self.assertEqual(updates[0][1]["status"], "succeeded")
+        self.assertFalse(updates[0][1]["waiting_for_approval"])
+
+    def test_execute_workflow_human_node_resolves_review_reply(self):
+        updates = []
+        emitted = []
+        state = {}
+
+        result = execute_workflow_human_node(
+            run_id="run-2",
+            node_id="review_1",
+            label="Review draft",
+            variant="review",
+            config={"title": "Review draft", "instructions": "Share feedback"},
+            current_text="Draft ready",
+            state=state,
+            context={"metadata": {}},
+            log_queue=queue.Queue(),
+            update_node_state_fn=lambda *args, **kwargs: updates.append((args, kwargs)),
+            wait_for_human_response_fn=lambda *args, **kwargs: {
+                "decision": "needs changes",
+                "raw_decision": "Needs changes",
+                "note": "Please fix tone",
+                "approved": False,
+            },
+            agent_machine_full_trust_for_context_fn=lambda context: False,
+            node_preview_text_fn=lambda value: str(value),
+            json_safe_fn=lambda value: value,
+            emit_log_fn=lambda *args, **kwargs: emitted.append((args, kwargs)),
+        )
+
+        self.assertEqual(result, "Please fix tone")
+        self.assertEqual(updates[0][1]["status"], "waiting_human")
+        self.assertEqual(updates[1][1]["status"], "succeeded")
+        self.assertFalse(updates[1][1]["waiting_for_approval"])
+        self.assertEqual(state["last_data"]["human_response"]["note"], "Please fix tone")
+        self.assertEqual(emitted[0][1]["event"], "workflow_human_resolved")
 
     def test_safe_int_and_normalize_requested_max_iterations(self):
         self.assertEqual(safe_int("7", 0), 7)

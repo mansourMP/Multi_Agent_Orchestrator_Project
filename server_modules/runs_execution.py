@@ -4126,140 +4126,22 @@ def _execute_workflow_graph(
                 )
 
             elif node_type == "human":
-                title = str(config.get("title") or label or "Approval required").strip() or "Approval required"
-                instructions = str(config.get("instructions") or "").strip()
-                decision_options = config.get("decision_options") if isinstance(config.get("decision_options"), list) else []
-                option_text = ", ".join(str(item).strip() for item in decision_options if str(item).strip()) or "approve / reject"
-                if variant == "wait_for_reply":
-                    prompt = (
-                        f"{title}. {instructions} "
-                        f"Current workflow context: {current_text or 'No current output.'} "
-                        "Reply with the information needed to continue."
-                    ).strip()
-                elif variant == "review":
-                    prompt = (
-                        f"{title}. {instructions} "
-                        f"Current workflow context: {current_text or 'No current output.'} "
-                        f"Reply with feedback or choose one of: {option_text}."
-                    ).strip()
-                else:
-                    prompt = (
-                        f"{title}. {instructions} "
-                        f"Current workflow context: {current_text or 'No current output.'} "
-                        f"Reply with one of: {option_text}."
-                    ).strip()
-                if variant == "approval" and _agent_machine_full_trust_for_context(context):
-                    current_text = f"{title}: approved"
-                    summary_text = f"{title}: approved"
-                    output_preview = _node_preview_text(current_text)
-                    state["last_text"] = current_text
-                    state["last_data"] = {
-                        "node_id": node_id,
-                        "node_type": node_type,
-                        "variant": variant,
-                        "decision": "proceed",
-                        "raw_decision": "Proceed",
-                        "note": "Agent machine mode bypassed confirmation.",
-                        "human_response": {
-                            "approved": True,
-                            "decision": "proceed",
-                            "raw_decision": "Proceed",
-                            "note": "Agent machine mode bypassed confirmation.",
-                        },
-                    }
-                    emit_log(
-                        log_queue,
-                        "info",
-                        current_text,
-                        event="workflow_human_bypassed",
-                        data={"node_id": node_id, "variant": variant or "approval"},
-                    )
-                    update_node_state(
-                        run_id,
-                        node_id,
-                        status="succeeded",
-                        finalize=True,
-                        output_preview=output_preview,
-                        summary=summary_text,
-                        detail={
-                            "decision": "proceed",
-                            "note": "Agent machine mode bypassed confirmation.",
-                            "variant": variant or "approval",
-                            "decision_options": decision_options,
-                        },
-                        waiting_for_approval=False,
-                    )
-                    continue
-                update_node_state(
-                    run_id,
-                    node_id,
-                    status="waiting_human",
-                    summary=title,
-                    detail={"variant": variant or "approval", "decision_options": decision_options},
-                    waiting_for_approval=True,
-                )
-                human_response = wait_for_human_response(
-                    run_id,
-                    prompt,
-                    source="workflow_human_node",
-                    metadata={
-                        "node_id": node_id,
-                        "node_label": label,
-                        "variant": variant or "approval",
-                        "decision_options": decision_options,
-                    },
-                )
-                response_decision = str(human_response.get("decision") or "").strip().lower()
-                response_raw_decision = str(human_response.get("raw_decision") or "").strip()
-                response_note = str(human_response.get("note") or "").strip()
-                if variant == "approval":
-                    if not bool(human_response.get("approved")):
-                        raise RuntimeError(f"Workflow stopped at human node '{label}'.")
-                    current_text = f"{title}: approved"
-                    summary_text = f"{title}: approved"
-                    output_preview = _node_preview_text(current_text)
-                else:
-                    reply_text = response_note or response_raw_decision or response_decision
-                    if not reply_text:
-                        raise RuntimeError(f"Human node '{label}' did not receive a usable response.")
-                    current_text = reply_text
-                    summary_text = (
-                        f"Reply received: {title}"
-                        if variant == "wait_for_reply"
-                        else f"Review received: {title}"
-                    )
-                    output_preview = _node_preview_text(reply_text)
-                state["last_text"] = current_text
-                state["last_data"] = {
-                    "node_id": node_id,
-                    "node_type": node_type,
-                    "variant": variant,
-                    "decision": response_decision or None,
-                    "raw_decision": response_raw_decision or None,
-                    "note": response_note or None,
-                    "human_response": _json_safe(human_response),
-                }
-                emit_log(
-                    log_queue,
-                    "info",
-                    current_text,
-                    event="workflow_human_resolved",
-                    data={"node_id": node_id, "variant": variant or "approval", "decision": response_decision or None},
-                )
-                update_node_state(
-                    run_id,
-                    node_id,
-                    status="succeeded",
-                    finalize=True,
-                    output_preview=output_preview,
-                    summary=summary_text,
-                    detail={
-                        "decision": response_decision or None,
-                        "note": response_note or None,
-                        "variant": variant or "approval",
-                        "decision_options": decision_options,
-                    },
-                    waiting_for_approval=False,
+                current_text = run_service.execute_workflow_human_node(
+                    run_id=run_id,
+                    node_id=node_id,
+                    label=label,
+                    variant=variant,
+                    config=config,
+                    current_text=current_text,
+                    state=state,
+                    context=context,
+                    log_queue=log_queue,
+                    update_node_state_fn=update_node_state,
+                    wait_for_human_response_fn=wait_for_human_response,
+                    agent_machine_full_trust_for_context_fn=_agent_machine_full_trust_for_context,
+                    node_preview_text_fn=_node_preview_text,
+                    json_safe_fn=_json_safe,
+                    emit_log_fn=emit_log,
                 )
 
             elif node_type == "data":

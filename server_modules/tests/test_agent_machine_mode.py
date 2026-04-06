@@ -5,7 +5,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from server_modules.connectors import autopilot_runtime_exports as autopilot_connectors
-from server_modules import operator_chat, runtime_config, runtime_runs_api, runs_core, runs_engine
+from server_modules import direct_chat_runtime_exports as operator_chat, runtime_config, runtime_runs_api, runs_core, runs_engine
 from server_modules.connectors import discord_connector
 from server_modules.runtime_models import RunStartRequest
 
@@ -115,7 +115,7 @@ class AgentMachineModeTests(unittest.TestCase):
             return {"reply": "ok"}
 
         with patch("server_modules.runtime_runs_api._direct_chat_session_manager_enabled", return_value=False):
-            with patch("server_modules.operator_chat.build_direct_operator_reply", side_effect=_fake_reply):
+            with patch("server_modules.direct_chat_runtime_entry_facade_service.build_direct_operator_reply", side_effect=_fake_reply):
                 payload = runtime_runs_api._build_direct_chat_event_producer(
                     current_user={"user_id": "user-123"},
                     body={},

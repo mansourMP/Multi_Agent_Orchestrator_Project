@@ -229,8 +229,8 @@ def build_imported_direct_chat_execution_services(
     session_manager_factory: Callable[[], Any],
     import_module: Callable[..., Any],
 ) -> Any:
-    operator_chat_module = import_module(
-        "server_modules.operator_chat",
+    direct_chat_module = import_module(
+        "server_modules.direct_chat_runtime_entry_facade_service",
         fromlist=["build_direct_operator_reply", "build_chat_turn_event_stream"],
     )
     return build_direct_chat_execution_services(
@@ -238,8 +238,8 @@ def build_imported_direct_chat_execution_services(
         chat_stream_key=chat_stream_key,
         session_manager_enabled=session_manager_enabled,
         session_manager_factory=session_manager_factory,
-        build_direct_operator_reply=operator_chat_module.build_direct_operator_reply,
-        build_chat_turn_event_stream=operator_chat_module.build_chat_turn_event_stream,
+        build_direct_operator_reply=direct_chat_module.build_direct_operator_reply,
+        build_chat_turn_event_stream=direct_chat_module.build_chat_turn_event_stream,
     )
 
 

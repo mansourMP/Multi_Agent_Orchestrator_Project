@@ -10,7 +10,7 @@ ROOT_DIR = Path(__file__).resolve().parents[2]
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
-OPERATOR_CHAT_PATH = ROOT_DIR / "server_modules" / "operator_chat.py"
+OPERATOR_CHAT_PATH = ROOT_DIR / "server_modules" / "direct_chat_runtime_exports.py"
 WORKER_EXECUTION_PATH = ROOT_DIR / "scripts" / "orion_local_worker_execution.py"
 
 

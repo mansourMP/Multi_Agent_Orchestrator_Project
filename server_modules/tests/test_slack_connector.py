@@ -10,7 +10,7 @@ from server_modules.connectors import slack_connector
 
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
-MODULE_PATH = ROOT_DIR / "server_modules" / "operator_chat.py"
+MODULE_PATH = ROOT_DIR / "server_modules" / "direct_chat_runtime_exports.py"
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 spec = importlib.util.spec_from_file_location("operator_chat_slack_under_test", MODULE_PATH)

@@ -29,7 +29,7 @@ from server_modules import health_core as health_core
 from server_modules import health_diagnostics as health_diagnostics
 from server_modules import connectors_core as connectors_core
 from server_modules import connectors_actions as connectors_actions
-from server_modules.operator_chat import registered_direct_chat_tool_names_for_logging
+from server_modules.direct_chat_tool_catalog_service import registered_direct_chat_tool_names_for_logging
 
 
 LOGGER = logging.getLogger(__name__)

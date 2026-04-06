@@ -40,15 +40,28 @@ async def build_direct_chat_stream_response(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     direct_turn_request = direct_resolution.turn_request
-    execution = await services.execute_agent_turn_request(
-        turn_request=direct_turn_request,
-        current_user=current_user,
-        services=services.build_turn_execution_services(
-            run_execution=services.run_execution_services(),
-            direct_chat=services.direct_chat_execution_services(),
-        ),
-        chat_body=body,
-    )
+    run_execution_services = services.run_execution_services()
+    direct_chat_execution_services = services.direct_chat_execution_services()
+    try:
+        execution = await services.execute_agent_turn_request(
+            turn_request=direct_turn_request,
+            current_user=current_user,
+            run_execution_services=run_execution_services,
+            direct_chat_services=direct_chat_execution_services,
+            chat_body=body,
+        )
+    except TypeError as exc:
+        if "unexpected keyword argument 'run_execution_services'" not in str(exc):
+            raise
+        execution = await services.execute_agent_turn_request(
+            turn_request=direct_turn_request,
+            current_user=current_user,
+            services=services.build_turn_execution_services(
+                run_execution=run_execution_services,
+                direct_chat=direct_chat_execution_services,
+            ),
+            chat_body=body,
+        )
     workspace_id = str(execution.get("workspace_id") or direct_resolution.workspace_id or "default").strip() or "default"
     session_key = str(execution.get("session_key") or "").strip()
     thread_id = str(execution.get("thread_id") or direct_resolution.thread_id or "direct-chat").strip() or "direct-chat"

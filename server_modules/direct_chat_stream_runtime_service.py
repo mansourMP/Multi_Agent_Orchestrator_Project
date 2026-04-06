@@ -230,7 +230,7 @@ def build_imported_direct_chat_execution_services(
     import_module: Callable[..., Any],
 ) -> Any:
     direct_chat_module = import_module(
-        "server_modules.direct_chat_runtime_entry_facade_service",
+        "server_modules.direct_chat_runtime_exports",
         fromlist=["build_direct_operator_reply", "build_chat_turn_event_stream"],
     )
     return build_direct_chat_execution_services(

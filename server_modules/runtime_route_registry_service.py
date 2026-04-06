@@ -3,6 +3,8 @@ from __future__ import annotations
 import uuid
 from typing import Any, Optional
 
+from fastapi import Request
+
 from server_modules.direct_chat_stream_response_service import build_direct_chat_stream_response as _build_direct_chat_stream_response
 from server_modules import runtime_heartbeat_service as _runtime_heartbeat_service
 from server_modules import runtime_history_service as _runtime_history_service
@@ -104,7 +106,7 @@ def register_runtime_run_routes(
 
     @app.post("/chat/respond", dependencies=[depends(require_api_key)])
     async def respond_chat(
-        request: request_class,
+        request: Request,
         current_user=depends(require_api_key),
     ):
         refresh_server_exports()
@@ -151,7 +153,7 @@ def register_runtime_run_routes(
     @app.post("/workspace/context-files/{filename}", dependencies=[depends(require_api_key)])
     async def update_workspace_context_file(
         filename: str,
-        request: request_class,
+        request: Request,
         current_user=depends(require_api_key),
     ):
         refresh_server_exports()
@@ -180,7 +182,7 @@ def register_runtime_run_routes(
 
     @app.post("/webhooks/register", dependencies=[depends(require_api_key)])
     async def register_webhook_trigger(
-        request: request_class,
+        request: Request,
         current_user=depends(require_api_key),
     ):
         refresh_server_exports()
@@ -199,7 +201,7 @@ def register_runtime_run_routes(
     @app.post("/webhooks/ingest/{workspace_id}", dependencies=[depends(require_api_key)])
     async def ingest_webhook(
         workspace_id: str,
-        request: request_class,
+        request: Request,
         current_user=depends(require_api_key),
     ):
         refresh_server_exports()

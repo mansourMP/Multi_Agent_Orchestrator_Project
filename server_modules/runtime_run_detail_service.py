@@ -3,6 +3,197 @@ from __future__ import annotations
 from typing import Any, Callable, Optional
 
 
+FAILURE_STATUSES = {"failed", "error", "stopped", "timeout", "cancelled"}
+TERMINAL_STATUSES = FAILURE_STATUSES | {"completed", "success"}
+
+
+def _text(value: Any) -> str:
+    return str(value or "").strip()
+
+
+def _normalized_status(value: Any) -> str:
+    return _text(value).lower()
+
+
+def _latest_event(source: dict[str, Any], *event_names: str) -> Optional[dict[str, Any]]:
+    events = source.get("events") if isinstance(source.get("events"), list) else []
+    wanted = {_normalized_status(item) for item in event_names if _text(item)}
+    for item in reversed(events):
+        if not isinstance(item, dict):
+            continue
+        if _normalized_status(item.get("event")) in wanted:
+            return item
+    return None
+
+
+def _latest_error_like_event(source: dict[str, Any]) -> Optional[dict[str, Any]]:
+    events = source.get("events") if isinstance(source.get("events"), list) else []
+    for item in reversed(events):
+        if not isinstance(item, dict):
+            continue
+        event_name = _normalized_status(item.get("event"))
+        level = _normalized_status(item.get("level"))
+        if level == "error" or event_name in {
+            "run_error",
+            "timeout",
+            "run_stopped",
+            "approval_timeout",
+            "runtime_restart_interrupted_run",
+            "memory_context_error",
+            "memory_write_error",
+        }:
+            return item
+    return None
+
+
+def build_run_diagnostics(
+    *,
+    source: dict[str, Any],
+    metadata: dict[str, Any],
+    pending_confirmation: Any,
+    archived: bool,
+) -> dict[str, Any]:
+    status = _normalized_status(source.get("status"))
+    schedule_id = _text(source.get("schedule_id") or metadata.get("schedule_id")) or None
+    scheduled = bool(source.get("scheduled") or metadata.get("scheduled") or schedule_id)
+    selected_target = _normalized_status(
+        source.get("execution_target_selected")
+        or metadata.get("execution_target_selected")
+        or source.get("execution_target")
+        or metadata.get("execution_target")
+    ) or None
+    waiting_for_runtime = bool(
+        source.get("execution_target_waiting_for_runtime")
+        or metadata.get("execution_target_waiting_for_runtime")
+    )
+    waiting_for_capacity = bool(
+        source.get("execution_target_waiting_for_capacity")
+        or metadata.get("execution_target_waiting_for_capacity")
+    )
+    route_reason = _text(source.get("execution_target_reason") or metadata.get("execution_target_reason")) or None
+    route_fallback = _text(source.get("execution_target_fallback") or metadata.get("execution_target_fallback")) or None
+    local_last_heartbeat_at = source.get("local_last_heartbeat_at")
+    browser_resume_supported = bool(
+        source.get("browser_resume_supported")
+        or metadata.get("browser_resume_supported")
+    )
+    resumed_after_restart = bool(source.get("resume_after_confirmation_scheduled"))
+    retry_of_run_id = _text(source.get("retry_of_run_id") or metadata.get("retry_of_run_id")) or None
+    retry_root_run_id = _text(source.get("retry_root_run_id") or metadata.get("retry_root_run_id")) or None
+    retry_sequence = source.get("retry_sequence") if isinstance(source.get("retry_sequence"), int) else metadata.get("retry_sequence")
+
+    failure_event = _latest_event(
+        source,
+        "run_error",
+        "timeout",
+        "run_stopped",
+        "approval_timeout",
+        "runtime_restart_interrupted_run",
+    ) or _latest_error_like_event(source)
+    failure_message = _text(
+        (failure_event or {}).get("message")
+        or source.get("result")
+        or source.get("result_summary")
+    ) or None
+    failure_event_name = _normalized_status((failure_event or {}).get("event")) or None
+
+    category = "active"
+    headline = "Run in progress"
+    summary = route_reason or "The run is still in progress."
+    next_step = None
+    blocked_on = None
+    local_status = None
+
+    if pending_confirmation and isinstance(pending_confirmation, dict) and _text(pending_confirmation.get("approval_id")):
+        category = "approval_wait"
+        headline = "Waiting for confirmation"
+        summary = _text(pending_confirmation.get("prompt")) or "This run is paused until a decision is made."
+        next_step = "Approve or decline the pending action so the run can continue."
+        blocked_on = "approval"
+    elif waiting_for_capacity:
+        category = "local_capacity_wait"
+        headline = "Waiting for local machine capacity"
+        summary = route_reason or "A compatible local machine is online, but all capable machines are currently busy."
+        next_step = "Keep a capable local machine online and wait for capacity to free up."
+        blocked_on = "local_capacity"
+        local_status = "waiting_for_capacity"
+    elif waiting_for_runtime:
+        category = "local_runtime_wait"
+        headline = "Waiting for the right local machine"
+        summary = route_reason or "This run requires a local machine with capabilities that are not online yet."
+        next_step = "Bring a capable local machine online or adjust future execution targeting."
+        blocked_on = "local_runtime"
+        local_status = "waiting_for_runtime"
+    elif resumed_after_restart and status == "waiting_for_input":
+        category = "resume_pending"
+        headline = "Resume queued after recovery"
+        summary = (
+            "This run was restored after a restart and is queued to resume from its saved checkpoint."
+            if browser_resume_supported
+            else "This run was restored after a restart and is queued to resume."
+        )
+        next_step = "Wait for the runtime or local companion to resume the run."
+        blocked_on = "resume"
+        local_status = "resuming_after_restart"
+    elif status == "queued_local":
+        category = "local_queue"
+        headline = "Queued for local machine execution"
+        summary = route_reason or "This run is queued for the local companion."
+        next_step = "Keep the local companion online so the run can be claimed."
+        local_status = "queued_local"
+    elif status == "running_local":
+        category = "local_running"
+        headline = "Running on a local machine"
+        summary = route_reason or "This run is currently executing on the local companion."
+        next_step = "Monitor artifacts, workflow progress, or confirmations if the run pauses."
+        local_status = "running_local"
+    elif status in FAILURE_STATUSES:
+        category = "failure"
+        headline = "Run failed"
+        summary = failure_message or "This run stopped before it completed."
+        if failure_event_name == "approval_timeout":
+            next_step = "Re-run the task and resolve the approval before it expires."
+            blocked_on = "approval_timeout"
+        elif failure_event_name == "runtime_restart_interrupted_run":
+            next_step = "Re-run the task now that the runtime is healthy again."
+            blocked_on = "runtime_restart"
+        else:
+            next_step = "Open inspect, review the latest timeline and logs, then retry when the issue is understood."
+    elif status in {"completed", "success"}:
+        category = "completed"
+        headline = "Run completed"
+        summary = _text(source.get("result") or source.get("result_summary")) or "The run completed successfully."
+        next_step = "Review the result, artifacts, or workflow trace if you need more detail."
+
+    if scheduled and category not in {"failure", "completed"}:
+        summary = f"{summary} Triggered by schedule." if summary else "Triggered by schedule."
+
+    if route_fallback and category != "failure":
+        summary = f"{summary} Fallback applied: {route_fallback}.".strip()
+
+    return {
+        "category": category,
+        "headline": headline,
+        "summary": summary,
+        "next_step": next_step,
+        "blocked_on": blocked_on,
+        "failure_message": failure_message,
+        "failure_event": failure_event_name,
+        "scheduled": scheduled,
+        "schedule_id": schedule_id,
+        "selected_target": selected_target,
+        "local_target": selected_target in {"local", "local_companion"},
+        "local_status": local_status,
+        "local_last_heartbeat_at": local_last_heartbeat_at,
+        "browser_resume_supported": browser_resume_supported,
+        "resumed_after_restart": resumed_after_restart,
+        "retry_of_run_id": retry_of_run_id,
+        "retry_root_run_id": retry_root_run_id,
+        "retry_sequence": retry_sequence if isinstance(retry_sequence, int) else None,
+        "archived": bool(archived),
+    }
+
+
 def can_view_sensitive_run_payload(user: Optional[dict]) -> bool:
     if not isinstance(user, dict):
         return False
@@ -143,6 +334,12 @@ def build_archived_run_detail_response(
         "execution_target_preferred_runtime_label": snapshot.get("execution_target_preferred_runtime_label"),
         "execution_target_preferred_runtime_reason": snapshot.get("execution_target_preferred_runtime_reason"),
         "route": _route_payload(snapshot),
+        "diagnostics": build_run_diagnostics(
+            source=snapshot,
+            metadata=metadata,
+            pending_confirmation=snapshot.get("pending_confirmation") or snapshot.get("pending_approval"),
+            archived=True,
+        ),
         "archived": True,
     }
     if snapshot.get("fallback_reason"):
@@ -238,6 +435,21 @@ def build_live_run_detail_response(
         "execution_target_preferred_runtime_label": metadata.get("execution_target_preferred_runtime_label"),
         "execution_target_preferred_runtime_reason": metadata.get("execution_target_preferred_runtime_reason"),
         "route": _route_payload(metadata),
+        "diagnostics": build_run_diagnostics(
+            source={
+                **snapshot,
+                "status": run.get("status", "unknown"),
+                "result": run.get("result"),
+                "local_last_heartbeat_at": run.get("local_last_heartbeat_at"),
+                "resume_after_confirmation_scheduled": bool(run.get("_resume_after_confirmation_scheduled")),
+                "browser_resume_supported": metadata.get("browser_resume_supported"),
+                "scheduled": metadata.get("scheduled"),
+                "schedule_id": metadata.get("schedule_id"),
+            },
+            metadata=metadata,
+            pending_confirmation=pending_confirmation,
+            archived=False,
+        ),
         "archived": False,
     }
     if snapshot.get("fallback_reason"):

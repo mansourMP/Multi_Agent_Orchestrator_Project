@@ -392,6 +392,8 @@ def _serialize_run_snapshot(run_id: str, run: Dict[str, Any]) -> Dict[str, Any]:
         "retry_root_run_id": metadata.get("retry_root_run_id"),
         "retry_sequence": metadata.get("retry_sequence"),
         "retry_count": metadata.get("retry_count"),
+        "scheduled": metadata.get("scheduled"),
+        "schedule_id": metadata.get("schedule_id"),
         "max_iterations": metadata.get("max_iterations"),
         "trust_mode": metadata.get("trust_mode"),
         "execution_target_requested": metadata.get("execution_target_requested"),
@@ -443,6 +445,10 @@ def _serialize_run_snapshot(run_id: str, run: Dict[str, Any]) -> Dict[str, Any]:
         "browser_checkpoint": run.get("browser_checkpoint") if isinstance(run.get("browser_checkpoint"), dict) else None,
         "browser_introspection": browser_introspection,
         "browser_execution_binding": metadata.get("browser_execution_binding") if isinstance(metadata.get("browser_execution_binding"), dict) else None,
+        "browser_resume_supported": metadata.get("browser_resume_supported"),
+        "local_claimed_at": run.get("local_claimed_at"),
+        "local_last_heartbeat_at": run.get("local_last_heartbeat_at"),
+        "resume_after_confirmation_scheduled": bool(run.get("_resume_after_confirmation_scheduled")),
         "events": trimmed_events,
     }
     if provider_model_truth.get("fallback_reason"):

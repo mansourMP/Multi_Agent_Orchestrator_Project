@@ -68,6 +68,28 @@ type RunNodeStatesPayload = {
   items?: RunNodeState[] | null;
 };
 
+type RunDiagnostics = {
+  category?: string | null;
+  headline?: string | null;
+  summary?: string | null;
+  next_step?: string | null;
+  blocked_on?: string | null;
+  failure_message?: string | null;
+  failure_event?: string | null;
+  scheduled?: boolean;
+  schedule_id?: string | null;
+  selected_target?: string | null;
+  local_target?: boolean;
+  local_status?: string | null;
+  local_last_heartbeat_at?: string | null;
+  browser_resume_supported?: boolean | null;
+  resumed_after_restart?: boolean;
+  retry_of_run_id?: string | null;
+  retry_root_run_id?: string | null;
+  retry_sequence?: number | null;
+  archived?: boolean;
+} | null;
+
 type RunDetailPayload = {
   run_id?: string;
   status?: string;
@@ -153,6 +175,7 @@ type RunDetailPayload = {
   pending_confirmation?: ApprovalState;
   /** @deprecated compatibility alias; use `pending_confirmation`. */
   pending_approval?: ApprovalState;
+  diagnostics?: RunDiagnostics;
   result_data?: unknown;
   node_states?: RunNodeStatesPayload | null;
 };
@@ -261,11 +284,35 @@ function formatExecutionTargetLabel(value: string | null | undefined): string {
   return 'Automatic';
 }
 
+function formatDiagnosticCategoryLabel(value: string | null | undefined): string {
+  const normalized = String(value || '').trim().toLowerCase();
+  if (!normalized) return 'Run diagnosis';
+  if (normalized === 'approval_wait') return 'Blocked by confirmation';
+  if (normalized === 'local_runtime_wait') return 'Waiting for machine capabilities';
+  if (normalized === 'local_capacity_wait') return 'Waiting for machine capacity';
+  if (normalized === 'resume_pending') return 'Queued to resume';
+  if (normalized === 'local_queue') return 'Queued for local machine';
+  if (normalized === 'local_running') return 'Running on local machine';
+  if (normalized === 'failure') return 'Failure diagnosis';
+  if (normalized === 'completed') return 'Completion summary';
+  return normalized.replace(/[_-]+/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
+function formatLocalExecutionStatus(value: string | null | undefined): string {
+  const normalized = String(value || '').trim().toLowerCase();
+  if (!normalized) return 'Not recorded';
+  if (normalized === 'waiting_for_runtime') return 'Waiting for the right machine';
+  if (normalized === 'waiting_for_capacity') return 'Waiting for machine capacity';
+  if (normalized === 'resuming_after_restart') return 'Queued to resume after restart';
+  if (normalized === 'queued_local') return 'Queued for local machine';
+  if (normalized === 'running_local') return 'Running on local machine';
+  return normalized.replace(/_/g, ' ');
+}
+
 function formatStatusLabel(
   detail: RunDetailPayload | null,
   historyItem: HistoryItem | null,
   replayPayload: ReplayPayload['item'],
-  liveEvents: ReplayEvent[],
 ): { label: string; toolLabel: string | null; icon: typeof Bot } {
   const status = String(detail?.status || replayPayload?.status || historyItem?.status || '').toLowerCase();
   if (!status) {
@@ -293,9 +340,10 @@ export default function RunDetailPage() {
   const [historyItem, setHistoryItem] = useState<HistoryItem | null>(null);
   const [runDetail, setRunDetail] = useState<RunDetailPayload | null>(null);
   const [replayItem, setReplayItem] = useState<ReplayPayload['item']>(null);
-  const [liveEvents, setLiveEvents] = useState<ReplayEvent[]>([]);
+  const [, setLiveEvents] = useState<ReplayEvent[]>([]);
   const [approvalBusy, setApprovalBusy] = useState<'Proceed' | 'Hold' | null>(null);
   const pendingConfirmation = runDetail?.pending_confirmation ?? runDetail?.pending_approval ?? null;
+  const runDiagnostics = runDetail?.diagnostics ?? null;
   const detailContract = runDetail?.run_detail_contract ?? null;
   const contractProviderModel = detailContract?.provider_model ?? null;
   const contractConnectorMutation = detailContract?.connector_mutation ?? null;
@@ -428,8 +476,8 @@ export default function RunDetailPage() {
   );
 
   const currentStatus = useMemo(
-    () => formatStatusLabel(runDetail, historyItem, replayItem, liveEvents),
-    [historyItem, liveEvents, replayItem, runDetail],
+    () => formatStatusLabel(runDetail, historyItem, replayItem),
+    [historyItem, replayItem, runDetail],
   );
   const effectiveStatus = useMemo(
     () => String(runDetail?.status || replayItem?.status || historyItem?.status || '').trim().toLowerCase(),
@@ -561,6 +609,57 @@ export default function RunDetailPage() {
       finalNode,
     };
   }, [runDetail?.node_states]);
+  const diagnosisRows = useMemo(() => {
+    if (!runDiagnostics) return [];
+    const rows: Array<{ label: string; value: string }> = [];
+    if (runDiagnostics.blocked_on) {
+      rows.push({
+        label: 'Blocked on',
+        value: formatDiagnosticCategoryLabel(runDiagnostics.category),
+      });
+    }
+    if (runDiagnostics.local_target || runDiagnostics.local_status) {
+      rows.push({
+        label: 'Local execution',
+        value: formatLocalExecutionStatus(runDiagnostics.local_status),
+      });
+    }
+    if (runDiagnostics.local_last_heartbeat_at) {
+      rows.push({
+        label: 'Last machine heartbeat',
+        value: formatDateTime(runDiagnostics.local_last_heartbeat_at),
+      });
+    }
+    if (runDiagnostics.scheduled) {
+      rows.push({
+        label: 'Started by schedule',
+        value: runDiagnostics.schedule_id || 'Yes',
+      });
+    }
+    if (typeof runDiagnostics.retry_sequence === 'number' || runDiagnostics.retry_of_run_id) {
+      rows.push({
+        label: 'Retry lineage',
+        value: runDiagnostics.retry_of_run_id
+          ? `Retry ${Math.max(1, Number(runDiagnostics.retry_sequence || 1))} of ${runDiagnostics.retry_of_run_id}`
+          : `Retry ${Math.max(1, Number(runDiagnostics.retry_sequence || 1))}`,
+      });
+    }
+    if (runDiagnostics.resumed_after_restart) {
+      rows.push({
+        label: 'Recovery',
+        value: runDiagnostics.browser_resume_supported
+          ? 'Resume queued from saved checkpoint'
+          : 'Resume queued after runtime restart',
+      });
+    }
+    if (runDiagnostics.failure_event) {
+      rows.push({
+        label: 'Failure source',
+        value: runDiagnostics.failure_event.replace(/_/g, ' '),
+      });
+    }
+    return rows;
+  }, [runDiagnostics]);
   const plainLanguageSummary = useMemo(() => {
     if (executionTargetWaitingForCapacity) {
       return compactText(
@@ -718,7 +817,34 @@ export default function RunDetailPage() {
               ) : null}
             </div>
 
-            <div className="hekor-run-summary-grid">
+              <div className="hekor-run-summary-grid">
+              <div className="orion-panel muted">
+                <div className="orion-panel-title">Diagnosis</div>
+                <div className="orion-panel-copy">
+                  {compactText(
+                    runDiagnostics?.headline || runDiagnostics?.summary,
+                    'The platform has not recorded a diagnosis summary for this run yet.',
+                    180,
+                  )}
+                </div>
+                {runDiagnostics?.summary && runDiagnostics.summary !== runDiagnostics.headline ? (
+                  <div className="hekor-run-route-note">{compactText(runDiagnostics.summary, '', 180)}</div>
+                ) : null}
+                {runDiagnostics?.next_step ? (
+                  <div className="hekor-run-route-note">Next step: {compactText(runDiagnostics.next_step, '', 180)}</div>
+                ) : null}
+                {diagnosisRows.length > 0 ? (
+                  <div className="hekor-run-info-list" style={{ marginTop: 10 }}>
+                    {diagnosisRows.map((item) => (
+                      <div key={`diagnosis:${item.label}`} className="hekor-run-info-row">
+                        <span>{item.label}</span>
+                        <strong>{item.value}</strong>
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
+
               <div className="orion-panel muted">
                 <div className="orion-panel-title">What happened</div>
                 <div className="orion-panel-copy">{plainLanguageSummary}</div>

@@ -137,6 +137,28 @@ type RunNodeStatesPayload = {
   items?: RunNodeState[] | null;
 };
 
+type RunDiagnostics = {
+  category?: string | null;
+  headline?: string | null;
+  summary?: string | null;
+  next_step?: string | null;
+  blocked_on?: string | null;
+  failure_message?: string | null;
+  failure_event?: string | null;
+  scheduled?: boolean;
+  schedule_id?: string | null;
+  selected_target?: string | null;
+  local_target?: boolean;
+  local_status?: string | null;
+  local_last_heartbeat_at?: string | null;
+  browser_resume_supported?: boolean | null;
+  resumed_after_restart?: boolean;
+  retry_of_run_id?: string | null;
+  retry_root_run_id?: string | null;
+  retry_sequence?: number | null;
+  archived?: boolean;
+} | null;
+
 type RunDetailPayload = {
   run_id?: string;
   status?: string;
@@ -271,6 +293,7 @@ type RunDetailPayload = {
       value?: string | null;
     }> | null;
   } | null;
+  diagnostics?: RunDiagnostics;
   node_states?: RunNodeStatesPayload | null;
 };
 
@@ -463,6 +486,31 @@ function formatApprovalDecisionLabel(value?: string | null): string {
   return normalized.replace(/_/g, ' ');
 }
 
+function formatRunDiagnosisCategory(value?: string | null): string {
+  const normalized = String(value || '').trim().toLowerCase();
+  if (!normalized) return 'Run diagnosis';
+  if (normalized === 'approval_wait') return 'Blocked by confirmation';
+  if (normalized === 'local_runtime_wait') return 'Waiting for machine capabilities';
+  if (normalized === 'local_capacity_wait') return 'Waiting for machine capacity';
+  if (normalized === 'resume_pending') return 'Queued to resume';
+  if (normalized === 'local_queue') return 'Queued for local machine';
+  if (normalized === 'local_running') return 'Running on local machine';
+  if (normalized === 'failure') return 'Failure diagnosis';
+  if (normalized === 'completed') return 'Completion summary';
+  return normalized.replace(/_/g, ' ');
+}
+
+function formatRunDiagnosisLocalStatus(value?: string | null): string {
+  const normalized = String(value || '').trim().toLowerCase();
+  if (!normalized) return '--';
+  if (normalized === 'waiting_for_runtime') return 'Waiting for the right machine';
+  if (normalized === 'waiting_for_capacity') return 'Waiting for machine capacity';
+  if (normalized === 'resuming_after_restart') return 'Queued to resume after restart';
+  if (normalized === 'queued_local') return 'Queued for local machine';
+  if (normalized === 'running_local') return 'Running on local machine';
+  return normalized.replace(/_/g, ' ');
+}
+
 function formatWorkflowNodeKind(type?: string | null, variant?: string | null): string {
   const family = String(type || '').trim().toLowerCase();
   const kind = String(variant || '').trim().toLowerCase();
@@ -564,35 +612,54 @@ function isLocalFileTarget(value?: string | null): boolean {
 }
 
 function ArtifactImagePreview({ path, alt }: { path: string; alt: string }) {
-  const [objectUrl, setObjectUrl] = useState('');
+  const normalizedPath = String(path || '').trim();
+  const [blobPreview, setBlobPreview] = useState<{ path: string; url: string }>({ path: '', url: '' });
 
   useEffect(() => {
-    const normalized = String(path || '').trim();
-    if (!normalized) {
-      setObjectUrl('');
-      return;
-    }
-    if (isHttpTarget(normalized)) {
-      setObjectUrl(normalized);
+    if (!normalizedPath || isHttpTarget(normalizedPath)) {
       return;
     }
     let active = true;
     let nextObjectUrl = '';
-    setObjectUrl('');
-    void fetchRuntimeArtifactBlob(normalized)
+    void fetchRuntimeArtifactBlob(normalizedPath)
       .then((blob) => {
         nextObjectUrl = URL.createObjectURL(blob);
-        if (active) setObjectUrl(nextObjectUrl);
+        if (active) {
+          setBlobPreview((current) => {
+            if (current.url && current.url !== nextObjectUrl) URL.revokeObjectURL(current.url);
+            return { path: normalizedPath, url: nextObjectUrl };
+          });
+        }
         else URL.revokeObjectURL(nextObjectUrl);
       })
       .catch(() => {
-        if (active) setObjectUrl('');
+        if (active) {
+          setBlobPreview((current) => {
+            if (current.url) URL.revokeObjectURL(current.url);
+            return { path: normalizedPath, url: '' };
+          });
+        }
       });
     return () => {
       active = false;
-      if (nextObjectUrl) URL.revokeObjectURL(nextObjectUrl);
+      if (nextObjectUrl) {
+        setBlobPreview((current) => (
+          current.url === nextObjectUrl
+            ? { path: normalizedPath, url: '' }
+            : current
+        ));
+        URL.revokeObjectURL(nextObjectUrl);
+      }
     };
-  }, [path]);
+  }, [normalizedPath]);
+
+  const objectUrl = !normalizedPath
+    ? ''
+    : isHttpTarget(normalizedPath)
+      ? normalizedPath
+      : blobPreview.path === normalizedPath
+        ? blobPreview.url
+        : '';
 
   if (!objectUrl) {
     return (
@@ -1290,6 +1357,7 @@ export default function RunInspectPage() {
     [parentRun?.user_goal, runDetail?.context?.user_goal],
   );
   const pendingConfirmation = runDetail?.pending_confirmation ?? runDetail?.pending_approval ?? null;
+  const runDiagnostics = runDetail?.diagnostics ?? null;
   const primarySummary = useMemo(() => {
     const resultSummary = compactText(String(historyItem?.result_summary || '').trim(), '', 220);
     if (resultSummary) return resultSummary;
@@ -1325,6 +1393,57 @@ export default function RunInspectPage() {
       : 'var(--primary-base)';
   const latestApproval = approvalAudit[0] ?? null;
   const latestArtifact = deliverableArtifacts[0] || screenshotArtifacts[0] || artifacts[0] || null;
+  const diagnosisRows = useMemo(() => {
+    if (!runDiagnostics) return [];
+    const rows: Array<{ label: string; value: string }> = [];
+    if (runDiagnostics.blocked_on) {
+      rows.push({
+        label: 'Blocked on',
+        value: formatRunDiagnosisCategory(runDiagnostics.category),
+      });
+    }
+    if (runDiagnostics.local_target || runDiagnostics.local_status) {
+      rows.push({
+        label: 'Local execution',
+        value: formatRunDiagnosisLocalStatus(runDiagnostics.local_status),
+      });
+    }
+    if (runDiagnostics.local_last_heartbeat_at) {
+      rows.push({
+        label: 'Last machine heartbeat',
+        value: fmtTime(runDiagnostics.local_last_heartbeat_at),
+      });
+    }
+    if (runDiagnostics.scheduled) {
+      rows.push({
+        label: 'Started by schedule',
+        value: runDiagnostics.schedule_id || 'Yes',
+      });
+    }
+    if (typeof runDiagnostics.retry_sequence === 'number' || runDiagnostics.retry_of_run_id) {
+      rows.push({
+        label: 'Retry lineage',
+        value: runDiagnostics.retry_of_run_id
+          ? `Retry ${Math.max(1, Number(runDiagnostics.retry_sequence || 1))} of ${runDiagnostics.retry_of_run_id}`
+          : `Retry ${Math.max(1, Number(runDiagnostics.retry_sequence || 1))}`,
+      });
+    }
+    if (runDiagnostics.resumed_after_restart) {
+      rows.push({
+        label: 'Recovery',
+        value: runDiagnostics.browser_resume_supported
+          ? 'Resume queued from saved checkpoint'
+          : 'Resume queued after runtime restart',
+      });
+    }
+    if (runDiagnostics.failure_event) {
+      rows.push({
+        label: 'Failure source',
+        value: runDiagnostics.failure_event.replace(/_/g, ' '),
+      });
+    }
+    return rows;
+  }, [runDiagnostics]);
   const runtimePolicyNotes = useMemo(() => {
     const notes: Array<{ label: string; value: string; tone?: 'default' | 'warning' }> = [];
     if (runSkillSummary.scope) notes.push({ label: 'Skill scope', value: runSkillSummary.scope });
@@ -1661,6 +1780,34 @@ export default function RunInspectPage() {
                   Go to Confirmation Queue
                 </Link>
               </div>
+            </article>
+
+            <article className="orion-panel">
+              <div className="orion-panel-title">Diagnosis</div>
+              <div style={{ marginTop: 6, fontSize: 17, fontWeight: 800, color: statusColor(runDetail?.status || historyItem?.status) }}>
+                {runDiagnostics?.headline || formatRunDiagnosisCategory(runDiagnostics?.category)}
+              </div>
+              <div style={{ marginTop: 10, fontSize: 13, lineHeight: 1.55, color: 'var(--text-secondary)' }}>
+                {compactText(
+                  runDiagnostics?.summary || runDiagnostics?.failure_message,
+                  'The runtime has not recorded a diagnosis summary for this run yet.',
+                  220,
+                )}
+              </div>
+              {runDiagnostics?.next_step ? (
+                <div style={{ marginTop: 10, fontSize: 12, color: 'var(--text-tertiary)' }}>
+                  Next step {compactText(runDiagnostics.next_step, '--', 180)}
+                </div>
+              ) : null}
+              {diagnosisRows.length > 0 ? (
+                <div style={{ marginTop: 12, display: 'grid', gap: 6, fontSize: 12, color: 'var(--text-tertiary)' }}>
+                  {diagnosisRows.map((item) => (
+                    <div key={`diagnosis:${item.label}`}>
+                      {item.label} {item.value}
+                    </div>
+                  ))}
+                </div>
+              ) : null}
             </article>
 
             <article className="orion-panel">

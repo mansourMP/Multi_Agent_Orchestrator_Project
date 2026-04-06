@@ -36,6 +36,7 @@ class RuntimeRunDetailServiceTests(unittest.TestCase):
                 "execution_target_requested": "cloud",
                 "execution_target_selected": "cloud",
                 "fallback_reason": "provider_unavailable",
+                "events": [],
             },
             metadata={"agent_role": "builder"},
             include_sensitive=False,
@@ -51,6 +52,7 @@ class RuntimeRunDetailServiceTests(unittest.TestCase):
         self.assertTrue(payload["archived"])
         self.assertEqual(payload["route"]["requested"], "cloud")
         self.assertEqual(payload["fallback_reason"], "provider_unavailable")
+        self.assertEqual(payload["diagnostics"]["category"], "completed")
 
     def test_build_live_run_detail_response_uses_trimmed_memory_and_pending_confirmation(self):
         payload = runtime_run_detail_service.build_live_run_detail_response(
@@ -78,6 +80,76 @@ class RuntimeRunDetailServiceTests(unittest.TestCase):
         self.assertFalse(payload["archived"])
         self.assertEqual(payload["memory_trace"], {"trimmed": True})
         self.assertEqual(payload["pending_confirmation"]["approval_id"], "approval-1")
+        self.assertEqual(payload["diagnostics"]["category"], "approval_wait")
+
+    def test_build_live_run_detail_response_sets_local_waiting_diagnostics(self):
+        payload = runtime_run_detail_service.build_live_run_detail_response(
+            run_id="run-local-1",
+            run={
+                "status": "queued_local",
+                "local_last_heartbeat_at": "2026-04-06T09:00:00Z",
+                "tool_policy_audit": [],
+            },
+            snapshot={
+                "status": "queued_local",
+                "events": [],
+                "retry_sequence": 2,
+                "retry_of_run_id": "run-root-1",
+            },
+            metadata={
+                "owner_user_id": "user-1",
+                "execution_target_selected": "local_companion",
+                "execution_target_waiting_for_capacity": True,
+                "execution_target_reason": "Local worker is online but busy.",
+                "scheduled": True,
+                "schedule_id": "schedule-1",
+            },
+            include_sensitive=True,
+            safe_context={"workspace_id": "default"},
+            parent_run=None,
+            child_runs=[],
+            delegation_summary={},
+            connector_binding={},
+            limited_result_data_view_fn=lambda value: {"summary": "trimmed"},
+            limited_node_states_view_fn=lambda value: {"trimmed": True},
+            trim_memory_trace_fn=lambda value: {"trimmed": bool(value)},
+            get_pending_confirmation_fn=lambda run: None,
+        )
+
+        self.assertEqual(payload["diagnostics"]["category"], "local_capacity_wait")
+        self.assertEqual(payload["diagnostics"]["blocked_on"], "local_capacity")
+        self.assertTrue(payload["diagnostics"]["scheduled"])
+        self.assertEqual(payload["diagnostics"]["schedule_id"], "schedule-1")
+        self.assertEqual(payload["diagnostics"]["retry_sequence"], 2)
+        self.assertEqual(payload["diagnostics"]["local_last_heartbeat_at"], "2026-04-06T09:00:00Z")
+
+    def test_build_archived_run_detail_response_sets_failure_diagnostics(self):
+        payload = runtime_run_detail_service.build_archived_run_detail_response(
+            run_id="run-failed-1",
+            snapshot={
+                "status": "failed",
+                "result_summary": "Provider authentication failed.",
+                "scheduled": True,
+                "schedule_id": "schedule-nightly",
+                "events": [
+                    {"event": "run_error", "message": "Provider authentication failed."},
+                ],
+            },
+            metadata={"agent_role": "builder"},
+            include_sensitive=False,
+            safe_context={"workspace_id": "default"},
+            parent_run=None,
+            child_runs=[],
+            delegation_summary={},
+            connector_binding={},
+            limited_result_data_view_fn=lambda value: {"summary": "trimmed"},
+            limited_node_states_view_fn=lambda value: {"trimmed": True},
+        )
+
+        self.assertEqual(payload["diagnostics"]["category"], "failure")
+        self.assertEqual(payload["diagnostics"]["failure_event"], "run_error")
+        self.assertEqual(payload["diagnostics"]["failure_message"], "Provider authentication failed.")
+        self.assertTrue(payload["diagnostics"]["scheduled"])
 
 
 if __name__ == "__main__":

@@ -16,6 +16,7 @@ class RunsCoreRunServiceTests(unittest.TestCase):
         self.assertIs(kwargs["load_live_runtime_state_fn"], runs_core._load_live_runtime_state)
         self.assertIs(kwargs["load_schedules_fn"], runs_core._load_schedules)
         self.assertEqual(kwargs["scheduler_enabled"], runs_core.ORION_SCHEDULER_ENABLED)
+        self.assertEqual(kwargs["local_runtime_watchdog_enabled"], runs_core.ORION_LOCAL_COMPANION_ENABLED)
 
     def test_trigger_pending_heartbeat_schedules_delegates_to_run_service(self) -> None:
         with patch.object(

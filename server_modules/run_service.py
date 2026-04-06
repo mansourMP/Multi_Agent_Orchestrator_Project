@@ -1491,6 +1491,9 @@ def initialize_runtime_services(
     set_telegram_autopilot_thread_fn: Callable[[Any], Any],
     whatsapp_autopilot_enabled: bool,
     whatsapp_autopilot_activate_fn: Callable[[], Any],
+    local_runtime_watchdog_enabled: bool = False,
+    run_local_runtime_watchdog_forever_fn: Optional[Callable[[], Any]] = None,
+    set_local_runtime_watchdog_thread_fn: Optional[Callable[[Any], Any]] = None,
 ) -> None:
     if is_initialized_fn():
         return
@@ -1518,6 +1521,11 @@ def initialize_runtime_services(
     load_telegram_autopilot_state_fn()
     load_whatsapp_autopilot_state_fn()
 
+    if local_runtime_watchdog_enabled and callable(run_local_runtime_watchdog_forever_fn):
+        watchdog_thread = thread_factory(target=run_local_runtime_watchdog_forever_fn, daemon=True)
+        if callable(set_local_runtime_watchdog_thread_fn):
+            set_local_runtime_watchdog_thread_fn(watchdog_thread)
+        watchdog_thread.start()
     if scheduler_enabled:
         scheduler_thread = thread_factory(target=run_weekly_scheduler_forever_fn, daemon=True)
         scheduler_thread.start()
@@ -1528,6 +1536,62 @@ def initialize_runtime_services(
     if whatsapp_autopilot_enabled:
         whatsapp_autopilot_activate_fn()
     mark_initialized_fn()
+
+
+def run_local_runtime_watchdog_pass(
+    *,
+    cleanup_stale_local_claims_fn: Callable[[], Any],
+    update_watchdog_status_fn: Callable[..., Any],
+    utc_now_iso_fn: Callable[[], str],
+    interval_seconds: int,
+) -> Dict[str, Any]:
+    checked_at = utc_now_iso_fn()
+    cleaned_run_ids: List[str] = []
+    try:
+        result = cleanup_stale_local_claims_fn()
+        cleaned_run_ids = [str(item) for item in (result or []) if str(item or "").strip()]
+        summary = (
+            f"Recovered {len(cleaned_run_ids)} stale local claim{'s' if len(cleaned_run_ids) != 1 else ''}."
+            if cleaned_run_ids
+            else "No stale local claims found."
+        )
+        status = "ok"
+    except Exception as exc:
+        cleaned_run_ids = []
+        summary = f"Local runtime watchdog failed: {exc}"
+        status = "error"
+    update_watchdog_status_fn(
+        checked_at=checked_at,
+        status=status,
+        summary=summary,
+        cleaned_run_ids=cleaned_run_ids,
+        interval_seconds=interval_seconds,
+    )
+    return {
+        "checked_at": checked_at,
+        "status": status,
+        "summary": summary,
+        "cleaned_run_ids": cleaned_run_ids,
+    }
+
+
+def run_local_runtime_watchdog_forever(
+    *,
+    cleanup_stale_local_claims_fn: Callable[[], Any],
+    update_watchdog_status_fn: Callable[..., Any],
+    utc_now_iso_fn: Callable[[], str],
+    interval_seconds: int = 5,
+    sleep_fn: Callable[[float], Any] = time.sleep,
+) -> None:
+    safe_interval = max(2, int(interval_seconds or 5))
+    while True:
+        run_local_runtime_watchdog_pass(
+            cleanup_stale_local_claims_fn=cleanup_stale_local_claims_fn,
+            update_watchdog_status_fn=update_watchdog_status_fn,
+            utc_now_iso_fn=utc_now_iso_fn,
+            interval_seconds=safe_interval,
+        )
+        sleep_fn(safe_interval)
 
 
 def execute_workflow_human_node(

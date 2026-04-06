@@ -112,6 +112,7 @@ from server_modules.run_service import (
     load_live_runtime_state,
     resolve_fastest_routing_context,
     refresh_parent_delegation_state,
+    run_local_runtime_watchdog_pass,
     schedule_auto_retry_for_failed_children,
     timeout_stale_delegated_child_runs,
     trigger_pending_heartbeat_schedules,
@@ -648,6 +649,9 @@ class RunServiceTests(unittest.TestCase):
             load_runtime_skills_state_fn=lambda: calls.append(("load_skills", None)),
             load_telegram_autopilot_state_fn=lambda: calls.append(("load_telegram_state", None)),
             load_whatsapp_autopilot_state_fn=lambda: calls.append(("load_whatsapp_state", None)),
+            local_runtime_watchdog_enabled=True,
+            run_local_runtime_watchdog_forever_fn=lambda: None,
+            set_local_runtime_watchdog_thread_fn=lambda thread: initialized.__setitem__("watchdog_thread", thread),
             scheduler_enabled=True,
             thread_factory=_thread_factory,
             run_weekly_scheduler_forever_fn=lambda: None,
@@ -662,9 +666,39 @@ class RunServiceTests(unittest.TestCase):
         self.assertEqual(calls[0], ("init_db", "runtime.sqlite3"))
         self.assertIn(("load_schedules", None), calls)
         self.assertIn(("activate_whatsapp", None), calls)
-        self.assertEqual(len(threads), 2)
+        self.assertEqual(len(threads), 3)
         self.assertTrue(all(thread.started for thread in threads))
-        self.assertIs(initialized["telegram_thread"], threads[1])
+        self.assertIs(initialized["watchdog_thread"], threads[0])
+        self.assertIs(initialized["telegram_thread"], threads[2])
+
+    def test_run_local_runtime_watchdog_pass_records_cleaned_run_ids(self):
+        updates = []
+
+        result = run_local_runtime_watchdog_pass(
+            cleanup_stale_local_claims_fn=lambda: ["run-1", "run-2"],
+            update_watchdog_status_fn=lambda **kwargs: updates.append(kwargs),
+            utc_now_iso_fn=lambda: "2026-04-06T12:00:00Z",
+            interval_seconds=5,
+        )
+
+        self.assertEqual(result["status"], "ok")
+        self.assertEqual(result["cleaned_run_ids"], ["run-1", "run-2"])
+        self.assertEqual(updates[0]["status"], "ok")
+        self.assertEqual(updates[0]["cleaned_run_ids"], ["run-1", "run-2"])
+
+    def test_run_local_runtime_watchdog_pass_records_failures_without_crashing(self):
+        updates = []
+
+        result = run_local_runtime_watchdog_pass(
+            cleanup_stale_local_claims_fn=lambda: (_ for _ in ()).throw(RuntimeError("lease cleanup broke")),
+            update_watchdog_status_fn=lambda **kwargs: updates.append(kwargs),
+            utc_now_iso_fn=lambda: "2026-04-06T12:00:00Z",
+            interval_seconds=5,
+        )
+
+        self.assertEqual(result["status"], "error")
+        self.assertIn("lease cleanup broke", result["summary"])
+        self.assertEqual(updates[0]["status"], "error")
 
     def test_execute_workflow_human_node_bypasses_approval_for_full_trust(self):
         updates = []

@@ -37,6 +37,7 @@ globals().update({key: value for key, value in vars(shared).items() if not key.s
 globals().update({key: value for key, value in vars(common).items() if not key.startswith("__")})
 
 _PERSISTED_TERMINAL_RUN_STATUSES = {"completed", "failed", "timeout", "stopped", "cancelled"}
+LOCAL_RUNTIME_WATCHDOG_THREAD = None
 
 
 def _get_pending_confirmation(run: Dict[str, Any]) -> Dict[str, Any]:
@@ -91,6 +92,14 @@ def _load_live_runtime_state() -> None:
         set_run_status_fn=set_run_status,
         sync_local_runtime_state_snapshot_fn=_sync_local_runtime_state_snapshot,
     )
+
+
+def _set_local_runtime_watchdog_thread(thread: Any) -> None:
+    global LOCAL_RUNTIME_WATCHDOG_THREAD
+    LOCAL_RUNTIME_WATCHDOG_THREAD = thread
+    server_module = sys.modules.get("server")
+    if server_module is not None:
+        setattr(server_module, "LOCAL_RUNTIME_WATCHDOG_THREAD", thread)
 
 def _begin_run_pending_confirmation(
     run_id: str,
@@ -391,6 +400,16 @@ def initialize_runtime_services() -> None:
 
         _local_queue.recover_orphaned_local_runs_on_startup()
 
+    def _run_local_runtime_watchdog_forever() -> None:
+        from server_modules import local_queue as _local_queue
+
+        run_service.run_local_runtime_watchdog_forever(
+            cleanup_stale_local_claims_fn=_local_queue._cleanup_stale_local_claims,
+            update_watchdog_status_fn=_local_queue._record_local_runtime_watchdog_status,
+            utc_now_iso_fn=_utc_now_iso,
+            interval_seconds=_local_queue.LOCAL_RUNTIME_WATCHDOG_INTERVAL_SECONDS,
+        )
+
     return run_service.initialize_runtime_services(
         is_initialized_fn=lambda: _runtime_services_initialized,
         mark_initialized_fn=_mark_runtime_services_initialized,
@@ -421,6 +440,9 @@ def initialize_runtime_services() -> None:
         set_telegram_autopilot_thread_fn=_set_telegram_autopilot_thread,
         whatsapp_autopilot_enabled=ORION_WHATSAPP_AUTOPILOT_ENABLED,
         whatsapp_autopilot_activate_fn=_whatsapp_autopilot_activate,
+        local_runtime_watchdog_enabled=ORION_LOCAL_COMPANION_ENABLED,
+        run_local_runtime_watchdog_forever_fn=_run_local_runtime_watchdog_forever,
+        set_local_runtime_watchdog_thread_fn=_set_local_runtime_watchdog_thread,
     )
 
 

@@ -6,6 +6,7 @@ Extracted from server.py to reduce hotspot size.
 from __future__ import annotations
 
 import hashlib
+import threading
 import uuid
 from datetime import datetime
 from typing import Any, Dict, List, Optional
@@ -17,7 +18,18 @@ from server_modules import machine_lease_service, outbox_service, worker_dispatc
 _server = None
 LOCAL_RUN_STILL_WORKING_INTERVAL_SECONDS = 15
 LOCAL_RUN_WORKER_LOST_TIMEOUT_SECONDS = 30
+LOCAL_RUNTIME_WATCHDOG_INTERVAL_SECONDS = 5
 _COLD_BOOT_RECOVERY_DONE = False
+_LOCAL_RUNTIME_WATCHDOG_LOCK = threading.Lock()
+_LOCAL_RUNTIME_WATCHDOG_STATE: Dict[str, Any] = {
+    "running": False,
+    "interval_seconds": LOCAL_RUNTIME_WATCHDOG_INTERVAL_SECONDS,
+    "last_checked_at": None,
+    "last_status": "idle",
+    "last_summary": "Local runtime watchdog not started yet.",
+    "last_cleaned_count": 0,
+    "last_cleaned_run_ids": [],
+}
 
 
 def _init():
@@ -167,6 +179,41 @@ def _persist_local_runtime_state() -> None:
         claimed_runs=claimed_runs,
         runtime_registrations=runtime_registrations,
     )
+
+
+def _record_local_runtime_watchdog_status(
+    *,
+    checked_at: str,
+    status: str,
+    summary: str,
+    cleaned_run_ids: Optional[List[str]] = None,
+    interval_seconds: Optional[int] = None,
+) -> None:
+    with _LOCAL_RUNTIME_WATCHDOG_LOCK:
+        _LOCAL_RUNTIME_WATCHDOG_STATE.update(
+            {
+                "running": True,
+                "interval_seconds": int(interval_seconds or _LOCAL_RUNTIME_WATCHDOG_STATE.get("interval_seconds") or LOCAL_RUNTIME_WATCHDOG_INTERVAL_SECONDS),
+                "last_checked_at": checked_at,
+                "last_status": str(status or "ok").strip() or "ok",
+                "last_summary": str(summary or "").strip() or "Local runtime watchdog ran.",
+                "last_cleaned_count": len(cleaned_run_ids or []),
+                "last_cleaned_run_ids": [str(item) for item in (cleaned_run_ids or []) if str(item or "").strip()],
+            }
+        )
+
+
+def local_runtime_watchdog_status_snapshot() -> Dict[str, Any]:
+    with _LOCAL_RUNTIME_WATCHDOG_LOCK:
+        return {
+            "running": bool(_LOCAL_RUNTIME_WATCHDOG_STATE.get("running")),
+            "interval_seconds": int(_LOCAL_RUNTIME_WATCHDOG_STATE.get("interval_seconds") or LOCAL_RUNTIME_WATCHDOG_INTERVAL_SECONDS),
+            "last_checked_at": _LOCAL_RUNTIME_WATCHDOG_STATE.get("last_checked_at"),
+            "last_status": _LOCAL_RUNTIME_WATCHDOG_STATE.get("last_status"),
+            "last_summary": _LOCAL_RUNTIME_WATCHDOG_STATE.get("last_summary"),
+            "last_cleaned_count": int(_LOCAL_RUNTIME_WATCHDOG_STATE.get("last_cleaned_count") or 0),
+            "last_cleaned_run_ids": list(_LOCAL_RUNTIME_WATCHDOG_STATE.get("last_cleaned_run_ids") or []),
+        }
 
 
 def _required_capabilities_for_run(run: Dict[str, Any]) -> List[str]:
@@ -752,6 +799,7 @@ def handle_get_local_workers_status() -> Dict[str, Any]:
             "pending_runs": pending_runs,
             "claimed_runs": claimed_runs,
         },
+        "watchdog": local_runtime_watchdog_status_snapshot(),
         "capability_queue": capability_queue,
         "items": items,
     }

@@ -49,12 +49,17 @@ from server_modules.run_service import (
     build_runs_delegation_runtime_preparation_services_from_namespace,
     build_runs_delegation_runtime_request_services_from_namespace,
     build_runs_delegation_result_services,
+    begin_run_pending_approval,
+    begin_run_pending_confirmation,
     build_delegated_child_run_request,
     build_delegation_summary,
     build_run_relation_summary,
     build_live_run_record,
+    clear_pending_confirmation,
+    get_pending_confirmation,
     register_live_run,
     activate_live_run,
+    set_pending_confirmation,
     transition_live_run_status,
     prepare_legacy_run_start_request,
     create_legacy_run_result_from_request,
@@ -137,6 +142,82 @@ class RunServiceTests(unittest.TestCase):
             )
         )
         self.assertFalse(is_local_runtime_run({"status": "running", "context": {"metadata": {}}}))
+
+    def test_pending_confirmation_helpers_preserve_legacy_aliases(self):
+        run = {"pending_confirmation": None, "pending_approval": {"approval_id": "legacy-1"}}
+
+        self.assertEqual(get_pending_confirmation(run)["approval_id"], "legacy-1")
+
+        set_pending_confirmation(run, {"approval_id": "approval-1"})
+
+        self.assertEqual(run["pending_confirmation"]["approval_id"], "approval-1")
+        self.assertEqual(run["pending_approval"]["approval_id"], "approval-1")
+
+        clear_pending_confirmation(run)
+
+        self.assertIsNone(run["pending_confirmation"])
+        self.assertIsNone(run["pending_approval"])
+
+    def test_begin_run_pending_confirmation_shapes_payload_and_waits_for_input(self):
+        log_queue = queue.Queue()
+        run = {
+            "run_id": "run-approval-1",
+            "logs": log_queue,
+            "context": {"metadata": {"approval_ttl_seconds": 15}},
+        }
+        emitted = []
+        audits = []
+        status_changes = []
+
+        payload = begin_run_pending_confirmation(
+            "run-approval-1",
+            "Confirm send",
+            runs_by_id={"run-approval-1": run},
+            default_approval_ttl_seconds=600,
+            approval_correlation_id_fn=lambda approval_id, run_id=None: f"corr:{run_id}:{approval_id}",
+            append_approval_audit_fn=lambda **kwargs: audits.append(kwargs),
+            json_safe_fn=lambda value: value,
+            emit_log_fn=lambda *args, **kwargs: emitted.append((args, kwargs)),
+            set_run_status_fn=lambda run_id, status: status_changes.append((run_id, status)),
+            utc_now_fn=lambda: datetime(2026, 4, 6, 0, 0, 0, tzinfo=timezone.utc),
+            utc_now_iso_fn=lambda: "2026-04-06T00:00:00Z",
+            source="local_execution_start",
+            metadata={
+                "approval_actions": ["browser_automation", "  ", "file_write"],
+                "target": "local_companion",
+                "policy_mode": "guarded",
+            },
+            emit_pause_required=True,
+        )
+
+        self.assertEqual(payload["ttl_seconds"], 30)
+        self.assertEqual(payload["scope"], "once")
+        self.assertEqual(payload["actions"], ["browser_automation", "file_write"])
+        self.assertEqual(payload["target"], "local_companion")
+        self.assertEqual(run["pending_confirmation"], payload)
+        self.assertEqual(run["pending_approval"], payload)
+        self.assertEqual(status_changes, [("run-approval-1", "waiting_for_input")])
+        self.assertEqual(log_queue.get_nowait(), "__PAUSE_REQUIRED__")
+        self.assertEqual(emitted[0][1]["event"], "approval_requested")
+        self.assertEqual(emitted[1][1]["event"], "approval_waiting")
+        self.assertEqual(audits[0]["stage"], "requested")
+        self.assertEqual(audits[1]["stage"], "waiting")
+
+    def test_begin_run_pending_approval_delegates_to_confirmation_entrypoint(self):
+        calls = []
+
+        payload = begin_run_pending_approval(
+            "run-approval-2",
+            "Confirm run",
+            begin_run_pending_confirmation_fn=lambda *args, **kwargs: calls.append((args, kwargs)) or {"approval_id": "approval-2"},
+            source="runtime",
+            metadata={"target": "cloud"},
+            emit_pause_required=False,
+        )
+
+        self.assertEqual(payload["approval_id"], "approval-2")
+        self.assertEqual(calls[0][0], ("run-approval-2", "Confirm run"))
+        self.assertEqual(calls[0][1]["metadata"]["target"], "cloud")
 
     def test_register_live_run_indexes_and_persists(self):
         runs = {}

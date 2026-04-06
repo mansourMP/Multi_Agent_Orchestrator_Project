@@ -36,29 +36,19 @@ globals().update({key: value for key, value in vars(config).items() if not key.s
 globals().update({key: value for key, value in vars(shared).items() if not key.startswith("__")})
 globals().update({key: value for key, value in vars(common).items() if not key.startswith("__")})
 
-APPROVAL_SCOPE_ONCE = "once"
-APPROVAL_SCOPE_CONSEQUENCE = "This confirmation applies only to this pending step in this run. Later runs or later confirmation points will ask again."
 _PERSISTED_TERMINAL_RUN_STATUSES = {"completed", "failed", "timeout", "stopped", "cancelled"}
 
 
 def _get_pending_confirmation(run: Dict[str, Any]) -> Dict[str, Any]:
-    pending = run.get("pending_confirmation")
-    if isinstance(pending, dict):
-        return pending
-    legacy = run.get("pending_approval")
-    if isinstance(legacy, dict):
-        return legacy
-    return {}
+    return run_service.get_pending_confirmation(run)
 
 
 def _set_pending_confirmation(run: Dict[str, Any], payload: Optional[Dict[str, Any]]) -> None:
-    run["pending_confirmation"] = payload
-    run["pending_approval"] = payload
+    run_service.set_pending_confirmation(run, payload)
 
 
 def _clear_pending_confirmation(run: Dict[str, Any]) -> None:
-    run["pending_confirmation"] = None
-    run["pending_approval"] = None
+    run_service.clear_pending_confirmation(run)
 
 
 def _sync_local_runtime_state_snapshot() -> None:
@@ -110,102 +100,22 @@ def _begin_run_pending_confirmation(
     metadata: Optional[Dict[str, Any]] = None,
     emit_pause_required: bool = False,
 ) -> Dict[str, Any]:
-    run = runs.get(run_id)
-    if not isinstance(run, dict):
-        raise RuntimeError("Run ID not found.")
-    context = run.get("context")
-    context_metadata = {}
-    if isinstance(context, dict):
-        raw_metadata = context.get("metadata")
-        if isinstance(raw_metadata, dict):
-            context_metadata = raw_metadata
-    configured_ttl = context_metadata.get("approval_ttl_seconds") if isinstance(context_metadata, dict) else None
-    ttl_seconds = ORION_APPROVAL_TTL_SECONDS
-    if isinstance(configured_ttl, (int, float)):
-        ttl_seconds = int(configured_ttl)
-    ttl_seconds = max(30, min(1800, ttl_seconds))
-    requested_at = _utc_now_iso()
-    expires_at = (_utc_now() + timedelta(seconds=ttl_seconds)).isoformat().replace("+00:00", "Z")
-    approval_id = str(uuid.uuid4())
-    correlation_id = _approval_correlation_id(approval_id, run_id=run_id)
-    safe_metadata = _json_safe(metadata if isinstance(metadata, dict) else {})
-    approval_actions = [
-        str(item).strip()
-        for item in (safe_metadata.get("approval_actions") if isinstance(safe_metadata.get("approval_actions"), list) else [])
-        if str(item).strip()
-    ]
-    approval_target = str(safe_metadata.get("target") or "").strip() or None
-    payload = {
-        "approval_id": approval_id,
-        "correlation_id": correlation_id,
-        "status": "waiting",
-        "requested_at": requested_at,
-        "expires_at": expires_at,
-        "prompt": prompt,
-        "ttl_seconds": ttl_seconds,
-        "scope": APPROVAL_SCOPE_ONCE,
-        "reusable": False,
-        "consequence": APPROVAL_SCOPE_CONSEQUENCE,
-        "actions": approval_actions,
-        "target": approval_target,
-        "metadata": safe_metadata,
-    }
-    _set_pending_confirmation(run, payload)
-    emit_log(
-        run["logs"],
-        "warn",
+    return run_service.begin_run_pending_confirmation(
+        run_id,
         prompt,
-        event="approval_requested",
-        data={
-            "approval_id": approval_id,
-            "correlation_id": correlation_id,
-            "ttl_seconds": ttl_seconds,
-            "expires_at": expires_at,
-            "scope": APPROVAL_SCOPE_ONCE,
-            "reusable": False,
-            **safe_metadata,
-        },
-    )
-    _append_approval_audit(
-        approval_id=approval_id,
-        stage="requested",
-        actor="system",
+        runs_by_id=runs,
+        default_approval_ttl_seconds=ORION_APPROVAL_TTL_SECONDS,
+        approval_correlation_id_fn=_approval_correlation_id,
+        append_approval_audit_fn=_append_approval_audit,
+        json_safe_fn=_json_safe,
+        emit_log_fn=emit_log,
+        set_run_status_fn=set_run_status,
+        utc_now_fn=_utc_now,
+        utc_now_iso_fn=_utc_now_iso,
         source=source,
-        run_id=run_id,
-        note=prompt,
-        correlation_id=correlation_id,
-        metadata={
-            "ttl_seconds": ttl_seconds,
-            "expires_at": expires_at,
-            "scope": APPROVAL_SCOPE_ONCE,
-            "reusable": False,
-            **(safe_metadata if isinstance(safe_metadata, dict) else {}),
-        },
+        metadata=metadata,
+        emit_pause_required=emit_pause_required,
     )
-    emit_log(
-        run["logs"],
-        "info",
-        "Approval request is waiting for user resolution.",
-        event="approval_waiting",
-        data={
-            "approval_id": approval_id,
-            "correlation_id": correlation_id,
-            "ttl_seconds": ttl_seconds,
-            "expires_at": expires_at,
-        },
-    )
-    _append_approval_audit(
-        approval_id=approval_id,
-        stage="waiting",
-        actor="system",
-        source=source,
-        run_id=run_id,
-        correlation_id=correlation_id,
-    )
-    set_run_status(run_id, "waiting_for_input")
-    if emit_pause_required:
-        run["logs"].put("__PAUSE_REQUIRED__")
-    return payload
 
 
 def _begin_run_pending_approval(
@@ -216,9 +126,10 @@ def _begin_run_pending_approval(
     metadata: Optional[Dict[str, Any]] = None,
     emit_pause_required: bool = False,
 ) -> Dict[str, Any]:
-    return _begin_run_pending_confirmation(
+    return run_service.begin_run_pending_approval(
         run_id,
         prompt,
+        begin_run_pending_confirmation_fn=_begin_run_pending_confirmation,
         source=source,
         metadata=metadata,
         emit_pause_required=emit_pause_required,

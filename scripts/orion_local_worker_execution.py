@@ -1,4 +1,5 @@
 import asyncio
+import base64
 import json
 import os
 import re
@@ -51,6 +52,7 @@ except ImportError:
 
 try:
     from computer_control import (
+        capture_screenshot,
         click_element_by_text,
         keyboard_type,
         launch_app,
@@ -65,6 +67,7 @@ try:
     )
 except ImportError:
     from server_modules.computer_control import (  # type: ignore[no-redef]
+        capture_screenshot,
         click_element_by_text,
         keyboard_type,
         launch_app,
@@ -1330,10 +1333,12 @@ def _run_screenshot_operation(run_id: str, op_index: int, operation: Dict[str, A
         shot_dir = artifacts_root / "screenshots"
         shot_dir.mkdir(parents=True, exist_ok=True)
         target = (shot_dir / f"{run_id}-shot-{op_index + 1}.png").resolve()
-    command = _screenshot_command(target)
-    completed = subprocess.run(command, capture_output=True, text=True, timeout=20, check=False)
-    if completed.returncode != 0 or not target.exists():
-        raw_message = _bounded_text(completed.stderr or completed.stdout or "Screenshot capture failed.")
+    capture_result = capture_screenshot(
+        monitor=str(operation.get("monitor") or "primary").strip() or "primary",
+        region=operation.get("region"),
+    )
+    if not bool(capture_result.get("success")):
+        raw_message = _bounded_text(str(capture_result.get("error") or "Screenshot capture failed.").strip())
         if sys.platform == "darwin":
             guidance = (
                 "macOS screenshot capture needs Screen Recording permission for the app running "
@@ -1344,6 +1349,18 @@ def _run_screenshot_operation(run_id: str, op_index: int, operation: Dict[str, A
         else:
             message = raw_message
         raise RuntimeError(message)
+    images = capture_result.get("images") if isinstance(capture_result.get("images"), list) else []
+    first_image = images[0] if images and isinstance(images[0], dict) else None
+    image_base64 = str((first_image or {}).get("data_base64") or "").strip()
+    if not image_base64:
+        raise RuntimeError("Screenshot capture returned no image data.")
+    try:
+        image_bytes = base64.b64decode(image_base64)
+    except Exception as exc:
+        raise RuntimeError("Screenshot capture returned invalid image data.") from exc
+    target.write_bytes(image_bytes)
+    if not target.exists():
+        raise RuntimeError("Screenshot capture did not write the output file.")
     relative_path = _relative_to_root(target, root)
     action = {
         "step_index": op_index,

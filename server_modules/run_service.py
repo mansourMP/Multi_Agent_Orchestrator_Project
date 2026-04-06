@@ -2394,6 +2394,14 @@ def execute_workflow_local_tool(
         }
         if not operation["url"]:
             raise RuntimeError("Browser tool node requires a URL.")
+    elif variant == "screenshot":
+        operation = {
+            "tool": "capture_screenshot",
+            "capability": str(config.get("capability") or "screenshot.capture").strip() or "screenshot.capture",
+            "monitor": str(config.get("monitor") or "primary").strip() or "primary",
+            "region": config.get("region"),
+            "path": str(config.get("path") or config.get("file_path") or "").strip() or None,
+        }
     elif variant == "computer":
         operation = {
             "tool": "computer_control",

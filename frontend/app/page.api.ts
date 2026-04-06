@@ -89,6 +89,8 @@ function createStreamRequestId(): string {
   return `chat-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
+const RUNTIME_SESSION_STORAGE_PREFIX = 'empyralis.runtime-session.v1:';
+
 function buildWebActor(sessionId: string): AgentTurnRequest['actor'] {
   const normalized = String(sessionId || 'web-user').trim() || 'web-user';
   return {
@@ -96,6 +98,30 @@ function buildWebActor(sessionId: string): AgentTurnRequest['actor'] {
     id: normalized,
     display_name: 'Web user',
   };
+}
+
+function readStoredRuntimeSessionId(clientSessionKey: string): string | null {
+  if (typeof window === 'undefined') return null;
+  const normalized = String(clientSessionKey || '').trim();
+  if (!normalized) return null;
+  try {
+    const value = window.sessionStorage.getItem(`${RUNTIME_SESSION_STORAGE_PREFIX}${normalized}`);
+    return value && value.trim() ? value.trim() : null;
+  } catch {
+    return null;
+  }
+}
+
+function storeRuntimeSessionId(clientSessionKey: string, runtimeSessionId: string): void {
+  if (typeof window === 'undefined') return;
+  const normalizedKey = String(clientSessionKey || '').trim();
+  const normalizedValue = String(runtimeSessionId || '').trim();
+  if (!normalizedKey || !normalizedValue) return;
+  try {
+    window.sessionStorage.setItem(`${RUNTIME_SESSION_STORAGE_PREFIX}${normalizedKey}`, normalizedValue);
+  } catch {
+    // Ignore storage failures and continue with in-memory request flow.
+  }
 }
 
 function readFreshCache<T>(cache: TimedResourceCache<T>, staleMs: number): T | null {
@@ -119,6 +145,37 @@ function getProviderModelsCacheEntry(providerId: ProviderId, credentialId?: stri
     providerModelsCache.set(key, cache);
   }
   return cache;
+}
+
+async function ensureRuntimeSessionId(input: {
+  clientSessionKey?: string | null;
+  channel?: string;
+  actorLabel?: string;
+  metadata?: Record<string, unknown>;
+}): Promise<string> {
+  const clientSessionKey = String(input.clientSessionKey || '').trim();
+  const cached = clientSessionKey ? readStoredRuntimeSessionId(clientSessionKey) : null;
+  if (cached) return cached;
+
+  const actorId = clientSessionKey || createStreamRequestId();
+  const session = await apiClient.createSession({
+    tenant_id: 'default',
+    workspace_id: WORKSPACE_ID,
+    channel: String(input.channel || 'web').trim() || 'web',
+    actor: {
+      ...buildWebActor(actorId),
+      display_name: String(input.actorLabel || 'Web user').trim() || 'Web user',
+    },
+    metadata: {
+      ...(clientSessionKey ? { client_session_key: clientSessionKey } : {}),
+      ...(input.metadata || {}),
+    },
+  });
+
+  const runtimeSessionId = String(session.session_id || '').trim();
+  if (!runtimeSessionId) throw new Error('Runtime session bootstrap failed.');
+  if (clientSessionKey) storeRuntimeSessionId(clientSessionKey, runtimeSessionId);
+  return runtimeSessionId;
 }
 
 async function getOrRefreshCachedResource<T>(
@@ -2034,6 +2091,15 @@ export function usePlatformApi(state: PageState, streamRef: MutableRefObject<Aut
   ): Promise<OperatorChatResponsePayload> => {
     const priorMessages = normalizeOperatorChatPriorMessages(options?.priorMessages);
     await ensureControlPlaneSession();
+    const clientSessionKey = String(options?.threadId || '').trim() || `direct-chat:${createStreamRequestId()}`;
+    const runtimeSessionId = await ensureRuntimeSessionId({
+      clientSessionKey,
+      channel: 'web',
+      actorLabel: 'Web user',
+      metadata: {
+        source: 'direct_chat',
+      },
+    });
     let streamedReply = '';
     let streamedSteps: OperatorChatStepPayload[] = [];
     const maxRetries = 3;
@@ -2101,9 +2167,9 @@ export function usePlatformApi(state: PageState, streamRef: MutableRefObject<Aut
         const turnRequest: AgentTurnRequest = {
           tenant_id: 'default',
           workspace_id: WORKSPACE_ID,
-          session_id: String(options?.threadId || clientRequestId || 'direct-chat').trim(),
+          session_id: runtimeSessionId,
           channel: 'web',
-          actor: buildWebActor(options?.threadId || clientRequestId),
+          actor: buildWebActor(runtimeSessionId),
           message: message.trim(),
           execution_mode: 'sync',
           response_mode: 'stream',
@@ -2311,12 +2377,20 @@ export function usePlatformApi(state: PageState, streamRef: MutableRefObject<Aut
       }
       state.setIsChecking(false);
 
+      const runtimeSessionId = await ensureRuntimeSessionId({
+        channel: 'web',
+        actorLabel: 'Operator run',
+        metadata: {
+          source: 'operator_run',
+        },
+      });
+
       const turnResponse = await apiClient.turn({
         tenant_id: 'default',
         workspace_id: WORKSPACE_ID,
-        session_id: createStreamRequestId(),
+        session_id: runtimeSessionId,
         channel: 'web',
-        actor: buildWebActor('operator-run'),
+        actor: buildWebActor(runtimeSessionId),
         message: effectiveGoal,
         execution_mode: 'durable',
         response_mode: 'artifact',
@@ -2499,6 +2573,15 @@ export function usePlatformApi(state: PageState, streamRef: MutableRefObject<Aut
       }
       state.setIsChecking(false);
 
+      const runtimeSessionId = await ensureRuntimeSessionId({
+        channel: 'web',
+        actorLabel: 'Pack run',
+        metadata: {
+          source: 'pack_run',
+          outcome_pack: selectedPack.id,
+        },
+      });
+
       const effectiveTrustMode: TrustMode = state.guidedDefaultsEnabled ? 'guarded' : state.trustMode;
       const agentSkills = resolveAgentProfileSkills(effectiveAgentRole);
       const activeSkills = agentSkills.skills.length > 0 ? agentSkills : await loadActiveSkills('automationDefaults');
@@ -2625,9 +2708,9 @@ export function usePlatformApi(state: PageState, streamRef: MutableRefObject<Aut
       const turnResponse = await apiClient.turn({
         tenant_id: 'default',
         workspace_id: WORKSPACE_ID,
-        session_id: createStreamRequestId(),
+        session_id: runtimeSessionId,
         channel: 'web',
-        actor: buildWebActor('pack-run'),
+        actor: buildWebActor(runtimeSessionId),
         message: effectiveGoal.trim(),
         execution_mode: 'durable',
         response_mode: 'artifact',

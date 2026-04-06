@@ -11,6 +11,8 @@ import type {
   RunDetailResponse,
   RunListResponse,
   RunReplayResponse,
+  SessionCreateRequest,
+  SessionResponse,
 } from '@/lib/api-contract';
 import { ensureControlPlaneSession } from '@/lib/controlPlaneSession';
 import { API_BASE } from '@/lib/config';
@@ -153,6 +155,18 @@ function buildQuery(params: Record<string, unknown>): string {
 }
 
 export const apiClient = {
+  async createSession(request: SessionCreateRequest): Promise<SessionResponse> {
+    return jsonRequest<SessionResponse>('/sessions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(request),
+    });
+  },
+
+  async getSession(sessionId: string): Promise<SessionResponse> {
+    return jsonRequest<SessionResponse>(`/sessions/${encodeURIComponent(sessionId)}`);
+  },
+
   async turn(request: AgentTurnRequest): Promise<AgentTurnResponse> {
     return jsonRequest<AgentTurnResponse>('/turn', {
       method: 'POST',

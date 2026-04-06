@@ -37,6 +37,28 @@ export type AgentTurnResponse = {
   metadata?: Record<string, unknown>;
 };
 
+export type SessionCreateRequest = {
+  tenant_id?: string;
+  workspace_id: string;
+  channel?: string;
+  actor: ApiTurnActor;
+  metadata?: Record<string, unknown>;
+  session_id?: string | null;
+};
+
+export type SessionResponse = {
+  ok?: boolean;
+  session_id: string;
+  workspace_id?: string;
+  tenant_id?: string;
+  channel?: string;
+  actor?: Record<string, unknown>;
+  created_at?: string | null;
+  expires_at?: string | null;
+  metadata?: Record<string, unknown>;
+  status?: string;
+};
+
 export type RunListItem = {
   run_id?: string | null;
   engine?: string | null;

@@ -193,27 +193,18 @@ CAPABILITY_REGISTRY: Dict[str, CapabilityContract] = {
         allowed_environments=["local_companion"],
         artifact_outputs=["text/plain"],
     ),
-    # Compatibility tool ids retained so existing runtime paths resolve through the same registry.
-    "capture_screenshot": _contract(
-        "capture_screenshot",
-        "Capture Screenshot",
+    "filesystem.read_write": _contract(
+        "filesystem.read_write",
+        "Read Or Write Files",
         risk_level="medium",
         requires_approval=True,
         reversible=True,
-        required_os_permissions=["screen_recording"],
+        required_os_permissions=["filesystem"],
         allowed_environments=["local_companion"],
-        artifact_outputs=["image/png"],
+        artifact_outputs=["text/plain"],
     ),
-    "browser_automation": _contract(
-        "browser_automation",
-        "Browser Automation",
-        risk_level="medium",
-        requires_approval=False,
-        reversible=True,
-        required_os_permissions=[],
-        allowed_environments=["local_companion", "hosted"],
-        artifact_outputs=["text/html", "image/png", "application/json"],
-    ),
+    # Compatibility tool ids retained as aliases so existing runtime paths can
+    # resolve through the canonical registry during migration.
     "computer_control": _contract(
         "computer_control",
         "Computer Control",
@@ -224,31 +215,14 @@ CAPABILITY_REGISTRY: Dict[str, CapabilityContract] = {
         allowed_environments=["local_companion"],
         artifact_outputs=["image/png", "text/plain", "application/json"],
     ),
-    "execute_shell_command": _contract(
-        "execute_shell_command",
-        "Execute Shell Command",
-        risk_level="critical",
-        requires_approval=True,
-        reversible=False,
-        required_os_permissions=["filesystem", "process_execution"],
-        allowed_environments=["local_companion"],
-        artifact_outputs=["text/plain", "application/json"],
-    ),
-    "read_write_files": _contract(
-        "read_write_files",
-        "Read Or Write Files",
-        risk_level="medium",
-        requires_approval=True,
-        reversible=True,
-        required_os_permissions=["filesystem"],
-        allowed_environments=["local_companion"],
-        artifact_outputs=["text/plain"],
-    ),
 }
 
 
 _CAPABILITY_ALIASES: Dict[str, str] = {
-    "filesystem.read_write": "read_write_files",
+    "read_write_files": "filesystem.read_write",
+    "capture_screenshot": "screenshot.capture",
+    "browser_automation": "browser_automation.interactive",
+    "execute_shell_command": "shell.execute",
     "browser.interactive": "browser_automation.interactive",
 }
 

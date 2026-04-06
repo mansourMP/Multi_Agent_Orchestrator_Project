@@ -38,15 +38,15 @@ def sync_acp_manager_paths(
 # aligned with the persistence layer instead of treating these containers as
 # authoritative beyond the current process.
 SHARED_STATE_BACKING: Dict[str, str] = {
-    "runs": "runtime_state_store.live_runs",
-    "RUN_HISTORY": "runtime_state_store.run_history",
+    "runs": "Postgres live_runs",
+    "RUN_HISTORY": "Postgres run_archive",
     "CHANNEL_EVENTS": "runtime_state_store.channel_events",
     "SETUP_SESSIONS": "setup_sessions.json",
     "PROVIDER_PROFILES": "provider_profiles.json",
     "IDEMPOTENCY_RECORDS": "idempotency.json",
-    "LOCAL_PENDING_RUN_IDS": "runtime_state_store.local_pending_queue",
-    "LOCAL_CLAIMED_RUNS": "runtime_state_store.local_claims",
-    "LOCAL_WORKER_REGISTRY": "runtime_state_store.runtime_registrations",
+    "LOCAL_PENDING_RUN_IDS": "runtime_state_store.local_pending_queue (local-only cache)",
+    "LOCAL_CLAIMED_RUNS": "runtime_state_store.local_claims (local-only cache)",
+    "LOCAL_WORKER_REGISTRY": "runtime_state_store.runtime_registrations (local-only cache)",
 }
 
 NON_DURABLE_SHARED_STATE: Dict[str, str] = {

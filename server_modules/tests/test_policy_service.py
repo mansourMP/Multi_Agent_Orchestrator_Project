@@ -27,14 +27,14 @@ class PolicyServiceTests(unittest.TestCase):
 
     def test_evaluate_tool_policy_decision_allows_safe_raw_shell_command(self) -> None:
         evaluation = policy_service.evaluate_tool_policy_decision(
-            tool_id="execute_shell_command",
+            tool_id="shell.execute",
             trust_mode="guarded",
             target="local_companion",
             metadata={
                 "pack_inputs": {
                     "operations": [
                         {
-                            "tool": "execute_shell_command",
+                            "tool": "shell.execute",
                             "command": "echo hello world",
                         }
                     ]
@@ -58,11 +58,11 @@ class PolicyServiceTests(unittest.TestCase):
                 "interactive_actions": ["click"],
                 "privileged_actions": [],
             },
-            predict_tool_ids_for_context_fn=lambda context: ["browser_automation", "read_write_files"],
+            predict_tool_ids_for_context_fn=lambda context: ["browser_automation.interactive", "filesystem.read_write"],
             build_skill_contract_from_metadata_fn=lambda metadata, tool_ids, policy_mode, target: {
                 "policy_mode": "observe",
                 "undeclared_tools": [],
-                "declared_runtime_tools": ["browser_automation", "read_write_files"],
+                "declared_runtime_tools": ["browser_automation.interactive", "filesystem.read_write"],
             },
             predict_capability_ids_for_context_fn=lambda context: [],
             apply_agent_machine_bypass_to_tool_policy_evaluation_fn=lambda evaluation: evaluation,
@@ -71,8 +71,8 @@ class PolicyServiceTests(unittest.TestCase):
         self.assertEqual(precheck["blocked_count"], 0)
         self.assertEqual(precheck["approval_required_count"], 1)
         self.assertEqual(precheck["allow_count"], 1)
-        self.assertIn("browser_automation", precheck["approval_required"])
-        self.assertIn("read_write_files", precheck["allowed"])
+        self.assertIn("browser_automation.interactive", precheck["approval_required"])
+        self.assertIn("filesystem.read_write", precheck["allowed"])
 
     def test_approval_required_for_direct_tool_uses_capability_policy(self) -> None:
         requires_approval = policy_service.approval_required_for_direct_tool(

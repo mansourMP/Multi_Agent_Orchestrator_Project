@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+"""Internal implementation only. All external access must go through memory_service.py."""
+
 import sqlite3
 import threading
 from datetime import timedelta

@@ -157,6 +157,43 @@ class RuntimeRunApprovalServiceTests(unittest.TestCase):
         self.assertEqual(calls[0][0][0], "run-1")
         self.assertEqual(calls[0][0][2], "approval-1")
 
+    def test_resolve_standalone_approval_records_postgres_resolution_and_outbox_event(self):
+        recorded = []
+        emitted = []
+        run = {
+            "status": "waiting_for_input",
+            "logs": object(),
+            "input_queue": queue.Queue(),
+            "context": {"workspace_id": "ws-1", "tenant_id": "tenant-1", "metadata": {"trace_id": "trace-1"}},
+            "pending_confirmation": {"approval_id": "approval-1", "correlation_id": "corr-1"},
+        }
+
+        payload = runtime_run_approval_service.resolve_standalone_approval(
+            "approval-1",
+            payload={"approval_id": "approval-1", "resolution": "approved", "actor": "user-1", "reason": "ok"},
+            current_user={"user_id": "user-1"},
+            runs={"run-1": run},
+            resolve_run_approval_fn=lambda run_id, approval_id, **kwargs: {"status": "ok", "run_id": run_id, "approval_id": approval_id},
+            resolve_run_approval_callbacks={},
+            record_approval_resolution_fn=lambda *args: recorded.append(args),
+            emit_approval_resolved_event_fn=lambda **kwargs: emitted.append(kwargs)
+            or type(
+                "Event",
+                (),
+                {
+                    "event_id": "evt-1",
+                    "event_type": "approval_resolved",
+                    "trace_id": "trace-1",
+                    "payload": kwargs,
+                },
+            )(),
+        )
+
+        self.assertEqual(payload["run_id"], "run-1")
+        self.assertEqual(payload["resolution"], "approved")
+        self.assertEqual(recorded[0][:3], ("run-1", "approval-1", "approved"))
+        self.assertEqual(emitted[0]["approval_id"], "approval-1")
+
 
 if __name__ == "__main__":
     unittest.main()

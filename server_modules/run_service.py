@@ -2320,7 +2320,7 @@ def execute_workflow_local_tool(
             execution_target,
         )
         operation = {
-            "tool": "read_write_files",
+            "tool": "filesystem.read_write",
             "mode": file_access["mode"],
             "path": str(config.get("path") or config.get("file_path") or "").strip(),
             "content": str(config.get("content") or current_text or ""),
@@ -2338,7 +2338,7 @@ def execute_workflow_local_tool(
             execution_target,
         )
         operation = {
-            "tool": "execute_shell_command",
+            "tool": "shell.execute",
             "command": str(config.get("command") or "").strip() or None,
             "argv": list(config.get("argv") or []) if isinstance(config.get("argv"), list) else None,
             "cwd": str(config.get("cwd") or ".").strip() or ".",
@@ -2373,7 +2373,7 @@ def execute_workflow_local_tool(
         browser_policy = browser_automation_policy_from_operations_fn(
             [
                 {
-                    "tool": "browser_automation",
+                    "tool": "browser_automation.interactive",
                     "mode": str(config.get("mode") or "extract_text").strip() or "extract_text",
                     "url": str(config.get("url") or "").strip(),
                     "session_profile": session_profile,
@@ -2382,7 +2382,7 @@ def execute_workflow_local_tool(
             ]
         )
         operation = {
-            "tool": "browser_automation",
+            "tool": "browser_automation.interactive",
             "mode": str(config.get("mode") or "extract_text").strip() or "extract_text",
             "url": str(config.get("url") or "").strip(),
             "path": browser_path or None,
@@ -2396,7 +2396,7 @@ def execute_workflow_local_tool(
             raise RuntimeError("Browser tool node requires a URL.")
     elif variant == "screenshot":
         operation = {
-            "tool": "capture_screenshot",
+            "tool": "screenshot.capture",
             "capability": str(config.get("capability") or "screenshot.capture").strip() or "screenshot.capture",
             "monitor": str(config.get("monitor") or "primary").strip() or "primary",
             "region": config.get("region"),

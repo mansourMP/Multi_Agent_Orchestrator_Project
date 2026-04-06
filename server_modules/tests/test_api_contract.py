@@ -3,6 +3,7 @@ import unittest
 from server_modules.agent_turn import build_inbound_agent_turn_request
 from server_modules.api_contract import (
     ApiAgentTurnRequest,
+    CANONICAL_API_ENDPOINTS,
     build_turn_chat_body,
     normalize_session_record,
     normalize_agent_turn_result,
@@ -100,6 +101,12 @@ class ApiContractTests(unittest.TestCase):
         self.assertEqual(payload.session_id, "session-1")
         self.assertEqual(payload.actor["id"], "user-1")
         self.assertEqual(payload.metadata["source"], "test")
+
+    def test_canonical_api_contract_documents_standalone_approvals_endpoint(self):
+        self.assertEqual(
+            CANONICAL_API_ENDPOINTS["approvals_resolve"]["path"],
+            "/approvals/{approval_id}/resolve",
+        )
 
 
 if __name__ == "__main__":

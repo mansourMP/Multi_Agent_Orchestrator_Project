@@ -458,7 +458,7 @@ read_payload="$(jq -nc '{
     trust_mode:"guarded",
     pack_inputs:{
       operations:[
-        {tool:"read_write_files", mode:"read", path:"server.py"}
+        {tool:"filesystem.read_write", mode:"read", path:"server.py"}
       ],
       continue_on_error:false
     }
@@ -501,7 +501,7 @@ browser_payload="$(jq -nc '{
     trust_mode:"guarded",
     pack_inputs:{
       operations:[
-        {tool:"browser_automation", mode:"extract_text", url:"https://example.com"}
+        {tool:"browser_automation.interactive", mode:"extract_text", url:"https://example.com"}
       ],
       continue_on_error:false
     }
@@ -516,7 +516,7 @@ if [[ -n "${browser_run_id}" ]] && poll_run_terminal "${browser_run_id}" "${SMOK
   browser_status="$(jq -r '.status // empty' "${browser_run_json}")"
   browser_tool="$(jq -r '(.result_data.outputs.actions // [])[0].tool // empty' "${browser_run_json}")"
   browser_artifact_count="$(jq -r '(.result_data.outputs.artifacts // []) | length' "${browser_run_json}")"
-  if [[ "${browser_status}" == "completed" && "${browser_tool}" == "browser_automation" && "${browser_artifact_count}" -ge 2 ]]; then
+  if [[ "${browser_status}" == "completed" && "${browser_tool}" == "browser_automation.interactive" && "${browser_artifact_count}" -ge 2 ]]; then
     pass "A5 browser automation"
   else
     fail "A5 browser automation"
@@ -536,7 +536,7 @@ browser_capture_payload="$(jq -nc '{
     trust_mode:"guarded",
     pack_inputs:{
       operations:[
-        {tool:"browser_automation", mode:"capture_page", url:"https://example.com"}
+        {tool:"browser_automation.interactive", mode:"capture_page", url:"https://example.com"}
       ],
       continue_on_error:false
     }
@@ -574,7 +574,7 @@ browser_session_seed_payload="$(jq -nc --arg url "${browser_session_url}?seed=Pe
     pack_inputs:{
       operations:[
         {
-          tool:"browser_automation",
+          tool:"browser_automation.interactive",
           mode:"capture_page",
           url:$url,
           session_profile:"smoke-browser-profile",
@@ -605,7 +605,7 @@ browser_session_check_payload="$(jq -nc --arg url "${browser_session_url}" '{
     pack_inputs:{
       operations:[
         {
-          tool:"browser_automation",
+          tool:"browser_automation.interactive",
           mode:"capture_page",
           url:$url,
           session_profile:"smoke-browser-profile",
@@ -661,7 +661,7 @@ browser_script_payload="$(jq -nc --arg url "${browser_session_url}" '{
     pack_inputs:{
       operations:[
         {
-          tool:"browser_automation",
+          tool:"browser_automation.interactive",
           mode:"capture_page",
           url:$url,
           browser_permissions:{allow:true},
@@ -705,7 +705,7 @@ browser_upload_payload="$(jq -nc --arg url "${browser_session_url}" --arg upload
     pack_inputs:{
       operations:[
         {
-          tool:"browser_automation",
+          tool:"browser_automation.interactive",
           mode:"capture_page",
           url:$url,
           browser_permissions:{allow:true},
@@ -753,7 +753,7 @@ approval_payload="$(jq -nc --arg url "${browser_session_url}" '{
     pack_inputs:{
       operations:[
         {
-          tool:"browser_automation",
+          tool:"browser_automation.interactive",
           mode:"capture_page",
           url:$url,
           session_profile:"smoke-browser-profile",
@@ -957,7 +957,7 @@ JQ
           pack_inputs:{
             operations:[
               {
-                tool:"read_write_files",
+                tool:"filesystem.read_write",
                 mode:"read",
                 path:"tmp/empyralis-smoke-missing-file.txt"
               }
@@ -1011,7 +1011,7 @@ browser_iframe_payload="$(jq -nc --arg url "${browser_session_url}" '{
     pack_inputs:{
       operations:[
         {
-          tool:"browser_automation",
+          tool:"browser_automation.interactive",
           mode:"capture_page",
           url:$url,
           browser_permissions:{allow:true},
@@ -1055,7 +1055,7 @@ browser_tab_payload="$(jq -nc --arg url "${browser_session_url}" --arg second_ur
     pack_inputs:{
       operations:[
         {
-          tool:"browser_automation",
+          tool:"browser_automation.interactive",
           mode:"capture_page",
           url:$url,
           browser_permissions:{allow:true},
@@ -1102,7 +1102,7 @@ browser_download_payload="$(jq -nc --arg url "${browser_session_url}" '{
     pack_inputs:{
       operations:[
         {
-          tool:"browser_automation",
+          tool:"browser_automation.interactive",
           mode:"capture_page",
           url:$url,
           browser_permissions:{allow:true},
@@ -1146,7 +1146,7 @@ browser_popup_payload="$(jq -nc --arg url "${browser_session_url}" '{
     pack_inputs:{
       operations:[
         {
-          tool:"browser_automation",
+          tool:"browser_automation.interactive",
           mode:"capture_page",
           url:$url,
           browser_permissions:{allow:true},
@@ -1192,7 +1192,7 @@ browser_auth_payload="$(jq -nc --arg url "${browser_session_url}" '{
     pack_inputs:{
       operations:[
         {
-          tool:"browser_automation",
+          tool:"browser_automation.interactive",
           mode:"capture_page",
           url:$url,
           session_profile:"smoke-auth-browser",
@@ -1245,7 +1245,7 @@ browser_auth_priv_payload="$(jq -nc --arg url "${browser_session_url}" --arg upl
     pack_inputs:{
       operations:[
         {
-          tool:"browser_automation",
+          tool:"browser_automation.interactive",
           mode:"capture_page",
           url:$url,
           session_profile:"smoke-browser-profile",
@@ -1390,7 +1390,7 @@ if [[ "${SCREENSHOT_SMOKE}" == "1" ]]; then
       trust_mode:"guarded",
       pack_inputs:{
         operations:[
-          {tool:"capture_screenshot"}
+          {tool:"screenshot.capture"}
         ],
         continue_on_error:false
       }

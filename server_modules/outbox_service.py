@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, Mapping, Optional, Sequence
 
@@ -25,6 +26,10 @@ class LocalRuntimeStateSnapshot:
     pending_run_ids: list[str] = field(default_factory=list)
     claimed_runs: Dict[str, Dict[str, Any]] = field(default_factory=dict)
     runtime_registrations: Dict[str, Dict[str, Any]] = field(default_factory=dict)
+
+
+def _utc_now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
 def build_local_runtime_state_snapshot(
@@ -83,6 +88,36 @@ def persist_local_runtime_state(
         db_path,
         snapshot,
         replace_local_runtime_state_fn=replace_local_runtime_state_fn,
+    )
+
+
+def emit_approval_resolved_event(
+    *,
+    approval_id: str,
+    run_id: str,
+    tenant_id: str,
+    workspace_id: str,
+    resolution: str,
+    actor: str,
+    reason: str = "",
+    trace_id: str = "",
+) -> OutboxEvent:
+    return OutboxEvent(
+        event_id=f"approval-resolved:{approval_id}:{resolution}:{trace_id or _utc_now_iso()}",
+        event_type="approval_resolved",
+        tenant_id=str(tenant_id or "").strip() or "default",
+        workspace_id=str(workspace_id or "").strip() or "default",
+        run_id=str(run_id or "").strip() or None,
+        trace_id=str(trace_id or "").strip(),
+        idempotency_key=f"approval_resolved:{approval_id}:{resolution}",
+        payload={
+            "approval_id": str(approval_id or "").strip(),
+            "run_id": str(run_id or "").strip(),
+            "resolution": str(resolution or "").strip() or "approved",
+            "actor": str(actor or "").strip() or "system",
+            "reason": str(reason or ""),
+            "emitted_at": _utc_now_iso(),
+        },
     )
 
 

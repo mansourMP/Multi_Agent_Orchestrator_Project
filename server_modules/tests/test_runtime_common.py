@@ -36,24 +36,24 @@ class RuntimeCommonRateLimitTests(unittest.TestCase):
         with runtime_common.RATE_LIMIT_LOCK:
             runtime_common.RATE_LIMIT_BUCKETS.clear()
 
-    def test_chat_respond_is_exempt_from_control_plane_rate_limit(self) -> None:
+    def test_turn_is_exempt_from_control_plane_rate_limit(self) -> None:
         with (
             patch.object(runtime_common, "CONTROL_PLANE_RATE_LIMIT_PER_MINUTE", 0),
             patch.object(runtime_common, "CONTROL_PLANE_RATE_LIMIT_BURST", 0),
         ):
-            first = runtime_common._control_plane_rate_limit(_request("/chat/respond"))
-            second = runtime_common._control_plane_rate_limit(_request("/chat/respond"))
+            first = runtime_common._control_plane_rate_limit(_request("/turn"))
+            second = runtime_common._control_plane_rate_limit(_request("/turn"))
 
         self.assertIsNone(first)
         self.assertIsNone(second)
 
-    def test_api_chat_respond_is_exempt_from_control_plane_rate_limit(self) -> None:
+    def test_api_turn_is_exempt_from_control_plane_rate_limit(self) -> None:
         with (
             patch.object(runtime_common, "CONTROL_PLANE_RATE_LIMIT_PER_MINUTE", 0),
             patch.object(runtime_common, "CONTROL_PLANE_RATE_LIMIT_BURST", 0),
         ):
-            first = runtime_common._control_plane_rate_limit(_request("/api/chat/respond"))
-            second = runtime_common._control_plane_rate_limit(_request("/api/chat/respond"))
+            first = runtime_common._control_plane_rate_limit(_request("/api/turn"))
+            second = runtime_common._control_plane_rate_limit(_request("/api/turn"))
 
         self.assertIsNone(first)
         self.assertIsNone(second)

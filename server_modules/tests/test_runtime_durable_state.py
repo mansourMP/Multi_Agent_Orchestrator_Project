@@ -4,10 +4,9 @@ import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
 
-from server_modules import runs_core, runs_engine, runs_execution, runs_output, runtime_runs_api, shared
+from server_modules import run_state_repository, runs_core, runs_engine, runs_execution, runs_output, runtime_runs_api, shared
 from server_modules.runtime_state_store import (
     init_runtime_state_db,
-    list_live_run_states,
     load_local_runtime_state,
 )
 
@@ -22,6 +21,37 @@ class RuntimeDurableStateTests(unittest.TestCase):
             patch.object(runs_execution, "ORION_RUNTIME_STATE_DB", self.db_path),
             patch.object(runs_output, "ORION_RUNTIME_STATE_DB", self.db_path),
         ]
+        self.live_run_store: dict[str, dict] = {}
+        self.archive_store: dict[str, dict] = {}
+        self.patchers.extend(
+            [
+                patch.object(
+                    run_state_repository,
+                    "sync_upsert_live_run",
+                    side_effect=self._sync_upsert_live_run,
+                ),
+                patch.object(
+                    run_state_repository,
+                    "sync_delete_live_run",
+                    side_effect=self._sync_delete_live_run,
+                ),
+                patch.object(
+                    run_state_repository,
+                    "sync_list_live_runs",
+                    side_effect=self._sync_list_live_runs,
+                ),
+                patch.object(
+                    run_state_repository,
+                    "sync_archive_run",
+                    side_effect=self._sync_archive_run,
+                ),
+                patch.object(
+                    run_state_repository,
+                    "sync_list_run_archive",
+                    side_effect=self._sync_list_run_archive,
+                ),
+            ]
+        )
         for patcher in self.patchers:
             patcher.start()
         shared.sync_acp_manager_paths(runtime_db_path=self.db_path)
@@ -68,7 +98,7 @@ class RuntimeDurableStateTests(unittest.TestCase):
             },
         )
 
-        live_runs = list_live_run_states(self.db_path)
+        live_runs = run_state_repository.sync_list_live_runs()
         self.assertEqual(len(live_runs), 1)
         self.assertEqual(live_runs[0]["run_id"], run_id)
         self.assertEqual(live_runs[0]["status"], "queued_local")
@@ -314,6 +344,40 @@ class RuntimeDurableStateTests(unittest.TestCase):
         self.assertTrue(run["_resume_after_confirmation_scheduled"])
         self.assertEqual(enqueued[0][0], "run-local-resume-1")
         self.assertEqual(enqueued[0][2], "local_resumed_from_checkpoint")
+
+    def _sync_upsert_live_run(
+        self,
+        run_id: str,
+        workspace_id: str,
+        tenant_id: str,
+        state: str,
+        payload: dict,
+        trace_id: str,
+    ) -> None:
+        snapshot = dict(payload)
+        snapshot["run_id"] = run_id
+        snapshot["workspace_id"] = workspace_id
+        snapshot["tenant_id"] = tenant_id
+        snapshot["status"] = state
+        snapshot["trace_id"] = trace_id
+        self.live_run_store[run_id] = snapshot
+
+    def _sync_delete_live_run(self, run_id: str) -> None:
+        self.live_run_store.pop(run_id, None)
+
+    def _sync_list_live_runs(self) -> list[dict]:
+        return [dict(item) for item in self.live_run_store.values()]
+
+    def _sync_archive_run(self, run_id: str, final_state: str, payload: dict, trace_id: str) -> None:
+        snapshot = dict(payload)
+        snapshot["run_id"] = run_id
+        snapshot["status"] = final_state
+        snapshot["trace_id"] = trace_id
+        self.archive_store[run_id] = snapshot
+
+    def _sync_list_run_archive(self, limit: int = 200) -> list[dict]:
+        items = list(self.archive_store.values())
+        return [dict(item) for item in items[: max(1, int(limit or 0))]]
 
 
 if __name__ == "__main__":

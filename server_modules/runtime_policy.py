@@ -166,14 +166,14 @@ def _iter_raw_shell_operations(metadata: Dict[str, Any]) -> List[Dict[str, Any]]
         if not isinstance(item, dict):
             continue
         tool = normalize_action_id(item.get("tool") or item.get("action"))
-        if tool == "execute_shell_command":
+        if tool == "shell.execute":
             collected.append(item)
     if collected:
         return collected
     command = str(metadata.get("raw_shell_command") or "").strip()
     argv = metadata.get("raw_shell_argv") if isinstance(metadata.get("raw_shell_argv"), list) else None
     if command or argv:
-        return [{"tool": "execute_shell_command", "command": command or None, "argv": argv}]
+        return [{"tool": "shell.execute", "command": command or None, "argv": argv}]
     return []
 
 
@@ -237,7 +237,7 @@ def _browser_operation_plan_row(raw_operation: Any) -> Dict[str, Any]:
     raw_actions = item.get("browser_actions") if isinstance(item.get("browser_actions"), list) else item.get("browserActions")
     actions = raw_actions if isinstance(raw_actions, list) else []
     return {
-        "tool": str(item.get("tool") or item.get("action") or "browser_automation").strip().lower(),
+        "tool": normalize_action_id(item.get("tool") or item.get("action") or "browser_automation.interactive"),
         "mode": str(item.get("mode") or "extract_text").strip().lower(),
         "url": str(item.get("url") or "").strip(),
         "path": str(item.get("path") or "").strip(),
@@ -263,7 +263,7 @@ def browser_automation_plan_hash_from_pack_inputs(pack_inputs: Any) -> str:
     browser_ops = [
         item
         for item in operations
-        if isinstance(item, dict) and str(item.get("tool") or item.get("action") or "").strip().lower() == "browser_automation"
+        if isinstance(item, dict) and normalize_action_id(item.get("tool") or item.get("action")) == "browser_automation.interactive"
     ]
     if not browser_ops and str(payload.get("url") or "").strip():
         browser_ops = [payload]
@@ -485,18 +485,18 @@ ACTION_RISK_LEVELS: Dict[str, str] = {
     "document_update": "medium",
     "presentation_create": "medium",
     "presentation_update": "medium",
-    "read_write_files": _registry_risk_level("read_write_files", "medium"),
-    "browser_automation": _registry_risk_level("browser_automation", "medium"),
-    "capture_screenshot": _registry_risk_level("capture_screenshot", "medium"),
+    "filesystem.read_write": _registry_risk_level("filesystem.read_write", "medium"),
+    "browser_automation.interactive": _registry_risk_level("browser_automation.interactive", "medium"),
+    "screenshot.capture": _registry_risk_level("screenshot.capture", "medium"),
     "computer_control": _registry_risk_level("computer_control", "critical"),
-    "execute_shell_command": _registry_risk_level("execute_shell_command", "critical"),
+    "shell.execute": _registry_risk_level("shell.execute", "critical"),
     "delete_files": "critical",
     "delete_records": "critical",
     "transfer_funds": "critical",
 }
 
 DEFAULT_ACTION_POLICY = {
-    "blocked_actions": {"execute_shell_command", "delete_files", "delete_records", "transfer_funds"},
+    "blocked_actions": {"shell.execute", "delete_files", "delete_records", "transfer_funds"},
     "approval_actions": {
         "send_message",
         "draft_email",
@@ -516,9 +516,9 @@ DEFAULT_ACTION_POLICY = {
 }
 
 APP_PERMISSION_ACTION_MAP = {
-    "files.read": {"tool": "read_write_files", "requires_approval": True},
-    "files.write": {"tool": "read_write_files", "requires_approval": True},
-    "device.control": {"tool": "execute_shell_command", "requires_approval": True},
+    "files.read": {"tool": "filesystem.read_write", "requires_approval": True},
+    "files.write": {"tool": "filesystem.read_write", "requires_approval": True},
+    "device.control": {"tool": "shell.execute", "requires_approval": True},
 }
 
 ACTION_SIGNAL_PATTERNS: Dict[str, List[str]] = {
@@ -595,14 +595,14 @@ ACTION_SIGNAL_PATTERNS: Dict[str, List[str]] = {
         "edit presentation",
         "append slides",
     ],
-    "read_write_files": [
+    "filesystem.read_write": [
         "read file",
         "write file",
         "append file",
         "edit file",
         "open file",
     ],
-    "browser_automation": [
+    "browser_automation.interactive": [
         "open website",
         "browse website",
         "fetch page",
@@ -610,7 +610,7 @@ ACTION_SIGNAL_PATTERNS: Dict[str, List[str]] = {
         "extract links",
         "read webpage",
     ],
-    "capture_screenshot": [
+    "screenshot.capture": [
         "take screenshot",
         "capture screenshot",
         "screen capture",
@@ -628,7 +628,7 @@ ACTION_SIGNAL_PATTERNS: Dict[str, List[str]] = {
         "launch app",
         "list running apps",
     ],
-    "execute_shell_command": [
+    "shell.execute": [
         "shell command",
         "terminal command",
         "run command",
@@ -661,7 +661,11 @@ ACTION_SIGNAL_PATTERNS: Dict[str, List[str]] = {
 
 def normalize_action_id(raw: Any) -> str:
     value = str(raw or "").strip().lower().replace("-", "_").replace(" ", "_")
-    return re.sub(r"[^a-z0-9_]", "", value)
+    normalized = re.sub(r"[^a-z0-9_.]", "", value)
+    contract = resolve_capability(normalized)
+    if contract is not None:
+        return str(contract.capability_id or normalized).strip().lower()
+    return normalized
 
 
 def _parse_action_set(raw: Any) -> Set[str]:
@@ -1166,8 +1170,8 @@ TOOL_CONTRACTS: Dict[str, Dict[str, Any]] = {
             "additionalProperties": True,
         },
     },
-    "read_write_files": {
-        "tool_id": "read_write_files",
+    "filesystem.read_write": {
+        "tool_id": "filesystem.read_write",
         "description": "Read, write, or append text files inside the local companion root.",
         "optional": True,
         "allowlist_roles": ["orion_operator"],
@@ -1184,8 +1188,8 @@ TOOL_CONTRACTS: Dict[str, Dict[str, Any]] = {
             "additionalProperties": True,
         },
     },
-    "browser_automation": {
-        "tool_id": "browser_automation",
+    "browser_automation.interactive": {
+        "tool_id": "browser_automation.interactive",
         "description": "Fetch a public web page and save HTML or extracted browser artifacts.",
         "optional": True,
         "allowlist_roles": ["orion_operator"],
@@ -1201,8 +1205,8 @@ TOOL_CONTRACTS: Dict[str, Dict[str, Any]] = {
             "additionalProperties": True,
         },
     },
-    "capture_screenshot": {
-        "tool_id": "capture_screenshot",
+    "screenshot.capture": {
+        "tool_id": "screenshot.capture",
         "description": "Capture a screenshot into the local companion artifact root.",
         "optional": True,
         "allowlist_roles": ["orion_operator"],
@@ -1239,8 +1243,8 @@ TOOL_CONTRACTS: Dict[str, Dict[str, Any]] = {
             "additionalProperties": True,
         },
     },
-    "execute_shell_command": {
-        "tool_id": "execute_shell_command",
+    "shell.execute": {
+        "tool_id": "shell.execute",
         "description": "Run an allowlisted local command without shell interpolation.",
         "optional": True,
         "allowlist_roles": ["orion_operator"],
@@ -1373,7 +1377,7 @@ def validate_pack_tool_contracts(pack_id: str, result_data: Dict[str, Any], role
             if not isinstance(item, dict):
                 continue
             tool_id = normalize_action_id(item.get("action"))
-            if tool_id in {"execute_shell_command", "read_write_files", "browser_automation", "capture_screenshot", "computer_control"}:
+            if tool_id in {"shell.execute", "filesystem.read_write", "browser_automation.interactive", "screenshot.capture", "computer_control"}:
                 validate_tool_contract(tool_id, role, item)
         return
 
@@ -1584,21 +1588,21 @@ def classify_runtime_action(
             "external_visibility": True,
             "destructive_risk": False,
         },
-        "read_write_files": {
+        "filesystem.read_write": {
             "action_type": ACTION_TYPE_REVERSIBLE_WRITE,
             "target_system": "local_workspace",
             "reversibility": True,
             "external_visibility": False,
             "destructive_risk": False,
         },
-        "browser_automation": {
+        "browser_automation.interactive": {
             "action_type": ACTION_TYPE_READ,
             "target_system": "browser",
             "reversibility": True,
             "external_visibility": False,
             "destructive_risk": False,
         },
-        "capture_screenshot": {
+        "screenshot.capture": {
             "action_type": ACTION_TYPE_READ,
             "target_system": "local_device",
             "reversibility": True,
@@ -1612,7 +1616,7 @@ def classify_runtime_action(
             "external_visibility": False,
             "destructive_risk": False,
         },
-        "execute_shell_command": {
+        "shell.execute": {
             "action_type": ACTION_TYPE_DESTRUCTIVE,
             "target_system": "local_device",
             "reversibility": False,
@@ -2585,7 +2589,7 @@ TOOL_POLICY.register_sensitive("presentation_update")
 TOOL_POLICY.register_critical("delete_files")
 TOOL_POLICY.register_critical("delete_records")
 TOOL_POLICY.register_critical("transfer_funds")
-for _tool_id in ("read_write_files", "capture_screenshot", "computer_control", "execute_shell_command"):
+for _tool_id in ("filesystem.read_write", "screenshot.capture", "computer_control", "shell.execute"):
     _contract = resolve_capability(_tool_id)
     _risk_level = str(_contract.risk_level).strip().lower() if _contract is not None else ""
     if _risk_level == "critical":
@@ -2613,9 +2617,9 @@ def evaluate_tool_policy_decision(
     block_cloud_critical = bool(policy.get("block_cloud_critical", True))
 
     browser_policy = metadata.get("browser_automation_policy") if isinstance(metadata.get("browser_automation_policy"), dict) else {}
-    browser_requires_approval = bool(browser_policy.get("requires_approval")) if clean_tool_id == "browser_automation" else False
-    browser_profile = str(browser_policy.get("profile") or "").strip().lower() if clean_tool_id == "browser_automation" else ""
-    browser_privileged_actions = list(browser_policy.get("privileged_actions") or []) if clean_tool_id == "browser_automation" else []
+    browser_requires_approval = bool(browser_policy.get("requires_approval")) if clean_tool_id == "browser_automation.interactive" else False
+    browser_profile = str(browser_policy.get("profile") or "").strip().lower() if clean_tool_id == "browser_automation.interactive" else ""
+    browser_privileged_actions = list(browser_policy.get("privileged_actions") or []) if clean_tool_id == "browser_automation.interactive" else []
     capability_ids = [
         str(item).strip().lower()
         for item in (capability_ids or [])
@@ -2629,8 +2633,8 @@ def evaluate_tool_policy_decision(
         )
         if isinstance(detail, dict)
     ]
-    uses_capability_path = clean_tool_id == "execute_shell_command" and bool(capability_details)
-    uses_raw_command_path = clean_tool_id == "execute_shell_command" and not uses_capability_path
+    uses_capability_path = clean_tool_id == "shell.execute" and bool(capability_details)
+    uses_raw_command_path = clean_tool_id == "shell.execute" and not uses_capability_path
     unsupported_capability = next(
         (
             detail
@@ -2642,7 +2646,7 @@ def evaluate_tool_policy_decision(
 
     safe_raw_shell_command = uses_raw_command_path and _metadata_allows_safe_raw_shell(metadata)
     classification = classify_runtime_action(clean_tool_id, count=1, target=effective_target)
-    if clean_tool_id == "execute_shell_command" and safe_raw_shell_command:
+    if clean_tool_id == "shell.execute" and safe_raw_shell_command:
         classification = {
             **classification,
             "action_type": ACTION_TYPE_REVERSIBLE_WRITE,
@@ -2692,7 +2696,7 @@ def evaluate_tool_policy_decision(
 
     if (
         execution_decision != "deny"
-        and clean_tool_id == "browser_automation"
+        and clean_tool_id == "browser_automation.interactive"
         and effective_target == EXECUTION_TARGET_LOCAL_COMPANION
         and browser_profile in {"authenticated_interactive", "authenticated_privileged"}
     ):
@@ -2705,7 +2709,7 @@ def evaluate_tool_policy_decision(
 
     if (
         execution_decision != "deny"
-        and clean_tool_id == "browser_automation"
+        and clean_tool_id == "browser_automation.interactive"
         and browser_requires_approval
         and not (
             effective_target == EXECUTION_TARGET_LOCAL_COMPANION
@@ -2741,7 +2745,7 @@ def evaluate_tool_policy_decision(
         "browser_requires_approval": browser_requires_approval,
         "browser_privileged_actions": browser_privileged_actions or None,
         "reviewed_approval_required": bool(
-            clean_tool_id == "browser_automation"
+            clean_tool_id == "browser_automation.interactive"
             and effective_target == EXECUTION_TARGET_LOCAL_COMPANION
             and browser_profile in {"authenticated_interactive", "authenticated_privileged"}
         ),

@@ -151,6 +151,23 @@ class ApiSessionResponse(BaseModel):
     status: str = "active"
 
 
+class ApiApprovalResolveRequest(BaseModel):
+    approval_id: Optional[str] = None
+    resolution: Literal["approved", "rejected"]
+    actor: str = "user"
+    reason: Optional[str] = None
+
+
+class ApiApprovalResolveResponse(BaseModel):
+    status: str = "ok"
+    approval_id: str
+    run_id: Optional[str] = None
+    resolution: Literal["approved", "rejected"]
+    actor: str = "user"
+    reason: str = ""
+    outbox_event: Dict[str, Any] = Field(default_factory=dict)
+
+
 CANONICAL_API_ENDPOINTS: Dict[str, Dict[str, Any]] = {
     "turn": {
         "method": "POST",
@@ -170,6 +187,13 @@ CANONICAL_API_ENDPOINTS: Dict[str, Dict[str, Any]] = {
         "path": "/notifications",
         "response_model": "ApiNotificationListResponse",
         "notes": "Canonical notification feed. `stream=true` returns SSE.",
+    },
+    "approvals_resolve": {
+        "method": "POST",
+        "path": "/approvals/{approval_id}/resolve",
+        "request_model": "ApiApprovalResolveRequest",
+        "response_model": "ApiApprovalResolveResponse",
+        "notes": "Canonical approval resolution endpoint with durable approval audit and outbox emission.",
     },
     "artifacts_list": {
         "method": "GET",

@@ -131,10 +131,10 @@ LOCAL_EXECUTION_TEXT_EXTENSIONS = {
 }
 BROWSER_CAPTURE_IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg"}
 LOCAL_WORKER_REGISTERED_TOOLS = [
-    "read_write_files",
-    "execute_shell_command",
-    "capture_screenshot",
-    "browser_automation",
+    "filesystem.read_write",
+    "shell.execute",
+    "screenshot.capture",
+    "browser_automation.interactive",
     "computer_control.ocr",
     "computer_control.click",
     "computer_control.type",
@@ -207,7 +207,12 @@ class _LinkCollector(HTMLParser):
         if href:
             self.links.append({"href": href, "title": title})
 def _normalize_action_id(raw: Any) -> str:
-    return str(raw or "").strip().lower().replace("-", "_").replace(" ", "_")
+    value = str(raw or "").strip().lower().replace("-", "_").replace(" ", "_")
+    normalized = re.sub(r"[^a-z0-9_.]", "", value)
+    contract = resolve_capability(normalized)
+    if contract is not None:
+        return str(contract.capability_id or normalized).strip().lower()
+    return normalized
 
 
 def _local_execution_root() -> Path:
@@ -614,7 +619,7 @@ def _browser_policy_gate(operation: Dict[str, Any], session_profile: str, browse
         current_plan_hash = browser_automation_plan_hash(
             [
                 {
-                    "tool": "browser_automation",
+                    "tool": "browser_automation.interactive",
                     "mode": str(operation.get("mode") or "capture_page").strip() or "capture_page",
                     "url": str(operation.get("url") or "").strip(),
                     "session_profile": session_profile,
@@ -649,7 +654,7 @@ def _run_browser_operation(run_id: str, op_index: int, operation: Dict[str, Any]
         current_plan_hash = browser_automation_plan_hash(
             [
                 {
-                    "tool": "browser_automation",
+                    "tool": "browser_automation.interactive",
                     "mode": mode,
                     "url": url,
                     "session_profile": session_profile,
@@ -792,10 +797,10 @@ def _run_browser_operation(run_id: str, op_index: int, operation: Dict[str, Any]
         action = {
             "step_index": op_index,
             "step_number": op_index + 1,
-            "tool": "browser_automation",
+            "tool": "browser_automation.interactive",
             "status": "waiting_for_input" if paused else "completed",
             "summary": _operation_summary(operation, op_index),
-            "action": "browser_automation",
+            "action": "browser_automation.interactive",
             "mode": mode,
             "url": str(capture_result.get("finalUrl") or target_url),
             "title": str(capture_result.get("title") or ""),
@@ -834,7 +839,7 @@ def _run_browser_operation(run_id: str, op_index: int, operation: Dict[str, Any]
             {
                 "step_index": op_index,
                 "step_number": op_index + 1,
-                "tool": "browser_automation",
+                "tool": "browser_automation.interactive",
                 "kind": "screenshot",
                 "file_path": _relative_to_root(screenshot_target, root),
                 "label": screenshot_target.name,
@@ -842,7 +847,7 @@ def _run_browser_operation(run_id: str, op_index: int, operation: Dict[str, Any]
             {
                 "step_index": op_index,
                 "step_number": op_index + 1,
-                "tool": "browser_automation",
+                "tool": "browser_automation.interactive",
                 "kind": "report",
                 "file_path": _relative_to_root(report_target, root),
                 "label": report_target.name,
@@ -863,7 +868,7 @@ def _run_browser_operation(run_id: str, op_index: int, operation: Dict[str, Any]
                 {
                     "step_index": op_index,
                     "step_number": op_index + 1,
-                    "tool": "browser_automation",
+                    "tool": "browser_automation.interactive",
                     "kind": "download",
                     "file_path": relative_saved,
                     "label": str(item.get("suggestedFilename") or saved_path_obj.name).strip() or saved_path_obj.name,
@@ -935,10 +940,10 @@ def _run_browser_operation(run_id: str, op_index: int, operation: Dict[str, Any]
     action = {
         "step_index": op_index,
         "step_number": op_index + 1,
-        "tool": "browser_automation",
+        "tool": "browser_automation.interactive",
         "status": "completed",
         "summary": _operation_summary(operation, op_index),
-        "action": "browser_automation",
+        "action": "browser_automation.interactive",
         "mode": mode,
         "url": final_url,
         "title": title,
@@ -951,7 +956,7 @@ def _run_browser_operation(run_id: str, op_index: int, operation: Dict[str, Any]
         {
             "step_index": op_index,
             "step_number": op_index + 1,
-            "tool": "browser_automation",
+            "tool": "browser_automation.interactive",
             "kind": "file",
             "file_path": _relative_to_root(report_target, root),
             "label": report_target.name,
@@ -959,7 +964,7 @@ def _run_browser_operation(run_id: str, op_index: int, operation: Dict[str, Any]
         {
             "step_index": op_index,
             "step_number": op_index + 1,
-            "tool": "browser_automation",
+            "tool": "browser_automation.interactive",
             "kind": "file",
             "file_path": _relative_to_root(html_target, root),
             "label": html_target.name,
@@ -1078,12 +1083,12 @@ def _parse_operations(pack_inputs: Dict[str, Any], metadata: Optional[Dict[str, 
             candidate.get("tool")
             or candidate.get("action")
             or capability_tool_id(candidate.get("capability"))
-            or ("execute_shell_command" if str(candidate.get("command") or "").strip() or isinstance(candidate.get("argv"), list) else "")
-            or ("browser_automation" if str(candidate.get("url") or "").strip() else "")
-            or ("capture_screenshot" if bool(candidate.get("screenshot")) else "")
+            or ("shell.execute" if str(candidate.get("command") or "").strip() or isinstance(candidate.get("argv"), list) else "")
+            or ("browser_automation.interactive" if str(candidate.get("url") or "").strip() else "")
+            or ("screenshot.capture" if bool(candidate.get("screenshot")) else "")
         )
         if not inferred_tool and str(candidate.get("path") or candidate.get("file_path") or "").strip():
-            inferred_tool = "read_write_files"
+            inferred_tool = "filesystem.read_write"
         if inferred_tool:
             candidate["tool"] = inferred_tool
             operations.append(candidate)
@@ -1097,7 +1102,7 @@ def _parse_operations(pack_inputs: Dict[str, Any], metadata: Optional[Dict[str, 
 
 def _operation_summary(operation: Dict[str, Any], fallback_index: int) -> str:
     tool_id = _normalize_action_id(operation.get("tool") or operation.get("action"))
-    if tool_id == "execute_shell_command":
+    if tool_id == "shell.execute":
         capability = str(operation.get("capability") or "").strip()
         if capability and not str(operation.get("command") or "").strip() and not isinstance(operation.get("argv"), list):
             detail = capability_metadata(capability, _project_root())
@@ -1112,7 +1117,7 @@ def _operation_summary(operation: Dict[str, Any], fallback_index: int) -> str:
         except Exception:
             command = str(operation.get("command") or "").strip()
             return command or f"Shell command {fallback_index + 1}"
-    if tool_id == "capture_screenshot":
+    if tool_id == "screenshot.capture":
         capability = str(operation.get("capability") or "").strip()
         if capability:
             detail = capability_metadata(capability, _project_root())
@@ -1122,7 +1127,7 @@ def _operation_summary(operation: Dict[str, Any], fallback_index: int) -> str:
                 return f"{title} -> {target}" if target else title
         target = str(operation.get("path") or operation.get("file_path") or "").strip()
         return target or f"Screenshot {fallback_index + 1}"
-    if tool_id == "browser_automation":
+    if tool_id == "browser_automation.interactive":
         mode = _normalize_action_id(operation.get("mode") or "extract_text")
         url = str(operation.get("url") or "").strip()
         if mode == "capture_page":
@@ -1184,10 +1189,10 @@ def _run_shell_operation(run_id: str, op_index: int, operation: Dict[str, Any], 
     action = {
         "step_index": op_index,
         "step_number": op_index + 1,
-        "tool": "execute_shell_command",
+        "tool": "shell.execute",
         "status": "completed",
         "summary": _operation_summary(operation, op_index),
-        "action": "execute_shell_command",
+        "action": "shell.execute",
         "command": display_command,
         "argv": list(tokens),
         "cwd": _relative_to_root(cwd, root),
@@ -1204,7 +1209,7 @@ def _run_shell_operation(run_id: str, op_index: int, operation: Dict[str, Any], 
     artifact = {
         "step_index": op_index,
         "step_number": op_index + 1,
-        "tool": "execute_shell_command",
+        "tool": "shell.execute",
         "kind": "report",
         "file_path": _relative_to_root(log_path, root),
         "label": log_path.name,
@@ -1224,7 +1229,7 @@ def _run_file_operation(operation: Dict[str, Any], root: Path, metadata: Dict[st
     )
     mode = access["mode"]
     if mode not in {"read", "write", "append", "delete"}:
-        raise RuntimeError("read_write_files mode must be read, write, append, or delete.")
+        raise RuntimeError("filesystem.read_write mode must be read, write, append, or delete.")
     target = _resolve_local_path(operation.get("path") or operation.get("file_path"), root, create_parent=mode in {"write", "append"})
     if not _is_text_file(target):
         raise RuntimeError("V1 file operations are limited to text-oriented files.")
@@ -1237,10 +1242,10 @@ def _run_file_operation(operation: Dict[str, Any], root: Path, metadata: Dict[st
         action = {
             "step_index": int(operation.get("__step_index__") or 0),
             "step_number": int(operation.get("__step_index__") or 0) + 1,
-            "tool": "read_write_files",
+            "tool": "filesystem.read_write",
             "status": "completed",
             "summary": _operation_summary(operation, int(operation.get("__step_index__") or 0)),
-            "action": "read_write_files",
+            "action": "filesystem.read_write",
             "mode": mode,
             "path": relative_path,
             "file_path": relative_path,
@@ -1250,7 +1255,7 @@ def _run_file_operation(operation: Dict[str, Any], root: Path, metadata: Dict[st
         artifact = {
             "step_index": int(operation.get("__step_index__") or 0),
             "step_number": int(operation.get("__step_index__") or 0) + 1,
-            "tool": "read_write_files",
+            "tool": "filesystem.read_write",
             "kind": "file",
             "file_path": relative_path,
             "label": target.name,
@@ -1266,10 +1271,10 @@ def _run_file_operation(operation: Dict[str, Any], root: Path, metadata: Dict[st
         action = {
             "step_index": int(operation.get("__step_index__") or 0),
             "step_number": int(operation.get("__step_index__") or 0) + 1,
-            "tool": "read_write_files",
+            "tool": "filesystem.read_write",
             "status": "completed",
             "summary": _operation_summary(operation, int(operation.get("__step_index__") or 0)),
-            "action": "read_write_files",
+            "action": "filesystem.read_write",
             "mode": mode,
             "path": relative_path,
             "file_path": relative_path,
@@ -1277,7 +1282,7 @@ def _run_file_operation(operation: Dict[str, Any], root: Path, metadata: Dict[st
         artifact = {
             "step_index": int(operation.get("__step_index__") or 0),
             "step_number": int(operation.get("__step_index__") or 0) + 1,
-            "tool": "read_write_files",
+            "tool": "filesystem.read_write",
             "kind": "file_delete",
             "file_path": relative_path,
             "label": target.name,
@@ -1296,10 +1301,10 @@ def _run_file_operation(operation: Dict[str, Any], root: Path, metadata: Dict[st
     action = {
         "step_index": int(operation.get("__step_index__") or 0),
         "step_number": int(operation.get("__step_index__") or 0) + 1,
-        "tool": "read_write_files",
+        "tool": "filesystem.read_write",
         "status": "completed",
         "summary": _operation_summary(operation, int(operation.get("__step_index__") or 0)),
-        "action": "read_write_files",
+        "action": "filesystem.read_write",
         "mode": mode,
         "path": relative_path,
         "file_path": relative_path,
@@ -1308,7 +1313,7 @@ def _run_file_operation(operation: Dict[str, Any], root: Path, metadata: Dict[st
     artifact = {
         "step_index": int(operation.get("__step_index__") or 0),
         "step_number": int(operation.get("__step_index__") or 0) + 1,
-        "tool": "read_write_files",
+        "tool": "filesystem.read_write",
         "kind": "file",
         "file_path": relative_path,
         "label": target.name,
@@ -1365,10 +1370,10 @@ def _run_screenshot_operation(run_id: str, op_index: int, operation: Dict[str, A
     action = {
         "step_index": op_index,
         "step_number": op_index + 1,
-        "tool": "capture_screenshot",
+        "tool": "screenshot.capture",
         "status": "completed",
         "summary": _operation_summary(operation, op_index),
-        "action": "capture_screenshot",
+        "action": "screenshot.capture",
         "path": relative_path,
         "file_path": relative_path,
     }
@@ -1377,7 +1382,7 @@ def _run_screenshot_operation(run_id: str, op_index: int, operation: Dict[str, A
     artifact = {
         "step_index": op_index,
         "step_number": op_index + 1,
-        "tool": "capture_screenshot",
+        "tool": "screenshot.capture",
         "kind": "screenshot",
         "file_path": relative_path,
         "label": target.name,
@@ -1529,14 +1534,14 @@ def build_local_execution_pack_result(run: Dict[str, Any], metadata: Dict[str, A
                         "tool_id": tool_id or "unknown",
                     },
                 )
-                if tool_id == "execute_shell_command":
+                if tool_id == "shell.execute":
                     action, artifact = _run_shell_operation(run_id, index, operation_row, root, artifacts_root)
-                elif tool_id == "read_write_files":
+                elif tool_id == "filesystem.read_write":
                     action, artifact = _run_file_operation(operation_row, root, metadata)
-                elif tool_id == "capture_screenshot":
+                elif tool_id == "screenshot.capture":
                     action, artifact = _run_screenshot_operation(run_id, index, operation_row, root, artifacts_root)
                     artifacts = [artifact]
-                elif tool_id == "browser_automation":
+                elif tool_id == "browser_automation.interactive":
                     action, artifacts = _run_browser_operation(run_id, index, operation_row, root, artifacts_root)
                 elif tool_id == "computer_control":
                     action, artifact = _run_computer_control_operation(index, operation_row)
@@ -1546,11 +1551,11 @@ def build_local_execution_pack_result(run: Dict[str, Any], metadata: Dict[str, A
                     span,
                     {
                         "tool_status": str(action.get("status") or "completed").strip() or "completed",
-                        "artifact_count": len(artifacts) if tool_id == "browser_automation" else (1 if isinstance(artifact, dict) else 0),
+                        "artifact_count": len(artifacts) if tool_id == "browser_automation.interactive" else (1 if isinstance(artifact, dict) else 0),
                     },
                 )
             outputs_actions.append(action)
-            if tool_id == "browser_automation":
+            if tool_id == "browser_automation.interactive":
                 outputs_artifacts.extend(artifacts)
             elif isinstance(artifact, dict):
                 outputs_artifacts.append(artifact)
@@ -1563,7 +1568,7 @@ def build_local_execution_pack_result(run: Dict[str, Any], metadata: Dict[str, A
                     "status": "completed",
                     "artifact_file_path": (
                         artifacts[0].get("file_path")
-                        if tool_id == "browser_automation" and artifacts
+                        if tool_id == "browser_automation.interactive" and artifacts
                         else artifact.get("file_path")
                         if isinstance(artifact, dict)
                         else None
@@ -1572,7 +1577,7 @@ def build_local_execution_pack_result(run: Dict[str, Any], metadata: Dict[str, A
                     "browser_security_profile": action.get("browser_security_profile"),
                 }
             )
-            if tool_id == "browser_automation" and str(action.get("status") or "").strip().lower() == "waiting_for_input":
+            if tool_id == "browser_automation.interactive" and str(action.get("status") or "").strip().lower() == "waiting_for_input":
                 summary = str(action.get("pause_label") or "Browser operator paused for human unblock.").strip()
                 data = {
                     "pack_id": LOCAL_EXECUTION_PACK_ID,

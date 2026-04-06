@@ -385,7 +385,7 @@ def run_full_stack_crash_rehearsal(
 ) -> Dict[str, Any]:
     api_key = "full-stack-crash-rehearsal-key"
     worker_id = "full-stack-crash-worker"
-    required_capabilities = ["browser_automation"]
+    required_capabilities = ["browser_automation.interactive"]
 
     with tempfile.TemporaryDirectory(prefix="full-stack-local-worker-crash-") as tmp_name:
         tmp_root = Path(tmp_name)
@@ -427,7 +427,7 @@ def run_full_stack_crash_rehearsal(
                         "pack_inputs": {
                             "operations": [
                                 {
-                                    "tool": "browser_automation",
+                                    "tool": "browser_automation.interactive",
                                     "mode": "capture_page",
                                     "url": site.url,
                                     "browser_permissions": {"allow": True},

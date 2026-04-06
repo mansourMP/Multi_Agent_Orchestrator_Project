@@ -4,6 +4,7 @@ import asyncio
 import json
 from typing import Any, Callable, Dict, List, Optional
 
+from server_modules.capability_registry import resolve_capability
 from server_modules import skills_service
 
 
@@ -143,9 +144,11 @@ def format_direct_local_tool_result(result: Dict[str, Any]) -> str:
     artifacts = outputs.get("artifacts") if isinstance(outputs.get("artifacts"), list) else []
     first_action = actions[0] if actions and isinstance(actions[0], dict) else {}
     first_artifact = artifacts[0] if artifacts and isinstance(artifacts[0], dict) else {}
-    tool_name = str(first_action.get("tool") or result_data.get("tool_variant") or "").strip().lower()
+    raw_tool_name = str(first_action.get("tool") or result_data.get("tool_variant") or "").strip().lower()
+    contract = resolve_capability(raw_tool_name)
+    tool_name = str(contract.capability_id).strip().lower() if contract is not None else raw_tool_name
 
-    if tool_name == "read_write_files":
+    if tool_name == "filesystem.read_write":
         mode = str(first_action.get("mode") or "").strip().lower()
         path = str(first_action.get("path") or first_action.get("file_path") or "").strip()
         if mode == "read":
@@ -159,7 +162,7 @@ def format_direct_local_tool_result(result: Dict[str, Any]) -> str:
         output_preview = str(first_action.get("output_preview") or "").strip()
         return "\n".join(part for part in [summary or (f"Command completed: {command}" if command else ""), output_preview] if part).strip()
 
-    if tool_name == "capture_screenshot":
+    if tool_name == "screenshot.capture":
         artifact_path = str(first_artifact.get("path") or "").strip()
         return artifact_path or summary or "Screenshot captured."
 

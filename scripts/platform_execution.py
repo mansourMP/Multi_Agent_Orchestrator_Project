@@ -44,7 +44,7 @@ def current_platform_context() -> PlatformContext:
 CAPABILITY_CATALOG: Tuple[Dict[str, Any], ...] = (
     {
         "id": "stack.start",
-        "tool_id": "execute_shell_command",
+        "tool_id": "shell.execute",
         "category": "runtime",
         "title": "Start local stack",
         "summary": "Start the local Empyralis runtime stack.",
@@ -52,7 +52,7 @@ CAPABILITY_CATALOG: Tuple[Dict[str, Any], ...] = (
     },
     {
         "id": "stack.status",
-        "tool_id": "execute_shell_command",
+        "tool_id": "shell.execute",
         "category": "runtime",
         "title": "Check local stack status",
         "summary": "Inspect the local Empyralis runtime stack status.",
@@ -60,7 +60,7 @@ CAPABILITY_CATALOG: Tuple[Dict[str, Any], ...] = (
     },
     {
         "id": "stack.logs",
-        "tool_id": "execute_shell_command",
+        "tool_id": "shell.execute",
         "category": "runtime",
         "title": "Open local stack logs",
         "summary": "Read local Empyralis runtime stack logs.",
@@ -68,7 +68,7 @@ CAPABILITY_CATALOG: Tuple[Dict[str, Any], ...] = (
     },
     {
         "id": "device.sleep",
-        "tool_id": "execute_shell_command",
+        "tool_id": "shell.execute",
         "category": "device",
         "title": "Sleep computer",
         "summary": "Put the computer into sleep mode.",
@@ -76,7 +76,7 @@ CAPABILITY_CATALOG: Tuple[Dict[str, Any], ...] = (
     },
     {
         "id": "device.display_sleep",
-        "tool_id": "execute_shell_command",
+        "tool_id": "shell.execute",
         "category": "device",
         "title": "Sleep display",
         "summary": "Turn off the display without full system sleep.",
@@ -84,7 +84,7 @@ CAPABILITY_CATALOG: Tuple[Dict[str, Any], ...] = (
     },
     {
         "id": "device.lock_screen",
-        "tool_id": "execute_shell_command",
+        "tool_id": "shell.execute",
         "category": "device",
         "title": "Lock screen",
         "summary": "Lock the current desktop session.",
@@ -92,7 +92,7 @@ CAPABILITY_CATALOG: Tuple[Dict[str, Any], ...] = (
     },
     {
         "id": "screenshot.capture",
-        "tool_id": "capture_screenshot",
+        "tool_id": "screenshot.capture",
         "category": "media",
         "title": "Capture screenshot",
         "summary": "Capture the current screen into the local artifact space.",
@@ -438,9 +438,9 @@ def capability_tool_id(capability: str) -> Optional[str]:
     if not clean:
         return None
     if clean == "screenshot.capture":
-        return "capture_screenshot"
+        return "screenshot.capture"
     if clean.startswith("device.") or clean.startswith("stack."):
-        return "execute_shell_command"
+        return "shell.execute"
     return None
 
 

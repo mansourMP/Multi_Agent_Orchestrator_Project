@@ -103,7 +103,7 @@ def _is_control_plane_rate_limited_path(request_path: str) -> bool:
     path = str(request_path or "").strip()
     if not path:
         return False
-    if path == "/chat/respond" or path == "/api/chat/respond":
+    if path == "/turn" or path == "/api/turn":
         return False
     if path.startswith("/runtime/runtimes/") or path.startswith("/runtime/tasks/"):
         return False
@@ -115,7 +115,7 @@ def _control_plane_rate_limit(request: Request) -> Optional[JSONResponse]:
         return None
     request_path = str(request.url.path or "")
     if not _is_control_plane_rate_limited_path(request_path):
-        # Runtime claims/heartbeats and direct chat are chatty by design.
+        # Runtime claims/heartbeats and canonical turn streaming are chatty by design.
         # Keep control-plane limits focused on configuration-style mutation APIs.
         return None
     now = time.time()

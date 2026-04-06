@@ -16,14 +16,10 @@ from server_modules.runtime_config import (
     ORION_SETUP_SESSIONS_FILE,
 )
 from server_modules import outbox_service
+from server_modules import run_state_repository
 from server_modules.runtime_state_store import (
-    delete_live_run_state,
     init_runtime_state_db,
-    list_live_run_states,
-    list_run_history,
     load_local_runtime_state,
-    replace_run_history,
-    upsert_live_run_state,
 )
 
 _LIVE_RUN_EXCLUDED_KEYS = {
@@ -411,30 +407,34 @@ class AcpSessionManager:
         token = str(run_id or "").strip()
         if not token:
             return
-        self._ensure_runtime_db()
         with self._lock_for(f"run:{token}"):
-            upsert_live_run_state(self.runtime_db_path, self._serialize_live_run(token, run))
+            payload = self._serialize_live_run(token, run)
+            run_state_repository.sync_upsert_live_run(
+                token,
+                str(payload.get("workspace_id") or payload.get("context", {}).get("workspace_id") or "default"),
+                str(payload.get("tenant_id") or payload.get("context", {}).get("tenant_id") or payload.get("context", {}).get("metadata", {}).get("tenant_id") or "default"),
+                str(payload.get("status") or "queued"),
+                payload,
+                str(payload.get("trace_id") or payload.get("context", {}).get("trace_id") or ""),
+            )
 
     def delete_live_run(self, run_id: str) -> None:
         token = str(run_id or "").strip()
         if not token:
             return
-        self._ensure_runtime_db()
         with self._lock_for(f"run:{token}"):
-            delete_live_run_state(self.runtime_db_path, token)
+            run_state_repository.sync_delete_live_run(token)
 
     def _persist_run_history(self) -> None:
-        self._ensure_runtime_db()
-        with self._lock_for("run_history"):
-            replace_run_history(
-                self.runtime_db_path,
-                [_json_safe(item) for item in self.run_history],
-                ORION_HISTORY_LIMIT,
-            )
+        # Archived run history is durably sourced from Postgres run_archive.
+        # Keep this in-memory list as a hot cache only.
+        return None
 
     def _persist_local_runtime_state(self) -> None:
         self._ensure_runtime_db()
         with self._lock_for("local_runtime_state"):
+            # SQLite remains only as a local-only offline queue/session cache.
+            # It is not the canonical store for live run truth.
             outbox_service.persist_local_runtime_state(
                 db_path=self.runtime_db_path,
                 pending_run_ids=[str(item) for item in self.local_pending_run_ids],
@@ -477,18 +477,12 @@ class AcpSessionManager:
 
     def reload_runtime_state(self) -> None:
         self._ensure_runtime_db()
-        try:
-            persisted_runs = list_live_run_states(self.runtime_db_path)
-        except Exception:
-            persisted_runs = []
+        persisted_runs = run_state_repository.sync_list_live_runs()
         try:
             local_state = load_local_runtime_state(self.runtime_db_path)
         except Exception:
             local_state = {}
-        try:
-            history_items = list_run_history(self.runtime_db_path, ORION_HISTORY_LIMIT)
-        except Exception:
-            history_items = []
+        history_items = run_state_repository.sync_list_run_archive(ORION_HISTORY_LIMIT)
         self.runs.reload(persisted_runs)
         self.local_pending_run_ids.reload(local_state.get("pending_run_ids") if isinstance(local_state, dict) else [])
         self.local_claimed_runs.reload(local_state.get("claimed_runs") if isinstance(local_state, dict) else {})

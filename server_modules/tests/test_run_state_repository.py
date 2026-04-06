@@ -1,10 +1,6 @@
-import os
-import tempfile
 import unittest
-from pathlib import Path
 from unittest.mock import patch
 
-from server_modules import runtime_state_store
 from server_modules import run_state_repository
 
 
@@ -58,28 +54,11 @@ class RunStateRepositoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["status"], "executing")
         self.assertEqual(len(pool.fetchrow_calls), 1)
 
-    async def test_get_live_run_falls_back_to_sqlite_when_postgres_unavailable(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            db_path = Path(tmp) / "runtime.db"
-            runtime_state_store.init_runtime_state_db(db_path)
-            runtime_state_store.upsert_live_run_state(
-                db_path,
-                {
-                    "run_id": "run-sqlite",
-                    "status": "queued",
-                    "workspace_id": "workspace-sqlite",
-                    "context": {"workspace_id": "workspace-sqlite"},
-                    "created_at": "2026-04-06T00:00:00Z",
-                    "updated_at": "2026-04-06T00:00:00Z",
-                },
-            )
-            with patch("server_modules.run_state_repository.runtime_db.get_pool", return_value=None):
-                with patch.dict(os.environ, {"ORION_RUNTIME_STATE_DB": str(db_path)}, clear=False):
-                    result = await run_state_repository.get_live_run("run-sqlite")
+    async def test_get_live_run_returns_none_when_postgres_unavailable(self):
+        with patch("server_modules.run_state_repository.runtime_db.get_pool", return_value=None):
+            result = await run_state_repository.get_live_run("run-sqlite")
 
-        self.assertIsNotNone(result)
-        self.assertEqual(result["run_id"], "run-sqlite")
-        self.assertEqual(result["status"], "queued")
+        self.assertIsNone(result)
 
     async def test_record_transition_is_non_throwing_when_postgres_fails(self):
         pool = _FakePool(execute_error=RuntimeError("db down"))
@@ -117,4 +96,3 @@ class RunStateRepositoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("run_archive", pool.execute_calls[0][0])
         self.assertIn("local_queue_claims", pool.execute_calls[1][0])
         self.assertIn("DELETE FROM local_queue_claims", pool.execute_calls[2][0])
-

@@ -80,7 +80,7 @@ class RunsExecutionGraphTests(unittest.TestCase):
 
         predicted = runs_execution._predict_tool_ids_for_context(context)
 
-        self.assertEqual(predicted, ["draft_email", "send_message", "execute_shell_command"])
+        self.assertEqual(predicted, ["draft_email", "send_message", "shell.execute"])
 
     def test_compile_orion_dag_prefers_workflow_definition(self):
         dag = runs_execution._compile_orion_dag(

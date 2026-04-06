@@ -8,6 +8,10 @@ from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional
 import sqlite3
 
+# SQLite is retained only for local-only offline cache concerns such as queue
+# recovery, chat stream state, channel events, and runtime sessions.
+# Live run truth and archived run history are durably sourced from Postgres.
+
 
 def _parse_ts(raw: Any) -> float:
     if isinstance(raw, (int, float)):

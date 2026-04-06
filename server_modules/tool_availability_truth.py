@@ -150,7 +150,7 @@ _ACTION_TOOL_MAP = {
     "create_document": "document_create",
     "create_sheet": "spreadsheet_create",
     "create_spreadsheet": "spreadsheet_create",
-    "upload_drive_file": "read_write_files",
+    "upload_drive_file": "filesystem.read_write",
 }
 
 

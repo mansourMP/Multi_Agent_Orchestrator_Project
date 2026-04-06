@@ -976,7 +976,7 @@ class RunServiceTests(unittest.TestCase):
 
         self.assertEqual(result["summary"], "Local tool finished")
         self.assertEqual(result["result_data"]["local_child_run_id"], "child-local-1")
-        self.assertEqual(requests[0].metadata["pack_inputs"]["operations"][0]["tool"], "read_write_files")
+        self.assertEqual(requests[0].metadata["pack_inputs"]["operations"][0]["tool"], "filesystem.read_write")
 
     def test_safe_int_and_normalize_requested_max_iterations(self):
         self.assertEqual(safe_int("7", 0), 7)

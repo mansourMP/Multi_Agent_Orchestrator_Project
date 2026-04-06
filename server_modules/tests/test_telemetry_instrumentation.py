@@ -169,7 +169,7 @@ class TelemetryInstrumentationTests(unittest.TestCase):
             pack_inputs = {
                 "operations": [
                     {
-                        "tool": "read_write_files",
+                        "tool": "filesystem.read_write",
                         "mode": "read",
                         "path": "notes.txt",
                     }
@@ -183,7 +183,7 @@ class TelemetryInstrumentationTests(unittest.TestCase):
         self.assertIn("Executed 1 of 1 local operations.", summary)
         self.assertEqual(data["outputs"]["operations_executed"], 1)
         span = tracer.spans[0]
-        self.assertEqual(span.attributes["capability_id"], "read_write_files")
+        self.assertEqual(span.attributes["capability_id"], "filesystem.read_write")
         self.assertEqual(span.attributes["risk_level"], "medium")
         self.assertEqual(span.attributes["run_id"], "run-local-1")
         self.assertEqual(span.attributes["workspace_id"], "workspace-1")
@@ -191,4 +191,3 @@ class TelemetryInstrumentationTests(unittest.TestCase):
         self.assertEqual(span.attributes["actor_type"], "worker")
         self.assertEqual(span.attributes["tool_status"], "completed")
         self.assertIn("trace_id", span.attributes)
-

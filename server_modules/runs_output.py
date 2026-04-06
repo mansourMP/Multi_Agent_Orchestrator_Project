@@ -1,6 +1,8 @@
 from server_modules import runtime_config as config
 from server_modules import shared as shared
+from server_modules.capability_registry import resolve_capability
 from server_modules import runtime_common as common
+from server_modules import run_state_repository
 
 globals().update({key: value for key, value in vars(config).items() if not key.startswith("__")})
 globals().update({key: value for key, value in vars(shared).items() if not key.startswith("__")})
@@ -77,7 +79,12 @@ def _browser_introspection_snapshot(run: Dict[str, Any], result_data: Optional[D
     outputs = result_data.get("outputs") if isinstance(result_data, dict) and isinstance(result_data.get("outputs"), dict) else {}
     actions = outputs.get("actions") if isinstance(outputs.get("actions"), list) else []
     for item in reversed(actions):
-        if isinstance(item, dict) and str(item.get("tool") or "").strip().lower() == "browser_automation":
+        if not isinstance(item, dict):
+            continue
+        raw_tool = str(item.get("tool") or "").strip().lower()
+        contract = resolve_capability(raw_tool)
+        tool_id = str(contract.capability_id).strip().lower() if contract is not None else raw_tool
+        if tool_id == "browser_automation.interactive":
             browser_action = item
             break
     checkpoint = run.get("browser_checkpoint") if isinstance(run.get("browser_checkpoint"), dict) else {}
@@ -460,11 +467,12 @@ def _archive_run_if_terminal(run_id: str, run: Dict[str, Any]):
     if run.get("_archived"):
         return
     snapshot = _serialize_run_snapshot(run_id, run)
-    ACP_MANAGER.reconfigure_paths(runtime_db_path=ORION_RUNTIME_STATE_DB)
-    try:
-        upsert_run_history_item(ORION_RUNTIME_STATE_DB, snapshot, ORION_HISTORY_LIMIT)
-    except Exception:
-        pass
+    run_state_repository.sync_archive_run(
+        run_id,
+        str(snapshot.get("status") or run.get("status") or "completed"),
+        snapshot,
+        str(snapshot.get("trace_id") or run.get("trace_id") or ""),
+    )
     with RUN_HISTORY_LOCK:
         RUN_HISTORY.insert(0, snapshot)
         del RUN_HISTORY[ORION_HISTORY_LIMIT:]
@@ -475,11 +483,12 @@ def _refresh_archived_run_snapshot(run_id: str, run: Dict[str, Any]) -> None:
     if not run.get("_archived"):
         return
     snapshot = _serialize_run_snapshot(run_id, run)
-    ACP_MANAGER.reconfigure_paths(runtime_db_path=ORION_RUNTIME_STATE_DB)
-    try:
-        upsert_run_history_item(ORION_RUNTIME_STATE_DB, snapshot, ORION_HISTORY_LIMIT)
-    except Exception:
-        pass
+    run_state_repository.sync_archive_run(
+        run_id,
+        str(snapshot.get("status") or run.get("status") or "completed"),
+        snapshot,
+        str(snapshot.get("trace_id") or run.get("trace_id") or ""),
+    )
     with RUN_HISTORY_LOCK:
         for idx, item in enumerate(RUN_HISTORY):
             if str(item.get("run_id") or "").strip() == run_id:
@@ -491,11 +500,12 @@ def _upsert_run_history_snapshot(snapshot: Dict[str, Any]) -> None:
     run_id = str(snapshot.get("run_id") or "").strip()
     if not run_id:
         return
-    ACP_MANAGER.reconfigure_paths(runtime_db_path=ORION_RUNTIME_STATE_DB)
-    try:
-        upsert_run_history_item(ORION_RUNTIME_STATE_DB, snapshot, ORION_HISTORY_LIMIT)
-    except Exception:
-        pass
+    run_state_repository.sync_archive_run(
+        run_id,
+        str(snapshot.get("status") or "completed"),
+        snapshot,
+        str(snapshot.get("trace_id") or ""),
+    )
     with RUN_HISTORY_LOCK:
         for idx, item in enumerate(RUN_HISTORY):
             if str(item.get("run_id") or "").strip() == run_id:
@@ -507,25 +517,7 @@ def _upsert_run_history_snapshot(snapshot: Dict[str, Any]) -> None:
 
 
 def _load_run_history():
-    ACP_MANAGER.reconfigure_paths(runtime_db_path=ORION_RUNTIME_STATE_DB)
-    items: List[Dict[str, Any]] = []
-    try:
-        items = list_run_history(ORION_RUNTIME_STATE_DB, ORION_HISTORY_LIMIT)
-    except Exception:
-        items = []
-    if not items:
-        # One-time fallback for older local installs that only have JSON state.
-        payload = _safe_read_json(ORION_HISTORY_FILE, {"version": 1, "items": []})
-        raw_items = payload.get("items")
-        if isinstance(raw_items, list):
-            for item in raw_items[:ORION_HISTORY_LIMIT]:
-                if isinstance(item, dict) and isinstance(item.get("run_id"), str):
-                    items.append(item)
-        if items:
-            try:
-                replace_run_history(ORION_RUNTIME_STATE_DB, items, ORION_HISTORY_LIMIT)
-            except Exception:
-                pass
+    items = run_state_repository.sync_list_run_archive(ORION_HISTORY_LIMIT)
     with RUN_HISTORY_LOCK:
         ACP_MANAGER.run_history.reload(items[:ORION_HISTORY_LIMIT])
 
@@ -603,11 +595,21 @@ def _restore_live_run_state(item: Dict[str, Any]) -> Optional[tuple[str, Dict[st
 
 
 def _persist_live_run_state(run_id: str, run: Dict[str, Any]) -> None:
-    upsert_live_run_state(ORION_RUNTIME_STATE_DB, _serialize_live_run_state(run_id, run))
+    payload = _serialize_live_run_state(run_id, run)
+    context = payload.get("context") if isinstance(payload.get("context"), dict) else {}
+    metadata = context.get("metadata") if isinstance(context.get("metadata"), dict) else {}
+    run_state_repository.sync_upsert_live_run(
+        run_id,
+        str(payload.get("workspace_id") or context.get("workspace_id") or "default"),
+        str(payload.get("tenant_id") or context.get("tenant_id") or metadata.get("tenant_id") or "default"),
+        str(payload.get("status") or "queued"),
+        payload,
+        str(payload.get("trace_id") or context.get("trace_id") or ""),
+    )
 
 
 def _remove_live_run_state(run_id: str) -> None:
-    delete_live_run_state(ORION_RUNTIME_STATE_DB, run_id)
+    run_state_repository.sync_delete_live_run(run_id)
 
 
 def _compact_event_text(value: Any, limit: int = 800) -> str:

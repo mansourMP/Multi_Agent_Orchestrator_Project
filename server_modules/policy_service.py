@@ -491,17 +491,17 @@ def evaluate_tool_policy_decision(
     )
     browser_requires_approval = (
         bool(browser_policy.get("requires_approval"))
-        if clean_tool_id == "browser_automation"
+        if clean_tool_id == "browser_automation.interactive"
         else False
     )
     browser_profile = (
         str(browser_policy.get("profile") or "").strip().lower()
-        if clean_tool_id == "browser_automation"
+        if clean_tool_id == "browser_automation.interactive"
         else ""
     )
     browser_privileged_actions = (
         list(browser_policy.get("privileged_actions") or [])
-        if clean_tool_id == "browser_automation"
+        if clean_tool_id == "browser_automation.interactive"
         else []
     )
     capability_ids = [str(item).strip().lower() for item in (capability_ids or []) if str(item).strip()]
@@ -513,8 +513,8 @@ def evaluate_tool_policy_decision(
         )
         if isinstance(detail, dict)
     ]
-    uses_capability_path = clean_tool_id == "execute_shell_command" and bool(capability_details)
-    uses_raw_command_path = clean_tool_id == "execute_shell_command" and not uses_capability_path
+    uses_capability_path = clean_tool_id == "shell.execute" and bool(capability_details)
+    uses_raw_command_path = clean_tool_id == "shell.execute" and not uses_capability_path
     unsupported_capability = next(
         (
             detail
@@ -526,7 +526,7 @@ def evaluate_tool_policy_decision(
 
     safe_raw_shell_command = uses_raw_command_path and runtime_policy._metadata_allows_safe_raw_shell(metadata)
     classification = runtime_policy.classify_runtime_action(clean_tool_id, count=1, target=effective_target)
-    if clean_tool_id == "execute_shell_command" and safe_raw_shell_command:
+    if clean_tool_id == "shell.execute" and safe_raw_shell_command:
         classification = {
             **classification,
             "action_type": runtime_policy.ACTION_TYPE_REVERSIBLE_WRITE,
@@ -581,7 +581,7 @@ def evaluate_tool_policy_decision(
 
     if (
         execution_decision != "deny"
-        and clean_tool_id == "browser_automation"
+        and clean_tool_id == "browser_automation.interactive"
         and effective_target == runtime_policy.EXECUTION_TARGET_LOCAL_COMPANION
         and browser_profile in {"authenticated_interactive", "authenticated_privileged"}
     ):
@@ -594,7 +594,7 @@ def evaluate_tool_policy_decision(
 
     if (
         execution_decision != "deny"
-        and clean_tool_id == "browser_automation"
+        and clean_tool_id == "browser_automation.interactive"
         and browser_requires_approval
         and not (
             effective_target == runtime_policy.EXECUTION_TARGET_LOCAL_COMPANION
@@ -630,7 +630,7 @@ def evaluate_tool_policy_decision(
         "browser_requires_approval": browser_requires_approval,
         "browser_privileged_actions": browser_privileged_actions or None,
         "reviewed_approval_required": bool(
-            clean_tool_id == "browser_automation"
+            clean_tool_id == "browser_automation.interactive"
             and effective_target == runtime_policy.EXECUTION_TARGET_LOCAL_COMPANION
             and browser_profile in {"authenticated_interactive", "authenticated_privileged"}
         ),

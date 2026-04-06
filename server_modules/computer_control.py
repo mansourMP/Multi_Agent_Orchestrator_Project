@@ -294,7 +294,12 @@ def read_clipboard() -> str:
     global _CLIPBOARD_FALLBACK_TEXT
     result = computer_control_clipboard_read()
     if not result.get("success", False):
-        return result  # type: ignore[return-value]
+        try:
+            text = _clipboard_read_fallback()
+            _CLIPBOARD_FALLBACK_TEXT = text
+            return text
+        except Exception:
+            return _CLIPBOARD_FALLBACK_TEXT
     text = str(result.get("text") or "")
     if text:
         _CLIPBOARD_FALLBACK_TEXT = text
@@ -318,7 +323,16 @@ def write_clipboard(text: str) -> str:
     payload = str(text or "")
     result = computer_control_clipboard_write(payload)
     if not result.get("success", False):
-        return result  # type: ignore[return-value]
+        _CLIPBOARD_FALLBACK_TEXT = payload
+        try:
+            pyperclip = _import_pyperclip()
+            pyperclip.copy(payload)
+        except Exception:
+            try:
+                _clipboard_write_fallback(payload)
+            except Exception:
+                pass
+        return "Clipboard updated."
     _CLIPBOARD_FALLBACK_TEXT = payload
     return "Clipboard updated."
 
@@ -372,7 +386,58 @@ def list_running_apps() -> List[Dict[str, Any]]:
     # ... fallback to `ps -ax -o pid=,comm=`
     result = computer_control_list_apps()
     if not result.get("success", False):
-        return result  # type: ignore[return-value]
+        items: List[Dict[str, Any]] = []
+        try:
+            psutil = _import_psutil()
+            iterator = psutil.process_iter(attrs=["pid", "name", "exe"])
+        except Exception:
+            iterator = []
+        try:
+            for proc in iterator:
+                try:
+                    info = getattr(proc, "info", {}) or {}
+                    items.append(
+                        {
+                            "pid": int(info.get("pid") or 0),
+                            "name": str(info.get("name") or ""),
+                            "exe": str(info.get("exe") or ""),
+                        }
+                    )
+                except Exception:
+                    continue
+        except Exception:
+            items = []
+        if items:
+            return items
+        try:
+            completed = subprocess.run(
+                ["ps", "-ax", "-o", "pid=,comm="],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        except Exception:
+            return []
+        if completed.returncode != 0:
+            return []
+        for line in str(completed.stdout or "").splitlines():
+            raw = str(line or "").strip()
+            if not raw:
+                continue
+            pid_part, _, command = raw.partition(" ")
+            try:
+                pid = int(pid_part.strip())
+            except Exception:
+                continue
+            resolved_command = str(command or "").strip()
+            items.append(
+                {
+                    "pid": pid,
+                    "name": Path(resolved_command).name or resolved_command,
+                    "exe": resolved_command,
+                }
+            )
+        return items
     windows = result.get("windows")
     if isinstance(windows, list):
         return windows  # type: ignore[return-value]

@@ -63,7 +63,7 @@ class RuntimeRouteRegistryServiceTests(unittest.TestCase):
         )
 
         self.assertIn(("POST", "/runs/start"), app.routes)
-        self.assertIn(("POST", "/chat/respond"), app.routes)
+        self.assertIn(("POST", "/approvals/{approval_id}/resolve"), app.routes)
         self.assertIn(("POST", "/runs/{run_id}/resume"), app.routes)
 
     def test_start_run_route_uses_runtime_handler_defaults(self):

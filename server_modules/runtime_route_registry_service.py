@@ -104,21 +104,6 @@ def register_runtime_run_routes(
             run_execution_services=run_execution_services,
         )
 
-    @app.post("/chat/respond", dependencies=[depends(require_api_key)])
-    async def respond_chat(
-        request: Request,
-        current_user=depends(require_api_key),
-    ):
-        refresh_server_exports()
-        return await runtime_route_request_handlers_service.respond_chat_response(
-            request=request,
-            current_user=current_user,
-            read_json_object_payload=runtime_request_service.read_json_object_payload,
-            require_authenticated_user=runtime_request_service.require_authenticated_user,
-            build_direct_chat_stream_response=build_direct_chat_stream_response,
-            direct_chat_stream_response_services=direct_chat_stream_response_services,
-        )
-
     @app.get("/memory/{workspace_id}", dependencies=[depends(require_api_key)])
     async def list_workspace_memory(
         workspace_id: str,
@@ -410,6 +395,27 @@ def register_runtime_run_routes(
             resolve_run_approval_fn=runtime_run_approval_service.resolve_run_approval,
             run=runs.get(str(run_id)),
             callbacks=resolve_run_approval_callbacks,
+        )
+
+    @app.post("/approvals/{approval_id}/resolve", dependencies=[depends(require_api_key)])
+    async def resolve_standalone_approval(
+        approval_id: str,
+        request: Request,
+        current_user=depends(require_api_key),
+    ):
+        refresh_server_exports()
+        payload = runtime_request_service.read_json_object_payload(request)
+        from server_modules import outbox_service, run_state_repository
+
+        return runtime_run_approval_service.resolve_standalone_approval(
+            approval_id,
+            payload=payload,
+            current_user=current_user,
+            runs=runs,
+            resolve_run_approval_fn=runtime_run_approval_service.resolve_run_approval,
+            resolve_run_approval_callbacks=resolve_run_approval_callbacks,
+            record_approval_resolution_fn=run_state_repository.sync_record_approval_resolution,
+            emit_approval_resolved_event_fn=outbox_service.emit_approval_resolved_event,
         )
 
     @app.post("/runs/{run_id}/resume", dependencies=[depends(require_api_key)])

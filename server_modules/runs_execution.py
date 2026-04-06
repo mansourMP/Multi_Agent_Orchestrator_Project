@@ -485,10 +485,10 @@ def _update_run_node_state(
 
 def _workflow_variant_default_tool_id(variant: str) -> str:
     mapping = {
-        "shell": "execute_shell_command",
+        "shell": "shell.execute",
         "code": "",
-        "browser": "browser_automation",
-        "file": "read_write_files",
+        "browser": "browser_automation.interactive",
+        "file": "filesystem.read_write",
         "document": "document_create",
         "spreadsheet": "spreadsheet_update",
     }
@@ -527,7 +527,7 @@ def _workflow_tool_policy_tool_id(variant: str, config: Dict[str, Any]) -> str:
             "create_document": "document_create",
             "create_sheet": "spreadsheet_create",
             "create_spreadsheet": "spreadsheet_create",
-            "upload_drive_file": "read_write_files",
+            "upload_drive_file": "filesystem.read_write",
             "http_request": "http_request",
             "signed_webhook": "http_request",
         }
@@ -641,12 +641,12 @@ def _predict_tool_ids_for_context(context: Dict[str, Any]) -> List[str]:
                 pack_inputs.get("tool")
                 or pack_inputs.get("action")
                 or capability_tool_id(pack_inputs.get("capability"))
-                or ("execute_shell_command" if str(pack_inputs.get("command") or "").strip() or isinstance(pack_inputs.get("argv"), list) else "")
-                or ("browser_automation" if str(pack_inputs.get("url") or "").strip() else "")
-                or ("capture_screenshot" if bool(pack_inputs.get("screenshot")) else "")
+                or ("shell.execute" if str(pack_inputs.get("command") or "").strip() or isinstance(pack_inputs.get("argv"), list) else "")
+                or ("browser_automation.interactive" if str(pack_inputs.get("url") or "").strip() else "")
+                or ("screenshot.capture" if bool(pack_inputs.get("screenshot")) else "")
             )
             if not inferred_tool and str(pack_inputs.get("path") or pack_inputs.get("file_path") or "").strip():
-                inferred_tool = "read_write_files"
+                inferred_tool = "filesystem.read_write"
             _append_predicted(inferred_tool)
         return predicted
 
@@ -788,7 +788,7 @@ def _derive_browser_automation_policy(context: Dict[str, Any]) -> Dict[str, Any]
         for item in operations:
             if not isinstance(item, dict):
                 continue
-            if normalize_action_id(item.get("tool") or item.get("action")) == "browser_automation":
+            if normalize_action_id(item.get("tool") or item.get("action")) == "browser_automation.interactive":
                 browser_ops.append(item)
     elif str(pack_inputs.get("url") or "").strip():
         browser_ops.append(pack_inputs)
@@ -4007,7 +4007,7 @@ def _execute_workflow_graph(
                 if str(config.get("capability") or "").strip():
                     capability_ids = [str(config.get("capability") or "").strip()]
                 tool_id = _workflow_tool_policy_tool_id(variant, config)
-                if tool_id == "execute_shell_command":
+                if tool_id == "shell.execute":
                     raw_command = str(config.get("command") or "").strip()
                     raw_argv = list(config.get("argv") or []) if isinstance(config.get("argv"), list) else None
                     if raw_command:

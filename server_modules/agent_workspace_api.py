@@ -1845,7 +1845,7 @@ def register_agent_workspace_routes(app) -> None:
         rel_path = _relative_to_root(target, root)
         operations = [
             {
-                "tool": "read_write_files",
+                "tool": "filesystem.read_write",
                 "mode": "write",
                 "path": rel_path,
                 "content": content if content is not None else "",
@@ -1856,7 +1856,7 @@ def register_agent_workspace_routes(app) -> None:
             "outcome_pack": LOCAL_EXECUTION_PACK_ID,
             "execution_target": EXECUTION_TARGET_LOCAL_COMPANION,
             "pack_inputs": {"operations": operations},
-            "action_policy": {"approval_actions": ["read_write_files"]},
+            "action_policy": {"approval_actions": ["filesystem.read_write"]},
             "agent_role": "builder",
         }
         req = RunStartRequest(
@@ -1883,7 +1883,7 @@ def register_agent_workspace_routes(app) -> None:
         rel_path = _relative_to_root(target, root)
         operations = [
             {
-                "tool": "read_write_files",
+                "tool": "filesystem.read_write",
                 "mode": "delete",
                 "path": rel_path,
             }
@@ -1892,7 +1892,7 @@ def register_agent_workspace_routes(app) -> None:
             "outcome_pack": LOCAL_EXECUTION_PACK_ID,
             "execution_target": EXECUTION_TARGET_LOCAL_COMPANION,
             "pack_inputs": {"operations": operations},
-            "action_policy": {"approval_actions": ["read_write_files"]},
+            "action_policy": {"approval_actions": ["filesystem.read_write"]},
             "agent_role": "builder",
         }
         req = RunStartRequest(
@@ -1919,7 +1919,7 @@ def register_agent_workspace_routes(app) -> None:
         command = DEVICE_ACTIONS[action]
         operations = [
             {
-                "tool": "execute_shell_command",
+                "tool": "shell.execute",
                 "capability": f"device.{action}",
                 "timeout_seconds": 20,
                 "cwd": ".",
@@ -1931,7 +1931,7 @@ def register_agent_workspace_routes(app) -> None:
             "pack_inputs": {"operations": operations},
             "action_policy": {
                 "blocked_actions": ["delete_files", "delete_records", "transfer_funds"],
-                "approval_actions": ["execute_shell_command"],
+                "approval_actions": ["shell.execute"],
             },
             "agent_role": "private-assistant",
         }

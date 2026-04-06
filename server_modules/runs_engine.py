@@ -1,7 +1,8 @@
 from server_modules import runtime_config as config
+from server_modules import run_service
 from server_modules import shared as shared
 from server_modules import runtime_common as common
-from server_modules.runs_history import _append_approval_audit
+from server_modules.runs_history import _append_approval_audit, _approval_correlation_id
 from server_modules.runs_output import _compact_event_text, _json_safe
 
 globals().update({key: value for key, value in vars(config).items() if not key.startswith("__")})
@@ -262,252 +263,25 @@ def wait_for_human_response(
         emit_log,
         set_run_status,
     )
-
-    run = runs[run_id]
-    existing_pending = _get_pending_confirmation(run)
-    if isinstance(existing_pending, dict):
-        existing_status = str(existing_pending.get("status") or "").strip().lower()
-        existing_prompt = str(existing_pending.get("prompt") or "").strip()
-        decision_raw_text = str(existing_pending.get("decision") or "").strip()
-        if (
-            existing_status == "resolved"
-            and decision_raw_text
-            and (not existing_prompt or existing_prompt == str(prompt or "").strip())
-        ):
-            approval_id = str(existing_pending.get("approval_id") or "").strip()
-            correlation_id = str(existing_pending.get("correlation_id") or "").strip() or _approval_correlation_id(approval_id, run_id=run_id)
-            decision_text = decision_raw_text.lower()
-            decision_note = str(existing_pending.get("note") or "").strip()
-            approve_tokens = {"proceed", "approve", "yes", "y", "continue", "ok"}
-            reject_tokens = {"hold", "reject", "no", "n", "abort", "stop", "cancel"}
-            escalate_tokens = {"escalate", "escalated"}
-            approved = decision_text in approve_tokens
-            rejected = decision_text in reject_tokens
-            escalated = decision_text in escalate_tokens
-            if not approved and not rejected and not escalated:
-                rejected = True
-            run.pop("_resume_after_confirmation_scheduled", None)
-            set_run_status(run_id, "running")
-            emit_log(
-                run["logs"],
-                "info",
-                f"Decision received: {decision_text}",
-                event="approval_received",
-                data={"approval_id": approval_id, "correlation_id": correlation_id, "decision": decision_text, "scope": "once", "reusable": False},
-            )
-            _append_approval_audit(
-                approval_id=approval_id,
-                stage="received",
-                decision=decision_text,
-                actor="user",
-                source="runtime_wait",
-                run_id=run_id,
-                note=decision_note or decision_raw_text,
-                correlation_id=correlation_id,
-                metadata={"scope": "once", "reusable": False, "resumed_after_restart": True},
-            )
-            emit_log(
-                run["logs"],
-                "info" if approved else "warn",
-                "Confirmation resolved.",
-                event="approval_resolved",
-                data={
-                    "approval_id": approval_id,
-                    "correlation_id": correlation_id,
-                    "decision": decision_text,
-                    "approved": approved,
-                    "rejected": bool(rejected),
-                    "escalated": bool(escalated),
-                    "scope": "once",
-                    "reusable": False,
-                    "resumed_after_restart": True,
-                },
-            )
-            _append_approval_audit(
-                approval_id=approval_id,
-                stage="resolved",
-                decision=("approved" if approved else "escalated" if escalated else "rejected"),
-                actor="runtime",
-                source="runtime_wait",
-                run_id=run_id,
-                correlation_id=correlation_id,
-                metadata={
-                    "raw_decision": decision_text,
-                    "approved": bool(approved),
-                    "rejected": bool(rejected),
-                    "escalated": bool(escalated),
-                    "scope": "once",
-                    "reusable": False,
-                    "resumed_after_restart": True,
-                },
-            )
-            _clear_pending_confirmation(run)
-            return {
-                "approval_id": approval_id,
-                "correlation_id": correlation_id,
-                "decision": decision_text,
-                "raw_decision": decision_raw_text,
-                "note": decision_note or None,
-                "approved": bool(approved),
-                "rejected": bool(rejected),
-                "escalated": bool(escalated),
-            }
-    pending_payload = _begin_run_pending_confirmation(
+    return run_service.wait_for_human_response(
         run_id,
         prompt,
+        runs_by_id=runs,
+        begin_run_pending_confirmation_fn=_begin_run_pending_confirmation,
+        clear_pending_confirmation_fn=_clear_pending_confirmation,
+        get_pending_confirmation_fn=_get_pending_confirmation,
+        set_pending_confirmation_fn=_set_pending_confirmation,
+        approval_correlation_id_fn=_approval_correlation_id,
+        append_approval_audit_fn=_append_approval_audit,
+        emit_log_fn=emit_log,
+        set_run_status_fn=set_run_status,
+        utc_now_iso_fn=_utc_now_iso,
+        approval_ttl_seconds=ORION_APPROVAL_TTL_SECONDS,
+        monotonic_fn=time.monotonic,
+        queue_empty_exception=queue.Empty,
         source=source,
         metadata=metadata,
-        emit_pause_required=True,
     )
-    approval_id = str(pending_payload.get("approval_id") or "").strip()
-    correlation_id = str(pending_payload.get("correlation_id") or "").strip()
-    ttl_seconds = int(pending_payload.get("ttl_seconds") or ORION_APPROVAL_TTL_SECONDS)
-    approve_tokens = {"proceed", "approve", "yes", "y", "continue", "ok"}
-    reject_tokens = {"hold", "reject", "no", "n", "abort", "stop", "cancel"}
-    escalate_tokens = {"escalate", "escalated"}
-    deadline = time.monotonic() + ttl_seconds
-    while True:
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
-            pending = _get_pending_confirmation(run)
-            pending["status"] = "expired"
-            pending["expired_at"] = _utc_now_iso()
-            _set_pending_confirmation(run, pending)
-            emit_log(
-                run["logs"],
-                "error",
-                "Confirmation request expired before user decision.",
-                event="approval_timeout",
-                data={"approval_id": approval_id, "correlation_id": correlation_id, "ttl_seconds": ttl_seconds},
-            )
-            _append_approval_audit(
-                approval_id=approval_id,
-                stage="timeout",
-                decision="timeout",
-                actor="system",
-                source="runtime_wait",
-                run_id=run_id,
-                note="Confirmation timeout reached while waiting for user decision.",
-                correlation_id=correlation_id,
-            )
-            raise RuntimeError("Confirmation timeout reached while waiting for user decision.")
-        try:
-            decision_raw = run["input_queue"].get(timeout=remaining)
-        except queue.Empty:
-            continue
-
-        incoming_approval_id: Optional[str] = None
-        decision_raw_text = ""
-        decision_text = ""
-        decision_note = ""
-        if isinstance(decision_raw, dict):
-            incoming_approval_id = str(decision_raw.get("approval_id") or "").strip() or None
-            decision_raw_text = str(decision_raw.get("decision") or "").strip()
-            decision_text = decision_raw_text.lower()
-            decision_note = str(decision_raw.get("note") or "").strip()
-        else:
-            decision_raw_text = str(decision_raw or "").strip()
-            decision_text = decision_raw_text.lower()
-
-        if incoming_approval_id and incoming_approval_id != approval_id:
-            emit_log(
-                run["logs"],
-                "warn",
-                "Ignored stale confirmation resolution for different approval_id.",
-                event="approval_ignored",
-                data={
-                    "approval_id": incoming_approval_id,
-                    "expected_approval_id": approval_id,
-                    "correlation_id": correlation_id,
-                },
-            )
-            _append_approval_audit(
-                approval_id=incoming_approval_id,
-                stage="ignored",
-                decision="ignored",
-                actor="runtime",
-                source="runtime_wait",
-                run_id=run_id,
-                note=f"Expected approval_id={approval_id}",
-                correlation_id=correlation_id,
-                metadata={"expected_approval_id": approval_id},
-            )
-            continue
-
-        pending = _get_pending_confirmation(run)
-        pending["status"] = "resolved"
-        pending["resolved_at"] = _utc_now_iso()
-        pending["decision"] = decision_text
-        _set_pending_confirmation(run, pending)
-        set_run_status(run_id, "running")
-        emit_log(
-            run["logs"],
-            "info",
-            f"Decision received: {decision_text}",
-            event="approval_received",
-            data={"approval_id": approval_id, "correlation_id": correlation_id, "decision": decision_text, "scope": "once", "reusable": False},
-        )
-        _append_approval_audit(
-            approval_id=approval_id,
-            stage="received",
-            decision=decision_text,
-            actor="user",
-            source="runtime_wait",
-            run_id=run_id,
-            note=decision_note or str(decision_raw),
-            correlation_id=correlation_id,
-            metadata={"scope": "once", "reusable": False},
-        )
-
-        approved = decision_text in approve_tokens
-        rejected = decision_text in reject_tokens
-        escalated = decision_text in escalate_tokens
-        if not approved and not rejected and not escalated:
-            rejected = True
-        emit_log(
-            run["logs"],
-            "info" if approved else "warn",
-            "Confirmation resolved.",
-            event="approval_resolved",
-            data={
-                "approval_id": approval_id,
-                "correlation_id": correlation_id,
-                "decision": decision_text,
-                "approved": approved,
-                "rejected": bool(rejected),
-                "escalated": bool(escalated),
-                "scope": "once",
-                "reusable": False,
-            },
-        )
-        _append_approval_audit(
-            approval_id=approval_id,
-            stage="resolved",
-            decision=("approved" if approved else "escalated" if escalated else "rejected"),
-            actor="runtime",
-            source="runtime_wait",
-            run_id=run_id,
-            correlation_id=correlation_id,
-            metadata={
-                "raw_decision": decision_text,
-                "approved": bool(approved),
-                "rejected": bool(rejected),
-                "escalated": bool(escalated),
-                "scope": "once",
-                "reusable": False,
-            },
-        )
-        _clear_pending_confirmation(run)
-        return {
-            "approval_id": approval_id,
-            "correlation_id": correlation_id,
-            "decision": decision_text,
-            "raw_decision": decision_raw_text,
-            "note": decision_note or None,
-            "approved": bool(approved),
-            "rejected": bool(rejected),
-            "escalated": bool(escalated),
-        }
 
 
 def wait_for_human_decision(run_id: str, prompt: str) -> bool:

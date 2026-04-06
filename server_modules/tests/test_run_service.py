@@ -106,6 +106,7 @@ from server_modules.run_service import (
     refresh_parent_delegation_state,
     schedule_auto_retry_for_failed_children,
     timeout_stale_delegated_child_runs,
+    wait_for_human_response,
 )
 from server_modules.runtime_models import RunStartRequest
 
@@ -218,6 +219,167 @@ class RunServiceTests(unittest.TestCase):
         self.assertEqual(payload["approval_id"], "approval-2")
         self.assertEqual(calls[0][0], ("run-approval-2", "Confirm run"))
         self.assertEqual(calls[0][1]["metadata"]["target"], "cloud")
+
+    def test_wait_for_human_response_consumes_resolved_confirmation_after_restart(self):
+        log_queue = queue.Queue()
+        run = {
+            "run_id": "run-approval-resume",
+            "status": "waiting_for_input",
+            "logs": log_queue,
+            "input_queue": queue.Queue(),
+            "pending_confirmation": {
+                "approval_id": "approval-1",
+                "correlation_id": "corr-1",
+                "status": "resolved",
+                "prompt": "Confirm send",
+                "decision": "proceed",
+                "note": "resume note",
+            },
+            "pending_approval": {
+                "approval_id": "approval-1",
+                "correlation_id": "corr-1",
+                "status": "resolved",
+                "prompt": "Confirm send",
+                "decision": "proceed",
+                "note": "resume note",
+            },
+            "_resume_after_confirmation_scheduled": True,
+        }
+        emitted = []
+        audits = []
+        status_changes = []
+
+        payload = wait_for_human_response(
+            "run-approval-resume",
+            "Confirm send",
+            runs_by_id={"run-approval-resume": run},
+            begin_run_pending_confirmation_fn=lambda *args, **kwargs: self.fail("should not begin new approval"),
+            clear_pending_confirmation_fn=clear_pending_confirmation,
+            get_pending_confirmation_fn=get_pending_confirmation,
+            set_pending_confirmation_fn=set_pending_confirmation,
+            approval_correlation_id_fn=lambda approval_id, run_id=None: f"corr:{run_id}:{approval_id}",
+            append_approval_audit_fn=lambda **kwargs: audits.append(kwargs),
+            emit_log_fn=lambda *args, **kwargs: emitted.append((args, kwargs)),
+            set_run_status_fn=lambda run_id, status: status_changes.append((run_id, status)),
+            utc_now_iso_fn=lambda: "2026-04-06T00:00:00Z",
+            approval_ttl_seconds=600,
+        )
+
+        self.assertTrue(payload["approved"])
+        self.assertEqual(status_changes, [("run-approval-resume", "running")])
+        self.assertIsNone(run["pending_confirmation"])
+        self.assertIsNone(run["pending_approval"])
+        self.assertNotIn("_resume_after_confirmation_scheduled", run)
+        self.assertEqual(emitted[0][1]["event"], "approval_received")
+        self.assertEqual(emitted[1][1]["event"], "approval_resolved")
+        self.assertEqual(audits[0]["stage"], "received")
+        self.assertEqual(audits[1]["stage"], "resolved")
+        self.assertTrue(audits[1]["metadata"]["resumed_after_restart"])
+
+    def test_wait_for_human_response_ignores_stale_approval_then_resolves_current(self):
+        log_queue = queue.Queue()
+        input_queue = queue.Queue()
+        input_queue.put({"approval_id": "approval-stale", "decision": "approve"})
+        input_queue.put({"approval_id": "approval-2", "decision": "approve", "note": "ship it"})
+        run = {
+            "run_id": "run-approval-live",
+            "status": "waiting_for_input",
+            "logs": log_queue,
+            "input_queue": input_queue,
+        }
+        emitted = []
+        audits = []
+        status_changes = []
+
+        def _begin(*args, **kwargs):
+            payload = {
+                "approval_id": "approval-2",
+                "correlation_id": "corr-2",
+                "ttl_seconds": 300,
+                "status": "waiting",
+                "prompt": "Confirm ship",
+            }
+            set_pending_confirmation(run, payload)
+            return payload
+
+        payload = wait_for_human_response(
+            "run-approval-live",
+            "Confirm ship",
+            runs_by_id={"run-approval-live": run},
+            begin_run_pending_confirmation_fn=_begin,
+            clear_pending_confirmation_fn=clear_pending_confirmation,
+            get_pending_confirmation_fn=get_pending_confirmation,
+            set_pending_confirmation_fn=set_pending_confirmation,
+            approval_correlation_id_fn=lambda approval_id, run_id=None: f"corr:{run_id}:{approval_id}",
+            append_approval_audit_fn=lambda **kwargs: audits.append(kwargs),
+            emit_log_fn=lambda *args, **kwargs: emitted.append((args, kwargs)),
+            set_run_status_fn=lambda run_id, status: status_changes.append((run_id, status)),
+            utc_now_iso_fn=lambda: "2026-04-06T00:00:00Z",
+            approval_ttl_seconds=600,
+            monotonic_fn=lambda: 10.0,
+        )
+
+        self.assertTrue(payload["approved"])
+        self.assertEqual(status_changes, [("run-approval-live", "running")])
+        self.assertIsNone(run["pending_confirmation"])
+        self.assertEqual(emitted[0][1]["event"], "approval_ignored")
+        self.assertEqual(emitted[1][1]["event"], "approval_received")
+        self.assertEqual(emitted[2][1]["event"], "approval_resolved")
+        self.assertEqual(audits[0]["stage"], "ignored")
+        self.assertEqual(audits[1]["stage"], "received")
+        self.assertEqual(audits[2]["stage"], "resolved")
+
+    def test_wait_for_human_response_marks_timeout_when_no_decision_arrives(self):
+        log_queue = queue.Queue()
+
+        class _EmptyInputQueue:
+            def get(self, timeout=None):
+                raise queue.Empty()
+
+        run = {
+            "run_id": "run-approval-timeout",
+            "status": "waiting_for_input",
+            "logs": log_queue,
+            "input_queue": _EmptyInputQueue(),
+        }
+        emitted = []
+        audits = []
+
+        def _begin(*args, **kwargs):
+            payload = {
+                "approval_id": "approval-timeout",
+                "correlation_id": "corr-timeout",
+                "ttl_seconds": 30,
+                "status": "waiting",
+                "prompt": "Confirm send",
+            }
+            set_pending_confirmation(run, payload)
+            return payload
+
+        monotonic_values = iter([100.0, 131.0])
+
+        with self.assertRaises(RuntimeError):
+            wait_for_human_response(
+                "run-approval-timeout",
+                "Confirm send",
+                runs_by_id={"run-approval-timeout": run},
+                begin_run_pending_confirmation_fn=_begin,
+                clear_pending_confirmation_fn=clear_pending_confirmation,
+                get_pending_confirmation_fn=get_pending_confirmation,
+                set_pending_confirmation_fn=set_pending_confirmation,
+                approval_correlation_id_fn=lambda approval_id, run_id=None: f"corr:{run_id}:{approval_id}",
+                append_approval_audit_fn=lambda **kwargs: audits.append(kwargs),
+                emit_log_fn=lambda *args, **kwargs: emitted.append((args, kwargs)),
+                set_run_status_fn=lambda run_id, status: None,
+                utc_now_iso_fn=lambda: "2026-04-06T00:00:00Z",
+                approval_ttl_seconds=600,
+                monotonic_fn=lambda: next(monotonic_values),
+            )
+
+        self.assertEqual(run["pending_confirmation"]["status"], "expired")
+        self.assertEqual(run["pending_approval"]["status"], "expired")
+        self.assertEqual(emitted[0][1]["event"], "approval_timeout")
+        self.assertEqual(audits[0]["stage"], "timeout")
 
     def test_register_live_run_indexes_and_persists(self):
         runs = {}

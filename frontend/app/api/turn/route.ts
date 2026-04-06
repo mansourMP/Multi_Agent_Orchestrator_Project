@@ -92,7 +92,7 @@ export async function POST(request: NextRequest) {
       const forwardedHeaders: Record<string, string> = { 'Content-Type': 'application/json' };
       const lastEventId = request.headers.get('last-event-id');
       if (lastEventId) forwardedHeaders['Last-Event-ID'] = lastEventId;
-      const runtimeResponse = await runtimeAuthorizedFetch('/chat/respond', {
+      const runtimeResponse = await runtimeAuthorizedFetch('/turn', {
         method: 'POST',
         body: JSON.stringify(buildDirectChatBody(turn)),
         headers: forwardedHeaders,

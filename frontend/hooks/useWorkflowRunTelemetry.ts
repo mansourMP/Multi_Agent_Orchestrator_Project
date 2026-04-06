@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { apiClient } from '@/lib/api-client';
+import type { RunDetailResponse } from '@/lib/api-contract';
 
 export interface WorkflowRunNodeState {
   node_id?: string | null;
@@ -85,65 +87,74 @@ export function useWorkflowRunTelemetry<TNode extends WorkflowRenderableNode>({
   runId,
   nodes,
   selectedNodeId,
-  controlPlaneFetch,
 }: WorkflowRunTelemetryOptions<TNode>) {
   const [runDetail, setRunDetail] = useState<WorkflowRunDetail | null>(null);
+  const normalizedRunId = String(runId || '').trim();
 
   const refreshRunDetail = useCallback(async (targetRunId?: string | null) => {
     const nextRunId = String(targetRunId || runId || '').trim();
     if (!nextRunId) return;
     try {
-      const response = await controlPlaneFetch(`/api/runs/${encodeURIComponent(nextRunId)}`);
-      if (!response.ok) return;
-      const payload = await response.json().catch(() => null);
-      setRunDetail(payload as WorkflowRunDetail | null);
+      const payload = await apiClient.getRunDetail(nextRunId);
+      setRunDetail(payload as RunDetailResponse as WorkflowRunDetail | null);
     } catch {
       // Keep the current surface stable if run detail sync fails transiently.
     }
-  }, [controlPlaneFetch, runId]);
+  }, [runId]);
 
   useEffect(() => {
-    const normalizedRunId = String(runId || '').trim();
-    if (!normalizedRunId) {
-      setRunDetail(null);
-      return;
-    }
-    setRunDetail((current) => {
-      const currentRunId = String(current?.run_id || '').trim();
-      return currentRunId && currentRunId === normalizedRunId ? current : null;
-    });
-    void refreshRunDetail(normalizedRunId);
-  }, [refreshRunDetail, runId]);
+    if (!normalizedRunId) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const payload = await apiClient.getRunDetail(normalizedRunId);
+        if (!cancelled) setRunDetail(payload as RunDetailResponse as WorkflowRunDetail | null);
+      } catch {
+        // Keep the current surface stable if run detail sync fails transiently.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [normalizedRunId]);
 
-  const currentRunStatus = String(runDetail?.status || '').trim().toLowerCase();
+  const scopedRunDetail = useMemo(() => {
+    if (!normalizedRunId) return null;
+    const currentRunId = String(runDetail?.run_id || '').trim();
+    if (currentRunId && currentRunId !== normalizedRunId) return null;
+    return runDetail;
+  }, [normalizedRunId, runDetail]);
+
+  const currentRunStatus = String(scopedRunDetail?.status || '').trim().toLowerCase();
 
   useEffect(() => {
-    const normalizedRunId = String(runId || '').trim();
     if (!normalizedRunId) return;
     if (currentRunStatus && !ACTIVE_RUN_STATUSES.has(currentRunStatus)) return;
     const timer = window.setInterval(() => {
       void refreshRunDetail(normalizedRunId);
     }, 5000);
     return () => window.clearInterval(timer);
-  }, [currentRunStatus, refreshRunDetail, runId]);
+  }, [currentRunStatus, normalizedRunId, refreshRunDetail]);
+
+  const scopedNodeStates = scopedRunDetail?.node_states ?? null;
 
   const workflowRunNodeStateMap = useMemo(() => {
-    const items = Array.isArray(runDetail?.node_states?.items) ? runDetail.node_states.items : [];
+    const items = Array.isArray(scopedNodeStates?.items) ? scopedNodeStates.items : [];
     return items.reduce<Record<string, WorkflowRunNodeState>>((acc, item) => {
       const nodeId = String(item?.node_id || '').trim();
       if (nodeId) acc[nodeId] = item;
       return acc;
     }, {});
-  }, [runDetail?.node_states?.items]);
+  }, [scopedNodeStates]);
 
   const activeRunNodeId = useMemo(
-    () => String(runDetail?.node_states?.active_node_id || '').trim() || null,
-    [runDetail?.node_states?.active_node_id],
+    () => String(scopedNodeStates?.active_node_id || '').trim() || null,
+    [scopedNodeStates],
   );
 
   const finalRunNodeId = useMemo(
-    () => String(runDetail?.node_states?.final_node_id || '').trim() || null,
-    [runDetail?.node_states?.final_node_id],
+    () => String(scopedNodeStates?.final_node_id || '').trim() || null,
+    [scopedNodeStates],
   );
 
   const selectedRunNodeState = useMemo(
@@ -169,7 +180,7 @@ export function useWorkflowRunTelemetry<TNode extends WorkflowRenderableNode>({
   );
 
   return {
-    runDetail,
+    runDetail: scopedRunDetail,
     refreshRunDetail,
     activeRunNodeId,
     finalRunNodeId,

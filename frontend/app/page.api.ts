@@ -37,6 +37,8 @@ import {
   type AgentRoleId,
 } from './page.catalog';
 import { type PageState } from './page.state';
+import { apiClient } from '@/lib/api-client';
+import type { AgentTurnRequest, AgentTurnResponse } from '@/lib/api-contract';
 import { loadActiveSkills, resolveSkillsByIds } from '@/lib/skills';
 import { BRAND } from '@/lib/brand';
 import { API_BASE } from '@/lib/config';
@@ -85,6 +87,15 @@ function createStreamRequestId(): string {
     return cryptoApi.randomUUID();
   }
   return `chat-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function buildWebActor(sessionId: string): AgentTurnRequest['actor'] {
+  const normalized = String(sessionId || 'web-user').trim() || 'web-user';
+  return {
+    type: 'user',
+    id: normalized,
+    display_name: 'Web user',
+  };
 }
 
 function readFreshCache<T>(cache: TimedResourceCache<T>, staleMs: number): T | null {
@@ -259,6 +270,17 @@ export type OperatorChatStepPayload = {
   detail?: string | null;
   status: OperatorChatStepStatus;
   kind?: OperatorChatStepKind | null;
+};
+
+type StartedRunPayload = {
+  run_id?: string;
+  status?: string;
+  route?: RoutePayload | Record<string, unknown> | null;
+  pending_approval?: { approval_id?: string } | null;
+  active_profile_label?: string | null;
+  active_profile_provider?: string | null;
+  active_profile_model?: string | null;
+  [key: string]: unknown;
 };
 
 export type OperatorChatResponsePayload = {
@@ -1958,10 +1980,7 @@ export function usePlatformApi(state: PageState, streamRef: MutableRefObject<Aut
 
   const fetchRunResult = useCallback(async (targetRunId: string): Promise<string | null> => {
     try {
-      await ensureControlPlaneSession();
-      const res = await fetch(`/api/runs/${encodeURIComponent(targetRunId)}`, { cache: 'no-store' });
-      if (!res.ok) return null;
-      const payload = await res.json();
+      const payload = await apiClient.getRunDetail(targetRunId);
       void fetchLocalWorkerStatus(true);
       void fetchRuntimeMetrics();
       if (payload && typeof payload === 'object') {
@@ -2079,27 +2098,26 @@ export function usePlatformApi(state: PageState, streamRef: MutableRefObject<Aut
       }
 
       try {
-        const requestBody = JSON.stringify({
+        const turnRequest: AgentTurnRequest = {
+          tenant_id: 'default',
           workspace_id: WORKSPACE_ID,
-          thread_id: options?.threadId || undefined,
-          client_request_id: clientRequestId,
-          last_event_id: lastEventId || undefined,
+          session_id: String(options?.threadId || clientRequestId || 'direct-chat').trim(),
+          channel: 'web',
+          actor: buildWebActor(options?.threadId || clientRequestId),
           message: message.trim(),
-          provider,
-          model,
-          reasoning_effort: options?.reasoningEffort || undefined,
-          prior_messages: priorMessages.length > 0 ? priorMessages : undefined,
-          approved_action: options?.approvedAction || undefined,
-        });
-        const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-        if (lastEventId) {
-          headers['Last-Event-ID'] = lastEventId;
-        }
-        const res = await fetch('/api/chat/respond', {
-          method: 'POST',
-          headers,
-          body: requestBody,
-          cache: 'no-store',
+          execution_mode: 'sync',
+          response_mode: 'stream',
+          context_hints: {
+            provider,
+            model,
+            reasoning_effort: options?.reasoningEffort || undefined,
+            prior_messages: priorMessages.length > 0 ? priorMessages : undefined,
+            approved_action: options?.approvedAction || undefined,
+          },
+        };
+        const res = await apiClient.openTurnStreamResponse(turnRequest, {
+          clientRequestId,
+          lastEventId: lastEventId || undefined,
           signal: controller.signal,
         });
         if (!res.ok) {
@@ -2293,17 +2311,20 @@ export function usePlatformApi(state: PageState, streamRef: MutableRefObject<Aut
       }
       state.setIsChecking(false);
 
-      await ensureControlPlaneSession();
-      const runRes = await fetch('/api/runs/start', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          engine: 'orion',
-          user_goal: effectiveGoal,
-          agent_role: effectiveAgentRole,
+      const turnResponse = await apiClient.turn({
+        tenant_id: 'default',
+        workspace_id: WORKSPACE_ID,
+        session_id: createStreamRequestId(),
+        channel: 'web',
+        actor: buildWebActor('operator-run'),
+        message: effectiveGoal,
+        execution_mode: 'durable',
+        response_mode: 'artifact',
+        context_hints: {
           provider: state.provider,
           model: state.model,
           credential_id: state.connectionMode === 'byok' ? state.credentialId : undefined,
+          agent_role: effectiveAgentRole,
           metadata: {
             source: 'operator_chat',
             direct_chat: true,
@@ -2311,23 +2332,22 @@ export function usePlatformApi(state: PageState, streamRef: MutableRefObject<Aut
             execution_target: state.connectionMode === 'local_companion' ? 'local_companion' : 'auto',
             ...(input.metadata || {}),
           },
-        }),
+        },
       });
 
-      if (!runRes.ok) {
-        if (runRes.status === 401) throw new Error('Invalid API key.');
-        throw new Error(await readResponseMessage(runRes, 'Failed to start operator run.'));
-      }
-
-      const runPayload = await runRes.json();
+      const runPayload = ((turnResponse as AgentTurnResponse).metadata?.created_run || {
+        run_id: turnResponse.run_id,
+        status: turnResponse.status,
+        route: turnResponse.metadata?.route,
+      }) as StartedRunPayload;
       state.setLastRunPayload(runPayload as Record<string, unknown>);
-      const nextRunId = runPayload?.run_id;
+      const nextRunId = String(runPayload.run_id || '').trim();
       if (!nextRunId) throw new Error('Run ID missing.');
 
       const route = runPayload?.route;
       if (route && typeof route === 'object') {
-        state.setLastRouteInfo(route);
-        if (route.selected === 'local_companion') state.setStatus('queued_local');
+        state.setLastRouteInfo(route as RoutePayload);
+        if (String((route as { selected?: unknown }).selected || '').trim() === 'local_companion') state.setStatus('queued_local');
       }
       const pending = runPayload?.pending_approval;
       if (pending && typeof pending === 'object') {
@@ -2602,17 +2622,20 @@ export function usePlatformApi(state: PageState, streamRef: MutableRefObject<Aut
         packInputs.slots = effectiveTertiary;
       }
 
-      await ensureControlPlaneSession();
-      const runRes = await fetch('/api/runs/start', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          engine: 'orion',
-          user_goal: effectiveGoal.trim(),
-          agent_role: effectiveAgentRole,
+      const turnResponse = await apiClient.turn({
+        tenant_id: 'default',
+        workspace_id: WORKSPACE_ID,
+        session_id: createStreamRequestId(),
+        channel: 'web',
+        actor: buildWebActor('pack-run'),
+        message: effectiveGoal.trim(),
+        execution_mode: 'durable',
+        response_mode: 'artifact',
+        context_hints: {
           provider: state.provider,
           model: state.model,
           credential_id: state.connectionMode === 'byok' ? state.credentialId : undefined,
+          agent_role: effectiveAgentRole,
           metadata: {
             trust_mode: effectiveTrustMode,
             trust_preset: 'standard_local',
@@ -2627,8 +2650,8 @@ export function usePlatformApi(state: PageState, streamRef: MutableRefObject<Aut
             execution_target: selectedPack.id === 'local-execution-v1'
               ? 'local_companion'
               : state.connectionMode === 'local_companion'
-              ? 'local_companion'
-              : 'auto',
+                ? 'local_companion'
+                : 'auto',
             outcome_pack: selectedPack.id,
             outcome_pack_label: selectedPack.label,
             outcome_scope: selectedPack.scope,
@@ -2651,23 +2674,22 @@ export function usePlatformApi(state: PageState, streamRef: MutableRefObject<Aut
             },
             ...(overrides?.metadata || {}),
           },
-        }),
+        },
       });
 
-      if (!runRes.ok) {
-        if (runRes.status === 401) throw new Error('Invalid API key.');
-        throw new Error(await readResponseMessage(runRes, 'Failed to start autopilot.'));
-      }
-
-      const runPayload = await runRes.json();
+      const runPayload = ((turnResponse as AgentTurnResponse).metadata?.created_run || {
+        run_id: turnResponse.run_id,
+        status: turnResponse.status,
+        route: turnResponse.metadata?.route,
+      }) as StartedRunPayload;
       state.setLastRunPayload(runPayload as Record<string, unknown>);
-      const nextRunId = runPayload?.run_id;
+      const nextRunId = String(runPayload.run_id || '').trim();
       if (!nextRunId) throw new Error('Run ID missing.');
 
       const route = runPayload?.route;
       if (route && typeof route === 'object') {
-        state.setLastRouteInfo(route);
-        if (route.selected === 'local_companion') state.setStatus('queued_local');
+        state.setLastRouteInfo(route as RoutePayload);
+        if (String((route as { selected?: unknown }).selected || '').trim() === 'local_companion') state.setStatus('queued_local');
       }
       const pending = runPayload?.pending_approval;
       if (pending && typeof pending === 'object') {

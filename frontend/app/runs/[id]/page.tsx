@@ -15,6 +15,8 @@ import {
   openAuthenticatedEventStream,
   type AuthenticatedEventStreamConnection,
 } from '@/lib/authenticatedEventStream';
+import { apiClient } from '@/lib/api-client';
+import type { RunListItem } from '@/lib/api-contract';
 import { ensureControlPlaneSession } from '@/lib/controlPlaneSession';
 import { LocalCompanionRunPanel } from '@/components/orion/runs/LocalCompanionRunPanel';
 import { RunRemediationGuide, shouldShowRunRemediationGuide } from '@/components/orion/runs/RunRemediationGuide';
@@ -375,23 +377,14 @@ export default function RunDetailPage() {
     setLoading(true);
     setError('');
     try {
-      await ensureControlPlaneSession();
-      const [historyRes, runRes, replayRes] = await Promise.all([
-        fetch(`/api/executions/history?limit=200&workspace_id=default`, { cache: 'no-store' }),
-        fetch(`/api/runs/${encodeURIComponent(runId)}`, { cache: 'no-store' }),
-        fetch(`/api/runs/${encodeURIComponent(runId)}/replay`, { cache: 'no-store' }),
+      const [historyPayload, runPayload, replayPayload] = await Promise.all([
+        apiClient.listRuns({ workspace_id: 'default', limit: 200 }).catch(() => ({ items: [] })),
+        apiClient.getRunDetail(runId),
+        apiClient.getRunReplay(runId).catch(() => ({ item: null })),
       ]);
-
-      if (!historyRes.ok || !runRes.ok) {
-        throw new Error('Could not load this run right now.');
-      }
-
-      const historyPayload = await historyRes.json().catch(() => ({ items: [] }));
-      const runPayload = await runRes.json().catch(() => null);
-      const replayPayload = replayRes.ok ? await replayRes.json().catch(() => ({ item: null })) : { item: null };
       const items = Array.isArray(historyPayload?.items) ? historyPayload.items : [];
-      const selected = items.find((item: HistoryItem) => item?.run_id === runId) || null;
-      setHistoryItem(selected);
+      const selected = items.find((item) => String((item as RunListItem)?.run_id || '').trim() === runId) || null;
+      setHistoryItem(selected as HistoryItem | null);
       setRunDetail(runPayload as RunDetailPayload | null);
       setReplayItem((replayPayload as ReplayPayload).item || null);
     } catch (nextError) {

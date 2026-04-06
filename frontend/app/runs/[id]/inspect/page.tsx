@@ -21,6 +21,8 @@ import {
   openAuthenticatedEventStream,
   type AuthenticatedEventStreamConnection,
 } from '@/lib/authenticatedEventStream';
+import { apiClient } from '@/lib/api-client';
+import type { RunListItem } from '@/lib/api-contract';
 import { OsPageHeader } from '@/components/ui/OsPageHeader';
 import { ensureControlPlaneSession } from '@/lib/controlPlaneSession';
 import { formatExecutionTargetLabel } from '@/lib/executionTargets';
@@ -912,23 +914,18 @@ export default function RunInspectPage() {
   const refreshRunState = useCallback(async () => {
     if (!runId) return;
     try {
-      await ensureControlPlaneSession();
-      const [historyRes, runRes, approvalsRes] = await Promise.all([
-        fetch('/api/executions/history?limit=200&workspace_id=default', { cache: 'no-store' }),
-        fetch(`/api/runs/${encodeURIComponent(runId)}`, { cache: 'no-store' }),
+      const [historyPayload, runPayload, approvalsRes] = await Promise.all([
+        apiClient.listRuns({ workspace_id: 'default', limit: 200 }).catch(() => ({ items: [] })),
+        apiClient.getRunDetail(runId).catch(() => null),
         fetch('/api/approvals/audit?limit=200', { cache: 'no-store' }),
       ]);
 
-      if (historyRes.ok) {
-        const historyPayload = await historyRes.json();
-        const historyItems = Array.isArray(historyPayload?.items) ? historyPayload.items : [];
-        const found = historyItems.find((item: HistoryItem) => item?.run_id === runId) || null;
-        setHistoryItem(found);
-      }
+      const historyItems = Array.isArray(historyPayload?.items) ? historyPayload.items : [];
+      const found = historyItems.find((item) => String((item as RunListItem)?.run_id || '').trim() === runId) || null;
+      setHistoryItem(found as HistoryItem | null);
 
-      if (runRes.ok) {
-        const runPayload = (await runRes.json()) as RunDetailPayload;
-        setRunDetail(runPayload || null);
+      if (runPayload) {
+        setRunDetail(runPayload as RunDetailPayload);
       }
 
       if (approvalsRes.ok) {
@@ -948,37 +945,20 @@ export default function RunInspectPage() {
     setLiveEvents([]);
     try {
       await ensureControlPlaneSession();
-      const [historyRes, runRes, approvalsRes, replayRes] = await Promise.all([
-        fetch('/api/executions/history?limit=200&workspace_id=default', { cache: 'no-store' }),
-        fetch(`/api/runs/${encodeURIComponent(runId)}`, { cache: 'no-store' }),
+      const [historyPayload, runPayload, approvalsRes, replayPayload] = await Promise.all([
+        apiClient.listRuns({ workspace_id: 'default', limit: 200 }),
+        apiClient.getRunDetail(runId),
         fetch('/api/approvals/audit?limit=200', { cache: 'no-store' }),
-        fetch(`/api/runs/${encodeURIComponent(runId)}/replay`, { cache: 'no-store' }),
+        apiClient.getRunReplay(runId).catch(() => ({ item: null })),
       ]);
-
-      if (!historyRes.ok) {
-        const text = await historyRes.text().catch(() => '');
-        throw new Error(text || 'Failed to load run history.');
-      }
-      if (!runRes.ok) {
-        const text = await runRes.text().catch(() => '');
-        throw new Error(text || 'Failed to load run details.');
-      }
-
-      const historyPayload = await historyRes.json();
-      const runPayload = (await runRes.json()) as RunDetailPayload;
       const approvalsPayload = approvalsRes.ok ? await approvalsRes.json() : { items: [] };
-      if (replayRes.ok) {
-        const replayPayload = (await replayRes.json()) as ReplayPayload;
-        setReplayItem(replayPayload?.item || null);
-      } else {
-        setReplayItem(null);
-      }
+      setReplayItem((replayPayload as ReplayPayload)?.item || null);
 
       const historyItems = Array.isArray(historyPayload?.items) ? historyPayload.items : [];
-      const found = historyItems.find((item: HistoryItem) => item?.run_id === runId) || null;
-      setHistoryItem(found);
+      const found = historyItems.find((item) => String((item as RunListItem)?.run_id || '').trim() === runId) || null;
+      setHistoryItem(found as HistoryItem | null);
 
-      setRunDetail(runPayload || null);
+      setRunDetail((runPayload as RunDetailPayload) || null);
       setApprovalAudit(mapApprovalAudit(approvalsPayload));
     } catch (nextError: unknown) {
       setError(nextError instanceof Error ? nextError.message : 'Failed to load transparency data.');
@@ -1245,7 +1225,8 @@ export default function RunInspectPage() {
   }, [delegateNote, failedDelegationRunIds, load, runId]);
 
   const handleResolveApproval = useCallback(async (decision: 'Proceed' | 'Hold') => {
-    if (!runId || !pendingConfirmation?.approval_id) return;
+    const pending = runDetail?.pending_confirmation ?? runDetail?.pending_approval ?? null;
+    if (!runId || !pending?.approval_id) return;
     setApprovalBusy(decision);
     setDelegateError(null);
     setDelegateNotice(null);
@@ -1256,7 +1237,7 @@ export default function RunInspectPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           runId,
-          approvalId: pendingConfirmation.approval_id,
+          approvalId: pending.approval_id,
           decision,
           note: 'Resolved from Run Inspect',
         }),
@@ -1272,7 +1253,7 @@ export default function RunInspectPage() {
     } finally {
       setApprovalBusy(null);
     }
-  }, [load, pendingConfirmation?.approval_id, runId]);
+  }, [load, runDetail?.pending_approval, runDetail?.pending_confirmation, runId]);
 
   const handleResumeRun = useCallback(async () => {
     if (!runId) return;

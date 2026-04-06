@@ -13,7 +13,7 @@ import {
   type ArtifactView,
   type KindFilter,
 } from '@/lib/artifactsPresentation';
-import { ensureControlPlaneSession } from '@/lib/controlPlaneSession';
+import { apiClient } from '@/lib/api-client';
 import { useAsyncPageResource } from '@/hooks/pages/useAsyncPageResource';
 
 type DesktopBridge = {
@@ -75,15 +75,11 @@ export function useArtifactsBrowser() {
     if (artifactsBrowserInFlight) return artifactsBrowserInFlight;
 
     artifactsBrowserInFlight = (async () => {
-      await ensureControlPlaneSession();
-      const response = await fetch(
-        '/api/artifacts/workspace?workspace_id=default&history_limit=80&limit=120',
-        { cache: 'no-store' },
-      );
-      if (!response.ok) {
-        throw new Error(`Failed to load artifacts (${response.status})`);
-      }
-      const next = (await response.json()) as ArtifactPayload;
+      const next = await apiClient.listArtifacts({
+        workspace_id: 'default',
+        history_limit: 80,
+        limit: 120,
+      }) as ArtifactPayload;
       persistArtifactsBrowserCache(next);
       return next;
     })();

@@ -1,4 +1,6 @@
+import threading
 import unittest
+from datetime import datetime
 
 from fastapi import HTTPException
 
@@ -164,6 +166,69 @@ class RuntimeRunQueryServiceTests(unittest.TestCase):
                 build_archived_run_detail_response=lambda **kwargs: {},
                 build_live_run_detail_response=lambda **kwargs: {},
             )
+
+    def test_build_run_list_response_merges_live_and_history_without_duplicates(self):
+        runs = {
+            "run-live": {
+                "run_id": "run-live",
+                "status": "running",
+                "workspace_id": "default",
+                "owner_user_id": "user-1",
+                "updated_at": "2026-04-06T10:00:00Z",
+                "created_at": "2026-04-06T09:55:00Z",
+            }
+        }
+        history = [
+            {
+                "run_id": "run-live",
+                "status": "completed",
+                "workspace_id": "default",
+                "owner_user_id": "user-1",
+                "updated_at": "2026-04-06T09:59:00Z",
+                "created_at": "2026-04-06T09:50:00Z",
+            },
+            {
+                "run_id": "run-archived",
+                "status": "completed",
+                "workspace_id": "default",
+                "owner_user_id": "user-1",
+                "updated_at": "2026-04-06T08:00:00Z",
+                "created_at": "2026-04-06T07:55:00Z",
+            },
+        ]
+
+        payload = runtime_run_query_service.build_run_list_response(
+            limit=50,
+            offset=0,
+            workspace_id="default",
+            status=None,
+            pack_id=None,
+            current_user={"user_id": "user-1"},
+            runs=runs,
+            run_history_lock=threading.Lock(),
+            run_history=history,
+            serialize_run_snapshot=lambda run_id, run: dict(run),
+            history_item_matches=lambda item, workspace_id, status, pack_id: (
+                (not workspace_id or item.get("workspace_id") == workspace_id)
+                and (not status or str(item.get("status") or "").lower() == str(status).lower())
+            ),
+            current_user_is_privileged=lambda current_user: False,
+            extract_run_owner_user_id=lambda item: str(item.get("owner_user_id") or ""),
+            summarize_history_item=lambda item: {
+                "run_id": item.get("run_id"),
+                "status": item.get("status"),
+                "updated_at": item.get("updated_at"),
+                "created_at": item.get("created_at"),
+            },
+            parse_utc_ts=lambda value: datetime.fromisoformat(str(value).replace("Z", "+00:00")) if value else None,
+        )
+
+        self.assertEqual(payload["count"], 2)
+        self.assertEqual(payload["total"], 2)
+        self.assertEqual(payload["items"][0]["run_id"], "run-live")
+        self.assertEqual(payload["items"][0]["source"], "live")
+        self.assertEqual(payload["items"][1]["run_id"], "run-archived")
+        self.assertEqual(payload["items"][1]["source"], "history")
 
 
 if __name__ == "__main__":

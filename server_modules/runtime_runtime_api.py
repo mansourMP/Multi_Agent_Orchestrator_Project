@@ -341,6 +341,10 @@ def register_runtime_routes(app) -> None:
     async def get_runtime_status():
         return runtime_status_payload()
 
+    @app.get("/machines", dependencies=[Depends(require_api_key)])
+    async def get_machines():
+        return runtime_status_payload()
+
     @app.get("/local/workers/status", dependencies=[Depends(require_api_key)])
     async def get_legacy_local_workers_status():
         return legacy_local_workers_status_payload()

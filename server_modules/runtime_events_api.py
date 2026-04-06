@@ -1,17 +1,19 @@
 from __future__ import annotations
 
+from typing import Any, Dict, List, Optional
+
+from server_modules.api_contract import ApiNotificationListResponse
+
 
 def register_inbox_routes(app) -> None:
     import server as _server
 
     module_globals = globals()
-    for key, value in _server.__dict__.items():
-        if key not in module_globals:
-            module_globals[key] = value
+    module_globals.update(_server.__dict__)
 
-    @app.get("/events/inbox", dependencies=[Depends(require_api_key)])
-    async def get_channel_events(
-        limit: int = 80,
+    def _notification_payload(
+        *,
+        limit: int,
         workspace_id: Optional[str] = None,
         channel: Optional[str] = None,
         session_key: Optional[str] = None,
@@ -21,7 +23,7 @@ def register_inbox_routes(app) -> None:
         trace_id: Optional[str] = None,
         include_sessions: bool = True,
         session_limit: int = ORION_CHANNEL_SESSIONS_LIMIT,
-    ):
+    ) -> dict[str, Any]:
         safe_limit = max(1, min(limit, 500))
         with CHANNEL_EVENTS_LOCK:
             items = list(CHANNEL_EVENTS)
@@ -49,10 +51,11 @@ def register_inbox_routes(app) -> None:
             "total": len(filtered),
             "sessions": sessions,
             "session_count": len(sessions),
+            "stream": False,
         }
 
-    @app.get("/events/inbox/stream", dependencies=[Depends(require_api_key)])
-    async def stream_channel_events(
+    def _notification_stream_response(
+        *,
         workspace_id: Optional[str] = None,
         channel: Optional[str] = None,
         session_key: Optional[str] = None,
@@ -87,6 +90,116 @@ def register_inbox_routes(app) -> None:
                 limit=limit,
             ),
             ping=max(3, int(safe_heartbeat)),
+        )
+
+    @app.get("/events/inbox", dependencies=[Depends(require_api_key)])
+    async def get_channel_events(
+        limit: int = 80,
+        workspace_id: Optional[str] = None,
+        channel: Optional[str] = None,
+        session_key: Optional[str] = None,
+        direction: Optional[str] = None,
+        action: Optional[str] = None,
+        run_id: Optional[str] = None,
+        trace_id: Optional[str] = None,
+        include_sessions: bool = True,
+        session_limit: int = ORION_CHANNEL_SESSIONS_LIMIT,
+    ):
+        return _notification_payload(
+            limit=limit,
+            workspace_id=workspace_id,
+            channel=channel,
+            session_key=session_key,
+            direction=direction,
+            action=action,
+            run_id=run_id,
+            trace_id=trace_id,
+            include_sessions=include_sessions,
+            session_limit=session_limit,
+        )
+
+    @app.get("/events/inbox/stream", dependencies=[Depends(require_api_key)])
+    async def stream_channel_events(
+        workspace_id: Optional[str] = None,
+        channel: Optional[str] = None,
+        session_key: Optional[str] = None,
+        direction: Optional[str] = None,
+        action: Optional[str] = None,
+        run_id: Optional[str] = None,
+        trace_id: Optional[str] = None,
+        since_id: Optional[str] = None,
+        since_ts: Optional[str] = None,
+        include_backlog: bool = False,
+        poll_seconds: float = 0.35,
+        heartbeat_seconds: float = 5.0,
+        timeout_seconds: float = 25.0,
+        limit: int = 120,
+    ):
+        return _notification_stream_response(
+            workspace_id=workspace_id,
+            channel=channel,
+            session_key=session_key,
+            direction=direction,
+            action=action,
+            run_id=run_id,
+            trace_id=trace_id,
+            since_id=since_id,
+            since_ts=since_ts,
+            include_backlog=include_backlog,
+            poll_seconds=poll_seconds,
+            heartbeat_seconds=heartbeat_seconds,
+            timeout_seconds=timeout_seconds,
+            limit=limit,
+        )
+
+    @app.get("/notifications", dependencies=[Depends(require_api_key)], response_model=ApiNotificationListResponse)
+    async def get_notifications(
+        limit: int = 80,
+        workspace_id: Optional[str] = None,
+        channel: Optional[str] = None,
+        session_key: Optional[str] = None,
+        direction: Optional[str] = None,
+        action: Optional[str] = None,
+        run_id: Optional[str] = None,
+        trace_id: Optional[str] = None,
+        include_sessions: bool = True,
+        session_limit: int = ORION_CHANNEL_SESSIONS_LIMIT,
+        stream: bool = False,
+        since_id: Optional[str] = None,
+        since_ts: Optional[str] = None,
+        include_backlog: bool = False,
+        poll_seconds: float = 0.35,
+        heartbeat_seconds: float = 5.0,
+        timeout_seconds: float = 25.0,
+    ):
+        if stream:
+            return _notification_stream_response(
+                workspace_id=workspace_id,
+                channel=channel,
+                session_key=session_key,
+                direction=direction,
+                action=action,
+                run_id=run_id,
+                trace_id=trace_id,
+                since_id=since_id,
+                since_ts=since_ts,
+                include_backlog=include_backlog,
+                poll_seconds=poll_seconds,
+                heartbeat_seconds=heartbeat_seconds,
+                timeout_seconds=timeout_seconds,
+                limit=limit,
+            )
+        return _notification_payload(
+            limit=limit,
+            workspace_id=workspace_id,
+            channel=channel,
+            session_key=session_key,
+            direction=direction,
+            action=action,
+            run_id=run_id,
+            trace_id=trace_id,
+            include_sessions=include_sessions,
+            session_limit=session_limit,
         )
 
     @app.get("/events/inbox/sessions", dependencies=[Depends(require_api_key)])

@@ -8,6 +8,14 @@ from fastapi import Depends, Request
 from sse_starlette.sse import EventSourceResponse
 
 from server_modules.agent_turn import agent_turn as execute_canonical_agent_turn, resolve_direct_chat_turn_request
+from server_modules.api_contract import (
+    ApiAgentTurnRequest,
+    ApiAgentTurnResponse,
+    ApiRunListResponse,
+    build_turn_chat_body,
+    normalize_agent_turn_result,
+    request_body_to_turn_request,
+)
 from server_modules.direct_chat_service import (
     build_direct_chat_execution_services,
     build_direct_chat_event_producer as _service_build_direct_chat_event_producer,
@@ -46,6 +54,7 @@ from server_modules import runtime_local_execution_approval_service
 from server_modules import runtime_route_registration_service
 from server_modules import runtime_run_access_service
 from server_modules import runtime_run_detail_service
+from server_modules import runtime_run_query_service
 from server_modules import runtime_run_resume_service
 from server_modules import runtime_usage_service
 from server_modules import runtime_webhook_trigger_service
@@ -395,3 +404,47 @@ def register_run_routes(app) -> None:
         execute_system_run_start_request_via_turn_runtime=execute_system_run_start_request_via_turn_runtime,
         enforce_run_owner_access=_enforce_run_owner_access,
     )
+
+    @app.post("/turn", dependencies=[Depends(_server.require_api_key)], response_model=ApiAgentTurnResponse)
+    async def canonical_turn(
+        body: ApiAgentTurnRequest,
+        current_user=Depends(_server.require_api_key),
+    ):
+        _refresh_server_exports()
+        turn_request = request_body_to_turn_request(body)
+        result = await execute_canonical_agent_turn(
+            turn_request=turn_request,
+            current_user=current_user,
+            run_execution_services=_run_execution_services(),
+            direct_chat_services=_direct_chat_execution_services(),
+            chat_body=build_turn_chat_body(turn_request),
+        )
+        return normalize_agent_turn_result(result, turn_request=turn_request)
+
+    @app.get("/runs", dependencies=[Depends(_server.require_api_key)], response_model=ApiRunListResponse)
+    async def list_runs(
+        limit: int = 50,
+        offset: int = 0,
+        workspace_id: Optional[str] = None,
+        status: Optional[str] = None,
+        pack_id: Optional[str] = None,
+        current_user=Depends(_server.require_api_key),
+    ):
+        _refresh_server_exports()
+        return runtime_run_query_service.build_run_list_response(
+            limit=limit,
+            offset=offset,
+            workspace_id=workspace_id,
+            status=status,
+            pack_id=pack_id,
+            current_user=current_user,
+            runs=_late_server_export("runs"),
+            run_history_lock=_late_server_export("RUN_HISTORY_LOCK"),
+            run_history=_late_server_export("RUN_HISTORY"),
+            serialize_run_snapshot=_late_server_export("_serialize_run_snapshot"),
+            history_item_matches=_late_server_export("_history_item_matches"),
+            current_user_is_privileged=_current_user_is_privileged,
+            extract_run_owner_user_id=_extract_run_owner_user_id,
+            summarize_history_item=_late_server_export("_summarize_history_item"),
+            parse_utc_ts=_late_server_export("_parse_utc_ts"),
+        )

@@ -10,6 +10,7 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 from urllib.parse import urlencode
 
 from scripts.platform_execution import current_platform_context, supported_device_actions
+from server_modules.api_contract import ApiArtifactListResponse, ApiArtifactPreviewResponse
 from server_modules.auth import enforce_workspace_access
 from server_modules.run_service import RunExecutionServices, build_server_system_run_execution_services
 from server_modules.schemas import DeviceExecuteRequest, WorkspaceFileDeleteRequest, WorkspaceFileWriteRequest
@@ -929,9 +930,7 @@ def register_agent_workspace_routes(app) -> None:
     import server as _server
 
     module_globals = globals()
-    for key, value in _server.__dict__.items():
-        if key not in module_globals:
-            module_globals[key] = value
+    module_globals.update(_server.__dict__)
 
     @app.get("/agents/workspace/snapshot", dependencies=[Depends(require_admin_api_key)])
     async def get_agents_workspace_snapshot(
@@ -1374,12 +1373,11 @@ def register_agent_workspace_routes(app) -> None:
             },
         }
 
-    @app.get("/artifacts/workspace", dependencies=[Depends(require_admin_api_key)])
-    async def get_workspace_artifacts(
+    async def _workspace_artifacts_payload(
         workspace_id: Optional[str] = None,
         history_limit: int = 80,
         limit: int = 120,
-        current_user=Depends(require_admin_api_key),
+        current_user: Any = None,
     ):
         workspace_filter = _normalize_workspace_id(enforce_workspace_access(current_user, workspace_id)) if workspace_id else None
         safe_history_limit = max(1, min(int(history_limit), 160))
@@ -1517,8 +1515,35 @@ def register_agent_workspace_routes(app) -> None:
             "items": combined_items,
         }
 
-    @app.get("/artifacts/preview", dependencies=[Depends(require_admin_api_key)])
-    async def get_artifact_preview(
+    @app.get("/artifacts", dependencies=[Depends(require_admin_api_key)], response_model=ApiArtifactListResponse)
+    async def get_artifacts(
+        workspace_id: Optional[str] = None,
+        history_limit: int = 80,
+        limit: int = 120,
+        current_user=Depends(require_admin_api_key),
+    ):
+        return await _workspace_artifacts_payload(
+            workspace_id=workspace_id,
+            history_limit=history_limit,
+            limit=limit,
+            current_user=current_user,
+        )
+
+    @app.get("/artifacts/workspace", dependencies=[Depends(require_admin_api_key)], response_model=ApiArtifactListResponse)
+    async def get_workspace_artifacts(
+        workspace_id: Optional[str] = None,
+        history_limit: int = 80,
+        limit: int = 120,
+        current_user=Depends(require_admin_api_key),
+    ):
+        return await _workspace_artifacts_payload(
+            workspace_id=workspace_id,
+            history_limit=history_limit,
+            limit=limit,
+            current_user=current_user,
+        )
+
+    async def _artifact_preview_payload(
         path: str,
     ):
         normalized_path = _normalize_workspace_material_path(path)
@@ -1557,6 +1582,7 @@ def register_agent_workspace_routes(app) -> None:
             "byte_size": target.stat().st_size,
             "text_preview": text_preview,
             "file_url": f"/artifacts/file?{urlencode({'path': normalized_path})}",
+            "download_url": f"/artifacts/content?{urlencode({'path': normalized_path})}",
             "file_name": target.name,
             "note": (
                 "Image preview available."
@@ -1567,8 +1593,13 @@ def register_agent_workspace_routes(app) -> None:
             ),
         }
 
-    @app.get("/artifacts/file", dependencies=[Depends(require_admin_api_key)])
-    async def get_artifact_file(
+    @app.get("/artifacts/preview", dependencies=[Depends(require_admin_api_key)], response_model=ApiArtifactPreviewResponse)
+    async def get_artifact_preview(
+        path: str,
+    ):
+        return await _artifact_preview_payload(path)
+
+    async def _artifact_file_response(
         path: str,
     ):
         normalized_path = _normalize_workspace_material_path(path)
@@ -1583,6 +1614,18 @@ def register_agent_workspace_routes(app) -> None:
 
         media_type = mimetypes.guess_type(str(target.name))[0] or "application/octet-stream"
         return FileResponse(path=str(target), media_type=media_type, filename=target.name)
+
+    @app.get("/artifacts/content", dependencies=[Depends(require_admin_api_key)])
+    async def get_artifact_content(
+        path: str,
+    ):
+        return await _artifact_file_response(path)
+
+    @app.get("/artifacts/file", dependencies=[Depends(require_admin_api_key)])
+    async def get_artifact_file(
+        path: str,
+    ):
+        return await _artifact_file_response(path)
 
     @app.get("/agents/workspace/file-diff", dependencies=[Depends(require_admin_api_key)])
     async def get_agent_workspace_file_diff(

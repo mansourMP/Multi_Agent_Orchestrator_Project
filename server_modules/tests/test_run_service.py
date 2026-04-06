@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, patch
 
 from fastapi import HTTPException
 
-from server_modules.agent_turn import build_run_start_turn_request
+from server_modules.agent_turn import build_agent_turn_request, build_run_start_turn_request
 from server_modules.run_service import (
     AUTO_DELEGATION_ROLE_RULES,
     ROUTING_PROVIDER_ORDER,
@@ -1669,8 +1669,10 @@ class RunServiceTests(unittest.TestCase):
             engine="orion",
             workspace_id="workspace-1",
             user_goal="Original goal",
+            business_plan="Original business plan",
             provider="openai",
             model="gpt-test",
+            agents=[{"id": "agent-1"}],
             metadata={"owner_user_id": "user-1", "trust_mode": "guarded"},
         )
         turn_request = build_run_start_turn_request(base_request)
@@ -1679,10 +1681,43 @@ class RunServiceTests(unittest.TestCase):
 
         self.assertEqual(converted.workspace_id, "workspace-1")
         self.assertEqual(converted.user_goal, "Original goal")
+        self.assertEqual(converted.business_plan, "Original business plan")
         self.assertEqual(converted.provider, "openai")
+        self.assertEqual(converted.agents, [{"id": "agent-1"}])
         self.assertEqual(converted.metadata["agent_turn_request"]["workspace_id"], "workspace-1")
         self.assertEqual(converted.metadata["agent_turn_request"]["message"], "Original goal")
         self.assertEqual(converted.metadata["channel"], "web")
+
+    def test_build_run_start_request_from_turn_uses_context_hints_when_base_request_missing(self):
+        turn_request = build_agent_turn_request(
+            {
+                "workspace_id": "workspace-2",
+                "session_id": "session-2",
+                "channel": "web",
+                "actor": {"type": "user", "id": "user-2", "display_name": "User Two"},
+                "message": "Run the workflow",
+                "execution_mode": "durable",
+                "response_mode": "artifact",
+                "context_hints": {
+                    "engine": "orion",
+                    "workflow_id": "workflow-2",
+                    "provider": "anthropic",
+                    "model": "claude-test",
+                    "agent_role": "builder",
+                    "business_plan": "Ship the builder changes",
+                    "agents": [{"role": "builder"}],
+                    "metadata": {"owner_user_id": "user-2"},
+                },
+            }
+        )
+
+        converted = build_run_start_request_from_turn(turn_request, base_request=None)
+
+        self.assertEqual(converted.workflow_id, "workflow-2")
+        self.assertEqual(converted.business_plan, "Ship the builder changes")
+        self.assertEqual(converted.provider, "anthropic")
+        self.assertEqual(converted.model, "claude-test")
+        self.assertEqual(converted.agents, [{"role": "builder"}])
 
     def test_build_run_preview_context_preserves_workflow_metadata(self):
         request = RunStartRequest(

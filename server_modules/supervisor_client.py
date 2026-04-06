@@ -84,6 +84,58 @@ def launch(target: str) -> dict[str, Any]:
     )
 
 
+def ocr(monitor: str = "primary", region: dict[str, Any] | None = None) -> dict[str, Any]:
+    return _execute(
+        "computer_control.ocr",
+        {
+          "monitor": monitor,
+          "region": region,
+        },
+    )
+
+
+def notify(title: str, message: str) -> dict[str, Any]:
+    return _execute(
+        "computer_control.notify",
+        {
+            "title": title,
+            "message": message,
+        },
+    )
+
+
+def list_apps() -> dict[str, Any]:
+    return _execute("computer_control.list_apps", {})
+
+
+def launch_app(target: str) -> dict[str, Any]:
+    return _execute(
+        "computer_control.launch_app",
+        {
+            "target": target,
+        },
+    )
+
+
+def run_applescript(script: str) -> dict[str, Any]:
+    return _execute(
+        "computer_control.applescript",
+        {
+            "script": script,
+        },
+    )
+
+
+def speak(text: str, voice: str | None = None) -> dict[str, Any]:
+    return _execute(
+        "computer_control.speak",
+        {
+            "text": text,
+            "voice": voice,
+        },
+    )
+
+
 def _execute(capability_id: str, arguments: dict[str, Any]) -> dict[str, Any]:
     request_id = str(uuid.uuid4())
     nonce = str(uuid.uuid4())

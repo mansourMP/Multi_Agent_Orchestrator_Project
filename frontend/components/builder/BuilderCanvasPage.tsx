@@ -2059,7 +2059,7 @@ export default function BuilderCanvasPage({ workflowId = null }: BuilderCanvasPa
         `Nodes: ${nodes.length}`,
         `Agent Setup: ${buildBuilderAgentSummary(nodes)}`,
       ].join('\n');
-      const response = await controlPlaneFetch('/api/runs/start', {
+      const response = await controlPlaneFetch(`/api/workflows/${encodeURIComponent(workflowId)}/run`, {
         method: 'POST',
         body: JSON.stringify({
           engine: 'orion',

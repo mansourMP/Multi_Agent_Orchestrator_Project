@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import queue
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
@@ -17,21 +16,11 @@ from server_modules.runtime_config import (
 )
 from server_modules import outbox_service
 from server_modules import run_state_repository
+from server_modules.run_execution_handle import durable_run_payload, restore_run_state, should_restore_execution_handle
 from server_modules.runtime_state_store import (
     init_runtime_state_db,
     load_local_runtime_state,
 )
-
-_LIVE_RUN_EXCLUDED_KEYS = {
-    "logs",
-    "input_queue",
-}
-_LIVE_RUN_MONO_KEYS = {
-    "_started_mono",
-    "_finished_mono",
-    "_first_value_mono",
-    "_hitl_wait_start_mono",
-}
 
 
 def _utc_now_iso() -> str:
@@ -229,12 +218,17 @@ class _PersistentRunStore(dict):
             return value
         return default
 
-    def reload(self, persisted_items: List[Dict[str, Any]]) -> None:
+    def reload(self, persisted_items: List[Dict[str, Any]], *, active_only: bool = False) -> None:
         self._loading = True
         try:
             dict.clear(self)
             for item in persisted_items:
-                restored = self._manager.restore_live_run(item)
+                restored = self._manager.restore_live_run(
+                    item,
+                    hydrate_execution_handle=(
+                        should_restore_execution_handle(item) if active_only else True
+                    ),
+                )
                 if not restored:
                     continue
                 run_id, run = restored
@@ -351,57 +345,22 @@ class AcpSessionManager:
                 self._scope_locks[scope_key] = lock
             return lock
 
-    def restore_live_run(self, item: Dict[str, Any]) -> Optional[tuple[str, Dict[str, Any]]]:
-        payload = _json_safe(item)
-        if not isinstance(payload, dict):
-            return None
-        run_id = str(payload.pop("run_id", "") or "").strip()
-        if not run_id:
-            return None
-        log_queue: queue.Queue = queue.Queue()
-        events = payload.get("events") if isinstance(payload.get("events"), list) else []
-        event_seq = int(payload.get("_event_seq") or 0)
-        for entry in events:
-            if not isinstance(entry, dict):
-                continue
-            try:
-                event_seq = max(event_seq, int(entry.get("seq") or 0))
-            except Exception:
-                continue
-        run: Dict[str, Any] = dict(payload)
-        run["run_id"] = run_id
-        run["logs"] = log_queue
-        run["input_queue"] = queue.Queue()
-        run["thread_id"] = None
-        run["_archived"] = False
-        run["_event_seq"] = event_seq
-        if not isinstance(run.get("events"), list):
-            run["events"] = []
-        if not isinstance(run.get("tool_policy_audit"), list):
-            run["tool_policy_audit"] = []
-        if not isinstance(run.get("memory_trace"), dict):
-            run["memory_trace"] = {
-                "enabled": ORION_MEMORY_ENABLED,
-                "reads": [],
-                "writes": [],
-                "last_error": None,
-                "updated_at": _utc_now_iso(),
-            }
-        if "_hitl_wait_total_ms" not in run:
-            run["_hitl_wait_total_ms"] = 0.0
-        return run_id, run
+    def restore_live_run(
+        self,
+        item: Dict[str, Any],
+        *,
+        hydrate_execution_handle: bool = True,
+    ) -> Optional[tuple[str, Dict[str, Any]]]:
+        return restore_run_state(
+            item,
+            json_safe=_json_safe,
+            memory_enabled=ORION_MEMORY_ENABLED,
+            now_iso=_utc_now_iso(),
+            hydrate_execution_handle=hydrate_execution_handle,
+        )
 
     def _serialize_live_run(self, run_id: str, run: MutableMapping[str, Any]) -> Dict[str, Any]:
-        payload: Dict[str, Any] = {"run_id": str(run_id or "").strip()}
-        for key, value in run.items():
-            if key in _LIVE_RUN_EXCLUDED_KEYS or key in _LIVE_RUN_MONO_KEYS:
-                continue
-            payload[key] = value
-        if "thread_id" not in payload:
-            payload["thread_id"] = None
-        if "_archived" not in payload:
-            payload["_archived"] = False
-        return _json_safe(payload)
+        return durable_run_payload(run_id, dict(run), json_safe=_json_safe)
 
     def persist_live_run(self, run_id: str, run: MutableMapping[str, Any]) -> None:
         token = str(run_id or "").strip()
@@ -483,7 +442,7 @@ class AcpSessionManager:
         except Exception:
             local_state = {}
         history_items = run_state_repository.sync_list_run_archive(ORION_HISTORY_LIMIT)
-        self.runs.reload(persisted_runs)
+        self.runs.reload(persisted_runs, active_only=True)
         self.local_pending_run_ids.reload(local_state.get("pending_run_ids") if isinstance(local_state, dict) else [])
         self.local_claimed_runs.reload(local_state.get("claimed_runs") if isinstance(local_state, dict) else {})
         self.local_worker_registry.reload(local_state.get("runtime_registrations") if isinstance(local_state, dict) else {})

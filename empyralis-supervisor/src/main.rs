@@ -156,6 +156,7 @@ async fn execute(
 async fn execute_capability(request: &ExecuteRequest) -> Result<Value> {
     match request.capability_id.as_str() {
         "screenshot.capture" => capabilities::screenshot::capture(&request.arguments),
+        "computer_control.ocr" => capabilities::ocr::read_screen_text(&request.arguments),
         "computer_control.click" => capabilities::control::click(&request.arguments),
         "computer_control.type" => capabilities::control::type_text(&request.arguments).await,
         "computer_control.key" => capabilities::control::press_key(&request.arguments),
@@ -164,7 +165,12 @@ async fn execute_capability(request: &ExecuteRequest) -> Result<Value> {
             capabilities::clipboard::write_clipboard(&request.arguments)
         }
         "computer_control.list_windows" => capabilities::windows::list_windows(),
+        "computer_control.list_apps" => capabilities::windows::list_windows(),
         "computer_control.launch" => capabilities::launch::launch_target(&request.arguments),
+        "computer_control.launch_app" => capabilities::launch::launch_target(&request.arguments),
+        "computer_control.notify" => capabilities::system::notify(&request.arguments),
+        "computer_control.applescript" => capabilities::system::applescript(&request.arguments),
+        "computer_control.speak" => capabilities::system::speak(&request.arguments),
         other => Err(anyhow::anyhow!("unsupported capability_id: {other}")),
     }
 }

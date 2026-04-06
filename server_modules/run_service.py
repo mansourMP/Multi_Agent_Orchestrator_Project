@@ -15,6 +15,7 @@ from server_modules.agent_turn import AgentTurnRequest, bind_agent_turn_metadata
 from server_modules.doctor_gate import build_doctor_run_gate_live
 from server_modules import machine_lease_service
 from server_modules.policy_service import apply_execution_route_metadata, decide_execution_target
+from server_modules.run_execution_handle import attach_execution_handle, build_run_record
 from server_modules import run_state_repository
 from server_modules.runtime_models import RunStartRequest
 from server_modules.telemetry import get_tracer, set_span_attributes
@@ -271,42 +272,29 @@ def build_live_run_record(
     active_provider: Optional[str],
     active_model: Optional[str],
 ) -> Dict[str, Any]:
-    return {
-        "run_id": run_id,
-        "status": "starting",
-        "logs": log_queue,
-        "input_queue": input_queue,
-        "thread_id": None,
-        "engine": engine,
-        "context": context,
-        "created_at": now_iso,
-        "updated_at": now_iso,
-        "result": None,
-        "result_data": None,
-        "duration_ms": None,
-        "_started_mono": started_mono,
-        "_finished_mono": None,
-        "_first_value_mono": None,
-        "_hitl_wait_start_mono": None,
-        "_hitl_wait_total_ms": 0.0,
-        "_archived": False,
-        "_event_seq": 0,
-        "events": [],
-        "node_states": None,
-        "tool_policy_audit": [],
-        "memory_trace": {
-            "enabled": bool(memory_enabled),
-            "reads": [],
-            "writes": [],
-            "last_error": None,
-            "updated_at": memory_updated_at,
-        },
-        "active_profile_id": active_profile_id or None,
-        "active_profile_label": active_profile_label or None,
-        "active_provider": active_provider or None,
-        "active_model": active_model or None,
-        "active_adapter": None,
-    }
+    record = build_run_record(
+        run_id=run_id,
+        engine=engine,
+        context=context,
+        now_iso=now_iso,
+        memory_enabled=memory_enabled,
+        memory_updated_at=memory_updated_at,
+        active_profile_id=active_profile_id,
+        active_profile_label=active_profile_label,
+        active_provider=active_provider,
+        active_model=active_model,
+    )
+    return attach_execution_handle(
+        record,
+        log_queue=log_queue,
+        input_queue=input_queue,
+        started_mono=started_mono,
+        finished_mono=None,
+        first_value_mono=None,
+        hitl_wait_start_mono=None,
+        thread_id=None,
+        event_seq=0,
+    )
 
 
 def register_live_run(
@@ -3435,7 +3423,7 @@ def build_run_start_request_from_turn(
         workflow_id=_hint_text(getattr(base, "workflow_id", None)) or _hint_text(turn_request.context_hints.get("workflow_id")),
         workspace_id=str(turn_request.workspace_id or getattr(base, "workspace_id", None) or "default").strip() or "default",
         user_goal=_hint_text(turn_request.message) or _hint_text(getattr(base, "user_goal", None)),
-        business_plan=_hint_text(getattr(base, "business_plan", None)),
+        business_plan=_hint_text(getattr(base, "business_plan", None)) or _hint_text(turn_request.context_hints.get("business_plan")),
         max_iterations=(
             getattr(base, "max_iterations", None)
             if getattr(base, "max_iterations", None) is not None
@@ -3446,7 +3434,7 @@ def build_run_start_request_from_turn(
         provider=_hint_text(getattr(base, "provider", None)) or _hint_text(turn_request.context_hints.get("provider")),
         model=_hint_text(getattr(base, "model", None)) or _hint_text(turn_request.context_hints.get("model")),
         credential_id=_hint_text(getattr(base, "credential_id", None)) or _hint_text(turn_request.context_hints.get("credential_id")),
-        agents=_hint_list(getattr(base, "agents", None)),
+        agents=_hint_list(getattr(base, "agents", None)) or _hint_list(turn_request.context_hints.get("agents")),
         metadata=metadata,
     )
 

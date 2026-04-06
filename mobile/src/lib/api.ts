@@ -1,5 +1,6 @@
 import Constants from "expo-constants";
 
+import type { AgentTurnRequest, AgentTurnResponse } from "../../../frontend/lib/api-contract";
 import type { AgentSummary, ApprovalSummary, ArtifactSummary, MobileSession, RunSummary } from "./types";
 
 const extra = (Constants.expoConfig?.extra ?? {}) as {
@@ -97,6 +98,18 @@ type EmpyralistDirectChatRequest = {
     input: string;
   };
 };
+
+function createMobileRequestId(prefix: string) {
+  return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function buildMobileActor(session: MobileSession, actorId: string): AgentTurnRequest["actor"] {
+  return {
+    type: "user",
+    id: actorId,
+    display_name: "Mobile user",
+  };
+}
 
 export function normalizeServerUrl(value: string) {
   const trimmed = value.trim();
@@ -309,22 +322,36 @@ export const mobileApi = {
     const chatUrl = getEmpyralistChatEndpoint(session);
     let response: Response;
     try {
+      const actorId = payload.threadId || createMobileRequestId("mobile-chat");
+      const requestBody: AgentTurnRequest = {
+        tenant_id: "default",
+        workspace_id: session.workspaceId || getDefaultWorkspaceId(),
+        session_id: actorId,
+        channel: "mobile",
+        actor: buildMobileActor(session, actorId),
+        message: payload.message,
+        attachments: [],
+        execution_mode: "sync",
+        response_mode: "stream",
+        context_hints: {
+          provider: payload.provider ?? getDefaultEmpyralistChatProvider(),
+          model: payload.model ?? getDefaultEmpyralistChatModel(),
+          prior_messages: payload.priorMessages && payload.priorMessages.length > 0 ? payload.priorMessages : undefined,
+          approved_action: payload.approvedAction || undefined,
+          metadata: {
+            source: "mobile_chat",
+            thread_id: payload.threadId || undefined,
+            availability: { ai_ready: true },
+          },
+        },
+      };
       response = await fetch(chatUrl, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
           "X-API-Key": session.runtimeKey,
         },
-        body: JSON.stringify({
-          workspace_id: session.workspaceId || getDefaultWorkspaceId(),
-          thread_id: payload.threadId || undefined,
-          message: payload.message,
-          provider: payload.provider ?? getDefaultEmpyralistChatProvider(),
-          model: payload.model ?? getDefaultEmpyralistChatModel(),
-          availability: { ai_ready: true },
-          prior_messages: payload.priorMessages && payload.priorMessages.length > 0 ? payload.priorMessages : undefined,
-          approved_action: payload.approvedAction || undefined,
-        }),
+        body: JSON.stringify(requestBody),
       });
     } catch (error) {
       throw new Error(error instanceof TypeError ? formatNetworkError(chatUrl) : "Request failed.");
@@ -469,14 +496,25 @@ export const mobileApi = {
     if (options?.appId) {
       metadata.app_id = options.appId;
     }
-    return request<{ run_id: string; status: string }>(session, "/runs/start", {
-      method: "POST",
-      body: JSON.stringify({
+    const turnRequest: AgentTurnRequest = {
+      tenant_id: "default",
+      workspace_id: session.workspaceId,
+      session_id: createMobileRequestId("mobile-run"),
+      channel: "mobile",
+      actor: buildMobileActor(session, `mobile-runner:${session.workspaceId || "default"}`),
+      message: goal,
+      attachments: [],
+      execution_mode: "durable",
+      response_mode: "artifact",
+      context_hints: {
         engine: "empyralis",
-        workspace_id: session.workspaceId,
-        user_goal: goal,
+        agent_role: agentRole || undefined,
         metadata,
-      }),
+      },
+    };
+    return request<AgentTurnResponse>(session, "/turn", {
+      method: "POST",
+      body: JSON.stringify(turnRequest),
     });
   },
   resolveApproval(

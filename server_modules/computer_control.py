@@ -137,12 +137,17 @@ def _clipboard_write_fallback(text: str) -> None:
 
 
 def screen_ocr(region: Any = None) -> str:
-    pytesseract = _import_pytesseract()
-    if not shutil.which("tesseract"):
-        raise RuntimeError("tesseract is not installed on this machine.")
-    image = _capture_screenshot_image(region=region)
-    text = str(pytesseract.image_to_string(image) or "").strip()
-    return text
+    # LEGACY:
+    # pytesseract = _import_pytesseract()
+    # if not shutil.which("tesseract"):
+    #     raise RuntimeError("tesseract is not installed on this machine.")
+    # image = _capture_screenshot_image(region=region)
+    # text = str(pytesseract.image_to_string(image) or "").strip()
+    # return text
+    result = _supervisor_call(supervisor_client.ocr, monitor="primary", region=region)
+    if not result.get("success", False):
+        raise RuntimeError(str(result.get("error") or "OCR failed.").strip())
+    return str(result.get("text") or "").strip()
 
 
 def capture_screenshot(monitor: str = "primary", region: Any = None) -> Dict[str, Any]:
@@ -185,11 +190,11 @@ def computer_control_clipboard_write(text: str) -> Dict[str, Any]:
 
 
 def computer_control_list_apps() -> Dict[str, Any]:
-    return _supervisor_call(supervisor_client.list_windows)
+    return _supervisor_call(supervisor_client.list_apps)
 
 
 def computer_control_launch_app(name_or_path: str) -> Dict[str, Any]:
-    return _supervisor_call(supervisor_client.launch, str(name_or_path or ""))
+    return _supervisor_call(supervisor_client.launch_app, str(name_or_path or ""))
 
 
 def mouse_click(x: Any, y: Any) -> str:
@@ -260,20 +265,26 @@ def keyboard_type(text: str) -> str:
 
 
 def run_applescript(script: str) -> str:
-    if sys.platform != "darwin":
-        raise RuntimeError("AppleScript is only available on macOS.")
+    # LEGACY:
+    # if sys.platform != "darwin":
+    #     raise RuntimeError("AppleScript is only available on macOS.")
+    # payload = str(script or "").strip()
+    # if not payload:
+    #     raise RuntimeError("AppleScript is required.")
+    # completed = subprocess.run(
+    #     ["osascript", "-e", payload],
+    #     capture_output=True,
+    #     text=True,
+    #     check=False,
+    # )
+    # if completed.returncode != 0:
+    #     raise RuntimeError(str(completed.stderr or completed.stdout or "AppleScript failed.").strip())
+    # return str(completed.stdout or "").strip()
     payload = str(script or "").strip()
-    if not payload:
-        raise RuntimeError("AppleScript is required.")
-    completed = subprocess.run(
-        ["osascript", "-e", payload],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    if completed.returncode != 0:
-        raise RuntimeError(str(completed.stderr or completed.stdout or "AppleScript failed.").strip())
-    return str(completed.stdout or "").strip()
+    result = _supervisor_call(supervisor_client.run_applescript, payload)
+    if not result.get("success", False):
+        raise RuntimeError(str(result.get("error") or "AppleScript failed.").strip())
+    return str(result.get("output") or "").strip()
 
 
 def read_clipboard() -> str:
@@ -294,12 +305,7 @@ def read_clipboard() -> str:
     global _CLIPBOARD_FALLBACK_TEXT
     result = computer_control_clipboard_read()
     if not result.get("success", False):
-        try:
-            text = _clipboard_read_fallback()
-            _CLIPBOARD_FALLBACK_TEXT = text
-            return text
-        except Exception:
-            return _CLIPBOARD_FALLBACK_TEXT
+        return _CLIPBOARD_FALLBACK_TEXT
     text = str(result.get("text") or "")
     if text:
         _CLIPBOARD_FALLBACK_TEXT = text
@@ -324,55 +330,60 @@ def write_clipboard(text: str) -> str:
     result = computer_control_clipboard_write(payload)
     if not result.get("success", False):
         _CLIPBOARD_FALLBACK_TEXT = payload
-        try:
-            pyperclip = _import_pyperclip()
-            pyperclip.copy(payload)
-        except Exception:
-            try:
-                _clipboard_write_fallback(payload)
-            except Exception:
-                pass
         return "Clipboard updated."
     _CLIPBOARD_FALLBACK_TEXT = payload
     return "Clipboard updated."
 
 
 def send_notification(title: str, message: str) -> str:
+    # LEGACY:
+    # resolved_title = str(title or "").strip() or "Empyralist"
+    # resolved_message = str(message or "").strip() or "Task completed."
+    # if sys.platform == "darwin":
+    #     script = (
+    #         f'display notification "{_applescript_string(resolved_message)}" '
+    #         f'with title "{_applescript_string(resolved_title)}"'
+    #     )
+    #     subprocess.run(["osascript", "-e", script], capture_output=True, text=True, check=False)
+    #     return "Notification sent."
+    # if shutil.which("notify-send"):
+    #     subprocess.run(["notify-send", resolved_title, resolved_message], capture_output=True, text=True, check=False)
+    #     return "Notification sent."
+    # raise RuntimeError("System notifications are not supported on this machine.")
     resolved_title = str(title or "").strip() or "Empyralist"
     resolved_message = str(message or "").strip() or "Task completed."
-    if sys.platform == "darwin":
-        script = (
-            f'display notification "{_applescript_string(resolved_message)}" '
-            f'with title "{_applescript_string(resolved_title)}"'
-        )
-        subprocess.run(["osascript", "-e", script], capture_output=True, text=True, check=False)
-        return "Notification sent."
-    if shutil.which("notify-send"):
-        subprocess.run(["notify-send", resolved_title, resolved_message], capture_output=True, text=True, check=False)
-        return "Notification sent."
-    raise RuntimeError("System notifications are not supported on this machine.")
+    result = _supervisor_call(supervisor_client.notify, resolved_title, resolved_message)
+    if not result.get("success", False):
+        raise RuntimeError(str(result.get("error") or "Notification failed.").strip())
+    return "Notification sent."
 
 
 def speak_text(text: str, voice: Optional[str] = None) -> str:
     payload = str(text or "").strip()
     if not payload:
         raise RuntimeError("Text is required.")
-    selected_voice = str(voice or "").strip()
-    if sys.platform == "darwin":
-        command = ["say"]
-        if selected_voice:
-            command.extend(["-v", selected_voice])
-        command.append(payload)
-        subprocess.run(command, capture_output=True, text=True, check=False)
-        return "Spoken aloud."
-    if shutil.which("espeak"):
-        command = ["espeak"]
-        if selected_voice:
-            command.extend(["-v", selected_voice])
-        command.append(payload)
-        subprocess.run(command, capture_output=True, text=True, check=False)
-        return "Spoken aloud."
-    raise RuntimeError("System text-to-speech is not supported on this machine.")
+    # LEGACY:
+    # selected_voice = str(voice or "").strip()
+    # if sys.platform == "darwin":
+    #     command = ["say"]
+    #     if selected_voice:
+    #         command.extend(["-v", selected_voice])
+    #     command.append(payload)
+    #     subprocess.run(command, capture_output=True, text=True, check=False)
+    #     return "Spoken aloud."
+    # if shutil.which("espeak"):
+    #     command = ["espeak"]
+    #     if selected_voice:
+    #         command.extend(["-v", selected_voice])
+    #     command.append(payload)
+    #     subprocess.run(command, capture_output=True, text=True, check=False)
+    #     return "Spoken aloud."
+    # raise RuntimeError("System text-to-speech is not supported on this machine.")
+    selected_voice = str(voice or "").strip() or None
+    result = _supervisor_call(supervisor_client.speak, payload, voice=selected_voice)
+    if not result.get("success", False):
+        raise RuntimeError(str(result.get("error") or "Text-to-speech failed.").strip())
+    return "Spoken aloud."
 
 
 def list_running_apps() -> List[Dict[str, Any]]:
@@ -384,60 +395,9 @@ def list_running_apps() -> List[Dict[str, Any]]:
     # except Exception:
     #     iterator = []
     # ... fallback to `ps -ax -o pid=,comm=`
-    result = computer_control_list_apps()
+    result = _supervisor_call(supervisor_client.list_apps)
     if not result.get("success", False):
-        items: List[Dict[str, Any]] = []
-        try:
-            psutil = _import_psutil()
-            iterator = psutil.process_iter(attrs=["pid", "name", "exe"])
-        except Exception:
-            iterator = []
-        try:
-            for proc in iterator:
-                try:
-                    info = getattr(proc, "info", {}) or {}
-                    items.append(
-                        {
-                            "pid": int(info.get("pid") or 0),
-                            "name": str(info.get("name") or ""),
-                            "exe": str(info.get("exe") or ""),
-                        }
-                    )
-                except Exception:
-                    continue
-        except Exception:
-            items = []
-        if items:
-            return items
-        try:
-            completed = subprocess.run(
-                ["ps", "-ax", "-o", "pid=,comm="],
-                capture_output=True,
-                text=True,
-                check=False,
-            )
-        except Exception:
-            return []
-        if completed.returncode != 0:
-            return []
-        for line in str(completed.stdout or "").splitlines():
-            raw = str(line or "").strip()
-            if not raw:
-                continue
-            pid_part, _, command = raw.partition(" ")
-            try:
-                pid = int(pid_part.strip())
-            except Exception:
-                continue
-            resolved_command = str(command or "").strip()
-            items.append(
-                {
-                    "pid": pid,
-                    "name": Path(resolved_command).name or resolved_command,
-                    "exe": resolved_command,
-                }
-            )
-        return items
+        return []
     windows = result.get("windows")
     if isinstance(windows, list):
         return windows  # type: ignore[return-value]

@@ -38,7 +38,7 @@ Assumed available or mostly available:
 2. `GET /runs/history`
 3. `GET /approvals`
 4. `GET /artifacts`
-5. `POST /runs/start`
+5. `POST /turn`
 6. `POST /runs/{run_id}/approvals/{approval_id}/resolve`
 
 ## Known backend/API gaps

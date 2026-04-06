@@ -4093,7 +4093,7 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
                 `Trust Mode: ${trustMode}`,
             ].filter(Boolean).join('\n');
 
-            const res = await controlPlaneFetch('/api/runs/start', {
+            const res = await controlPlaneFetch(`/api/workflows/${encodeURIComponent(activeWorkflowId)}/run`, {
                 method: 'POST',
                 body: JSON.stringify({
                     engine: 'codex',

@@ -89,22 +89,6 @@ def register_runtime_run_routes(
     runtime_usage_service=_runtime_usage_service,
     build_direct_chat_stream_response=_build_direct_chat_stream_response,
 ) -> None:
-    @app.post("/runs/start", dependencies=[depends(require_api_key)])
-    async def start_run(
-        body: Optional[run_start_request_class] = None,
-        current_user=depends(require_api_key),
-    ):
-        refresh_server_exports()
-        return await runtime_route_run_handlers_service.start_run_route_response(
-            body,
-            current_user=current_user,
-            run_start_request_class=run_start_request_class,
-            start_run_response_fn=runtime_run_entry_service.start_run_response,
-            execute_run_start_request_via_turn_runtime=execute_run_start_request_via_turn_runtime,
-            stamp_request_owner_fn=stamp_request_owner_fn,
-            run_execution_services=run_execution_services,
-        )
-
     @app.get("/memory/{workspace_id}", dependencies=[depends(require_api_key)])
     async def list_workspace_memory(
         workspace_id: str,

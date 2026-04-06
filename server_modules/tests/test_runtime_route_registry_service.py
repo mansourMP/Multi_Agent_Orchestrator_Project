@@ -62,31 +62,9 @@ class RuntimeRouteRegistryServiceTests(unittest.TestCase):
             **self._registry_kwargs(),
         )
 
-        self.assertIn(("POST", "/runs/start"), app.routes)
+        self.assertNotIn(("POST", "/runs/start"), app.routes)
         self.assertIn(("POST", "/approvals/{approval_id}/resolve"), app.routes)
         self.assertIn(("POST", "/runs/{run_id}/resume"), app.routes)
-
-    def test_start_run_route_uses_runtime_handler_defaults(self):
-        app = _FakeApp()
-
-        async def _start_run_response(payload, **kwargs):
-            return payload
-
-        runtime_route_registry_service.register_runtime_run_routes(
-            app,
-            **self._registry_kwargs(
-                runtime_run_entry_service=types.SimpleNamespace(
-                    start_run_response=_start_run_response,
-                    preview_routing_response=lambda *args, **kwargs: {},
-                    precheck_run_response=lambda *args, **kwargs: {},
-                    stream_run_response=lambda *args, **kwargs: {},
-                ),
-            ),
-        )
-
-        payload = self._run_async(app.routes[("POST", "/runs/start")](None, current_user={"user_id": "user-1"}))
-        self.assertIsInstance(payload, _RunStartRequest)
-        self.assertTrue(payload.defaulted)
 
     def _registry_kwargs(self, **overrides):
         kwargs = dict(

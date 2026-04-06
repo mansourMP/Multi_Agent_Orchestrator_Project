@@ -3,6 +3,7 @@ from server_modules import shared as shared
 from server_modules.capability_registry import resolve_capability
 from server_modules import runtime_common as common
 from server_modules import run_state_repository
+from server_modules.run_execution_handle import durable_run_payload, restore_run_state, should_restore_execution_handle
 
 globals().update({key: value for key, value in vars(config).items() if not key.startswith("__")})
 globals().update({key: value for key, value in vars(shared).items() if not key.startswith("__")})
@@ -528,70 +529,18 @@ def _json_safe(value: Any) -> Any:
         return str(value)
 
 
-_LIVE_RUN_EXCLUDED_KEYS = {
-    "logs",
-    "input_queue",
-}
-_LIVE_RUN_MONO_KEYS = {
-    "_started_mono",
-    "_finished_mono",
-    "_first_value_mono",
-    "_hitl_wait_start_mono",
-}
-
-
 def _serialize_live_run_state(run_id: str, run: Dict[str, Any]) -> Dict[str, Any]:
-    payload: Dict[str, Any] = {"run_id": str(run_id or "").strip()}
-    for key, value in run.items():
-        if key in _LIVE_RUN_EXCLUDED_KEYS or key in _LIVE_RUN_MONO_KEYS:
-            continue
-        payload[key] = value
-    if "thread_id" not in payload:
-        payload["thread_id"] = None
-    if "_archived" not in payload:
-        payload["_archived"] = False
-    return _json_safe(payload)
+    return durable_run_payload(run_id, run, json_safe=_json_safe)
 
 
 def _restore_live_run_state(item: Dict[str, Any]) -> Optional[tuple[str, Dict[str, Any]]]:
-    payload = _json_safe(item)
-    if not isinstance(payload, dict):
-        return None
-    run_id = str(payload.pop("run_id", "") or "").strip()
-    if not run_id:
-        return None
-    log_queue: queue.Queue = queue.Queue()
-    events = payload.get("events") if isinstance(payload.get("events"), list) else []
-    event_seq = int(payload.get("_event_seq") or 0)
-    for entry in events:
-        if not isinstance(entry, dict):
-            continue
-        try:
-            event_seq = max(event_seq, int(entry.get("seq") or 0))
-        except Exception:
-            continue
-    run: Dict[str, Any] = dict(payload)
-    run["run_id"] = run_id
-    run["logs"] = log_queue
-    run["input_queue"] = queue.Queue()
-    run["thread_id"] = None
-    run["_archived"] = False
-    run["_event_seq"] = event_seq
-    if not isinstance(run.get("events"), list):
-        run["events"] = []
-    if not isinstance(run.get("tool_policy_audit"), list):
-        run["tool_policy_audit"] = []
-    if not isinstance(run.get("memory_trace"), dict):
-        run["memory_trace"] = {
-            "enabled": ORION_MEMORY_ENABLED,
-            "reads": [],
-            "writes": [],
-            "last_error": None,
-            "updated_at": _utc_now_iso(),
-        }
-    if "_hitl_wait_total_ms" not in run:
-        run["_hitl_wait_total_ms"] = 0.0
-    return run_id, run
+    return restore_run_state(
+        item,
+        json_safe=_json_safe,
+        memory_enabled=ORION_MEMORY_ENABLED,
+        now_iso=_utc_now_iso(),
+        hydrate_execution_handle=should_restore_execution_handle(item),
+    )
 
 
 def _persist_live_run_state(run_id: str, run: Dict[str, Any]) -> None:

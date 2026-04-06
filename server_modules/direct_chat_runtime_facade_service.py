@@ -69,6 +69,12 @@ class DirectChatRuntimeFacadeCallbacks:
     direct_chat_workspace_context_text: Callable[[str], str]
     direct_chat_generation_services: direct_chat_generation_service.DirectChatGenerationServices
     no_provider_reasoning_required_response: Callable[[], Dict[str, Any]]
+    # Deprecated compatibility fields retained so older facades/tests can still
+    # construct this callback bundle while the implementation reads memory through
+    # memory_service directly.
+    list_memory_entries: Optional[Callable[[str], Any]] = None
+    get_memory: Optional[Callable[[str], Any]] = None
+    delete_memory: Optional[Callable[[str, str], Any]] = None
 
 
 def build_no_provider_execution_services(

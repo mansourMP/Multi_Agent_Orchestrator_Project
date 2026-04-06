@@ -3,9 +3,14 @@ from __future__ import annotations
 import uuid
 from datetime import timedelta
 from dataclasses import dataclass, field
+import logging
 from typing import Any, Callable, Dict, List, Mapping, Optional
 
 from fastapi import HTTPException
+from server_modules import run_state_repository
+
+
+LOGGER = logging.getLogger(__name__)
 
 
 @dataclass(slots=True)
@@ -29,6 +34,37 @@ class MachineLease:
     capabilities_requested: List[str] = field(default_factory=list)
     capabilities_granted: List[str] = field(default_factory=list)
     metadata: Dict[str, Any] = field(default_factory=dict)
+
+
+def _dispatch_claim_repository_write(
+    *,
+    run_id: str,
+    worker_id: str,
+    ttl_seconds: int,
+    trace_id: Optional[str],
+) -> None:
+    try:
+        run_state_repository.dispatch_repository_call(
+            run_state_repository.claim_run(
+                run_id=run_id,
+                worker_id=worker_id,
+                ttl=max(1, int(ttl_seconds or 0)),
+                trace_id=str(trace_id or "").strip(),
+            ),
+            operation=f"claim_run:{run_id}",
+        )
+    except Exception as exc:
+        LOGGER.warning("Failed to dispatch repository claim write for %s: %s", run_id, exc)
+
+
+def _dispatch_release_repository_write(run_id: str) -> None:
+    try:
+        run_state_repository.dispatch_repository_call(
+            run_state_repository.release_claim(run_id),
+            operation=f"release_claim:{run_id}",
+        )
+    except Exception as exc:
+        LOGGER.warning("Failed to dispatch repository claim release for %s: %s", run_id, exc)
 
 
 def build_machine_presence_record(
@@ -337,6 +373,19 @@ def claim_local_machine_lease(
     if state_changed:
         persist_local_runtime_state_fn()
     if claimed_run_id:
+        claim = claimed_runs.get(claimed_run_id) if isinstance(claimed_runs.get(claimed_run_id), dict) else {}
+        claim_trace_id = ""
+        run = runs_by_id.get(claimed_run_id)
+        if isinstance(run, dict):
+            context = run.get("context") if isinstance(run.get("context"), dict) else {}
+            metadata = context.get("metadata") if isinstance(context.get("metadata"), dict) else {}
+            claim_trace_id = str(run.get("trace_id") or metadata.get("trace_id") or metadata.get("request_trace_id") or "").strip()
+        _dispatch_claim_repository_write(
+            run_id=claimed_run_id,
+            worker_id=worker_id,
+            ttl_seconds=int(claim.get("lease_seconds") or lease_seconds),
+            trace_id=claim_trace_id,
+        )
         mark_local_worker_seen_fn(worker_id, claimed_run_id, "busy", note="claimed_local_run")
     else:
         mark_local_worker_seen_fn(
@@ -409,6 +458,8 @@ def release_machine_lease_claim(
 
     if released and callable(persist_local_runtime_state_fn):
         persist_local_runtime_state_fn()
+    if released:
+        _dispatch_release_repository_write(run_id)
     if resolved_worker and callable(mark_local_worker_seen_fn) and status_hint:
         mark_local_worker_seen_fn(resolved_worker, None, status_hint, note=note or None)
     return {
@@ -434,6 +485,7 @@ def reconcile_machine_lease_release(
         if local_claimed_runs.pop(run_id, None) is not None:
             changed = True
     if changed:
+        _dispatch_release_repository_write(run_id)
         sync_local_runtime_state_snapshot_fn()
     return changed
 
@@ -459,6 +511,8 @@ def reconcile_recovered_machine_leases(
             if local_claimed_runs.pop(run_id, None) is not None:
                 changed = True
     if changed:
+        for run_id in recovered_set:
+            _dispatch_release_repository_write(run_id)
         persist_local_runtime_state_fn()
     return changed
 
@@ -501,6 +555,7 @@ def cleanup_stale_machine_leases(
             machine_id = str(claim.get("machine_id") or worker_id or "").strip() or None
             claimed_runs.pop(run_id, None)
             changed = True
+            _dispatch_release_repository_write(run_id)
             if worker_id:
                 worker_state = (
                     worker_registry.get(worker_id)

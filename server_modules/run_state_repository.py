@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timezone
 import json
 import logging
 import os
 from pathlib import Path
-from typing import Any, Dict, Optional
+import threading
+from typing import Any, Awaitable, Dict, Optional
 import sqlite3
 
 from server_modules import db as runtime_db
@@ -16,6 +18,32 @@ LOGGER = logging.getLogger(__name__)
 
 def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def dispatch_repository_call(awaitable: Awaitable[Any], *, operation: str) -> None:
+    async def _guard() -> None:
+        try:
+            await awaitable
+        except Exception as exc:
+            LOGGER.warning("Repository dispatch failed during %s: %s", operation, exc)
+
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        try:
+            worker = threading.Thread(
+                target=lambda: asyncio.run(_guard()),
+                name=f"run-state-repository-{operation}",
+                daemon=True,
+            )
+            worker.start()
+        except Exception as exc:
+            LOGGER.warning("Repository background dispatch start failed during %s: %s", operation, exc)
+        return
+    try:
+        loop.create_task(_guard())
+    except Exception as exc:
+        LOGGER.warning("Repository async dispatch failed during %s: %s", operation, exc)
 
 
 def _normalized_sqlite_db_path() -> Path:

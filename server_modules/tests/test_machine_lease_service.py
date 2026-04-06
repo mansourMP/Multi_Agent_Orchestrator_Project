@@ -2,6 +2,7 @@ import threading
 import unittest
 from datetime import datetime
 import queue
+from unittest.mock import patch
 
 from server_modules import machine_lease_service
 
@@ -81,27 +82,32 @@ class MachineLeaseServiceTests(unittest.TestCase):
             }
         }
 
-        claimed_run = machine_lease_service.claim_local_machine_lease(
-            "worker-1",
-            required_capabilities=["browser_automation"],
-            local_queue_lock=threading.Lock(),
-            pending_run_ids=pending,
-            claimed_runs=claimed,
-            worker_registry=worker_registry,
-            runs_by_id=runs,
-            lease_seconds=45,
-            cleanup_stale_local_claims_fn=lambda: None,
-            ordered_runtime_preferences_for_run_fn=lambda run: [],
-            best_online_preferred_runtime_fn=lambda ids: None,
-            required_capabilities_for_run_fn=lambda run: ["browser_automation"],
-            normalize_capability_ids_fn=lambda items: [str(item).strip().lower() for item in (items or [])],
-            persist_local_runtime_state_fn=lambda: persisted.append(True),
-            mark_local_worker_seen_fn=lambda worker_id, run_id, status, note=None: seen.append(
-                (worker_id, run_id, status, note)
-            ),
-            now_iso_fn=lambda: "2026-04-06T00:00:00Z",
-            lease_id_factory=lambda: "lease-1",
-        )
+        repo_claims = []
+        with patch(
+            "server_modules.machine_lease_service.run_state_repository.dispatch_repository_call",
+            side_effect=lambda awaitable, operation: (repo_claims.append(operation), __import__("asyncio").run(awaitable)),
+        ):
+            claimed_run = machine_lease_service.claim_local_machine_lease(
+                "worker-1",
+                required_capabilities=["browser_automation"],
+                local_queue_lock=threading.Lock(),
+                pending_run_ids=pending,
+                claimed_runs=claimed,
+                worker_registry=worker_registry,
+                runs_by_id=runs,
+                lease_seconds=45,
+                cleanup_stale_local_claims_fn=lambda: None,
+                ordered_runtime_preferences_for_run_fn=lambda run: [],
+                best_online_preferred_runtime_fn=lambda ids: None,
+                required_capabilities_for_run_fn=lambda run: ["browser_automation"],
+                normalize_capability_ids_fn=lambda items: [str(item).strip().lower() for item in (items or [])],
+                persist_local_runtime_state_fn=lambda: persisted.append(True),
+                mark_local_worker_seen_fn=lambda worker_id, run_id, status, note=None: seen.append(
+                    (worker_id, run_id, status, note)
+                ),
+                now_iso_fn=lambda: "2026-04-06T00:00:00Z",
+                lease_id_factory=lambda: "lease-1",
+            )
 
         self.assertEqual(claimed_run, "run-1")
         self.assertEqual(claimed["run-1"]["machine_id"], "machine-1")
@@ -110,6 +116,7 @@ class MachineLeaseServiceTests(unittest.TestCase):
         self.assertEqual(claimed["run-1"]["actor_id"], "user-1")
         self.assertEqual(persisted, [True])
         self.assertEqual(seen, [("worker-1", "run-1", "busy", "claimed_local_run")])
+        self.assertIn("claim_run:run-1", repo_claims)
 
     def test_release_machine_lease_claim_releases_and_marks_worker_idle(self) -> None:
         claimed = {
@@ -122,24 +129,30 @@ class MachineLeaseServiceTests(unittest.TestCase):
         persisted = []
         seen = []
 
-        result = machine_lease_service.release_machine_lease_claim(
-            "run-1",
-            worker_id="worker-1",
-            local_queue_lock=threading.Lock(),
-            claimed_runs=claimed,
-            persist_local_runtime_state_fn=lambda: persisted.append(True),
-            mark_local_worker_seen_fn=lambda worker_id, run_id, status, note=None: seen.append(
-                (worker_id, run_id, status, note)
-            ),
-            status_hint="idle",
-            note="paused_waiting_for_input",
-        )
+        repo_releases = []
+        with patch(
+            "server_modules.machine_lease_service.run_state_repository.dispatch_repository_call",
+            side_effect=lambda awaitable, operation: (repo_releases.append(operation), __import__("asyncio").run(awaitable)),
+        ):
+            result = machine_lease_service.release_machine_lease_claim(
+                "run-1",
+                worker_id="worker-1",
+                local_queue_lock=threading.Lock(),
+                claimed_runs=claimed,
+                persist_local_runtime_state_fn=lambda: persisted.append(True),
+                mark_local_worker_seen_fn=lambda worker_id, run_id, status, note=None: seen.append(
+                    (worker_id, run_id, status, note)
+                ),
+                status_hint="idle",
+                note="paused_waiting_for_input",
+            )
 
         self.assertTrue(result["released"])
         self.assertEqual(result["resolved_worker"], "worker-1")
         self.assertEqual(claimed, {})
         self.assertEqual(persisted, [True])
         self.assertEqual(seen, [("worker-1", None, "idle", "paused_waiting_for_input")])
+        self.assertIn("release_claim:run-1", repo_releases)
 
     def test_cleanup_stale_machine_leases_moves_worker_offline_and_fails_run(self) -> None:
         claimed = {

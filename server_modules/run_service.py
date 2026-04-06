@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
+import logging
 import queue
 import time
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple
@@ -14,8 +15,11 @@ from server_modules.agent_turn import AgentTurnRequest, bind_agent_turn_metadata
 from server_modules.doctor_gate import build_doctor_run_gate_live
 from server_modules import machine_lease_service
 from server_modules.policy_service import apply_execution_route_metadata, decide_execution_target
+from server_modules import run_state_repository
 from server_modules.runtime_models import RunStartRequest
 from server_modules.telemetry import get_tracer, set_span_attributes
+
+LOGGER = logging.getLogger(__name__)
 
 
 RUN_STATES = (
@@ -323,6 +327,99 @@ def register_live_run(
         persist_live_run_state_fn(run_id, run)
     except Exception:
         pass
+
+
+def _run_workspace_id(run: Dict[str, Any]) -> str:
+    context = run.get("context") if isinstance(run.get("context"), dict) else {}
+    metadata = context.get("metadata") if isinstance(context.get("metadata"), dict) else {}
+    return str(run.get("workspace_id") or context.get("workspace_id") or metadata.get("workspace_id") or "default").strip() or "default"
+
+
+def _run_tenant_id(run: Dict[str, Any]) -> str:
+    context = run.get("context") if isinstance(run.get("context"), dict) else {}
+    metadata = context.get("metadata") if isinstance(context.get("metadata"), dict) else {}
+    return str(run.get("tenant_id") or context.get("tenant_id") or metadata.get("tenant_id") or "default").strip() or "default"
+
+
+def _run_trace_id(run: Dict[str, Any], *, fallback: Optional[str] = None) -> str:
+    context = run.get("context") if isinstance(run.get("context"), dict) else {}
+    metadata = context.get("metadata") if isinstance(context.get("metadata"), dict) else {}
+    token = (
+        str(run.get("trace_id") or "").strip()
+        or str(metadata.get("trace_id") or "").strip()
+        or str(metadata.get("request_trace_id") or "").strip()
+        or str(fallback or "").strip()
+    )
+    return token
+
+
+def _persist_run_repository_snapshot(
+    run_id: str,
+    run: Dict[str, Any],
+    *,
+    state: str,
+    trace_id: str,
+) -> None:
+    try:
+        run_state_repository.dispatch_repository_call(
+            run_state_repository.upsert_live_run(
+                run_id=run_id,
+                workspace_id=_run_workspace_id(run),
+                tenant_id=_run_tenant_id(run),
+                state=state,
+                payload=dict(run),
+                trace_id=trace_id,
+            ),
+            operation=f"upsert_live_run:{run_id}:{state}",
+        )
+    except Exception as exc:
+        LOGGER.warning("Failed to dispatch live run repository upsert for %s: %s", run_id, exc)
+
+
+def _record_run_repository_transition(
+    run_id: str,
+    *,
+    from_state: Any,
+    to_state: str,
+    actor: str,
+    trace_id: str,
+) -> None:
+    if str(from_state or "").strip() == str(to_state or "").strip():
+        return
+    try:
+        run_state_repository.dispatch_repository_call(
+            run_state_repository.record_transition(
+                run_id=run_id,
+                from_state=str(from_state or "").strip() or "unknown",
+                to_state=to_state,
+                actor=actor,
+                trace_id=trace_id,
+            ),
+            operation=f"record_transition:{run_id}:{to_state}",
+        )
+    except Exception as exc:
+        LOGGER.warning("Failed to dispatch run transition repository write for %s: %s", run_id, exc)
+
+
+def _archive_run_repository_payload(
+    run_id: str,
+    run: Dict[str, Any],
+    *,
+    final_state: str,
+    trace_id: str,
+) -> None:
+    try:
+        run_state_repository.dispatch_repository_call(
+            run_state_repository.archive_run(
+                run_id=run_id,
+                final_state=final_state,
+                payload=dict(run),
+                trace_id=trace_id,
+            ),
+            operation=f"archive_run:{run_id}:{final_state}",
+        )
+    except Exception as exc:
+        LOGGER.warning("Failed to dispatch run archive repository write for %s: %s", run_id, exc)
 
 
 def get_pending_confirmation(run: Dict[str, Any]) -> Dict[str, Any]:
@@ -912,17 +1009,18 @@ def transition_live_run_status(
     tracer = get_tracer("server_modules.run_service")
     with tracer.start_as_current_span("run_service.transition_live_run_status") as span:
         previous = run.get("status")
+        actor = (
+            str(metadata.get("request_actor_type") or "").strip()
+            or str(metadata.get("actor_type") or "").strip()
+            or "runtime"
+        )
         set_span_attributes(
             span,
             {
                 "run_id": str(run_id or "").strip(),
                 "state": str(status or "").strip(),
                 "previous_state": str(previous or "").strip() or None,
-                "actor": (
-                    str(metadata.get("request_actor_type") or "").strip()
-                    or str(metadata.get("actor_type") or "").strip()
-                    or "runtime"
-                ),
+                "actor": actor,
                 "workspace_id": str(context.get("workspace_id") or metadata.get("workspace_id") or "default").strip() or "default",
                 "tenant_id": str(context.get("tenant_id") or metadata.get("tenant_id") or "default").strip() or "default",
             },
@@ -959,6 +1057,15 @@ def transition_live_run_status(
 
             run["status"] = status
             run["updated_at"] = now_iso
+            trace_id = _run_trace_id(run, fallback=f"{span.get_span_context().trace_id:032x}" if span is not None else None)
+            _persist_run_repository_snapshot(run_id, run, state=status, trace_id=trace_id)
+            _record_run_repository_transition(
+                run_id,
+                from_state=previous,
+                to_state=status,
+                actor=actor,
+                trace_id=trace_id,
+            )
             if status in {"completed", "failed", "timeout"}:
                 machine_lease_service.reconcile_machine_lease_release(
                     run_id,
@@ -967,6 +1074,7 @@ def transition_live_run_status(
                     local_claimed_runs=local_claimed_runs,
                     sync_local_runtime_state_snapshot_fn=sync_local_runtime_state_snapshot_fn,
                 )
+                _archive_run_repository_payload(run_id, run, final_state=status, trace_id=trace_id)
                 archive_run_if_terminal_fn(run_id, run)
                 log_queue = run.get("logs")
                 if log_queue is not None:
@@ -1321,6 +1429,7 @@ def load_live_runtime_state(
             continue
         if is_local_runtime_run(run):
             if status == "running_local" and run_id not in local_claimed_runs:
+                previous_status = status
                 run["status"] = "queued_local"
                 run["local_worker_id"] = None
                 run["local_claimed_at"] = None
@@ -1329,18 +1438,43 @@ def load_live_runtime_state(
                 with local_queue_lock:
                     if run_id not in local_pending_run_ids:
                         local_pending_run_ids.append(run_id)
+                trace_id = _run_trace_id(run)
+                _persist_run_repository_snapshot(run_id, run, state="queued_local", trace_id=trace_id)
+                _record_run_repository_transition(
+                    run_id,
+                    from_state=previous_status,
+                    to_state="queued_local",
+                    actor="runtime",
+                    trace_id=trace_id,
+                )
                 persist_live_run_state_fn(run_id, run)
                 recovered_queue = True
                 continue
             if status in {"starting", "queued_local"}:
+                previous_status = status
                 run["status"] = "queued_local"
                 run["updated_at"] = now_iso_fn()
                 with local_queue_lock:
                     if run_id not in local_pending_run_ids and run_id not in local_claimed_runs:
                         local_pending_run_ids.append(run_id)
+                trace_id = _run_trace_id(run)
+                _persist_run_repository_snapshot(run_id, run, state="queued_local", trace_id=trace_id)
+                _record_run_repository_transition(
+                    run_id,
+                    from_state=previous_status,
+                    to_state="queued_local",
+                    actor="runtime",
+                    trace_id=trace_id,
+                )
                 persist_live_run_state_fn(run_id, run)
                 recovered_queue = True
                 continue
+            _persist_run_repository_snapshot(
+                run_id,
+                run,
+                state=str(run.get("status") or "").strip() or "queued",
+                trace_id=_run_trace_id(run),
+            )
             persist_live_run_state_fn(run_id, run)
             continue
         if status in {"starting", "running"}:
@@ -1355,6 +1489,12 @@ def load_live_runtime_state(
             set_run_status_fn(run_id, "failed")
             run["logs"].put(None)
             continue
+        _persist_run_repository_snapshot(
+            run_id,
+            run,
+            state=str(run.get("status") or "").strip() or "queued",
+            trace_id=_run_trace_id(run),
+        )
         persist_live_run_state_fn(run_id, run)
     if recovered_queue:
         sync_local_runtime_state_snapshot_fn()

@@ -436,6 +436,7 @@ class RunServiceTests(unittest.TestCase):
             "status": "running",
             "_started_mono": 5.0,
             "logs": queue.Queue(),
+            "context": {"workspace_id": "workspace-1", "tenant_id": "tenant-1", "metadata": {"trace_id": "trace-1"}},
         }
         queue_index = {id(run["logs"]): "run-1"}
         pending = ["run-1"]
@@ -445,25 +446,27 @@ class RunServiceTests(unittest.TestCase):
         synced = []
         metrics_added = []
         metrics_inc = []
+        repo_dispatches = []
 
-        transition_live_run_status(
-            "run-1",
-            "completed",
-            run=run,
-            now_mono=7.5,
-            now_iso="2026-04-06T00:00:00Z",
-            terminal_statuses={"completed", "failed", "timeout"},
-            local_queue_lock=__import__("threading").Lock(),
-            local_pending_run_ids=pending,
-            local_claimed_runs=claimed,
-            archive_run_if_terminal_fn=lambda run_id, payload: archived.append((run_id, payload["status"])),
-            remove_live_run_state_fn=lambda run_id: removed.append(run_id),
-            sync_local_runtime_state_snapshot_fn=lambda: synced.append(True),
-            persist_live_run_state_fn=lambda run_id, payload: None,
-            run_queue_index=queue_index,
-            metrics_add_fn=lambda key, value: metrics_added.append((key, value)),
-            metrics_inc_fn=lambda key, value=1: metrics_inc.append((key, value)),
-        )
+        with patch("server_modules.run_service.run_state_repository.dispatch_repository_call", side_effect=lambda awaitable, operation: (repo_dispatches.append(operation), asyncio.run(awaitable))):
+            transition_live_run_status(
+                "run-1",
+                "completed",
+                run=run,
+                now_mono=7.5,
+                now_iso="2026-04-06T00:00:00Z",
+                terminal_statuses={"completed", "failed", "timeout"},
+                local_queue_lock=__import__("threading").Lock(),
+                local_pending_run_ids=pending,
+                local_claimed_runs=claimed,
+                archive_run_if_terminal_fn=lambda run_id, payload: archived.append((run_id, payload["status"])),
+                remove_live_run_state_fn=lambda run_id: removed.append(run_id),
+                sync_local_runtime_state_snapshot_fn=lambda: synced.append(True),
+                persist_live_run_state_fn=lambda run_id, payload: None,
+                run_queue_index=queue_index,
+                metrics_add_fn=lambda key, value: metrics_added.append((key, value)),
+                metrics_inc_fn=lambda key, value=1: metrics_inc.append((key, value)),
+            )
 
         self.assertEqual(run["status"], "completed")
         self.assertEqual(run["completed_at"], "2026-04-06T00:00:00Z")
@@ -475,6 +478,9 @@ class RunServiceTests(unittest.TestCase):
         self.assertEqual(synced, [True])
         self.assertNotIn(id(run["logs"]), queue_index)
         self.assertIn(("runs_completed", 1), metrics_inc)
+        self.assertIn("upsert_live_run:run-1:completed", repo_dispatches)
+        self.assertIn("record_transition:run-1:completed", repo_dispatches)
+        self.assertIn("archive_run:run-1:completed", repo_dispatches)
 
     def test_load_live_runtime_state_requeues_local_runs_and_fails_interrupted_cloud_runs(self):
         local_log_queue = queue.Queue()

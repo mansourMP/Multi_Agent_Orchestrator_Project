@@ -1739,6 +1739,8 @@ def initialize_runtime_services(
     load_setup_sessions_fn: Callable[[], Any],
     load_provider_profiles_fn: Callable[[], Any],
     load_idempotency_fn: Callable[[], Any],
+    replay_outbox_events_on_startup_fn: Optional[Callable[[], Any]] = None,
+    recover_expired_worker_leases_on_startup_fn: Optional[Callable[[], Any]] = None,
     recover_orphaned_local_runs_on_startup_fn: Callable[[], Any],
     load_runtime_skills_state_fn: Callable[[], Any],
     load_telegram_autopilot_state_fn: Callable[[], Any],
@@ -1774,6 +1776,16 @@ def initialize_runtime_services(
     load_setup_sessions_fn()
     load_provider_profiles_fn()
     load_idempotency_fn()
+    if callable(replay_outbox_events_on_startup_fn):
+        try:
+            replay_outbox_events_on_startup_fn()
+        except Exception:
+            pass
+    if callable(recover_expired_worker_leases_on_startup_fn):
+        try:
+            recover_expired_worker_leases_on_startup_fn()
+        except Exception:
+            pass
     try:
         recover_orphaned_local_runs_on_startup_fn()
     except Exception:

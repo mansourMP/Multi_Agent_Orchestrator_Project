@@ -530,6 +530,236 @@ async def record_approval_resolution(
     return None
 
 
+async def persist_outbox_event(
+    *,
+    event_id: str,
+    event_type: str,
+    tenant_id: str,
+    workspace_id: str,
+    run_id: Optional[str],
+    machine_id: Optional[str],
+    trace_id: str,
+    idempotency_key: str,
+    payload: Dict[str, Any],
+) -> None:
+    token = str(event_id or "").strip()
+    if not token:
+        return None
+    pool = await runtime_db.get_pool()
+    if pool is None:
+        return None
+    try:
+        await pool.execute(
+            """
+            CREATE TABLE IF NOT EXISTS runtime_outbox (
+                event_id TEXT PRIMARY KEY,
+                event_type TEXT NOT NULL,
+                tenant_id TEXT NOT NULL,
+                workspace_id TEXT NOT NULL,
+                run_id TEXT NULL,
+                machine_id TEXT NULL,
+                trace_id TEXT NULL,
+                idempotency_key TEXT NULL,
+                payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                delivered_at TIMESTAMPTZ NULL,
+                last_replayed_at TIMESTAMPTZ NULL
+            )
+            """
+        )
+        await pool.execute(
+            """
+            INSERT INTO runtime_outbox (
+                event_id,
+                event_type,
+                tenant_id,
+                workspace_id,
+                run_id,
+                machine_id,
+                trace_id,
+                idempotency_key,
+                payload,
+                created_at,
+                delivered_at,
+                last_replayed_at
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, NOW(), NULL, NULL)
+            ON CONFLICT (event_id) DO UPDATE SET
+                event_type = EXCLUDED.event_type,
+                tenant_id = EXCLUDED.tenant_id,
+                workspace_id = EXCLUDED.workspace_id,
+                run_id = EXCLUDED.run_id,
+                machine_id = EXCLUDED.machine_id,
+                trace_id = COALESCE(NULLIF(EXCLUDED.trace_id, ''), runtime_outbox.trace_id),
+                idempotency_key = COALESCE(NULLIF(EXCLUDED.idempotency_key, ''), runtime_outbox.idempotency_key),
+                payload = EXCLUDED.payload
+            """,
+            token,
+            str(event_type or "").strip() or "runtime_event",
+            str(tenant_id or "").strip() or "default",
+            str(workspace_id or "").strip() or "default",
+            str(run_id or "").strip() or None,
+            str(machine_id or "").strip() or None,
+            str(trace_id or "").strip() or None,
+            str(idempotency_key or "").strip() or None,
+            _json_payload(payload),
+        )
+    except Exception as exc:
+        LOGGER.warning("Postgres persist_outbox_event failed for %s: %s", token, exc)
+        return None
+    return None
+
+
+async def list_undelivered_outbox_events(
+    *,
+    older_than_seconds: int = 30,
+    limit: int = 200,
+) -> list[Dict[str, Any]]:
+    pool = await runtime_db.get_pool()
+    if pool is None:
+        return []
+    try:
+        await pool.execute(
+            """
+            CREATE TABLE IF NOT EXISTS runtime_outbox (
+                event_id TEXT PRIMARY KEY,
+                event_type TEXT NOT NULL,
+                tenant_id TEXT NOT NULL,
+                workspace_id TEXT NOT NULL,
+                run_id TEXT NULL,
+                machine_id TEXT NULL,
+                trace_id TEXT NULL,
+                idempotency_key TEXT NULL,
+                payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                delivered_at TIMESTAMPTZ NULL,
+                last_replayed_at TIMESTAMPTZ NULL
+            )
+            """
+        )
+        rows = await pool.fetch(
+            """
+            SELECT
+                event_id,
+                event_type,
+                tenant_id,
+                workspace_id,
+                run_id,
+                machine_id,
+                trace_id,
+                idempotency_key,
+                payload,
+                created_at,
+                delivered_at,
+                last_replayed_at
+            FROM runtime_outbox
+            WHERE delivered_at IS NULL
+              AND created_at <= NOW() - ($1::text || ' seconds')::interval
+            ORDER BY created_at ASC
+            LIMIT $2
+            """,
+            max(0, int(older_than_seconds or 0)),
+            max(1, int(limit or 0)),
+        )
+    except Exception as exc:
+        LOGGER.warning("Postgres list_undelivered_outbox_events failed: %s", exc)
+        return []
+    items: list[Dict[str, Any]] = []
+    for row in rows or []:
+        payload = row["payload"]
+        if isinstance(payload, str):
+            try:
+                payload = json.loads(payload)
+            except Exception:
+                payload = {}
+        if not isinstance(payload, dict):
+            payload = {}
+        items.append(
+            {
+                "event_id": str(row["event_id"] or "").strip(),
+                "event_type": str(row["event_type"] or "").strip(),
+                "tenant_id": str(row["tenant_id"] or "").strip() or "default",
+                "workspace_id": str(row["workspace_id"] or "").strip() or "default",
+                "run_id": str(row["run_id"] or "").strip() or None,
+                "machine_id": str(row["machine_id"] or "").strip() or None,
+                "trace_id": str(row["trace_id"] or "").strip(),
+                "idempotency_key": str(row["idempotency_key"] or "").strip(),
+                "payload": payload,
+                "created_at": str(row["created_at"] or "").strip() or None,
+                "delivered_at": str(row["delivered_at"] or "").strip() or None,
+                "last_replayed_at": str(row["last_replayed_at"] or "").strip() or None,
+            }
+        )
+    return items
+
+
+async def mark_outbox_event_delivered(event_id: str) -> None:
+    token = str(event_id or "").strip()
+    if not token:
+        return None
+    pool = await runtime_db.get_pool()
+    if pool is None:
+        return None
+    try:
+        await pool.execute(
+            """
+            UPDATE runtime_outbox
+            SET delivered_at = NOW(),
+                last_replayed_at = NOW()
+            WHERE event_id = $1
+            """,
+            token,
+        )
+    except Exception as exc:
+        LOGGER.warning("Postgres mark_outbox_event_delivered failed for %s: %s", token, exc)
+        return None
+    return None
+
+
+async def list_expired_local_claims() -> list[Dict[str, Any]]:
+    pool = await runtime_db.get_pool()
+    if pool is None:
+        return []
+    try:
+        rows = await pool.fetch(
+            """
+            SELECT
+                claims.run_id,
+                claims.worker_id,
+                claims.claimed_at,
+                claims.ttl,
+                claims.trace_id,
+                live_runs.payload AS run_payload
+            FROM local_queue_claims AS claims
+            LEFT JOIN live_runs ON live_runs.run_id = claims.run_id
+            WHERE claims.claimed_at + (GREATEST(COALESCE(claims.ttl, 0), 1) * INTERVAL '1 second') <= NOW()
+            ORDER BY claims.claimed_at ASC
+            """
+        )
+    except Exception as exc:
+        LOGGER.warning("Postgres list_expired_local_claims failed: %s", exc)
+        return []
+    items: list[Dict[str, Any]] = []
+    for row in rows or []:
+        payload = row["run_payload"]
+        if isinstance(payload, str):
+            try:
+                payload = json.loads(payload)
+            except Exception:
+                payload = None
+        items.append(
+            {
+                "run_id": str(row["run_id"] or "").strip() or None,
+                "worker_id": str(row["worker_id"] or "").strip() or None,
+                "claimed_at": str(row["claimed_at"] or "").strip() or None,
+                "ttl": int(row["ttl"] or 0),
+                "trace_id": str(row["trace_id"] or "").strip() or None,
+                "run_payload": payload if isinstance(payload, dict) else None,
+            }
+        )
+    return items
+
+
 def sync_upsert_live_run(
     run_id: str,
     workspace_id: str,
@@ -615,5 +845,66 @@ def sync_record_approval_resolution(
     _run_sync(
         lambda: record_approval_resolution(run_id, approval_id, resolution, actor, trace_id),
         operation="sync_record_approval_resolution",
+        fallback=None,
+    )
+
+
+def sync_persist_outbox_event(
+    *,
+    event_id: str,
+    event_type: str,
+    tenant_id: str,
+    workspace_id: str,
+    run_id: Optional[str],
+    machine_id: Optional[str],
+    trace_id: str,
+    idempotency_key: str,
+    payload: Dict[str, Any],
+) -> None:
+    _run_sync(
+        lambda: persist_outbox_event(
+            event_id=event_id,
+            event_type=event_type,
+            tenant_id=tenant_id,
+            workspace_id=workspace_id,
+            run_id=run_id,
+            machine_id=machine_id,
+            trace_id=trace_id,
+            idempotency_key=idempotency_key,
+            payload=payload,
+        ),
+        operation="sync_persist_outbox_event",
+        fallback=None,
+    )
+
+
+def sync_list_undelivered_outbox_events(*, older_than_seconds: int = 30, limit: int = 200) -> list[Dict[str, Any]]:
+    return _run_sync(
+        lambda: list_undelivered_outbox_events(older_than_seconds=older_than_seconds, limit=limit),
+        operation="sync_list_undelivered_outbox_events",
+        fallback=[],
+    )
+
+
+def sync_mark_outbox_event_delivered(event_id: str) -> None:
+    _run_sync(
+        lambda: mark_outbox_event_delivered(event_id),
+        operation="sync_mark_outbox_event_delivered",
+        fallback=None,
+    )
+
+
+def sync_list_expired_local_claims() -> list[Dict[str, Any]]:
+    return _run_sync(
+        lambda: list_expired_local_claims(),
+        operation="sync_list_expired_local_claims",
+        fallback=[],
+    )
+
+
+def sync_release_claim(run_id: str) -> None:
+    _run_sync(
+        lambda: release_claim(run_id),
+        operation="sync_release_claim",
         fallback=None,
     )

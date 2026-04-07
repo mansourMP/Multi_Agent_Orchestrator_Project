@@ -2,11 +2,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+import logging
 from pathlib import Path
 from typing import Any, Callable, Dict, Mapping, Optional, Sequence
 
 from server_modules.runtime_state_store import replace_local_runtime_state
 
+
+LOGGER = logging.getLogger(__name__)
 
 @dataclass(slots=True)
 class OutboxEvent:
@@ -101,8 +104,9 @@ def emit_approval_resolved_event(
     actor: str,
     reason: str = "",
     trace_id: str = "",
+    persist_outbox_event_fn: Optional[Callable[..., Any]] = None,
 ) -> OutboxEvent:
-    return OutboxEvent(
+    event = OutboxEvent(
         event_id=f"approval-resolved:{approval_id}:{resolution}:{trace_id or _utc_now_iso()}",
         event_type="approval_resolved",
         tenant_id=str(tenant_id or "").strip() or "default",
@@ -119,6 +123,91 @@ def emit_approval_resolved_event(
             "emitted_at": _utc_now_iso(),
         },
     )
+    if persist_outbox_event_fn is None:
+        try:
+            from server_modules import run_state_repository
+
+            persist_outbox_event_fn = run_state_repository.sync_persist_outbox_event
+        except Exception:
+            persist_outbox_event_fn = None
+    if callable(persist_outbox_event_fn):
+        try:
+            persist_outbox_event_fn(
+                event_id=event.event_id,
+                event_type=event.event_type,
+                tenant_id=event.tenant_id,
+                workspace_id=event.workspace_id,
+                run_id=event.run_id,
+                machine_id=event.machine_id,
+                trace_id=event.trace_id,
+                idempotency_key=event.idempotency_key,
+                payload=dict(event.payload),
+            )
+        except Exception as exc:
+            LOGGER.warning("Failed to persist outbox event %s: %s", event.event_id, exc)
+    return event
+
+
+def replay_undelivered_events_on_startup(
+    *,
+    older_than_seconds: int = 30,
+    limit: int = 200,
+    list_undelivered_outbox_events_fn: Optional[Callable[..., Sequence[Mapping[str, Any]]]] = None,
+    mark_outbox_event_delivered_fn: Optional[Callable[[str], Any]] = None,
+    deliver_event_fn: Optional[Callable[[OutboxEvent], Any]] = None,
+) -> list[str]:
+    if list_undelivered_outbox_events_fn is None or mark_outbox_event_delivered_fn is None:
+        try:
+            from server_modules import run_state_repository
+
+            list_undelivered_outbox_events_fn = (
+                list_undelivered_outbox_events_fn
+                or run_state_repository.sync_list_undelivered_outbox_events
+            )
+            mark_outbox_event_delivered_fn = (
+                mark_outbox_event_delivered_fn
+                or run_state_repository.sync_mark_outbox_event_delivered
+            )
+        except Exception:
+            return []
+    delivered_ids: list[str] = []
+    if not callable(list_undelivered_outbox_events_fn):
+        return delivered_ids
+    items = list_undelivered_outbox_events_fn(
+        older_than_seconds=max(0, int(older_than_seconds or 0)),
+        limit=max(1, int(limit or 0)),
+    )
+    for item in items or []:
+        if not isinstance(item, Mapping):
+            continue
+        event = OutboxEvent(
+            event_id=str(item.get("event_id") or "").strip(),
+            event_type=str(item.get("event_type") or "").strip() or "runtime_event",
+            tenant_id=str(item.get("tenant_id") or "").strip() or "default",
+            workspace_id=str(item.get("workspace_id") or "").strip() or "default",
+            run_id=str(item.get("run_id") or "").strip() or None,
+            machine_id=str(item.get("machine_id") or "").strip() or None,
+            trace_id=str(item.get("trace_id") or "").strip(),
+            idempotency_key=str(item.get("idempotency_key") or "").strip(),
+            payload=dict(item.get("payload") or {}) if isinstance(item.get("payload"), Mapping) else {},
+        )
+        if not event.event_id:
+            continue
+        delivered = True
+        if callable(deliver_event_fn):
+            try:
+                delivered = bool(deliver_event_fn(event))
+            except Exception as exc:
+                LOGGER.warning("Outbox replay failed for %s: %s", event.event_id, exc)
+                delivered = False
+        if not delivered:
+            continue
+        try:
+            mark_outbox_event_delivered_fn(event.event_id)
+            delivered_ids.append(event.event_id)
+        except Exception as exc:
+            LOGGER.warning("Failed to mark outbox event %s delivered: %s", event.event_id, exc)
+    return delivered_ids
 
 
 def enqueue_local_companion_run(

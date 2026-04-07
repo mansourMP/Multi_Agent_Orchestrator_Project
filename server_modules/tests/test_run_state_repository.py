@@ -5,11 +5,13 @@ from server_modules import run_state_repository
 
 
 class _FakePool:
-    def __init__(self, *, fetchrow_result=None, execute_error: Exception | None = None):
+    def __init__(self, *, fetchrow_result=None, fetch_result=None, execute_error: Exception | None = None):
         self.fetchrow_result = fetchrow_result
+        self.fetch_result = list(fetch_result or [])
         self.execute_error = execute_error
         self.execute_calls = []
         self.fetchrow_calls = []
+        self.fetch_calls = []
 
     async def execute(self, query, *args):
         self.execute_calls.append((query, args))
@@ -22,6 +24,12 @@ class _FakePool:
         if self.execute_error is not None:
             raise self.execute_error
         return self.fetchrow_result
+
+    async def fetch(self, query, *args):
+        self.fetch_calls.append((query, args))
+        if self.execute_error is not None:
+            raise self.execute_error
+        return list(self.fetch_result)
 
 
 class RunStateRepositoryTests(unittest.IsolatedAsyncioTestCase):
@@ -96,3 +104,64 @@ class RunStateRepositoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("run_archive", pool.execute_calls[0][0])
         self.assertIn("local_queue_claims", pool.execute_calls[1][0])
         self.assertIn("DELETE FROM local_queue_claims", pool.execute_calls[2][0])
+
+    async def test_persist_and_replay_outbox_events_round_trip_through_postgres(self):
+        pool = _FakePool(
+            fetch_result=[
+                {
+                    "event_id": "evt-1",
+                    "event_type": "approval_resolved",
+                    "tenant_id": "tenant-1",
+                    "workspace_id": "ws-1",
+                    "run_id": "run-1",
+                    "machine_id": None,
+                    "trace_id": "trace-1",
+                    "idempotency_key": "approval_resolved:approval-1:approved",
+                    "payload": {"approval_id": "approval-1"},
+                    "created_at": "2026-04-07T00:00:00Z",
+                    "delivered_at": None,
+                    "last_replayed_at": None,
+                }
+            ]
+        )
+        with patch("server_modules.run_state_repository.runtime_db.get_pool", return_value=pool):
+            await run_state_repository.persist_outbox_event(
+                event_id="evt-1",
+                event_type="approval_resolved",
+                tenant_id="tenant-1",
+                workspace_id="ws-1",
+                run_id="run-1",
+                machine_id=None,
+                trace_id="trace-1",
+                idempotency_key="approval_resolved:approval-1:approved",
+                payload={"approval_id": "approval-1"},
+            )
+            items = await run_state_repository.list_undelivered_outbox_events(older_than_seconds=30)
+            await run_state_repository.mark_outbox_event_delivered("evt-1")
+
+        self.assertEqual(items[0]["event_id"], "evt-1")
+        self.assertGreaterEqual(len(pool.execute_calls), 3)
+        self.assertIn("runtime_outbox", pool.execute_calls[0][0])
+        self.assertIn("runtime_outbox", pool.execute_calls[1][0])
+        self.assertEqual(len(pool.fetch_calls), 1)
+        self.assertIn("UPDATE runtime_outbox", pool.execute_calls[-1][0])
+
+    async def test_list_expired_local_claims_returns_joined_run_payloads(self):
+        pool = _FakePool(
+            fetch_result=[
+                {
+                    "run_id": "run-1",
+                    "worker_id": "worker-1",
+                    "claimed_at": "2026-04-07T00:00:00Z",
+                    "ttl": 30,
+                    "trace_id": "trace-1",
+                    "run_payload": {"run_id": "run-1", "status": "running_local"},
+                }
+            ]
+        )
+        with patch("server_modules.run_state_repository.runtime_db.get_pool", return_value=pool):
+            items = await run_state_repository.list_expired_local_claims()
+
+        self.assertEqual(items[0]["run_id"], "run-1")
+        self.assertEqual(items[0]["worker_id"], "worker-1")
+        self.assertEqual(items[0]["run_payload"]["status"], "running_local")

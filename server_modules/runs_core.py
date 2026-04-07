@@ -395,6 +395,16 @@ def initialize_runtime_services() -> None:
     from server_modules.health_diagnostics import _load_runtime_skills_state
     from server_modules.runtime_runs_api import initialize_chat_stream_runtime_state
 
+    def _replay_outbox_events_on_startup() -> None:
+        from server_modules import outbox_service as _outbox_service
+
+        _outbox_service.replay_undelivered_events_on_startup(older_than_seconds=30)
+
+    def _recover_expired_worker_leases_on_startup() -> None:
+        from server_modules import local_queue as _local_queue
+
+        _local_queue.recover_expired_worker_leases_on_startup()
+
     def _recover_orphaned_local_runs_on_startup() -> None:
         from server_modules import local_queue as _local_queue
 
@@ -434,6 +444,8 @@ def initialize_runtime_services() -> None:
         load_setup_sessions_fn=_load_setup_sessions,
         load_provider_profiles_fn=_load_provider_profiles,
         load_idempotency_fn=_load_idempotency,
+        replay_outbox_events_on_startup_fn=_replay_outbox_events_on_startup,
+        recover_expired_worker_leases_on_startup_fn=_recover_expired_worker_leases_on_startup,
         recover_orphaned_local_runs_on_startup_fn=_recover_orphaned_local_runs_on_startup,
         recover_delegation_retries_on_startup_fn=_recover_delegation_retries_on_startup,
         load_runtime_skills_state_fn=_load_runtime_skills_state,

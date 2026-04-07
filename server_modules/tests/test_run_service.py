@@ -652,6 +652,8 @@ class RunServiceTests(unittest.TestCase):
             load_setup_sessions_fn=lambda: calls.append(("load_setup_sessions", None)),
             load_provider_profiles_fn=lambda: calls.append(("load_provider_profiles", None)),
             load_idempotency_fn=lambda: calls.append(("load_idempotency", None)),
+            replay_outbox_events_on_startup_fn=lambda: calls.append(("replay_outbox", None)),
+            recover_expired_worker_leases_on_startup_fn=lambda: calls.append(("recover_expired_leases", None)),
             recover_orphaned_local_runs_on_startup_fn=lambda: calls.append(("recover_local", None)),
             recover_delegation_retries_on_startup_fn=lambda: calls.append(("recover_delegation", None)),
             load_runtime_skills_state_fn=lambda: calls.append(("load_skills", None)),
@@ -673,6 +675,8 @@ class RunServiceTests(unittest.TestCase):
         self.assertTrue(initialized["value"])
         self.assertEqual(calls[0], ("init_db", "runtime.sqlite3"))
         self.assertIn(("load_schedules", None), calls)
+        self.assertIn(("replay_outbox", None), calls)
+        self.assertIn(("recover_expired_leases", None), calls)
         self.assertIn(("recover_delegation", None), calls)
         self.assertIn(("activate_whatsapp", None), calls)
         self.assertEqual(len(threads), 3)

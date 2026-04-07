@@ -22,6 +22,7 @@ LOCAL_RUNTIME_WATCHDOG_INTERVAL_SECONDS = 5
 LOCAL_CHECKPOINT_RECOVERY_MAX_AUTO_RETRIES = 3
 LOCAL_CHECKPOINT_RECOVERY_BACKOFF_SECONDS = [0, 10, 30]
 _COLD_BOOT_RECOVERY_DONE = False
+_EXPIRED_LEASE_RECOVERY_DONE = False
 _LOCAL_RUNTIME_WATCHDOG_LOCK = threading.Lock()
 _LOCAL_RUNTIME_WATCHDOG_STATE: Dict[str, Any] = {
     "running": False,
@@ -688,6 +689,67 @@ def recover_orphaned_local_runs_on_startup() -> List[str]:
             persist_local_runtime_state_fn=_persist_local_runtime_state,
         )
     _COLD_BOOT_RECOVERY_DONE = True
+    return recovered
+
+
+def recover_expired_worker_leases_on_startup() -> List[str]:
+    global _EXPIRED_LEASE_RECOVERY_DONE
+    _init()
+    if _EXPIRED_LEASE_RECOVERY_DONE:
+        return []
+    from server_modules import run_state_repository
+
+    recovered: List[str] = []
+    expired_claims = run_state_repository.sync_list_expired_local_claims()
+    for item in expired_claims or []:
+        if not isinstance(item, dict):
+            continue
+        run_id = str(item.get("run_id") or "").strip()
+        if not run_id:
+            continue
+        run_state_repository.sync_release_claim(run_id)
+        with _server.LOCAL_QUEUE_LOCK:
+            _server.LOCAL_CLAIMED_RUNS.pop(run_id, None)
+        run = _server.runs.get(run_id)
+        if not isinstance(run, dict):
+            continue
+        status = str(run.get("status") or "").strip().lower()
+        if status in {"completed", "failed", "timeout", "stopped", "cancelled"}:
+            continue
+        context = run.get("context") if isinstance(run.get("context"), dict) else {}
+        metadata = context.get("metadata") if isinstance(context.get("metadata"), dict) else {}
+        selected_target = str(
+            metadata.get("execution_target_selected")
+            or metadata.get("execution_target")
+            or ""
+        ).strip().lower()
+        if selected_target not in {"local", "local_companion"} and status not in {"running_local", "queued_local", "starting"}:
+            continue
+        machine_lease_service.clear_active_machine_lease_binding(run)
+        run["local_worker_id"] = None
+        run["local_claimed_at"] = None
+        run["local_last_heartbeat_at"] = None
+        _server.set_run_status(run_id, "queued_local")
+        with _server.LOCAL_QUEUE_LOCK:
+            if run_id not in _server.LOCAL_PENDING_RUN_IDS:
+                _server.LOCAL_PENDING_RUN_IDS.append(run_id)
+        _persist_local_runtime_state()
+        log_queue = run.get("logs")
+        if log_queue is not None:
+            _server.emit_log(
+                log_queue,
+                "warn",
+                "Recovered expired worker lease on startup and requeued the run.",
+                event="local_claim_requeued_startup",
+                data={
+                    "run_id": run_id,
+                    "worker_id": str(item.get("worker_id") or "").strip() or None,
+                    "ttl_seconds": int(item.get("ttl") or 0),
+                    "claimed_at": item.get("claimed_at"),
+                },
+            )
+        recovered.append(run_id)
+    _EXPIRED_LEASE_RECOVERY_DONE = True
     return recovered
 
 

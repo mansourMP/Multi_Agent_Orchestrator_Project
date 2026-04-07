@@ -6,6 +6,25 @@ from server_modules import outbox_service
 
 
 class OutboxServiceTests(unittest.TestCase):
+    def test_emit_approval_resolved_event_persists_outbox_payload(self) -> None:
+        persisted = []
+
+        event = outbox_service.emit_approval_resolved_event(
+            approval_id="approval-1",
+            run_id="run-1",
+            tenant_id="tenant-1",
+            workspace_id="ws-1",
+            resolution="approved",
+            actor="user-1",
+            reason="ok",
+            trace_id="trace-1",
+            persist_outbox_event_fn=lambda **kwargs: persisted.append(kwargs),
+        )
+
+        self.assertEqual(event.event_type, "approval_resolved")
+        self.assertEqual(persisted[0]["event_id"], event.event_id)
+        self.assertEqual(persisted[0]["payload"]["approval_id"], "approval-1")
+
     def test_persist_local_runtime_state_builds_normalized_snapshot(self) -> None:
         captured = {}
 
@@ -70,6 +89,32 @@ class OutboxServiceTests(unittest.TestCase):
         self.assertEqual(persisted["pending_run_ids"], ["run-1"])
         self.assertEqual(events[0]["message"], "Waiting for an online machine.")
         self.assertEqual(events[0]["data"]["required_capabilities"], ["browser_automation"])
+
+    def test_replay_undelivered_events_on_startup_delivers_and_marks(self) -> None:
+        delivered = []
+        marked = []
+
+        replayed = outbox_service.replay_undelivered_events_on_startup(
+            older_than_seconds=30,
+            list_undelivered_outbox_events_fn=lambda **kwargs: [
+                {
+                    "event_id": "evt-1",
+                    "event_type": "approval_resolved",
+                    "tenant_id": "tenant-1",
+                    "workspace_id": "ws-1",
+                    "run_id": "run-1",
+                    "trace_id": "trace-1",
+                    "idempotency_key": "approval_resolved:approval-1:approved",
+                    "payload": {"approval_id": "approval-1"},
+                }
+            ],
+            mark_outbox_event_delivered_fn=lambda event_id: marked.append(event_id),
+            deliver_event_fn=lambda event: delivered.append(event.event_id) or True,
+        )
+
+        self.assertEqual(replayed, ["evt-1"])
+        self.assertEqual(delivered, ["evt-1"])
+        self.assertEqual(marked, ["evt-1"])
 
 
 if __name__ == "__main__":

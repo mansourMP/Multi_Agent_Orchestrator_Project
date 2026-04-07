@@ -347,6 +347,52 @@ class LocalRuntimeRecoveryScenarioTests(unittest.TestCase):
         self.assertEqual(resumed, ["run-1"])
         self.assertEqual(scheduled, ["run-1"])
 
+    def test_recover_expired_worker_leases_on_startup_requeues_local_run(self) -> None:
+        run = {
+            "status": "running_local",
+            "logs": object(),
+            "context": {"metadata": {"execution_target_selected": "local_companion"}},
+        }
+        original_server = local_queue._server
+        original_done = getattr(local_queue, "_EXPIRED_LEASE_RECOVERY_DONE", False)
+        statuses = []
+        released = []
+        persisted = []
+        emitted = []
+        try:
+            local_queue._server = SimpleNamespace(
+                runs={"run-1": run},
+                LOCAL_QUEUE_LOCK=threading.Lock(),
+                LOCAL_CLAIMED_RUNS={"run-1": {"worker_id": "worker-1"}},
+                LOCAL_PENDING_RUN_IDS=[],
+                set_run_status=lambda run_id, status: statuses.append((run_id, status)) or run.__setitem__("status", status),
+                emit_log=lambda logs, level, message, **kwargs: emitted.append((level, message, kwargs)),
+            )
+            local_queue._EXPIRED_LEASE_RECOVERY_DONE = False
+            with patch.object(local_queue, "_persist_local_runtime_state", side_effect=lambda: persisted.append(True)):
+                with patch.object(local_queue.machine_lease_service, "clear_active_machine_lease_binding", side_effect=lambda live_run: live_run.update({"machine_lease_id": None})):
+                    with patch.object(
+                        __import__("server_modules.run_state_repository", fromlist=["sync_list_expired_local_claims"]),
+                        "sync_list_expired_local_claims",
+                        return_value=[{"run_id": "run-1", "worker_id": "worker-1", "ttl": 30, "claimed_at": "2026-04-07T00:00:00Z"}],
+                    ):
+                        with patch.object(
+                            __import__("server_modules.run_state_repository", fromlist=["sync_release_claim"]),
+                            "sync_release_claim",
+                            side_effect=lambda run_id: released.append(run_id),
+                        ):
+                            recovered = local_queue.recover_expired_worker_leases_on_startup()
+        finally:
+            local_queue._server = original_server
+            local_queue._EXPIRED_LEASE_RECOVERY_DONE = original_done
+
+        self.assertEqual(recovered, ["run-1"])
+        self.assertEqual(statuses, [("run-1", "queued_local")])
+        self.assertEqual(released, ["run-1"])
+        self.assertEqual(local_queue._server, original_server)
+        self.assertTrue(persisted)
+        self.assertEqual(emitted[0][2]["event"], "local_claim_requeued_startup")
+
 
 if __name__ == "__main__":
     unittest.main()

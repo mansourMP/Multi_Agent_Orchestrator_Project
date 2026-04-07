@@ -1,5 +1,6 @@
 import queue
 import unittest
+from unittest.mock import patch
 
 from fastapi import HTTPException
 
@@ -160,34 +161,40 @@ class RuntimeRunApprovalServiceTests(unittest.TestCase):
     def test_resolve_standalone_approval_records_postgres_resolution_and_outbox_event(self):
         recorded = []
         emitted = []
-        run = {
+        run_record = {
             "status": "waiting_for_input",
-            "logs": object(),
-            "input_queue": queue.Queue(),
             "context": {"workspace_id": "ws-1", "tenant_id": "tenant-1", "metadata": {"trace_id": "trace-1"}},
             "pending_confirmation": {"approval_id": "approval-1", "correlation_id": "corr-1"},
         }
+        live_run = dict(run_record)
+        live_run["logs"] = object()
+        live_run["input_queue"] = queue.Queue()
 
-        payload = runtime_run_approval_service.resolve_standalone_approval(
-            "approval-1",
-            payload={"approval_id": "approval-1", "resolution": "approved", "actor": "user-1", "reason": "ok"},
-            current_user={"user_id": "user-1"},
-            runs={"run-1": run},
-            resolve_run_approval_fn=lambda run_id, approval_id, **kwargs: {"status": "ok", "run_id": run_id, "approval_id": approval_id},
-            resolve_run_approval_callbacks={},
-            record_approval_resolution_fn=lambda *args: recorded.append(args),
-            emit_approval_resolved_event_fn=lambda **kwargs: emitted.append(kwargs)
-            or type(
-                "Event",
-                (),
-                {
-                    "event_id": "evt-1",
-                    "event_type": "approval_resolved",
-                    "trace_id": "trace-1",
-                    "payload": kwargs,
-                },
-            )(),
-        )
+        with patch.object(
+            runtime_run_approval_service.run_state_repository,
+            "sync_find_live_run_by_approval_id",
+            return_value={"run_id": "run-1", **run_record},
+        ):
+            payload = runtime_run_approval_service.resolve_standalone_approval(
+                "approval-1",
+                payload={"approval_id": "approval-1", "resolution": "approved", "actor": "user-1", "reason": "ok"},
+                current_user={"user_id": "user-1"},
+                runs={"run-1": live_run},
+                resolve_run_approval_fn=lambda run_id, approval_id, **kwargs: {"status": "ok", "run_id": run_id, "approval_id": approval_id},
+                resolve_run_approval_callbacks={},
+                record_approval_resolution_fn=lambda *args: recorded.append(args),
+                emit_approval_resolved_event_fn=lambda **kwargs: emitted.append(kwargs)
+                or type(
+                    "Event",
+                    (),
+                    {
+                        "event_id": "evt-1",
+                        "event_type": "approval_resolved",
+                        "trace_id": "trace-1",
+                        "payload": kwargs,
+                    },
+                )(),
+            )
 
         self.assertEqual(payload["run_id"], "run-1")
         self.assertEqual(payload["resolution"], "approved")

@@ -153,6 +153,7 @@ def stream_run_route_response(
     current_user: Any,
     stream_run_response_fn: Callable[..., Any],
     runs: dict[str, Any],
+    get_live_run_fn: Callable[[str], dict[str, Any] | None],
     serialize_run_snapshot: Callable[[str, dict[str, Any]], Any],
     enforce_run_owner_access: Callable[[Any, Any], None],
     event_source_response_class: Callable[[Any], Any],
@@ -162,6 +163,7 @@ def stream_run_route_response(
         str(run_id),
         current_user=current_user,
         runs=runs,
+        get_live_run_fn=get_live_run_fn,
         serialize_run_snapshot=serialize_run_snapshot,
         enforce_run_owner_access=enforce_run_owner_access,
         event_source_response_class=event_source_response_class,
@@ -176,12 +178,14 @@ def submit_run_decision_route_response(
     current_user: Any,
     submit_run_decision_fn: Callable[..., Any],
     run: dict[str, Any] | None,
+    run_record: dict[str, Any] | None,
     callbacks: dict[str, Any],
 ) -> Any:
     payload.validate_fields()
     return submit_run_decision_fn(
         str(run_id),
         run=run,
+        run_record=run_record,
         payload=payload,
         current_user=current_user,
         **callbacks,
@@ -196,6 +200,7 @@ def resolve_run_approval_route_response(
     current_user: Any,
     resolve_run_approval_fn: Callable[..., Any],
     run: dict[str, Any] | None,
+    run_record: dict[str, Any] | None,
     callbacks: dict[str, Any],
 ) -> Any:
     payload.validate_fields()
@@ -203,6 +208,7 @@ def resolve_run_approval_route_response(
         str(run_id),
         approval_id,
         run=run,
+        run_record=run_record,
         payload=payload,
         current_user=current_user,
         **callbacks,
@@ -215,11 +221,13 @@ def resume_run_route_response(
     current_user: Any,
     resume_waiting_run_fn: Callable[..., Any],
     run: dict[str, Any] | None,
+    run_record: dict[str, Any] | None,
     callbacks: dict[str, Any],
 ) -> Any:
     return resume_waiting_run_fn(
         str(run_id),
         run=run,
+        run_record=run_record,
         current_user=current_user,
         **callbacks,
     )

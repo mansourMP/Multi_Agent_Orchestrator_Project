@@ -72,6 +72,7 @@ def submit_run_decision(
     run_id: str,
     *,
     run: dict[str, Any] | None,
+    run_record: dict[str, Any] | None = None,
     payload: Any,
     current_user: Any,
     serialize_run_snapshot: Callable[[str, dict[str, Any]], dict[str, Any]],
@@ -81,14 +82,15 @@ def submit_run_decision(
     append_approval_audit: Callable[..., None],
     resolve_local_execution_start_approval: Callable[..., dict[str, Any]],
 ) -> dict[str, Any]:
-    if not isinstance(run, dict):
+    snapshot_run = run if isinstance(run, dict) else run_record if isinstance(run_record, dict) else None
+    if not isinstance(snapshot_run, dict):
         raise HTTPException(404, "Run ID not found")
-    snapshot = serialize_run_snapshot(run_id, run)
+    snapshot = serialize_run_snapshot(run_id, snapshot_run)
     enforce_run_owner_access(current_user, snapshot)
-    pending = get_pending_confirmation(run)
+    pending = get_pending_confirmation(snapshot_run)
     approval_id = str(pending.get("approval_id") or "").strip() if isinstance(pending, dict) else ""
     correlation_id = str(pending.get("correlation_id") or "").strip() if isinstance(pending, dict) else ""
-    context = run.get("context")
+    context = snapshot_run.get("context")
     metadata = context.get("metadata") if isinstance(context, dict) and isinstance(context.get("metadata"), dict) else {}
     decision_text = str(payload.decision or "").strip().lower()
     note_text = str(payload.note or "")
@@ -96,6 +98,8 @@ def submit_run_decision(
         bool(metadata.get("local_execution_waiting_confirmation"))
         or bool(metadata.get("local_execution_waiting_approval"))
     ):
+        if not isinstance(run, dict):
+            raise HTTPException(status_code=409, detail="Run is not active in this process.")
         return resolve_local_execution_start_approval(
             run_id,
             run,
@@ -104,6 +108,8 @@ def submit_run_decision(
             note_text,
         )
     if approval_id:
+        if not isinstance(run, dict):
+            raise HTTPException(status_code=409, detail="Run is not active in this process.")
         append_approval_audit(
             approval_id=approval_id,
             stage="decision_submitted",
@@ -124,6 +130,8 @@ def submit_run_decision(
             "reusable": False,
             "consequence": "This confirmation applies only to this pending step in this run. Later runs or later confirmation points will ask again.",
         }
+    if not isinstance(run, dict):
+        raise HTTPException(status_code=409, detail="Run is not active in this process.")
     run["input_queue"].put(payload.decision)
     return {"status": "ok", "approval_id": None}
 
@@ -133,6 +141,7 @@ def resolve_run_approval(
     approval_id: str,
     *,
     run: dict[str, Any] | None,
+    run_record: dict[str, Any] | None = None,
     payload: Any,
     current_user: Any,
     serialize_run_snapshot: Callable[[str, dict[str, Any]], dict[str, Any]],
@@ -151,20 +160,23 @@ def resolve_run_approval(
     emit_log: Callable[..., None],
     schedule_restored_run_resume: Callable[[str, dict[str, Any]], bool],
 ) -> dict[str, Any]:
-    if not isinstance(run, dict):
+    snapshot_run = run if isinstance(run, dict) else run_record if isinstance(run_record, dict) else None
+    if not isinstance(snapshot_run, dict):
         raise HTTPException(status_code=404, detail="Run ID not found")
-    snapshot = serialize_run_snapshot(run_id, run)
+    snapshot = serialize_run_snapshot(run_id, snapshot_run)
     enforce_run_owner_access(current_user, snapshot)
-    pending = get_pending_confirmation(run)
+    pending = get_pending_confirmation(snapshot_run)
     if not isinstance(pending, dict):
         raise HTTPException(status_code=409, detail="No pending confirmation for this run.")
     expected = str(pending.get("approval_id") or "").strip()
     if expected != approval_id:
         raise HTTPException(status_code=409, detail="approval_id does not match pending confirmation.")
     decision_text = str(payload.decision or "").strip().lower()
-    context = run.get("context")
+    context = snapshot_run.get("context")
     metadata = context.get("metadata") if isinstance(context, dict) and isinstance(context.get("metadata"), dict) else {}
     if bool(metadata.get("local_execution_waiting_confirmation")) or bool(metadata.get("local_execution_waiting_approval")):
+        if not isinstance(run, dict):
+            raise HTTPException(status_code=409, detail="Run is not active in this process.")
         return resolve_local_execution_start_approval(
             run_id,
             run,
@@ -174,6 +186,8 @@ def resolve_run_approval(
         )
     pending_metadata = pending.get("metadata") if isinstance(pending.get("metadata"), dict) else {}
     if str(pending_metadata.get("kind") or "").strip() == "local_worker_recovery_resume":
+        if not isinstance(run, dict):
+            raise HTTPException(status_code=409, detail="Run is not active in this process.")
         return resolve_local_worker_recovery_approval(
             run_id,
             run,
@@ -192,8 +206,11 @@ def resolve_run_approval(
     if expires_at is not None and utc_now() > expires_at:
         pending["status"] = "expired"
         pending["expired_at"] = utc_now_iso()
-        set_pending_confirmation(run, pending)
+        if isinstance(run, dict):
+            set_pending_confirmation(run, pending)
         raise HTTPException(status_code=409, detail="Confirmation request has already expired.")
+    if not isinstance(run, dict):
+        raise HTTPException(status_code=409, detail="Run is not active in this process.")
     run["input_queue"].put(
         {
             "approval_id": approval_id,
@@ -277,23 +294,15 @@ def resolve_standalone_approval(
 
     matched_run = run_state_repository.sync_find_live_run_by_approval_id(approval_token)
     matched_run_id = str((matched_run or {}).get("run_id") or "").strip() if isinstance(matched_run, dict) else ""
-    if (not matched_run_id or not isinstance(matched_run, dict)) and isinstance(runs, dict):
-        for run_id, run in (runs or {}).items():
-            if not isinstance(run, dict):
-                continue
-            pending_confirmation = run.get("pending_confirmation") if isinstance(run.get("pending_confirmation"), dict) else {}
-            pending_approval = run.get("pending_approval") if isinstance(run.get("pending_approval"), dict) else {}
-            if str(pending_confirmation.get("approval_id") or "").strip() == approval_token or str(pending_approval.get("approval_id") or "").strip() == approval_token:
-                matched_run_id = str(run_id or "").strip()
-                matched_run = run
-                break
     if not matched_run_id or not isinstance(matched_run, dict):
         raise HTTPException(status_code=404, detail="approval_id not found")
+    live_run = runs.get(matched_run_id) if isinstance(runs, dict) else None
 
     result = resolve_run_approval_fn(
         matched_run_id,
         approval_token,
-        run=matched_run,
+        run=live_run if isinstance(live_run, dict) else None,
+        run_record=matched_run,
         payload=SimpleNamespace(decision=decision, note=reason),
         current_user=current_user,
         **resolve_run_approval_callbacks,

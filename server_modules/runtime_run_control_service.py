@@ -218,6 +218,7 @@ def resume_waiting_run(
     run_id: str,
     *,
     run: dict[str, Any] | None,
+    run_record: dict[str, Any] | None = None,
     current_user: Any,
     serialize_run_snapshot: Callable[[str, dict[str, Any]], dict[str, Any]],
     enforce_run_owner_access: Callable[[Any, Any], None],
@@ -226,22 +227,25 @@ def resume_waiting_run(
     emit_log: Callable[..., None],
     schedule_restored_run_resume: Callable[[str, dict[str, Any]], bool],
 ) -> dict[str, Any]:
-    if not isinstance(run, dict):
+    snapshot_run = run if isinstance(run, dict) else run_record if isinstance(run_record, dict) else None
+    if not isinstance(snapshot_run, dict):
         raise HTTPException(status_code=404, detail="Run ID not found")
-    snapshot = serialize_run_snapshot(run_id, run)
+    snapshot = serialize_run_snapshot(run_id, snapshot_run)
     enforce_run_owner_access(current_user, snapshot)
-    if str(run.get("status") or "").strip().lower() != "waiting_for_input":
+    if str(snapshot_run.get("status") or "").strip().lower() != "waiting_for_input":
         raise HTTPException(status_code=409, detail="Run is not waiting for input.")
-    pending_confirmation = get_pending_confirmation(run)
+    pending_confirmation = get_pending_confirmation(snapshot_run)
     if isinstance(pending_confirmation, dict) and pending_confirmation:
         raise HTTPException(status_code=409, detail="Run requires confirmation resolution, not direct resume.")
-    checkpoint = run.get("browser_checkpoint") if isinstance(run.get("browser_checkpoint"), dict) else {}
+    checkpoint = snapshot_run.get("browser_checkpoint") if isinstance(snapshot_run.get("browser_checkpoint"), dict) else {}
     if not checkpoint:
         raise HTTPException(status_code=409, detail="Run does not have a resumable browser checkpoint.")
-    if local_worker_recovery_confirmation_required(run):
+    if local_worker_recovery_confirmation_required(snapshot_run):
+        if not isinstance(run, dict):
+            raise HTTPException(status_code=409, detail="Run is not active in this process.")
         pending = begin_run_pending_confirmation(
             run_id,
-            local_worker_recovery_confirmation_prompt(run),
+            local_worker_recovery_confirmation_prompt(snapshot_run),
             source="local_worker_recovery_resume",
             metadata={
                 "kind": "local_worker_recovery_resume",
@@ -258,6 +262,8 @@ def resume_waiting_run(
             "resume_kind": "browser_checkpoint",
             "degradation_kind": "local_worker_recovery_exhausted",
         }
+    if not isinstance(run, dict):
+        raise HTTPException(status_code=409, detail="Run is not active in this process.")
     emit_log(
         run["logs"],
         "info",

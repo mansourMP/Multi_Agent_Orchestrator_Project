@@ -51,6 +51,7 @@ class RuntimeRouteRunHandlersServiceTests(unittest.TestCase):
             current_user={"user_id": "user-1"},
             submit_run_decision_fn=lambda run_id_str, **kwargs: {"run_id": run_id_str},
             run={},
+            run_record={},
             callbacks={},
         )
 
@@ -69,6 +70,7 @@ class RuntimeRouteRunHandlersServiceTests(unittest.TestCase):
                 "approval_id": approval_id,
             },
             run={},
+            run_record={},
             callbacks={},
         )
 

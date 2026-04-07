@@ -60,13 +60,17 @@ def stream_run_response(
     *,
     current_user: Any,
     runs: dict[str, Any],
+    get_live_run_fn: Callable[[str], dict[str, Any] | None],
     serialize_run_snapshot: Callable[[str, dict[str, Any]], Any],
     enforce_run_owner_access: Callable[[Any, Any], None],
     event_source_response_class: Callable[[Any], Any],
     iter_logs_for_run: Callable[[str], Any],
 ) -> Any:
-    if run_id not in runs:
+    run_record = get_live_run_fn(run_id)
+    if not isinstance(run_record, dict):
         raise HTTPException(404, "Run ID not found")
-    snapshot = serialize_run_snapshot(run_id, runs[run_id])
+    snapshot = serialize_run_snapshot(run_id, run_record)
     enforce_run_owner_access(current_user, snapshot)
+    if run_id not in runs:
+        raise HTTPException(409, "Run is not active in this process.")
     return event_source_response_class(iter_logs_for_run(run_id))

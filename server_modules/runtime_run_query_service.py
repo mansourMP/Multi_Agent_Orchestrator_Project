@@ -116,8 +116,6 @@ def build_run_detail_response(
     include_sensitive = can_view_sensitive_run_payload(current_user)
     fetch_live_run = get_live_run_fn or run_state_repository.sync_get_live_run
     run = fetch_live_run(run_id)
-    if not isinstance(run, dict):
-        run = runs.get(run_id)
 
     if run is None:
         try:
@@ -203,7 +201,7 @@ def build_run_list_response(
     items: list[dict[str, Any]] = []
     seen_run_ids: set[str] = set()
 
-    live_runs = list_live_runs_fn() if callable(list_live_runs_fn) else list(runs.values())
+    live_runs = list_live_runs_fn() if callable(list_live_runs_fn) else run_state_repository.sync_list_live_runs()
     for run in live_runs:
         if not isinstance(run, dict):
             continue

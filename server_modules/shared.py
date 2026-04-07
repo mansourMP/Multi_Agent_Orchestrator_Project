@@ -33,7 +33,7 @@ def sync_acp_manager_paths(
         idempotency_path=idempotency_path,
     )
 
-# shared.runs is a process-local execution cache. It is populated on run start and cleared on run end. It is not a durable store. All durable run state is in Postgres via run_state_repository. Never use shared.runs as the source of truth for queries, recovery, or inspection.
+# shared.runs is a process-local execution cache only. Never use for queries, recovery, or inspection. All durable state is in Postgres via run_state_repository.
 # Inventory of shared mutable state and its current durable backing.
 # This makes the migration surface explicit and keeps active queue/session state
 # aligned with the persistence layer instead of treating these containers as

@@ -343,6 +343,7 @@ def register_runtime_run_routes(
             current_user=current_user,
             stream_run_response_fn=runtime_run_entry_service.stream_run_response,
             runs=runs,
+            get_live_run_fn=run_state_repository.sync_get_live_run,
             serialize_run_snapshot=serialize_run_snapshot,
             enforce_run_owner_access=enforce_run_owner_access,
             event_source_response_class=event_source_response_class,
@@ -362,6 +363,7 @@ def register_runtime_run_routes(
             current_user=current_user,
             submit_run_decision_fn=runtime_run_approval_service.submit_run_decision,
             run=runs.get(str(run_id)),
+            run_record=run_state_repository.sync_get_live_run(str(run_id)),
             callbacks=submit_run_decision_callbacks,
         )
 
@@ -380,6 +382,7 @@ def register_runtime_run_routes(
             current_user=current_user,
             resolve_run_approval_fn=runtime_run_approval_service.resolve_run_approval,
             run=runs.get(str(run_id)),
+            run_record=run_state_repository.sync_get_live_run(str(run_id)),
             callbacks=resolve_run_approval_callbacks,
         )
 
@@ -412,5 +415,6 @@ def register_runtime_run_routes(
             current_user=current_user,
             resume_waiting_run_fn=runtime_run_control_service.resume_waiting_run,
             run=runs.get(str(run_id)),
+            run_record=run_state_repository.sync_get_live_run(str(run_id)),
             callbacks=resume_waiting_run_callbacks,
         )

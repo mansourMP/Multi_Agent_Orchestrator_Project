@@ -119,6 +119,10 @@ class RuntimeRunQueryServiceTests(unittest.TestCase):
                     "memory_trace": {"raw": True},
                 }
             },
+            get_live_run_fn=lambda run_id: {
+                "context": {"metadata": {"owner_user_id": "user-1"}, "secret": True},
+                "memory_trace": {"raw": True},
+            },
             get_replay_payload=lambda run_id: {},
             serialize_run_snapshot=lambda run_id, run: {"run_id": run_id, "snapshot": True},
             enforce_run_owner_access=lambda current_user, snapshot: None,
@@ -205,6 +209,7 @@ class RuntimeRunQueryServiceTests(unittest.TestCase):
             pack_id=None,
             current_user={"user_id": "user-1"},
             runs=runs,
+            list_live_runs_fn=lambda: list(runs.values()),
             run_history_lock=threading.Lock(),
             run_history=history,
             serialize_run_snapshot=lambda run_id, run: dict(run),

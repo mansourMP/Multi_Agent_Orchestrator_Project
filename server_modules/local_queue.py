@@ -641,10 +641,6 @@ def recover_orphaned_local_runs_on_startup() -> List[str]:
         "machine_allocating",
         "retrying",
         "blocked",
-        "starting",
-        "queued_local",
-        "running_local",
-        "waiting_for_input",
     ]
     recoverable_run_ids = {
         str(item.get("run_id") or "").strip()

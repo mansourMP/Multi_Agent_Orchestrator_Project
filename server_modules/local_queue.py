@@ -1002,6 +1002,11 @@ def handle_get_local_workers_status() -> Dict[str, Any]:
                     "status": status,
                     "online": online,
                     "current_run_id": record.get("current_run_id"),
+                    "current_lease_holder": (
+                        f"Run {str(record.get('current_run_id') or '').strip()[:8]}"
+                        if str(record.get("current_run_id") or "").strip()
+                        else None
+                    ),
                     "last_seen_at": record.get("last_seen_at"),
                     "seconds_since_seen": since_seen,
                     "lease_seconds": lease_seconds,
@@ -1039,6 +1044,79 @@ def handle_get_local_workers_status() -> Dict[str, Any]:
         "watchdog": local_runtime_watchdog_status_snapshot(),
         "capability_queue": capability_queue,
         "items": items,
+    }
+
+
+def handle_enroll_local_runtime(
+    *,
+    machine_id: Optional[str] = None,
+    runtime_type: str = "local_companion",
+    display_name: Optional[str] = None,
+    platform: Optional[str] = None,
+    policy_mode: Optional[str] = None,
+    capabilities: Optional[List[str]] = None,
+    execution_targets: Optional[List[str]] = None,
+    note: Optional[str] = None,
+) -> Dict[str, Any]:
+    _init()
+    runtime_id = str(machine_id or "").strip() or f"machine-{uuid.uuid4().hex[:8]}"
+    registration = _upsert_runtime_registration(
+        runtime_id,
+        runtime_type=runtime_type,
+        display_name=display_name,
+        platform=platform,
+        policy_mode=policy_mode,
+        capabilities=capabilities,
+        execution_targets=execution_targets or ["local_companion"],
+        instance_id=runtime_id,
+        capability_digest=None,
+    )
+    heartbeat = LocalWorkerHeartbeatPayload(
+        current_run_id=None,
+        note=note or "machine_enrolled",
+    )
+    handle_heartbeat_local_worker(runtime_id, heartbeat)
+    status_payload = handle_get_local_workers_status()
+    items = status_payload.get("items") if isinstance(status_payload.get("items"), list) else []
+    machine = next(
+        (
+            item
+            for item in items
+            if isinstance(item, dict)
+            and str(item.get("machine_id") or item.get("runtime_id") or "").strip() == runtime_id
+        ),
+        None,
+    )
+    return {
+        "ok": True,
+        "machine": machine,
+        "session_token": registration.get("session_token"),
+        "machine_id": runtime_id,
+    }
+
+
+def handle_delete_local_runtime(machine_id: str) -> Dict[str, Any]:
+    _init()
+    runtime_id = str(machine_id or "").strip()
+    if not runtime_id:
+        raise HTTPException(status_code=400, detail="machine_id is required.")
+
+    with _server.LOCAL_QUEUE_LOCK:
+        record = _server.LOCAL_WORKER_REGISTRY.get(runtime_id) if isinstance(_server.LOCAL_WORKER_REGISTRY.get(runtime_id), dict) else None
+        if not isinstance(record, dict):
+            raise HTTPException(status_code=404, detail="Machine not found.")
+        current_run_id = str(record.get("current_run_id") or "").strip()
+        if current_run_id:
+            raise HTTPException(status_code=409, detail="Machine is currently leased by an active run.")
+        deleted = dict(record)
+        _server.LOCAL_WORKER_REGISTRY.pop(runtime_id, None)
+
+    _persist_local_runtime_state()
+    return {
+        "ok": True,
+        "machine_id": runtime_id,
+        "deleted": True,
+        "machine": deleted,
     }
 
 

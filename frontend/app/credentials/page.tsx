@@ -1140,6 +1140,37 @@ function CredentialsPageContent() {
       connectedCount: directoryCounts.connected,
     };
   }, [directoryCounts.available, directoryCounts.connected, googleSuiteRow, microsoftSuiteRow, summary.active]);
+  const featuredConnectorProducts = useMemo(() => {
+    return [
+      {
+        id: 'gmail',
+        label: 'Gmail',
+        connector: 'google_workspace' as ConnectorId,
+        note: 'Inbox, drafts, calendar, and Drive in one Google Workspace connection.',
+      },
+      {
+        id: 'telegram_bot',
+        label: 'Telegram',
+        connector: 'telegram_bot' as ConnectorId,
+        note: 'Bot alerts, operator threads, and fast approval prompts.',
+      },
+      {
+        id: 'slack',
+        label: 'Slack',
+        connector: 'slack' as ConnectorId,
+        note: 'Workspace OAuth, channel posting, and team-facing agent workflows.',
+      },
+    ].map((item) => {
+      const row = connectors.find((candidate) => candidate.connector === item.connector && !rowPaused(candidate))
+        || connectors.find((candidate) => candidate.connector === item.connector)
+        || null;
+      return {
+        ...item,
+        row,
+        connected: row ? !rowPaused(row) : false,
+      };
+    });
+  }, [connectors]);
   const selectedConnectorRow = useMemo(() => {
     const selectedConnectorId = focusedCatalogEntry ? resolveCatalogConnectorId(focusedCatalogEntry) : null;
     if (!selectedConnectorId) return null;
@@ -1844,6 +1875,84 @@ function buildCredentialsPayload(state: ConnectModalState): Record<string, unkno
           </div>
         </PageHeroCard>
       </section>
+
+      <PageSection
+        title="Core connectors"
+        description="Gmail, Telegram, and Slack now have a simple product surface: connect, test, verify success, and disconnect."
+        className="orion-home-list-panel"
+      >
+        <div className="orion-integration-directory">
+          {featuredConnectorProducts.map((item) => {
+            const row = item.row;
+            const busyAction = row ? rowBusy[row.id] || '' : '';
+            const test = row ? testResults[row.id] : null;
+            return (
+              <article key={item.id} className="orion-connector-card orion-integration-card">
+                <div className="orion-integration-card-head">
+                  <div className="orion-integration-card-main">
+                    <ConnectorMark id={item.id} size={52} />
+                    <div className="orion-integration-card-copy">
+                      <div className="orion-integration-card-kicker">Core connector</div>
+                      <div className="orion-integration-card-title">{item.label}</div>
+                      <div className="orion-integration-card-note">{item.note}</div>
+                    </div>
+                  </div>
+                </div>
+                <div className="orion-integration-card-meta">
+                  <span className="orion-integration-card-meta-note">
+                    {item.connected
+                      ? test?.message || 'Connected and ready'
+                      : row
+                        ? 'Configured but currently paused'
+                        : 'Not connected yet'}
+                  </span>
+                </div>
+                <div className="orion-integration-card-actions" style={{ marginTop: 12 }}>
+                  {item.connected ? (
+                    <>
+                      <button
+                        className="orion-btn orion-btn-ghost"
+                        style={{ minHeight: 44, paddingInline: 12 }}
+                        onClick={() => void handleTest(row!)}
+                        disabled={Boolean(busyAction)}
+                      >
+                        <ShieldCheck size={13} />
+                        {busyAction === 'test' ? 'Testing…' : 'Test connection'}
+                      </button>
+                      <button
+                        className="orion-btn orion-btn-ghost"
+                        style={{ minHeight: 44, paddingInline: 12 }}
+                        onClick={() => openConnectedRow(item.connector)}
+                      >
+                        <ArrowUpRight size={13} />
+                        Open setup
+                      </button>
+                      <button
+                        className="orion-btn orion-btn-danger"
+                        style={{ minHeight: 44, paddingInline: 12 }}
+                        onClick={() => void handleRemove(row!)}
+                        disabled={Boolean(busyAction)}
+                      >
+                        <Trash2 size={13} />
+                        {busyAction === 'remove' ? 'Disconnecting…' : 'Disconnect'}
+                      </button>
+                    </>
+                  ) : (
+                    <button
+                      className="orion-btn orion-btn-primary"
+                      style={{ minHeight: 44, paddingInline: 12 }}
+                      onClick={() => openCreateModal(item.connector, item.label)}
+                    >
+                      <Plus size={13} />
+                      Connect
+                    </button>
+                  )}
+                </div>
+              </article>
+            );
+          })}
+        </div>
+      </PageSection>
 
       <PageFilterBar
         title="Tool directory"

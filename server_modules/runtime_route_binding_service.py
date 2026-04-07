@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import queue
+import uuid
 from typing import Any, Callable
 
 from server_modules import runtime_history_service
@@ -10,6 +11,7 @@ from server_modules import runtime_run_approval_service
 from server_modules import runtime_run_delegation_service
 from server_modules import runtime_run_query_service
 from server_modules.run_execution_handle import attach_execution_handle
+from server_modules import local_queue
 
 
 @dataclass(frozen=True)
@@ -23,6 +25,7 @@ class RuntimeRouteBindings:
     submit_run_decision_callbacks: dict[str, Any]
     resolve_run_approval_callbacks: dict[str, Any]
     resume_waiting_run_callbacks: dict[str, Any]
+    pause_run_callbacks: dict[str, Any]
 
 
 def build_runtime_route_bindings(
@@ -185,6 +188,20 @@ def build_runtime_route_bindings(
         emit_log=emit_log,
         schedule_restored_run_resume=schedule_restored_run_resume,
     )
+    pause_run_callbacks = runtime_run_control_service.build_pause_run_callbacks(
+        serialize_run_snapshot=serialize_run_snapshot,
+        enforce_run_owner_access=enforce_run_owner_access,
+        pause_local_run=lambda **kwargs: local_queue.handle_pause_local_run(
+            uuid.UUID(str(kwargs.get("run_id"))),
+            local_queue.LocalRunPausePayload(
+                worker_id=kwargs.get("worker_id"),
+                result_text=kwargs.get("result_text"),
+                result_data=kwargs.get("result_data"),
+                browser_checkpoint=kwargs.get("browser_checkpoint"),
+                wait_reason=kwargs.get("wait_reason"),
+            ),
+        ),
+    )
 
     return RuntimeRouteBindings(
         serialize_run_snapshot=serialize_run_snapshot,
@@ -196,4 +213,5 @@ def build_runtime_route_bindings(
         submit_run_decision_callbacks=submit_run_decision_callbacks,
         resolve_run_approval_callbacks=resolve_run_approval_callbacks,
         resume_waiting_run_callbacks=resume_waiting_run_callbacks,
+        pause_run_callbacks=pause_run_callbacks,
     )

@@ -383,7 +383,7 @@ export async function fetchExecutionHistory(limit: number = 200, workspaceId: st
 }
 
 export async function fetchRuntimeMachines() {
-    return internalApiFetch('/api/runtime/machines', { cache: 'no-store' });
+    return internalApiFetch('/api/machines', { cache: 'no-store' });
 }
 
 export async function fetchExecution(id: string) {

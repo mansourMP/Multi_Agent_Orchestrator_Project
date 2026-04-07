@@ -249,6 +249,7 @@ def register_runtime_run_routes_from_api(
         submit_run_decision_callbacks=route_bindings.submit_run_decision_callbacks,
         resolve_run_approval_callbacks=route_bindings.resolve_run_approval_callbacks,
         resume_waiting_run_callbacks=route_bindings.resume_waiting_run_callbacks,
+        pause_run_callbacks=route_bindings.pause_run_callbacks,
         enforce_run_owner_access=enforce_run_owner_access,
     )
     return heartbeat_scheduler

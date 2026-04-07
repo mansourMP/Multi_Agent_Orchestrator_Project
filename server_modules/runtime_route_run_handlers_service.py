@@ -231,3 +231,21 @@ def resume_run_route_response(
         current_user=current_user,
         **callbacks,
     )
+
+
+def pause_run_route_response(
+    run_id: Any,
+    *,
+    current_user: Any,
+    pause_run_fn: Callable[..., Any],
+    run: dict[str, Any] | None,
+    run_record: dict[str, Any] | None,
+    callbacks: dict[str, Any],
+) -> Any:
+    return pause_run_fn(
+        str(run_id),
+        run=run,
+        run_record=run_record,
+        current_user=current_user,
+        **callbacks,
+    )

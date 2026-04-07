@@ -51,6 +51,19 @@ def build_resume_waiting_run_callbacks(
     }
 
 
+def build_pause_run_callbacks(
+    *,
+    serialize_run_snapshot: Callable[[str, dict[str, Any]], dict[str, Any]],
+    enforce_run_owner_access: Callable[[Any, Any], None],
+    pause_local_run: Callable[..., dict[str, Any]],
+) -> dict[str, Any]:
+    return {
+        "serialize_run_snapshot": serialize_run_snapshot,
+        "enforce_run_owner_access": enforce_run_owner_access,
+        "pause_local_run": pause_local_run,
+    }
+
+
 def build_local_worker_recovery_approval_callbacks(
     *,
     get_pending_confirmation: Callable[[dict[str, Any]], Any],
@@ -69,6 +82,60 @@ def build_local_worker_recovery_approval_callbacks(
         "emit_log": emit_log,
         "append_approval_audit": append_approval_audit,
         "schedule_restored_run_resume": schedule_restored_run_resume,
+    }
+
+
+def pause_run_for_takeover(
+    run_id: str,
+    *,
+    run: dict[str, Any] | None,
+    run_record: dict[str, Any] | None = None,
+    current_user: Any,
+    serialize_run_snapshot: Callable[[str, dict[str, Any]], dict[str, Any]],
+    enforce_run_owner_access: Callable[[Any, Any], None],
+    pause_local_run: Callable[..., dict[str, Any]],
+) -> dict[str, Any]:
+    active_run = run if isinstance(run, dict) else None
+    snapshot_run = active_run if isinstance(active_run, dict) else run_record if isinstance(run_record, dict) else None
+    if not isinstance(snapshot_run, dict):
+        raise HTTPException(status_code=404, detail="Run ID not found")
+    snapshot = serialize_run_snapshot(run_id, snapshot_run)
+    enforce_run_owner_access(current_user, snapshot)
+
+    status = str(snapshot_run.get("status") or "").strip().lower()
+    if status in {"completed", "failed", "timeout", "cancelled", "canceled", "stopped"}:
+        raise HTTPException(status_code=409, detail="Run is already terminal.")
+    if not isinstance(active_run, dict):
+        raise HTTPException(status_code=409, detail="Run is not active in this process for takeover.")
+
+    local_worker_id = str(active_run.get("local_worker_id") or "").strip()
+    machine_id = str(active_run.get("machine_id") or "").strip()
+    if not local_worker_id and not machine_id:
+        raise HTTPException(status_code=409, detail="Run is not currently attached to a local machine.")
+
+    result = pause_local_run(
+        run_id,
+        worker_id=None,
+        result_text="Control handed back to the user. Run paused for manual takeover.",
+        result_data={
+            "manual_takeover": True,
+            "summary": "Control handed back to the user. Run paused for manual takeover.",
+        },
+        browser_checkpoint=(
+            dict(active_run.get("browser_checkpoint"))
+            if isinstance(active_run.get("browser_checkpoint"), dict)
+            else None
+        ),
+        wait_reason="manual_takeover_requested",
+    )
+    return {
+        "status": "ok",
+        "run_id": run_id,
+        "paused": True,
+        "takeover": True,
+        "machine_id": machine_id or None,
+        "worker_id": local_worker_id or None,
+        **(result if isinstance(result, dict) else {}),
     }
 
 

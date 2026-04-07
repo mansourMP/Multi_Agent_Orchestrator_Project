@@ -67,6 +67,7 @@ class RuntimeRouteRegistryServiceTests(unittest.TestCase):
         self.assertIn(("POST", "/admin/safe-mode"), app.routes)
         self.assertIn(("POST", "/approvals/{approval_id}/resolve"), app.routes)
         self.assertIn(("POST", "/runs/{run_id}/resume"), app.routes)
+        self.assertIn(("POST", "/runs/{run_id}/pause"), app.routes)
 
     def _registry_kwargs(self, **overrides):
         kwargs = dict(
@@ -149,6 +150,7 @@ class RuntimeRouteRegistryServiceTests(unittest.TestCase):
             ),
             runtime_run_control_service=types.SimpleNamespace(
                 resume_waiting_run=lambda *args, **kwargs: {},
+                pause_run_for_takeover=lambda *args, **kwargs: {},
             ),
             runtime_history_service=types.SimpleNamespace(
                 build_runs_history_payload=lambda *args, **kwargs: {},
@@ -177,6 +179,7 @@ class RuntimeRouteRegistryServiceTests(unittest.TestCase):
             submit_run_decision_callbacks={},
             resolve_run_approval_callbacks={},
             resume_waiting_run_callbacks={},
+            pause_run_callbacks={},
             enforce_run_owner_access=lambda current_user, payload: None,
         )
         kwargs.update(overrides)

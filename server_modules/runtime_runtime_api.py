@@ -45,6 +45,17 @@ class RuntimeHeartbeatPayload(BaseModel):
     note: Optional[str] = None
 
 
+class MachineEnrollPayload(BaseModel):
+    machine_id: Optional[str] = None
+    runtime_type: str = "local_companion"
+    display_name: Optional[str] = None
+    platform: Optional[str] = None
+    policy_mode: Optional[str] = None
+    capabilities: List[str] = Field(default_factory=list)
+    execution_targets: List[str] = Field(default_factory=lambda: ["local_companion"])
+    note: Optional[str] = None
+
+
 class RuntimeTaskClaimRequest(BaseModel):
     runtime_id: Optional[str] = None
     session_token: Optional[str] = None
@@ -241,6 +252,7 @@ def _runtime_summary_from_worker_item(item: Dict[str, Any]) -> Dict[str, Any]:
         "status": item.get("status"),
         "online": bool(item.get("online")),
         "current_task_id": item.get("current_run_id"),
+        "current_lease_holder": item.get("current_lease_holder"),
         "last_seen_at": item.get("last_seen_at"),
         "registered_at": item.get("registered_at"),
         "last_registered_at": item.get("last_registered_at"),
@@ -344,6 +356,24 @@ def register_runtime_routes(app) -> None:
     @app.get("/machines", dependencies=[Depends(require_api_key)])
     async def get_machines():
         return runtime_status_payload()
+
+    @app.post("/machines/enroll", dependencies=[Depends(require_api_key)])
+    async def enroll_machine(payload: Optional[MachineEnrollPayload] = None):
+        body = payload or MachineEnrollPayload()
+        return local_queue.handle_enroll_local_runtime(
+            machine_id=body.machine_id,
+            runtime_type=body.runtime_type,
+            display_name=body.display_name,
+            platform=body.platform,
+            policy_mode=body.policy_mode,
+            capabilities=body.capabilities,
+            execution_targets=body.execution_targets,
+            note=body.note,
+        )
+
+    @app.delete("/machines/{machine_id}", dependencies=[Depends(require_api_key)])
+    async def delete_machine(machine_id: str):
+        return local_queue.handle_delete_local_runtime(machine_id)
 
     @app.get("/local/workers/status", dependencies=[Depends(require_api_key)])
     async def get_legacy_local_workers_status():

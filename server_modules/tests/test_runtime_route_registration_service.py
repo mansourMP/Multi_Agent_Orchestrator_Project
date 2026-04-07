@@ -33,6 +33,7 @@ class RuntimeRouteRegistrationServiceTests(unittest.TestCase):
             submit_run_decision_callbacks={"decision": True},
             resolve_run_approval_callbacks={"approval": True},
             resume_waiting_run_callbacks={"resume": True},
+            pause_run_callbacks={"pause": True},
         )
         server_module = types.SimpleNamespace(
             RUN_HISTORY_LOCK=object(),

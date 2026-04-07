@@ -862,6 +862,7 @@ export default function RunInspectPage() {
   const [delegateNote, setDelegateNote] = useState('');
   const [approvalBusy, setApprovalBusy] = useState<'Proceed' | 'Hold' | null>(null);
   const [resumeBusy, setResumeBusy] = useState(false);
+  const [takeoverBusy, setTakeoverBusy] = useState(false);
   const [delegating, setDelegating] = useState(false);
   const [autoDelegating, setAutoDelegating] = useState(false);
   const [retryingDelegation, setRetryingDelegation] = useState(false);
@@ -1276,6 +1277,27 @@ export default function RunInspectPage() {
     }
   }, [load, runId]);
 
+  const handleTakeOverRun = useCallback(async () => {
+    if (!runId) return;
+    setTakeoverBusy(true);
+    setDelegateError(null);
+    setDelegateNotice(null);
+    try {
+      await ensureControlPlaneSession();
+      const response = await fetch(`/api/runs/${encodeURIComponent(runId)}/pause`, { method: 'POST' });
+      if (!response.ok) {
+        const payload = await response.json().catch(() => null) as { detail?: string } | null;
+        throw new Error(payload?.detail || 'Failed to take over this run.');
+      }
+      setDelegateNotice('Control handed back to you. The run is paused for manual takeover.');
+      await load();
+    } catch (nextError: unknown) {
+      setDelegateError(nextError instanceof Error ? nextError.message : 'Failed to take over this run.');
+    } finally {
+      setTakeoverBusy(false);
+    }
+  }, [load, runId]);
+
   const timelineEvents = useMemo((): TimelineEvent[] => {
     const replayEvents = Array.isArray(replayItem?.events) ? replayItem.events : [];
     const combined: TimelineEvent[] = [];
@@ -1310,6 +1332,11 @@ export default function RunInspectPage() {
     () => artifacts.filter((item) => /\.(png|jpg|jpeg|webp|gif)$/i.test(item) || /screenshot/i.test(item)),
     [artifacts],
   );
+  const liveScreenshotArtifact = useMemo(() => {
+    if (screenshotArtifacts.length > 0) return screenshotArtifacts[0];
+    const stepArtifact = localExecutionSteps.find((item) => typeof item.artifact_file_path === 'string' && item.artifact_file_path.trim().length > 0);
+    return stepArtifact?.artifact_file_path || null;
+  }, [localExecutionSteps, screenshotArtifacts]);
   const deliverableArtifacts = useMemo(
     () => artifacts.filter((item) => classifyArtifactForInspect(item) === 'deliverable'),
     [artifacts],
@@ -1502,6 +1529,13 @@ export default function RunInspectPage() {
     [runDetail?.execution_target_busy_runtime_labels],
   );
   const canResumeRun = effectiveRunStatus === 'waiting_for_input' && !pendingConfirmation?.approval_id && Boolean(runDiagnostics?.browser_resume_supported);
+  const canTakeOverRun = !TERMINAL_RUN_STATUSES.has(effectiveRunStatus)
+    && (
+      String(runDiagnostics?.selected_target || '').trim().toLowerCase() === 'local_companion'
+      || String(runDiagnostics?.selected_target || '').trim().toLowerCase() === 'local'
+      || String(historyItem?.execution_target_selected || '').trim().toLowerCase() === 'local_companion'
+      || String(historyItem?.execution_target_selected || '').trim().toLowerCase() === 'local'
+    );
   const needsLocalMachineAttention = ['local_runtime_wait', 'local_capacity_wait', 'local_queue', 'local_running'].includes(String(runDiagnostics?.category || ''));
   const showRemediationGuide = shouldShowRunRemediationGuide({
     diagnostics: runDiagnostics,
@@ -1586,6 +1620,10 @@ export default function RunInspectPage() {
       updatedAt: payload?.updated_at || null,
     };
   }, [runDetail?.node_states]);
+  const currentStepLabel = workflowNodeStates.activeNode?.label
+    || localExecutionSteps.find((item) => String(item.status || '').trim().toLowerCase() !== 'completed')?.summary
+    || workflowNodeStates.finalNode?.label
+    || 'Waiting for the next execution step.';
   const logRows = useMemo(
     () =>
       timelineEvents.map((item) => ({
@@ -1974,6 +2012,61 @@ export default function RunInspectPage() {
                 <Link className="orion-btn orion-btn-ghost" style={{ minHeight: 44, paddingInline: 12 }} href="/artifacts">
                   Open outputs
                 </Link>
+              </div>
+            </article>
+
+            <article className="orion-panel">
+              <div className="orion-panel-title">Live computer control</div>
+              <div style={{ marginTop: 6, fontSize: 17, fontWeight: 800, color: 'var(--text-primary)' }}>
+                {liveScreenshotArtifact ? 'Latest machine view' : 'Waiting for the first screenshot'}
+              </div>
+              <div style={{ marginTop: 10, fontSize: 12, color: 'var(--text-tertiary)' }}>
+                Current step {currentStepLabel}
+              </div>
+              <div
+                style={{
+                  position: 'relative',
+                  marginTop: 12,
+                  minHeight: 220,
+                  borderRadius: 16,
+                  overflow: 'hidden',
+                  border: '1px solid var(--border-default)',
+                  background: 'var(--bg-element)',
+                }}
+              >
+                {liveScreenshotArtifact ? (
+                  <ArtifactImagePreview path={liveScreenshotArtifact} alt={`Latest screenshot for run ${runId}`} />
+                ) : (
+                  <div
+                    style={{
+                      minHeight: 220,
+                      display: 'grid',
+                      placeItems: 'center',
+                      color: 'var(--text-secondary)',
+                      fontSize: 12,
+                    }}
+                  >
+                    This run has not produced a screenshot artifact yet.
+                  </div>
+                )}
+              </div>
+              <div style={{ marginTop: 12, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                <button
+                  className="orion-btn orion-btn-primary"
+                  style={{ minHeight: 44, paddingInline: 12 }}
+                  onClick={() => void handleTakeOverRun()}
+                  disabled={!canTakeOverRun || takeoverBusy || approvalBusy !== null || resumeBusy}
+                  title={!canTakeOverRun ? 'Take over is available only for active local-machine runs.' : undefined}
+                >
+                  {takeoverBusy ? 'Pausing…' : 'Take over'}
+                </button>
+                <button
+                  className="orion-btn orion-btn-ghost"
+                  style={{ minHeight: 44, paddingInline: 12 }}
+                  onClick={() => focusSection('screenshots')}
+                >
+                  Open screenshot history
+                </button>
               </div>
             </article>
           </section>

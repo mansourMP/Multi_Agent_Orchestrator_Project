@@ -25,6 +25,7 @@ type RuntimeMachine = {
   status: string;
   online: boolean;
   current_task_id?: string | null;
+  current_lease_holder?: string | null;
   last_seen_at?: string | null;
   registered_at?: string | null;
   last_registered_at?: string | null;
@@ -105,6 +106,8 @@ export default function MachinesPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [doctorDecision, setDoctorDecision] = useState<DoctorRunGateDecision | null>(null);
+  const [enrolling, setEnrolling] = useState(false);
+  const [revokingMachineId, setRevokingMachineId] = useState<string | null>(null);
 
   const loadMachines = useCallback(async () => {
     setLoading(true);
@@ -128,6 +131,54 @@ export default function MachinesPage() {
 
   useEffect(() => {
     void loadMachines();
+  }, [loadMachines]);
+
+  const handleEnroll = useCallback(async () => {
+    setEnrolling(true);
+    setError('');
+    try {
+      const nextOrdinal = (payload?.summary?.known ?? payload?.items?.length ?? 0) + 1;
+      const response = await fetch('/api/machines', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          runtime_type: 'local_companion',
+          display_name: `Empyralist Machine ${nextOrdinal}`,
+          execution_targets: ['local_companion'],
+          note: 'Enrolled from Machines UI',
+        }),
+      });
+      const body = await response.json().catch(() => null);
+      if (!response.ok) {
+        throw new Error((body as { detail?: string } | null)?.detail || 'Unable to enroll a machine.');
+      }
+      await loadMachines();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Unable to enroll a machine.');
+    } finally {
+      setEnrolling(false);
+    }
+  }, [loadMachines, payload?.items?.length, payload?.summary?.known]);
+
+  const handleRevoke = useCallback(async (machineId: string) => {
+    const normalized = String(machineId || '').trim();
+    if (!normalized) return;
+    setRevokingMachineId(normalized);
+    setError('');
+    try {
+      const response = await fetch(`/api/machines/${encodeURIComponent(normalized)}`, {
+        method: 'DELETE',
+      });
+      const body = await response.json().catch(() => null);
+      if (!response.ok) {
+        throw new Error((body as { detail?: string } | null)?.detail || 'Unable to revoke this machine.');
+      }
+      await loadMachines();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Unable to revoke this machine.');
+    } finally {
+      setRevokingMachineId(null);
+    }
   }, [loadMachines]);
 
   const machines = useMemo(() => payload?.items ?? [], [payload]);
@@ -170,6 +221,10 @@ export default function MachinesPage() {
             <button type="button" className="orion-btn orion-btn-ghost" onClick={() => void loadMachines()}>
               <RefreshCw size={14} />
               Refresh
+            </button>
+            <button type="button" className="orion-btn orion-btn-primary" onClick={() => void handleEnroll()} disabled={enrolling}>
+              <Laptop size={14} />
+              {enrolling ? 'Enrolling...' : 'Enroll machine'}
             </button>
           </div>
         }
@@ -354,6 +409,9 @@ export default function MachinesPage() {
               <RefreshCw size={14} />
               Refresh
             </button>
+            <button type="button" className="btn-primary" onClick={() => void handleEnroll()} disabled={enrolling}>
+              Enroll machine
+            </button>
           </div>
         </PageSection>
       ) : null}
@@ -394,6 +452,9 @@ export default function MachinesPage() {
           copy="Platform is ready for runtimes, but no local or headless machine has registered yet."
           actions={
             <>
+              <button type="button" className="btn-primary" onClick={() => void handleEnroll()} disabled={enrolling}>
+                {enrolling ? 'Enrolling...' : 'Enroll machine'}
+              </button>
               <Link href="/setup" className="btn-primary">
                 New task
               </Link>
@@ -469,6 +530,10 @@ export default function MachinesPage() {
                     )}
                   </span>
                 </div>
+                <div className="orion-machine-meta-row">
+                  <span className="orion-machine-meta-label">Lease holder</span>
+                  <span className="orion-machine-meta-value">{machine.current_lease_holder || 'None'}</span>
+                </div>
               </div>
 
               <div className="orion-machine-card-section">
@@ -503,6 +568,18 @@ export default function MachinesPage() {
                   {machine.note}
                 </div>
               ) : null}
+
+              <div className="orion-inline-actions" style={{ marginTop: 14 }}>
+                <button
+                  type="button"
+                  className="orion-btn orion-btn-ghost"
+                  onClick={() => void handleRevoke(machine.runtime_id)}
+                  disabled={Boolean(machine.current_task_id) || revokingMachineId === machine.runtime_id}
+                  title={machine.current_task_id ? 'Cannot revoke a machine while it holds an active run.' : undefined}
+                >
+                  {revokingMachineId === machine.runtime_id ? 'Revoking...' : 'Revoke'}
+                </button>
+              </div>
             </article>
           ))}
         </section>

@@ -73,6 +73,7 @@ def register_runtime_run_routes(
     submit_run_decision_callbacks,
     resolve_run_approval_callbacks,
     resume_waiting_run_callbacks,
+    pause_run_callbacks,
     enforce_run_owner_access,
     runtime_workspace_service=_runtime_workspace_service,
     runtime_heartbeat_service=_runtime_heartbeat_service,
@@ -472,4 +473,16 @@ def register_runtime_run_routes(
             run=runs.get(str(run_id)),
             run_record=run_state_repository.sync_get_live_run(str(run_id)),
             callbacks=resume_waiting_run_callbacks,
+        )
+
+    @app.post("/runs/{run_id}/pause", dependencies=[depends(member_dependency)])
+    async def pause_run(run_id: uuid.UUID, current_user=depends(member_dependency)):
+        refresh_server_exports()
+        return runtime_route_run_handlers_service.pause_run_route_response(
+            run_id,
+            current_user=current_user,
+            pause_run_fn=runtime_run_control_service.pause_run_for_takeover,
+            run=runs.get(str(run_id)),
+            run_record=run_state_repository.sync_get_live_run(str(run_id)),
+            callbacks=pause_run_callbacks,
         )

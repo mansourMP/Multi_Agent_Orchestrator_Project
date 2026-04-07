@@ -9,6 +9,7 @@ import type {
   ConnectorListResponse,
   HealthResponse,
   MachineListResponse,
+  NotificationDeviceRegistrationResponse,
   RunDetailResponse,
   RunListResponse,
   NotificationListResponse,
@@ -425,6 +426,26 @@ export const mobileApi = {
       workspace_id: session.workspaceId,
       mark_all: Boolean(options?.markAll),
     }) as Promise<NotificationReadResponse>;
+  },
+  registerNotificationDevice(session: MobileSession, request: {
+    device_id: string;
+    push_token: string;
+    provider?: string;
+    platform?: string;
+    device_name?: string;
+    app_id?: string;
+    capabilities?: string[];
+  }) {
+    return buildMobileRuntimeClient(session).registerNotificationDevice({
+      workspace_id: session.workspaceId,
+      device_id: request.device_id,
+      push_token: request.push_token,
+      provider: request.provider,
+      platform: request.platform,
+      device_name: request.device_name,
+      app_id: request.app_id,
+      capabilities: request.capabilities,
+    }) as Promise<NotificationDeviceRegistrationResponse>;
   },
   async testConnector(session: MobileSession, connectorId: string) {
     const baseUrl = normalizeServerUrl(session.runtimeUrl);

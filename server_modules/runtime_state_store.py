@@ -191,6 +191,80 @@ def init_runtime_state_db(db_path: Path) -> None:
             """
         )
         conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS notifications (
+                id TEXT PRIMARY KEY,
+                tenant_id TEXT,
+                workspace_id TEXT,
+                session_key TEXT,
+                session_id TEXT,
+                channel TEXT,
+                direction TEXT,
+                event_type TEXT,
+                run_id TEXT,
+                machine_id TEXT,
+                trace_id TEXT,
+                action TEXT,
+                title TEXT,
+                text TEXT,
+                sort_ts REAL NOT NULL,
+                notification_json TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                persisted_at TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS notification_reads (
+                notification_id TEXT NOT NULL,
+                reader_key TEXT NOT NULL,
+                tenant_id TEXT,
+                workspace_id TEXT,
+                read_at TEXT NOT NULL,
+                persisted_at TEXT NOT NULL,
+                PRIMARY KEY (notification_id, reader_key),
+                FOREIGN KEY(notification_id) REFERENCES notifications(id) ON DELETE CASCADE
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS notification_devices (
+                device_id TEXT PRIMARY KEY,
+                tenant_id TEXT,
+                workspace_id TEXT,
+                reader_key TEXT,
+                provider TEXT NOT NULL,
+                push_token TEXT NOT NULL,
+                platform TEXT,
+                app_id TEXT,
+                device_name TEXT,
+                status TEXT NOT NULL,
+                capabilities_json TEXT NOT NULL,
+                device_json TEXT NOT NULL,
+                last_registered_at TEXT NOT NULL,
+                last_delivered_at TEXT,
+                last_error TEXT,
+                persisted_at TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS notification_deliveries (
+                notification_id TEXT NOT NULL,
+                device_id TEXT NOT NULL,
+                status TEXT NOT NULL,
+                delivered_at TEXT,
+                last_error TEXT,
+                persisted_at TEXT NOT NULL,
+                PRIMARY KEY (notification_id, device_id),
+                FOREIGN KEY(notification_id) REFERENCES notifications(id) ON DELETE CASCADE
+            )
+            """
+        )
+        conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_live_runs_sort_ts ON live_runs(sort_ts DESC)"
         )
         conn.execute(
@@ -249,6 +323,27 @@ def init_runtime_state_db(db_path: Path) -> None:
         )
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_runtime_session_turns_updated ON runtime_session_turns(updated_at DESC)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_notifications_sort_ts ON notifications(sort_ts DESC)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_notifications_workspace ON notifications(workspace_id)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_notifications_run ON notifications(run_id)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_notification_reads_workspace ON notification_reads(workspace_id)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_notification_devices_workspace ON notification_devices(workspace_id)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_notification_devices_status ON notification_devices(status)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_notification_deliveries_status ON notification_deliveries(status)"
         )
         conn.commit()
 
@@ -1194,4 +1289,514 @@ def list_channel_events(db_path: Path, limit: int) -> List[Dict[str, Any]]:
                 out.append(parsed)
         except Exception:
             continue
+    return out
+
+
+def _normalize_notification_row(row: sqlite3.Row) -> Dict[str, Any]:
+    payload = _parse_json_blob(row["notification_json"], {})
+    if not isinstance(payload, dict):
+        payload = {}
+    record = dict(payload)
+    record["id"] = str(record.get("id") or row["id"] or "").strip()
+    record["ts"] = str(record.get("ts") or row["created_at"] or "").strip()
+    record["tenant_id"] = str(record.get("tenant_id") or row["tenant_id"] or "").strip()
+    record["workspace_id"] = str(record.get("workspace_id") or row["workspace_id"] or "").strip()
+    record["session_key"] = str(record.get("session_key") or row["session_key"] or "").strip()
+    record["session_id"] = str(record.get("session_id") or row["session_id"] or "").strip()
+    record["channel"] = str(record.get("channel") or row["channel"] or "").strip().lower()
+    record["direction"] = str(record.get("direction") or row["direction"] or "").strip().lower()
+    record["event_type"] = str(record.get("event_type") or row["event_type"] or "").strip().lower()
+    record["run_id"] = str(record.get("run_id") or row["run_id"] or "").strip()
+    record["machine_id"] = str(record.get("machine_id") or row["machine_id"] or "").strip()
+    record["trace_id"] = str(record.get("trace_id") or row["trace_id"] or "").strip()
+    record["action"] = str(record.get("action") or row["action"] or "").strip().lower()
+    record["title"] = str(record.get("title") or row["title"] or "").strip() or None
+    record["text"] = str(record.get("text") or row["text"] or "").strip()
+    read_at = str(row["read_at"] or "").strip() if "read_at" in row.keys() else ""
+    record["read_at"] = read_at or None
+    return record
+
+
+def _normalize_notification_device_row(row: sqlite3.Row) -> Dict[str, Any]:
+    payload = _parse_json_blob(row["device_json"], {})
+    if not isinstance(payload, dict):
+        payload = {}
+    record = dict(payload)
+    record["device_id"] = str(record.get("device_id") or row["device_id"] or "").strip()
+    record["tenant_id"] = str(record.get("tenant_id") or row["tenant_id"] or "").strip()
+    record["workspace_id"] = str(record.get("workspace_id") or row["workspace_id"] or "").strip()
+    record["reader_key"] = str(record.get("reader_key") or row["reader_key"] or "").strip()
+    record["provider"] = str(record.get("provider") or row["provider"] or "").strip().lower()
+    record["push_token"] = str(record.get("push_token") or row["push_token"] or "").strip()
+    record["platform"] = str(record.get("platform") or row["platform"] or "").strip().lower() or None
+    record["app_id"] = str(record.get("app_id") or row["app_id"] or "").strip() or None
+    record["device_name"] = str(record.get("device_name") or row["device_name"] or "").strip() or None
+    record["status"] = str(record.get("status") or row["status"] or "").strip().lower() or "active"
+    record["last_registered_at"] = str(record.get("last_registered_at") or row["last_registered_at"] or "").strip()
+    record["last_delivered_at"] = str(record.get("last_delivered_at") or row["last_delivered_at"] or "").strip() or None
+    record["last_error"] = str(record.get("last_error") or row["last_error"] or "").strip() or None
+    capabilities = _parse_json_blob(row["capabilities_json"], [])
+    record["capabilities"] = capabilities if isinstance(capabilities, list) else []
+    return record
+
+
+def upsert_notification(db_path: Path, item: Dict[str, Any]) -> None:
+    notification_id = str(item.get("id") or "").strip()
+    if not notification_id:
+        return
+    created_at = str(item.get("ts") or item.get("created_at") or "").strip() or _utc_now_iso()
+    sort_ts = _parse_ts(created_at)
+    payload = json.dumps(item, ensure_ascii=False, separators=(",", ":"))
+    with _connect(db_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO notifications (
+                id, tenant_id, workspace_id, session_key, session_id, channel,
+                direction, event_type, run_id, machine_id, trace_id, action,
+                title, text, sort_ts, notification_json, created_at, persisted_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                tenant_id = excluded.tenant_id,
+                workspace_id = excluded.workspace_id,
+                session_key = excluded.session_key,
+                session_id = excluded.session_id,
+                channel = excluded.channel,
+                direction = excluded.direction,
+                event_type = excluded.event_type,
+                run_id = excluded.run_id,
+                machine_id = excluded.machine_id,
+                trace_id = excluded.trace_id,
+                action = excluded.action,
+                title = excluded.title,
+                text = excluded.text,
+                sort_ts = excluded.sort_ts,
+                notification_json = excluded.notification_json,
+                created_at = excluded.created_at,
+                persisted_at = excluded.persisted_at
+            """,
+            (
+                notification_id,
+                str(item.get("tenant_id") or "").strip(),
+                str(item.get("workspace_id") or "").strip(),
+                str(item.get("session_key") or "").strip(),
+                str(item.get("session_id") or "").strip(),
+                str(item.get("channel") or "").strip().lower(),
+                str(item.get("direction") or "").strip().lower(),
+                str(item.get("event_type") or "").strip().lower(),
+                str(item.get("run_id") or "").strip(),
+                str(item.get("machine_id") or "").strip(),
+                str(item.get("trace_id") or "").strip(),
+                str(item.get("action") or "").strip().lower(),
+                str(item.get("title") or "").strip() or None,
+                str(item.get("text") or ""),
+                sort_ts,
+                payload,
+                created_at,
+                _utc_now_iso(),
+            ),
+        )
+        conn.commit()
+
+
+def list_notifications(
+    db_path: Path,
+    *,
+    reader_key: str = "",
+    tenant_id: str = "",
+    workspace_id: str = "",
+    channel: str = "",
+    session_key: str = "",
+    direction: str = "",
+    action: str = "",
+    run_id: str = "",
+    trace_id: str = "",
+    limit: int = 80,
+) -> List[Dict[str, Any]]:
+    params: List[Any] = [str(reader_key or "").strip()]
+    clauses: List[str] = []
+    if str(tenant_id or "").strip():
+        clauses.append("n.tenant_id = ?")
+        params.append(str(tenant_id or "").strip())
+    if str(workspace_id or "").strip():
+        clauses.append("n.workspace_id = ?")
+        params.append(str(workspace_id or "").strip())
+    if str(channel or "").strip():
+        clauses.append("n.channel = ?")
+        params.append(str(channel or "").strip().lower())
+    if str(session_key or "").strip():
+        clauses.append("n.session_key = ?")
+        params.append(str(session_key or "").strip())
+    if str(direction or "").strip():
+        clauses.append("n.direction = ?")
+        params.append(str(direction or "").strip().lower())
+    if str(action or "").strip():
+        clauses.append("n.action = ?")
+        params.append(str(action or "").strip().lower())
+    if str(run_id or "").strip():
+        clauses.append("n.run_id = ?")
+        params.append(str(run_id or "").strip())
+    if str(trace_id or "").strip():
+        clauses.append("n.trace_id = ?")
+        params.append(str(trace_id or "").strip())
+    query = """
+        SELECT n.id, n.tenant_id, n.workspace_id, n.session_key, n.session_id,
+               n.channel, n.direction, n.event_type, n.run_id, n.machine_id,
+               n.trace_id, n.action, n.title, n.text, n.notification_json,
+               n.created_at, r.read_at
+        FROM notifications n
+        LEFT JOIN notification_reads r
+          ON n.id = r.notification_id
+         AND r.reader_key = ?
+    """
+    if clauses:
+        query += "\nWHERE " + " AND ".join(clauses)
+    query += "\nORDER BY n.sort_ts DESC\nLIMIT ?"
+    params.append(max(1, int(limit or 0)))
+    with _connect(db_path) as conn:
+        rows = conn.execute(query, tuple(params)).fetchall()
+    return [_normalize_notification_row(row) for row in rows]
+
+
+def list_notifications_by_ids(
+    db_path: Path,
+    *,
+    reader_key: str = "",
+    notification_ids: List[str],
+) -> List[Dict[str, Any]]:
+    normalized = [str(item or "").strip() for item in (notification_ids or []) if str(item or "").strip()]
+    if not normalized:
+        return []
+    placeholders = ", ".join("?" for _ in normalized)
+    query = f"""
+        SELECT n.id, n.tenant_id, n.workspace_id, n.session_key, n.session_id,
+               n.channel, n.direction, n.event_type, n.run_id, n.machine_id,
+               n.trace_id, n.action, n.title, n.text, n.notification_json,
+               n.created_at, r.read_at
+        FROM notifications n
+        LEFT JOIN notification_reads r
+          ON n.id = r.notification_id
+         AND r.reader_key = ?
+        WHERE n.id IN ({placeholders})
+        ORDER BY n.sort_ts DESC
+    """
+    params: List[Any] = [str(reader_key or "").strip(), *normalized]
+    with _connect(db_path) as conn:
+        rows = conn.execute(query, tuple(params)).fetchall()
+    return [_normalize_notification_row(row) for row in rows]
+
+
+def summarize_notification_sessions(
+    items: List[Dict[str, Any]],
+    *,
+    limit: Optional[int] = None,
+) -> List[Dict[str, Any]]:
+    sessions: Dict[str, Dict[str, Any]] = {}
+    ordered: List[str] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        session_key = (
+            str(item.get("session_key") or "").strip()
+            or (f"run:{str(item.get('run_id') or '').strip()}" if str(item.get("run_id") or "").strip() else "")
+            or (f"machine:{str(item.get('machine_id') or '').strip()}" if str(item.get("machine_id") or "").strip() else "")
+        )
+        if not session_key:
+            continue
+        if session_key not in sessions:
+            ordered.append(session_key)
+            sessions[session_key] = {
+                "session_key": session_key,
+                "workspace_id": str(item.get("workspace_id") or "").strip(),
+                "run_id": str(item.get("run_id") or "").strip() or None,
+                "machine_id": str(item.get("machine_id") or "").strip() or None,
+                "latest_text": str(item.get("text") or "").strip(),
+                "latest_action": str(item.get("action") or "").strip() or None,
+                "latest_ts": str(item.get("ts") or "").strip() or None,
+                "count": 0,
+                "unread_count": 0,
+            }
+        entry = sessions[session_key]
+        entry["count"] = int(entry.get("count") or 0) + 1
+        if not str(item.get("read_at") or "").strip():
+            entry["unread_count"] = int(entry.get("unread_count") or 0) + 1
+    out = [sessions[key] for key in ordered]
+    if isinstance(limit, int) and limit > 0:
+        return out[:limit]
+    return out
+
+
+def mark_notifications_read(
+    db_path: Path,
+    *,
+    reader_key: str,
+    notification_ids: Optional[List[str]] = None,
+    tenant_id: str = "",
+    workspace_id: str = "",
+    mark_all: bool = False,
+) -> Dict[str, Any]:
+    reader_token = str(reader_key or "").strip()
+    if not reader_token:
+        return {"marked_count": 0, "marked_ids": [], "read_at": None}
+    target_ids: List[str] = [
+        str(item or "").strip()
+        for item in (notification_ids or [])
+        if str(item or "").strip()
+    ]
+    if mark_all:
+        target_ids = [
+            str(item.get("id") or "").strip()
+            for item in list_notifications(
+                db_path,
+                reader_key=reader_token,
+                tenant_id=tenant_id,
+                workspace_id=workspace_id,
+                limit=500,
+            )
+            if isinstance(item, dict) and str(item.get("id") or "").strip()
+        ]
+    deduped: List[str] = []
+    seen: set[str] = set()
+    for item in target_ids:
+        if not item or item in seen:
+            continue
+        seen.add(item)
+        deduped.append(item)
+    if not deduped:
+        return {"marked_count": 0, "marked_ids": [], "read_at": None}
+    read_at = _utc_now_iso()
+    with _connect(db_path) as conn:
+        for notification_id in deduped:
+            row = conn.execute(
+                "SELECT tenant_id, workspace_id FROM notifications WHERE id = ?",
+                (notification_id,),
+            ).fetchone()
+            if row is None:
+                continue
+            conn.execute(
+                """
+                INSERT INTO notification_reads (
+                    notification_id, reader_key, tenant_id, workspace_id, read_at, persisted_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(notification_id, reader_key) DO UPDATE SET
+                    tenant_id = excluded.tenant_id,
+                    workspace_id = excluded.workspace_id,
+                    read_at = excluded.read_at,
+                    persisted_at = excluded.persisted_at
+                """,
+                (
+                    notification_id,
+                    reader_token,
+                    str(row["tenant_id"] or "").strip(),
+                    str(row["workspace_id"] or "").strip(),
+                    read_at,
+                    _utc_now_iso(),
+                ),
+            )
+        conn.commit()
+    return {"marked_count": len(deduped), "marked_ids": deduped, "read_at": read_at}
+
+
+def upsert_notification_device(db_path: Path, item: Dict[str, Any]) -> Dict[str, Any]:
+    device_id = str(item.get("device_id") or "").strip()
+    push_token = str(item.get("push_token") or "").strip()
+    provider = str(item.get("provider") or "expo").strip().lower() or "expo"
+    if not device_id or not push_token:
+        return {}
+    registered_at = str(item.get("last_registered_at") or item.get("registered_at") or "").strip() or _utc_now_iso()
+    capabilities = item.get("capabilities") if isinstance(item.get("capabilities"), list) else []
+    payload = dict(item)
+    payload["device_id"] = device_id
+    payload["push_token"] = push_token
+    payload["provider"] = provider
+    payload["status"] = str(item.get("status") or "active").strip().lower() or "active"
+    payload["last_registered_at"] = registered_at
+    with _connect(db_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO notification_devices (
+                device_id, tenant_id, workspace_id, reader_key, provider, push_token,
+                platform, app_id, device_name, status, capabilities_json, device_json,
+                last_registered_at, last_delivered_at, last_error, persisted_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(device_id) DO UPDATE SET
+                tenant_id = excluded.tenant_id,
+                workspace_id = excluded.workspace_id,
+                reader_key = excluded.reader_key,
+                provider = excluded.provider,
+                push_token = excluded.push_token,
+                platform = excluded.platform,
+                app_id = excluded.app_id,
+                device_name = excluded.device_name,
+                status = excluded.status,
+                capabilities_json = excluded.capabilities_json,
+                device_json = excluded.device_json,
+                last_registered_at = excluded.last_registered_at,
+                last_delivered_at = excluded.last_delivered_at,
+                last_error = excluded.last_error,
+                persisted_at = excluded.persisted_at
+            """,
+            (
+                device_id,
+                str(item.get("tenant_id") or "").strip(),
+                str(item.get("workspace_id") or "").strip(),
+                str(item.get("reader_key") or "").strip(),
+                provider,
+                push_token,
+                str(item.get("platform") or "").strip().lower() or None,
+                str(item.get("app_id") or "").strip() or None,
+                str(item.get("device_name") or "").strip() or None,
+                str(payload.get("status") or "active").strip().lower() or "active",
+                _json_blob(capabilities if isinstance(capabilities, list) else [], fallback="[]"),
+                _json_blob(payload, fallback="{}"),
+                registered_at,
+                str(item.get("last_delivered_at") or "").strip() or None,
+                str(item.get("last_error") or "").strip() or None,
+                _utc_now_iso(),
+            ),
+        )
+        conn.commit()
+    return payload
+
+
+def list_notification_devices(
+    db_path: Path,
+    *,
+    tenant_id: str = "",
+    workspace_id: str = "",
+    reader_key: str = "",
+    status: str = "",
+) -> List[Dict[str, Any]]:
+    clauses: List[str] = []
+    params: List[Any] = []
+    if str(tenant_id or "").strip():
+        clauses.append("tenant_id = ?")
+        params.append(str(tenant_id or "").strip())
+    if str(workspace_id or "").strip():
+        clauses.append("workspace_id = ?")
+        params.append(str(workspace_id or "").strip())
+    if str(reader_key or "").strip():
+        clauses.append("reader_key = ?")
+        params.append(str(reader_key or "").strip())
+    if str(status or "").strip():
+        clauses.append("status = ?")
+        params.append(str(status or "").strip().lower())
+    query = """
+        SELECT device_id, tenant_id, workspace_id, reader_key, provider, push_token,
+               platform, app_id, device_name, status, capabilities_json, device_json,
+               last_registered_at, last_delivered_at, last_error
+        FROM notification_devices
+    """
+    if clauses:
+        query += "\nWHERE " + " AND ".join(clauses)
+    query += "\nORDER BY last_registered_at DESC"
+    with _connect(db_path) as conn:
+        rows = conn.execute(query, tuple(params)).fetchall()
+    return [_normalize_notification_device_row(row) for row in rows]
+
+
+def update_notification_device_status(
+    db_path: Path,
+    device_id: str,
+    *,
+    status: Optional[str] = None,
+    last_error: Optional[str] = None,
+    last_delivered_at: Optional[str] = None,
+) -> None:
+    token = str(device_id or "").strip()
+    if not token:
+        return
+    assignments: List[str] = []
+    params: List[Any] = []
+    if status is not None:
+        assignments.append("status = ?")
+        params.append(str(status or "").strip().lower() or "active")
+    if last_error is not None:
+        assignments.append("last_error = ?")
+        params.append(str(last_error or "").strip() or None)
+    if last_delivered_at is not None:
+        assignments.append("last_delivered_at = ?")
+        params.append(str(last_delivered_at or "").strip() or None)
+    if not assignments:
+        return
+    assignments.append("persisted_at = ?")
+    params.append(_utc_now_iso())
+    params.append(token)
+    with _connect(db_path) as conn:
+        conn.execute(
+            f"UPDATE notification_devices SET {', '.join(assignments)} WHERE device_id = ?",
+            tuple(params),
+        )
+        conn.commit()
+
+
+def upsert_notification_delivery(
+    db_path: Path,
+    *,
+    notification_id: str,
+    device_id: str,
+    status: str,
+    delivered_at: Optional[str] = None,
+    last_error: Optional[str] = None,
+) -> None:
+    notification_token = str(notification_id or "").strip()
+    device_token = str(device_id or "").strip()
+    if not notification_token or not device_token:
+        return
+    with _connect(db_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO notification_deliveries (
+                notification_id, device_id, status, delivered_at, last_error, persisted_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(notification_id, device_id) DO UPDATE SET
+                status = excluded.status,
+                delivered_at = excluded.delivered_at,
+                last_error = excluded.last_error,
+                persisted_at = excluded.persisted_at
+            """,
+            (
+                notification_token,
+                device_token,
+                str(status or "").strip().lower() or "pending",
+                str(delivered_at or "").strip() or None,
+                str(last_error or "").strip() or None,
+                _utc_now_iso(),
+            ),
+        )
+        conn.commit()
+
+
+def list_notification_delivery_statuses(
+    db_path: Path,
+    *,
+    notification_id: str,
+) -> Dict[str, Dict[str, Any]]:
+    notification_token = str(notification_id or "").strip()
+    if not notification_token:
+        return {}
+    with _connect(db_path) as conn:
+        rows = conn.execute(
+            """
+            SELECT notification_id, device_id, status, delivered_at, last_error
+            FROM notification_deliveries
+            WHERE notification_id = ?
+            """,
+            (notification_token,),
+        ).fetchall()
+    out: Dict[str, Dict[str, Any]] = {}
+    for row in rows:
+        device_id = str(row["device_id"] or "").strip()
+        if not device_id:
+            continue
+        out[device_id] = {
+            "notification_id": notification_token,
+            "device_id": device_id,
+            "status": str(row["status"] or "").strip().lower() or "pending",
+            "delivered_at": str(row["delivered_at"] or "").strip() or None,
+            "last_error": str(row["last_error"] or "").strip() or None,
+        }
     return out

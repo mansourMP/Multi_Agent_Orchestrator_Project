@@ -8,6 +8,8 @@ import type {
   ConnectorListResponse,
   HealthResponse,
   MachineListResponse,
+  NotificationDeviceRegistrationRequest,
+  NotificationDeviceRegistrationResponse,
   NotificationListResponse,
   NotificationReadRequest,
   NotificationReadResponse,
@@ -288,6 +290,16 @@ export function createApiClient(init: ApiClientInit = {}) {
 
     markNotificationsRead(request: NotificationReadRequest): Promise<NotificationReadResponse> {
       return jsonRequest<NotificationReadResponse>("/notifications", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(request),
+      });
+    },
+
+    registerNotificationDevice(
+      request: NotificationDeviceRegistrationRequest,
+    ): Promise<NotificationDeviceRegistrationResponse> {
+      return jsonRequest<NotificationDeviceRegistrationResponse>("/notifications/devices", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(request),

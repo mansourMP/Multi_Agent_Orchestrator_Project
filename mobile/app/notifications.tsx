@@ -39,6 +39,9 @@ export default function NotificationsScreen() {
   const updatedLabel = notificationState.updatedAt
     ? new Date(notificationState.updatedAt).toLocaleString()
     : "Not registered yet";
+  const runtimeRegisteredLabel = notificationState.runtimeRegistration?.registeredAt
+    ? new Date(notificationState.runtimeRegistration.registeredAt).toLocaleString()
+    : "Not registered with runtime yet";
 
   return (
     <MobileScreen>
@@ -72,6 +75,12 @@ export default function NotificationsScreen() {
             value={notificationState.expoPushToken || "Not registered yet."}
             multiline
           />
+          <DetailRow label="Device ID" value={notificationState.deviceId || "Not assigned yet."} multiline />
+          <DetailRow
+            label="Runtime registration"
+            value={notificationState.runtimeRegistration?.status || "Not registered"}
+          />
+          <DetailRow label="Runtime sync" value={runtimeRegisteredLabel} />
           <DetailRow label="Last updated" value={updatedLabel} />
 
           {notificationState.error ? (
@@ -85,7 +94,7 @@ export default function NotificationsScreen() {
               onPress={async () => {
                 setBusy(true);
                 try {
-                  const nextState = await registerForPushNotificationsAsync();
+                  const nextState = await registerForPushNotificationsAsync(session);
                   setNotificationState(nextState);
                 } finally {
                   setBusy(false);

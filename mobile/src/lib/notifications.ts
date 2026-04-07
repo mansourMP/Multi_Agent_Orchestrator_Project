@@ -11,6 +11,13 @@ const RUNTIME_SYNC_STORAGE_KEY = "empyralis.mobile.notifications.runtime-sync.v1
 export type StoredNotificationState = {
   permissionStatus: Notifications.PermissionStatus | "undetermined";
   expoPushToken?: string;
+  deviceId?: string;
+  runtimeRegistration?: {
+    status?: string;
+    workspaceId?: string;
+    tenantId?: string;
+    registeredAt?: string;
+  };
   error?: string;
   updatedAt?: number;
 };
@@ -39,6 +46,10 @@ Notifications.setNotificationHandler({
 
 async function persist(state: StoredNotificationState) {
   await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+}
+
+function buildLocalDeviceId() {
+  return `mobile-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
 async function getRuntimeSyncState(): Promise<RuntimeSyncState> {
@@ -75,6 +86,17 @@ export async function getStoredNotificationState(): Promise<StoredNotificationSt
   }
 }
 
+async function ensureStoredDeviceId(existing?: string): Promise<string> {
+  const current = String(existing || "").trim();
+  if (current) return current;
+  const state = await getStoredNotificationState();
+  const fromState = String(state.deviceId || "").trim();
+  if (fromState) return fromState;
+  const nextId = buildLocalDeviceId();
+  await persist({ ...state, deviceId: nextId, updatedAt: Date.now() });
+  return nextId;
+}
+
 export async function configureNotificationChannelAsync() {
   if (Platform.OS !== "android") return;
 
@@ -90,7 +112,7 @@ function getProjectId() {
   return Constants?.expoConfig?.extra?.eas?.projectId ?? Constants?.easConfig?.projectId ?? null;
 }
 
-export async function registerForPushNotificationsAsync(): Promise<StoredNotificationState> {
+export async function registerForPushNotificationsAsync(session?: MobileSession | null): Promise<StoredNotificationState> {
   await configureNotificationChannelAsync();
 
   const permissions = await Notifications.getPermissionsAsync();
@@ -116,6 +138,7 @@ export async function registerForPushNotificationsAsync(): Promise<StoredNotific
     if (!projectId) {
       const noProjectId: StoredNotificationState = {
         permissionStatus: finalStatus,
+        deviceId: await ensureStoredDeviceId(),
         error: "Expo projectId is missing. Add EAS project configuration before requesting a push token.",
         updatedAt: Date.now(),
       };
@@ -124,16 +147,40 @@ export async function registerForPushNotificationsAsync(): Promise<StoredNotific
     }
 
     const token = (await Notifications.getExpoPushTokenAsync({ projectId })).data;
+    const deviceId = await ensureStoredDeviceId();
     const nextState: StoredNotificationState = {
       permissionStatus: finalStatus,
       expoPushToken: token,
+      deviceId,
       updatedAt: Date.now(),
     };
+    if (session?.runtimeUrl && session?.runtimeKey) {
+      try {
+        const registration = await mobileApi.registerNotificationDevice(session, {
+          device_id: deviceId,
+          push_token: token,
+          provider: "expo",
+          platform: Platform.OS,
+          device_name: `${Platform.OS} mobile`,
+          app_id: "kin-mobile",
+          capabilities: ["push"],
+        });
+        nextState.runtimeRegistration = {
+          status: registration.status,
+          workspaceId: registration.workspace_id,
+          tenantId: registration.tenant_id ?? undefined,
+          registeredAt: registration.registered_at ?? undefined,
+        };
+      } catch (error) {
+        nextState.error = error instanceof Error ? error.message : "Runtime device registration failed.";
+      }
+    }
     await persist(nextState);
     return nextState;
   } catch (error) {
     const failedState: StoredNotificationState = {
       permissionStatus: finalStatus,
+      deviceId: await ensureStoredDeviceId(),
       error: error instanceof Error ? error.message : "Could not fetch Expo push token.",
       updatedAt: Date.now(),
     };
@@ -143,9 +190,12 @@ export async function registerForPushNotificationsAsync(): Promise<StoredNotific
 }
 
 export async function syncRuntimeNotifications(session: MobileSession): Promise<number> {
-  const permission = await getStoredNotificationState();
+  let permission = await getStoredNotificationState();
   if (permission.permissionStatus !== "granted") {
     return 0;
+  }
+  if (!permission.expoPushToken || !permission.deviceId || !permission.runtimeRegistration?.registeredAt) {
+    permission = await registerForPushNotificationsAsync(session);
   }
 
   const syncState = await getRuntimeSyncState();
@@ -160,24 +210,9 @@ export async function syncRuntimeNotifications(session: MobileSession): Promise<
     const id = String(item?.id ?? "");
     return id && !delivered.has(id);
   });
-
-  for (const item of fresh.reverse()) {
+  for (const item of fresh) {
     const id = String(item?.id ?? "");
-    const title = String(item?.action || item?.channel || "Empyralis");
-    const body = String(item?.text || "A runtime event needs your attention.");
-    await Notifications.scheduleNotificationAsync({
-      content: {
-        title,
-        body,
-        data: {
-          path: item?.run_id ? `/approvals` : "/notifications",
-          runId: item?.run_id ?? undefined,
-          notificationId: id,
-        },
-      },
-      trigger: null,
-    });
-    delivered.add(id);
+    if (id) delivered.add(id);
   }
 
   await persistRuntimeSyncState({

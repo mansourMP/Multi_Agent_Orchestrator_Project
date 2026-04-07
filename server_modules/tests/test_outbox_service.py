@@ -3,6 +3,7 @@ import queue
 import threading
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from server_modules import outbox_service
 from server_modules import runtime_events
@@ -216,8 +217,9 @@ class OutboxServiceTests(unittest.TestCase):
                 created_at="2026-04-07T00:00:00Z",
             )
 
-            outbox_service.deliver_outbox_event(event, append_channel_event_item_fn=runtime_events.append_channel_event_item)
-            outbox_service.deliver_outbox_event(event, append_channel_event_item_fn=runtime_events.append_channel_event_item)
+            with patch("server_modules.notification_service.deliver_notification_from_outbox_event", return_value=None):
+                outbox_service.deliver_outbox_event(event, append_channel_event_item_fn=runtime_events.append_channel_event_item)
+                outbox_service.deliver_outbox_event(event, append_channel_event_item_fn=runtime_events.append_channel_event_item)
 
             self.assertEqual(len(channel_events), 1)
             self.assertEqual(channel_events[0]["id"], "evt-1")

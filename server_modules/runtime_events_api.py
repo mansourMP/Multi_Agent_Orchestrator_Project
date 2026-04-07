@@ -294,39 +294,44 @@ def register_inbox_routes(app) -> None:
         timeout_seconds: float = 25.0,
         current_user=Depends(require_api_key),
     ):
-        if stream:
-            from server_modules.auth import enforce_workspace_access
-            from server_modules.auth import allowed_workspace_ids
+        from server_modules.auth import allowed_workspace_ids, enforce_workspace_access
+        from server_modules import notification_service
 
-            requested_workspace_id = (
-                enforce_workspace_access(current_user, workspace_id, tenant_id=tenant_id, minimum_role="viewer")
-                if workspace_id
-                else None
+        requested_workspace_id = (
+            enforce_workspace_access(current_user, workspace_id, tenant_id=tenant_id, minimum_role="viewer")
+            if workspace_id
+            else None
+        )
+        allowed_workspaces = allowed_workspace_ids(current_user)
+        if stream:
+            safe_heartbeat = max(1.0, min(float(heartbeat_seconds), 60.0))
+            return EventSourceResponse(
+                notification_service.iter_notifications_stream(
+                    reader_key=notification_service.reader_key_for_current_user(current_user),
+                    allowed_workspace_ids=allowed_workspaces,
+                    workspace_id=requested_workspace_id,
+                    tenant_id=tenant_id,
+                    channel=channel,
+                    session_key=session_key,
+                    direction=direction,
+                    action=action,
+                    run_id=run_id,
+                    trace_id=trace_id,
+                    since_id=since_id,
+                    since_ts=since_ts,
+                    include_backlog=include_backlog,
+                    poll_seconds=poll_seconds,
+                    heartbeat_seconds=heartbeat_seconds,
+                    timeout_seconds=timeout_seconds,
+                    limit=limit,
+                ),
+                ping=max(3, int(safe_heartbeat)),
             )
-            allowed_workspaces = allowed_workspace_ids(current_user)
-            return _notification_stream_response(
-                allowed_workspaces=allowed_workspaces,
-                tenant_id=tenant_id,
-                workspace_id=requested_workspace_id,
-                channel=channel,
-                session_key=session_key,
-                direction=direction,
-                action=action,
-                run_id=run_id,
-                trace_id=trace_id,
-                since_id=since_id,
-                since_ts=since_ts,
-                include_backlog=include_backlog,
-                poll_seconds=poll_seconds,
-                heartbeat_seconds=heartbeat_seconds,
-                timeout_seconds=timeout_seconds,
-                limit=limit,
-            )
-        return _notification_payload(
-            limit=limit,
+        return notification_service.list_notification_payload(
             current_user=current_user,
+            limit=limit,
             tenant_id=tenant_id,
-            workspace_id=workspace_id,
+            workspace_id=requested_workspace_id,
             channel=channel,
             session_key=session_key,
             direction=direction,
@@ -339,6 +344,8 @@ def register_inbox_routes(app) -> None:
 
     @app.post("/notifications", dependencies=[Depends(require_api_key)])
     async def mark_notifications_read(body: Optional[Dict[str, Any]] = None, current_user=Depends(require_api_key)):
+        from server_modules import notification_service
+
         payload = body if isinstance(body, dict) else {}
         notification_ids = payload.get("notification_ids")
         tenant_id = payload.get("tenant_id")
@@ -346,12 +353,39 @@ def register_inbox_routes(app) -> None:
         mark_all = bool(payload.get("mark_all"))
         if not mark_all and not isinstance(notification_ids, list):
             raise HTTPException(status_code=400, detail="notification_ids or mark_all is required.")
-        return _mark_notifications_read(
+        return notification_service.mark_notifications_read(
             current_user=current_user,
             notification_ids=notification_ids if isinstance(notification_ids, list) else None,
             tenant_id=str(tenant_id or "").strip() or None,
             workspace_id=str(workspace_id or "").strip() or None,
             mark_all=mark_all,
+        )
+
+    @app.post("/notifications/devices", dependencies=[Depends(require_api_key)])
+    async def register_notification_device(body: Optional[Dict[str, Any]] = None, current_user=Depends(require_api_key)):
+        from server_modules import notification_service
+
+        payload = body if isinstance(body, dict) else {}
+        workspace_id = str(payload.get("workspace_id") or "").strip()
+        device_id = str(payload.get("device_id") or "").strip()
+        push_token = str(payload.get("push_token") or "").strip()
+        if not workspace_id:
+            raise HTTPException(status_code=400, detail="workspace_id is required.")
+        if not device_id:
+            raise HTTPException(status_code=400, detail="device_id is required.")
+        if not push_token:
+            raise HTTPException(status_code=400, detail="push_token is required.")
+        capabilities = payload.get("capabilities")
+        return notification_service.register_notification_device(
+            current_user=current_user,
+            workspace_id=workspace_id,
+            device_id=device_id,
+            push_token=push_token,
+            provider=str(payload.get("provider") or "expo").strip() or "expo",
+            platform=str(payload.get("platform") or "").strip(),
+            device_name=str(payload.get("device_name") or "").strip(),
+            app_id=str(payload.get("app_id") or "").strip(),
+            capabilities=capabilities if isinstance(capabilities, list) else None,
         )
 
     @app.get("/events/inbox/sessions", dependencies=[Depends(require_api_key)])

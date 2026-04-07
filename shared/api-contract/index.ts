@@ -203,15 +203,18 @@ export type ConnectorListResponse = Record<string, unknown> & {
 export type NotificationItem = {
   id?: string | null;
   ts?: string | null;
+  title?: string | null;
   channel?: string | null;
   direction?: string | null;
   event_type?: string | null;
+  tenant_id?: string | null;
   workspace_id?: string | null;
   session_key?: string | null;
   session_id?: string | null;
   message_id?: string | null;
   parent_id?: string | null;
   run_id?: string | null;
+  machine_id?: string | null;
   trace_id?: string | null;
   action?: string | null;
   text?: string | null;
@@ -238,6 +241,28 @@ export type NotificationReadResponse = {
   status?: string;
   marked_count: number;
   marked_ids: string[];
+  read_at?: string | null;
+};
+
+export type NotificationDeviceRegistrationRequest = {
+  workspace_id: string;
+  device_id: string;
+  push_token: string;
+  provider?: string;
+  platform?: string | null;
+  device_name?: string | null;
+  app_id?: string | null;
+  capabilities?: string[];
+};
+
+export type NotificationDeviceRegistrationResponse = {
+  ok: boolean;
+  device_id: string;
+  workspace_id: string;
+  tenant_id?: string | null;
+  status: string;
+  registered_at?: string | null;
+  provider?: string | null;
 };
 
 export type HealthResponse = Record<string, unknown> & {

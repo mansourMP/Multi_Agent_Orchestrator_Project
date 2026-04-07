@@ -417,6 +417,7 @@ def deliver_outbox_event(
         direction="system",
         event_type=event.event_type,
         text=text,
+        tenant_id=event.tenant_id,
         workspace_id=event.workspace_id,
         session_key=session_key,
         session_id=session_key,
@@ -428,6 +429,12 @@ def deliver_outbox_event(
         event_id=event.event_id,
         occurred_at=event.created_at or payload.get("emitted_at"),
     )
+    try:
+        from server_modules import notification_service
+
+        notification_service.deliver_notification_from_outbox_event(event)
+    except Exception:
+        raise
     return True
 
 

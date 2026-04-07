@@ -6,7 +6,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { useAppTheme as useTheme } from "@/src/theme/useAppTheme";
 import { useSessionState } from "@/src/lib/session-context";
-import { mobileApi } from "@/src/lib/api";
+import { appRegistryApi } from "@/src/lib/appRegistryApi";
 import { useTransientBanner } from "@/src/lib/useTransientBanner";
 import { useAppContextStore } from "@/src/stores/appContextStore";
 import { getCatalogApp } from "@/src/lib/appCatalog";
@@ -35,8 +35,8 @@ export default function AppDetailScreen() {
       const appId = String(params.id);
 
       const [coreManifest, platformManifest] = await Promise.all([
-        coreReady ? mobileApi.getAppManifest(session!, appId).catch(() => ({ item: null })) : Promise.resolve({ item: null }),
-        platformReady ? mobileApi.getPlatformAppManifest(session!, appId).catch(() => ({ item: null })) : Promise.resolve({ item: null }),
+        coreReady ? appRegistryApi.getAppManifest(session!, appId).catch(() => ({ item: null })) : Promise.resolve({ item: null }),
+        platformReady ? appRegistryApi.getPlatformAppManifest(session!, appId).catch(() => ({ item: null })) : Promise.resolve({ item: null }),
       ]);
 
       const normalizedCore = normalizeAppRecord(coreManifest.item, "core");
@@ -185,7 +185,7 @@ export default function AppDetailScreen() {
                 router.push("/session");
                 return;
               }
-              await mobileApi.installApp(session, app.id, {
+              await appRegistryApi.installApp(session, app.id, {
                 packageId: app.packageId,
                 releaseChannel: app.releaseChannel,
                 source: app.source,
@@ -209,7 +209,7 @@ export default function AppDetailScreen() {
             }}
             onPress={async () => {
               if (!session?.runtimeUrl || !session?.runtimeKey) return;
-              await mobileApi.updateApp(session, app.id, {
+              await appRegistryApi.updateApp(session, app.id, {
                 packageId: app.packageId,
                 releaseChannel: app.releaseChannel,
                 source: app.source,
@@ -247,7 +247,7 @@ export default function AppDetailScreen() {
             }}
             onPress={async () => {
               if (!session?.runtimeUrl || !session?.runtimeKey) return;
-              await mobileApi.uninstallApp(session, app.id);
+              await appRegistryApi.uninstallApp(session, app.id);
               showBanner("Uninstalled.", "success");
               if (activeApp?.id === app.id) {
                 clearActiveApp();

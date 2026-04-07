@@ -5,7 +5,7 @@ import { useRouter } from "expo-router";
 import { PrimaryScreenHeader } from "@/src/components/navigation/PrimaryScreenHeader";
 import { useAppTheme as useTheme } from "@/src/theme/useAppTheme";
 import { useSessionState } from "@/src/lib/session-context";
-import { mobileApi } from "@/src/lib/api";
+import { appRegistryApi } from "@/src/lib/appRegistryApi";
 import { getDefaultInstalledApps } from "@/src/lib/appCatalog";
 import { BrandedAppIcon } from "@/src/components/apps/BrandedAppIcon";
 import { normalizeAppRecord } from "@/src/lib/appRegistry";
@@ -101,7 +101,7 @@ export default function AppsScreen() {
       return;
     }
     try {
-      const [installedRes] = await Promise.all([mobileApi.getInstalledApps(session)]);
+      const [installedRes] = await Promise.all([appRegistryApi.getInstalledApps(session)]);
       setInstalled(
         (installedRes.items ?? [])
           .map((app: any) => normalizeAppRecord(app, "core"))

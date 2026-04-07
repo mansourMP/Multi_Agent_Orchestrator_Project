@@ -502,6 +502,76 @@ def register_run_routes(app) -> None:
             parse_utc_ts=_late_server_export("_parse_utc_ts"),
         )
 
+    @app.get("/approvals", dependencies=[Depends(_server.require_api_key)])
+    async def list_approvals(
+        workspace_id: Optional[str] = None,
+        current_user=Depends(_server.require_api_key),
+    ):
+        _refresh_server_exports()
+        request_user_id = str((current_user or {}).get("user_id") or "").strip()
+        include_all = _current_user_is_privileged(current_user)
+        if not include_all and not request_user_id:
+            from fastapi import HTTPException
+
+            raise HTTPException(status_code=401, detail="Authenticated user id is required.")
+
+        items: list[dict[str, Any]] = []
+        for run in run_state_repository.sync_list_live_runs():
+            if not isinstance(run, dict):
+                continue
+            run_id = str(run.get("run_id") or "").strip()
+            if not run_id:
+                continue
+            if not include_all and _extract_run_owner_user_id(run) != request_user_id:
+                continue
+            context = run.get("context") if isinstance(run.get("context"), dict) else {}
+            metadata = context.get("metadata") if isinstance(context.get("metadata"), dict) else {}
+            run_workspace_id = str(
+                run.get("workspace_id")
+                or context.get("workspace_id")
+                or "default"
+            ).strip() or "default"
+            if workspace_id and run_workspace_id != str(workspace_id).strip():
+                continue
+            pending = (
+                run.get("pending_confirmation")
+                if isinstance(run.get("pending_confirmation"), dict)
+                else run.get("pending_approval")
+                if isinstance(run.get("pending_approval"), dict)
+                else None
+            )
+            if not isinstance(pending, dict):
+                continue
+            approval_id = str(pending.get("approval_id") or "").strip()
+            if not approval_id:
+                continue
+            items.append(
+                {
+                    "approval_id": approval_id,
+                    "run_id": run_id,
+                    "workspace_id": run_workspace_id,
+                    "status": str(pending.get("status") or "pending").strip().lower() or "pending",
+                    "action": (
+                        str(pending.get("action") or "").strip()
+                        or str((pending.get("metadata") or {}).get("kind") or "").strip()
+                        or str(metadata.get("agent_role") or "").strip()
+                        or "Approval"
+                    ),
+                    "summary": str(pending.get("prompt") or pending.get("reason") or "Approval required.").strip(),
+                    "requested_at": pending.get("requested_at") or pending.get("created_at") or run.get("updated_at"),
+                    "expires_at": pending.get("expires_at"),
+                    "correlation_id": pending.get("correlation_id"),
+                }
+            )
+        items.sort(key=lambda item: str(item.get("requested_at") or ""), reverse=True)
+        return {
+            "items": items,
+            "pending": items,
+            "count": len(items),
+            "total": len(items),
+            "workspace_id": str(workspace_id or "default").strip() or "default",
+        }
+
     @app.post("/sessions", dependencies=[Depends(_server.require_api_key)], response_model=ApiSessionResponse)
     async def create_runtime_session(
         body: ApiSessionRequest,

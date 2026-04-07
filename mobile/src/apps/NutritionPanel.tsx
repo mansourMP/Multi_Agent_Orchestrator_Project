@@ -2,8 +2,8 @@ import React from "react";
 import { Text, View } from "react-native";
 
 import { useAppTheme as useTheme } from "@/src/theme/useAppTheme";
-import { mobileApi } from "@/src/lib/api";
 import { MobileSession } from "@/src/lib/types";
+import { workspaceApi } from "@/src/lib/workspaceApi";
 
 type NutritionPanelProps = {
   session: MobileSession;
@@ -20,7 +20,7 @@ export function NutritionPanel({ session }: NutritionPanelProps) {
       if (!session?.runtimeUrl || !session?.runtimeKey) return;
       try {
         setLoading(true);
-        const res = await mobileApi.readFile(session, "nutrition_log.txt");
+        const res = await workspaceApi.readFile(session, "nutrition_log.txt");
         const content = String(res?.content ?? "");
         const lines = content
           .split("\n")

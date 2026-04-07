@@ -7,7 +7,7 @@ import { BrandedAppIcon } from "@/src/components/apps/BrandedAppIcon";
 import { PrimaryScreenHeader } from "@/src/components/navigation/PrimaryScreenHeader";
 import { getPrimaryAgent } from "@/src/lib/agents";
 import { getPreviewAppRecord, normalizeAppRecord } from "@/src/lib/appRegistry";
-import { mobileApi } from "@/src/lib/api";
+import { appRegistryApi } from "@/src/lib/appRegistryApi";
 import { useKinPreferences } from "@/src/lib/kin-preferences";
 import {
   formatRelativeTime,
@@ -65,7 +65,7 @@ export default function HomeScreen() {
       }
 
       try {
-        const installedRes = await mobileApi.getInstalledApps(session);
+        const installedRes = await appRegistryApi.getInstalledApps(session);
         const installedById = new Map(
           (installedRes.items ?? [])
             .map((app: any) => normalizeAppRecord(app, "core"))

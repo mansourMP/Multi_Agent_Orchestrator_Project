@@ -4,9 +4,9 @@ import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
+import { appRegistryApi } from "@/src/lib/appRegistryApi";
 import { useAppTheme as useTheme } from "@/src/theme/useAppTheme";
 import { useSessionState } from "@/src/lib/session-context";
-import { mobileApi } from "@/src/lib/api";
 import { useTransientBanner } from "@/src/lib/useTransientBanner";
 import { getCatalogApp, getDefaultInstalledApps, getDefaultStoreApps } from "@/src/lib/appCatalog";
 import { BrandedAppIcon } from "@/src/components/apps/BrandedAppIcon";
@@ -114,9 +114,9 @@ export default function AppStoreScreen() {
 
     try {
       const [storeRes, updatesRes, installedRes] = await Promise.all([
-        hasPlatform ? mobileApi.getPlatformStoreApps(session!) : Promise.resolve({ items: [] }),
-        hasCore ? mobileApi.getAppUpdates(session!) : Promise.resolve({ items: [] }),
-        hasCore ? mobileApi.getInstalledApps(session!) : Promise.resolve({ items: [] }),
+        hasPlatform ? appRegistryApi.getPlatformStoreApps(session!) : Promise.resolve({ items: [] }),
+        hasCore ? appRegistryApi.getAppUpdates(session!) : Promise.resolve({ items: [] }),
+        hasCore ? appRegistryApi.getInstalledApps(session!) : Promise.resolve({ items: [] }),
       ]);
       const nextStore = (storeRes.items ?? [])
         .map((item: any) => normalizeAppRecord(item, "platform"))
@@ -205,7 +205,7 @@ export default function AppStoreScreen() {
       }
 
       if (needsUpdate) {
-        await mobileApi.updateApp(session, app.id, getInstallMetadata(app));
+        await appRegistryApi.updateApp(session, app.id, getInstallMetadata(app));
         showBanner(`Updated ${app.name}.`, "success");
         await refresh();
         return;
@@ -216,7 +216,7 @@ export default function AppStoreScreen() {
         return;
       }
 
-      await mobileApi.installApp(session, app.id, getInstallMetadata(app));
+      await appRegistryApi.installApp(session, app.id, getInstallMetadata(app));
       showBanner(`Installed ${app.name}.`, "success");
       await refresh();
     },

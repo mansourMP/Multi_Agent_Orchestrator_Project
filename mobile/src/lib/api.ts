@@ -1,7 +1,7 @@
 import Constants from "expo-constants";
 
 import type { AgentTurnRequest, AgentTurnResponse } from "../../../frontend/lib/api-contract";
-import type { AgentSummary, ApprovalSummary, ArtifactSummary, MobileSession, RunSummary } from "./types";
+import type { ApprovalSummary, ArtifactSummary, MobileSession, RunSummary } from "./types";
 
 const extra = (Constants.expoConfig?.extra ?? {}) as {
   runtimeUrl?: string;
@@ -54,12 +54,6 @@ export function getDefaultWorkspaceId() {
 export function getDefaultPlatformUrl() {
   return process.env.EXPO_PUBLIC_PLATFORM_URL || extra.platformUrl || "";
 }
-
-type AppInstallMetadata = {
-  packageId?: string;
-  releaseChannel?: string;
-  source?: "core" | "platform" | "preview";
-};
 
 export type EmpyralistChatPriorMessage = {
   role: "user" | "assistant";
@@ -366,53 +360,22 @@ export const mobileApi = {
   getRun(session: MobileSession, runId: string) {
     return request<any>(session, `/runs/${encodeURIComponent(runId)}`);
   },
-  listFiles(session: MobileSession, path?: string) {
-    const query = path ? `?path=${encodeURIComponent(path)}` : "";
-    return request<any>(session, `/files/list${query}`);
-  },
-  readFile(session: MobileSession, path: string) {
-    return request<any>(session, `/files/read?path=${encodeURIComponent(path)}`);
-  },
-  writeFile(
-    session: MobileSession,
-    payload: { path: string; content: string; overwrite?: boolean },
-  ) {
-    return request<any>(session, "/files/write", {
-      method: "POST",
-      body: JSON.stringify({ ...payload, workspace_id: session.workspaceId }),
-    });
-  },
-  deleteFileRequest(session: MobileSession, path: string) {
-    return request<any>(session, "/files/delete_request", {
-      method: "POST",
-      body: JSON.stringify({ path, workspace_id: session.workspaceId }),
-    });
-  },
-  executeDeviceAction(session: MobileSession, payload: { action: string; args?: Record<string, any> }) {
-    return request<any>(session, "/device/execute", {
-      method: "POST",
-      body: JSON.stringify({ ...payload, workspace_id: session.workspaceId }),
-    });
-  },
-  getAudit(session: MobileSession, limit = 100) {
-    return request<any>(session, `/audit?limit=${encodeURIComponent(String(limit))}`);
-  },
-  getAgentSnapshot(session: MobileSession) {
-    return request<{ agents?: AgentSummary[] }>(
-      session,
-      `/agents/workspace/snapshot?workspace_id=${encodeURIComponent(session.workspaceId)}`,
-    );
-  },
   getCoreStatus(session: MobileSession) {
-    return request<any>(
-      session,
-      `/agents/workspace/snapshot?workspace_id=${encodeURIComponent(session.workspaceId)}&history_limit=1&audit_limit=1`,
-    );
+    return request<any>(session, "/health").then((payload) => ({
+      ok: Boolean(payload?.ok),
+      runtime: {
+        ok: Boolean(payload?.ok),
+        model_name: payload?.codex_model ?? payload?.model_name ?? payload?.model ?? null,
+        model: payload?.model ?? payload?.codex_model ?? null,
+        modelId: payload?.modelId ?? payload?.model_id ?? payload?.codex_model ?? null,
+        model_id: payload?.model_id ?? payload?.modelId ?? payload?.codex_model ?? null,
+      },
+    }));
   },
   getRuns(session: MobileSession) {
     return request<{ items?: RunSummary[] }>(
       session,
-      `/history/runs?workspace_id=${encodeURIComponent(session.workspaceId)}`,
+      `/runs?workspace_id=${encodeURIComponent(session.workspaceId)}`,
     );
   },
   getApprovals(session: MobileSession) {
@@ -426,65 +389,6 @@ export const mobileApi = {
       session,
       `/artifacts?workspace_id=${encodeURIComponent(session.workspaceId)}`,
     );
-  },
-  getAppsRegistry(session: MobileSession) {
-    return request<{ items?: any[] }>(session, "/apps/registry");
-  },
-  getInstalledApps(session: MobileSession) {
-    return request<{ items?: any[] }>(session, "/apps/installed");
-  },
-  getStoreApps(session: MobileSession) {
-    return request<{ items?: any[] }>(session, "/apps/store");
-  },
-  getPlatformStoreApps(session: MobileSession) {
-    if (!session.platformUrl) {
-      throw new Error("Platform registry not configured");
-    }
-    return requestBase<{ items?: any[] }>(session.platformUrl, session.platformKey, "/apps/store");
-  },
-  getPlatformAppManifest(session: MobileSession, appId: string) {
-    if (!session.platformUrl) {
-      throw new Error("Platform registry not configured");
-    }
-    return requestBase<{ item?: any }>(
-      session.platformUrl,
-      session.platformKey,
-      `/apps/manifest/${encodeURIComponent(appId)}`,
-    );
-  },
-  getAppUpdates(session: MobileSession) {
-    return request<{ items?: any[] }>(session, "/apps/updates");
-  },
-  getAppManifest(session: MobileSession, appId: string) {
-    return request<{ item?: any }>(session, `/apps/manifest/${encodeURIComponent(appId)}`);
-  },
-  installApp(session: MobileSession, appId: string, metadata?: AppInstallMetadata) {
-    return request<any>(session, "/apps/install", {
-      method: "POST",
-      body: JSON.stringify({
-        app_id: appId,
-        package_id: metadata?.packageId,
-        release_channel: metadata?.releaseChannel,
-        install_source: metadata?.source,
-      }),
-    });
-  },
-  uninstallApp(session: MobileSession, appId: string) {
-    return request<any>(session, "/apps/uninstall", {
-      method: "POST",
-      body: JSON.stringify({ app_id: appId }),
-    });
-  },
-  updateApp(session: MobileSession, appId: string, metadata?: AppInstallMetadata) {
-    return request<any>(session, "/apps/update", {
-      method: "POST",
-      body: JSON.stringify({
-        app_id: appId,
-        package_id: metadata?.packageId,
-        release_channel: metadata?.releaseChannel,
-        install_source: metadata?.source,
-      }),
-    });
   },
   createRun(
     session: MobileSession,
@@ -523,10 +427,11 @@ export const mobileApi = {
     approvalId: string,
     decision: "approved" | "held" | "rejected",
   ) {
-    const mapped = decision === "approved" ? "proceed" : decision === "held" ? "hold" : "reject";
-    return request(session, `/runs/${encodeURIComponent(runId)}/approvals/${encodeURIComponent(approvalId)}/resolve`, {
+    void runId;
+    const mapped = decision === "approved" ? "approved" : "rejected";
+    return request(session, `/approvals/${encodeURIComponent(approvalId)}/resolve`, {
       method: "POST",
-      body: JSON.stringify({ decision: mapped }),
+      body: JSON.stringify({ approval_id: approvalId, resolution: mapped, actor: "user" }),
     });
   },
 };

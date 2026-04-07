@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { useEffect, useMemo, useState } from 'react';
-import { ArrowUpRight, Download, ExternalLink, FolderOpen } from 'lucide-react';
+import { ArrowUpRight, ChevronLeft, ChevronRight, Download, ExternalLink, FolderOpen } from 'lucide-react';
 import { apiClient } from '@/lib/api-client';
 import {
   artifactActionHint,
@@ -32,6 +32,12 @@ type ArtifactDetailPaneProps = {
   downloadHref: string | null;
   showReveal: boolean;
   revealLabel: string;
+  showBackButton?: boolean;
+  onBack?: () => void;
+  hasPreviousArtifact?: boolean;
+  hasNextArtifact?: boolean;
+  onPreviousArtifact?: () => void;
+  onNextArtifact?: () => void;
   onOpenExternal: () => void;
   onReveal: () => void;
 };
@@ -45,6 +51,12 @@ export function ArtifactDetailPane({
   downloadHref,
   showReveal,
   revealLabel,
+  showBackButton = false,
+  onBack,
+  hasPreviousArtifact = false,
+  hasNextArtifact = false,
+  onPreviousArtifact,
+  onNextArtifact,
   onOpenExternal,
   onReveal,
 }: ArtifactDetailPaneProps) {
@@ -188,6 +200,30 @@ export function ArtifactDetailPane({
         </div>
 
         <div className="orion-artifact-detail-actions">
+          {showBackButton ? (
+            <button className="orion-btn orion-btn-ghost" onClick={onBack} title="Back to list (Esc)">
+              <ChevronLeft size={13} />
+              Back
+            </button>
+          ) : null}
+          <button
+            className="orion-btn orion-btn-ghost"
+            onClick={onPreviousArtifact}
+            disabled={!hasPreviousArtifact}
+            title="Previous artifact (Left arrow)"
+          >
+            <ChevronLeft size={13} />
+            Previous
+          </button>
+          <button
+            className="orion-btn orion-btn-ghost"
+            onClick={onNextArtifact}
+            disabled={!hasNextArtifact}
+            title="Next artifact (Right arrow)"
+          >
+            Next
+            <ChevronRight size={13} />
+          </button>
           <button className="orion-btn orion-btn-ghost" onClick={onOpenExternal}>
             <ExternalLink size={13} />
             Open externally

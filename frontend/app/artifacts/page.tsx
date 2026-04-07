@@ -46,9 +46,16 @@ export default function ArtifactsPage() {
     channelOptions,
     hasActiveFilters,
     clearFilters,
+    isNarrowViewport,
     selectedArtifact,
     selectedPreviewTarget,
+    selectedArtifactHiddenByFilters,
     selectArtifact,
+    closeArtifactSelection,
+    hasPreviousArtifact,
+    hasNextArtifact,
+    selectPreviousArtifact,
+    selectNextArtifact,
     artifactContentHref,
     artifactDownloadHref,
     openArtifact,
@@ -57,6 +64,8 @@ export default function ArtifactsPage() {
     desktopBridge,
     previewTargetById,
   } = useArtifactsBrowser();
+  const showWorkspace = filteredItems.length > 0 || Boolean(selectedArtifact);
+  const mobileDetailOpen = Boolean(isNarrowViewport && selectedArtifact);
 
   return (
     <div className="orion-page-shell is-static-entry">
@@ -216,7 +225,7 @@ export default function ArtifactsPage() {
           copy={error}
           actions={<RetryActions onRetry={() => void refresh()} />}
         />
-      ) : filteredItems.length === 0 ? (
+      ) : !showWorkspace ? (
         <EmptyState
           title="No assets yet"
           filtered={hasActiveFilters}
@@ -239,46 +248,86 @@ export default function ArtifactsPage() {
         />
       ) : (
         <PageCollection className="orion-home-list-panel" bodyClassName="orion-asset-collection-body">
-          <div className="orion-artifact-workspace">
+          <div className={`orion-artifact-workspace${mobileDetailOpen ? ' is-mobile-detail-open' : ''}`}>
             <section className="orion-artifact-list-pane">
-              <div className="orion-asset-grid">
-                {filteredItems.map((item, index) => {
-                  const previewTarget = previewTargetById.get(item.id) || item;
-                  const resolvedLocation = String(previewTarget.uri_or_path || '').trim();
-                  const showReveal = Boolean(desktopBridge?.desktop && isLocalFileTarget(resolvedLocation));
-                  const rowKey = [item.id, item.run_id || '', item.updated_at || '', item.uri_or_path || ''].join('::');
+              {filteredItems.length === 0 ? (
+                <div className="orion-artifact-list-empty">
+                  <div className="orion-panel-title">No visible artifacts</div>
+                  <p>
+                    {selectedArtifactHiddenByFilters
+                      ? 'The selected artifact is still open on the right, but your current filters hide it from the list.'
+                      : 'No artifacts match the current filters.'}
+                  </p>
+                  {hasActiveFilters ? (
+                    <button className="orion-btn orion-btn-ghost" onClick={clearFilters}>
+                      Clear filters
+                    </button>
+                  ) : null}
+                </div>
+              ) : (
+                <div className="orion-asset-grid">
+                  {filteredItems.map((item, index) => {
+                    const previewTarget = previewTargetById.get(item.id) || item;
+                    const resolvedLocation = String(previewTarget.uri_or_path || '').trim();
+                    const showReveal = Boolean(desktopBridge?.desktop && isLocalFileTarget(resolvedLocation));
+                    const rowKey = [item.id, item.run_id || '', item.updated_at || '', item.uri_or_path || ''].join('::');
 
-                  return (
-                    <ArtifactCard
-                      key={`${rowKey}::${index}`}
-                      item={item}
-                      previewTarget={previewTarget}
-                      isSelected={selectedArtifact?.id === item.id}
-                      revealLabel={revealLabel}
-                      viewMode={viewMode}
-                      showReveal={showReveal}
-                      onSelect={() => selectArtifact(item)}
-                      onReveal={() => void revealArtifact(item)}
-                    />
-                  );
-                })}
-              </div>
+                    return (
+                      <ArtifactCard
+                        key={`${rowKey}::${index}`}
+                        item={item}
+                        previewTarget={previewTarget}
+                        isSelected={selectedArtifact?.id === item.id}
+                        revealLabel={revealLabel}
+                        viewMode={viewMode}
+                        showReveal={showReveal}
+                        onSelect={() => selectArtifact(item)}
+                        onReveal={() => void revealArtifact(item)}
+                      />
+                    );
+                  })}
+                </div>
+              )}
             </section>
 
-            <ArtifactDetailPane
-              item={selectedArtifact}
-              previewTarget={selectedPreviewTarget}
-              contentHref={selectedPreviewTarget ? artifactContentHref(selectedPreviewTarget) : null}
-              downloadHref={selectedPreviewTarget ? artifactDownloadHref(selectedPreviewTarget) : null}
-              showReveal={Boolean(
-                selectedPreviewTarget
-                && desktopBridge?.desktop
-                && isLocalFileTarget(String(selectedPreviewTarget.uri_or_path || '').trim()),
-              )}
-              revealLabel={revealLabel}
-              onOpenExternal={() => (selectedArtifact ? void openArtifact(selectedArtifact) : undefined)}
-              onReveal={() => (selectedArtifact ? void revealArtifact(selectedArtifact) : undefined)}
-            />
+            {!isNarrowViewport || selectedArtifact ? (
+              <div className="orion-artifact-detail-column">
+                {selectedArtifactHiddenByFilters ? (
+                  <div className="orion-artifact-filter-notice">
+                    <div>
+                      <strong>Selected artifact is hidden by current filters.</strong>
+                      <span>It stays open here until you clear the filters or pick another file.</span>
+                    </div>
+                    {hasActiveFilters ? (
+                      <button className="orion-btn orion-btn-ghost" onClick={clearFilters}>
+                        Clear filters
+                      </button>
+                    ) : null}
+                  </div>
+                ) : null}
+
+                <ArtifactDetailPane
+                  item={selectedArtifact}
+                  previewTarget={selectedPreviewTarget}
+                  contentHref={selectedPreviewTarget ? artifactContentHref(selectedPreviewTarget) : null}
+                  downloadHref={selectedPreviewTarget ? artifactDownloadHref(selectedPreviewTarget) : null}
+                  showReveal={Boolean(
+                    selectedPreviewTarget
+                    && desktopBridge?.desktop
+                    && isLocalFileTarget(String(selectedPreviewTarget.uri_or_path || '').trim()),
+                  )}
+                  revealLabel={revealLabel}
+                  showBackButton={isNarrowViewport}
+                  onBack={() => closeArtifactSelection()}
+                  hasPreviousArtifact={hasPreviousArtifact}
+                  hasNextArtifact={hasNextArtifact}
+                  onPreviousArtifact={() => selectPreviousArtifact()}
+                  onNextArtifact={() => selectNextArtifact()}
+                  onOpenExternal={() => (selectedArtifact ? void openArtifact(selectedArtifact) : undefined)}
+                  onReveal={() => (selectedArtifact ? void revealArtifact(selectedArtifact) : undefined)}
+                />
+              </div>
+            ) : null}
           </div>
         </PageCollection>
       )}

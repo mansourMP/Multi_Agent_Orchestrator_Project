@@ -13,7 +13,7 @@ from typing import Any, Dict, List, Optional
 
 from fastapi import HTTPException
 from pydantic import BaseModel, Field
-from server_modules import machine_lease_service, outbox_service, worker_dispatch_service
+from server_modules import machine_lease_service, outbox_service, safe_mode_service, worker_dispatch_service
 
 _server = None
 LOCAL_RUN_STILL_WORKING_INTERVAL_SECONDS = 15
@@ -69,6 +69,11 @@ class LocalRunControlStatePayload(BaseModel):
 class LocalWorkerHeartbeatPayload(BaseModel):
     current_run_id: Optional[str] = None
     note: Optional[str] = None
+    permission_probe: Dict[str, Dict[str, Any]] = Field(default_factory=dict)
+
+
+class LocalMachineControlPayload(BaseModel):
+    reason: Optional[str] = None
 
 
 class LocalRunCompletePayload(BaseModel):
@@ -324,6 +329,149 @@ def _set_enrollment_state(
     return record
 
 
+def _machine_control_state(record: Dict[str, Any]) -> str:
+    state = str(record.get("control_state") or "").strip().lower()
+    if state in {"suspended", "revoked"}:
+        return state
+    if record.get("revoked_at"):
+        return "revoked"
+    if record.get("suspended_at"):
+        return "suspended"
+    return "active"
+
+
+def _set_machine_control_state(
+    record: Dict[str, Any],
+    state: str,
+    *,
+    reason: Optional[str] = None,
+    now_iso: Optional[str] = None,
+) -> Dict[str, Any]:
+    _init()
+    timestamp = str(now_iso or _server._utc_now_iso())
+    normalized = str(state or "").strip().lower() or "active"
+    record["control_state"] = normalized
+    record["control_state_updated_at"] = timestamp
+    if normalized == "suspended":
+        record["suspended_at"] = timestamp
+        record["suspended_reason"] = str(reason or record.get("suspended_reason") or "Suspended by operator.")[:280]
+    elif normalized == "revoked":
+        record["revoked_at"] = timestamp
+        record["revoked_reason"] = str(reason or record.get("revoked_reason") or "Revoked by operator.")[:280]
+    elif normalized == "active":
+        record["suspended_at"] = None
+        record["suspended_reason"] = None
+    return record
+
+
+def _normalize_permission_probe_entry(
+    *,
+    raw_entry: Any,
+    fallback_status: str,
+    fallback_source: str,
+    fallback_detail: str = "",
+) -> Dict[str, Any]:
+    allowed_statuses = {"granted", "denied", "unsupported", "unknown"}
+    if isinstance(raw_entry, dict):
+        status = str(raw_entry.get("status") or "").strip().lower()
+        if not status and isinstance(raw_entry.get("granted"), bool):
+            status = "granted" if bool(raw_entry.get("granted")) else "denied"
+        if status not in allowed_statuses:
+            status = fallback_status
+        source = str(raw_entry.get("source") or fallback_source).strip() or fallback_source
+        detail = str(raw_entry.get("detail") or fallback_detail).strip()
+        updated_at = str(raw_entry.get("updated_at") or "").strip() or None
+        return {
+            "status": status,
+            "source": source,
+            "detail": detail,
+            "updated_at": updated_at,
+        }
+    if isinstance(raw_entry, bool):
+        return {
+            "status": "granted" if raw_entry else "denied",
+            "source": fallback_source,
+            "detail": fallback_detail,
+            "updated_at": None,
+        }
+    return {
+        "status": fallback_status,
+        "source": fallback_source,
+        "detail": fallback_detail,
+        "updated_at": None,
+    }
+
+
+def _permission_probe_defaults(record: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
+    capabilities = {str(item).strip().lower() for item in (record.get("capabilities") or []) if str(item).strip()}
+    execution_targets = {str(item).strip().lower() for item in (record.get("execution_targets") or []) if str(item).strip()}
+    runtime_type = str(record.get("runtime_type") or "").strip().lower()
+    local_companion_like = runtime_type == "local_companion" or "local_companion" in execution_targets
+    control_capability = any(capability.startswith("computer_control.") for capability in capabilities)
+    browser_capability = "browser_automation.interactive" in capabilities
+    shell_capability = "shell.execute" in capabilities
+    screenshot_capability = "screenshot.capture" in capabilities
+    return {
+        "screen_recording": _normalize_permission_probe_entry(
+            raw_entry=None,
+            fallback_status="unknown" if (screenshot_capability or local_companion_like) else "unsupported",
+            fallback_source="probe_pending" if (screenshot_capability or local_companion_like) else "capability_manifest",
+            fallback_detail="Waiting for worker probe." if (screenshot_capability or local_companion_like) else "Screen capture is not advertised by this machine.",
+        ),
+        "accessibility": _normalize_permission_probe_entry(
+            raw_entry=None,
+            fallback_status="unknown" if (control_capability or browser_capability or local_companion_like) else "unsupported",
+            fallback_source="probe_pending" if (control_capability or browser_capability or local_companion_like) else "capability_manifest",
+            fallback_detail="Waiting for worker probe." if (control_capability or browser_capability or local_companion_like) else "Accessibility-driven control is not advertised by this machine.",
+        ),
+        "browser_session": _normalize_permission_probe_entry(
+            raw_entry=None,
+            fallback_status="granted" if (browser_capability or local_companion_like) else "unsupported",
+            fallback_source="capability_manifest",
+            fallback_detail="Browser/session automation available." if (browser_capability or local_companion_like) else "Browser/session automation is not advertised by this machine.",
+        ),
+        "shell": _normalize_permission_probe_entry(
+            raw_entry=None,
+            fallback_status="granted" if shell_capability else "unsupported",
+            fallback_source="capability_manifest",
+            fallback_detail="Shell execution available." if shell_capability else "Shell execution is not advertised by this machine.",
+        ),
+    }
+
+
+def _normalized_permission_probe(record: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
+    defaults = _permission_probe_defaults(record)
+    raw_probe = record.get("permission_probe") if isinstance(record.get("permission_probe"), dict) else {}
+    return {
+        key: _normalize_permission_probe_entry(
+            raw_entry=raw_probe.get(key),
+            fallback_status=str(defaults[key].get("status") or "unknown"),
+            fallback_source=str(defaults[key].get("source") or "probe_pending"),
+            fallback_detail=str(defaults[key].get("detail") or ""),
+        )
+        for key in defaults
+    }
+
+
+def _apply_permission_probe(record: Dict[str, Any], probe: Optional[Dict[str, Dict[str, Any]]]) -> Dict[str, Any]:
+    if isinstance(probe, dict) and probe:
+        record["permission_probe"] = dict(probe)
+        _init()
+        record["permission_probe_updated_at"] = _server._utc_now_iso()
+    elif not isinstance(record.get("permission_probe"), dict):
+        record["permission_probe"] = {}
+    return record
+
+
+def _machine_policy_status(record: Dict[str, Any]) -> Dict[str, Any]:
+    return safe_mode_service.resolve_machine_policy_status(
+        tenant_id=str(record.get("tenant_id") or "default").strip() or "default",
+        workspace_id=str(record.get("workspace_id") or "default").strip() or "default",
+        machine_id=str(record.get("machine_id") or record.get("runtime_id") or "").strip() or None,
+        capability_ids=list(record.get("capabilities") or []),
+    )
+
+
 def _assert_enrollment_token(record: Dict[str, Any], provided_token: Optional[str]) -> str:
     _init()
     provided = str(provided_token or "").strip()
@@ -562,6 +710,7 @@ def _upsert_runtime_registration(
     execution_targets: Optional[List[str]] = None,
     instance_id: Optional[str] = None,
     capability_digest: Optional[str] = None,
+    permission_probe: Optional[Dict[str, Dict[str, Any]]] = None,
 ) -> Dict[str, Any]:
     _init()
     worker = str(runtime_id or "").strip()
@@ -590,6 +739,7 @@ def _upsert_runtime_registration(
             capability_digest_fn=_capability_digest,
         )
         session = _issue_runtime_session(record)
+        _apply_permission_probe(record, permission_probe)
         _server.LOCAL_WORKER_REGISTRY[worker] = record
     _persist_local_runtime_state()
     _emit_machine_outbox_event("runtime_registered", record)
@@ -648,6 +798,7 @@ def create_machine_enrollment_intent(
         record["note"] = str(note or "machine_enrollment_requested")[:280]
         record["enrollment_token_hash"] = token_hash
         record["bootstrap_error"] = None
+        _set_machine_control_state(record, "active", now_iso=now_iso)
         _set_enrollment_state(record, "requested", now_iso=now_iso)
         _set_enrollment_state(record, "awaiting_local_acceptance", now_iso=now_iso)
         _server.LOCAL_WORKER_REGISTRY[runtime_id] = record
@@ -1298,6 +1449,9 @@ def handle_get_local_workers_status() -> Dict[str, Any]:
                 continue
             lease_seconds = int(record.get("lease_seconds") or _server.ORION_LOCAL_LEASE_SECONDS)
             online = _is_worker_online(record, now)
+            control_state = _machine_control_state(record)
+            policy_status = _machine_policy_status(record)
+            permission_probe = _normalized_permission_probe(record)
             seen_at = _server._parse_utc_ts(record.get("last_seen_at"))
             since_seen = None
             if seen_at is not None:
@@ -1308,6 +1462,9 @@ def handle_get_local_workers_status() -> Dict[str, Any]:
             items.append(
                 {
                     "worker_id": worker_id,
+                    "tenant_id": str(record.get("tenant_id") or "default").strip() or "default",
+                    "workspace_id": str(record.get("workspace_id") or "default").strip() or "default",
+                    "machine_id": str(record.get("machine_id") or record.get("runtime_id") or worker_id).strip() or worker_id,
                     "runtime_id": record.get("runtime_id") or worker_id,
                     "runtime_type": record.get("runtime_type") or "local",
                     "display_name": record.get("display_name") or worker_id,
@@ -1333,10 +1490,21 @@ def handle_get_local_workers_status() -> Dict[str, Any]:
                     "seconds_since_seen": since_seen,
                     "lease_seconds": lease_seconds,
                     "note": record.get("note"),
+                    "permission_probe": permission_probe,
+                    "permission_probe_updated_at": record.get("permission_probe_updated_at"),
+                    "control_state": control_state,
+                    "control_state_updated_at": record.get("control_state_updated_at"),
+                    "suspended_at": record.get("suspended_at"),
+                    "suspended_reason": record.get("suspended_reason"),
+                    "revoked_at": record.get("revoked_at"),
+                    "revoked_reason": record.get("revoked_reason"),
+                    "safe_mode_status": policy_status.get("safe_mode"),
+                    "kill_switch_status": policy_status.get("kill_switch"),
                     "enrollment_state": record.get("enrollment_state"),
                     "enrollment_requested_at": record.get("enrollment_requested_at"),
                     "enrollment_updated_at": record.get("enrollment_updated_at"),
                     "bootstrap_error": record.get("bootstrap_error"),
+                    "machine_enrollment_scope": record.get("machine_enrollment_scope") or "workspace",
                 }
             )
         pending_runs = len(_server.LOCAL_PENDING_RUN_IDS)
@@ -1348,6 +1516,8 @@ def handle_get_local_workers_status() -> Dict[str, Any]:
     busy = len([item for item in items if item.get("online") and item.get("current_run_id")])
     idle = max(0, online - busy)
     offline = max(0, known - online)
+    suspended = len([item for item in items if str(item.get("control_state") or "").strip().lower() == "suspended"])
+    revoked = len([item for item in items if str(item.get("control_state") or "").strip().lower() == "revoked"])
 
     items.sort(key=_worker_display_sort_key)
     capability_queue = _capability_queue_summary(
@@ -1364,6 +1534,8 @@ def handle_get_local_workers_status() -> Dict[str, Any]:
             "busy": busy,
             "idle": idle,
             "offline": offline,
+            "suspended": suspended,
+            "revoked": revoked,
             "pending_runs": pending_runs,
             "claimed_runs": claimed_runs,
         },
@@ -1412,26 +1584,90 @@ def handle_delete_local_runtime(machine_id: str) -> Dict[str, Any]:
         record = _server.LOCAL_WORKER_REGISTRY.get(runtime_id) if isinstance(_server.LOCAL_WORKER_REGISTRY.get(runtime_id), dict) else None
         if not isinstance(record, dict):
             raise HTTPException(status_code=404, detail="Machine not found.")
-        current_run_id = str(record.get("current_run_id") or "").strip()
-        if current_run_id:
-            raise HTTPException(status_code=409, detail="Machine is currently leased by an active run.")
-        deleted = dict(record)
-        _server.LOCAL_WORKER_REGISTRY.pop(runtime_id, None)
+        _set_machine_control_state(record, "revoked", reason="Revoked from fleet controls.")
+        record["note"] = "machine_revoked"
+        _server.LOCAL_WORKER_REGISTRY[runtime_id] = record
 
     _persist_local_runtime_state()
-    _emit_machine_outbox_event("deleted", deleted)
+    _emit_machine_outbox_event("revoked", record)
+    status_payload = handle_get_local_workers_status()
+    items = status_payload.get("items") if isinstance(status_payload.get("items"), list) else []
+    machine = next(
+        (
+            item
+            for item in items
+            if isinstance(item, dict)
+            and str(item.get("machine_id") or item.get("runtime_id") or "").strip() == runtime_id
+        ),
+        None,
+    )
     return {
         "ok": True,
         "machine_id": runtime_id,
-        "deleted": True,
-        "machine": deleted,
+        "deleted": False,
+        "revoked": True,
+        "machine": machine or dict(record),
     }
+
+
+def handle_set_local_runtime_control(machine_id: str, *, action: str, reason: Optional[str] = None) -> Dict[str, Any]:
+    _init()
+    runtime_id = str(machine_id or "").strip()
+    control_action = str(action or "").strip().lower()
+    if not runtime_id:
+        raise HTTPException(status_code=400, detail="machine_id is required.")
+    if control_action not in {"suspend", "resume"}:
+        raise HTTPException(status_code=400, detail="Unsupported machine control action.")
+
+    with _server.LOCAL_QUEUE_LOCK:
+        record = _server.LOCAL_WORKER_REGISTRY.get(runtime_id) if isinstance(_server.LOCAL_WORKER_REGISTRY.get(runtime_id), dict) else None
+        if not isinstance(record, dict):
+            raise HTTPException(status_code=404, detail="Machine not found.")
+        current_state = _machine_control_state(record)
+        if control_action == "resume":
+            if current_state == "revoked":
+                raise HTTPException(status_code=409, detail="Revoked machines must be re-enrolled instead of resumed.")
+            _set_machine_control_state(record, "active", reason=reason or "Resumed from fleet controls.")
+            record["note"] = "machine_resumed"
+            outbox_action = "resumed"
+        else:
+            if current_state == "revoked":
+                raise HTTPException(status_code=409, detail="Revoked machines cannot be suspended.")
+            _set_machine_control_state(record, "suspended", reason=reason or "Suspended from fleet controls.")
+            record["note"] = "machine_suspended"
+            outbox_action = "suspended"
+        _server.LOCAL_WORKER_REGISTRY[runtime_id] = record
+
+    _persist_local_runtime_state()
+    _emit_machine_outbox_event(outbox_action, record)
+    status_payload = handle_get_local_workers_status()
+    items = status_payload.get("items") if isinstance(status_payload.get("items"), list) else []
+    machine = next(
+        (
+            item
+            for item in items
+            if isinstance(item, dict)
+            and str(item.get("machine_id") or item.get("runtime_id") or "").strip() == runtime_id
+        ),
+        None,
+    )
+    return {"ok": True, "machine_id": runtime_id, "action": control_action, "machine": machine or dict(record)}
 
 
 def handle_heartbeat_local_worker(worker_id: str, payload: Optional[LocalWorkerHeartbeatPayload] = None) -> Dict[str, Any]:
     _init()
+    worker = str(worker_id or "").strip()
+    if not worker:
+        raise HTTPException(status_code=400, detail="worker_id is required.")
+    if payload and payload.permission_probe:
+        with _server.LOCAL_QUEUE_LOCK:
+            record = _server.LOCAL_WORKER_REGISTRY.get(worker) if isinstance(_server.LOCAL_WORKER_REGISTRY.get(worker), dict) else {}
+            next_record = dict(record or {})
+            _apply_permission_probe(next_record, payload.permission_probe)
+            _server.LOCAL_WORKER_REGISTRY[worker] = next_record
+        _persist_local_runtime_state()
     return worker_dispatch_service.heartbeat_local_worker(
-        worker_id,
+        worker,
         current_run_id=(payload.current_run_id if payload else None),
         note=(payload.note if payload else None),
         runs_by_id=_server.runs,
@@ -1546,12 +1782,31 @@ def handle_get_local_run_control_state(
     payload: Optional[LocalRunControlStatePayload] = None,
 ) -> Dict[str, Any]:
     _init()
-    del payload
+    worker_id = str((payload.worker_id if payload else None) or "").strip()
     run_id_str = str(run_id)
     run = _server.runs.get(run_id_str)
     if not isinstance(run, dict):
         raise HTTPException(status_code=404, detail="Run ID not found")
     status = str(run.get("status") or "").strip().lower()
+    context = run.get("context") if isinstance(run.get("context"), dict) else {}
+    metadata = context.get("metadata") if isinstance(context.get("metadata"), dict) else {}
+    machine_id = str(
+        run.get("machine_id")
+        or run.get("local_worker_id")
+        or metadata.get("machine_id")
+        or worker_id
+        or ""
+    ).strip()
+    machine_control_state = "active"
+    machine_wait_reason: Optional[str] = None
+    with _server.LOCAL_QUEUE_LOCK:
+        record = _server.LOCAL_WORKER_REGISTRY.get(machine_id) if isinstance(_server.LOCAL_WORKER_REGISTRY.get(machine_id), dict) else None
+        if isinstance(record, dict):
+            machine_control_state = _machine_control_state(record)
+            if machine_control_state == "revoked":
+                machine_wait_reason = "machine_revoked"
+            elif machine_control_state == "suspended":
+                machine_wait_reason = "machine_suspended"
     browser_checkpoint = run.get("browser_checkpoint") if isinstance(run.get("browser_checkpoint"), dict) else None
     local_execution_checkpoint = _local_execution_checkpoint_payload(run)
     wait_reason = str(
@@ -1562,11 +1817,12 @@ def handle_get_local_run_control_state(
     manual_takeover = _manual_takeover_active(run)
     return {
         "status": status,
-        "pause_requested": status == "waiting_for_input",
+        "pause_requested": status == "waiting_for_input" or bool(machine_wait_reason),
         "manual_takeover": manual_takeover,
-        "wait_reason": wait_reason,
+        "wait_reason": machine_wait_reason or wait_reason,
         "browser_checkpoint": dict(browser_checkpoint) if isinstance(browser_checkpoint, dict) else None,
         "local_execution_checkpoint": local_execution_checkpoint,
+        "machine_control_state": machine_control_state,
         "resume_available": bool(browser_checkpoint or local_execution_checkpoint),
     }
 

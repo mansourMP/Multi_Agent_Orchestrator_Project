@@ -82,6 +82,44 @@ class LocalWorkerRuntimeClientTests(TestCase):
         self.assertEqual(captured[1]["session_token"], "fresh-session")
         self.assertEqual(captured[1]["instance_id"], "fresh-instance")
 
+    def test_heartbeat_run_can_send_structured_event(self):
+        client = self._client()
+        captured = {}
+
+        def fake_request(method, primary_path, fallback_path, payload=None):
+            captured["payload"] = payload
+            return {"ok": True}
+
+        with patch.object(client, "_request_with_fallback", side_effect=fake_request):
+            client.heartbeat_run(
+                "run-1",
+                "worker-1",
+                "Step 1",
+                event={"event": "computer_action", "message": "Step 1", "data": {"label": "Typing query"}},
+            )
+
+        self.assertEqual(captured["payload"]["event"]["event"], "computer_action")
+        self.assertEqual(captured["payload"]["event"]["data"]["label"], "Typing query")
+
+    def test_get_task_control_state_uses_runtime_session_payload(self):
+        client = self._client()
+        captured = {}
+
+        def fake_request(method, path, payload=None):
+            captured["method"] = method
+            captured["path"] = path
+            captured["payload"] = payload
+            return {"ok": True, "pause_requested": True}
+
+        with patch.object(client, "_request", side_effect=fake_request):
+            payload = client.get_task_control_state("run-1", "worker-1")
+
+        self.assertTrue(payload["pause_requested"])
+        self.assertEqual(captured["method"], "POST")
+        self.assertEqual(captured["path"], "/runtime/tasks/run-1/control-state")
+        self.assertEqual(captured["payload"]["runtime_id"], "worker-1")
+        self.assertEqual(captured["payload"]["session_token"], "stale-session")
+
     def test_pause_run_retry_uses_new_session_token(self):
         client = self._client()
         captured = []
@@ -122,6 +160,26 @@ class LocalWorkerRuntimeClientTests(TestCase):
                 platform="darwin",
                 policy_mode="trusted_full_access",
                 execution_targets=["local"],
+                permission_probe={"screen_recording": {"status": "granted", "source": "probe"}},
             )
 
         self.assertEqual(captured["payload"]["policy_mode"], "trusted_full_access")
+        self.assertEqual(captured["payload"]["permission_probe"]["screen_recording"]["status"], "granted")
+
+    def test_heartbeat_worker_can_send_permission_probe(self):
+        client = self._client()
+        captured = {}
+
+        def fake_request(method, primary_path, fallback_path, payload=None):
+            captured["payload"] = payload
+            return {"ok": True}
+
+        with patch.object(client, "_request_with_fallback", side_effect=fake_request):
+            client.heartbeat_worker(
+                "worker-1",
+                None,
+                "idle",
+                permission_probe={"accessibility": {"status": "denied", "source": "probe"}},
+            )
+
+        self.assertEqual(captured["payload"]["permission_probe"]["accessibility"]["status"], "denied")

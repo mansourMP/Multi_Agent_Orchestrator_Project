@@ -58,6 +58,95 @@ def build_runtime_capabilities() -> List[str]:
     ]
 
 
+def _permission_entry(status: str, *, source: str, detail: str = "") -> Dict[str, Any]:
+    return {
+        "status": str(status or "unknown").strip().lower() or "unknown",
+        "source": str(source or "probe").strip() or "probe",
+        "detail": str(detail or "").strip(),
+        "updated_at": utc_now_iso(),
+    }
+
+
+def _macos_screen_recording_probe() -> Optional[bool]:
+    try:
+        import Quartz  # type: ignore
+
+        probe = getattr(Quartz, "CGPreflightScreenCaptureAccess", None)
+        if callable(probe):
+            return bool(probe())
+    except Exception:
+        return None
+    return None
+
+
+def _macos_accessibility_probe() -> Optional[bool]:
+    try:
+        from ApplicationServices import AXIsProcessTrusted  # type: ignore
+
+        return bool(AXIsProcessTrusted())
+    except Exception:
+        try:
+            import Quartz  # type: ignore
+
+            probe = getattr(Quartz, "AXIsProcessTrusted", None)
+            if callable(probe):
+                return bool(probe())
+        except Exception:
+            return None
+    return None
+
+
+def build_runtime_permission_probe(
+    *,
+    runtime_type: str,
+    capabilities: List[str],
+    execution_targets: List[str],
+) -> Dict[str, Dict[str, Any]]:
+    capability_set = {str(item).strip().lower() for item in capabilities if str(item).strip()}
+    execution_target_set = {str(item).strip().lower() for item in execution_targets if str(item).strip()}
+    local_companion_like = str(runtime_type or "").strip().lower() == "local_companion" or "local_companion" in execution_target_set
+    screen_recording_applicable = local_companion_like or "screenshot.capture" in capability_set
+    accessibility_applicable = local_companion_like or "browser_automation.interactive" in capability_set or any(
+        capability.startswith("computer_control.") for capability in capability_set
+    )
+    browser_applicable = local_companion_like or "browser_automation.interactive" in capability_set
+    shell_applicable = "shell.execute" in capability_set
+
+    screen_probe = _macos_screen_recording_probe() if sys.platform == "darwin" and screen_recording_applicable else None
+    accessibility_probe = _macos_accessibility_probe() if sys.platform == "darwin" and accessibility_applicable else None
+
+    return {
+        "screen_recording": (
+            _permission_entry("granted" if screen_probe else "denied", source="probe", detail="macOS screen capture permission probe.")
+            if isinstance(screen_probe, bool)
+            else _permission_entry(
+                "unknown" if screen_recording_applicable else "unsupported",
+                source="probe_pending" if screen_recording_applicable else "capability_manifest",
+                detail="Worker has not confirmed screen recording permission yet." if screen_recording_applicable else "Screen capture is not advertised by this worker.",
+            )
+        ),
+        "accessibility": (
+            _permission_entry("granted" if accessibility_probe else "denied", source="probe", detail="macOS accessibility permission probe.")
+            if isinstance(accessibility_probe, bool)
+            else _permission_entry(
+                "unknown" if accessibility_applicable else "unsupported",
+                source="probe_pending" if accessibility_applicable else "capability_manifest",
+                detail="Worker has not confirmed accessibility permission yet." if accessibility_applicable else "Accessibility-driven control is not advertised by this worker.",
+            )
+        ),
+        "browser_session": _permission_entry(
+            "granted" if browser_applicable else "unsupported",
+            source="capability_manifest",
+            detail="Interactive browser/session automation available." if browser_applicable else "Browser/session automation is not advertised by this worker.",
+        ),
+        "shell": _permission_entry(
+            "granted" if shell_applicable else "unsupported",
+            source="capability_manifest",
+            detail="Shell execution available." if shell_applicable else "Shell execution is not advertised by this worker.",
+        ),
+    }
+
+
 def _truncate_text(value: str, limit: int = 240) -> str:
     text = re.sub(r"\s+", " ", str(value or "").strip())
     if len(text) <= limit:
@@ -79,7 +168,13 @@ def _deterministic_chat_fallback(goal: str, llm_error: str) -> str:
     return "I couldn’t get a model reply right now. Retry in a moment."
 
 
-def build_pack_result(run: Dict[str, Any], worker_id: str) -> Tuple[str, Optional[Dict[str, Any]], Optional[Dict[str, Any]]]:
+def build_pack_result(
+    run: Dict[str, Any],
+    worker_id: str,
+    *,
+    progress_callback=None,
+    control_state_provider=None,
+) -> Tuple[str, Optional[Dict[str, Any]], Optional[Dict[str, Any]]]:
     context = run.get("context") if isinstance(run.get("context"), dict) else {}
     metadata = context.get("metadata") if isinstance(context.get("metadata"), dict) else {}
     workflow_definition = (
@@ -323,7 +418,13 @@ def build_pack_result(run: Dict[str, Any], worker_id: str) -> Tuple[str, Optiona
         return summary, data, None
 
     if pack_id == "local-execution-v1":
-        summary, data = build_local_execution_pack_result(run, metadata, pack_inputs)
+        summary, data = build_local_execution_pack_result(
+            run,
+            metadata,
+            pack_inputs,
+            progress_callback=progress_callback,
+            control_state_provider=control_state_provider,
+        )
         return summary, data, None
 
     allow_workspace_listing_reply = str(metadata.get("allow_workspace_listing_reply") or "").strip().lower() in {
@@ -407,16 +508,38 @@ def process_run(client: RuntimeClient, worker_id: str, run: Dict[str, Any], step
         "Preparing local output.",
         "Finalizing result payload.",
     ]
+    permission_probe = build_runtime_permission_probe(
+        runtime_type="local",
+        capabilities=build_runtime_capabilities(),
+        execution_targets=["local"],
+    )
     for phase in phases:
         if verbose:
             print(f"[{run_id[:8]}] {phase}")
-        client.heartbeat_worker(worker_id, run_id, phase)
+        client.heartbeat_worker(worker_id, run_id, phase, permission_probe=permission_probe)
         client.heartbeat_run(run_id, worker_id, phase)
         if step_delay_seconds > 0:
             time.sleep(step_delay_seconds)
 
     try:
-        summary, result_data, usage_override = build_pack_result(run, worker_id)
+        def _progress_callback(event: Dict[str, Any]) -> None:
+            if not isinstance(event, dict):
+                return
+            note = str(event.get("message") or "runtime_task_heartbeat").strip() or "runtime_task_heartbeat"
+            try:
+                client.heartbeat_run(run_id, worker_id, note, event=event)
+            except Exception:
+                return
+
+        def _control_state_provider(active_run_id: str) -> Dict[str, Any]:
+            return client.get_task_control_state(active_run_id, worker_id)
+
+        summary, result_data, usage_override = build_pack_result(
+            run,
+            worker_id,
+            progress_callback=_progress_callback,
+            control_state_provider=_control_state_provider,
+        )
     except LocalExecutionPauseRequired as pause:
         client.pause_run(
             run_id,
@@ -491,6 +614,11 @@ def main() -> int:
         print(f"Registered tools: {registered_local_worker_tool_names()}")
 
     try:
+        permission_probe = build_runtime_permission_probe(
+            runtime_type="local",
+            capabilities=build_runtime_capabilities(),
+            execution_targets=["local"],
+        )
         registration = client.bootstrap_runtime_session(
             worker_id,
             runtime_type="local",
@@ -500,6 +628,7 @@ def main() -> int:
             capabilities=build_runtime_capabilities(),
             execution_targets=["local"],
             instance_id=runtime_instance_id,
+            permission_probe=permission_probe,
         )
         if verbose and bool(registration.get("resumed")):
             print("[info] Restored persisted runtime session.")
@@ -519,7 +648,16 @@ def main() -> int:
         now = time.time()
         if now >= next_idle_heartbeat_at:
             try:
-                client.heartbeat_worker(worker_id, None, "idle")
+                client.heartbeat_worker(
+                    worker_id,
+                    None,
+                    "idle",
+                    permission_probe=build_runtime_permission_probe(
+                        runtime_type="local",
+                        capabilities=build_runtime_capabilities(),
+                        execution_targets=["local"],
+                    ),
+                )
                 consecutive_errors = 0
             except RateLimitError as exc:
                 if verbose:

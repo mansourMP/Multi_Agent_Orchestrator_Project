@@ -251,6 +251,7 @@ class RuntimeClient:
         capabilities: Optional[list[str]] = None,
         execution_targets: Optional[list[str]] = None,
         instance_id: Optional[str] = None,
+        permission_probe: Optional[Dict[str, Dict[str, Any]]] = None,
     ) -> Dict[str, Any]:
         registration = self._remember_registration(
             runtime_id,
@@ -274,6 +275,8 @@ class RuntimeClient:
             "capability_digest": self._capability_digest(capabilities),
             "note": "local_worker_boot",
         }
+        if isinstance(permission_probe, dict) and permission_probe:
+            payload["permission_probe"] = permission_probe
         try:
             result = self._request("POST", f"/runtime/runtimes/{runtime_id}/register", payload)
             self.runtime_session_token = str(result.get("session_token") or "").strip() or None
@@ -299,6 +302,7 @@ class RuntimeClient:
         capabilities: Optional[list[str]] = None,
         execution_targets: Optional[list[str]] = None,
         instance_id: Optional[str] = None,
+        permission_probe: Optional[Dict[str, Dict[str, Any]]] = None,
     ) -> Dict[str, Any]:
         registration = self._remember_registration(
             runtime_id,
@@ -313,7 +317,7 @@ class RuntimeClient:
         self.load_runtime_session(runtime_id)
         if self.runtime_session_token:
             try:
-                self.heartbeat_worker(runtime_id, None, "runtime_session_resume")
+                self.heartbeat_worker(runtime_id, None, "runtime_session_resume", permission_probe=permission_probe)
                 return {
                     "ok": True,
                     "runtime_id": runtime_id,
@@ -335,6 +339,7 @@ class RuntimeClient:
             capabilities=list(registration.get("capabilities") or []),
             execution_targets=list(registration.get("execution_targets") or ["local"]),
             instance_id=str(registration.get("instance_id") or "") or None,
+            permission_probe=permission_probe,
         )
         if self.runtime_session_token or bool(result.get("legacy")):
             result["resumed"] = False
@@ -363,7 +368,7 @@ class RuntimeClient:
                 response["run"] = run
         return response
 
-    def heartbeat_run(self, run_id: str, worker_id: str, note: str):
+    def heartbeat_run(self, run_id: str, worker_id: str, note: str, event: Optional[Dict[str, Any]] = None):
         self._retry_with_reregister(
             worker_id,
             lambda: self._request_with_fallback(
@@ -375,6 +380,21 @@ class RuntimeClient:
                     "session_token": self.runtime_session_token,
                     "instance_id": self.runtime_instance_id,
                     "note": note[:300],
+                    "event": (dict(event) if isinstance(event, dict) else None),
+                },
+            ),
+        )
+
+    def get_task_control_state(self, run_id: str, worker_id: str) -> Dict[str, Any]:
+        return self._retry_with_reregister(
+            worker_id,
+            lambda: self._request(
+                "POST",
+                f"/runtime/tasks/{run_id}/control-state",
+                {
+                    "runtime_id": worker_id,
+                    "session_token": self.runtime_session_token,
+                    "instance_id": self.runtime_instance_id,
                 },
             ),
         )
@@ -460,13 +480,22 @@ class RuntimeClient:
             ),
         )
 
-    def heartbeat_worker(self, worker_id: str, current_run_id: Optional[str], note: str):
+    def heartbeat_worker(
+        self,
+        worker_id: str,
+        current_run_id: Optional[str],
+        note: str,
+        *,
+        permission_probe: Optional[Dict[str, Dict[str, Any]]] = None,
+    ):
         def _payload() -> Dict[str, Any]:
             payload: Dict[str, Any] = {"note": note[:240]}
             if current_run_id:
                 payload["current_run_id"] = current_run_id
             payload["session_token"] = self.runtime_session_token
             payload["instance_id"] = self.runtime_instance_id
+            if isinstance(permission_probe, dict) and permission_probe:
+                payload["permission_probe"] = permission_probe
             return payload
 
         self._retry_with_reregister(

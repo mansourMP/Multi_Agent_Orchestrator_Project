@@ -50,6 +50,10 @@ class RuntimeRuntimeApiTests(unittest.TestCase):
                     "registered_at": "2026-03-27T00:00:00Z",
                     "session_issued_at": "2026-03-27T00:00:00Z",
                     "trust_state": "verified",
+                    "permission_probe": {"screen_recording": {"status": "granted", "source": "probe"}},
+                    "control_state": "active",
+                    "safe_mode_status": {"active": False},
+                    "kill_switch_status": {"active": False},
                 }
             ],
         }
@@ -65,6 +69,8 @@ class RuntimeRuntimeApiTests(unittest.TestCase):
         self.assertEqual(payload["items"][0]["status"], "idle")
         self.assertEqual(payload["items"][0]["policy_mode"], "trusted_full_access")
         self.assertIsNone(payload["items"][0]["current_lease_holder"])
+        self.assertEqual(payload["items"][0]["permission_probe"]["screen_recording"]["status"], "granted")
+        self.assertEqual(payload["items"][0]["control_state"], "active")
 
     @patch("server_modules.runtime_runtime_api.runtime_status_payload")
     def test_legacy_local_workers_status_payload_preserves_counts(self, mock_status_payload):
@@ -194,7 +200,7 @@ class RuntimeRuntimeApiTests(unittest.TestCase):
     def test_register_runtime_routes_exposes_machine_delete(self, mock_revoke_trust, mock_status, mock_delete):
         app = _FakeApp()
         runtime_runtime_api.register_runtime_routes(app)
-        mock_delete.return_value = {"ok": True, "machine_id": "machine-1", "deleted": True}
+        mock_delete.return_value = {"ok": True, "machine_id": "machine-1", "revoked": True, "deleted": False}
         mock_status.return_value = {
             "items": [{"machine_id": "machine-1", "tenant_id": "default", "workspace_id": "default"}],
             "summary": {},
@@ -203,9 +209,55 @@ class RuntimeRuntimeApiTests(unittest.TestCase):
 
         result = self._run_async(handler("machine-1", current_user={"role": "owner", "is_admin": True}))
 
-        self.assertTrue(result["deleted"])
+        self.assertTrue(result["revoked"])
         mock_delete.assert_called_once_with("machine-1")
         mock_revoke_trust.assert_called_once_with("default", "machine-1")
+
+    @patch("server_modules.local_queue.handle_set_local_runtime_control")
+    @patch("server_modules.runtime_runtime_api.local_queue.handle_get_local_workers_status")
+    def test_register_runtime_routes_exposes_machine_suspend(self, mock_status, mock_control):
+        app = _FakeApp()
+        runtime_runtime_api.register_runtime_routes(app)
+        mock_control.return_value = {"ok": True, "machine_id": "machine-1", "action": "suspend"}
+        mock_status.return_value = {
+            "items": [{"machine_id": "machine-1", "tenant_id": "default", "workspace_id": "default"}],
+            "summary": {},
+        }
+        handler = app.routes[("POST", "/machines/{machine_id}/suspend")]
+
+        result = self._run_async(
+            handler(
+                "machine-1",
+                runtime_runtime_api.MachineControlPayload(reason="Maintenance"),
+                current_user={"role": "owner", "is_admin": True},
+            )
+        )
+
+        self.assertEqual(result["action"], "suspend")
+        mock_control.assert_called_once_with("machine-1", action="suspend", reason="Maintenance")
+
+    @patch("server_modules.local_queue.handle_set_local_runtime_control")
+    @patch("server_modules.runtime_runtime_api.local_queue.handle_get_local_workers_status")
+    def test_register_runtime_routes_exposes_machine_resume(self, mock_status, mock_control):
+        app = _FakeApp()
+        runtime_runtime_api.register_runtime_routes(app)
+        mock_control.return_value = {"ok": True, "machine_id": "machine-1", "action": "resume"}
+        mock_status.return_value = {
+            "items": [{"machine_id": "machine-1", "tenant_id": "default", "workspace_id": "default"}],
+            "summary": {},
+        }
+        handler = app.routes[("POST", "/machines/{machine_id}/resume")]
+
+        result = self._run_async(
+            handler(
+                "machine-1",
+                runtime_runtime_api.MachineControlPayload(reason="Recovered"),
+                current_user={"role": "owner", "is_admin": True},
+            )
+        )
+
+        self.assertEqual(result["action"], "resume")
+        mock_control.assert_called_once_with("machine-1", action="resume", reason="Recovered")
 
     def _run_async(self, coroutine):
         import asyncio

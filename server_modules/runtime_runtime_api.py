@@ -46,6 +46,7 @@ class RuntimeRegisterPayload(BaseModel):
     capability_digest: Optional[str] = None
     current_run_id: Optional[str] = None
     note: Optional[str] = None
+    permission_probe: Dict[str, Dict[str, Any]] = Field(default_factory=dict)
 
 
 class RuntimeHeartbeatPayload(BaseModel):
@@ -53,6 +54,7 @@ class RuntimeHeartbeatPayload(BaseModel):
     instance_id: Optional[str] = None
     current_run_id: Optional[str] = None
     note: Optional[str] = None
+    permission_probe: Dict[str, Dict[str, Any]] = Field(default_factory=dict)
 
 
 class MachineEnrollPayload(BaseModel):
@@ -83,6 +85,10 @@ class MachineEnrollmentStatePayload(BaseModel):
 
 class MachineBootstrapCompletePayload(BaseModel):
     enrollment_token: str = Field(min_length=1)
+
+
+class MachineControlPayload(BaseModel):
+    reason: Optional[str] = None
 
 
 class RuntimeTaskClaimRequest(BaseModel):
@@ -299,6 +305,16 @@ def _runtime_summary_from_worker_item(item: Dict[str, Any]) -> Dict[str, Any]:
         "capability_digest": item.get("capability_digest"),
         "trust_state": item.get("trust_state") or "unverified",
         "note": item.get("note"),
+        "permission_probe": item.get("permission_probe") if isinstance(item.get("permission_probe"), dict) else {},
+        "permission_probe_updated_at": item.get("permission_probe_updated_at"),
+        "control_state": item.get("control_state") or "active",
+        "control_state_updated_at": item.get("control_state_updated_at"),
+        "suspended_at": item.get("suspended_at"),
+        "suspended_reason": item.get("suspended_reason"),
+        "revoked_at": item.get("revoked_at"),
+        "revoked_reason": item.get("revoked_reason"),
+        "safe_mode_status": item.get("safe_mode_status") if isinstance(item.get("safe_mode_status"), dict) else {},
+        "kill_switch_status": item.get("kill_switch_status") if isinstance(item.get("kill_switch_status"), dict) else {},
         "enrollment_state": item.get("enrollment_state"),
         "enrollment_requested_at": item.get("enrollment_requested_at"),
         "enrollment_updated_at": item.get("enrollment_updated_at"),
@@ -432,6 +448,8 @@ def register_runtime_routes(app) -> None:
             "busy": sum(1 for item in filtered if bool(item.get("current_run_id"))),
             "idle": sum(1 for item in filtered if bool(item.get("online")) and not bool(item.get("current_run_id"))),
             "offline": sum(1 for item in filtered if not bool(item.get("online"))),
+            "suspended": sum(1 for item in filtered if str(item.get("control_state") or "").strip().lower() == "suspended"),
+            "revoked": sum(1 for item in filtered if str(item.get("control_state") or "").strip().lower() == "revoked"),
         }
         return payload
 
@@ -547,6 +565,60 @@ def register_runtime_routes(app) -> None:
         revoke_workspace_owner_machine_trust(workspace_id, str(machine_id or "").strip())
         return result
 
+    @app.post("/machines/{machine_id}/suspend", dependencies=[Depends(require_api_key)])
+    async def suspend_machine(
+        machine_id: str,
+        payload: Optional[MachineControlPayload] = None,
+        current_user=Depends(require_api_key),
+    ):
+        status_payload = local_queue.handle_get_local_workers_status()
+        items = status_payload.get("items") if isinstance(status_payload.get("items"), list) else []
+        machine = next(
+            (
+                item
+                for item in items
+                if isinstance(item, dict)
+                and str(item.get("machine_id") or item.get("runtime_id") or "").strip() == str(machine_id or "").strip()
+            ),
+            None,
+        )
+        enforce_workspace_access(
+            current_user,
+            (machine or {}).get("workspace_id") or "default",
+            tenant_id=(machine or {}).get("tenant_id"),
+            minimum_role="member",
+            capability_id="machines.manage",
+        )
+        body = payload or MachineControlPayload()
+        return local_queue.handle_set_local_runtime_control(machine_id, action="suspend", reason=body.reason)
+
+    @app.post("/machines/{machine_id}/resume", dependencies=[Depends(require_api_key)])
+    async def resume_machine(
+        machine_id: str,
+        payload: Optional[MachineControlPayload] = None,
+        current_user=Depends(require_api_key),
+    ):
+        status_payload = local_queue.handle_get_local_workers_status()
+        items = status_payload.get("items") if isinstance(status_payload.get("items"), list) else []
+        machine = next(
+            (
+                item
+                for item in items
+                if isinstance(item, dict)
+                and str(item.get("machine_id") or item.get("runtime_id") or "").strip() == str(machine_id or "").strip()
+            ),
+            None,
+        )
+        enforce_workspace_access(
+            current_user,
+            (machine or {}).get("workspace_id") or "default",
+            tenant_id=(machine or {}).get("tenant_id"),
+            minimum_role="member",
+            capability_id="machines.manage",
+        )
+        body = payload or MachineControlPayload()
+        return local_queue.handle_set_local_runtime_control(machine_id, action="resume", reason=body.reason)
+
     @app.get("/local/workers/status", dependencies=[Depends(require_api_key)])
     async def get_legacy_local_workers_status():
         return legacy_local_workers_status_payload()
@@ -567,10 +639,12 @@ def register_runtime_routes(app) -> None:
             execution_targets=body.execution_targets or ["local"],
             instance_id=body.instance_id,
             capability_digest=body.capability_digest,
+            permission_probe=body.permission_probe,
         )
         heartbeat = local_queue.LocalWorkerHeartbeatPayload(
             current_run_id=body.current_run_id,
             note=body.note or "runtime_registered",
+            permission_probe=body.permission_probe,
         )
         local_queue.handle_heartbeat_local_worker(runtime_token, heartbeat)
         status_payload = local_queue.handle_get_local_workers_status()
@@ -604,6 +678,7 @@ def register_runtime_routes(app) -> None:
         local_payload = local_queue.LocalWorkerHeartbeatPayload(
             current_run_id=body.current_run_id,
             note=body.note or "runtime_heartbeat",
+            permission_probe=body.permission_probe,
         )
         result = local_queue.handle_heartbeat_local_worker(runtime_token, local_payload)
         return {

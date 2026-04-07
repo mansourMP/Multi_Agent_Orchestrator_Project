@@ -157,6 +157,18 @@ def build_runtime_registration_record(
     record["last_registered_at"] = now_iso
     record["lease_seconds"] = int(previous.get("lease_seconds") or lease_seconds)
     record["trust_state"] = str(previous.get("trust_state") or "unverified").strip() or "unverified"
+    record["permission_probe"] = (
+        dict(previous.get("permission_probe"))
+        if isinstance(previous.get("permission_probe"), Mapping)
+        else {}
+    )
+    record["permission_probe_updated_at"] = previous.get("permission_probe_updated_at")
+    record["control_state"] = str(previous.get("control_state") or "active").strip().lower() or "active"
+    record["suspended_at"] = previous.get("suspended_at")
+    record["suspended_reason"] = previous.get("suspended_reason")
+    record["revoked_at"] = previous.get("revoked_at")
+    record["revoked_reason"] = previous.get("revoked_reason")
+    record["control_state_updated_at"] = previous.get("control_state_updated_at")
     return record
 
 
@@ -297,6 +309,9 @@ def claim_local_machine_lease(
         worker_capabilities = normalize_capability_ids_fn(
             worker_state.get("capabilities") if isinstance(worker_state, dict) else []
         )
+        worker_control_state = str(
+            (worker_state.get("control_state") if isinstance(worker_state, dict) else None) or "active"
+        ).strip().lower() or "active"
         worker_capability_set = set(worker_capabilities)
         requested_capability_filter = set(normalize_capability_ids_fn(required_capabilities))
         machine_id = str(
@@ -304,6 +319,14 @@ def claim_local_machine_lease(
             or (worker_state.get("runtime_id") if isinstance(worker_state, dict) else None)
             or worker_id
         ).strip() or str(worker_id or "").strip()
+        if worker_control_state in {"suspended", "revoked"}:
+            mark_local_worker_seen_fn(
+                worker_id,
+                None,
+                "idle",
+                note=f"idle_machine_{worker_control_state}",
+            )
+            return None
         while pending_run_ids:
             run_id = pending_run_ids.pop(0)
             state_changed = True

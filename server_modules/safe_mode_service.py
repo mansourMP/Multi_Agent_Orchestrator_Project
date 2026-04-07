@@ -256,6 +256,92 @@ def is_capability_disabled(
     )
 
 
+def resolve_machine_policy_status(
+    *,
+    tenant_id: str | None = None,
+    workspace_id: str | None = None,
+    machine_id: str | None = None,
+    capability_ids: List[str] | None = None,
+) -> Dict[str, Any]:
+    tenant_token = _normalize_token(tenant_id)
+    workspace_token = _normalize_token(workspace_id)
+    machine_token = _normalize_token(machine_id)
+    capability_tokens = [_normalize_token(item) for item in (capability_ids or []) if _normalize_token(item)]
+
+    safe_chain: list[dict[str, Any]] = []
+    kill_chain: list[dict[str, Any]] = []
+
+    def _push(chain: list[dict[str, Any]], state_type: str, scope: str, state: Any, *, extra: Dict[str, Any] | None = None) -> None:
+        entry = {
+            "type": state_type,
+            "scope": scope,
+            "reason": str(getattr(state, "reason", "") or ""),
+            "metadata": dict(getattr(state, "metadata", {}) or {}),
+        }
+        if extra:
+            entry.update(extra)
+        chain.append(entry)
+
+    with _LOCK:
+        if bool(_GLOBAL_SAFE_MODE.enabled):
+            _push(safe_chain, "safe_mode", "global", _GLOBAL_SAFE_MODE)
+        if bool(_GLOBAL_KILL_SWITCH.enabled):
+            _push(kill_chain, "kill_switch", "global", _GLOBAL_KILL_SWITCH)
+
+        tenant_safe = _TENANT_SAFE_MODE.get(tenant_token) if tenant_token else None
+        if isinstance(tenant_safe, SafeModeState) and tenant_safe.enabled:
+            _push(safe_chain, "safe_mode", "tenant", tenant_safe, extra={"tenant_id": tenant_token})
+        tenant_kill = _TENANT_KILL_SWITCHES.get(tenant_token) if tenant_token else None
+        if isinstance(tenant_kill, KillSwitchState) and tenant_kill.enabled:
+            _push(kill_chain, "kill_switch", "tenant", tenant_kill, extra={"tenant_id": tenant_token})
+
+        workspace_safe = _WORKSPACE_SAFE_MODE.get(workspace_token) if workspace_token else None
+        if isinstance(workspace_safe, SafeModeState) and workspace_safe.enabled:
+            _push(safe_chain, "safe_mode", "workspace", workspace_safe, extra={"workspace_id": workspace_token})
+        workspace_kill = _WORKSPACE_KILL_SWITCHES.get(workspace_token) if workspace_token else None
+        if isinstance(workspace_kill, KillSwitchState) and workspace_kill.enabled:
+            _push(kill_chain, "kill_switch", "workspace", workspace_kill, extra={"workspace_id": workspace_token})
+
+        machine_safe = _MACHINE_SAFE_MODE.get(machine_token) if machine_token else None
+        if isinstance(machine_safe, SafeModeState) and machine_safe.enabled:
+            _push(safe_chain, "safe_mode", "machine", machine_safe, extra={"machine_id": machine_token})
+        machine_kill = _MACHINE_KILL_SWITCHES.get(machine_token) if machine_token else None
+        if isinstance(machine_kill, KillSwitchState) and machine_kill.enabled:
+            _push(kill_chain, "kill_switch", "machine", machine_kill, extra={"machine_id": machine_token})
+
+        for capability_token in capability_tokens:
+            capability_kill = _CAPABILITY_KILL_SWITCHES.get(capability_token)
+            if isinstance(capability_kill, KillSwitchState) and capability_kill.enabled:
+                _push(
+                    kill_chain,
+                    "kill_switch",
+                    "capability",
+                    capability_kill,
+                    extra={"capability_id": capability_token},
+                )
+
+    def _summarize(chain: list[dict[str, Any]]) -> Dict[str, Any]:
+        if not chain:
+            return {
+                "active": False,
+                "scope": None,
+                "reason": "",
+                "matched_chain": [],
+            }
+        matched = chain[-1]
+        return {
+            "active": True,
+            "scope": matched.get("scope"),
+            "reason": str(matched.get("reason") or ""),
+            "matched_chain": chain,
+        }
+
+    return {
+        "safe_mode": _summarize(safe_chain),
+        "kill_switch": _summarize(kill_chain),
+    }
+
+
 def state_snapshot() -> Dict[str, Any]:
     with _LOCK:
         return {

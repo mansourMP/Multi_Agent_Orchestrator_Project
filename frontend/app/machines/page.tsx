@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { AlertCircle, Cpu, Laptop, RefreshCw, Server, ShieldCheck, Workflow } from 'lucide-react';
+import { AlertCircle, Cpu, Laptop, PauseCircle, Play, RefreshCw, ShieldCheck } from 'lucide-react';
 import DoctorPreflightNotice from '@/components/orion/DoctorPreflightNotice';
 import { PageHero } from '@/components/orion/page/PageHero';
 import { PageHeroCard } from '@/components/orion/page/PageHeroCard';
@@ -12,6 +12,8 @@ import { ApiError, fetchRuntimeMachines } from '@/lib/api';
 import { fetchDoctorRunGate, type DoctorRunGateDecision } from '@/lib/doctorPreflight';
 
 type RuntimeMachine = {
+  tenant_id?: string;
+  workspace_id?: string;
   runtime_id: string;
   runtime_type: string;
   display_name: string;
@@ -34,6 +36,30 @@ type RuntimeMachine = {
   enrollment_requested_at?: string | null;
   enrollment_updated_at?: string | null;
   bootstrap_error?: string | null;
+  machine_enrollment_scope?: string | null;
+  permission_probe?: Record<string, {
+    status?: string | null;
+    source?: string | null;
+    detail?: string | null;
+    updated_at?: string | null;
+  }>;
+  permission_probe_updated_at?: string | null;
+  control_state?: string | null;
+  control_state_updated_at?: string | null;
+  suspended_at?: string | null;
+  suspended_reason?: string | null;
+  revoked_at?: string | null;
+  revoked_reason?: string | null;
+  safe_mode_status?: {
+    active?: boolean;
+    scope?: string | null;
+    reason?: string | null;
+  };
+  kill_switch_status?: {
+    active?: boolean;
+    scope?: string | null;
+    reason?: string | null;
+  };
 };
 
 type RuntimeMachinesPayload = {
@@ -44,6 +70,8 @@ type RuntimeMachinesPayload = {
     busy?: number;
     idle?: number;
     offline?: number;
+    suspended?: number;
+    revoked?: number;
     pending_runs?: number;
     claimed_runs?: number;
   };
@@ -117,6 +145,9 @@ function relativeRuntimeTime(value?: string | null): string {
 }
 
 function statusTone(machine: RuntimeMachine): 'green' | 'yellow' | 'red' | 'grey' {
+  const controlState = String(machine.control_state || '').trim().toLowerCase();
+  if (controlState === 'revoked') return 'red';
+  if (controlState === 'suspended') return 'yellow';
   const enrollmentState = String(machine.enrollment_state || '').trim().toLowerCase();
   if (enrollmentState === 'failed') return 'red';
   if (enrollmentState && enrollmentState !== 'healthy') return 'yellow';
@@ -127,6 +158,9 @@ function statusTone(machine: RuntimeMachine): 'green' | 'yellow' | 'red' | 'grey
 }
 
 function enrollmentLabel(machine: RuntimeMachine): string {
+  const controlState = String(machine.control_state || '').trim().toLowerCase();
+  if (controlState === 'revoked') return 'Revoked';
+  if (controlState === 'suspended') return 'Suspended';
   const state = String(machine.enrollment_state || '').trim().toLowerCase();
   if (!state || state === 'healthy') {
     return machine.online ? (machine.status === 'busy' ? 'Busy' : 'Online') : 'Offline';
@@ -145,6 +179,33 @@ function hasPendingEnrollment(machine: RuntimeMachine): boolean {
   );
 }
 
+function permissionTone(status?: string | null): 'green' | 'yellow' | 'red' | 'grey' {
+  const token = String(status || '').trim().toLowerCase();
+  if (token === 'granted') return 'green';
+  if (token === 'denied') return 'red';
+  if (token === 'unknown') return 'yellow';
+  return 'grey';
+}
+
+function formatPermissionStatus(status?: string | null): string {
+  const token = String(status || '').trim().toLowerCase();
+  if (token === 'granted') return 'Granted';
+  if (token === 'denied') return 'Denied';
+  if (token === 'unknown') return 'Pending probe';
+  if (token === 'unsupported') return 'Not available';
+  return 'Unknown';
+}
+
+function policySummary(policy?: { active?: boolean; scope?: string | null; reason?: string | null }): string {
+  if (!policy?.active) return 'Normal';
+  const scope = String(policy.scope || '').trim();
+  const reason = String(policy.reason || '').trim();
+  if (scope && reason) return `${scope} · ${reason}`;
+  if (scope) return scope;
+  if (reason) return reason;
+  return 'Active';
+}
+
 export default function MachinesPage() {
   const [payload, setPayload] = useState<RuntimeMachinesPayload | null>(null);
   const [loading, setLoading] = useState(true);
@@ -152,6 +213,7 @@ export default function MachinesPage() {
   const [doctorDecision, setDoctorDecision] = useState<DoctorRunGateDecision | null>(null);
   const [enrolling, setEnrolling] = useState(false);
   const [revokingMachineId, setRevokingMachineId] = useState<string | null>(null);
+  const [controllingMachineId, setControllingMachineId] = useState<string | null>(null);
   const [enrollMessage, setEnrollMessage] = useState('');
 
   const loadMachines = useCallback(async () => {
@@ -232,6 +294,7 @@ export default function MachinesPage() {
     if (!normalized) return;
     setRevokingMachineId(normalized);
     setError('');
+    setEnrollMessage('');
     try {
       const response = await fetch(`/api/machines/${encodeURIComponent(normalized)}`, {
         method: 'DELETE',
@@ -240,11 +303,39 @@ export default function MachinesPage() {
       if (!response.ok) {
         throw new Error((body as { detail?: string } | null)?.detail || 'Unable to revoke this machine.');
       }
+      setEnrollMessage('Machine revoked. Active local work will pause before the next action and new leases are blocked.');
       await loadMachines();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unable to revoke this machine.');
     } finally {
       setRevokingMachineId(null);
+    }
+  }, [loadMachines]);
+
+  const handleControl = useCallback(async (machineId: string, action: 'suspend' | 'resume') => {
+    const normalized = String(machineId || '').trim();
+    if (!normalized) return;
+    setControllingMachineId(normalized);
+    setError('');
+    setEnrollMessage('');
+    try {
+      const response = await fetch(`/api/machines/${encodeURIComponent(normalized)}/${action}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          reason: action === 'suspend' ? 'Suspended from fleet controls.' : 'Resumed from fleet controls.',
+        }),
+      });
+      const body = await response.json().catch(() => null);
+      if (!response.ok) {
+        throw new Error((body as { detail?: string } | null)?.detail || `Unable to ${action} this machine.`);
+      }
+      setEnrollMessage(action === 'suspend' ? 'Machine suspended. New leases are blocked and active local work will pause.' : 'Machine resumed and ready for new local work.');
+      await loadMachines();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : `Unable to ${action} this machine.`);
+    } finally {
+      setControllingMachineId(null);
     }
   }, [loadMachines]);
 
@@ -336,8 +427,18 @@ export default function MachinesPage() {
             <div className="orion-machines-kpi-label">Capabilities</div>
             <div className="orion-machines-kpi-value">{capabilityCount}</div>
           </div>
+          <div className="orion-machines-kpi-card">
+            <div className="orion-machines-kpi-label">Suspended</div>
+            <div className="orion-machines-kpi-value">{summary.suspended ?? 0}</div>
+          </div>
+          <div className="orion-machines-kpi-card">
+            <div className="orion-machines-kpi-label">Revoked</div>
+            <div className="orion-machines-kpi-value">{summary.revoked ?? 0}</div>
+          </div>
         </div>
       </section>
+
+      {enrollMessage ? <div className="orion-page-state-detail">{enrollMessage}</div> : null}
 
       {!loading && !error && localMachineOnline && capabilityWaitingCount > 0 ? (
         <PageSection
@@ -578,6 +679,16 @@ export default function MachinesPage() {
                   <span className="orion-machine-meta-value">{relativeRuntimeTime(machine.last_seen_at)}</span>
                 </div>
                 <div className="orion-machine-meta-row">
+                  <span className="orion-machine-meta-label">Control</span>
+                  <span className="orion-machine-meta-value">
+                    {String(machine.control_state || 'active').trim().toLowerCase() === 'revoked'
+                      ? `Revoked${machine.revoked_reason ? ` · ${machine.revoked_reason}` : ''}`
+                      : String(machine.control_state || 'active').trim().toLowerCase() === 'suspended'
+                        ? `Suspended${machine.suspended_reason ? ` · ${machine.suspended_reason}` : ''}`
+                        : 'Active'}
+                  </span>
+                </div>
+                <div className="orion-machine-meta-row">
                   <span className="orion-machine-meta-label">Registered</span>
                   <span className="orion-machine-meta-value">{formatTimestamp(machine.registered_at || machine.last_registered_at)}</span>
                 </div>
@@ -609,6 +720,14 @@ export default function MachinesPage() {
                   <span className="orion-machine-meta-label">Lease holder</span>
                   <span className="orion-machine-meta-value">{machine.current_lease_holder || 'None'}</span>
                 </div>
+                <div className="orion-machine-meta-row">
+                  <span className="orion-machine-meta-label">Safe mode</span>
+                  <span className="orion-machine-meta-value">{policySummary(machine.safe_mode_status)}</span>
+                </div>
+                <div className="orion-machine-meta-row">
+                  <span className="orion-machine-meta-label">Kill switch</span>
+                  <span className="orion-machine-meta-value">{policySummary(machine.kill_switch_status)}</span>
+                </div>
               </div>
 
               <div className="orion-machine-card-section">
@@ -637,20 +756,66 @@ export default function MachinesPage() {
                 </div>
               </div>
 
-              {machine.note ? (
-                <div className="orion-machine-card-note">
-                  <Workflow size={14} />
-                  {machine.note}
+              <div className="orion-machine-card-section">
+                <div className="orion-machine-section-label">Permissions</div>
+                <div className="orion-machine-card-meta">
+                  {[
+                    ['screen_recording', 'Screen recording'],
+                    ['accessibility', 'Accessibility'],
+                    ['browser_session', 'Browser / session'],
+                    ['shell', 'Shell'],
+                  ].map(([permissionKey, label]) => {
+                    const entry = machine.permission_probe?.[permissionKey];
+                    return (
+                      <div key={`${machine.runtime_id}-${permissionKey}`} className="orion-machine-meta-row">
+                        <span className="orion-machine-meta-label">{label}</span>
+                        <span className="orion-machine-meta-value">
+                          <span className="orion-chip" data-status-tone={permissionTone(entry?.status)}>
+                            {formatPermissionStatus(entry?.status)}
+                          </span>
+                          {entry?.detail ? ` · ${entry.detail}` : ''}
+                        </span>
+                      </div>
+                    );
+                  })}
+                  {machine.permission_probe_updated_at ? (
+                    <div className="orion-machine-meta-row">
+                      <span className="orion-machine-meta-label">Permission probe</span>
+                      <span className="orion-machine-meta-value">{formatTimestamp(machine.permission_probe_updated_at)}</span>
+                    </div>
+                  ) : null}
                 </div>
-              ) : null}
+              </div>
+
+              {machine.note ? <div className="orion-machine-card-note">{machine.note}</div> : null}
 
               <div className="orion-inline-actions" style={{ marginTop: 14 }}>
+                {String(machine.control_state || '').trim().toLowerCase() === 'suspended' ? (
+                  <button
+                    type="button"
+                    className="orion-btn orion-btn-ghost"
+                    onClick={() => void handleControl(machine.runtime_id, 'resume')}
+                    disabled={controllingMachineId === machine.runtime_id}
+                  >
+                    <Play size={14} />
+                    {controllingMachineId === machine.runtime_id ? 'Resuming...' : 'Resume'}
+                  </button>
+                ) : String(machine.control_state || '').trim().toLowerCase() !== 'revoked' ? (
+                  <button
+                    type="button"
+                    className="orion-btn orion-btn-ghost"
+                    onClick={() => void handleControl(machine.runtime_id, 'suspend')}
+                    disabled={controllingMachineId === machine.runtime_id}
+                  >
+                    <PauseCircle size={14} />
+                    {controllingMachineId === machine.runtime_id ? 'Suspending...' : 'Suspend'}
+                  </button>
+                ) : null}
                 <button
                   type="button"
                   className="orion-btn orion-btn-ghost"
                   onClick={() => void handleRevoke(machine.runtime_id)}
-                  disabled={Boolean(machine.current_task_id) || revokingMachineId === machine.runtime_id}
-                  title={machine.current_task_id ? 'Cannot revoke a machine while it holds an active run.' : undefined}
+                  disabled={String(machine.control_state || '').trim().toLowerCase() === 'revoked' || revokingMachineId === machine.runtime_id}
                 >
                   {revokingMachineId === machine.runtime_id ? 'Revoking...' : 'Revoke'}
                 </button>

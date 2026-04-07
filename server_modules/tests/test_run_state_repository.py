@@ -5,8 +5,9 @@ from server_modules import run_state_repository
 
 
 class _FakePool:
-    def __init__(self, *, fetchrow_result=None, fetch_result=None, execute_error: Exception | None = None):
+    def __init__(self, *, fetchrow_result=None, fetchrow_results=None, fetch_result=None, execute_error: Exception | None = None):
         self.fetchrow_result = fetchrow_result
+        self.fetchrow_results = list(fetchrow_results or [])
         self.fetch_result = list(fetch_result or [])
         self.execute_error = execute_error
         self.execute_calls = []
@@ -23,6 +24,8 @@ class _FakePool:
         self.fetchrow_calls.append((query, args))
         if self.execute_error is not None:
             raise self.execute_error
+        if self.fetchrow_results:
+            return self.fetchrow_results.pop(0)
         return self.fetchrow_result
 
     async def fetch(self, query, *args):
@@ -121,6 +124,11 @@ class RunStateRepositoryTests(unittest.IsolatedAsyncioTestCase):
                     "created_at": "2026-04-07T00:00:00Z",
                     "delivered_at": None,
                     "last_replayed_at": None,
+                    "retry_count": 0,
+                    "last_delivery_error": None,
+                    "last_attempted_at": None,
+                    "next_attempt_at": None,
+                    "poisoned_at": None,
                 }
             ]
         )
@@ -145,6 +153,37 @@ class RunStateRepositoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("runtime_outbox", pool.execute_calls[1][0])
         self.assertEqual(len(pool.fetch_calls), 1)
         self.assertIn("UPDATE runtime_outbox", pool.execute_calls[-1][0])
+
+    async def test_record_outbox_delivery_failure_and_status_snapshot_include_retry_fields(self):
+        pool = _FakePool(
+            fetchrow_results=[
+                {
+                    "undelivered_count": 2,
+                    "poisoned_count": 1,
+                    "total_retry_count": 5,
+                    "max_retry_count": 3,
+                },
+                {
+                    "event_id": "evt-1",
+                    "last_delivery_error": "boom",
+                    "last_attempted_at": "2026-04-07T00:01:00Z",
+                    "retry_count": 3,
+                },
+            ]
+        )
+        with patch("server_modules.run_state_repository.runtime_db.get_pool", return_value=pool):
+            await run_state_repository.record_outbox_delivery_failure(
+                "evt-1",
+                error_text="boom",
+                retry_delay_seconds=15,
+                poison=False,
+            )
+            status = await run_state_repository.get_outbox_delivery_status()
+
+        self.assertTrue(any("UPDATE runtime_outbox" in query for query, _args in pool.execute_calls))
+        self.assertEqual(status["undelivered_count"], 2)
+        self.assertEqual(status["poisoned_count"], 1)
+        self.assertEqual(status["last_delivery_error"]["event_id"], "evt-1")
 
     async def test_list_expired_local_claims_returns_joined_run_payloads(self):
         pool = _FakePool(

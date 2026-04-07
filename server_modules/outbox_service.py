@@ -4,12 +4,18 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 import logging
 from pathlib import Path
+import threading
+import time
 from typing import Any, Callable, Dict, Mapping, Optional, Sequence
+import uuid
 
 from server_modules.runtime_state_store import replace_local_runtime_state
 
 
 LOGGER = logging.getLogger(__name__)
+OUTBOX_DELIVERY_RETRY_BACKOFF_SECONDS: tuple[int, ...] = (5, 15, 30, 60, 120)
+OUTBOX_MAX_DELIVERY_ATTEMPTS = len(OUTBOX_DELIVERY_RETRY_BACKOFF_SECONDS)
+
 
 @dataclass(slots=True)
 class OutboxEvent:
@@ -22,6 +28,12 @@ class OutboxEvent:
     trace_id: str = ""
     idempotency_key: str = ""
     payload: Dict[str, Any] = field(default_factory=dict)
+    created_at: Optional[str] = None
+    retry_count: int = 0
+    last_delivery_error: Optional[str] = None
+    last_attempted_at: Optional[str] = None
+    next_attempt_at: Optional[str] = None
+    poisoned_at: Optional[str] = None
 
 
 @dataclass(slots=True)
@@ -33,6 +45,583 @@ class LocalRuntimeStateSnapshot:
 
 def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _normalized_scope_token(value: Any, *, default: str = "default") -> str:
+    token = str(value or "").strip()
+    return token or default
+
+
+def _build_event_id(event_type: str, idempotency_key: str) -> str:
+    normalized_key = str(idempotency_key or "").strip()
+    if normalized_key:
+        return f"{event_type}:{normalized_key}"
+    return f"{event_type}:{uuid.uuid4().hex}"
+
+
+def _persist_outbox_event(
+    event: OutboxEvent,
+    *,
+    persist_outbox_event_fn: Optional[Callable[..., Any]] = None,
+) -> None:
+    if persist_outbox_event_fn is None:
+        try:
+            from server_modules import run_state_repository
+
+            persist_outbox_event_fn = run_state_repository.sync_persist_outbox_event
+        except Exception:
+            persist_outbox_event_fn = None
+    if not callable(persist_outbox_event_fn):
+        return
+    try:
+        persist_outbox_event_fn(
+            event_id=event.event_id,
+            event_type=event.event_type,
+            tenant_id=event.tenant_id,
+            workspace_id=event.workspace_id,
+            run_id=event.run_id,
+            machine_id=event.machine_id,
+            trace_id=event.trace_id,
+            idempotency_key=event.idempotency_key,
+            payload=dict(event.payload),
+        )
+    except Exception as exc:
+        LOGGER.warning("Failed to persist outbox event %s: %s", event.event_id, exc)
+
+
+def emit_runtime_event(
+    *,
+    event_type: str,
+    tenant_id: str,
+    workspace_id: str,
+    run_id: Optional[str] = None,
+    machine_id: Optional[str] = None,
+    trace_id: str = "",
+    idempotency_key: str = "",
+    payload: Optional[Dict[str, Any]] = None,
+    event_id: Optional[str] = None,
+    persist_outbox_event_fn: Optional[Callable[..., Any]] = None,
+) -> OutboxEvent:
+    event = OutboxEvent(
+        event_id=str(event_id or "").strip() or _build_event_id(event_type, idempotency_key),
+        event_type=str(event_type or "").strip() or "runtime_event",
+        tenant_id=_normalized_scope_token(tenant_id),
+        workspace_id=_normalized_scope_token(workspace_id),
+        run_id=str(run_id or "").strip() or None,
+        machine_id=str(machine_id or "").strip() or None,
+        trace_id=str(trace_id or "").strip(),
+        idempotency_key=str(idempotency_key or "").strip(),
+        payload=dict(payload or {}),
+        created_at=_utc_now_iso(),
+    )
+    _persist_outbox_event(event, persist_outbox_event_fn=persist_outbox_event_fn)
+    return event
+
+
+def emit_approval_requested_event(
+    *,
+    approval_id: str,
+    run_id: str,
+    tenant_id: str,
+    workspace_id: str,
+    prompt: str,
+    ttl_seconds: int,
+    expires_at: str,
+    correlation_id: str,
+    source: str = "runtime",
+    actor: str = "system",
+    target: Optional[str] = None,
+    actions: Optional[Sequence[str]] = None,
+    metadata: Optional[Dict[str, Any]] = None,
+    trace_id: str = "",
+    persist_outbox_event_fn: Optional[Callable[..., Any]] = None,
+) -> OutboxEvent:
+    approval_token = str(approval_id or "").strip()
+    action_items = [str(item).strip() for item in (actions or []) if str(item).strip()]
+    return emit_runtime_event(
+        event_type="approval_requested",
+        tenant_id=tenant_id,
+        workspace_id=workspace_id,
+        run_id=run_id,
+        trace_id=trace_id,
+        idempotency_key=f"approval_requested:{approval_token}",
+        payload={
+            "approval_id": approval_token,
+            "run_id": str(run_id or "").strip(),
+            "prompt": str(prompt or "").strip(),
+            "ttl_seconds": max(0, int(ttl_seconds or 0)),
+            "expires_at": str(expires_at or "").strip(),
+            "correlation_id": str(correlation_id or "").strip(),
+            "source": str(source or "runtime").strip() or "runtime",
+            "actor": str(actor or "system").strip() or "system",
+            "target": str(target or "").strip() or None,
+            "actions": action_items,
+            "metadata": dict(metadata or {}),
+            "emitted_at": _utc_now_iso(),
+        },
+        persist_outbox_event_fn=persist_outbox_event_fn,
+    )
+
+
+def emit_approval_resolved_event(
+    *,
+    approval_id: str,
+    run_id: str,
+    tenant_id: str,
+    workspace_id: str,
+    resolution: str,
+    actor: str,
+    reason: str = "",
+    trace_id: str = "",
+    persist_outbox_event_fn: Optional[Callable[..., Any]] = None,
+) -> OutboxEvent:
+    approval_token = str(approval_id or "").strip()
+    resolution_token = str(resolution or "").strip() or "approved"
+    return emit_runtime_event(
+        event_type="approval_resolved",
+        tenant_id=tenant_id,
+        workspace_id=workspace_id,
+        run_id=run_id,
+        trace_id=trace_id,
+        idempotency_key=f"approval_resolved:{approval_token}:{resolution_token}",
+        payload={
+            "approval_id": approval_token,
+            "run_id": str(run_id or "").strip(),
+            "resolution": resolution_token,
+            "actor": str(actor or "").strip() or "system",
+            "reason": str(reason or ""),
+            "emitted_at": _utc_now_iso(),
+        },
+        persist_outbox_event_fn=persist_outbox_event_fn,
+    )
+
+
+def emit_run_transition_event(
+    *,
+    run_id: str,
+    tenant_id: str,
+    workspace_id: str,
+    from_state: str,
+    to_state: str,
+    actor: str,
+    trace_id: str = "",
+    persist_outbox_event_fn: Optional[Callable[..., Any]] = None,
+) -> OutboxEvent:
+    run_token = str(run_id or "").strip()
+    from_token = str(from_state or "").strip() or "unknown"
+    to_token = str(to_state or "").strip() or "unknown"
+    return emit_runtime_event(
+        event_type="run_transition",
+        tenant_id=tenant_id,
+        workspace_id=workspace_id,
+        run_id=run_token,
+        trace_id=trace_id,
+        idempotency_key=f"run_transition:{run_token}:{from_token}:{to_token}",
+        payload={
+            "run_id": run_token,
+            "from_state": from_token,
+            "to_state": to_token,
+            "actor": str(actor or "").strip() or "runtime",
+            "emitted_at": _utc_now_iso(),
+        },
+        persist_outbox_event_fn=persist_outbox_event_fn,
+    )
+
+
+def emit_artifact_created_event(
+    *,
+    run_id: str,
+    tenant_id: str,
+    workspace_id: str,
+    artifact: Mapping[str, Any],
+    trace_id: str = "",
+    index: int = 0,
+    persist_outbox_event_fn: Optional[Callable[..., Any]] = None,
+) -> OutboxEvent:
+    artifact_payload = dict(artifact) if isinstance(artifact, Mapping) else {}
+    artifact_path = str(
+        artifact_payload.get("path")
+        or artifact_payload.get("file_path")
+        or artifact_payload.get("url")
+        or f"index:{max(0, int(index))}"
+    ).strip()
+    artifact_kind = str(artifact_payload.get("kind") or artifact_payload.get("type") or "artifact").strip()
+    return emit_runtime_event(
+        event_type="artifact_created",
+        tenant_id=tenant_id,
+        workspace_id=workspace_id,
+        run_id=run_id,
+        trace_id=trace_id,
+        idempotency_key=f"artifact_created:{run_id}:{artifact_path}:{index}",
+        payload={
+            "run_id": str(run_id or "").strip(),
+            "artifact_index": max(0, int(index)),
+            "artifact_kind": artifact_kind,
+            "artifact_path": artifact_path,
+            "artifact": artifact_payload,
+            "emitted_at": _utc_now_iso(),
+        },
+        persist_outbox_event_fn=persist_outbox_event_fn,
+    )
+
+
+def emit_machine_event(
+    *,
+    machine_id: str,
+    tenant_id: str,
+    workspace_id: str,
+    action: str,
+    machine_payload: Optional[Dict[str, Any]] = None,
+    trace_id: str = "",
+    error: Optional[str] = None,
+    persist_outbox_event_fn: Optional[Callable[..., Any]] = None,
+) -> OutboxEvent:
+    machine_token = str(machine_id or "").strip()
+    action_token = str(action or "").strip() or "updated"
+    payload = dict(machine_payload or {})
+    if error:
+        payload["error"] = str(error)
+    payload.setdefault("machine_id", machine_token)
+    payload.setdefault("action", action_token)
+    payload.setdefault("emitted_at", _utc_now_iso())
+    return emit_runtime_event(
+        event_type="machine_event",
+        tenant_id=tenant_id,
+        workspace_id=workspace_id,
+        machine_id=machine_token,
+        trace_id=trace_id,
+        idempotency_key=f"machine_event:{machine_token}:{action_token}:{payload.get('enrollment_state') or payload.get('status') or ''}",
+        payload=payload,
+        persist_outbox_event_fn=persist_outbox_event_fn,
+    )
+
+
+def emit_notification_event(
+    *,
+    tenant_id: str,
+    workspace_id: str,
+    action: str,
+    text: str,
+    run_id: Optional[str] = None,
+    machine_id: Optional[str] = None,
+    trace_id: str = "",
+    metadata: Optional[Dict[str, Any]] = None,
+    persist_outbox_event_fn: Optional[Callable[..., Any]] = None,
+) -> OutboxEvent:
+    action_token = str(action or "").strip() or "notification"
+    return emit_runtime_event(
+        event_type="notification",
+        tenant_id=tenant_id,
+        workspace_id=workspace_id,
+        run_id=run_id,
+        machine_id=machine_id,
+        trace_id=trace_id,
+        idempotency_key=f"notification:{action_token}:{run_id or machine_id or workspace_id}:{str(text or '').strip()}",
+        payload={
+            "action": action_token,
+            "text": str(text or "").strip(),
+            "metadata": dict(metadata or {}),
+            "emitted_at": _utc_now_iso(),
+        },
+        persist_outbox_event_fn=persist_outbox_event_fn,
+    )
+
+
+def _outbox_event_from_item(item: Mapping[str, Any]) -> Optional[OutboxEvent]:
+    if not isinstance(item, Mapping):
+        return None
+    event_id = str(item.get("event_id") or "").strip()
+    if not event_id:
+        return None
+    payload = dict(item.get("payload") or {}) if isinstance(item.get("payload"), Mapping) else {}
+    return OutboxEvent(
+        event_id=event_id,
+        event_type=str(item.get("event_type") or "").strip() or "runtime_event",
+        tenant_id=_normalized_scope_token(item.get("tenant_id")),
+        workspace_id=_normalized_scope_token(item.get("workspace_id")),
+        run_id=str(item.get("run_id") or "").strip() or None,
+        machine_id=str(item.get("machine_id") or "").strip() or None,
+        trace_id=str(item.get("trace_id") or "").strip(),
+        idempotency_key=str(item.get("idempotency_key") or "").strip(),
+        payload=payload,
+        created_at=str(item.get("created_at") or "").strip() or None,
+        retry_count=int(item.get("retry_count") or 0),
+        last_delivery_error=str(item.get("last_delivery_error") or "").strip() or None,
+        last_attempted_at=str(item.get("last_attempted_at") or "").strip() or None,
+        next_attempt_at=str(item.get("next_attempt_at") or "").strip() or None,
+        poisoned_at=str(item.get("poisoned_at") or "").strip() or None,
+    )
+
+
+def _delivery_text_for_event(event: OutboxEvent) -> str:
+    payload = event.payload if isinstance(event.payload, dict) else {}
+    if event.event_type == "approval_requested":
+        prompt = str(payload.get("prompt") or "").strip()
+        return prompt or f"Approval requested for run {event.run_id or 'unknown'}."
+    if event.event_type == "approval_resolved":
+        resolution = str(payload.get("resolution") or "approved").strip()
+        return f"Approval {resolution} for run {event.run_id or 'unknown'}."
+    if event.event_type == "run_transition":
+        to_state = str(payload.get("to_state") or "").strip() or "updated"
+        return f"Run {event.run_id or 'unknown'} moved to {to_state}."
+    if event.event_type == "artifact_created":
+        artifact_path = str(payload.get("artifact_path") or "").strip()
+        return artifact_path or f"Artifact created for run {event.run_id or 'unknown'}."
+    if event.event_type == "machine_event":
+        action = str(payload.get("action") or "updated").strip()
+        machine_id = str(payload.get("machine_id") or event.machine_id or "").strip() or "unknown"
+        return f"Machine {machine_id} {action.replace('_', ' ')}."
+    if event.event_type == "notification":
+        return str(payload.get("text") or "").strip() or "Notification"
+    return str(payload.get("text") or payload.get("summary") or event.event_type).strip() or event.event_type
+
+
+def deliver_outbox_event(
+    event: OutboxEvent,
+    *,
+    append_channel_event_item_fn: Optional[Callable[..., Any]] = None,
+) -> bool:
+    if append_channel_event_item_fn is None:
+        try:
+            from server_modules import runtime_events
+
+            append_channel_event_item_fn = runtime_events.append_channel_event_item
+        except Exception:
+            append_channel_event_item_fn = None
+    if not callable(append_channel_event_item_fn):
+        return False
+    payload = dict(event.payload or {})
+    session_key = (
+        f"run:{event.run_id}"
+        if event.run_id
+        else f"machine:{event.machine_id}"
+        if event.machine_id
+        else f"workspace:{event.workspace_id}"
+    )
+    action = str(payload.get("action") or event.event_type).strip().lower()
+    text = _delivery_text_for_event(event)
+    metadata = {
+        "outbox_event_id": event.event_id,
+        "outbox_event_type": event.event_type,
+        "outbox_idempotency_key": event.idempotency_key,
+        "tenant_id": event.tenant_id,
+        "workspace_id": event.workspace_id,
+        **payload,
+    }
+    append_channel_event_item_fn(
+        channel="runtime",
+        direction="system",
+        event_type=event.event_type,
+        text=text,
+        workspace_id=event.workspace_id,
+        session_key=session_key,
+        session_id=session_key,
+        message_id=event.event_id,
+        run_id=event.run_id,
+        trace_id=event.trace_id,
+        action=action,
+        metadata=metadata,
+        event_id=event.event_id,
+        occurred_at=event.created_at or payload.get("emitted_at"),
+    )
+    return True
+
+
+def _delivery_retry_delay_for_attempt(attempt_number: int) -> Optional[int]:
+    if attempt_number >= OUTBOX_MAX_DELIVERY_ATTEMPTS:
+        return None
+    return OUTBOX_DELIVERY_RETRY_BACKOFF_SECONDS[max(0, attempt_number - 1)]
+
+
+def deliver_due_outbox_events_once(
+    *,
+    older_than_seconds: int = 0,
+    limit: int = 200,
+    list_undelivered_outbox_events_fn: Optional[Callable[..., Sequence[Mapping[str, Any]]]] = None,
+    mark_outbox_event_delivered_fn: Optional[Callable[[str], Any]] = None,
+    record_outbox_delivery_failure_fn: Optional[Callable[..., Any]] = None,
+    deliver_event_fn: Optional[Callable[[OutboxEvent], Any]] = None,
+    get_outbox_delivery_status_fn: Optional[Callable[[], Dict[str, Any]]] = None,
+) -> Dict[str, Any]:
+    if (
+        list_undelivered_outbox_events_fn is None
+        or mark_outbox_event_delivered_fn is None
+        or record_outbox_delivery_failure_fn is None
+        or get_outbox_delivery_status_fn is None
+    ):
+        try:
+            from server_modules import run_state_repository
+
+            list_undelivered_outbox_events_fn = (
+                list_undelivered_outbox_events_fn
+                or run_state_repository.sync_list_undelivered_outbox_events
+            )
+            mark_outbox_event_delivered_fn = (
+                mark_outbox_event_delivered_fn
+                or run_state_repository.sync_mark_outbox_event_delivered
+            )
+            record_outbox_delivery_failure_fn = (
+                record_outbox_delivery_failure_fn
+                or run_state_repository.sync_record_outbox_delivery_failure
+            )
+            get_outbox_delivery_status_fn = (
+                get_outbox_delivery_status_fn
+                or run_state_repository.sync_get_outbox_delivery_status
+            )
+        except Exception:
+            return {
+                "attempted": 0,
+                "delivered_ids": [],
+                "failed_ids": [],
+                "poisoned_ids": [],
+                "status": {
+                    "undelivered_count": 0,
+                    "poisoned_count": 0,
+                    "total_retry_count": 0,
+                    "max_retry_count": 0,
+                    "last_delivery_error": None,
+                },
+            }
+    if deliver_event_fn is None:
+        deliver_event_fn = deliver_outbox_event
+    if not callable(list_undelivered_outbox_events_fn):
+        return {
+            "attempted": 0,
+            "delivered_ids": [],
+            "failed_ids": [],
+            "poisoned_ids": [],
+            "status": {},
+        }
+
+    delivered_ids: list[str] = []
+    failed_ids: list[str] = []
+    poisoned_ids: list[str] = []
+    items = list_undelivered_outbox_events_fn(
+        older_than_seconds=max(0, int(older_than_seconds or 0)),
+        limit=max(1, int(limit or 0)),
+    )
+    for item in items or []:
+        event = _outbox_event_from_item(item)
+        if event is None:
+            continue
+        try:
+            delivered = bool(deliver_event_fn(event))
+            if not delivered:
+                raise RuntimeError("delivery sink returned false")
+        except Exception as exc:
+            next_attempt = event.retry_count + 1
+            retry_delay_seconds = _delivery_retry_delay_for_attempt(next_attempt)
+            poison = retry_delay_seconds is None
+            error_message = str(exc or "delivery failed").strip() or "delivery failed"
+            try:
+                record_outbox_delivery_failure_fn(
+                    event.event_id,
+                    error_text=error_message,
+                    retry_delay_seconds=retry_delay_seconds,
+                    poison=poison,
+                )
+            except Exception as failure_exc:
+                LOGGER.warning("Failed to record outbox delivery failure for %s: %s", event.event_id, failure_exc)
+            failed_ids.append(event.event_id)
+            if poison:
+                poisoned_ids.append(event.event_id)
+            continue
+        try:
+            mark_outbox_event_delivered_fn(event.event_id)
+            delivered_ids.append(event.event_id)
+        except Exception as exc:
+            LOGGER.warning("Failed to mark outbox event %s delivered: %s", event.event_id, exc)
+    status = (
+        get_outbox_delivery_status_fn()
+        if callable(get_outbox_delivery_status_fn)
+        else {
+            "undelivered_count": 0,
+            "poisoned_count": 0,
+            "total_retry_count": 0,
+            "max_retry_count": 0,
+            "last_delivery_error": None,
+        }
+    )
+    return {
+        "attempted": len(delivered_ids) + len(failed_ids),
+        "delivered_ids": delivered_ids,
+        "failed_ids": failed_ids,
+        "poisoned_ids": poisoned_ids,
+        "status": status,
+    }
+
+
+def replay_undelivered_events_on_startup(
+    *,
+    older_than_seconds: int = 30,
+    limit: int = 200,
+    list_undelivered_outbox_events_fn: Optional[Callable[..., Sequence[Mapping[str, Any]]]] = None,
+    mark_outbox_event_delivered_fn: Optional[Callable[[str], Any]] = None,
+    record_outbox_delivery_failure_fn: Optional[Callable[..., Any]] = None,
+    deliver_event_fn: Optional[Callable[[OutboxEvent], Any]] = None,
+) -> list[str]:
+    result = deliver_due_outbox_events_once(
+        older_than_seconds=max(0, int(older_than_seconds or 0)),
+        limit=max(1, int(limit or 0)),
+        list_undelivered_outbox_events_fn=list_undelivered_outbox_events_fn,
+        mark_outbox_event_delivered_fn=mark_outbox_event_delivered_fn,
+        record_outbox_delivery_failure_fn=record_outbox_delivery_failure_fn,
+        deliver_event_fn=deliver_event_fn,
+    )
+    return list(result.get("delivered_ids") or [])
+
+
+def run_outbox_delivery_forever(
+    *,
+    poll_seconds: float = 2.0,
+    limit: int = 200,
+    older_than_seconds: int = 0,
+    stop_event: Optional[threading.Event] = None,
+    deliver_once_fn: Callable[..., Dict[str, Any]] = deliver_due_outbox_events_once,
+) -> None:
+    interval = max(0.25, float(poll_seconds or 0.0))
+    while True:
+        if stop_event is not None and stop_event.is_set():
+            return
+        try:
+            deliver_once_fn(
+                older_than_seconds=max(0, int(older_than_seconds or 0)),
+                limit=max(1, int(limit or 0)),
+            )
+        except Exception as exc:
+            LOGGER.warning("Outbox delivery loop failed: %s", exc)
+        time.sleep(interval)
+
+
+def get_outbox_delivery_status(
+    *,
+    get_outbox_delivery_status_fn: Optional[Callable[[], Dict[str, Any]]] = None,
+) -> Dict[str, Any]:
+    if get_outbox_delivery_status_fn is None:
+        try:
+            from server_modules import run_state_repository
+
+            get_outbox_delivery_status_fn = run_state_repository.sync_get_outbox_delivery_status
+        except Exception:
+            get_outbox_delivery_status_fn = None
+    if not callable(get_outbox_delivery_status_fn):
+        return {
+            "undelivered_count": 0,
+            "poisoned_count": 0,
+            "total_retry_count": 0,
+            "max_retry_count": 0,
+            "last_delivery_error": None,
+        }
+    try:
+        return dict(get_outbox_delivery_status_fn() or {})
+    except Exception:
+        return {
+            "undelivered_count": 0,
+            "poisoned_count": 0,
+            "total_retry_count": 0,
+            "max_retry_count": 0,
+            "last_delivery_error": None,
+        }
 
 
 def build_local_runtime_state_snapshot(
@@ -92,122 +681,6 @@ def persist_local_runtime_state(
         snapshot,
         replace_local_runtime_state_fn=replace_local_runtime_state_fn,
     )
-
-
-def emit_approval_resolved_event(
-    *,
-    approval_id: str,
-    run_id: str,
-    tenant_id: str,
-    workspace_id: str,
-    resolution: str,
-    actor: str,
-    reason: str = "",
-    trace_id: str = "",
-    persist_outbox_event_fn: Optional[Callable[..., Any]] = None,
-) -> OutboxEvent:
-    event = OutboxEvent(
-        event_id=f"approval-resolved:{approval_id}:{resolution}:{trace_id or _utc_now_iso()}",
-        event_type="approval_resolved",
-        tenant_id=str(tenant_id or "").strip() or "default",
-        workspace_id=str(workspace_id or "").strip() or "default",
-        run_id=str(run_id or "").strip() or None,
-        trace_id=str(trace_id or "").strip(),
-        idempotency_key=f"approval_resolved:{approval_id}:{resolution}",
-        payload={
-            "approval_id": str(approval_id or "").strip(),
-            "run_id": str(run_id or "").strip(),
-            "resolution": str(resolution or "").strip() or "approved",
-            "actor": str(actor or "").strip() or "system",
-            "reason": str(reason or ""),
-            "emitted_at": _utc_now_iso(),
-        },
-    )
-    if persist_outbox_event_fn is None:
-        try:
-            from server_modules import run_state_repository
-
-            persist_outbox_event_fn = run_state_repository.sync_persist_outbox_event
-        except Exception:
-            persist_outbox_event_fn = None
-    if callable(persist_outbox_event_fn):
-        try:
-            persist_outbox_event_fn(
-                event_id=event.event_id,
-                event_type=event.event_type,
-                tenant_id=event.tenant_id,
-                workspace_id=event.workspace_id,
-                run_id=event.run_id,
-                machine_id=event.machine_id,
-                trace_id=event.trace_id,
-                idempotency_key=event.idempotency_key,
-                payload=dict(event.payload),
-            )
-        except Exception as exc:
-            LOGGER.warning("Failed to persist outbox event %s: %s", event.event_id, exc)
-    return event
-
-
-def replay_undelivered_events_on_startup(
-    *,
-    older_than_seconds: int = 30,
-    limit: int = 200,
-    list_undelivered_outbox_events_fn: Optional[Callable[..., Sequence[Mapping[str, Any]]]] = None,
-    mark_outbox_event_delivered_fn: Optional[Callable[[str], Any]] = None,
-    deliver_event_fn: Optional[Callable[[OutboxEvent], Any]] = None,
-) -> list[str]:
-    if list_undelivered_outbox_events_fn is None or mark_outbox_event_delivered_fn is None:
-        try:
-            from server_modules import run_state_repository
-
-            list_undelivered_outbox_events_fn = (
-                list_undelivered_outbox_events_fn
-                or run_state_repository.sync_list_undelivered_outbox_events
-            )
-            mark_outbox_event_delivered_fn = (
-                mark_outbox_event_delivered_fn
-                or run_state_repository.sync_mark_outbox_event_delivered
-            )
-        except Exception:
-            return []
-    delivered_ids: list[str] = []
-    if not callable(list_undelivered_outbox_events_fn):
-        return delivered_ids
-    items = list_undelivered_outbox_events_fn(
-        older_than_seconds=max(0, int(older_than_seconds or 0)),
-        limit=max(1, int(limit or 0)),
-    )
-    for item in items or []:
-        if not isinstance(item, Mapping):
-            continue
-        event = OutboxEvent(
-            event_id=str(item.get("event_id") or "").strip(),
-            event_type=str(item.get("event_type") or "").strip() or "runtime_event",
-            tenant_id=str(item.get("tenant_id") or "").strip() or "default",
-            workspace_id=str(item.get("workspace_id") or "").strip() or "default",
-            run_id=str(item.get("run_id") or "").strip() or None,
-            machine_id=str(item.get("machine_id") or "").strip() or None,
-            trace_id=str(item.get("trace_id") or "").strip(),
-            idempotency_key=str(item.get("idempotency_key") or "").strip(),
-            payload=dict(item.get("payload") or {}) if isinstance(item.get("payload"), Mapping) else {},
-        )
-        if not event.event_id:
-            continue
-        delivered = True
-        if callable(deliver_event_fn):
-            try:
-                delivered = bool(deliver_event_fn(event))
-            except Exception as exc:
-                LOGGER.warning("Outbox replay failed for %s: %s", event.event_id, exc)
-                delivered = False
-        if not delivered:
-            continue
-        try:
-            mark_outbox_event_delivered_fn(event.event_id)
-            delivered_ids.append(event.event_id)
-        except Exception as exc:
-            LOGGER.warning("Failed to mark outbox event %s delivered: %s", event.event_id, exc)
-    return delivered_ids
 
 
 def enqueue_local_companion_run(

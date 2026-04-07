@@ -530,6 +530,40 @@ async def record_approval_resolution(
     return None
 
 
+async def _ensure_runtime_outbox_table(pool: Any) -> None:
+    await pool.execute(
+        """
+        CREATE TABLE IF NOT EXISTS runtime_outbox (
+            event_id TEXT PRIMARY KEY,
+            event_type TEXT NOT NULL,
+            tenant_id TEXT NOT NULL,
+            workspace_id TEXT NOT NULL,
+            run_id TEXT NULL,
+            machine_id TEXT NULL,
+            trace_id TEXT NULL,
+            idempotency_key TEXT NULL,
+            payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            delivered_at TIMESTAMPTZ NULL,
+            last_replayed_at TIMESTAMPTZ NULL,
+            retry_count INTEGER NOT NULL DEFAULT 0,
+            last_delivery_error TEXT NULL,
+            last_attempted_at TIMESTAMPTZ NULL,
+            next_attempt_at TIMESTAMPTZ NULL,
+            poisoned_at TIMESTAMPTZ NULL
+        )
+        """
+    )
+    await pool.execute("ALTER TABLE runtime_outbox ADD COLUMN IF NOT EXISTS retry_count INTEGER NOT NULL DEFAULT 0")
+    await pool.execute("ALTER TABLE runtime_outbox ADD COLUMN IF NOT EXISTS last_delivery_error TEXT NULL")
+    await pool.execute("ALTER TABLE runtime_outbox ADD COLUMN IF NOT EXISTS last_attempted_at TIMESTAMPTZ NULL")
+    await pool.execute("ALTER TABLE runtime_outbox ADD COLUMN IF NOT EXISTS next_attempt_at TIMESTAMPTZ NULL")
+    await pool.execute("ALTER TABLE runtime_outbox ADD COLUMN IF NOT EXISTS poisoned_at TIMESTAMPTZ NULL")
+    await pool.execute(
+        "CREATE INDEX IF NOT EXISTS idx_runtime_outbox_due ON runtime_outbox (delivered_at, poisoned_at, next_attempt_at, created_at)"
+    )
+
+
 async def persist_outbox_event(
     *,
     event_id: str,
@@ -549,24 +583,7 @@ async def persist_outbox_event(
     if pool is None:
         return None
     try:
-        await pool.execute(
-            """
-            CREATE TABLE IF NOT EXISTS runtime_outbox (
-                event_id TEXT PRIMARY KEY,
-                event_type TEXT NOT NULL,
-                tenant_id TEXT NOT NULL,
-                workspace_id TEXT NOT NULL,
-                run_id TEXT NULL,
-                machine_id TEXT NULL,
-                trace_id TEXT NULL,
-                idempotency_key TEXT NULL,
-                payload JSONB NOT NULL DEFAULT '{}'::jsonb,
-                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-                delivered_at TIMESTAMPTZ NULL,
-                last_replayed_at TIMESTAMPTZ NULL
-            )
-            """
-        )
+        await _ensure_runtime_outbox_table(pool)
         await pool.execute(
             """
             INSERT INTO runtime_outbox (
@@ -581,9 +598,14 @@ async def persist_outbox_event(
                 payload,
                 created_at,
                 delivered_at,
-                last_replayed_at
+                last_replayed_at,
+                retry_count,
+                last_delivery_error,
+                last_attempted_at,
+                next_attempt_at,
+                poisoned_at
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, NOW(), NULL, NULL)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, NOW(), NULL, NULL, 0, NULL, NULL, NULL, NULL)
             ON CONFLICT (event_id) DO UPDATE SET
                 event_type = EXCLUDED.event_type,
                 tenant_id = EXCLUDED.tenant_id,
@@ -619,24 +641,7 @@ async def list_undelivered_outbox_events(
     if pool is None:
         return []
     try:
-        await pool.execute(
-            """
-            CREATE TABLE IF NOT EXISTS runtime_outbox (
-                event_id TEXT PRIMARY KEY,
-                event_type TEXT NOT NULL,
-                tenant_id TEXT NOT NULL,
-                workspace_id TEXT NOT NULL,
-                run_id TEXT NULL,
-                machine_id TEXT NULL,
-                trace_id TEXT NULL,
-                idempotency_key TEXT NULL,
-                payload JSONB NOT NULL DEFAULT '{}'::jsonb,
-                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-                delivered_at TIMESTAMPTZ NULL,
-                last_replayed_at TIMESTAMPTZ NULL
-            )
-            """
-        )
+        await _ensure_runtime_outbox_table(pool)
         rows = await pool.fetch(
             """
             SELECT
@@ -651,11 +656,17 @@ async def list_undelivered_outbox_events(
                 payload,
                 created_at,
                 delivered_at,
-                last_replayed_at
+                last_replayed_at,
+                retry_count,
+                last_delivery_error,
+                last_attempted_at,
+                next_attempt_at,
+                poisoned_at
             FROM runtime_outbox
             WHERE delivered_at IS NULL
-              AND created_at <= NOW() - ($1::text || ' seconds')::interval
-            ORDER BY created_at ASC
+              AND poisoned_at IS NULL
+              AND COALESCE(next_attempt_at, created_at) <= NOW() - ($1::text || ' seconds')::interval
+            ORDER BY COALESCE(next_attempt_at, created_at) ASC, created_at ASC
             LIMIT $2
             """,
             max(0, int(older_than_seconds or 0)),
@@ -688,6 +699,11 @@ async def list_undelivered_outbox_events(
                 "created_at": str(row["created_at"] or "").strip() or None,
                 "delivered_at": str(row["delivered_at"] or "").strip() or None,
                 "last_replayed_at": str(row["last_replayed_at"] or "").strip() or None,
+                "retry_count": int(row["retry_count"] or 0),
+                "last_delivery_error": str(row["last_delivery_error"] or "").strip() or None,
+                "last_attempted_at": str(row["last_attempted_at"] or "").strip() or None,
+                "next_attempt_at": str(row["next_attempt_at"] or "").strip() or None,
+                "poisoned_at": str(row["poisoned_at"] or "").strip() or None,
             }
         )
     return items
@@ -701,11 +717,16 @@ async def mark_outbox_event_delivered(event_id: str) -> None:
     if pool is None:
         return None
     try:
+        await _ensure_runtime_outbox_table(pool)
         await pool.execute(
             """
             UPDATE runtime_outbox
             SET delivered_at = NOW(),
-                last_replayed_at = NOW()
+                last_replayed_at = NOW(),
+                last_attempted_at = NOW(),
+                last_delivery_error = NULL,
+                next_attempt_at = NULL,
+                poisoned_at = NULL
             WHERE event_id = $1
             """,
             token,
@@ -714,6 +735,105 @@ async def mark_outbox_event_delivered(event_id: str) -> None:
         LOGGER.warning("Postgres mark_outbox_event_delivered failed for %s: %s", token, exc)
         return None
     return None
+
+
+async def record_outbox_delivery_failure(
+    event_id: str,
+    *,
+    error_text: str,
+    retry_delay_seconds: Optional[int],
+    poison: bool = False,
+) -> None:
+    token = str(event_id or "").strip()
+    if not token:
+        return None
+    pool = await runtime_db.get_pool()
+    if pool is None:
+        return None
+    try:
+        await _ensure_runtime_outbox_table(pool)
+        await pool.execute(
+            """
+            UPDATE runtime_outbox
+            SET retry_count = COALESCE(retry_count, 0) + 1,
+                last_delivery_error = LEFT($2, 2000),
+                last_attempted_at = NOW(),
+                last_replayed_at = NOW(),
+                next_attempt_at = CASE
+                    WHEN $3::boolean THEN NULL
+                    WHEN $4::integer IS NULL THEN NULL
+                    ELSE NOW() + ($4::text || ' seconds')::interval
+                END,
+                poisoned_at = CASE WHEN $3::boolean THEN NOW() ELSE NULL END
+            WHERE event_id = $1
+            """,
+            token,
+            str(error_text or "").strip() or "outbox_delivery_failed",
+            bool(poison),
+            (None if retry_delay_seconds is None else max(0, int(retry_delay_seconds))),
+        )
+    except Exception as exc:
+        LOGGER.warning("Postgres record_outbox_delivery_failure failed for %s: %s", token, exc)
+        return None
+    return None
+
+
+async def get_outbox_delivery_status() -> Dict[str, Any]:
+    pool = await runtime_db.get_pool()
+    if pool is None:
+        return {
+            "undelivered_count": 0,
+            "poisoned_count": 0,
+            "total_retry_count": 0,
+            "max_retry_count": 0,
+            "last_delivery_error": None,
+        }
+    try:
+        await _ensure_runtime_outbox_table(pool)
+        summary_row = await pool.fetchrow(
+            """
+            SELECT
+                COUNT(*) FILTER (WHERE delivered_at IS NULL AND poisoned_at IS NULL) AS undelivered_count,
+                COUNT(*) FILTER (WHERE delivered_at IS NULL AND poisoned_at IS NOT NULL) AS poisoned_count,
+                COALESCE(SUM(retry_count), 0) AS total_retry_count,
+                COALESCE(MAX(retry_count), 0) AS max_retry_count
+            FROM runtime_outbox
+            """
+        )
+        error_row = await pool.fetchrow(
+            """
+            SELECT event_id, last_delivery_error, last_attempted_at, retry_count
+            FROM runtime_outbox
+            WHERE COALESCE(last_delivery_error, '') <> ''
+            ORDER BY last_attempted_at DESC NULLS LAST, created_at DESC
+            LIMIT 1
+            """
+        )
+    except Exception as exc:
+        LOGGER.warning("Postgres get_outbox_delivery_status failed: %s", exc)
+        return {
+            "undelivered_count": 0,
+            "poisoned_count": 0,
+            "total_retry_count": 0,
+            "max_retry_count": 0,
+            "last_delivery_error": None,
+        }
+    return {
+        "undelivered_count": int(summary_row["undelivered_count"] if summary_row is not None else 0),
+        "poisoned_count": int(summary_row["poisoned_count"] if summary_row is not None else 0),
+        "total_retry_count": int(summary_row["total_retry_count"] if summary_row is not None else 0),
+        "max_retry_count": int(summary_row["max_retry_count"] if summary_row is not None else 0),
+        "last_delivery_error": (
+            {
+                "event_id": str(error_row["event_id"] or "").strip(),
+                "message": str(error_row["last_delivery_error"] or "").strip(),
+                "last_attempted_at": str(error_row["last_attempted_at"] or "").strip() or None,
+                "retry_count": int(error_row["retry_count"] or 0),
+            }
+            if error_row is not None
+            else None
+        ),
+    }
 
 
 async def list_expired_local_claims() -> list[Dict[str, Any]]:
@@ -891,6 +1011,39 @@ def sync_mark_outbox_event_delivered(event_id: str) -> None:
         lambda: mark_outbox_event_delivered(event_id),
         operation="sync_mark_outbox_event_delivered",
         fallback=None,
+    )
+
+
+def sync_record_outbox_delivery_failure(
+    event_id: str,
+    *,
+    error_text: str,
+    retry_delay_seconds: Optional[int],
+    poison: bool = False,
+) -> None:
+    _run_sync(
+        lambda: record_outbox_delivery_failure(
+            event_id,
+            error_text=error_text,
+            retry_delay_seconds=retry_delay_seconds,
+            poison=poison,
+        ),
+        operation="sync_record_outbox_delivery_failure",
+        fallback=None,
+    )
+
+
+def sync_get_outbox_delivery_status() -> Dict[str, Any]:
+    return _run_sync(
+        get_outbox_delivery_status,
+        operation="sync_get_outbox_delivery_status",
+        fallback={
+            "undelivered_count": 0,
+            "poisoned_count": 0,
+            "total_retry_count": 0,
+            "max_retry_count": 0,
+            "last_delivery_error": None,
+        },
     )
 
 

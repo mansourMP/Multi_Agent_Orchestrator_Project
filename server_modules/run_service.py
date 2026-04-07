@@ -14,6 +14,7 @@ from fastapi import HTTPException
 from server_modules.agent_turn import AgentTurnRequest, bind_agent_turn_metadata, resolve_run_start_turn_request
 from server_modules.doctor_gate import build_doctor_run_gate_live
 from server_modules import machine_lease_service
+from server_modules import outbox_service
 from server_modules.policy_service import apply_execution_route_metadata, decide_execution_target
 from server_modules.run_execution_handle import attach_execution_handle, build_run_record
 from server_modules import run_state_repository
@@ -410,6 +411,56 @@ def _archive_run_repository_payload(
         LOGGER.warning("Failed to dispatch run archive repository write for %s: %s", run_id, exc)
 
 
+def _emit_run_transition_outbox_event(
+    run_id: str,
+    *,
+    run: Dict[str, Any],
+    from_state: Any,
+    to_state: str,
+    actor: str,
+    trace_id: str,
+) -> None:
+    if str(from_state or "").strip() == str(to_state or "").strip():
+        return
+    try:
+        outbox_service.emit_run_transition_event(
+            run_id=run_id,
+            tenant_id=_run_tenant_id(run),
+            workspace_id=_run_workspace_id(run),
+            from_state=str(from_state or "").strip() or "unknown",
+            to_state=to_state,
+            actor=actor,
+            trace_id=trace_id,
+        )
+    except Exception as exc:
+        LOGGER.warning("Failed to emit outbox run transition for %s: %s", run_id, exc)
+
+
+def _emit_artifact_outbox_events(
+    run_id: str,
+    *,
+    run: Dict[str, Any],
+    trace_id: str,
+) -> None:
+    result_data = run.get("result_data") if isinstance(run.get("result_data"), dict) else {}
+    outputs = result_data.get("outputs") if isinstance(result_data.get("outputs"), dict) else {}
+    artifacts = outputs.get("artifacts") if isinstance(outputs.get("artifacts"), list) else []
+    for index, artifact in enumerate(artifacts):
+        if not isinstance(artifact, dict):
+            continue
+        try:
+            outbox_service.emit_artifact_created_event(
+                run_id=run_id,
+                tenant_id=_run_tenant_id(run),
+                workspace_id=_run_workspace_id(run),
+                artifact=artifact,
+                trace_id=trace_id,
+                index=index,
+            )
+        except Exception as exc:
+            LOGGER.warning("Failed to emit outbox artifact event for %s[%s]: %s", run_id, index, exc)
+
+
 def get_pending_confirmation(run: Dict[str, Any]) -> Dict[str, Any]:
     pending = run.get("pending_confirmation")
     if isinstance(pending, dict):
@@ -488,6 +539,25 @@ def begin_run_pending_confirmation(
         "metadata": safe_metadata,
     }
     set_pending_confirmation(run, payload)
+    try:
+        outbox_service.emit_approval_requested_event(
+            approval_id=approval_id,
+            run_id=run_id,
+            tenant_id=_run_tenant_id(run),
+            workspace_id=_run_workspace_id(run),
+            prompt=prompt,
+            ttl_seconds=ttl_seconds,
+            expires_at=expires_at,
+            correlation_id=correlation_id,
+            source=source,
+            actor="system",
+            target=approval_target,
+            actions=approval_actions,
+            metadata=safe_metadata,
+            trace_id=_run_trace_id(run, fallback=correlation_id),
+        )
+    except Exception as exc:
+        LOGGER.warning("Failed to emit outbox approval_requested for %s: %s", run_id, exc)
     emit_log_fn(
         run["logs"],
         "warn",
@@ -1054,7 +1124,21 @@ def transition_live_run_status(
                 actor=actor,
                 trace_id=trace_id,
             )
+            _emit_run_transition_outbox_event(
+                run_id,
+                run=run,
+                from_state=previous,
+                to_state=status,
+                actor=actor,
+                trace_id=trace_id,
+            )
             if status in {"completed", "failed", "timeout"}:
+                if str(previous or "").strip() != str(status or "").strip():
+                    _emit_artifact_outbox_events(
+                        run_id,
+                        run=run,
+                        trace_id=trace_id,
+                    )
                 machine_lease_service.reconcile_machine_lease_release(
                     run_id,
                     local_queue_lock=local_queue_lock,
@@ -1740,6 +1824,7 @@ def initialize_runtime_services(
     load_provider_profiles_fn: Callable[[], Any],
     load_idempotency_fn: Callable[[], Any],
     replay_outbox_events_on_startup_fn: Optional[Callable[[], Any]] = None,
+    run_outbox_delivery_forever_fn: Optional[Callable[[], Any]] = None,
     recover_expired_worker_leases_on_startup_fn: Optional[Callable[[], Any]] = None,
     recover_orphaned_local_runs_on_startup_fn: Callable[[], Any],
     load_runtime_skills_state_fn: Callable[[], Any],
@@ -1781,6 +1866,9 @@ def initialize_runtime_services(
             replay_outbox_events_on_startup_fn()
         except Exception:
             pass
+    if callable(run_outbox_delivery_forever_fn):
+        outbox_thread = thread_factory(target=run_outbox_delivery_forever_fn, daemon=True)
+        outbox_thread.start()
     if callable(recover_expired_worker_leases_on_startup_fn):
         try:
             recover_expired_worker_leases_on_startup_fn()
@@ -3323,6 +3411,13 @@ def precheck_human_action_labels(precheck: Dict[str, Any], decision: str = "requ
             continue
         item_decision = str(item.get("execution_decision") or item.get("decision") or "").strip().lower()
         if item_decision not in accepted:
+            continue
+        explicit_label = str(item.get("approval_label") or "").strip()
+        if explicit_label:
+            clean = explicit_label.strip()
+            if clean and clean.lower() not in seen:
+                seen.add(clean.lower())
+                labels.append(clean)
             continue
         capabilities = item.get("capabilities") if isinstance(item.get("capabilities"), list) else []
         capability_labels = [

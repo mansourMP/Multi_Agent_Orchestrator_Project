@@ -26,8 +26,9 @@ class _FakeApp:
 
 
 class RuntimeRuntimeApiTests(unittest.TestCase):
+    @patch("server_modules.outbox_service.get_outbox_delivery_status")
     @patch("server_modules.local_queue.handle_get_local_workers_status")
-    def test_runtime_status_payload_maps_worker_summary(self, mock_status):
+    def test_runtime_status_payload_maps_worker_summary(self, mock_status, mock_outbox_status):
         mock_status.return_value = {
             "summary": {"known": 1, "online": 1, "idle": 1, "busy": 0, "offline": 0},
             "capability_queue": {"read_write_files": ["empyralis-tauri-local"]},
@@ -52,11 +53,13 @@ class RuntimeRuntimeApiTests(unittest.TestCase):
                 }
             ],
         }
+        mock_outbox_status.return_value = {"undelivered_count": 2, "total_retry_count": 1}
 
         payload = runtime_runtime_api.runtime_status_payload()
 
         self.assertEqual(payload["scope"], "local_companion_bridge")
         self.assertEqual(payload["summary"]["online"], 1)
+        self.assertEqual(payload["outbox"]["undelivered_count"], 2)
         self.assertEqual(payload["items"][0]["machine_id"], "empyralis-tauri-local")
         self.assertEqual(payload["items"][0]["runtime_id"], "empyralis-tauri-local")
         self.assertEqual(payload["items"][0]["status"], "idle")
@@ -114,6 +117,58 @@ class RuntimeRuntimeApiTests(unittest.TestCase):
 
         self.assertEqual(result["machine_id"], "machine-1")
         mock_complete.assert_called_once_with("machine-1", enrollment_token="tok")
+
+    @patch("server_modules.local_queue.handle_heartbeat_local_run")
+    @patch("server_modules.local_queue._assert_runtime_session")
+    def test_runtime_task_heartbeat_forwards_structured_event(self, mock_assert_session, mock_heartbeat):
+        app = _FakeApp()
+        runtime_runtime_api.register_runtime_routes(app)
+        mock_heartbeat.return_value = {"last_heartbeat_at": "2026-04-07T00:00:00Z"}
+        handler = app.routes[("POST", "/runtime/tasks/{task_id}/heartbeat")]
+
+        result = self._run_async(
+            handler(
+                runtime_runtime_api.uuid.UUID("00000000-0000-0000-0000-000000000001"),
+                runtime_runtime_api.RuntimeTaskHeartbeatPayload(
+                    runtime_id="worker-1",
+                    session_token="sess",
+                    instance_id="inst",
+                    note="Step 1",
+                    event={"event": "computer_action", "message": "Step 1", "data": {"label": "Clicking search field"}},
+                ),
+            )
+        )
+
+        self.assertEqual(result["task_id"], "00000000-0000-0000-0000-000000000001")
+        payload = mock_heartbeat.call_args.args[1]
+        self.assertEqual(payload.event["event"], "computer_action")
+        self.assertEqual(payload.event["data"]["label"], "Clicking search field")
+        mock_assert_session.assert_called_once()
+
+    @patch("server_modules.local_queue.handle_get_local_run_control_state")
+    @patch("server_modules.local_queue._assert_runtime_session")
+    def test_runtime_task_control_state_route_forwards_runtime_session(self, mock_assert_session, mock_control_state):
+        app = _FakeApp()
+        runtime_runtime_api.register_runtime_routes(app)
+        mock_control_state.return_value = {"status": "waiting_for_input", "pause_requested": True, "manual_takeover": True}
+        handler = app.routes[("POST", "/runtime/tasks/{task_id}/control-state")]
+
+        result = self._run_async(
+            handler(
+                runtime_runtime_api.uuid.UUID("00000000-0000-0000-0000-000000000001"),
+                runtime_runtime_api.RuntimeTaskControlStatePayload(
+                    runtime_id="worker-1",
+                    session_token="sess",
+                    instance_id="inst",
+                ),
+            )
+        )
+
+        self.assertTrue(result["pause_requested"])
+        self.assertTrue(result["manual_takeover"])
+        mock_assert_session.assert_called_once()
+        payload = mock_control_state.call_args.args[1]
+        self.assertEqual(payload.worker_id, "worker-1")
 
     @patch("server_modules.local_queue.handle_delete_local_runtime")
     def test_register_runtime_routes_exposes_machine_delete(self, mock_delete):

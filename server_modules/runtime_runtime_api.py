@@ -14,6 +14,7 @@ from pydantic import BaseModel, Field
 
 from server_modules.runtime_common import require_api_key
 from server_modules import local_queue
+from server_modules import outbox_service
 
 SUPPORTED_STT_CONTENT_TYPES: Dict[str, str] = {
     "audio/webm": "input.webm",
@@ -86,6 +87,13 @@ class RuntimeTaskHeartbeatPayload(BaseModel):
     session_token: Optional[str] = None
     instance_id: Optional[str] = None
     note: Optional[str] = None
+    event: Optional[Dict[str, Any]] = None
+
+
+class RuntimeTaskControlStatePayload(BaseModel):
+    runtime_id: Optional[str] = None
+    session_token: Optional[str] = None
+    instance_id: Optional[str] = None
 
 
 class RuntimeTaskCompletePayload(BaseModel):
@@ -314,6 +322,7 @@ def runtime_status_payload() -> Dict[str, Any]:
         "scope": "local_companion_bridge",
         "summary": payload.get("summary") if isinstance(payload.get("summary"), dict) else {},
         "capability_queue": payload.get("capability_queue") if isinstance(payload.get("capability_queue"), dict) else {},
+        "outbox": outbox_service.get_outbox_delivery_status(),
         "items": [_runtime_summary_from_worker_item(item) for item in items if isinstance(item, dict)],
     }
 
@@ -523,6 +532,7 @@ def register_runtime_routes(app) -> None:
         local_payload = local_queue.LocalRunHeartbeatPayload(
             worker_id=runtime_token or None,
             note=body.note or "runtime_task_heartbeat",
+            event=(dict(body.event) if isinstance(body.event, dict) else None),
         )
         result = local_queue.handle_heartbeat_local_run(task_id, local_payload)
         return {
@@ -530,6 +540,17 @@ def register_runtime_routes(app) -> None:
             "task_id": str(task_id),
             "last_heartbeat_at": result.get("last_heartbeat_at"),
         }
+
+    @app.post("/runtime/tasks/{task_id}/control-state", dependencies=[Depends(require_api_key)])
+    async def get_runtime_task_control_state(task_id: uuid.UUID, payload: Optional[RuntimeTaskControlStatePayload] = None):
+        body = payload or RuntimeTaskControlStatePayload()
+        runtime_token = str(body.runtime_id or "").strip()
+        local_queue._assert_runtime_session(runtime_token, body.session_token, instance_id=body.instance_id)
+        result = local_queue.handle_get_local_run_control_state(
+            task_id,
+            local_queue.LocalRunControlStatePayload(worker_id=runtime_token or None),
+        )
+        return {"ok": True, "task_id": str(task_id), **result}
 
     @app.post("/runtime/tasks/{task_id}/complete", dependencies=[Depends(require_api_key)])
     async def complete_runtime_task(task_id: uuid.UUID, payload: RuntimeTaskCompletePayload):

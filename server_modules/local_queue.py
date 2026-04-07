@@ -59,6 +59,11 @@ class LocalRunClaimRequest(BaseModel):
 class LocalRunHeartbeatPayload(BaseModel):
     worker_id: Optional[str] = None
     note: Optional[str] = None
+    event: Optional[Dict[str, Any]] = None
+
+
+class LocalRunControlStatePayload(BaseModel):
+    worker_id: Optional[str] = None
 
 
 class LocalWorkerHeartbeatPayload(BaseModel):
@@ -116,6 +121,74 @@ def _mark_local_worker_seen(worker_id: str, current_run_id: Optional[str], statu
         )
         _server.LOCAL_WORKER_REGISTRY[worker] = next_record
     _persist_local_runtime_state()
+
+
+def _manual_takeover_active(run: Dict[str, Any]) -> bool:
+    result_data = run.get("result_data") if isinstance(run.get("result_data"), dict) else {}
+    context = run.get("context") if isinstance(run.get("context"), dict) else {}
+    metadata = context.get("metadata") if isinstance(context.get("metadata"), dict) else {}
+    return bool(result_data.get("manual_takeover") or metadata.get("manual_takeover"))
+
+
+def _local_execution_checkpoint_payload(run: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    checkpoint = run.get("local_execution_checkpoint")
+    if isinstance(checkpoint, dict) and checkpoint:
+        return dict(checkpoint)
+    result_data = run.get("result_data") if isinstance(run.get("result_data"), dict) else {}
+    result_checkpoint = result_data.get("local_execution_checkpoint")
+    if isinstance(result_checkpoint, dict) and result_checkpoint:
+        return dict(result_checkpoint)
+    context = run.get("context") if isinstance(run.get("context"), dict) else {}
+    metadata = context.get("metadata") if isinstance(context.get("metadata"), dict) else {}
+    metadata_checkpoint = metadata.get("local_execution_checkpoint")
+    if isinstance(metadata_checkpoint, dict) and metadata_checkpoint:
+        return dict(metadata_checkpoint)
+    pack_inputs = metadata.get("pack_inputs") if isinstance(metadata.get("pack_inputs"), dict) else {}
+    operations = pack_inputs.get("operations") if isinstance(pack_inputs.get("operations"), list) else []
+    if operations:
+        return {
+            "kind": "local_execution_v1",
+            "next_operation_index": 0,
+            "total_operations": len(operations),
+            "phase": "planned",
+            "mode": "observing",
+        }
+    return None
+
+
+def _update_run_progress_from_structured_event(run: Dict[str, Any], event_name: str, event_data: Optional[Dict[str, Any]]) -> None:
+    if event_name != "computer_action" or not isinstance(event_data, dict):
+        return
+    step_number = event_data.get("step_number")
+    step_total = event_data.get("step_total")
+    phase = str(event_data.get("phase") or "").strip().lower() or "completed"
+    label = str(event_data.get("label") or "").strip() or "Computer action"
+    next_operation_index: Optional[int] = None
+    if isinstance(step_number, (int, float)):
+        normalized_step = max(1, int(step_number))
+        if phase == "completed":
+            next_operation_index = normalized_step
+        else:
+            next_operation_index = normalized_step - 1
+    checkpoint: Dict[str, Any] = {
+        "kind": "local_execution_v1",
+        "phase": phase,
+        "mode": str(event_data.get("mode") or "").strip().lower() or "acting",
+        "current_label": label,
+        "action_type": str(event_data.get("action_type") or "").strip().lower() or None,
+        "updated_at": _server._utc_now_iso(),
+    }
+    if next_operation_index is not None:
+        checkpoint["next_operation_index"] = max(0, next_operation_index)
+    if isinstance(step_total, (int, float)):
+        checkpoint["total_operations"] = max(1, int(step_total))
+    run["local_execution_checkpoint"] = checkpoint
+    context = run.get("context") if isinstance(run.get("context"), dict) else {}
+    metadata = context.get("metadata") if isinstance(context.get("metadata"), dict) else {}
+    metadata["local_execution_checkpoint"] = checkpoint
+    metadata["local_execution_resume_supported"] = True
+    context["metadata"] = metadata
+    run["context"] = context
 
 
 def _maybe_emit_local_still_working(
@@ -185,6 +258,30 @@ def _persist_local_runtime_state() -> None:
         claimed_runs=claimed_runs,
         runtime_registrations=runtime_registrations,
     )
+
+
+def _emit_machine_outbox_event(action: str, record: Dict[str, Any], *, error: Optional[str] = None) -> None:
+    _init()
+    if not isinstance(record, dict):
+        return
+    machine_id = str(record.get("machine_id") or record.get("runtime_id") or "").strip()
+    if not machine_id:
+        return
+    payload = dict(record)
+    payload.pop("enrollment_token_hash", None)
+    payload.pop("session_token", None)
+    try:
+        outbox_service.emit_machine_event(
+            machine_id=machine_id,
+            tenant_id="default",
+            workspace_id="default",
+            action=action,
+            machine_payload=payload,
+            trace_id=str(record.get("trace_id") or record.get("session_token") or machine_id).strip(),
+            error=error,
+        )
+    except Exception:
+        return
 
 
 def _machine_runtime_base_url() -> str:
@@ -269,6 +366,11 @@ def _mark_ghost_enrollments_failed() -> List[str]:
             )
             _server.LOCAL_WORKER_REGISTRY[machine_id] = record
             failed_machine_ids.append(machine_id)
+            _emit_machine_outbox_event(
+                "bootstrap_failed",
+                record,
+                error="Machine bootstrap timed out before the worker heartbeated.",
+            )
             changed = True
     if changed:
         _persist_local_runtime_state()
@@ -490,6 +592,7 @@ def _upsert_runtime_registration(
         session = _issue_runtime_session(record)
         _server.LOCAL_WORKER_REGISTRY[worker] = record
     _persist_local_runtime_state()
+    _emit_machine_outbox_event("runtime_registered", record)
     return {
         "runtime_id": worker,
         "machine_id": record.get("machine_id") or worker,
@@ -541,6 +644,7 @@ def create_machine_enrollment_intent(
         _set_enrollment_state(record, "awaiting_local_acceptance", now_iso=now_iso)
         _server.LOCAL_WORKER_REGISTRY[runtime_id] = record
     _persist_local_runtime_state()
+    _emit_machine_outbox_event("enrollment_requested", record)
     return {
         "ok": True,
         "machine_id": runtime_id,
@@ -575,6 +679,7 @@ def update_machine_enrollment_state(
         _set_enrollment_state(record, state, error=error)
         _server.LOCAL_WORKER_REGISTRY[runtime_id] = record
     _persist_local_runtime_state()
+    _emit_machine_outbox_event("enrollment_state_updated", record, error=error)
     return {"ok": True, "machine_id": runtime_id, "enrollment_state": str(state or "").strip().lower()}
 
 
@@ -598,6 +703,7 @@ def complete_machine_bootstrap(
         record["enrollment_token_hash"] = None
         _server.LOCAL_WORKER_REGISTRY[runtime_id] = record
     _persist_local_runtime_state()
+    _emit_machine_outbox_event("bootstrap_completed", record)
     status_payload = handle_get_local_workers_status()
     items = status_payload.get("items") if isinstance(status_payload.get("items"), list) else []
     machine = next(
@@ -1294,6 +1400,7 @@ def handle_delete_local_runtime(machine_id: str) -> Dict[str, Any]:
         _server.LOCAL_WORKER_REGISTRY.pop(runtime_id, None)
 
     _persist_local_runtime_state()
+    _emit_machine_outbox_event("deleted", deleted)
     return {
         "ok": True,
         "machine_id": runtime_id,
@@ -1400,10 +1507,49 @@ def handle_heartbeat_local_run(run_id: uuid.UUID, payload: Optional[LocalRunHear
         utc_now_iso_fn=_server._utc_now_iso,
     )
     note = str((payload.note if payload else None) or "").strip() if payload else ""
+    structured_event = dict(payload.event) if payload and isinstance(payload.event, dict) else None
     run = _server.runs.get(run_id_str)
-    if note and isinstance(run, dict):
-        _server.emit_log(run["logs"], "info", note[:400], event="local_heartbeat")
+    if isinstance(run, dict):
+        if structured_event:
+            event_name = str(structured_event.get("event") or "").strip().lower() or "local_heartbeat"
+            event_message = str(structured_event.get("message") or note or event_name).strip() or event_name
+            event_level = str(structured_event.get("level") or "info").strip().lower() or "info"
+            event_data = structured_event.get("data") if isinstance(structured_event.get("data"), dict) else None
+            _update_run_progress_from_structured_event(run, event_name, event_data)
+            _server.emit_log(run["logs"], event_level, event_message[:400], event=event_name, data=event_data)
+        elif note:
+            _server.emit_log(run["logs"], "info", note[:400], event="local_heartbeat")
     return result
+
+
+def handle_get_local_run_control_state(
+    run_id: uuid.UUID,
+    payload: Optional[LocalRunControlStatePayload] = None,
+) -> Dict[str, Any]:
+    _init()
+    del payload
+    run_id_str = str(run_id)
+    run = _server.runs.get(run_id_str)
+    if not isinstance(run, dict):
+        raise HTTPException(status_code=404, detail="Run ID not found")
+    status = str(run.get("status") or "").strip().lower()
+    browser_checkpoint = run.get("browser_checkpoint") if isinstance(run.get("browser_checkpoint"), dict) else None
+    local_execution_checkpoint = _local_execution_checkpoint_payload(run)
+    wait_reason = str(
+        run.get("wait_reason")
+        or ((run.get("result_data") if isinstance(run.get("result_data"), dict) else {}).get("pause_reason"))
+        or ""
+    ).strip() or None
+    manual_takeover = _manual_takeover_active(run)
+    return {
+        "status": status,
+        "pause_requested": status == "waiting_for_input",
+        "manual_takeover": manual_takeover,
+        "wait_reason": wait_reason,
+        "browser_checkpoint": dict(browser_checkpoint) if isinstance(browser_checkpoint, dict) else None,
+        "local_execution_checkpoint": local_execution_checkpoint,
+        "resume_available": bool(browser_checkpoint or local_execution_checkpoint),
+    }
 
 
 def handle_complete_local_run(run_id: uuid.UUID, payload: LocalRunCompletePayload) -> Dict[str, Any]:

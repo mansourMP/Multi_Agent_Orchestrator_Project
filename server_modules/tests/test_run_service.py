@@ -182,27 +182,29 @@ class RunServiceTests(unittest.TestCase):
         emitted = []
         audits = []
         status_changes = []
+        outbox_events = []
 
-        payload = begin_run_pending_confirmation(
-            "run-approval-1",
-            "Confirm send",
-            runs_by_id={"run-approval-1": run},
-            default_approval_ttl_seconds=600,
-            approval_correlation_id_fn=lambda approval_id, run_id=None: f"corr:{run_id}:{approval_id}",
-            append_approval_audit_fn=lambda **kwargs: audits.append(kwargs),
-            json_safe_fn=lambda value: value,
-            emit_log_fn=lambda *args, **kwargs: emitted.append((args, kwargs)),
-            set_run_status_fn=lambda run_id, status: status_changes.append((run_id, status)),
-            utc_now_fn=lambda: datetime(2026, 4, 6, 0, 0, 0, tzinfo=timezone.utc),
-            utc_now_iso_fn=lambda: "2026-04-06T00:00:00Z",
-            source="local_execution_start",
-            metadata={
-                "approval_actions": ["browser_automation", "  ", "file_write"],
-                "target": "local_companion",
-                "policy_mode": "guarded",
-            },
-            emit_pause_required=True,
-        )
+        with patch("server_modules.run_service.outbox_service.emit_approval_requested_event", side_effect=lambda **kwargs: outbox_events.append(kwargs)):
+            payload = begin_run_pending_confirmation(
+                "run-approval-1",
+                "Confirm send",
+                runs_by_id={"run-approval-1": run},
+                default_approval_ttl_seconds=600,
+                approval_correlation_id_fn=lambda approval_id, run_id=None: f"corr:{run_id}:{approval_id}",
+                append_approval_audit_fn=lambda **kwargs: audits.append(kwargs),
+                json_safe_fn=lambda value: value,
+                emit_log_fn=lambda *args, **kwargs: emitted.append((args, kwargs)),
+                set_run_status_fn=lambda run_id, status: status_changes.append((run_id, status)),
+                utc_now_fn=lambda: datetime(2026, 4, 6, 0, 0, 0, tzinfo=timezone.utc),
+                utc_now_iso_fn=lambda: "2026-04-06T00:00:00Z",
+                source="local_execution_start",
+                metadata={
+                    "approval_actions": ["browser_automation", "  ", "file_write"],
+                    "target": "local_companion",
+                    "policy_mode": "guarded",
+                },
+                emit_pause_required=True,
+            )
 
         self.assertEqual(payload["ttl_seconds"], 30)
         self.assertEqual(payload["scope"], "once")
@@ -216,6 +218,7 @@ class RunServiceTests(unittest.TestCase):
         self.assertEqual(emitted[1][1]["event"], "approval_waiting")
         self.assertEqual(audits[0]["stage"], "requested")
         self.assertEqual(audits[1]["stage"], "waiting")
+        self.assertEqual(outbox_events[0]["approval_id"], payload["approval_id"])
 
     def test_begin_run_pending_approval_delegates_to_confirmation_entrypoint(self):
         calls = []
@@ -447,8 +450,12 @@ class RunServiceTests(unittest.TestCase):
         metrics_added = []
         metrics_inc = []
         repo_dispatches = []
+        transition_outbox = []
+        artifact_outbox = []
 
-        with patch("server_modules.run_service.run_state_repository.dispatch_repository_call", side_effect=lambda awaitable, operation: (repo_dispatches.append(operation), asyncio.run(awaitable))):
+        with patch("server_modules.run_service.run_state_repository.dispatch_repository_call", side_effect=lambda awaitable, operation: (repo_dispatches.append(operation), asyncio.run(awaitable))), \
+             patch("server_modules.run_service.outbox_service.emit_run_transition_event", side_effect=lambda **kwargs: transition_outbox.append(kwargs)), \
+             patch("server_modules.run_service.outbox_service.emit_artifact_created_event", side_effect=lambda **kwargs: artifact_outbox.append(kwargs)):
             transition_live_run_status(
                 "run-1",
                 "completed",
@@ -481,6 +488,8 @@ class RunServiceTests(unittest.TestCase):
         self.assertIn("upsert_live_run:run-1:completed", repo_dispatches)
         self.assertIn("record_transition:run-1:completed", repo_dispatches)
         self.assertIn("archive_run:run-1:completed", repo_dispatches)
+        self.assertEqual(transition_outbox[0]["to_state"], "completed")
+        self.assertEqual(artifact_outbox, [])
 
     def test_load_live_runtime_state_requeues_local_runs_and_fails_interrupted_cloud_runs(self):
         local_log_queue = queue.Queue()
@@ -653,6 +662,7 @@ class RunServiceTests(unittest.TestCase):
             load_provider_profiles_fn=lambda: calls.append(("load_provider_profiles", None)),
             load_idempotency_fn=lambda: calls.append(("load_idempotency", None)),
             replay_outbox_events_on_startup_fn=lambda: calls.append(("replay_outbox", None)),
+            run_outbox_delivery_forever_fn=lambda: None,
             recover_expired_worker_leases_on_startup_fn=lambda: calls.append(("recover_expired_leases", None)),
             recover_orphaned_local_runs_on_startup_fn=lambda: calls.append(("recover_local", None)),
             recover_delegation_retries_on_startup_fn=lambda: calls.append(("recover_delegation", None)),
@@ -679,10 +689,10 @@ class RunServiceTests(unittest.TestCase):
         self.assertIn(("recover_expired_leases", None), calls)
         self.assertIn(("recover_delegation", None), calls)
         self.assertIn(("activate_whatsapp", None), calls)
-        self.assertEqual(len(threads), 3)
+        self.assertEqual(len(threads), 4)
         self.assertTrue(all(thread.started for thread in threads))
-        self.assertIs(initialized["watchdog_thread"], threads[0])
-        self.assertIs(initialized["telegram_thread"], threads[2])
+        self.assertIs(initialized["watchdog_thread"], threads[1])
+        self.assertIs(initialized["telegram_thread"], threads[3])
 
     def test_run_local_runtime_watchdog_pass_records_cleaned_run_ids(self):
         updates = []

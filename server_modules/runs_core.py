@@ -400,6 +400,11 @@ def initialize_runtime_services() -> None:
 
         _outbox_service.replay_undelivered_events_on_startup(older_than_seconds=30)
 
+    def _run_outbox_delivery_forever() -> None:
+        from server_modules import outbox_service as _outbox_service
+
+        _outbox_service.run_outbox_delivery_forever(poll_seconds=2.0, older_than_seconds=0)
+
     def _recover_expired_worker_leases_on_startup() -> None:
         from server_modules import local_queue as _local_queue
 
@@ -445,6 +450,7 @@ def initialize_runtime_services() -> None:
         load_provider_profiles_fn=_load_provider_profiles,
         load_idempotency_fn=_load_idempotency,
         replay_outbox_events_on_startup_fn=_replay_outbox_events_on_startup,
+        run_outbox_delivery_forever_fn=_run_outbox_delivery_forever,
         recover_expired_worker_leases_on_startup_fn=_recover_expired_worker_leases_on_startup,
         recover_orphaned_local_runs_on_startup_fn=_recover_orphaned_local_runs_on_startup,
         recover_delegation_retries_on_startup_fn=_recover_delegation_retries_on_startup,

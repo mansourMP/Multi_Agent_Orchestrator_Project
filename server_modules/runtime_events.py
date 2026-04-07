@@ -174,6 +174,8 @@ def append_channel_event_item(
     trace_id: Optional[str] = None,
     action: Optional[str] = None,
     metadata: Optional[Dict[str, Any]] = None,
+    event_id: Optional[str] = None,
+    occurred_at: Optional[str] = None,
 ) -> Dict[str, Any]:
     append_fn = _require_configured(append_channel_event, "append_channel_event")
     utc_now_iso = _require_configured(_utc_now_iso, "_utc_now_iso")
@@ -185,17 +187,19 @@ def append_channel_event_item(
     direction_id = str(direction or "").strip().lower()
     if direction_id not in {"inbound", "outbound", "system"}:
         direction_id = "system"
-    event_id = str(event_type or "").strip().lower() or "event"
+    event_type_id = str(event_type or "").strip().lower() or "event"
     session_key_value = str(session_key or "").strip()
     session_id_value = str(session_id or session_key_value or f"{channel_id}:unknown").strip()
     metadata_value = json_safe(metadata if isinstance(metadata, dict) else {})
     trace_value = str(trace_id or metadata_value.get("trace_id") or "").strip()
+    item_id = str(event_id or "").strip() or str(uuid.uuid4())
+    item_ts = str(occurred_at or "").strip() or utc_now_iso()
     item = {
-        "id": str(uuid.uuid4()),
-        "ts": utc_now_iso(),
+        "id": item_id,
+        "ts": item_ts,
         "channel": channel_id,
         "direction": direction_id,
-        "event_type": event_id,
+        "event_type": event_type_id,
         "workspace_id": normalize_ws(workspace_id),
         "session_key": session_key_value,
         "session_id": session_id_value,
@@ -208,6 +212,11 @@ def append_channel_event_item(
         "metadata": metadata_value,
     }
     with CHANNEL_EVENTS_LOCK:
+        CHANNEL_EVENTS[:] = [
+            existing
+            for existing in CHANNEL_EVENTS
+            if str((existing or {}).get("id") or "").strip() != item_id
+        ]
         CHANNEL_EVENTS.insert(0, item)
         del CHANNEL_EVENTS[ORION_CHANNEL_EVENTS_LIMIT:]
     try:

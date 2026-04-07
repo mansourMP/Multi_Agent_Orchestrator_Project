@@ -34,3 +34,12 @@ def test_browser_boundary_is_documented_as_permanent_not_temporary() -> None:
     assert "intentionally Python-owned" in canonical
     assert "temporary Playwright-based adapter" not in canonical
     assert "browser automation is still temporarily Python-owned" not in final_audit.lower()
+
+
+def test_memory_convergence_is_no_longer_listed_as_a_current_blocker() -> None:
+    canonical = CANONICAL_DOC.read_text(encoding="utf-8")
+    final_audit = FINAL_AUDIT_DOC.read_text(encoding="utf-8")
+
+    assert "runtime_memory.py" not in canonical
+    assert "runtime_memory.py" not in final_audit
+    assert "memory has one public facade, but the internals are still split" not in final_audit.lower()

@@ -19,7 +19,7 @@ class SessionTranscriptStoreTests(unittest.TestCase):
 
         self._transcript_patch = patch.object(session_transcript_store, "_TRANSCRIPTS_ROOT", self._transcripts_root)
         self._workspace_patch = patch.object(workspace_context, "_WORKSPACE_DIR", self._workspace_root)
-        self._memory_patch = patch.object(memory_service.agent_memory, "_MEMORY_DIR", self._memory_root)
+        self._memory_patch = patch.object(memory_service._workspace_memory_store, "_MEMORY_DIR", self._memory_root)
 
         self._transcript_patch.start()
         self._workspace_patch.start()

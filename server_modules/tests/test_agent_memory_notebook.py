@@ -21,7 +21,7 @@ class AgentMemoryNotebookTests(unittest.TestCase):
             "MEMORY.md",
             "# Curated Memory\n\n- favorite_food: sushi\n- timezone: Asia/Shanghai\n",
         )
-        notes_dir = memory_service.agent_memory._memory_notebook_dir("default")
+        notes_dir = memory_service._workspace_memory_store._memory_notebook_dir("default")
         (notes_dir / "2026-04-02.md").write_text(
             "# 2026-04-02\n\nUser prefers night owl work sessions.\n",
             encoding="utf-8",
@@ -35,7 +35,7 @@ class AgentMemoryNotebookTests(unittest.TestCase):
         self.assertIn("night owl", session_results[0]["snippet"].lower())
 
     def test_get_memory_notebook_excerpt_reads_requested_line_window(self) -> None:
-        notes_dir = memory_service.agent_memory._memory_notebook_dir("default")
+        notes_dir = memory_service._workspace_memory_store._memory_notebook_dir("default")
         (notes_dir / "people.md").write_text(
             "# People\n\nAlice likes structured updates.\nBob prefers async check-ins.\n",
             encoding="utf-8",

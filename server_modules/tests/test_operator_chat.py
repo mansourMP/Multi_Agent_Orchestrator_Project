@@ -69,7 +69,7 @@ stream_direct_operator_reply = operator_chat.build_direct_operator_reply
 
 class OperatorChatTests(unittest.TestCase):
     def setUp(self) -> None:
-        self._semantic_model_patch = patch.object(operator_chat.memory_service.agent_memory, "_SEMANTIC_MODEL", False)
+        self._semantic_model_patch = patch.object(operator_chat.memory_service._workspace_memory_store, "_SEMANTIC_MODEL", False)
         self._semantic_model_patch.start()
 
     def tearDown(self) -> None:

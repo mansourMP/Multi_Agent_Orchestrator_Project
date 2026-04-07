@@ -10,31 +10,25 @@ Status legend:
 - `Partial`: materially implemented, but still has an explicit temporary boundary or missing portion
 - `Deferred`: intentionally not yet implemented; accepted boundary must remain explicit
 
-Weighted compliance score against the Bible: `93%`
+Weighted compliance score against the Bible: `94%`
 
 This score is weighted toward runtime-critical sections rather than treating every prose section as equal. The platform is architecturally coherent now, but it is not yet fully canonical in every operational detail.
 
 ## Exact Remaining Blockers
 
-1. Memory has one public facade, but the internals are still split across private modules.
-   Evidence:
-   [server_modules/memory_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/memory_service.py),
-   [server_modules/agent_memory.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/agent_memory.py),
-   [server_modules/runtime_memory.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/runtime_memory.py)
-
-2. Canonical artifact storage exists, but the active development backend is still filesystem-backed rather than external S3-compatible object storage.
+1. Canonical artifact storage exists, but the active development backend is still filesystem-backed rather than external S3-compatible object storage.
    Evidence:
    [server_modules/artifact_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/artifact_service.py),
    [server_modules/agent_workspace_api.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/agent_workspace_api.py)
 
-3. Enterprise hardening is still incomplete.
+2. Enterprise hardening is still incomplete.
    Missing in practice:
    SSO, MFA, SCIM, SBOM/provenance attestations beyond release signing, PR/main CI, dependency and secrets scanning, and customer-facing incident/reliability runbooks.
    Evidence:
    [docs/EMPYRALIS_CANONICAL_ARCHITECTURE.md](/Users/mansur/Multi_Agent_Orchestrator_Project/docs/EMPYRALIS_CANONICAL_ARCHITECTURE.md),
    [.github/workflows/build.yml](/Users/mansur/Multi_Agent_Orchestrator_Project/.github/workflows/build.yml)
 
-4. Reliability targets are declared, but there is not yet a measurable SLO dashboard proving compliance with them.
+3. Reliability targets are declared, but there is not yet a measurable SLO dashboard proving compliance with them.
    Evidence:
    [docs/EMPYRALIS_CANONICAL_ARCHITECTURE.md](/Users/mansur/Multi_Agent_Orchestrator_Project/docs/EMPYRALIS_CANONICAL_ARCHITECTURE.md),
    [server_modules/telemetry.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/telemetry.py)
@@ -52,7 +46,7 @@ This score is weighted toward runtime-critical sections rather than treating eve
 | Final System Shape | Partial | [server_modules/agent_turn.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/agent_turn.py), [server_modules/run_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/run_service.py), [server_modules/circuit_breaker_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/circuit_breaker_service.py) | Most canonical modules exist. `circuit_breaker_service.py` is still only a thin state model, not a platform-wide breaker system. |
 | Core Claim | Aligned | [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py), [server_modules/turn_runtime.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/turn_runtime.py), [docs/EMPYRALIS_FINAL_COMPLIANCE_AUDIT.md](/Users/mansur/Multi_Agent_Orchestrator_Project/docs/EMPYRALIS_FINAL_COMPLIANCE_AUDIT.md) | Fragmentation has been sharply reduced and the remaining seams are explicit internal delegates, not competing cores. |
 | What The Platform Must Become | Partial | [frontend/app/runs/[id]/inspect/page.tsx](/Users/mansur/Multi_Agent_Orchestrator_Project/frontend/app/runs/[id]/inspect/page.tsx), [frontend/app/machines/page.tsx](/Users/mansur/Multi_Agent_Orchestrator_Project/frontend/app/machines/page.tsx), [mobile/app/notifications.tsx](/Users/mansur/Multi_Agent_Orchestrator_Project/mobile/app/notifications.tsx) | Most user-facing surfaces exist, but daily-use autonomy reliability and some enterprise/product polish still lag the full end-state. |
-| Non-Negotiable Architecture Rules | Partial | [server_modules/agent_turn.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/agent_turn.py), [server_modules/memory_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/memory_service.py), [server_modules/capability_registry.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/capability_registry.py), [server_modules/auth.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/auth.py) | One turn path, explicit policy inheritance, and typed capabilities are real. Accessibility-first and fully singular memory internals are still incomplete. |
+| Non-Negotiable Architecture Rules | Partial | [server_modules/agent_turn.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/agent_turn.py), [server_modules/memory_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/memory_service.py), [server_modules/capability_registry.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/capability_registry.py), [server_modules/auth.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/auth.py) | One turn path, one public memory path, explicit policy inheritance, and typed capabilities are real. Accessibility-first capability coverage is still incomplete. |
 | Platform Capability Model | Partial | [server_modules/capability_registry.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/capability_registry.py), [server_modules/supervisor_client.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/supervisor_client.py), [scripts/orion_local_worker_execution.py](/Users/mansur/Multi_Agent_Orchestrator_Project/scripts/orion_local_worker_execution.py) | The typed catalog is real, but the full Bible list is not complete yet, especially accessibility extraction, richer drag/drop, and some advanced system capabilities. |
 | Existing Computer-Control Surface In The Repo | Aligned | [scripts/orion_local_worker_execution.py](/Users/mansur/Multi_Agent_Orchestrator_Project/scripts/orion_local_worker_execution.py), [server_modules/computer_control.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/computer_control.py), [server_modules/runtime_policy.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/runtime_policy.py) | The repo clearly demonstrates screenshot, OCR, input, clipboard, app launch, and browser-linked control. |
 | Full-Trust Owner Mode | Aligned | [server_modules/computer_action_safety.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/computer_action_safety.py), [server_modules/auth.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/auth.py), [server_modules/runtime_runtime_api.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/runtime_runtime_api.py) | Owner full-trust is explicit, machine-scoped, policy-aware, and revocable. |
@@ -72,7 +66,6 @@ This score is weighted toward runtime-critical sections rather than treating eve
 Empyralis is no longer “mostly aspirational.” The core runtime, run lifecycle, policy surface, machine control path, notifications, shells, and auditability are real.
 
 What remains is not a second architecture. It is a bounded list of unfinished convergence and hardening work:
-- memory-internal convergence
 - external object-storage backing
 - enterprise controls and operational rigor
 - measured reliability proof

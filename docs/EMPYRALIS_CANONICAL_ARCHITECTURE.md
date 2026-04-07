@@ -1043,7 +1043,6 @@ Examples:
 - [server_modules/runs_core.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/runs_core.py)
 - [server_modules/runs_delegation.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/runs_delegation.py)
 - [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py)
-- [server_modules/runtime_memory.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/runtime_memory.py)
 - current skill loading and prompt-append paths
 
 ### Introduce
@@ -1298,14 +1297,7 @@ They are not alternate architectures. They are explicit boundaries that must rem
    - Rust remains the owner of direct device control
    - moving browser automation to Rust is optional future redesign work, not a requirement for canonical compliance
 
-2. Memory is canonically accessed through one facade but still split internally.
-
-   Accepted boundary:
-
-   - [memory_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/memory_service.py) is the only public access path
-   - [agent_memory.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/agent_memory.py) and [runtime_memory.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/runtime_memory.py) remain private implementation modules behind that facade
-
-3. Object storage is canonical at the interface level, but development storage is still filesystem-backed.
+2. Object storage is canonical at the interface level, but development storage is still filesystem-backed.
 
    Accepted boundary:
 
@@ -1313,7 +1305,7 @@ They are not alternate architectures. They are explicit boundaries that must rem
    - the current development backend stores objects under `.orion-object-store/`
    - external S3-compatible backing remains a deployment follow-through item
 
-4. Enterprise hardening is still incomplete.
+3. Enterprise hardening is still incomplete.
 
    Accepted boundary:
 

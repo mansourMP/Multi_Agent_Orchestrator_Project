@@ -6,13 +6,13 @@ import hashlib
 import json
 import sqlite3
 import re
+import threading
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Callable, Dict, List, Optional, Set
 
 from fastapi import HTTPException
 
-from server_modules import agent_memory
-from server_modules import runtime_memory
+from server_modules import agent_memory as _workspace_memory_store
 from server_modules.telemetry import get_tracer, set_span_attributes
 from server_modules.workspace_context import read_workspace_context_files
 
@@ -69,12 +69,166 @@ class WorkspaceMemorySnapshot:
         }
 
 
+UtcNowFn = Callable[[], Any]
+UtcNowIsoFn = Callable[[], str]
+ParseUtcTsFn = Callable[[Any], Any]
+NormalizeWorkspaceFn = Callable[[Any], Optional[str]]
+JsonSafeFn = Callable[[Any], Any]
+CompactTextFn = Callable[[Any, int], str]
+EmitLogFn = Callable[[Any, str, str], None]
+RefreshArchivedFn = Callable[[str, Dict[str, Any]], None]
+
+
+class _RuntimeMemoryCompat:
+    def __init__(self) -> None:
+        self.ORION_MEMORY_ENABLED = False
+        self.ORION_MEMORY_LANCEDB_URI = ""
+        self.ORION_MEMORY_DB_PATH = ""
+        self.ORION_MEMORY_READ_K = 5
+        self.ORION_MEMORY_RETENTION_DAYS_DEFAULT = 30
+        self.ORION_MEMORY_MAX_TEXT_CHARS = 6000
+        self.MEMORY_BUCKETS: Set[str] = set()
+        self.RuntimeMemoryManager: Any = None
+        self.UTC_NOW: Optional[UtcNowFn] = None
+        self.UTC_NOW_ISO: Optional[UtcNowIsoFn] = None
+        self.PARSE_UTC_TS: Optional[ParseUtcTsFn] = None
+        self.NORMALIZE_WORKSPACE_ID: Optional[NormalizeWorkspaceFn] = None
+        self.JSON_SAFE: Optional[JsonSafeFn] = None
+        self.COMPACT_EVENT_TEXT: Optional[CompactTextFn] = None
+        self.EMIT_LOG: Optional[EmitLogFn] = None
+        self.REFRESH_ARCHIVED_RUN_SNAPSHOT: Optional[RefreshArchivedFn] = None
+        self.MEMORY_MANAGER_LOCK = threading.Lock()
+        self.MEMORY_MANAGER_INSTANCE: Any = None
+        self.MEMORY_MANAGER_ERROR: Optional[str] = None
+
+    def _configure_runtime_memory(
+        self,
+        *,
+        memory_enabled: bool,
+        memory_lancedb_uri: str,
+        memory_db_path: str,
+        memory_read_k: int,
+        memory_retention_days_default: int,
+        memory_max_text_chars: int,
+        memory_buckets: Set[str],
+        runtime_memory_manager: Any,
+        utc_now: UtcNowFn,
+        utc_now_iso: UtcNowIsoFn,
+        parse_utc_ts: ParseUtcTsFn,
+        normalize_workspace_id: NormalizeWorkspaceFn,
+        json_safe: JsonSafeFn,
+        compact_event_text: CompactTextFn,
+        emit_log: EmitLogFn,
+        refresh_archived_run_snapshot: RefreshArchivedFn,
+    ) -> None:
+        self.ORION_MEMORY_ENABLED = bool(memory_enabled)
+        self.ORION_MEMORY_LANCEDB_URI = str(memory_lancedb_uri)
+        self.ORION_MEMORY_DB_PATH = str(memory_db_path)
+        self.ORION_MEMORY_READ_K = int(memory_read_k)
+        self.ORION_MEMORY_RETENTION_DAYS_DEFAULT = int(memory_retention_days_default)
+        self.ORION_MEMORY_MAX_TEXT_CHARS = int(memory_max_text_chars)
+        self.MEMORY_BUCKETS = set(memory_buckets)
+        self.RuntimeMemoryManager = runtime_memory_manager
+        self.UTC_NOW = utc_now
+        self.UTC_NOW_ISO = utc_now_iso
+        self.PARSE_UTC_TS = parse_utc_ts
+        self.NORMALIZE_WORKSPACE_ID = normalize_workspace_id
+        self.JSON_SAFE = json_safe
+        self.COMPACT_EVENT_TEXT = compact_event_text
+        self.EMIT_LOG = emit_log
+        self.REFRESH_ARCHIVED_RUN_SNAPSHOT = refresh_archived_run_snapshot
+
+    def _utc_now(self) -> Any:
+        if self.UTC_NOW is None:
+            raise RuntimeError("UTC_NOW not configured")
+        return self.UTC_NOW()
+
+    def _utc_now_iso(self) -> str:
+        if self.UTC_NOW_ISO is None:
+            raise RuntimeError("UTC_NOW_ISO not configured")
+        return self.UTC_NOW_ISO()
+
+    def _parse_utc_ts(self, value: Any) -> Any:
+        if self.PARSE_UTC_TS is None:
+            raise RuntimeError("PARSE_UTC_TS not configured")
+        return self.PARSE_UTC_TS(value)
+
+    def _normalize_workspace_id(self, value: Any) -> Optional[str]:
+        if self.NORMALIZE_WORKSPACE_ID is None:
+            raise RuntimeError("NORMALIZE_WORKSPACE_ID not configured")
+        return self.NORMALIZE_WORKSPACE_ID(value)
+
+    def _json_safe(self, value: Any) -> Any:
+        if self.JSON_SAFE is None:
+            raise RuntimeError("JSON_SAFE not configured")
+        return self.JSON_SAFE(value)
+
+    def _compact_event_text(self, value: Any, limit: int = 800) -> str:
+        if self.COMPACT_EVENT_TEXT is None:
+            raise RuntimeError("COMPACT_EVENT_TEXT not configured")
+        return self.COMPACT_EVENT_TEXT(value, limit)
+
+    def _emit_log(self, log_queue: Any, level: str, message: str, event: str = "runtime", data: Optional[dict] = None) -> None:
+        if self.EMIT_LOG is None:
+            raise RuntimeError("EMIT_LOG not configured")
+        self.EMIT_LOG(log_queue, level, message, event=event, data=data)
+
+    def _refresh_archived_run_snapshot(self, run_id: str, run: Dict[str, Any]) -> None:
+        if self.REFRESH_ARCHIVED_RUN_SNAPSHOT is None:
+            return
+        self.REFRESH_ARCHIVED_RUN_SNAPSHOT(run_id, run)
+
+    def _normalize_memory_bucket(self, value: Any, *, required: bool = True) -> Optional[str]:
+        bucket = str(value or "").strip().lower()
+        if not bucket:
+            if required:
+                raise HTTPException(status_code=400, detail="memory bucket is required.")
+            return None
+        if bucket not in self.MEMORY_BUCKETS:
+            raise HTTPException(status_code=400, detail="memory bucket must be one of: profile, project, session.")
+        return bucket
+
+    def _memory_manager(self) -> Any:
+        if not self.ORION_MEMORY_ENABLED:
+            self.MEMORY_MANAGER_ERROR = "memory_disabled"
+            return None
+        with self.MEMORY_MANAGER_LOCK:
+            if self.MEMORY_MANAGER_INSTANCE is not None:
+                return self.MEMORY_MANAGER_INSTANCE
+            if self.RuntimeMemoryManager is None:
+                self.MEMORY_MANAGER_ERROR = "memory_manager_import_failed"
+                return None
+            try:
+                self.MEMORY_MANAGER_INSTANCE = self.RuntimeMemoryManager(
+                    lancedb_uri=self.ORION_MEMORY_LANCEDB_URI,
+                    sqlite_path=self.ORION_MEMORY_DB_PATH,
+                )
+                self.MEMORY_MANAGER_ERROR = None
+                return self.MEMORY_MANAGER_INSTANCE
+            except Exception as exc:
+                self.MEMORY_MANAGER_ERROR = f"memory_manager_init_failed: {exc}"
+                self.MEMORY_MANAGER_INSTANCE = None
+                return None
+
+    def _memory_manager_or_503(self) -> Any:
+        manager = self._memory_manager()
+        if manager is None:
+            reason = self.MEMORY_MANAGER_ERROR or "memory_unavailable"
+            raise HTTPException(status_code=503, detail=reason)
+        return manager
+
+
+# Internal runtime-memory state after folding the separate runtime_memory.py
+# subsystem into this service boundary.
+runtime_memory = _RuntimeMemoryCompat()
+
+
 def list_memory_entries(workspace_id: str) -> List[Dict[str, Any]]:
-    return agent_memory._list_memory_entries(_normalize_workspace_id(workspace_id))
+    return _workspace_memory_store._list_memory_entries(_normalize_workspace_id(workspace_id))
 
 
 def save_memory(workspace_id: str, key: str, content: str, *, sync_memory_md: bool = True) -> None:
-    agent_memory._save_memory(
+    _workspace_memory_store._save_memory(
         _normalize_workspace_id(workspace_id),
         key,
         content,
@@ -83,27 +237,27 @@ def save_memory(workspace_id: str, key: str, content: str, *, sync_memory_md: bo
 
 
 def get_memory(workspace_id: str) -> str:
-    return agent_memory._get_memory(_normalize_workspace_id(workspace_id))
+    return _workspace_memory_store._get_memory(_normalize_workspace_id(workspace_id))
 
 
 def semantic_search(workspace_id: str, query: str, top_k: int = 5) -> List[Dict[str, Any]]:
-    return agent_memory._semantic_search(_normalize_workspace_id(workspace_id), query, top_k=top_k)
+    return _workspace_memory_store._semantic_search(_normalize_workspace_id(workspace_id), query, top_k=top_k)
 
 
 def delete_memory(workspace_id: str, key: str) -> bool:
-    return agent_memory._delete_memory(_normalize_workspace_id(workspace_id), key)
+    return _workspace_memory_store._delete_memory(_normalize_workspace_id(workspace_id), key)
 
 
 def save_daily_log(workspace_id: str, content: str) -> None:
-    agent_memory._save_daily_log(_normalize_workspace_id(workspace_id), content)
+    _workspace_memory_store._save_daily_log(_normalize_workspace_id(workspace_id), content)
 
 
 def get_recent_logs(workspace_id: str, days: int = 7) -> str:
-    return agent_memory._get_recent_logs(_normalize_workspace_id(workspace_id), days=days)
+    return _workspace_memory_store._get_recent_logs(_normalize_workspace_id(workspace_id), days=days)
 
 
 def search_memory_notebook(workspace_id: str, query: str, *, max_results: int = 5) -> List[Dict[str, Any]]:
-    return agent_memory._search_memory_notebook(
+    return _workspace_memory_store._search_memory_notebook(
         _normalize_workspace_id(workspace_id),
         query,
         max_results=max_results,
@@ -117,7 +271,7 @@ def get_memory_notebook_excerpt(
     from_line: int | None = None,
     line_count: int | None = None,
 ) -> Dict[str, Any]:
-    return agent_memory._get_memory_notebook_excerpt(
+    return _workspace_memory_store._get_memory_notebook_excerpt(
         _normalize_workspace_id(workspace_id),
         rel_path,
         from_line=from_line,

@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useDeferredValue, useEffect, useMemo, useState } from 'react';
+import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import type { AgentRoleId } from '@/app/page.catalog';
 import {
   artifactKindGroup,
@@ -59,13 +60,16 @@ function isHttpTarget(value?: string | null): boolean {
 
 export function useArtifactsBrowser() {
   const initialPayload = useMemo(() => readArtifactsBrowserCache(), []);
+  const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
   const [query, setQuery] = useState('');
   const deferredQuery = useDeferredValue(query);
   const [viewMode, setViewMode] = useState<ArtifactView>('deliverables');
   const [kindFilter, setKindFilter] = useState<KindFilter>('all');
   const [agentFilter, setAgentFilter] = useState<'all' | AgentRoleId>('all');
   const [channelFilter, setChannelFilter] = useState('all');
-  const [selectedArtifactId, setSelectedArtifactId] = useState<string | null>(null);
+  const [selectedArtifactId, setSelectedArtifactId] = useState<string | null>(() => searchParams.get('artifact'));
   const desktopBridge = useMemo(() => {
     if (typeof window === 'undefined') return null;
     const scopedWindow = window as typeof window & { orionDesktop?: DesktopBridge; empyralisDesktop?: DesktopBridge };
@@ -116,14 +120,33 @@ export function useArtifactsBrowser() {
   const { viewSummary, previewTargetById, channelOptions } = browserView;
   const latestArtifact = filteredItems[0] || payload?.items?.[0] || null;
 
+  const syncSelectedArtifact = useCallback((artifactId: string | null) => {
+    setSelectedArtifactId(artifactId);
+    const current = searchParams.get('artifact');
+    if ((current || null) === artifactId) return;
+    const next = new URLSearchParams(searchParams.toString());
+    if (artifactId) next.set('artifact', artifactId);
+    else next.delete('artifact');
+    const href = next.toString() ? `${pathname}?${next.toString()}` : pathname;
+    router.replace(href, { scroll: false });
+  }, [pathname, router, searchParams]);
+
   useEffect(() => {
+    const artifactFromUrl = searchParams.get('artifact');
+    if ((artifactFromUrl || null) === selectedArtifactId) return;
+    setSelectedArtifactId(artifactFromUrl);
+  }, [searchParams, selectedArtifactId]);
+
+  useEffect(() => {
+    if (!payload) return;
+    const allItems = payload.items || [];
+    if (selectedArtifactId && allItems.some((item) => item.id === selectedArtifactId)) return;
     if (filteredItems.length === 0) {
-      setSelectedArtifactId(null);
+      if (selectedArtifactId) syncSelectedArtifact(null);
       return;
     }
-    if (selectedArtifactId && filteredItems.some((item) => item.id === selectedArtifactId)) return;
-    setSelectedArtifactId(filteredItems[0]?.id || null);
-  }, [filteredItems, selectedArtifactId]);
+    syncSelectedArtifact(filteredItems[0]?.id || null);
+  }, [filteredItems, payload, selectedArtifactId, syncSelectedArtifact]);
 
   const hasActiveFilters =
     query.trim().length > 0
@@ -140,10 +163,13 @@ export function useArtifactsBrowser() {
     setChannelFilter('all');
   }, []);
 
-  const selectedArtifact = useMemo(
-    () => filteredItems.find((item) => item.id === selectedArtifactId) || filteredItems[0] || null,
-    [filteredItems, selectedArtifactId],
-  );
+  const selectedArtifact = useMemo(() => {
+    const allItems = payload?.items || [];
+    if (selectedArtifactId) {
+      return allItems.find((item) => item.id === selectedArtifactId) || filteredItems[0] || allItems[0] || null;
+    }
+    return filteredItems[0] || allItems[0] || null;
+  }, [filteredItems, payload, selectedArtifactId]);
 
   const selectedPreviewTarget = useMemo(
     () => (selectedArtifact ? previewTargetById.get(selectedArtifact.id) || selectedArtifact : null),
@@ -151,17 +177,21 @@ export function useArtifactsBrowser() {
   );
 
   const selectArtifact = useCallback((item: ArtifactItem) => {
-    setSelectedArtifactId(item.id);
-  }, []);
+    syncSelectedArtifact(item.id);
+  }, [syncSelectedArtifact]);
 
   const artifactContentHref = useCallback((item: ArtifactItem) => {
     const target = previewTargetById.get(item.id) || item;
-    return `/api/artifacts/content?path=${encodeURIComponent(String(target.uri_or_path || '').trim())}`;
+    const location = String(target.uri_or_path || '').trim();
+    if (isHttpTarget(location)) return location;
+    return `/api/artifacts/content?path=${encodeURIComponent(location)}`;
   }, [previewTargetById]);
 
   const artifactDownloadHref = useCallback((item: ArtifactItem) => {
     const target = previewTargetById.get(item.id) || item;
-    return `/api/artifacts/file?path=${encodeURIComponent(String(target.uri_or_path || '').trim())}`;
+    const location = String(target.uri_or_path || '').trim();
+    if (isHttpTarget(location)) return location;
+    return `/api/artifacts/file?path=${encodeURIComponent(location)}`;
   }, [previewTargetById]);
 
   const openArtifact = useCallback(async (item: ArtifactItem) => {

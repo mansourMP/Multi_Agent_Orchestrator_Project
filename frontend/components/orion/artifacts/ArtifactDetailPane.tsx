@@ -14,15 +14,16 @@ import {
   artifactPathTail,
   artifactPreviewMode,
   artifactSummary,
+  artifactSupportsCodeView,
+  artifactSupportsRenderedView,
   artifactSurfaceLabel,
   compactText,
   connectorBindingText,
-  toDateLabel,
   type ArtifactItem,
 } from '@/lib/artifactsPresentation';
 import { ArtifactCodeView } from './ArtifactCodeView';
-import { ArtifactHtmlPreview } from './ArtifactHtmlPreview';
-import { ArtifactMarkdownPreview } from './ArtifactMarkdownPreview';
+import { ArtifactMetaView } from './ArtifactMetaView';
+import { ArtifactPreviewView } from './ArtifactPreviewView';
 
 type ArtifactDetailPaneProps = {
   item: ArtifactItem | null;
@@ -35,7 +36,7 @@ type ArtifactDetailPaneProps = {
   onReveal: () => void;
 };
 
-type ViewTab = 'view' | 'code';
+type ViewTab = 'view' | 'code' | 'meta';
 
 export function ArtifactDetailPane({
   item,
@@ -48,21 +49,24 @@ export function ArtifactDetailPane({
   onReveal,
 }: ArtifactDetailPaneProps) {
   const previewMode = useMemo(() => (previewTarget ? artifactPreviewMode(previewTarget) : 'none'), [previewTarget]);
-  const [activeTab, setActiveTab] = useState<ViewTab>(previewTarget ? artifactDefaultViewerTab(previewTarget) : 'code');
+  const [activeTab, setActiveTab] = useState<ViewTab>(previewTarget ? artifactDefaultViewerTab(previewTarget) : 'meta');
   const [textContent, setTextContent] = useState<string>('');
   const [contentLoading, setContentLoading] = useState(false);
   const [contentError, setContentError] = useState<string>('');
 
+  const canRenderView = Boolean(previewTarget && artifactSupportsRenderedView(previewTarget));
+  const canShowCode = Boolean(previewTarget && artifactSupportsCodeView(previewTarget));
+
   useEffect(() => {
     if (!previewTarget) {
-      setActiveTab('code');
+      setActiveTab('meta');
       return;
     }
     setActiveTab(artifactDefaultViewerTab(previewTarget));
   }, [previewTarget]);
 
   useEffect(() => {
-    if (!previewTarget || previewMode === 'none') {
+    if (!previewTarget || (!canShowCode && previewMode !== 'csv' && previewMode !== 'markdown' && previewMode !== 'text' && previewMode !== 'html')) {
       setTextContent('');
       setContentLoading(false);
       setContentError('');
@@ -90,28 +94,30 @@ export function ArtifactDetailPane({
     return () => {
       cancelled = true;
     };
-  }, [previewMode, previewTarget]);
+  }, [canShowCode, previewMode, previewTarget]);
 
   useEffect(() => {
-    if (activeTab === 'view' && previewMode !== 'html' && contentError) {
-      setActiveTab('code');
+    if (activeTab === 'view' && !canRenderView) {
+      setActiveTab(canShowCode ? 'code' : 'meta');
+      return;
     }
-  }, [activeTab, contentError, previewMode]);
+    if (activeTab === 'code' && !canShowCode) {
+      setActiveTab(canRenderView ? 'view' : 'meta');
+    }
+  }, [activeTab, canRenderView, canShowCode]);
 
   if (!item || !previewTarget) {
     return (
       <aside className="orion-artifact-detail-pane is-empty">
         <div className="orion-artifact-detail-empty">
           <div className="orion-panel-title">Select an artifact</div>
-          <p>Choose an HTML page, markdown file, or code/text output to inspect it here.</p>
+          <p>Choose an output, screenshot, page, or support file to inspect it inside Empyralis.</p>
         </div>
       </aside>
     );
   }
 
   const formatTone = artifactFormatTone(previewTarget);
-  const canRenderView = previewMode !== 'none';
-  const canShowCode = previewMode !== 'none';
   const inspectHref = item.run_id
     ? `/runs/${encodeURIComponent(item.run_id)}/inspect?focus=${encodeURIComponent(item.focus_target || 'artifacts')}`
     : null;
@@ -121,44 +127,43 @@ export function ArtifactDetailPane({
     ? 'Rendered page'
     : previewMode === 'markdown'
       ? 'Rendered markdown'
-      : 'Formatted text';
+      : previewMode === 'image'
+        ? 'Inline image preview'
+        : previewMode === 'pdf'
+          ? 'Embedded PDF preview'
+          : previewMode === 'csv'
+            ? 'Table preview'
+            : 'Formatted text preview';
 
   let body: React.ReactNode;
   if (activeTab === 'view') {
-    if (!canRenderView) {
+    body = (
+      <ArtifactPreviewView
+        item={item}
+        previewTarget={previewTarget}
+        previewMode={previewMode}
+        contentHref={contentHref}
+        textContent={textContent}
+        loading={contentLoading}
+        error={contentError}
+      />
+    );
+  } else if (activeTab === 'code') {
+    if (!canShowCode) {
       body = (
         <div className="orion-artifact-detail-fallback">
-          Rendered view is not available for this file type yet. Use Code or Download.
-        </div>
-      );
-    } else if (previewMode === 'html') {
-      body = (
-        <div className="orion-artifact-detail-body-frame">
-          <div className="orion-artifact-detail-inline-note">Sandboxed HTML preview. Scripts, forms, and parent-page access are disabled.</div>
-          <ArtifactHtmlPreview title={`Preview ${artifactSurfaceLabel(item)}`} src={contentHref || ''} />
+          Raw source view is only available for HTML, markdown, CSV, and text/code artifacts.
         </div>
       );
     } else if (contentLoading) {
-      body = <div className="orion-artifact-detail-fallback">Loading preview…</div>;
+      body = <div className="orion-artifact-detail-fallback">Loading source…</div>;
     } else if (contentError) {
       body = <div className="orion-artifact-detail-fallback">{contentError}</div>;
-    } else if (previewMode === 'markdown') {
-      body = <ArtifactMarkdownPreview content={textContent} />;
     } else {
-      body = <pre className="orion-artifact-preview is-text">{textContent}</pre>;
+      body = <ArtifactCodeView code={textContent} language={codeLanguage} />;
     }
-  } else if (!canShowCode) {
-    body = (
-      <div className="orion-artifact-detail-fallback">
-        Raw source preview is only available for HTML, markdown, and text/code artifacts in this sprint.
-      </div>
-    );
-  } else if (contentLoading) {
-    body = <div className="orion-artifact-detail-fallback">Loading source…</div>;
-  } else if (contentError) {
-    body = <div className="orion-artifact-detail-fallback">{contentError}</div>;
   } else {
-    body = <ArtifactCodeView code={textContent} language={codeLanguage} />;
+    body = <ArtifactMetaView item={item} previewTarget={previewTarget} />;
   }
 
   return (
@@ -176,7 +181,6 @@ export function ArtifactDetailPane({
           </p>
           <div className="orion-artifact-detail-meta">
             <span>{artifactPathTail(resolvedLocation) || 'Saved artifact'}</span>
-            <span>{toDateLabel(item.updated_at)}</span>
             {item.run_id ? <span>Run {item.run_id.slice(0, 8)}</span> : null}
             {item.agent_label ? <span>{item.agent_label}</span> : null}
             {connectorBindingText(item.connector_binding) ? <span>{connectorBindingText(item.connector_binding)}</span> : null}
@@ -227,6 +231,14 @@ export function ArtifactDetailPane({
           title={canShowCode ? 'Raw source view' : 'Code view is unavailable for this file type.'}
         >
           Code
+        </button>
+        <button
+          type="button"
+          className={`orion-artifact-detail-tab${activeTab === 'meta' ? ' is-active' : ''}`}
+          onClick={() => setActiveTab('meta')}
+          title="Artifact metadata and provenance"
+        >
+          Meta
         </button>
       </div>
 

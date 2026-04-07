@@ -6,8 +6,19 @@ export type ArtifactItem = {
   kind: string;
   source: string;
   run_id?: string | null;
+  created_at?: string | null;
   updated_at?: string | null;
   uri_or_path: string;
+  artifact_id?: string | null;
+  content_type?: string | null;
+  byte_size?: number | null;
+  step_id?: string | null;
+  step_index?: number | null;
+  step_number?: number | null;
+  machine_id?: string | null;
+  storage_backend?: string | null;
+  object_key?: string | null;
+  retention?: Record<string, unknown> | null;
   focus_target?: 'screenshots' | 'artifacts';
   agent_role?: string | null;
   agent_label?: string | null;
@@ -40,7 +51,7 @@ export type ArtifactPayload = {
 export type KindFilter = 'all' | 'screenshots' | 'reports' | 'data' | 'links' | 'files';
 export type ArtifactView = 'deliverables' | 'evidence' | 'system' | 'all';
 export type ArtifactFormat = 'word' | 'powerpoint' | 'spreadsheet' | 'pdf' | 'image' | 'text' | 'generic';
-export type ArtifactPreviewMode = 'html' | 'markdown' | 'text' | 'none';
+export type ArtifactPreviewMode = 'html' | 'markdown' | 'image' | 'pdf' | 'csv' | 'text' | 'none';
 
 export function toDateLabel(value?: string | null): string {
   if (!value) return '—';
@@ -54,6 +65,15 @@ export function compactText(value?: string | null, fallback = '—', maxLength =
   if (!normalized) return fallback;
   if (normalized.length <= maxLength) return normalized;
   return `${normalized.slice(0, Math.max(0, maxLength - 1)).trimEnd()}…`;
+}
+
+export function formatByteSize(value?: number | null): string {
+  const size = Number(value || 0);
+  if (!Number.isFinite(size) || size <= 0) return '—';
+  if (size < 1024) return `${size} B`;
+  if (size < 1024 * 1024) return `${(size / 1024).toFixed(size < 10 * 1024 ? 1 : 0)} KB`;
+  if (size < 1024 * 1024 * 1024) return `${(size / (1024 * 1024)).toFixed(size < 10 * 1024 * 1024 ? 1 : 0)} MB`;
+  return `${(size / (1024 * 1024 * 1024)).toFixed(1)} GB`;
 }
 
 export function artifactKindGroup(kind?: string): KindFilter {
@@ -152,13 +172,18 @@ export function artifactPreviewMode(item: ArtifactItem): ArtifactPreviewMode {
   const ext = artifactExtension(item.uri_or_path) || artifactExtension(item.label);
   if (ext === '.html' || ext === '.htm') return 'html';
   if (ext === '.md' || ext === '.markdown') return 'markdown';
+  if (ext === '.pdf') return 'pdf';
+  if (ext === '.csv') return 'csv';
+  if (artifactFormat(item) === 'image') return 'image';
   if (artifactFormat(item) === 'text') return 'text';
   return 'none';
 }
 
-export function artifactDefaultViewerTab(item: ArtifactItem): 'view' | 'code' {
+export function artifactDefaultViewerTab(item: ArtifactItem): 'view' | 'code' | 'meta' {
   const mode = artifactPreviewMode(item);
-  return mode === 'html' || mode === 'markdown' ? 'view' : 'code';
+  if (mode === 'html' || mode === 'markdown' || mode === 'image' || mode === 'pdf' || mode === 'csv') return 'view';
+  if (mode === 'text') return 'code';
+  return 'meta';
 }
 
 export function artifactCodeLanguage(item: ArtifactItem): string {
@@ -180,6 +205,15 @@ export function artifactCodeLanguage(item: ArtifactItem): string {
   if (ext === '.sh') return 'bash';
   if (ext === '.ps1') return 'powershell';
   return 'text';
+}
+
+export function artifactSupportsCodeView(item: ArtifactItem): boolean {
+  const mode = artifactPreviewMode(item);
+  return mode === 'html' || mode === 'markdown' || mode === 'csv' || mode === 'text';
+}
+
+export function artifactSupportsRenderedView(item: ArtifactItem): boolean {
+  return artifactPreviewMode(item) !== 'none';
 }
 
 export function artifactFormatLabel(item: ArtifactItem): string {

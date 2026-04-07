@@ -8333,6 +8333,7 @@ body.orion-modal-open .orion-page-shell {
 
 .orion-artifact-detail-body-frame,
 .orion-artifact-detail-code,
+.orion-artifact-meta-grid,
 .orion-artifact-preview,
 .orion-artifact-detail-fallback {
   min-height: 100%;
@@ -8361,6 +8362,33 @@ body.orion-modal-open .orion-page-shell {
 .orion-artifact-preview {
   width: 100%;
   min-height: 560px;
+}
+
+.orion-artifact-preview.is-media {
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background:
+    radial-gradient(circle at top left, color-mix(in srgb, var(--primary-soft) 40%, white 60%) 0%, transparent 42%),
+    linear-gradient(180deg, color-mix(in srgb, var(--bg-element) 82%, white 18%) 0%, var(--bg-surface) 100%);
+}
+
+.orion-artifact-media-image {
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  max-height: 520px;
+  object-fit: contain;
+  border-radius: 14px;
+  box-shadow: 0 20px 38px rgba(15, 23, 42, 0.12);
+  background: white;
+}
+
+.orion-artifact-pdf-frame {
+  width: 100%;
+  min-height: 560px;
+  border: none;
+  background: white;
 }
 
 .orion-artifact-preview.markdown {
@@ -8403,6 +8431,67 @@ body.orion-modal-open .orion-page-shell {
   font-size: 12.75px;
   line-height: 1.7;
   color: var(--text-primary);
+}
+
+.orion-artifact-preview.is-table {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+}
+
+.orion-artifact-table-wrap {
+  overflow: auto;
+}
+
+.orion-artifact-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--text-primary);
+}
+
+.orion-artifact-table th,
+.orion-artifact-table td {
+  padding: 10px 12px;
+  text-align: left;
+  border-bottom: 1px solid color-mix(in srgb, var(--border-subtle) 86%, transparent 14%);
+  vertical-align: top;
+}
+
+.orion-artifact-table th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  font-size: 11.5px;
+  letter-spacing: 0.02em;
+  background: color-mix(in srgb, var(--bg-element) 86%, white 14%);
+  color: var(--text-secondary);
+}
+
+.orion-artifact-meta-grid {
+  display: grid;
+  grid-template-columns: minmax(120px, 156px) minmax(0, 1fr);
+  gap: 0;
+  padding: 8px 0;
+}
+
+.orion-artifact-meta-label,
+.orion-artifact-meta-value {
+  padding: 12px 16px;
+  border-bottom: 1px solid color-mix(in srgb, var(--border-subtle) 88%, transparent 12%);
+  font-size: 12.5px;
+  line-height: 1.6;
+}
+
+.orion-artifact-meta-label {
+  color: var(--text-secondary);
+  font-weight: 700;
+  background: color-mix(in srgb, var(--bg-element) 62%, white 38%);
+}
+
+.orion-artifact-meta-value {
+  color: var(--text-primary);
+  word-break: break-word;
 }
 
 .orion-artifact-detail-fallback {
@@ -8547,8 +8636,26 @@ body.orion-modal-open .orion-page-shell {
   }
 
   .orion-artifact-html-frame,
+  .orion-artifact-pdf-frame,
   .orion-artifact-preview {
     min-height: 420px;
+  }
+
+  .orion-artifact-media-image {
+    max-height: 360px;
+  }
+
+  .orion-artifact-meta-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .orion-artifact-meta-label {
+    padding-bottom: 4px;
+    border-bottom: none;
+  }
+
+  .orion-artifact-meta-value {
+    padding-top: 0;
   }
 
   .orion-home-overview,

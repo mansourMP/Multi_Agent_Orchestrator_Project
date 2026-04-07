@@ -330,6 +330,9 @@ function formatStatusLabel(
   if (status === 'waiting_for_input') {
     return { label: 'Waiting for input', toolLabel: null, icon: ShieldCheck };
   }
+  if (status === 'executing') {
+    return { label: 'Running', toolLabel: null, icon: Bot };
+  }
   if (status === 'completed') {
     return { label: 'Completed', toolLabel: null, icon: CheckCircle2 };
   }

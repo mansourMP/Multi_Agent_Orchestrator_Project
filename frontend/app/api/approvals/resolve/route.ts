@@ -11,6 +11,7 @@ type ApprovalResolveBody = {
   approvalId?: string;
   decision?: string;
   note?: string;
+  actor?: string;
 };
 
 export async function POST(request: NextRequest) {
@@ -24,25 +25,38 @@ export async function POST(request: NextRequest) {
   const approvalId = String(body?.approvalId || '').trim();
   const decision = String(body?.decision || '').trim();
   const note = String(body?.note || '').trim();
+  const actor = String(body?.actor || '').trim() || 'user';
 
-  if (!runId || !approvalId) {
-    return Response.json({ detail: 'Run ID and approval ID are required.' }, { status: 400 });
+  if (!approvalId) {
+    return Response.json({ detail: 'Approval ID is required.' }, { status: 400 });
   }
   if (!decision) {
     return Response.json({ detail: 'Decision is required.' }, { status: 400 });
   }
 
-  const owned = await requireOwnedRun(request, runId);
-  if (owned.response) return owned.response;
+  if (runId) {
+    const owned = await requireOwnedRun(request, runId);
+    if (owned.response) return owned.response;
+  }
+
+  const resolution =
+    decision.toLowerCase() === 'proceed' ? 'approved'
+      : decision.toLowerCase() === 'hold' ? 'rejected'
+      : '';
+  if (!resolution) {
+    return Response.json({ detail: 'Decision must be Proceed or Hold.' }, { status: 400 });
+  }
 
   try {
     const { status, payload } = await runtimeJsonRequest(
-      `/runs/${encodeURIComponent(runId)}/approvals/${encodeURIComponent(approvalId)}/resolve`,
+      `/approvals/${encodeURIComponent(approvalId)}/resolve`,
       {
         method: 'POST',
         body: JSON.stringify({
-          decision,
-          note,
+          approval_id: approvalId,
+          resolution,
+          actor,
+          reason: note,
         }),
       },
     );

@@ -210,7 +210,7 @@ class RuntimeDurableStateTests(unittest.TestCase):
         response = runs_engine.wait_for_human_response(run_id, "Confirm send")
 
         self.assertTrue(response["approved"])
-        self.assertEqual(stored_run["status"], "running")
+        self.assertEqual(stored_run["status"], "executing")
         self.assertIsNone(stored_run["pending_confirmation"])
         self.assertIsNone(stored_run["pending_approval"])
         self.assertFalse(stored_run.get("_resume_after_confirmation_scheduled"))

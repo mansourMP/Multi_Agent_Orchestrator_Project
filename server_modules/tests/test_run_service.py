@@ -279,7 +279,7 @@ class RunServiceTests(unittest.TestCase):
         )
 
         self.assertTrue(payload["approved"])
-        self.assertEqual(status_changes, [("run-approval-resume", "running")])
+        self.assertEqual(status_changes, [("run-approval-resume", "executing")])
         self.assertIsNone(run["pending_confirmation"])
         self.assertIsNone(run["pending_approval"])
         self.assertNotIn("_resume_after_confirmation_scheduled", run)
@@ -333,7 +333,7 @@ class RunServiceTests(unittest.TestCase):
         )
 
         self.assertTrue(payload["approved"])
-        self.assertEqual(status_changes, [("run-approval-live", "running")])
+        self.assertEqual(status_changes, [("run-approval-live", "executing")])
         self.assertIsNone(run["pending_confirmation"])
         self.assertEqual(emitted[0][1]["event"], "approval_ignored")
         self.assertEqual(emitted[1][1]["event"], "approval_received")

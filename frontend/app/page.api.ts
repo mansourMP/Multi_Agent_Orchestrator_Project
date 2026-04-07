@@ -2070,7 +2070,7 @@ export function usePlatformApi(state: PageState, streamRef: MutableRefObject<Aut
       if (runStatus === 'completed') return 'completed';
       if (runStatus === 'waiting_for_input') return 'waiting';
       if (runStatus === 'failed' || runStatus === 'timeout') return 'error';
-      if (runStatus === 'running' || runStatus === 'running_local' || runStatus === 'starting') return 'running';
+      if (runStatus === 'running' || runStatus === 'executing' || runStatus === 'running_local' || runStatus === 'starting') return 'running';
       return null;
     } catch {
       return null;

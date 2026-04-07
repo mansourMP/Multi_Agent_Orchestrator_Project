@@ -607,7 +607,7 @@ def wait_for_human_response(
             if not approved and not rejected and not escalated:
                 rejected = True
             run.pop("_resume_after_confirmation_scheduled", None)
-            set_run_status_fn(run_id, "running")
+            set_run_status_fn(run_id, "executing")
             emit_log_fn(
                 run["logs"],
                 "info",
@@ -762,7 +762,7 @@ def wait_for_human_response(
         pending["resolved_at"] = utc_now_iso_fn()
         pending["decision"] = decision_text
         set_pending_confirmation_fn(run, pending)
-        set_run_status_fn(run_id, "running")
+        set_run_status_fn(run_id, "executing")
         emit_log_fn(
             run["logs"],
             "info",

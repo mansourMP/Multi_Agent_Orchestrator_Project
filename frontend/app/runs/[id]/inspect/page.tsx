@@ -404,7 +404,7 @@ function fmtMs(value?: number | null): string {
 function statusColor(status?: string): string {
   const value = String(status || '').toLowerCase();
   if (value === 'completed' || value === 'success') return 'var(--success-fg)';
-  if (value === 'running' || value === 'starting') return 'var(--primary-base)';
+  if (value === 'running' || value === 'executing' || value === 'starting') return 'var(--primary-base)';
   if (value === 'waiting' || value === 'waiting_for_input') return 'var(--warning-fg)';
   if (value === 'failed' || value === 'error' || value === 'timeout') return 'var(--error-fg)';
   return 'var(--text-secondary)';
@@ -439,7 +439,7 @@ function workflowNodeTone(status?: string): { color: string; label: string; back
       border: 'var(--error-border)',
     };
   }
-  if (value === 'running' || value === 'starting') {
+  if (value === 'running' || value === 'executing' || value === 'starting') {
     return {
       color: 'var(--primary-base)',
       label: 'Running',

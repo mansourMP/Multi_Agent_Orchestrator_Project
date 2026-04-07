@@ -91,6 +91,30 @@ class RuntimeRuntimeApiTests(unittest.TestCase):
         self.assertEqual(result["machine_id"], "machine-1")
         mock_enroll.assert_called_once()
 
+    @patch("server_modules.local_queue.create_machine_enrollment_intent")
+    def test_register_runtime_routes_exposes_machine_enrollment_intent(self, mock_create_intent):
+        app = _FakeApp()
+        runtime_runtime_api.register_runtime_routes(app)
+        mock_create_intent.return_value = {"ok": True, "machine_id": "machine-1", "token": "tok"}
+        handler = app.routes[("POST", "/machines/enrollment-intents")]
+
+        result = self._run_async(handler(runtime_runtime_api.MachineEnrollPayload(display_name="Machine 1")))
+
+        self.assertEqual(result["machine_id"], "machine-1")
+        mock_create_intent.assert_called_once()
+
+    @patch("server_modules.local_queue.complete_machine_bootstrap")
+    def test_register_runtime_routes_exposes_machine_bootstrap_complete(self, mock_complete):
+        app = _FakeApp()
+        runtime_runtime_api.register_runtime_routes(app)
+        mock_complete.return_value = {"ok": True, "machine_id": "machine-1"}
+        handler = app.routes[("POST", "/machines/{machine_id}/bootstrap-complete")]
+
+        result = self._run_async(handler("machine-1", runtime_runtime_api.MachineBootstrapCompletePayload(enrollment_token="tok")))
+
+        self.assertEqual(result["machine_id"], "machine-1")
+        mock_complete.assert_called_once_with("machine-1", enrollment_token="tok")
+
     @patch("server_modules.local_queue.handle_delete_local_runtime")
     def test_register_runtime_routes_exposes_machine_delete(self, mock_delete):
         app = _FakeApp()

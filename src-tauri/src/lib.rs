@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
 use rand::{rngs::OsRng, RngCore};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use tauri::{Manager, RunEvent, Runtime, WebviewUrl, WebviewWindowBuilder};
@@ -31,6 +31,7 @@ const WORKER_ID: &str = "empyralis-tauri-local";
 const SERVER_BOOT_TIMEOUT: Duration = Duration::from_secs(45);
 const SERVER_POLL_INTERVAL: Duration = Duration::from_millis(250);
 const WORKER_BOOT_GRACE: Duration = Duration::from_secs(2);
+const MACHINE_BOOTSTRAP_HEARTBEAT_TIMEOUT: Duration = Duration::from_secs(60);
 const OPENAI_CODEX_CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
 const OPENAI_CODEX_AUTHORIZE_URL: &str = "https://auth.openai.com/oauth/authorize";
 const OPENAI_CODEX_TOKEN_URL: &str = "https://auth.openai.com/oauth/token";
@@ -95,6 +96,44 @@ struct OpenAiCodexOauthResult {
     account_id: String,
     email: Option<String>,
     profile_name: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+struct MachineEnrollmentIntent {
+    machine_id: String,
+    token: String,
+    runtime_url: String,
+    worker_config: MachineWorkerConfig,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+struct MachineWorkerConfig {
+    worker_id: String,
+    runtime_type: String,
+    display_name: String,
+    execution_targets: Vec<String>,
+    policy_mode: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+struct LocalMachineEnrollmentConfig {
+    machine_id: String,
+    runtime_url: String,
+    runtime_type: String,
+    display_name: String,
+    policy_mode: String,
+    execution_targets: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "snake_case")]
+struct MachineBootstrapResult {
+    ok: bool,
+    machine_id: String,
+    enrollment_state: String,
 }
 
 fn base64url_encode(bytes: &[u8]) -> String {
@@ -432,6 +471,22 @@ fn runtime_key_path() -> PathBuf {
     state_dir().join("runtime_key")
 }
 
+fn machine_enrollment_config_path() -> PathBuf {
+    state_dir().join("machine-enrollment.json")
+}
+
+fn worker_wrapper_script_path() -> PathBuf {
+    #[cfg(target_os = "windows")]
+    {
+        return state_dir().join("run-local-worker.cmd");
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        return state_dir().join("run-local-worker.sh");
+    }
+}
+
 fn pid_dir() -> PathBuf {
     state_dir().join("pids")
 }
@@ -691,6 +746,28 @@ fn ensure_runtime_key() -> Result<String, String> {
     Ok(generated)
 }
 
+fn read_machine_enrollment_config() -> Option<LocalMachineEnrollmentConfig> {
+    let path = machine_enrollment_config_path();
+    let raw = fs::read_to_string(path).ok()?;
+    serde_json::from_str::<LocalMachineEnrollmentConfig>(&raw).ok()
+}
+
+fn write_machine_enrollment_config(config: &LocalMachineEnrollmentConfig) -> Result<(), String> {
+    ensure_state_dir()?;
+    let path = machine_enrollment_config_path();
+    let payload = serde_json::to_string_pretty(config)
+        .map_err(|error| format!("Failed to serialize machine enrollment config: {error}"))?;
+    fs::write(&path, payload)
+        .map_err(|error| format!("Failed to write machine enrollment config at {}: {error}", path.display()))
+}
+
+fn resolved_worker_id() -> String {
+    read_machine_enrollment_config()
+        .map(|config| config.machine_id)
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| WORKER_ID.to_string())
+}
+
 fn frontend_dir() -> PathBuf {
     repo_root().join("frontend")
 }
@@ -730,6 +807,200 @@ fn next_url() -> String {
 
 fn next_health_url() -> String {
     next_url()
+}
+
+fn runtime_get_json(runtime_base_url: &str, path: &str, runtime_key: &str) -> Result<Value, String> {
+    let url = format!(
+        "{}/{}",
+        runtime_base_url.trim_end_matches('/'),
+        path.trim_start_matches('/')
+    );
+    let mut response = ureq::get(&url)
+        .header("X-API-Key", runtime_key)
+        .call()
+        .map_err(|error| format!("Runtime GET {url} failed: {error}"))?;
+    let status = response.status().as_u16();
+    let raw = response
+        .body_mut()
+        .read_to_string()
+        .map_err(|error| format!("Failed to read runtime response from {url}: {error}"))?;
+    if !(200..300).contains(&status) {
+        return Err(format!("Runtime GET {url} failed with status {status}: {}", raw.trim()));
+    }
+    serde_json::from_str::<Value>(&raw)
+        .map_err(|error| format!("Invalid runtime JSON from {url}: {error}"))
+}
+
+fn runtime_post_json(
+    runtime_base_url: &str,
+    path: &str,
+    runtime_key: &str,
+    payload: &Value,
+) -> Result<Value, String> {
+    let url = format!(
+        "{}/{}",
+        runtime_base_url.trim_end_matches('/'),
+        path.trim_start_matches('/')
+    );
+    let mut response = ureq::post(&url)
+        .header("X-API-Key", runtime_key)
+        .header("Content-Type", "application/json")
+        .send(payload.to_string())
+        .map_err(|error| format!("Runtime POST {url} failed: {error}"))?;
+    let status = response.status().as_u16();
+    let raw = response
+        .body_mut()
+        .read_to_string()
+        .map_err(|error| format!("Failed to read runtime response from {url}: {error}"))?;
+    if !(200..300).contains(&status) {
+        return Err(format!("Runtime POST {url} failed with status {status}: {}", raw.trim()));
+    }
+    serde_json::from_str::<Value>(&raw)
+        .map_err(|error| format!("Invalid runtime JSON from {url}: {error}"))
+}
+
+fn runtime_machine_online(
+    runtime_base_url: &str,
+    runtime_key: &str,
+    machine_id: &str,
+) -> Result<bool, String> {
+    let payload = runtime_get_json(runtime_base_url, "/machines", runtime_key)?;
+    let items = payload
+        .get("items")
+        .and_then(|value| value.as_array())
+        .cloned()
+        .unwrap_or_default();
+    Ok(items.iter().any(|item| {
+        item.get("machine_id")
+            .and_then(|value| value.as_str())
+            .map(|value| value == machine_id)
+            .unwrap_or(false)
+            && item.get("online").and_then(|value| value.as_bool()).unwrap_or(false)
+    }))
+}
+
+fn write_worker_wrapper_script(config: &LocalMachineEnrollmentConfig) -> Result<PathBuf, String> {
+    ensure_state_dir()?;
+    let path = worker_wrapper_script_path();
+
+    #[cfg(target_os = "windows")]
+    let contents = format!(
+        "@echo off\r\nsetlocal enabledelayedexpansion\r\nset RUNTIME_KEY_FILE={state}\\runtime_key\r\nif not exist \"%RUNTIME_KEY_FILE%\" exit /b 1\r\nset /p RUNTIME_KEY=<\"%RUNTIME_KEY_FILE%\"\r\nset ORION_API_URL={runtime_url}\r\nset WORKER_ID={worker_id}\r\ncd /d \"{repo}\"\r\ncall \"{repo}\\scripts\\run_local_worker.sh\" \"%RUNTIME_KEY%\"\r\n",
+        state = state_dir().display(),
+        runtime_url = config.runtime_url,
+        worker_id = config.machine_id,
+        repo = repo_root().display(),
+    );
+
+    #[cfg(not(target_os = "windows"))]
+    let contents = format!(
+        "#!/usr/bin/env bash\nset -euo pipefail\nROOT=\"{repo}\"\nRUNTIME_KEY_FILE=\"{state}/runtime_key\"\nif [[ ! -f \"$RUNTIME_KEY_FILE\" ]]; then\n  exit 1\nfi\nRUNTIME_KEY=\"$(tr -d '[:space:]' < \"$RUNTIME_KEY_FILE\")\"\nexport ORION_API_URL=\"{runtime_url}\"\nexport WORKER_ID=\"{worker_id}\"\ncd \"$ROOT\"\nexec bash \"$ROOT/scripts/run_local_worker.sh\" \"$RUNTIME_KEY\"\n",
+        state = state_dir().display(),
+        runtime_url = config.runtime_url,
+        worker_id = config.machine_id,
+        repo = repo_root().display(),
+    );
+
+    fs::write(&path, contents)
+        .map_err(|error| format!("Failed to write worker wrapper script at {}: {error}", path.display()))?;
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut permissions = fs::metadata(&path)
+            .map_err(|error| format!("Failed to read wrapper metadata: {error}"))?
+            .permissions();
+        permissions.set_mode(0o700);
+        fs::set_permissions(&path, permissions)
+            .map_err(|error| format!("Failed to chmod worker wrapper: {error}"))?;
+    }
+
+    Ok(path)
+}
+
+fn ensure_worker_startup_persistence(config: &LocalMachineEnrollmentConfig) -> Result<(), String> {
+    let wrapper_path = write_worker_wrapper_script(config)?;
+
+    #[cfg(target_os = "macos")]
+    {
+        let home = std::env::var("HOME").map_err(|_| "HOME is not set.".to_string())?;
+        let launch_agents_dir = PathBuf::from(home).join("Library").join("LaunchAgents");
+        fs::create_dir_all(&launch_agents_dir)
+            .map_err(|error| format!("Failed to create LaunchAgents directory: {error}"))?;
+        let plist_path = launch_agents_dir.join("com.empyralis.local-worker.plist");
+        let plist = format!(
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n<plist version=\"1.0\"><dict><key>Label</key><string>com.empyralis.local-worker</string><key>ProgramArguments</key><array><string>{}</string></array><key>RunAtLoad</key><true/><key>KeepAlive</key><true/><key>WorkingDirectory</key><string>{}</string></dict></plist>\n",
+            wrapper_path.display(),
+            repo_root().display(),
+        );
+        fs::write(&plist_path, plist)
+            .map_err(|error| format!("Failed to write LaunchAgent plist: {error}"))?;
+        let _ = Command::new("launchctl").arg("unload").arg(&plist_path).status();
+        let status = Command::new("launchctl")
+            .arg("load")
+            .arg(&plist_path)
+            .status()
+            .map_err(|error| format!("Failed to load LaunchAgent: {error}"))?;
+        if !status.success() {
+            return Err(format!("launchctl load failed with status {status}."));
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        let task_name = "EmpyralisLocalWorker";
+        let task_command = format!("cmd /c \"{}\"", wrapper_path.display());
+        let create = Command::new("schtasks")
+            .arg("/Create")
+            .arg("/F")
+            .arg("/SC")
+            .arg("ONLOGON")
+            .arg("/TN")
+            .arg(task_name)
+            .arg("/TR")
+            .arg(task_command)
+            .status()
+            .map_err(|error| format!("Failed to create Windows startup task: {error}"))?;
+        if !create.success() {
+            return Err(format!("schtasks /Create failed with status {create}."));
+        }
+    }
+
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        let home = std::env::var("HOME").map_err(|_| "HOME is not set.".to_string())?;
+        let systemd_dir = PathBuf::from(home).join(".config").join("systemd").join("user");
+        fs::create_dir_all(&systemd_dir)
+            .map_err(|error| format!("Failed to create systemd user directory: {error}"))?;
+        let service_path = systemd_dir.join("empyralis-local-worker.service");
+        let service = format!(
+            "[Unit]\nDescription=Empyralis Local Worker\nAfter=default.target\n\n[Service]\nType=simple\nExecStart={}\nRestart=always\nRestartSec=5\nWorkingDirectory={}\n\n[Install]\nWantedBy=default.target\n",
+            wrapper_path.display(),
+            repo_root().display(),
+        );
+        fs::write(&service_path, service)
+            .map_err(|error| format!("Failed to write systemd user service: {error}"))?;
+        let reload = Command::new("systemctl")
+            .arg("--user")
+            .arg("daemon-reload")
+            .status()
+            .map_err(|error| format!("Failed to reload systemd user services: {error}"))?;
+        if !reload.success() {
+            return Err(format!("systemctl --user daemon-reload failed with status {reload}."));
+        }
+        let enable = Command::new("systemctl")
+            .arg("--user")
+            .arg("enable")
+            .arg("--now")
+            .arg("empyralis-local-worker.service")
+            .status()
+            .map_err(|error| format!("Failed to enable systemd user service: {error}"))?;
+        if !enable.success() {
+            return Err(format!("systemctl --user enable --now failed with status {enable}."));
+        }
+    }
+
+    Ok(())
 }
 
 fn node_binary() -> &'static str {
@@ -972,6 +1243,12 @@ fn desktop_bridge_script() -> String {
       }}
       return false;
     }},
+    bootstrapMachineEnrollment: async (intent) => {{
+      if (window.__TAURI_INTERNALS__ && typeof window.__TAURI_INTERNALS__.invoke === "function") {{
+        return await window.__TAURI_INTERNALS__.invoke("bootstrap_machine_enrollment", {{ intent }});
+      }}
+      throw new Error("Machine bootstrap is only available in the Empyralis desktop app.");
+    }},
     openaiCodexOauthLogin: async () => {{
       if (window.__TAURI_INTERNALS__ && typeof window.__TAURI_INTERNALS__.invoke === "function") {{
         return await window.__TAURI_INTERNALS__.invoke("openai_codex_oauth_login");
@@ -987,14 +1264,14 @@ fn desktop_bridge_script() -> String {
     )
 }
 
-fn spawn_worker(runtime_key: &str) -> Result<Child, String> {
+fn spawn_worker(runtime_key: &str, worker_id: &str) -> Result<Child, String> {
     let mut command = Command::new("bash");
     command
         .arg("scripts/run_local_worker.sh")
         .current_dir(repo_root())
         .env("RUNTIME_KEY", runtime_key)
         .env("ORION_API_URL", runtime_url())
-        .env("WORKER_ID", WORKER_ID)
+        .env("WORKER_ID", worker_id)
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit());
 
@@ -1003,7 +1280,7 @@ fn spawn_worker(runtime_key: &str) -> Result<Child, String> {
         .map_err(|error| format!("Failed to start local worker sidecar: {error}"))
 }
 
-fn cleanup_stale_worker_processes(worker_id: &str) -> Result<(), String> {
+fn cleanup_stale_worker_processes(worker_id: Option<&str>) -> Result<(), String> {
     let output = Command::new("ps")
         .arg("-ax")
         .arg("-o")
@@ -1022,8 +1299,10 @@ fn cleanup_stale_worker_processes(worker_id: &str) -> Result<(), String> {
         if !trimmed.contains("scripts/orion_local_worker.py") {
             continue;
         }
-        if !trimmed.contains(&format!("--worker-id {worker_id}")) {
-            continue;
+        if let Some(worker_id) = worker_id {
+            if !trimmed.contains(&format!("--worker-id {worker_id}")) {
+                continue;
+            }
         }
 
         let mut parts = trimmed.split_whitespace();
@@ -1101,6 +1380,7 @@ where
 }
 
 fn ensure_worker(state: &SidecarState, runtime_key: &str) -> Result<(), String> {
+    let worker_id = resolved_worker_id();
     {
         let guard = state
             .0
@@ -1111,9 +1391,9 @@ fn ensure_worker(state: &SidecarState, runtime_key: &str) -> Result<(), String> 
         }
     }
 
-    cleanup_stale_worker_processes(WORKER_ID)?;
+    cleanup_stale_worker_processes(Some(&worker_id))?;
 
-    let child = spawn_worker(runtime_key)?;
+    let child = spawn_worker(runtime_key, &worker_id)?;
     let _ = write_service_pid_file("worker", child.id());
     {
         let mut guard = state
@@ -1142,9 +1422,135 @@ fn ensure_worker(state: &SidecarState, runtime_key: &str) -> Result<(), String> 
     }
 }
 
+fn restart_worker(state: &SidecarState, runtime_key: &str, worker_id: &str) -> Result<(), String> {
+    {
+        let mut guard = state
+            .0
+            .lock()
+            .map_err(|_| "worker sidecar state lock poisoned".to_string())?;
+        stop_child("worker", &mut guard.worker);
+    }
+
+    cleanup_stale_worker_processes(None)?;
+
+    let child = spawn_worker(runtime_key, worker_id)?;
+    let _ = write_service_pid_file("worker", child.id());
+    {
+        let mut guard = state
+            .0
+            .lock()
+            .map_err(|_| "worker sidecar state lock poisoned".to_string())?;
+        guard.worker = Some(child);
+    }
+
+    sleep(WORKER_BOOT_GRACE);
+    Ok(())
+}
+
+fn run_machine_bootstrap(
+    state: &SidecarState,
+    intent: MachineEnrollmentIntent,
+) -> Result<MachineBootstrapResult, String> {
+    let runtime_key = ensure_runtime_key()?;
+    let runtime_base_url = if intent.runtime_url.trim().is_empty() {
+        runtime_url()
+    } else {
+        intent.runtime_url.trim().trim_end_matches('/').to_string()
+    };
+
+    let config = LocalMachineEnrollmentConfig {
+        machine_id: intent.machine_id.clone(),
+        runtime_url: runtime_base_url.clone(),
+        runtime_type: intent.worker_config.runtime_type.clone(),
+        display_name: intent.worker_config.display_name.clone(),
+        policy_mode: intent.worker_config.policy_mode.clone(),
+        execution_targets: intent.worker_config.execution_targets.clone(),
+    };
+
+    runtime_post_json(
+        &runtime_base_url,
+        &format!("/machines/{}/enrollment-state", intent.machine_id),
+        &runtime_key,
+        &serde_json::json!({
+            "enrollment_token": intent.token,
+            "state": "installing",
+        }),
+    )?;
+
+    write_machine_enrollment_config(&config)?;
+    ensure_worker_startup_persistence(&config)?;
+
+    runtime_post_json(
+        &runtime_base_url,
+        &format!("/machines/{}/enrollment-state", intent.machine_id),
+        &runtime_key,
+        &serde_json::json!({
+            "enrollment_token": intent.token,
+            "state": "starting",
+        }),
+    )?;
+
+    restart_worker(state, &runtime_key, &intent.machine_id)?;
+
+    runtime_post_json(
+        &runtime_base_url,
+        &format!("/machines/{}/enrollment-state", intent.machine_id),
+        &runtime_key,
+        &serde_json::json!({
+            "enrollment_token": intent.token,
+            "state": "registering",
+        }),
+    )?;
+
+    let started_at = Instant::now();
+    while started_at.elapsed() < MACHINE_BOOTSTRAP_HEARTBEAT_TIMEOUT {
+        if runtime_machine_online(&runtime_base_url, &runtime_key, &intent.machine_id)? {
+            runtime_post_json(
+                &runtime_base_url,
+                &format!("/machines/{}/bootstrap-complete", intent.machine_id),
+                &runtime_key,
+                &serde_json::json!({
+                    "enrollment_token": intent.token,
+                }),
+            )?;
+            return Ok(MachineBootstrapResult {
+                ok: true,
+                machine_id: intent.machine_id,
+                enrollment_state: "healthy".to_string(),
+            });
+        }
+        sleep(Duration::from_secs(2));
+    }
+
+    let _ = runtime_post_json(
+        &runtime_base_url,
+        &format!("/machines/{}/enrollment-state", intent.machine_id),
+        &runtime_key,
+        &serde_json::json!({
+            "enrollment_token": intent.token,
+            "state": "failed",
+            "error": "Worker did not heartbeat before bootstrap timeout.",
+        }),
+    );
+
+    Err("Worker did not heartbeat before bootstrap timeout.".into())
+}
+
+#[tauri::command]
+fn bootstrap_machine_enrollment(
+    state: tauri::State<'_, SidecarState>,
+    intent: MachineEnrollmentIntent,
+) -> Result<MachineBootstrapResult, String> {
+    run_machine_bootstrap(&state, intent)
+}
+
 pub fn run() {
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![open_external, openai_codex_oauth_login])
+        .invoke_handler(tauri::generate_handler![
+            open_external,
+            openai_codex_oauth_login,
+            bootstrap_machine_enrollment
+        ])
         .setup(|app| {
             let app_handle = app.handle().clone();
             let lock_path =

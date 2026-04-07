@@ -56,6 +56,23 @@ class MachineEnrollPayload(BaseModel):
     note: Optional[str] = None
 
 
+class MachineEnrollmentStatePayload(BaseModel):
+    enrollment_token: str = Field(min_length=1)
+    state: Literal[
+        "awaiting_local_acceptance",
+        "installing",
+        "starting",
+        "registering",
+        "healthy",
+        "failed",
+    ]
+    error: Optional[str] = None
+
+
+class MachineBootstrapCompletePayload(BaseModel):
+    enrollment_token: str = Field(min_length=1)
+
+
 class RuntimeTaskClaimRequest(BaseModel):
     runtime_id: Optional[str] = None
     session_token: Optional[str] = None
@@ -261,6 +278,10 @@ def _runtime_summary_from_worker_item(item: Dict[str, Any]) -> Dict[str, Any]:
         "capability_digest": item.get("capability_digest"),
         "trust_state": item.get("trust_state") or "unverified",
         "note": item.get("note"),
+        "enrollment_state": item.get("enrollment_state"),
+        "enrollment_requested_at": item.get("enrollment_requested_at"),
+        "enrollment_updated_at": item.get("enrollment_updated_at"),
+        "bootstrap_error": item.get("bootstrap_error"),
     }
 
 
@@ -369,6 +390,36 @@ def register_runtime_routes(app) -> None:
             capabilities=body.capabilities,
             execution_targets=body.execution_targets,
             note=body.note,
+        )
+
+    @app.post("/machines/enrollment-intents", dependencies=[Depends(require_api_key)])
+    async def create_machine_enrollment_intent(payload: Optional[MachineEnrollPayload] = None):
+        body = payload or MachineEnrollPayload()
+        return local_queue.create_machine_enrollment_intent(
+            machine_id=body.machine_id,
+            runtime_type=body.runtime_type,
+            display_name=body.display_name,
+            platform=body.platform,
+            policy_mode=body.policy_mode,
+            capabilities=body.capabilities,
+            execution_targets=body.execution_targets,
+            note=body.note,
+        )
+
+    @app.post("/machines/{machine_id}/enrollment-state", dependencies=[Depends(require_api_key)])
+    async def update_machine_enrollment_state(machine_id: str, payload: MachineEnrollmentStatePayload):
+        return local_queue.update_machine_enrollment_state(
+            machine_id,
+            enrollment_token=payload.enrollment_token,
+            state=payload.state,
+            error=payload.error,
+        )
+
+    @app.post("/machines/{machine_id}/bootstrap-complete", dependencies=[Depends(require_api_key)])
+    async def complete_machine_bootstrap(machine_id: str, payload: MachineBootstrapCompletePayload):
+        return local_queue.complete_machine_bootstrap(
+            machine_id,
+            enrollment_token=payload.enrollment_token,
         )
 
     @app.delete("/machines/{machine_id}", dependencies=[Depends(require_api_key)])

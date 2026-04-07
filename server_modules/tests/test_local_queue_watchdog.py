@@ -142,6 +142,36 @@ class LocalQueueWatchdogTests(unittest.TestCase):
         self.assertTrue(run["context"]["metadata"]["local_worker_recovery_manual_confirmation_required"])
         self.assertEqual(emitted[0][2]["event"], "local_cold_boot_recovered_manual_gate")
 
+    def test_mark_ghost_enrollments_failed_after_timeout(self) -> None:
+        persisted = []
+        original_server = local_queue._server
+        local_queue._server = SimpleNamespace(
+            LOCAL_QUEUE_LOCK=__import__("threading").Lock(),
+            LOCAL_WORKER_REGISTRY={
+                "machine-1": {
+                    "runtime_id": "machine-1",
+                    "machine_id": "machine-1",
+                    "enrollment_state": "installing",
+                    "enrollment_requested_at": "2026-04-06T11:00:00Z",
+                    "lease_seconds": 30,
+                    "last_seen_at": None,
+                }
+            },
+            _utc_now=lambda: datetime.fromisoformat("2026-04-06T11:06:00"),
+            _utc_now_iso=lambda: "2026-04-06T11:06:00Z",
+            _parse_utc_ts=lambda value: datetime.fromisoformat(str(value).replace("Z", "")) if value else None,
+            ORION_LOCAL_LEASE_SECONDS=30,
+        )
+        try:
+            with patch.object(local_queue, "_persist_local_runtime_state", side_effect=lambda: persisted.append(True)):
+                failed = local_queue._mark_ghost_enrollments_failed()
+        finally:
+            local_queue._server = original_server
+
+        self.assertEqual(failed, ["machine-1"])
+        self.assertEqual(local_queue._server, original_server)
+        self.assertTrue(persisted)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -21,6 +21,7 @@ LOCAL_RUN_WORKER_LOST_TIMEOUT_SECONDS = 30
 LOCAL_RUNTIME_WATCHDOG_INTERVAL_SECONDS = 5
 LOCAL_CHECKPOINT_RECOVERY_MAX_AUTO_RETRIES = 3
 LOCAL_CHECKPOINT_RECOVERY_BACKOFF_SECONDS = [0, 10, 30]
+MACHINE_ENROLLMENT_TIMEOUT_SECONDS = 300
 _COLD_BOOT_RECOVERY_DONE = False
 _EXPIRED_LEASE_RECOVERY_DONE = False
 _LOCAL_RUNTIME_WATCHDOG_LOCK = threading.Lock()
@@ -184,6 +185,94 @@ def _persist_local_runtime_state() -> None:
         claimed_runs=claimed_runs,
         runtime_registrations=runtime_registrations,
     )
+
+
+def _machine_runtime_base_url() -> str:
+    _init()
+    value = str(
+        getattr(_server, "EMPYRALIST_WORKFLOW_API_URL", "")
+        or getattr(_server, "ORION_API_URL", "")
+        or "http://127.0.0.1:8001"
+    ).strip().rstrip("/")
+    return value or "http://127.0.0.1:8001"
+
+
+def _set_enrollment_state(
+    record: Dict[str, Any],
+    state: str,
+    *,
+    error: Optional[str] = None,
+    now_iso: Optional[str] = None,
+) -> Dict[str, Any]:
+    _init()
+    timestamp = str(now_iso or _server._utc_now_iso())
+    normalized = str(state or "").strip().lower() or "requested"
+    record["enrollment_state"] = normalized
+    record["enrollment_updated_at"] = timestamp
+    if not record.get("enrollment_requested_at"):
+        record["enrollment_requested_at"] = timestamp
+    if normalized == "installing" and not record.get("installing_started_at"):
+        record["installing_started_at"] = timestamp
+    if normalized == "starting" and not record.get("starting_started_at"):
+        record["starting_started_at"] = timestamp
+    if normalized == "registering" and not record.get("registering_started_at"):
+        record["registering_started_at"] = timestamp
+    if normalized == "healthy":
+        record["bootstrap_completed_at"] = timestamp
+        record["bootstrap_error"] = None
+    elif normalized == "failed":
+        record["bootstrap_error"] = str(error or record.get("bootstrap_error") or "bootstrap_failed")[:400]
+    elif error is not None:
+        record["bootstrap_error"] = str(error)[:400]
+    return record
+
+
+def _assert_enrollment_token(record: Dict[str, Any], provided_token: Optional[str]) -> str:
+    _init()
+    provided = str(provided_token or "").strip()
+    if not provided:
+        raise HTTPException(status_code=401, detail="Machine enrollment token is required.")
+    expected_hash = str(record.get("enrollment_token_hash") or "").strip()
+    if not expected_hash:
+        raise HTTPException(status_code=409, detail="Machine enrollment is not pending.")
+    actual_hash = hashlib.sha256(provided.encode("utf-8")).hexdigest()
+    if actual_hash != expected_hash:
+        raise HTTPException(status_code=401, detail="Machine enrollment token is invalid.")
+    return provided
+
+
+def _mark_ghost_enrollments_failed() -> List[str]:
+    _init()
+    now = _server._utc_now()
+    failed_machine_ids: List[str] = []
+    changed = False
+    with _server.LOCAL_QUEUE_LOCK:
+        for machine_id, record in list(_server.LOCAL_WORKER_REGISTRY.items()):
+            if not isinstance(record, dict):
+                continue
+            state = str(record.get("enrollment_state") or "").strip().lower()
+            if state in {"", "healthy", "failed"}:
+                continue
+            requested_at = _server._parse_utc_ts(record.get("enrollment_requested_at"))
+            if requested_at is None:
+                continue
+            if (now - requested_at).total_seconds() <= MACHINE_ENROLLMENT_TIMEOUT_SECONDS:
+                continue
+            last_seen_at = _server._parse_utc_ts(record.get("last_seen_at"))
+            if last_seen_at is not None and _is_worker_online(record, now):
+                continue
+            _set_enrollment_state(
+                record,
+                "failed",
+                error="Machine bootstrap timed out before the worker heartbeated.",
+                now_iso=_server._utc_now_iso(),
+            )
+            _server.LOCAL_WORKER_REGISTRY[machine_id] = record
+            failed_machine_ids.append(machine_id)
+            changed = True
+    if changed:
+        _persist_local_runtime_state()
+    return failed_machine_ids
 
 
 def _record_local_runtime_watchdog_status(
@@ -408,6 +497,119 @@ def _upsert_runtime_registration(
         "capability_digest": record.get("capability_digest"),
         **session,
     }
+
+
+def create_machine_enrollment_intent(
+    *,
+    machine_id: Optional[str] = None,
+    runtime_type: str = "local_companion",
+    display_name: Optional[str] = None,
+    platform: Optional[str] = None,
+    policy_mode: Optional[str] = None,
+    capabilities: Optional[List[str]] = None,
+    execution_targets: Optional[List[str]] = None,
+    note: Optional[str] = None,
+) -> Dict[str, Any]:
+    _init()
+    runtime_id = str(machine_id or "").strip() or f"machine-{uuid.uuid4().hex[:8]}"
+    token = _server.secrets.token_urlsafe(24)
+    token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
+    now_iso = _server._utc_now_iso()
+    with _server.LOCAL_QUEUE_LOCK:
+        previous = _server.LOCAL_WORKER_REGISTRY.get(runtime_id) if isinstance(_server.LOCAL_WORKER_REGISTRY.get(runtime_id), dict) else {}
+        record = machine_lease_service.build_runtime_registration_record(
+            runtime_id,
+            previous_record=previous,
+            runtime_type=runtime_type,
+            display_name=display_name,
+            platform=platform,
+            policy_mode=(policy_mode or previous.get("policy_mode") or _server.ORION_RUNTIME_POLICY_MODE_DEFAULT),
+            capabilities=capabilities,
+            execution_targets=execution_targets or ["local_companion"],
+            instance_id=runtime_id,
+            capability_digest=None,
+            lease_seconds=_server.ORION_LOCAL_LEASE_SECONDS,
+            now_iso=now_iso,
+            normalize_policy_mode_fn=_server.normalize_policy_mode,
+            capability_digest_fn=_capability_digest,
+        )
+        record["current_run_id"] = None
+        record["note"] = str(note or "machine_enrollment_requested")[:280]
+        record["enrollment_token_hash"] = token_hash
+        record["bootstrap_error"] = None
+        _set_enrollment_state(record, "requested", now_iso=now_iso)
+        _set_enrollment_state(record, "awaiting_local_acceptance", now_iso=now_iso)
+        _server.LOCAL_WORKER_REGISTRY[runtime_id] = record
+    _persist_local_runtime_state()
+    return {
+        "ok": True,
+        "machine_id": runtime_id,
+        "token": token,
+        "runtime_url": _machine_runtime_base_url(),
+        "worker_config": {
+            "worker_id": runtime_id,
+            "runtime_type": runtime_type,
+            "display_name": str(display_name or runtime_id).strip() or runtime_id,
+            "execution_targets": list(execution_targets or ["local_companion"]),
+            "policy_mode": str(policy_mode or _server.ORION_RUNTIME_POLICY_MODE_DEFAULT),
+        },
+    }
+
+
+def update_machine_enrollment_state(
+    machine_id: str,
+    *,
+    enrollment_token: Optional[str] = None,
+    state: str,
+    error: Optional[str] = None,
+) -> Dict[str, Any]:
+    _init()
+    runtime_id = str(machine_id or "").strip()
+    if not runtime_id:
+        raise HTTPException(status_code=400, detail="machine_id is required.")
+    with _server.LOCAL_QUEUE_LOCK:
+        record = _server.LOCAL_WORKER_REGISTRY.get(runtime_id) if isinstance(_server.LOCAL_WORKER_REGISTRY.get(runtime_id), dict) else None
+        if not isinstance(record, dict):
+            raise HTTPException(status_code=404, detail="Machine not found.")
+        _assert_enrollment_token(record, enrollment_token)
+        _set_enrollment_state(record, state, error=error)
+        _server.LOCAL_WORKER_REGISTRY[runtime_id] = record
+    _persist_local_runtime_state()
+    return {"ok": True, "machine_id": runtime_id, "enrollment_state": str(state or "").strip().lower()}
+
+
+def complete_machine_bootstrap(
+    machine_id: str,
+    *,
+    enrollment_token: Optional[str] = None,
+) -> Dict[str, Any]:
+    _init()
+    runtime_id = str(machine_id or "").strip()
+    if not runtime_id:
+        raise HTTPException(status_code=400, detail="machine_id is required.")
+    with _server.LOCAL_QUEUE_LOCK:
+        record = _server.LOCAL_WORKER_REGISTRY.get(runtime_id) if isinstance(_server.LOCAL_WORKER_REGISTRY.get(runtime_id), dict) else None
+        if not isinstance(record, dict):
+            raise HTTPException(status_code=404, detail="Machine not found.")
+        _assert_enrollment_token(record, enrollment_token)
+        if not _is_worker_online(record, _server._utc_now()):
+            raise HTTPException(status_code=409, detail="Machine worker has not heartbeated yet.")
+        _set_enrollment_state(record, "healthy")
+        record["enrollment_token_hash"] = None
+        _server.LOCAL_WORKER_REGISTRY[runtime_id] = record
+    _persist_local_runtime_state()
+    status_payload = handle_get_local_workers_status()
+    items = status_payload.get("items") if isinstance(status_payload.get("items"), list) else []
+    machine = next(
+        (
+            item
+            for item in items
+            if isinstance(item, dict)
+            and str(item.get("machine_id") or item.get("runtime_id") or "").strip() == runtime_id
+        ),
+        None,
+    )
+    return {"ok": True, "machine_id": runtime_id, "machine": machine}
 
 
 def _is_worker_online(record: Dict[str, Any], now: Optional[datetime] = None) -> bool:
@@ -967,6 +1169,7 @@ def handle_get_local_run_queue(workspace_id: Optional[str] = None, limit: int = 
 def handle_get_local_workers_status() -> Dict[str, Any]:
     _init()
     _cleanup_stale_local_claims()
+    _mark_ghost_enrollments_failed()
     items: List[Dict[str, Any]] = []
     now = _server._utc_now()
     queued_ids: List[str] = []
@@ -1011,6 +1214,10 @@ def handle_get_local_workers_status() -> Dict[str, Any]:
                     "seconds_since_seen": since_seen,
                     "lease_seconds": lease_seconds,
                     "note": record.get("note"),
+                    "enrollment_state": record.get("enrollment_state"),
+                    "enrollment_requested_at": record.get("enrollment_requested_at"),
+                    "enrollment_updated_at": record.get("enrollment_updated_at"),
+                    "bootstrap_error": record.get("bootstrap_error"),
                 }
             )
         pending_runs = len(_server.LOCAL_PENDING_RUN_IDS)
@@ -1058,41 +1265,16 @@ def handle_enroll_local_runtime(
     execution_targets: Optional[List[str]] = None,
     note: Optional[str] = None,
 ) -> Dict[str, Any]:
-    _init()
-    runtime_id = str(machine_id or "").strip() or f"machine-{uuid.uuid4().hex[:8]}"
-    registration = _upsert_runtime_registration(
-        runtime_id,
+    return create_machine_enrollment_intent(
+        machine_id=machine_id,
         runtime_type=runtime_type,
         display_name=display_name,
         platform=platform,
         policy_mode=policy_mode,
         capabilities=capabilities,
-        execution_targets=execution_targets or ["local_companion"],
-        instance_id=runtime_id,
-        capability_digest=None,
+        execution_targets=execution_targets,
+        note=note,
     )
-    heartbeat = LocalWorkerHeartbeatPayload(
-        current_run_id=None,
-        note=note or "machine_enrolled",
-    )
-    handle_heartbeat_local_worker(runtime_id, heartbeat)
-    status_payload = handle_get_local_workers_status()
-    items = status_payload.get("items") if isinstance(status_payload.get("items"), list) else []
-    machine = next(
-        (
-            item
-            for item in items
-            if isinstance(item, dict)
-            and str(item.get("machine_id") or item.get("runtime_id") or "").strip() == runtime_id
-        ),
-        None,
-    )
-    return {
-        "ok": True,
-        "machine": machine,
-        "session_token": registration.get("session_token"),
-        "machine_id": runtime_id,
-    }
 
 
 def handle_delete_local_runtime(machine_id: str) -> Dict[str, Any]:

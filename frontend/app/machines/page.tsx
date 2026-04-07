@@ -30,6 +30,10 @@ type RuntimeMachine = {
   registered_at?: string | null;
   last_registered_at?: string | null;
   note?: string | null;
+  enrollment_state?: string | null;
+  enrollment_requested_at?: string | null;
+  enrollment_updated_at?: string | null;
+  bootstrap_error?: string | null;
 };
 
 type RuntimeMachinesPayload = {
@@ -60,6 +64,24 @@ type RuntimeMachinesPayload = {
     }>;
   };
   items?: RuntimeMachine[];
+};
+
+type MachineEnrollmentIntent = {
+  machine_id: string;
+  token: string;
+  runtime_url: string;
+  worker_config: {
+    worker_id: string;
+    runtime_type: string;
+    display_name: string;
+    execution_targets: string[];
+    policy_mode: string;
+  };
+};
+
+type DesktopBridge = {
+  desktop?: boolean;
+  bootstrapMachineEnrollment?: (intent: MachineEnrollmentIntent) => Promise<unknown>;
 };
 
 function formatRuntimeType(value: string): string {
@@ -95,10 +117,32 @@ function relativeRuntimeTime(value?: string | null): string {
 }
 
 function statusTone(machine: RuntimeMachine): 'green' | 'yellow' | 'red' | 'grey' {
+  const enrollmentState = String(machine.enrollment_state || '').trim().toLowerCase();
+  if (enrollmentState === 'failed') return 'red';
+  if (enrollmentState && enrollmentState !== 'healthy') return 'yellow';
   if (machine.online && machine.status === 'busy') return 'yellow';
   if (machine.online) return 'green';
   if (machine.status === 'offline') return 'red';
   return 'grey';
+}
+
+function enrollmentLabel(machine: RuntimeMachine): string {
+  const state = String(machine.enrollment_state || '').trim().toLowerCase();
+  if (!state || state === 'healthy') {
+    return machine.online ? (machine.status === 'busy' ? 'Busy' : 'Online') : 'Offline';
+  }
+  if (state === 'awaiting_local_acceptance') return 'Waiting for desktop';
+  if (state === 'installing') return 'Installing';
+  if (state === 'starting') return 'Starting';
+  if (state === 'registering') return 'Registering';
+  if (state === 'failed') return 'Failed';
+  return state;
+}
+
+function hasPendingEnrollment(machine: RuntimeMachine): boolean {
+  return ['requested', 'awaiting_local_acceptance', 'installing', 'starting', 'registering'].includes(
+    String(machine.enrollment_state || '').trim().toLowerCase(),
+  );
 }
 
 export default function MachinesPage() {
@@ -108,6 +152,7 @@ export default function MachinesPage() {
   const [doctorDecision, setDoctorDecision] = useState<DoctorRunGateDecision | null>(null);
   const [enrolling, setEnrolling] = useState(false);
   const [revokingMachineId, setRevokingMachineId] = useState<string | null>(null);
+  const [enrollMessage, setEnrollMessage] = useState('');
 
   const loadMachines = useCallback(async () => {
     setLoading(true);
@@ -133,12 +178,22 @@ export default function MachinesPage() {
     void loadMachines();
   }, [loadMachines]);
 
+  useEffect(() => {
+    const hasPending = (payload?.items ?? []).some((machine) => hasPendingEnrollment(machine));
+    if (!hasPending) return undefined;
+    const timer = window.setInterval(() => {
+      void loadMachines();
+    }, 3000);
+    return () => window.clearInterval(timer);
+  }, [loadMachines, payload]);
+
   const handleEnroll = useCallback(async () => {
     setEnrolling(true);
     setError('');
+    setEnrollMessage('');
     try {
       const nextOrdinal = (payload?.summary?.known ?? payload?.items?.length ?? 0) + 1;
-      const response = await fetch('/api/machines', {
+      const response = await fetch('/api/machines/enrollment-intents', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -151,6 +206,18 @@ export default function MachinesPage() {
       const body = await response.json().catch(() => null);
       if (!response.ok) {
         throw new Error((body as { detail?: string } | null)?.detail || 'Unable to enroll a machine.');
+      }
+      const intent = body as MachineEnrollmentIntent;
+      await loadMachines();
+      const bridge = typeof window !== 'undefined'
+        ? (window as Window & { empyralisDesktop?: DesktopBridge }).empyralisDesktop
+        : undefined;
+      if (bridge?.desktop && typeof bridge.bootstrapMachineEnrollment === 'function') {
+        setEnrollMessage('Installing local worker...');
+        await bridge.bootstrapMachineEnrollment(intent);
+        setEnrollMessage('Local worker installed and running.');
+      } else {
+        setEnrollMessage('Open the Empyralis desktop app on this machine to finish enrollment.');
       }
       await loadMachines();
     } catch (err) {
@@ -224,7 +291,7 @@ export default function MachinesPage() {
             </button>
             <button type="button" className="orion-btn orion-btn-primary" onClick={() => void handleEnroll()} disabled={enrolling}>
               <Laptop size={14} />
-              {enrolling ? 'Enrolling...' : 'Enroll machine'}
+              {enrolling ? 'Installing...' : 'Enroll machine'}
             </button>
           </div>
         }
@@ -410,9 +477,10 @@ export default function MachinesPage() {
               Refresh
             </button>
             <button type="button" className="btn-primary" onClick={() => void handleEnroll()} disabled={enrolling}>
-              Enroll machine
+              {enrolling ? 'Installing...' : 'Enroll machine'}
             </button>
           </div>
+          {enrollMessage ? <div className="orion-page-state-detail">{enrollMessage}</div> : null}
         </PageSection>
       ) : null}
 
@@ -453,7 +521,7 @@ export default function MachinesPage() {
           actions={
             <>
               <button type="button" className="btn-primary" onClick={() => void handleEnroll()} disabled={enrolling}>
-                {enrolling ? 'Enrolling...' : 'Enroll machine'}
+                {enrolling ? 'Installing...' : 'Enroll machine'}
               </button>
               <Link href="/setup" className="btn-primary">
                 New task
@@ -477,11 +545,18 @@ export default function MachinesPage() {
                   </div>
                 </div>
                 <span className="orion-chip" data-status-tone={statusTone(machine)}>
-                  {machine.online ? (machine.status === 'busy' ? 'Busy' : 'Online') : 'Offline'}
+                  {enrollmentLabel(machine)}
                 </span>
               </div>
 
               <div className="orion-machine-card-meta">
+                <div className="orion-machine-meta-row">
+                  <span className="orion-machine-meta-label">Enrollment</span>
+                  <span className="orion-machine-meta-value">
+                    {enrollmentLabel(machine)}
+                    {machine.bootstrap_error ? ` · ${machine.bootstrap_error}` : ''}
+                  </span>
+                </div>
                 <div className="orion-machine-meta-row">
                   <span className="orion-machine-meta-label">Trust</span>
                   <span className="orion-machine-meta-value">
@@ -584,6 +659,7 @@ export default function MachinesPage() {
           ))}
         </section>
       )}
+      {enrollMessage && !error ? <div className="orion-page-state-detail">{enrollMessage}</div> : null}
     </div>
   );
 }

@@ -34,7 +34,8 @@ We must build Empyralis as:
 - Expo / React Native for the mobile shell
 - Python as the short-term canonical orchestration runtime
 - Rust as the high-trust local execution and device-control layer
-- Postgres, object storage, Redis, and tracing as the durable operational substrate
+- Postgres, object storage, and tracing as the durable operational substrate
+- runtime state stores, local queues, and worker heartbeats as the active coordination substrate
 - a durable queue, outbox, worker, and event-stream model for asynchronous work
 
 ## Final Language Decision
@@ -120,7 +121,7 @@ If we want a final, concrete answer, it is this:
 - Trusted local machine layer: Rust
 - Durable database: Postgres
 - Artifact store: S3-compatible object storage
-- Cache and locks: Redis
+- Ephemeral coordination: runtime state stores, local queues, and worker heartbeats
 - Search and semantic recall: Postgres first, pgvector or equivalent when needed
 - Eventing: durable outbox plus worker dispatcher and replay path
 
@@ -495,7 +496,7 @@ flowchart TD
     Runs --> Postgres
     Sessions --> Postgres
     Artifacts --> ObjectStore["object storage"]
-    Gateway --> Redis["Redis"]
+    Gateway --> RuntimeState["runtime state stores / local queues"]
     Queue --> EventBus["event stream / replay bus"]
     Queue --> Workers["leased workers"]
     Workers --> Exec
@@ -617,7 +618,7 @@ Target data responsibilities:
 
 - Postgres for canonical state
 - object storage for artifacts and heavy outputs
-- Redis for ephemeral coordination
+- runtime state stores, local queues, and worker heartbeats for ephemeral coordination
 - vector storage for semantic memory
 - SQLite only for local cache and offline scenarios
 
@@ -1262,7 +1263,7 @@ We must:
 
 - move canonical durable state to Postgres
 - move artifacts to object storage
-- keep Redis for cache and locks only
+- harden runtime state stores, local queues, and worker lease coordination
 - add OpenTelemetry traces, logs, and metrics
 - add per-run trace IDs and audit lineage
 - add outbox and event replay
@@ -1310,15 +1311,7 @@ They are not alternate architectures. They are bounded exceptions that must rema
    - the current development backend stores objects under `.orion-object-store/`
    - external S3-compatible backing remains a deployment follow-through item
 
-4. Redis is still deferred.
-
-   Accepted boundary:
-
-   - durable run truth, outbox, and notifications already live on Postgres and runtime state stores
-   - there is no active Redis coordination layer in the runtime yet
-   - Redis remains part of the target data plane, not the current mandatory dev substrate
-
-5. Enterprise hardening is still incomplete.
+4. Enterprise hardening is still incomplete.
 
    Accepted boundary:
 

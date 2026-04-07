@@ -3,6 +3,10 @@ from __future__ import annotations
 from unittest.mock import patch
 
 from server_modules.computer_control import (
+    computer_control_click,
+    computer_control_launch_app,
+    computer_control_list_apps,
+    computer_control_type,
     list_running_apps,
     read_clipboard,
     run_applescript,
@@ -37,6 +41,28 @@ def test_notify_does_not_crash():
     assert result == "Notification sent."
 
 
+def test_click_routes_through_supervisor():
+    with patch(
+        "server_modules.computer_control.supervisor_client.click",
+        return_value={"clicked": True},
+    ) as click_mock:
+        result = computer_control_click(10, 20, button="right", double=True)
+
+    assert result["success"] is True
+    click_mock.assert_called_once_with(10, 20, button="right", double=True)
+
+
+def test_type_routes_through_supervisor():
+    with patch(
+        "server_modules.computer_control.supervisor_client.type_text",
+        return_value={"typed": True, "length": 5},
+    ) as type_mock:
+        result = computer_control_type("hello", delay_ms=15)
+
+    assert result["success"] is True
+    type_mock.assert_called_once_with("hello", delay_ms=15)
+
+
 def test_speak_text_does_not_crash():
     with patch("server_modules.computer_control.supervisor_client.speak", return_value={"spoken": True}):
         result = speak_text("hello")
@@ -57,3 +83,25 @@ def test_list_apps_returns_list():
         assert "pid" in first
         assert "name" in first
         assert "exe" in first
+
+
+def test_computer_control_list_apps_routes_through_supervisor():
+    with patch(
+        "server_modules.computer_control.supervisor_client.list_apps",
+        return_value={"windows": []},
+    ) as list_mock:
+        result = computer_control_list_apps()
+
+    assert result["success"] is True
+    list_mock.assert_called_once_with()
+
+
+def test_launch_app_routes_through_supervisor():
+    with patch(
+        "server_modules.computer_control.supervisor_client.launch_app",
+        return_value={"launched": True},
+    ) as launch_mock:
+        result = computer_control_launch_app("/Applications/Safari.app")
+
+    assert result["success"] is True
+    launch_mock.assert_called_once_with("/Applications/Safari.app")

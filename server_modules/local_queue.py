@@ -604,6 +604,7 @@ def _upsert_runtime_registration(
 
 def create_machine_enrollment_intent(
     *,
+    workspace_id: Optional[str] = None,
     machine_id: Optional[str] = None,
     runtime_type: str = "local_companion",
     display_name: Optional[str] = None,
@@ -637,6 +638,7 @@ def create_machine_enrollment_intent(
             capability_digest_fn=_capability_digest,
         )
         record["current_run_id"] = None
+        record["workspace_id"] = str(workspace_id or previous.get("workspace_id") or "default").strip() or "default"
         record["note"] = str(note or "machine_enrollment_requested")[:280]
         record["enrollment_token_hash"] = token_hash
         record["bootstrap_error"] = None
@@ -1362,6 +1364,7 @@ def handle_get_local_workers_status() -> Dict[str, Any]:
 
 def handle_enroll_local_runtime(
     *,
+    workspace_id: Optional[str] = None,
     machine_id: Optional[str] = None,
     runtime_type: str = "local_companion",
     display_name: Optional[str] = None,
@@ -1372,6 +1375,7 @@ def handle_enroll_local_runtime(
     note: Optional[str] = None,
 ) -> Dict[str, Any]:
     return create_machine_enrollment_intent(
+        workspace_id=workspace_id,
         machine_id=machine_id,
         runtime_type=runtime_type,
         display_name=display_name,

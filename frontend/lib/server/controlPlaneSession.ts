@@ -25,6 +25,18 @@ type ControlPlaneAuthProviders = {
   apple: { enabled: boolean };
 };
 
+type ControlPlaneWorkspaceCapabilityPolicy = {
+  allow: string[];
+  deny: string[];
+};
+
+type ControlPlaneWorkspaceAccess = {
+  role: ControlPlaneRole;
+  capabilities: ControlPlaneWorkspaceCapabilityPolicy;
+  dangerousActionClasses: ControlPlaneWorkspaceCapabilityPolicy;
+  trustedOwnerMachineIds: string[];
+};
+
 type ControlPlaneSessionPayload = {
   v: 1;
   exp: number;
@@ -34,6 +46,7 @@ type ControlPlaneSessionPayload = {
   authType: 'bearer' | 'trusted_local';
   role: ControlPlaneRole;
   admin: boolean;
+  workspaceAccess?: Record<string, ControlPlaneWorkspaceAccess>;
 };
 
 type ControlPlaneIdentity = {
@@ -42,6 +55,7 @@ type ControlPlaneIdentity = {
   authType: 'bearer' | 'trusted_local';
   role: ControlPlaneRole;
   admin: boolean;
+  workspaceAccess?: Record<string, ControlPlaneWorkspaceAccess>;
 };
 
 type PendingControlPlaneOauth = {
@@ -67,6 +81,42 @@ function controlPlaneRoleAllowed(actual: ControlPlaneRole, minimum: ControlPlane
   return CONTROL_PLANE_ROLE_ORDER[actual] >= CONTROL_PLANE_ROLE_ORDER[minimum];
 }
 
+function normalizeTokenList(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return Array.from(
+    new Set(
+      value
+        .map((item) => String(item || '').trim().toLowerCase())
+        .filter(Boolean),
+    ),
+  );
+}
+
+function normalizeWorkspaceCapabilityPolicy(value: unknown): ControlPlaneWorkspaceCapabilityPolicy {
+  const payload = value && typeof value === 'object' ? value as Record<string, unknown> : {};
+  return {
+    allow: normalizeTokenList(payload.allow),
+    deny: normalizeTokenList(payload.deny),
+  };
+}
+
+function normalizeWorkspaceAccess(value: unknown): Record<string, ControlPlaneWorkspaceAccess> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  const out: Record<string, ControlPlaneWorkspaceAccess> = {};
+  for (const [rawWorkspaceId, rawEntry] of Object.entries(value as Record<string, unknown>)) {
+    const workspaceId = String(rawWorkspaceId || '').trim();
+    if (!workspaceId || !rawEntry || typeof rawEntry !== 'object' || Array.isArray(rawEntry)) continue;
+    const entry = rawEntry as Record<string, unknown>;
+    out[workspaceId] = {
+      role: normalizeControlPlaneRole(entry.role, 'viewer'),
+      capabilities: normalizeWorkspaceCapabilityPolicy(entry.capabilities),
+      dangerousActionClasses: normalizeWorkspaceCapabilityPolicy(entry.dangerousActionClasses ?? entry.dangerous_action_classes),
+      trustedOwnerMachineIds: normalizeTokenList(entry.trustedOwnerMachineIds ?? entry.trusted_owner_machine_ids),
+    };
+  }
+  return out;
+}
+
 function trustedDesktopSessionPayload(request: NextRequest): ControlPlaneSessionPayload | null {
   const identity = getTrustedDesktopIdentity(request);
   if (!identity) return null;
@@ -79,6 +129,7 @@ function trustedDesktopSessionPayload(request: NextRequest): ControlPlaneSession
     authType: identity.authType,
     role: identity.role,
     admin: identity.admin,
+    workspaceAccess: identity.workspaceAccess,
   };
 }
 
@@ -354,7 +405,7 @@ async function verifyBearerSignature(token: string): Promise<Response | null> {
   return null;
 }
 
-async function fetchRuntimeRole(token: string): Promise<Pick<ControlPlaneIdentity, 'email' | 'role' | 'admin'> | null> {
+async function fetchRuntimeRole(token: string): Promise<Pick<ControlPlaneIdentity, 'email' | 'role' | 'admin' | 'workspaceAccess'> | null> {
   try {
     const response = await fetch(`${CONTROL_PLANE_BACKEND_URL}/auth/me`, {
       method: 'GET',
@@ -366,14 +417,33 @@ async function fetchRuntimeRole(token: string): Promise<Pick<ControlPlaneIdentit
     if (!response.ok) return null;
     const payload = (await response.json().catch(() => null)) as {
       user?: { email?: string | null; role?: string | null; is_admin?: boolean | null } | null;
+      workspace_access?: Array<{
+        workspace_id?: string | null;
+        role?: string | null;
+        capabilities?: { allow?: string[]; deny?: string[] } | null;
+        dangerous_action_classes?: { allow?: string[]; deny?: string[] } | null;
+        trusted_owner_machine_ids?: string[] | null;
+      }> | null;
     } | null;
     const user = payload?.user;
     if (!user || typeof user !== 'object') return null;
     const role = normalizeControlPlaneRole(user.role, Boolean(user.is_admin) ? 'owner' : 'member');
+    const workspaceAccess: Record<string, ControlPlaneWorkspaceAccess> = {};
+    for (const item of Array.isArray(payload?.workspace_access) ? payload.workspace_access : []) {
+      const workspaceId = String(item?.workspace_id || '').trim();
+      if (!workspaceId) continue;
+      workspaceAccess[workspaceId] = {
+        role: normalizeControlPlaneRole(item?.role, role),
+        capabilities: normalizeWorkspaceCapabilityPolicy(item?.capabilities),
+        dangerousActionClasses: normalizeWorkspaceCapabilityPolicy(item?.dangerous_action_classes),
+        trustedOwnerMachineIds: normalizeTokenList(item?.trusted_owner_machine_ids),
+      };
+    }
     return {
       email: String(user.email || '').trim().toLowerCase() || null,
       role,
       admin: role === 'owner',
+      workspaceAccess,
     };
   } catch {
     return null;
@@ -394,6 +464,7 @@ async function verifyAdminBearerIdentity(token: string): Promise<ControlPlaneIde
       authType: 'bearer',
       role,
       admin: role === 'owner',
+      workspaceAccess: resolved?.workspaceAccess,
     };
   }
   if (resolved) {
@@ -403,6 +474,7 @@ async function verifyAdminBearerIdentity(token: string): Promise<ControlPlaneIde
       authType: 'bearer',
       role: resolved.role,
       admin: resolved.admin,
+      workspaceAccess: resolved.workspaceAccess,
     };
   }
   return Response.json({ detail: 'Invalid bearer token.' }, { status: 401 });
@@ -483,6 +555,7 @@ async function decodeSession(token: string, request: NextRequest): Promise<Contr
   if (!['bearer', 'trusted_local'].includes(String(parsed.authType || '').trim())) return null;
   parsed.role = normalizeControlPlaneRole(parsed.role, parsed.admin ? 'owner' : 'member');
   parsed.admin = parsed.role === 'owner';
+  parsed.workspaceAccess = normalizeWorkspaceAccess(parsed.workspaceAccess);
   return parsed;
 }
 
@@ -511,6 +584,14 @@ export function getTrustedDesktopIdentity(request: NextRequest): ControlPlaneIde
     authType: 'trusted_local',
     role: 'owner',
     admin: true,
+    workspaceAccess: {
+      default: {
+        role: 'owner',
+        capabilities: { allow: ['*'], deny: [] },
+        dangerousActionClasses: { allow: ['*'], deny: [] },
+        trustedOwnerMachineIds: [],
+      },
+    },
   };
 }
 
@@ -557,6 +638,7 @@ export async function issueAdminBrowserIdentityResponse(
     authType: identity.authType,
     role: identity.role,
     admin: identity.admin,
+    workspaceAccess: identity.workspaceAccess,
   };
   const sessionToken = await encodeSession(sessionPayload);
   response.cookies.set({
@@ -606,6 +688,7 @@ export async function issueControlPlaneSessionResponse(
     authType: identity.authType,
     role: identity.role,
     admin: identity.admin,
+    workspaceAccess: identity.workspaceAccess,
   };
   const token = await encodeSession(payload);
   const response = NextResponse.json({ ok: true, expires_in: CONTROL_PLANE_SESSION_TTL_SECONDS, role: identity.role });
@@ -641,6 +724,65 @@ export async function requireControlPlaneRole(
     { detail: `${minimumRole} role required.`, required_role: minimumRole, role: actualRole },
     { status: 403 },
   );
+}
+
+export async function requireControlPlaneWorkspaceAccess(
+  request: NextRequest,
+  workspaceId: string,
+  minimumRole: ControlPlaneRole,
+  capabilityId?: string,
+): Promise<Response | null> {
+  const parsed = await getControlPlaneSession(request);
+  if (!parsed) {
+    return Response.json({ detail: 'Control-plane session required.' }, { status: 401 });
+  }
+  const workspaceToken = String(workspaceId || '').trim() || 'default';
+  const workspaceAccess = normalizeWorkspaceAccess(parsed.workspaceAccess);
+  const workspaceEntry = workspaceAccess[workspaceToken];
+  const effectiveRole = workspaceEntry?.role || (parsed.admin ? 'owner' : null);
+  if (!effectiveRole) {
+    return Response.json(
+      { detail: `Workspace '${workspaceToken}' is not accessible.`, workspace_id: workspaceToken },
+      { status: 403 },
+    );
+  }
+  if (!controlPlaneRoleAllowed(effectiveRole, minimumRole)) {
+    return Response.json(
+      {
+        detail: `${minimumRole} role required for workspace '${workspaceToken}'.`,
+        required_role: minimumRole,
+        role: effectiveRole,
+        workspace_id: workspaceToken,
+      },
+      { status: 403 },
+    );
+  }
+  const capabilityToken = String(capabilityId || '').trim().toLowerCase();
+  if (capabilityToken && workspaceEntry) {
+    const denied = new Set(workspaceEntry.capabilities.deny);
+    const allowed = new Set(workspaceEntry.capabilities.allow);
+    if (denied.has('*') || denied.has(capabilityToken)) {
+      return Response.json(
+        {
+          detail: `Capability '${capabilityToken}' is not allowed in workspace '${workspaceToken}'.`,
+          workspace_id: workspaceToken,
+          capability_id: capabilityToken,
+        },
+        { status: 403 },
+      );
+    }
+    if (allowed.size > 0 && !allowed.has('*') && !allowed.has(capabilityToken) && effectiveRole !== 'owner') {
+      return Response.json(
+        {
+          detail: `Capability '${capabilityToken}' is not granted in workspace '${workspaceToken}'.`,
+          workspace_id: workspaceToken,
+          capability_id: capabilityToken,
+        },
+        { status: 403 },
+      );
+    }
+  }
+  return null;
 }
 
 export function controlPlaneAuthProviders(): ControlPlaneAuthProviders {

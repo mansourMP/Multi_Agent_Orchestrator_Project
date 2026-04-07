@@ -6,6 +6,11 @@ from typing import Any, Optional
 
 from fastapi import Depends, Request
 from sse_starlette.sse import EventSourceResponse
+from server_modules.auth import (
+    allowed_workspace_ids,
+    build_workspace_authorization_metadata,
+    enforce_workspace_access,
+)
 
 from server_modules.agent_turn import (
     agent_turn as execute_canonical_agent_turn,
@@ -106,6 +111,66 @@ def _utc_now() -> datetime:
 
 def _utc_now_iso() -> str:
     return _chat_stream_now_iso()
+
+
+def _workspace_filtered_items(items: list[dict[str, Any]], current_user: Any) -> list[dict[str, Any]]:
+    allowed = allowed_workspace_ids(current_user)
+    if allowed is None:
+        return items
+    filtered: list[dict[str, Any]] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        workspace_id = str(item.get("workspace_id") or "default").strip() or "default"
+        if workspace_id in allowed:
+            filtered.append(item)
+    return filtered
+
+
+def _workspace_id_from_turn_payload(payload: dict[str, Any]) -> str:
+    return str(payload.get("workspace_id") or "default").strip() or "default"
+
+
+def _machine_target_from_turn_payload(payload: dict[str, Any]) -> str | None:
+    context_hints = payload.get("context_hints") if isinstance(payload.get("context_hints"), dict) else {}
+    metadata = context_hints.get("metadata") if isinstance(context_hints.get("metadata"), dict) else {}
+    token = (
+        str(payload.get("machine_target") or "").strip()
+        or str(metadata.get("machine_id") or "").strip()
+        or str(metadata.get("machine_target") or "").strip()
+    )
+    return token or None
+
+
+def _stamp_workspace_authorization_on_turn_payload(
+    payload: dict[str, Any],
+    *,
+    current_user: Any,
+    minimum_role: str,
+) -> dict[str, Any]:
+    body = dict(payload or {})
+    workspace_id = enforce_workspace_access(
+        current_user,
+        _workspace_id_from_turn_payload(body),
+        minimum_role=minimum_role,
+    )
+    machine_target = _machine_target_from_turn_payload(body)
+    context_hints = body.get("context_hints") if isinstance(body.get("context_hints"), dict) else {}
+    metadata = context_hints.get("metadata") if isinstance(context_hints.get("metadata"), dict) else {}
+    metadata = {
+        **metadata,
+        **build_workspace_authorization_metadata(
+            current_user,
+            workspace_id,
+            machine_id=machine_target,
+        ),
+    }
+    body["workspace_id"] = workspace_id
+    body["context_hints"] = {
+        **context_hints,
+        "metadata": metadata,
+    }
+    return body
 
 
 def _chat_stream_metrics_inc(key: str, amount: float = 1) -> None:
@@ -457,6 +522,11 @@ def register_run_routes(app) -> None:
                 from fastapi import HTTPException
 
                 raise HTTPException(status_code=400, detail="Invalid turn payload")
+        payload = _stamp_workspace_authorization_on_turn_payload(
+            payload,
+            current_user=current_user,
+            minimum_role="member",
+        )
 
         if _looks_like_legacy_direct_chat_body(payload):
             return await build_direct_chat_stream_response(
@@ -516,10 +586,28 @@ def register_run_routes(app) -> None:
         current_user=Depends(viewer_dependency),
     ):
         _refresh_server_exports()
-        return runtime_run_query_service.build_run_list_response(
+        allowed_workspaces = allowed_workspace_ids(current_user)
+        requested_workspace_id = (
+            enforce_workspace_access(current_user, workspace_id, minimum_role="viewer")
+            if workspace_id
+            else None
+        )
+        base_history_item_matches = _late_server_export("_history_item_matches")
+
+        def _authorized_history_item_matches(item: Any, requested_workspace: Any, requested_status: Any, requested_pack_id: Any) -> bool:
+            if not base_history_item_matches(item, requested_workspace, requested_status, requested_pack_id):
+                return False
+            if allowed_workspaces is None:
+                return True
+            if not isinstance(item, dict):
+                return False
+            run_workspace_id = str(item.get("workspace_id") or "default").strip() or "default"
+            return run_workspace_id in allowed_workspaces
+
+        payload = runtime_run_query_service.build_run_list_response(
             limit=limit,
             offset=offset,
-            workspace_id=workspace_id,
+            workspace_id=requested_workspace_id,
             status=status,
             pack_id=pack_id,
             current_user=current_user,
@@ -528,12 +616,13 @@ def register_run_routes(app) -> None:
             run_history_lock=_late_server_export("RUN_HISTORY_LOCK"),
             run_history=_late_server_export("RUN_HISTORY"),
             serialize_run_snapshot=_late_server_export("_serialize_run_snapshot"),
-            history_item_matches=_late_server_export("_history_item_matches"),
+            history_item_matches=_authorized_history_item_matches,
             current_user_is_privileged=_current_user_is_privileged,
             extract_run_owner_user_id=_extract_run_owner_user_id,
             summarize_history_item=_late_server_export("_summarize_history_item"),
             parse_utc_ts=_late_server_export("_parse_utc_ts"),
         )
+        return payload
 
     @app.get("/approvals", dependencies=[Depends(viewer_dependency)])
     async def list_approvals(
@@ -541,6 +630,12 @@ def register_run_routes(app) -> None:
         current_user=Depends(viewer_dependency),
     ):
         _refresh_server_exports()
+        allowed_workspaces = allowed_workspace_ids(current_user)
+        requested_workspace_id = (
+            enforce_workspace_access(current_user, workspace_id, minimum_role="viewer")
+            if workspace_id
+            else None
+        )
         request_user_id = str((current_user or {}).get("user_id") or "").strip()
         include_all = _current_user_is_privileged(current_user)
         if not include_all and not request_user_id:
@@ -564,7 +659,9 @@ def register_run_routes(app) -> None:
                 or context.get("workspace_id")
                 or "default"
             ).strip() or "default"
-            if workspace_id and run_workspace_id != str(workspace_id).strip():
+            if requested_workspace_id and run_workspace_id != requested_workspace_id:
+                continue
+            if allowed_workspaces is not None and run_workspace_id not in allowed_workspaces:
                 continue
             pending = (
                 run.get("pending_confirmation")
@@ -602,7 +699,7 @@ def register_run_routes(app) -> None:
             "pending": items,
             "count": len(items),
             "total": len(items),
-            "workspace_id": str(workspace_id or "default").strip() or "default",
+            "workspace_id": str(requested_workspace_id or "default").strip() or "default",
         }
 
     @app.post("/sessions", dependencies=[Depends(member_dependency)], response_model=ApiSessionResponse)
@@ -611,13 +708,18 @@ def register_run_routes(app) -> None:
         current_user=Depends(member_dependency),
     ):
         payload = body.model_dump() if hasattr(body, "model_dump") else body.dict()
+        workspace_id = enforce_workspace_access(
+            current_user,
+            payload.get("workspace_id"),
+            minimum_role="member",
+        )
         actor = dict(payload.get("actor") or {})
         if not str(actor.get("id") or "").strip():
             actor["id"] = str((current_user or {}).get("user_id") or (current_user or {}).get("email") or "anonymous").strip()
         if not str(actor.get("display_name") or "").strip():
             actor["display_name"] = str((current_user or {}).get("email") or actor.get("id") or "").strip()
         session_id = await session_service.create_session(
-            workspace_id=str(payload.get("workspace_id") or "default").strip() or "default",
+            workspace_id=workspace_id,
             tenant_id=str(payload.get("tenant_id") or "default").strip() or "default",
             actor=actor,
             channel=str(payload.get("channel") or "web").strip() or "web",
@@ -626,7 +728,7 @@ def register_run_routes(app) -> None:
         )
         record = await session_service.get_session(session_id) or {
             "session_id": session_id,
-            "workspace_id": str(payload.get("workspace_id") or "default").strip() or "default",
+            "workspace_id": workspace_id,
             "tenant_id": str(payload.get("tenant_id") or "default").strip() or "default",
             "channel": str(payload.get("channel") or "web").strip() or "web",
             "actor": actor,
@@ -640,12 +742,16 @@ def register_run_routes(app) -> None:
         session_id: str,
         current_user=Depends(viewer_dependency),
     ):
-        del current_user
         record = await session_service.get_session(session_id)
         if not isinstance(record, dict):
             from fastapi import HTTPException
 
             raise HTTPException(status_code=404, detail="Session not found.")
+        enforce_workspace_access(
+            current_user,
+            record.get("workspace_id"),
+            minimum_role="viewer",
+        )
         return normalize_session_record(record)
 
     @app.delete("/sessions/{session_id}", dependencies=[Depends(member_dependency)])
@@ -653,6 +759,12 @@ def register_run_routes(app) -> None:
         session_id: str,
         current_user=Depends(member_dependency),
     ):
-        del current_user
+        record = await session_service.get_session(session_id)
+        if isinstance(record, dict):
+            enforce_workspace_access(
+                current_user,
+                record.get("workspace_id"),
+                minimum_role="member",
+            )
         await session_service.terminate_session(session_id)
         return {"ok": True, "session_id": str(session_id or "").strip()}

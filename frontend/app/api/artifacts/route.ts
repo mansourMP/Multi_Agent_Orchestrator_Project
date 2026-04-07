@@ -1,6 +1,10 @@
 import type { NextRequest } from 'next/server';
 import { enforceBffRouteGuard, sanitizeArtifactsWorkspaceQuery } from '@/lib/server/bffRouteGuard';
-import { requireControlPlaneRole, requireControlPlaneSession } from '@/lib/server/controlPlaneSession';
+import {
+  requireControlPlaneRole,
+  requireControlPlaneSession,
+  requireControlPlaneWorkspaceAccess,
+} from '@/lib/server/controlPlaneSession';
 import { runtimeJsonRequest } from '@/lib/server/runtimeControlPlane';
 
 export const dynamic = 'force-dynamic';
@@ -12,6 +16,16 @@ export async function GET(request: NextRequest) {
   if (authFailure) return authFailure;
   const roleFailure = await requireControlPlaneRole(request, 'viewer');
   if (roleFailure) return roleFailure;
+  const workspaceId = String(request.nextUrl.searchParams.get('workspace_id') || '').trim();
+  if (workspaceId) {
+    const workspaceFailure = await requireControlPlaneWorkspaceAccess(
+      request,
+      workspaceId,
+      'viewer',
+      'artifacts.read',
+    );
+    if (workspaceFailure) return workspaceFailure;
+  }
 
   const query = sanitizeArtifactsWorkspaceQuery(request);
   const runtimePath = `/artifacts${query ? `?${query}` : ''}`;

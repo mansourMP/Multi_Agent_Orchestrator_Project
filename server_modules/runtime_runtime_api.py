@@ -12,6 +12,13 @@ from fastapi import Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
+from server_modules.auth import (
+    allowed_workspace_ids,
+    enforce_workspace_access,
+    grant_workspace_owner_machine_trust,
+    revoke_workspace_owner_machine_trust,
+    workspace_role,
+)
 from server_modules.runtime_common import require_api_key
 from server_modules import local_queue
 from server_modules import outbox_service
@@ -47,6 +54,7 @@ class RuntimeHeartbeatPayload(BaseModel):
 
 
 class MachineEnrollPayload(BaseModel):
+    workspace_id: Optional[str] = None
     machine_id: Optional[str] = None
     runtime_type: str = "local_companion"
     display_name: Optional[str] = None
@@ -384,13 +392,53 @@ def register_runtime_routes(app) -> None:
         return runtime_status_payload()
 
     @app.get("/machines", dependencies=[Depends(require_api_key)])
-    async def get_machines():
-        return runtime_status_payload()
+    async def get_machines(
+        workspace_id: Optional[str] = None,
+        current_user=Depends(require_api_key),
+    ):
+        requested_workspace_id = (
+            enforce_workspace_access(current_user, workspace_id, minimum_role="viewer")
+            if workspace_id
+            else None
+        )
+        payload = runtime_status_payload()
+        items = payload.get("items") if isinstance(payload.get("items"), list) else []
+        allowed = allowed_workspace_ids(current_user)
+        filtered = []
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            item_workspace_id = str(item.get("workspace_id") or "default").strip() or "default"
+            if requested_workspace_id and item_workspace_id != requested_workspace_id:
+                continue
+            if allowed is not None and item_workspace_id not in allowed:
+                continue
+            filtered.append(item)
+        payload["items"] = filtered
+        payload["summary"] = {
+            **(payload.get("summary") if isinstance(payload.get("summary"), dict) else {}),
+            "known": len(filtered),
+            "online": sum(1 for item in filtered if bool(item.get("online"))),
+            "busy": sum(1 for item in filtered if bool(item.get("current_run_id"))),
+            "idle": sum(1 for item in filtered if bool(item.get("online")) and not bool(item.get("current_run_id"))),
+            "offline": sum(1 for item in filtered if not bool(item.get("online"))),
+        }
+        return payload
 
     @app.post("/machines/enroll", dependencies=[Depends(require_api_key)])
-    async def enroll_machine(payload: Optional[MachineEnrollPayload] = None):
+    async def enroll_machine(
+        payload: Optional[MachineEnrollPayload] = None,
+        current_user=Depends(require_api_key),
+    ):
         body = payload or MachineEnrollPayload()
-        return local_queue.handle_enroll_local_runtime(
+        workspace_id = enforce_workspace_access(
+            current_user,
+            body.workspace_id,
+            minimum_role="member",
+            capability_id="machines.manage",
+        )
+        result = local_queue.handle_enroll_local_runtime(
+            workspace_id=workspace_id,
             machine_id=body.machine_id,
             runtime_type=body.runtime_type,
             display_name=body.display_name,
@@ -400,11 +448,24 @@ def register_runtime_routes(app) -> None:
             execution_targets=body.execution_targets,
             note=body.note,
         )
+        if workspace_role(current_user, workspace_id) == "owner":
+            grant_workspace_owner_machine_trust(workspace_id, str(result.get("machine_id") or "").strip())
+        return result
 
     @app.post("/machines/enrollment-intents", dependencies=[Depends(require_api_key)])
-    async def create_machine_enrollment_intent(payload: Optional[MachineEnrollPayload] = None):
+    async def create_machine_enrollment_intent(
+        payload: Optional[MachineEnrollPayload] = None,
+        current_user=Depends(require_api_key),
+    ):
         body = payload or MachineEnrollPayload()
-        return local_queue.create_machine_enrollment_intent(
+        workspace_id = enforce_workspace_access(
+            current_user,
+            body.workspace_id,
+            minimum_role="member",
+            capability_id="machines.manage",
+        )
+        result = local_queue.create_machine_enrollment_intent(
+            workspace_id=workspace_id,
             machine_id=body.machine_id,
             runtime_type=body.runtime_type,
             display_name=body.display_name,
@@ -414,6 +475,9 @@ def register_runtime_routes(app) -> None:
             execution_targets=body.execution_targets,
             note=body.note,
         )
+        if workspace_role(current_user, workspace_id) == "owner":
+            grant_workspace_owner_machine_trust(workspace_id, str(result.get("machine_id") or "").strip())
+        return result
 
     @app.post("/machines/{machine_id}/enrollment-state", dependencies=[Depends(require_api_key)])
     async def update_machine_enrollment_state(machine_id: str, payload: MachineEnrollmentStatePayload):
@@ -432,8 +496,27 @@ def register_runtime_routes(app) -> None:
         )
 
     @app.delete("/machines/{machine_id}", dependencies=[Depends(require_api_key)])
-    async def delete_machine(machine_id: str):
-        return local_queue.handle_delete_local_runtime(machine_id)
+    async def delete_machine(machine_id: str, current_user=Depends(require_api_key)):
+        status_payload = local_queue.handle_get_local_workers_status()
+        items = status_payload.get("items") if isinstance(status_payload.get("items"), list) else []
+        machine = next(
+            (
+                item
+                for item in items
+                if isinstance(item, dict)
+                and str(item.get("machine_id") or item.get("runtime_id") or "").strip() == str(machine_id or "").strip()
+            ),
+            None,
+        )
+        workspace_id = enforce_workspace_access(
+            current_user,
+            (machine or {}).get("workspace_id") or "default",
+            minimum_role="member",
+            capability_id="machines.manage",
+        )
+        result = local_queue.handle_delete_local_runtime(machine_id)
+        revoke_workspace_owner_machine_trust(workspace_id, str(machine_id or "").strip())
+        return result
 
     @app.get("/local/workers/status", dependencies=[Depends(require_api_key)])
     async def get_legacy_local_workers_status():

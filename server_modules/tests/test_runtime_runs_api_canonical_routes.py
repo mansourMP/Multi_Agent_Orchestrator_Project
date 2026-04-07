@@ -80,6 +80,14 @@ class RuntimeRunsApiCanonicalRouteTests(unittest.TestCase):
                     "workspace_id": "default",
                     "created_at": "2026-04-06T09:00:00Z",
                     "updated_at": "2026-04-06T10:00:00Z",
+                },
+                {
+                    "run_id": "run-live-finance",
+                    "status": "running",
+                    "owner_user_id": "user-1",
+                    "workspace_id": "finance",
+                    "created_at": "2026-04-06T09:10:00Z",
+                    "updated_at": "2026-04-06T10:10:00Z",
                 }
             ]
             runtime_runs_api._late_server_export = lambda name: {
@@ -91,6 +99,14 @@ class RuntimeRunsApiCanonicalRouteTests(unittest.TestCase):
                         "workspace_id": "default",
                         "created_at": "2026-04-06T09:00:00Z",
                         "updated_at": "2026-04-06T10:00:00Z",
+                    },
+                    "run-live-finance": {
+                        "run_id": "run-live-finance",
+                        "status": "running",
+                        "owner_user_id": "user-1",
+                        "workspace_id": "finance",
+                        "created_at": "2026-04-06T09:10:00Z",
+                        "updated_at": "2026-04-06T10:10:00Z",
                     }
                 },
                 "RUN_HISTORY_LOCK": threading.Lock(),
@@ -102,6 +118,14 @@ class RuntimeRunsApiCanonicalRouteTests(unittest.TestCase):
                         "workspace_id": "default",
                         "created_at": "2026-04-06T08:00:00Z",
                         "updated_at": "2026-04-06T08:30:00Z",
+                    },
+                    {
+                        "run_id": "run-archived-finance",
+                        "status": "completed",
+                        "owner_user_id": "user-1",
+                        "workspace_id": "finance",
+                        "created_at": "2026-04-06T07:00:00Z",
+                        "updated_at": "2026-04-06T07:30:00Z",
                     }
                 ],
                 "_serialize_run_snapshot": lambda run_id, run: dict(run),

@@ -6,6 +6,7 @@ import {
   getControlPlaneSession,
   requireControlPlaneRole,
   requireControlPlaneSession,
+  requireControlPlaneWorkspaceAccess,
 } from '@/lib/server/controlPlaneSession';
 import { runtimeAuthorizedFetch, runtimeJsonRequest } from '@/lib/server/runtimeControlPlane';
 
@@ -93,6 +94,13 @@ export async function POST(request: NextRequest) {
   const rawBody = await request.text();
   const stampedBody = await stampTurnOwnerBody(request, rawBody);
   const turn = parseTurnPayload(stampedBody);
+  const workspaceFailure = await requireControlPlaneWorkspaceAccess(
+    request,
+    String(turn?.workspace_id || 'default').trim() || 'default',
+    'member',
+    'turn.execute',
+  );
+  if (workspaceFailure) return workspaceFailure;
 
   if (wantsDirectChatStream(turn)) {
     try {

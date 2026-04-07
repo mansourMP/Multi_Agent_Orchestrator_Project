@@ -47,6 +47,11 @@ def _expired_token(auth) -> str:
     return f"{header_segment}.{payload_segment}.{auth._b64url_encode(signature)}"
 
 
+class _Request:
+    headers = {}
+    client = None
+
+
 def test_jwt_stable_across_restart(monkeypatch: pytest.MonkeyPatch, tmp_path):
     auth, jwt_secret, state_home = _reload_auth(monkeypatch, tmp_path)
     first_secret = auth._jwt_secret()
@@ -92,6 +97,40 @@ def test_expired_token_rejected(monkeypatch: pytest.MonkeyPatch, tmp_path):
 
     assert exc.value.status_code == 401
     assert exc.value.detail == "Bearer token has expired."
+
+
+def test_workspace_membership_scope_and_viewer_role(monkeypatch: pytest.MonkeyPatch, tmp_path):
+    auth, _, _ = _reload_auth(monkeypatch, tmp_path)
+    created = auth.register_user("workspace.viewer@example.com", "password-123", name="Viewer")
+    auth.upsert_workspace_membership(created["user"]["id"], "finance", "viewer")
+    token = created["token"]
+    current_user = auth.get_current_user(_Request(), authorization=f"Bearer {token}")
+
+    assert auth.workspace_role(current_user, "default") == "member"
+    assert auth.workspace_role(current_user, "finance") == "viewer"
+    assert auth.enforce_workspace_access(current_user, "finance", minimum_role="viewer") == "finance"
+    with pytest.raises(HTTPException):
+        auth.enforce_workspace_access(current_user, "finance", minimum_role="member")
+    with pytest.raises(HTTPException):
+        auth.enforce_workspace_access(current_user, "secret-lab", minimum_role="viewer")
+
+
+def test_workspace_capability_policy_denies_local_capability(monkeypatch: pytest.MonkeyPatch, tmp_path):
+    auth, _, _ = _reload_auth(monkeypatch, tmp_path)
+    created = auth.register_user("workspace.member@example.com", "password-123", name="Member")
+    auth.upsert_workspace_policy("default", capability_deny=["computer_control.type"])
+    token = created["token"]
+    current_user = auth.get_current_user(_Request(), authorization=f"Bearer {token}")
+
+    with pytest.raises(HTTPException) as exc:
+        auth.enforce_workspace_access(
+            current_user,
+            "default",
+            minimum_role="member",
+            capability_id="computer_control.type",
+        )
+
+    assert exc.value.status_code == 403
 
 
 def _build_auth_test_app() -> FastAPI:

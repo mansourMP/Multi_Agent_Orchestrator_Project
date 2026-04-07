@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
 from scripts.platform_execution import capability_metadata
+from server_modules.computer_action_safety import evaluate_dangerous_computer_action_policy
 from server_modules import skills_service
 
 
@@ -466,6 +467,80 @@ def summarize_action_policy_eval(eval_data: Dict[str, Any]) -> str:
     )
 
 
+def _operation_capability_id_for_policy(operation: Dict[str, Any]) -> str:
+    capability = str(operation.get("capability") or "").strip().lower()
+    if capability:
+        return capability
+    tool_id = _normalize_action_id(operation.get("tool") or operation.get("action"))
+    if tool_id == "computer_control":
+        action_name = _normalize_action_id(operation.get("action"))
+        if action_name:
+            return f"computer_control.{action_name}"
+    return tool_id
+
+
+def _local_execution_dangerous_action_items(
+    context: Dict[str, Any],
+    *,
+    policy_mode: str,
+    target: str,
+    capability_metadata_root: Optional[Path],
+) -> List[Dict[str, Any]]:
+    metadata = context.get("metadata") if isinstance(context.get("metadata"), dict) else {}
+    pack_inputs = metadata.get("pack_inputs") if isinstance(metadata.get("pack_inputs"), dict) else {}
+    operations = pack_inputs.get("operations") if isinstance(pack_inputs.get("operations"), list) else []
+    if not operations and isinstance(pack_inputs, dict) and pack_inputs:
+        operations = [pack_inputs]
+
+    items: List[Dict[str, Any]] = []
+    for index, raw_operation in enumerate(operations):
+        if not isinstance(raw_operation, dict):
+            continue
+        capability_id = _operation_capability_id_for_policy(raw_operation)
+        if not capability_id:
+            continue
+        evaluation = evaluate_dangerous_computer_action_policy(
+            raw_operation,
+            metadata=metadata,
+            capability_id=capability_id,
+            policy_mode=policy_mode,
+            target=target,
+        )
+        dangerous_classes = list(evaluation.get("dangerous_action_classes") or [])
+        if not dangerous_classes:
+            continue
+        detail = capability_metadata(capability_id, capability_metadata_root or Path(__file__).resolve().parents[1])
+        labels = list(evaluation.get("dangerous_action_labels") or [])
+        label = ", ".join(labels) if labels else capability_id.replace("_", " ")
+        items.append(
+            {
+                "tool_id": capability_id,
+                "execution_decision": str(evaluation.get("execution_decision") or "allow").strip().lower() or "allow",
+                "decision": str(evaluation.get("decision") or "allow").strip().lower() or "allow",
+                "reason": str(evaluation.get("reason") or "").strip() or None,
+                "policy_mode": str(policy_mode or "").strip().lower() or None,
+                "target": str(target or "").strip().lower() or None,
+                "is_sensitive": True,
+                "is_critical": True,
+                "classification": {
+                    "dangerous_action_classes": dangerous_classes,
+                    "dangerous_action_labels": labels,
+                    "action_summary": str(raw_operation.get("summary") or raw_operation.get("target_description") or raw_operation.get("target_text") or raw_operation.get("action") or capability_id).strip() or capability_id,
+                },
+                "approval_label": label,
+                "capabilities": [detail] if isinstance(detail, dict) else None,
+                "metadata": {
+                    "operation_index": index,
+                    "dangerous_action_classes": dangerous_classes,
+                    "dangerous_action_labels": labels,
+                    "owner_or_admin_mode": bool(evaluation.get("owner_or_admin_mode")),
+                    "explicitly_allowed_classes": list(evaluation.get("explicitly_allowed_classes") or []),
+                },
+            }
+        )
+    return items
+
+
 def evaluate_tool_policy_decision(
     tool_id: str,
     trust_mode: str,
@@ -504,7 +579,28 @@ def evaluate_tool_policy_decision(
         if clean_tool_id == "browser_automation.interactive"
         else []
     )
+    workspace_capability_policy = (
+        metadata.get("workspace_capability_policy")
+        if isinstance(metadata.get("workspace_capability_policy"), dict)
+        else {}
+    )
+    workspace_denied_capabilities = {
+        str(item or "").strip().lower()
+        for item in (workspace_capability_policy.get("deny") or [])
+        if str(item or "").strip()
+    }
+    workspace_allowed_capabilities = {
+        str(item or "").strip().lower()
+        for item in (workspace_capability_policy.get("allow") or [])
+        if str(item or "").strip()
+    }
+    workspace_role = _normalize_action_id(
+        metadata.get("workspace_role")
+        or metadata.get("owner_role")
+        or metadata.get("role")
+    )
     capability_ids = [str(item).strip().lower() for item in (capability_ids or []) if str(item).strip()]
+    requested_capability_ids = capability_ids or ([clean_tool_id] if clean_tool_id else [])
     capability_details = [
         detail
         for detail in (
@@ -540,7 +636,21 @@ def evaluate_tool_policy_decision(
     execution_decision = "allow"
     reason = "policy_allow_default"
 
-    if clean_tool_id in runtime_policy.TOOL_CONTRACTS and not runtime_policy.is_tool_enabled(clean_tool_id):
+    if any(
+        capability_id in workspace_denied_capabilities or "*" in workspace_denied_capabilities
+        for capability_id in requested_capability_ids
+    ):
+        execution_decision = "deny"
+        reason = "workspace_capability_denied"
+    elif (
+        workspace_allowed_capabilities
+        and "*" not in workspace_allowed_capabilities
+        and any(capability_id not in workspace_allowed_capabilities for capability_id in requested_capability_ids)
+        and workspace_role != "owner"
+    ):
+        execution_decision = "deny"
+        reason = "workspace_capability_not_granted"
+    elif clean_tool_id in runtime_policy.TOOL_CONTRACTS and not runtime_policy.is_tool_enabled(clean_tool_id):
         execution_decision = "deny"
         reason = "tool_disabled"
     elif unsupported_capability:
@@ -715,6 +825,27 @@ def compute_tool_policy_precheck(
             require_confirmation.append(clean_tool)
         else:
             allowed.append(clean_tool)
+
+    dangerous_action_items = _local_execution_dangerous_action_items(
+        context,
+        policy_mode=policy_mode,
+        target=target,
+        capability_metadata_root=capability_metadata_root,
+    )
+    for item in dangerous_action_items:
+        items.append(item)
+        execution_decision = str(item.get("execution_decision") or "").strip().lower()
+        clean_tool = str(item.get("tool_id") or "").strip().lower()
+        if execution_decision == "deny":
+            denied.append(clean_tool)
+        elif execution_decision == "require_confirmation":
+            require_confirmation.append(clean_tool)
+        else:
+            allowed.append(clean_tool)
+
+    denied = sorted(set(denied))
+    require_confirmation = sorted(set(require_confirmation))
+    allowed = sorted(set(allowed).difference(denied).difference(require_confirmation))
 
     return {
         "policy_mode": policy_mode,

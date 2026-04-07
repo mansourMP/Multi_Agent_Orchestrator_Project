@@ -1,6 +1,10 @@
 import type { NextRequest } from 'next/server';
 import { enforceBffRouteGuard } from '@/lib/server/bffRouteGuard';
-import { requireControlPlaneRole, requireControlPlaneSession } from '@/lib/server/controlPlaneSession';
+import {
+  requireControlPlaneRole,
+  requireControlPlaneSession,
+  requireControlPlaneWorkspaceAccess,
+} from '@/lib/server/controlPlaneSession';
 import { runtimeJsonRequest } from '@/lib/server/runtimeControlPlane';
 
 export const dynamic = 'force-dynamic';
@@ -14,6 +18,20 @@ export async function POST(request: NextRequest) {
   if (roleFailure) return roleFailure;
 
   const rawBody = await request.text();
+  let workspaceId = 'default';
+  try {
+    const parsed = JSON.parse(rawBody || '{}') as { workspace_id?: string };
+    workspaceId = String(parsed.workspace_id || 'default').trim() || 'default';
+  } catch {
+    workspaceId = 'default';
+  }
+  const workspaceFailure = await requireControlPlaneWorkspaceAccess(
+    request,
+    workspaceId,
+    'member',
+    'machines.manage',
+  );
+  if (workspaceFailure) return workspaceFailure;
 
   try {
     const { status, payload } = await runtimeJsonRequest('/machines/enrollment-intents', {

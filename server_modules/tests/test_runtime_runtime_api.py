@@ -83,28 +83,42 @@ class RuntimeRuntimeApiTests(unittest.TestCase):
         self.assertEqual(payload["offline"], 1)
 
     @patch("server_modules.local_queue.handle_enroll_local_runtime")
-    def test_register_runtime_routes_exposes_machine_enroll(self, mock_enroll):
+    @patch("server_modules.runtime_runtime_api.grant_workspace_owner_machine_trust")
+    def test_register_runtime_routes_exposes_machine_enroll(self, mock_grant_trust, mock_enroll):
         app = _FakeApp()
         runtime_runtime_api.register_runtime_routes(app)
         mock_enroll.return_value = {"ok": True, "machine_id": "machine-1"}
         handler = app.routes[("POST", "/machines/enroll")]
 
-        result = self._run_async(handler(runtime_runtime_api.MachineEnrollPayload(display_name="Machine 1")))
+        result = self._run_async(
+            handler(
+                runtime_runtime_api.MachineEnrollPayload(display_name="Machine 1", workspace_id="default"),
+                current_user={"role": "owner", "is_admin": True},
+            )
+        )
 
         self.assertEqual(result["machine_id"], "machine-1")
-        mock_enroll.assert_called_once()
+        self.assertEqual(mock_enroll.call_args.kwargs["workspace_id"], "default")
+        mock_grant_trust.assert_called_once_with("default", "machine-1")
 
     @patch("server_modules.local_queue.create_machine_enrollment_intent")
-    def test_register_runtime_routes_exposes_machine_enrollment_intent(self, mock_create_intent):
+    @patch("server_modules.runtime_runtime_api.grant_workspace_owner_machine_trust")
+    def test_register_runtime_routes_exposes_machine_enrollment_intent(self, mock_grant_trust, mock_create_intent):
         app = _FakeApp()
         runtime_runtime_api.register_runtime_routes(app)
         mock_create_intent.return_value = {"ok": True, "machine_id": "machine-1", "token": "tok"}
         handler = app.routes[("POST", "/machines/enrollment-intents")]
 
-        result = self._run_async(handler(runtime_runtime_api.MachineEnrollPayload(display_name="Machine 1")))
+        result = self._run_async(
+            handler(
+                runtime_runtime_api.MachineEnrollPayload(display_name="Machine 1", workspace_id="default"),
+                current_user={"role": "owner", "is_admin": True},
+            )
+        )
 
         self.assertEqual(result["machine_id"], "machine-1")
-        mock_create_intent.assert_called_once()
+        self.assertEqual(mock_create_intent.call_args.kwargs["workspace_id"], "default")
+        mock_grant_trust.assert_called_once_with("default", "machine-1")
 
     @patch("server_modules.local_queue.complete_machine_bootstrap")
     def test_register_runtime_routes_exposes_machine_bootstrap_complete(self, mock_complete):
@@ -171,16 +185,23 @@ class RuntimeRuntimeApiTests(unittest.TestCase):
         self.assertEqual(payload.worker_id, "worker-1")
 
     @patch("server_modules.local_queue.handle_delete_local_runtime")
-    def test_register_runtime_routes_exposes_machine_delete(self, mock_delete):
+    @patch("server_modules.runtime_runtime_api.local_queue.handle_get_local_workers_status")
+    @patch("server_modules.runtime_runtime_api.revoke_workspace_owner_machine_trust")
+    def test_register_runtime_routes_exposes_machine_delete(self, mock_revoke_trust, mock_status, mock_delete):
         app = _FakeApp()
         runtime_runtime_api.register_runtime_routes(app)
         mock_delete.return_value = {"ok": True, "machine_id": "machine-1", "deleted": True}
+        mock_status.return_value = {
+            "items": [{"machine_id": "machine-1", "workspace_id": "default"}],
+            "summary": {},
+        }
         handler = app.routes[("DELETE", "/machines/{machine_id}")]
 
-        result = self._run_async(handler("machine-1"))
+        result = self._run_async(handler("machine-1", current_user={"role": "owner", "is_admin": True}))
 
         self.assertTrue(result["deleted"])
         mock_delete.assert_called_once_with("machine-1")
+        mock_revoke_trust.assert_called_once_with("default", "machine-1")
 
     def _run_async(self, coroutine):
         import asyncio

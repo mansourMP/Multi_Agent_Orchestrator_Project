@@ -23,33 +23,53 @@ admin_deps = [Depends(require_admin_api_key)]
 async def provider_profiles(
     request: Request,
     body: Optional[ProviderProfileUpsertRequest] = None,
-    current_user=Depends(require_admin_api_key),
+    current_user=Depends(require_api_key),
 ):
     if request.method.upper() == "GET":
-        workspace_id = enforce_workspace_access(current_user, request.query_params.get("workspace_id"))
+        workspace_id = enforce_workspace_access(
+            current_user,
+            request.query_params.get("workspace_id"),
+            minimum_role="owner",
+            capability_id="connectors.manage",
+        )
         return await core.list_provider_profiles(
             workspace_id=workspace_id,
             provider=request.query_params.get("provider"),
         )
     if body is None:
         raise HTTPException(status_code=422, detail="Provider profile payload is required.")
-    body.workspace_id = enforce_workspace_access(current_user, body.workspace_id)
+    body.workspace_id = enforce_workspace_access(
+        current_user,
+        body.workspace_id,
+        minimum_role="owner",
+        capability_id="connectors.manage",
+    )
     return await core.upsert_provider_profile(body)
 
 
 async def provider_profiles_health(
     request: Request,
-    current_user=Depends(require_admin_api_key),
+    current_user=Depends(require_api_key),
 ):
-    workspace_id = enforce_workspace_access(current_user, request.query_params.get("workspace_id"))
+    workspace_id = enforce_workspace_access(
+        current_user,
+        request.query_params.get("workspace_id"),
+        minimum_role="owner",
+        capability_id="connectors.manage",
+    )
     return await core.provider_profiles_health(workspace_id=workspace_id)
 
 
 async def providers_health_check(
     request: Request,
-    current_user=Depends(require_admin_api_key),
+    current_user=Depends(require_api_key),
 ):
-    workspace_id = enforce_workspace_access(current_user, request.query_params.get("workspace_id"))
+    workspace_id = enforce_workspace_access(
+        current_user,
+        request.query_params.get("workspace_id"),
+        minimum_role="owner",
+        capability_id="connectors.manage",
+    )
     payload = await core.list_credentials_vault(workspace_id=workspace_id)
     items = payload.get("items") if isinstance(payload, dict) else []
     results: Dict[str, str] = {}
@@ -84,26 +104,41 @@ async def update_tool_contract(
 
 async def list_credentials_vault(
     request: Request,
-    current_user=Depends(require_admin_api_key),
+    current_user=Depends(require_api_key),
 ):
-    workspace_id = enforce_workspace_access(current_user, request.query_params.get("workspace_id"))
+    workspace_id = enforce_workspace_access(
+        current_user,
+        request.query_params.get("workspace_id"),
+        minimum_role="owner",
+        capability_id="connectors.read",
+    )
     return await core.list_credentials_vault(workspace_id=workspace_id)
 
 
 async def list_connectors_vault(
     request: Request,
-    current_user=Depends(require_admin_api_key),
+    current_user=Depends(require_api_key),
 ):
-    workspace_id = enforce_workspace_access(current_user, request.query_params.get("workspace_id"))
+    workspace_id = enforce_workspace_access(
+        current_user,
+        request.query_params.get("workspace_id"),
+        minimum_role="owner",
+        capability_id="connectors.read",
+    )
     return await core.list_connectors_vault(workspace_id=workspace_id)
 
 
 async def browse_microsoft_connector_drive(
     request: Request,
     connector_id: str,
-    current_user=Depends(require_admin_api_key),
+    current_user=Depends(require_api_key),
 ):
-    workspace_id = enforce_workspace_access(current_user, request.query_params.get("workspace_id"))
+    workspace_id = enforce_workspace_access(
+        current_user,
+        request.query_params.get("workspace_id"),
+        minimum_role="owner",
+        capability_id="connectors.manage",
+    )
     return await actions.browse_microsoft_connector_drive(
         connector_id=connector_id,
         workspace_id=workspace_id,
@@ -114,9 +149,14 @@ async def browse_microsoft_connector_drive(
 async def browse_google_connector_drive(
     request: Request,
     connector_id: str,
-    current_user=Depends(require_admin_api_key),
+    current_user=Depends(require_api_key),
 ):
-    workspace_id = enforce_workspace_access(current_user, request.query_params.get("workspace_id"))
+    workspace_id = enforce_workspace_access(
+        current_user,
+        request.query_params.get("workspace_id"),
+        minimum_role="owner",
+        capability_id="connectors.manage",
+    )
     return await actions.browse_google_connector_drive(
         connector_id=connector_id,
         workspace_id=workspace_id,
@@ -128,9 +168,14 @@ async def create_google_connector_document(
     request: Request,
     connector_id: str,
     body: Optional[ConnectorDocumentCreateRequest] = None,
-    current_user=Depends(require_admin_api_key),
+    current_user=Depends(require_api_key),
 ):
-    workspace_id = enforce_workspace_access(current_user, request.query_params.get("workspace_id"))
+    workspace_id = enforce_workspace_access(
+        current_user,
+        request.query_params.get("workspace_id"),
+        minimum_role="owner",
+        capability_id="connectors.manage",
+    )
     return await actions.create_google_connector_document(
         connector_id=connector_id,
         body=body,
@@ -142,9 +187,14 @@ async def create_google_connector_spreadsheet(
     request: Request,
     connector_id: str,
     body: Optional[ConnectorSpreadsheetCreateRequest] = None,
-    current_user=Depends(require_admin_api_key),
+    current_user=Depends(require_api_key),
 ):
-    workspace_id = enforce_workspace_access(current_user, request.query_params.get("workspace_id"))
+    workspace_id = enforce_workspace_access(
+        current_user,
+        request.query_params.get("workspace_id"),
+        minimum_role="owner",
+        capability_id="connectors.manage",
+    )
     return await actions.create_google_connector_spreadsheet(
         connector_id=connector_id,
         body=body,
@@ -155,9 +205,14 @@ async def create_google_connector_spreadsheet(
 async def create_connector_vault(
     request: Request,
     body: ConnectorCreate,
-    current_user=Depends(require_admin_api_key),
+    current_user=Depends(require_api_key),
 ):
-    body.workspace_id = enforce_workspace_access(current_user, body.workspace_id)
+    body.workspace_id = enforce_workspace_access(
+        current_user,
+        body.workspace_id,
+        minimum_role="owner",
+        capability_id="connectors.manage",
+    )
     return await actions.create_connector_vault(body)
 
 
@@ -165,70 +220,110 @@ async def update_connector_vault(
     request: Request,
     credential_id: str,
     body: ConnectorPatchRequest,
-    current_user=Depends(require_admin_api_key),
+    current_user=Depends(require_api_key),
 ):
-    body.workspace_id = enforce_workspace_access(current_user, body.workspace_id)
+    body.workspace_id = enforce_workspace_access(
+        current_user,
+        body.workspace_id,
+        minimum_role="owner",
+        capability_id="connectors.manage",
+    )
     return await actions.update_connector_vault(credential_id, body)
 
 
 async def test_connector_vault(
     request: Request,
     credential_id: str,
-    current_user=Depends(require_admin_api_key),
+    current_user=Depends(require_api_key),
 ):
-    workspace_id = enforce_workspace_access(current_user, request.query_params.get("workspace_id"))
+    workspace_id = enforce_workspace_access(
+        current_user,
+        request.query_params.get("workspace_id"),
+        minimum_role="owner",
+        capability_id="connectors.manage",
+    )
     return await actions.test_connector_vault(credential_id, workspace_id=workspace_id)
 
 
 async def delete_connector_vault(
     request: Request,
     credential_id: str,
-    current_user=Depends(require_admin_api_key),
+    current_user=Depends(require_api_key),
 ):
-    workspace_id = enforce_workspace_access(current_user, request.query_params.get("workspace_id"))
+    workspace_id = enforce_workspace_access(
+        current_user,
+        request.query_params.get("workspace_id"),
+        minimum_role="owner",
+        capability_id="connectors.manage",
+    )
     return await actions.delete_connector_vault(credential_id, workspace_id=workspace_id)
 
 
 async def create_vault_credential(
     request: Request,
     body: CredentialUpsertRequest,
-    current_user=Depends(require_admin_api_key),
+    current_user=Depends(require_api_key),
 ):
-    body.workspace_id = enforce_workspace_access(current_user, body.workspace_id)
+    body.workspace_id = enforce_workspace_access(
+        current_user,
+        body.workspace_id,
+        minimum_role="owner",
+        capability_id="connectors.manage",
+    )
     return await actions.create_vault_credential(body)
 
 
 async def delete_vault_credential(
     request: Request,
     credential_id: str,
-    current_user=Depends(require_admin_api_key),
+    current_user=Depends(require_api_key),
 ):
-    workspace_id = enforce_workspace_access(current_user, request.query_params.get("workspace_id"))
+    workspace_id = enforce_workspace_access(
+        current_user,
+        request.query_params.get("workspace_id"),
+        minimum_role="owner",
+        capability_id="connectors.manage",
+    )
     return await actions.delete_vault_credential(credential_id, workspace_id=workspace_id)
 
 
 async def test_vault_credential(
     request: Request,
     credential_id: str,
-    current_user=Depends(require_admin_api_key),
+    current_user=Depends(require_api_key),
 ):
-    workspace_id = enforce_workspace_access(current_user, request.query_params.get("workspace_id"))
+    workspace_id = enforce_workspace_access(
+        current_user,
+        request.query_params.get("workspace_id"),
+        minimum_role="owner",
+        capability_id="connectors.manage",
+    )
     return await actions.test_vault_credential(credential_id, workspace_id=workspace_id)
 
 
 async def export_vault_credentials(
     body: VaultExportRequest,
-    current_user=Depends(require_admin_api_key),
+    current_user=Depends(require_api_key),
 ):
-    body.workspace_id = enforce_workspace_access(current_user, body.workspace_id)
+    body.workspace_id = enforce_workspace_access(
+        current_user,
+        body.workspace_id,
+        minimum_role="owner",
+        capability_id="connectors.manage",
+    )
     return await core.export_vault_credentials(body)
 
 
 async def import_vault_credentials(
     body: VaultImportRequest,
-    current_user=Depends(require_admin_api_key),
+    current_user=Depends(require_api_key),
 ):
-    body.workspace_id = enforce_workspace_access(current_user, body.workspace_id)
+    body.workspace_id = enforce_workspace_access(
+        current_user,
+        body.workspace_id,
+        minimum_role="owner",
+        capability_id="connectors.manage",
+    )
     return await core.import_vault_credentials(body)
 
 

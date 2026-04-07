@@ -240,7 +240,9 @@ def emit_artifact_created_event(
 ) -> OutboxEvent:
     artifact_payload = dict(artifact) if isinstance(artifact, Mapping) else {}
     artifact_path = str(
-        artifact_payload.get("path")
+        artifact_payload.get("uri")
+        or artifact_payload.get("uri_or_path")
+        or artifact_payload.get("path")
         or artifact_payload.get("file_path")
         or artifact_payload.get("url")
         or f"index:{max(0, int(index))}"
@@ -258,6 +260,8 @@ def emit_artifact_created_event(
             "artifact_index": max(0, int(index)),
             "artifact_kind": artifact_kind,
             "artifact_path": artifact_path,
+            "artifact_uri": str(artifact_payload.get("uri") or artifact_payload.get("uri_or_path") or "").strip() or None,
+            "artifact_id": str(artifact_payload.get("artifact_id") or "").strip() or None,
             "artifact": artifact_payload,
             "emitted_at": _utc_now_iso(),
         },

@@ -11,7 +11,7 @@ import uuid
 from html import unescape
 from html.parser import HTMLParser
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 from urllib import request as urlrequest
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
@@ -49,6 +49,16 @@ try:
     from capability_registry import resolve_capability
 except ImportError:
     from server_modules.capability_registry import resolve_capability  # type: ignore[no-redef]
+
+try:
+    from computer_action_safety import evaluate_dangerous_computer_action_policy
+except ImportError:
+    from server_modules.computer_action_safety import evaluate_dangerous_computer_action_policy  # type: ignore[no-redef]
+
+try:
+    from artifact_service import store_artifact_bytes, store_artifact_file
+except ImportError:
+    from server_modules.artifact_service import store_artifact_bytes, store_artifact_file  # type: ignore[no-redef]
 
 try:
     from computer_control import (
@@ -189,6 +199,88 @@ class LocalExecutionPauseRequired(RuntimeError):
         self.browser_checkpoint = browser_checkpoint if isinstance(browser_checkpoint, dict) else {}
 
 
+def _local_execution_resume_checkpoint(run: Dict[str, Any], metadata: Dict[str, Any], operations: List[Dict[str, Any]]) -> Dict[str, Any]:
+    for candidate in (
+        run.get("local_execution_checkpoint"),
+        (run.get("result_data") if isinstance(run.get("result_data"), dict) else {}).get("local_execution_checkpoint"),
+        metadata.get("local_execution_checkpoint"),
+    ):
+        if isinstance(candidate, dict) and candidate:
+            return dict(candidate)
+    if operations:
+        return {
+            "kind": "local_execution_v1",
+            "next_operation_index": 0,
+            "total_operations": len(operations),
+            "phase": "planned",
+            "mode": "observing",
+        }
+    return {}
+
+
+def _normalized_resume_operation_index(checkpoint: Dict[str, Any], operations: List[Dict[str, Any]]) -> int:
+    raw_value = checkpoint.get("next_operation_index") if isinstance(checkpoint, dict) else 0
+    try:
+        value = int(raw_value or 0)
+    except Exception:
+        value = 0
+    return max(0, min(value, len(operations)))
+
+
+def _local_execution_pause_result_data(
+    *,
+    summary: str,
+    pause_reason: str,
+    operations: List[Dict[str, Any]],
+    outputs_actions: List[Dict[str, Any]],
+    outputs_artifacts: List[Dict[str, Any]],
+    errors: List[Dict[str, Any]],
+    steps: List[Dict[str, Any]],
+    root: Path,
+    continue_on_error: bool,
+    checkpoint: Dict[str, Any],
+    manual_takeover: bool,
+    browser_checkpoint: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    payload: Dict[str, Any] = {
+        "pack_id": LOCAL_EXECUTION_PACK_ID,
+        "status": "waiting_for_input",
+        "summary": summary,
+        "pause_reason": pause_reason,
+        "resume_available": True,
+        "manual_takeover": manual_takeover,
+        "local_execution_checkpoint": checkpoint if isinstance(checkpoint, dict) and checkpoint else None,
+        "browser_checkpoint": browser_checkpoint if isinstance(browser_checkpoint, dict) and browser_checkpoint else None,
+        "inputs": {
+            "operations_requested": len(operations),
+            "local_root": str(root),
+            "continue_on_error": continue_on_error,
+        },
+        "outputs": {
+            "operations_requested": len(operations),
+            "operations_executed": len(outputs_actions),
+            "outbound_actions": 0,
+            "urgent_count": 1,
+            "steps": steps,
+            "actions": outputs_actions,
+            "artifacts": outputs_artifacts,
+            "errors": errors,
+        },
+        "next_steps": [
+            "Take over the machine and finish the manual step if needed.",
+            "Resume the same run to continue from the saved checkpoint.",
+        ],
+    }
+    return {key: value for key, value in payload.items() if value is not None}
+
+
+def _pause_requested_state(control_state_provider: Optional[Callable[[str], Dict[str, Any]]], run_id: str) -> Dict[str, Any]:
+    if not callable(control_state_provider):
+        return {}
+    state = control_state_provider(run_id)
+    return dict(state) if isinstance(state, dict) else {}
+
+
 class _LinkCollector(HTMLParser):
     def __init__(self) -> None:
         super().__init__()
@@ -246,6 +338,192 @@ def _relative_to_root(path: Path, root: Path) -> str:
         return path.resolve().relative_to(root.resolve()).as_posix()
     except Exception:
         return path.resolve().as_posix()
+
+
+def _artifact_machine_id(run: Dict[str, Any], metadata: Dict[str, Any]) -> Optional[str]:
+    context = run.get("context") if isinstance(run.get("context"), dict) else {}
+    context_metadata = context.get("metadata") if isinstance(context.get("metadata"), dict) else {}
+    for raw_value in (
+        metadata.get("machine_id"),
+        metadata.get("execution_target_machine_id"),
+        metadata.get("execution_target_preferred_runtime_id"),
+        run.get("machine_id"),
+        context_metadata.get("machine_id"),
+        context_metadata.get("execution_target_machine_id"),
+        context_metadata.get("execution_target_preferred_runtime_id"),
+    ):
+        token = str(raw_value or "").strip()
+        if token:
+            return token
+    return None
+
+
+def _artifact_retention_days(run: Dict[str, Any], metadata: Dict[str, Any]) -> Optional[int]:
+    context = run.get("context") if isinstance(run.get("context"), dict) else {}
+    context_metadata = context.get("metadata") if isinstance(context.get("metadata"), dict) else {}
+    for raw_value in (
+        metadata.get("artifact_retention_days"),
+        metadata.get("retention_days"),
+        context_metadata.get("artifact_retention_days"),
+        context_metadata.get("retention_days"),
+    ):
+        if isinstance(raw_value, int) and raw_value > 0:
+            return int(raw_value)
+    return None
+
+
+def _artifact_created_at(operation: Dict[str, Any]) -> Optional[str]:
+    for raw_value in (
+        operation.get("created_at"),
+        operation.get("completed_at"),
+        operation.get("updated_at"),
+        operation.get("__created_at__"),
+    ):
+        token = str(raw_value or "").strip()
+        if token:
+            return token
+    return None
+
+
+def _resolve_artifact_source_path(reference: str, root: Path) -> Optional[Path]:
+    token = str(reference or "").strip()
+    if not token:
+        return None
+    candidate = Path(token).expanduser()
+    if not candidate.is_absolute():
+        candidate = (root / candidate).resolve()
+    else:
+        candidate = candidate.resolve()
+    if candidate.exists() and candidate.is_file():
+        return candidate
+    return None
+
+
+def _artifact_tombstone_payload(artifact: Dict[str, Any], action: Dict[str, Any]) -> bytes:
+    payload = {
+        "kind": str(artifact.get("kind") or "artifact").strip() or "artifact",
+        "label": str(artifact.get("label") or "").strip() or "artifact",
+        "message": "Artifact source file was removed before durable storage.",
+        "deleted_path": str(artifact.get("file_path") or artifact.get("path") or "").strip() or None,
+        "tool": str(action.get("tool") or artifact.get("tool") or "").strip() or None,
+        "summary": str(action.get("summary") or "").strip() or None,
+    }
+    return json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8")
+
+
+def _artifact_step_identifiers(artifact: Dict[str, Any]) -> Tuple[Optional[int], Optional[int], Optional[str]]:
+    step_index = int(artifact.get("step_index")) if isinstance(artifact.get("step_index"), int) else None
+    step_number = int(artifact.get("step_number")) if isinstance(artifact.get("step_number"), int) else None
+    if step_number is None and step_index is not None:
+        step_number = step_index + 1
+    step_id = f"step:{step_number}" if step_number is not None else None
+    return step_index, step_number, step_id
+
+
+def _store_artifact_snapshot(
+    run: Dict[str, Any],
+    metadata: Dict[str, Any],
+    artifact: Dict[str, Any],
+    *,
+    root: Path,
+    action: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    file_reference = str(artifact.get("file_path") or artifact.get("path") or "").strip()
+    label = str(artifact.get("label") or Path(file_reference or "artifact.bin").name).strip() or "artifact.bin"
+    step_index, step_number, step_id = _artifact_step_identifiers(artifact)
+    record_metadata = {
+        "tool": str(artifact.get("tool") or (action or {}).get("tool") or "").strip() or None,
+        "source_kind": str(artifact.get("kind") or "artifact").strip() or "artifact",
+        "action_summary": str((action or {}).get("summary") or "").strip() or None,
+    }
+    record_metadata = {key: value for key, value in record_metadata.items() if value is not None}
+    source_path = _resolve_artifact_source_path(file_reference, root)
+    if source_path is not None:
+        stored = store_artifact_file(
+            source_path,
+            run_id=str(run.get("run_id") or "").strip(),
+            kind=str(artifact.get("kind") or "artifact").strip() or "artifact",
+            label=label,
+            machine_id=_artifact_machine_id(run, metadata),
+            step_id=f"{str(run.get('run_id') or '').strip()}:{step_id}" if step_id else None,
+            step_index=step_index,
+            step_number=step_number,
+            retention_days=_artifact_retention_days(run, metadata),
+            metadata=record_metadata,
+            created_at=_artifact_created_at(artifact),
+        )
+    else:
+        stored = store_artifact_bytes(
+            _artifact_tombstone_payload(artifact, action or {}),
+            run_id=str(run.get("run_id") or "").strip(),
+            kind=str(artifact.get("kind") or "artifact").strip() or "artifact",
+            file_name=f"{Path(label).stem or 'artifact'}-record.json",
+            label=f"{Path(label).stem or 'artifact'}-record.json",
+            machine_id=_artifact_machine_id(run, metadata),
+            step_id=f"{str(run.get('run_id') or '').strip()}:{step_id}" if step_id else None,
+            step_index=step_index,
+            step_number=step_number,
+            content_type="application/json",
+            retention_days=_artifact_retention_days(run, metadata),
+            metadata=record_metadata,
+            created_at=_artifact_created_at(artifact),
+        )
+    payload = stored.as_payload()
+    if artifact.get("tool"):
+        payload["tool"] = artifact.get("tool")
+    return payload
+
+
+def _rewrite_action_artifact_references(action: Dict[str, Any], artifact_uri_by_source: Dict[str, str]) -> Dict[str, Any]:
+    if not artifact_uri_by_source:
+        return action
+    rewritten = dict(action)
+    for key in ("file_path", "report_file_path", "html_file_path"):
+        value = str(rewritten.get(key) or "").strip()
+        if value and value in artifact_uri_by_source:
+            rewritten[key] = artifact_uri_by_source[value]
+    downloads = rewritten.get("downloads")
+    if isinstance(downloads, list):
+        next_downloads: List[Dict[str, Any]] = []
+        for item in downloads:
+            if not isinstance(item, dict):
+                next_downloads.append(item)
+                continue
+            updated = dict(item)
+            file_value = str(updated.get("file_path") or "").strip()
+            if file_value and file_value in artifact_uri_by_source:
+                updated["file_path"] = artifact_uri_by_source[file_value]
+            next_downloads.append(updated)
+        rewritten["downloads"] = next_downloads
+    if str(rewritten.get("tool") or "").strip() == "screenshot.capture":
+        path_value = str(rewritten.get("path") or "").strip()
+        if path_value and path_value in artifact_uri_by_source:
+            rewritten["path"] = artifact_uri_by_source[path_value]
+    return rewritten
+
+
+def _canonicalize_operation_artifacts(
+    run: Dict[str, Any],
+    metadata: Dict[str, Any],
+    artifacts: List[Dict[str, Any]],
+    *,
+    root: Path,
+    action: Optional[Dict[str, Any]] = None,
+) -> Tuple[List[Dict[str, Any]], Dict[str, str]]:
+    canonical: List[Dict[str, Any]] = []
+    artifact_uri_by_source: Dict[str, str] = {}
+    for artifact in artifacts:
+        if not isinstance(artifact, dict):
+            continue
+        source_reference = str(artifact.get("file_path") or artifact.get("path") or "").strip()
+        if source_reference.startswith(("http://", "https://")):
+            canonical.append(dict(artifact))
+            continue
+        payload = _store_artifact_snapshot(run, metadata, artifact, root=root, action=action)
+        canonical.append(payload)
+        if source_reference:
+            artifact_uri_by_source[source_reference] = str(payload.get("uri") or payload.get("file_path") or "").strip()
+    return canonical, artifact_uri_by_source
 
 
 def _strip_html_to_text(raw_html: str) -> str:
@@ -321,7 +599,7 @@ def _browser_download_dir(run_id: str, op_index: int, artifacts_root: Path) -> P
 
 
 def _browser_execution_binding(project_root: Path, browser_plan_hash: str, session_profile: str) -> Dict[str, Any]:
-    argv = [sys.executable, "-m", "server_modules.browser_engine"]
+    argv = [sys.executable, "-m", "server_modules.execution_router"]
     cwd = str(project_root.resolve())
     return build_local_operator_execution_binding(
         argv=argv,
@@ -372,8 +650,9 @@ def _run_browser_capture_task(
     type_selector: str = "",
     type_text: str = "",
     timeout_seconds: int = 45,
+    pause_requested_fn: Optional[Callable[[], Dict[str, Any]]] = None,
 ) -> Dict[str, Any]:
-    from server_modules.execution_router import enforce_browser_execution_gate, get_browser_engine
+    from server_modules.execution_router import enforce_browser_execution_gate, get_browser_adapter
 
     project_root = _project_root()
     enforce_browser_execution_gate(
@@ -399,7 +678,7 @@ def _run_browser_capture_task(
         normalized_actions.append({"action": "click", "selector": click_selector})
 
     async def _capture() -> Dict[str, Any]:
-        engine = get_browser_engine(
+        engine = get_browser_adapter(
             {
                 "execution_target_selected": "local_companion",
                 "browser_automation_policy": {
@@ -420,14 +699,20 @@ def _run_browser_capture_task(
         next_action_index = max(0, int(resume_from_action_index or 0))
 
         for index, action in enumerate(normalized_actions[next_action_index:], start=next_action_index):
+            control_state = pause_requested_fn() if callable(pause_requested_fn) else {}
+            if bool(control_state.get("pause_requested")):
+                paused = True
+                pause_reason = str(control_state.get("wait_reason") or "manual_takeover_requested").strip() or "manual_takeover_requested"
+                pause_label = "Human now has control"
+                next_action_index = index
+                break
             action_name = _normalize_action_id(action.get("action"))
             selector = str(action.get("selector") or "").strip()
             frame = str(action.get("frame") or "").strip()
             label = str(action.get("label") or "").strip()
             tab_value = str(action.get("tab") or "").strip()
             if action_name == "wait":
-                page = await engine._active_page()
-                await page.wait_for_selector(selector, timeout=max(1000, int(action.get("ms") or timeout_seconds * 1000)))
+                await engine.wait_for_selector(selector, timeout_ms=max(1000, int(action.get("ms") or timeout_seconds * 1000)))
                 action_results.append({"action": "wait", "selector": selector, "frame": frame, "tab": tab_value, "label": label})
             elif action_name == "type":
                 result = await engine.fill(selector, str(action.get("text") or ""))
@@ -475,22 +760,7 @@ def _run_browser_capture_task(
         shot_path = await engine.screenshot()
         screenshot_target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(shot_path, screenshot_target)
-        tab_snapshots: List[Dict[str, Any]] = []
-        for tab_id, page in list(engine._tabs.items()):
-            if page is None or page.is_closed():
-                continue
-            try:
-                title = await page.title()
-            except Exception:
-                title = ""
-            tab_snapshots.append(
-                {
-                    "tabId": str(tab_id),
-                    "url": str(page.url or "").strip(),
-                    "title": title,
-                    "active": tab_id == engine._active_tab_id,
-                }
-            )
+        tab_snapshots = await engine.list_tabs()
         checkpoint_payload = {
             "current_url": state.get("url"),
             "next_action_index": next_action_index,
@@ -652,7 +922,15 @@ def _browser_policy_gate(operation: Dict[str, Any], session_profile: str, browse
             raise RuntimeError("Browser execution plan drifted after approval.")
 
 
-def _run_browser_operation(run_id: str, op_index: int, operation: Dict[str, Any], root: Path, artifacts_root: Path) -> Tuple[Dict[str, Any], List[Dict[str, Any]]]:
+def _run_browser_operation(
+    run_id: str,
+    op_index: int,
+    operation: Dict[str, Any],
+    root: Path,
+    artifacts_root: Path,
+    *,
+    pause_requested_fn: Optional[Callable[[], Dict[str, Any]]] = None,
+) -> Tuple[Dict[str, Any], List[Dict[str, Any]]]:
     mode = _normalize_action_id(operation.get("mode") or "extract_text")
     if mode not in {"extract_text", "extract_links", "save_html", "capture_page"}:
         raise RuntimeError("Browser mode must be extract_text, extract_links, save_html, or capture_page.")
@@ -701,6 +979,7 @@ def _run_browser_operation(run_id: str, op_index: int, operation: Dict[str, Any]
             expected_execution_binding=expected_execution_binding,
             browser_plan_hash=current_plan_hash,
             resume_from_action_index=resume_from_action_index,
+            pause_requested_fn=pause_requested_fn,
         )
         links = capture_result.get("links") if isinstance(capture_result.get("links"), list) else []
         downloads = capture_result.get("downloads") if isinstance(capture_result.get("downloads"), list) else []
@@ -1048,10 +1327,11 @@ def _match_allowed_operation_command(operation: Dict[str, Any]) -> Tuple[List[st
     return tokens, matched_prefix, display
 
 
-def _policy_gate(metadata: Dict[str, Any], requested_tools: List[str]) -> None:
+def _policy_gate(metadata: Dict[str, Any], operations: List[Dict[str, Any]]) -> None:
     precheck = metadata.get("tool_policy_precheck") if isinstance(metadata.get("tool_policy_precheck"), dict) else {}
     items = precheck.get("items") if isinstance(precheck.get("items"), list) else []
     decisions: Dict[str, str] = {}
+    labels: Dict[str, str] = {}
     for item in items:
         if not isinstance(item, dict):
             continue
@@ -1059,16 +1339,64 @@ def _policy_gate(metadata: Dict[str, Any], requested_tools: List[str]) -> None:
         decision = str(item.get("decision") or "").strip().lower()
         if tool_id and decision:
             decisions[tool_id] = decision
+            explicit_label = str(item.get("approval_label") or "").strip()
+            if explicit_label:
+                labels[tool_id] = explicit_label
 
-    blocked = sorted({tool for tool in requested_tools if decisions.get(tool) == "blocked"})
+    requested_entries: List[Tuple[str, str]] = []
+    dynamic_blocked: List[str] = []
+    dynamic_approval: List[str] = []
+    for operation in operations:
+        if not isinstance(operation, dict):
+            continue
+        generic_tool_id = _normalize_action_id(operation.get("tool") or operation.get("action"))
+        capability_id = _operation_capability_id(operation, generic_tool_id)
+        primary_tool_id = capability_id or generic_tool_id
+        if primary_tool_id:
+            requested_entries.append((primary_tool_id, generic_tool_id))
+        if not primary_tool_id or decisions.get(primary_tool_id) or decisions.get(generic_tool_id):
+            continue
+        dynamic = evaluate_dangerous_computer_action_policy(
+            operation,
+            metadata=metadata,
+            capability_id=primary_tool_id,
+            policy_mode=str(metadata.get("policy_mode") or "").strip().lower(),
+            target=str(metadata.get("execution_target_selected") or metadata.get("execution_target") or "").strip().lower(),
+        )
+        dynamic_decision = str(dynamic.get("execution_decision") or dynamic.get("decision") or "").strip().lower()
+        dynamic_labels = list(dynamic.get("dangerous_action_labels") or [])
+        if dynamic_labels:
+            labels[primary_tool_id] = ", ".join(dynamic_labels)
+        if dynamic_decision == "deny":
+            dynamic_blocked.append(primary_tool_id)
+        elif dynamic_decision == "require_confirmation":
+            dynamic_approval.append(primary_tool_id)
+
+    blocked = sorted(
+        {
+            primary
+            for primary, fallback in requested_entries
+            if decisions.get(primary) == "blocked" or (fallback and decisions.get(fallback) == "blocked")
+        }
+        | set(dynamic_blocked)
+    )
     if blocked:
-        raise RuntimeError(f"Local execution blocked by safety policy: {', '.join(blocked)}.")
+        blocked_labels = [labels.get(tool) or tool for tool in blocked]
+        raise RuntimeError(f"Local execution blocked by safety policy: {', '.join(blocked_labels)}.")
 
-    approval = sorted({tool for tool in requested_tools if decisions.get(tool) == "approval_required"})
+    approval = sorted(
+        {
+            primary
+            for primary, fallback in requested_entries
+            if decisions.get(primary) == "approval_required" or (fallback and decisions.get(fallback) == "approval_required")
+        }
+        | set(dynamic_approval)
+    )
     if approval:
+        approval_labels = [labels.get(tool) or tool for tool in approval]
         raise RuntimeError(
             "Local execution requires approval for: "
-            + ", ".join(approval)
+            + ", ".join(approval_labels)
             + ". Local companion V1 does not auto-execute approval-gated tools."
         )
 
@@ -1342,7 +1670,15 @@ def _screenshot_command(target: Path) -> List[str]:
     return screenshot_command(target)
 
 
-def _run_screenshot_operation(run_id: str, op_index: int, operation: Dict[str, Any], root: Path, artifacts_root: Path) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+def _run_screenshot_operation(
+    run_id: str,
+    op_index: int,
+    operation: Dict[str, Any],
+    root: Path,
+    artifacts_root: Path,
+    *,
+    continue_allowed: Optional[Callable[[], Dict[str, Any]]] = None,
+) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     capability = str(operation.get("capability") or "").strip()
     if capability:
         if capability.lower() != "screenshot.capture":
@@ -1355,6 +1691,8 @@ def _run_screenshot_operation(run_id: str, op_index: int, operation: Dict[str, A
         shot_dir = artifacts_root / "screenshots"
         shot_dir.mkdir(parents=True, exist_ok=True)
         target = (shot_dir / f"{run_id}-shot-{op_index + 1}.png").resolve()
+    if callable(continue_allowed):
+        continue_allowed()
     capture_result = capture_screenshot(
         monitor=str(operation.get("monitor") or "primary").strip() or "primary",
         region=operation.get("region"),
@@ -1407,7 +1745,12 @@ def _run_screenshot_operation(run_id: str, op_index: int, operation: Dict[str, A
     return action, artifact
 
 
-def _run_computer_control_operation(op_index: int, operation: Dict[str, Any]) -> Tuple[Dict[str, Any], Optional[Dict[str, Any]]]:
+def _run_computer_control_operation(
+    op_index: int,
+    operation: Dict[str, Any],
+    *,
+    continue_allowed: Optional[Callable[[], Dict[str, Any]]] = None,
+) -> Tuple[Dict[str, Any], Optional[Dict[str, Any]]]:
     action_name = _normalize_action_id(operation.get("action"))
     if not action_name:
         raise RuntimeError("Computer control action is required.")
@@ -1422,6 +1765,8 @@ def _run_computer_control_operation(op_index: int, operation: Dict[str, Any]) ->
         "action": "computer_control",
         "computer_action": action_name,
     }
+    if callable(continue_allowed):
+        continue_allowed()
 
     if action_name == "ocr":
         text = screen_ocr(region=operation.get("region"))
@@ -1496,25 +1841,139 @@ def _operation_risk_level(operation: Dict[str, Any], tool_id: str) -> str:
     return str(ACTION_RISK_LEVELS.get(tool_id or "", "medium")).strip() or "medium"
 
 
-def build_local_execution_pack_result(run: Dict[str, Any], metadata: Dict[str, Any], pack_inputs: Dict[str, Any]) -> Tuple[str, Dict[str, Any]]:
+def _compact_computer_action_detail(action: Dict[str, Any]) -> Optional[str]:
+    for value in (
+        action.get("summary"),
+        action.get("text_preview"),
+        action.get("output_preview"),
+        action.get("title"),
+        action.get("url"),
+        action.get("file_path"),
+    ):
+        text = str(value or "").strip()
+        if text:
+            return _bounded_text(text, 240)
+    return None
+
+
+def _live_computer_action_payload(
+    *,
+    tool_id: str,
+    step_index: int,
+    step_total: int,
+    label: str,
+    phase: str,
+    mode: str,
+    action: Optional[Dict[str, Any]] = None,
+    operation: Optional[Dict[str, Any]] = None,
+    success: Optional[bool] = None,
+    error: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    if tool_id not in {"browser_automation.interactive", "screenshot.capture", "computer_control"}:
+        return None
+    action_row = action if isinstance(action, dict) else {}
+    operation_row = operation if isinstance(operation, dict) else {}
+    raw_action_type = (
+        action_row.get("computer_action")
+        or action_row.get("mode")
+        or action_row.get("action")
+        or operation_row.get("action")
+        or tool_id
+    )
+    text_summary = str(action_row.get("text_preview") or operation_row.get("text") or "").strip()
+    payload = {
+        "schema": "empyralis.computer_action.v1",
+        "mode": str(mode or "acting").strip().lower() or "acting",
+        "phase": str(phase or "completed").strip().lower() or "completed",
+        "step_number": int(step_index) + 1,
+        "step_total": max(1, int(step_total or 1)),
+        "tool": tool_id,
+        "action_type": str(raw_action_type or tool_id).strip().lower() or tool_id,
+        "label": str(label or "Computer action").strip() or "Computer action",
+        "reason": str(operation_row.get("summary") or label or "").strip() or None,
+        "detail": _compact_computer_action_detail(action_row),
+        "status": str(action_row.get("status") or "").strip().lower() or None,
+        "success": success,
+        "x": action_row.get("x") if isinstance(action_row.get("x"), (int, float)) else operation_row.get("x"),
+        "y": action_row.get("y") if isinstance(action_row.get("y"), (int, float)) else operation_row.get("y"),
+        "text_summary": _bounded_text(text_summary, 160) if text_summary else None,
+        "file_path": str(action_row.get("file_path") or "").strip() or None,
+        "url": str(action_row.get("url") or operation_row.get("url") or "").strip() or None,
+        "error": _bounded_text(str(error or "").strip(), 240) if str(error or "").strip() else None,
+    }
+    return {key: value for key, value in payload.items() if value is not None}
+
+
+def build_local_execution_pack_result(
+    run: Dict[str, Any],
+    metadata: Dict[str, Any],
+    pack_inputs: Dict[str, Any],
+    *,
+    progress_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
+    control_state_provider: Optional[Callable[[str], Dict[str, Any]]] = None,
+) -> Tuple[str, Dict[str, Any]]:
     run_id = str(run.get("run_id") or uuid.uuid4()).strip()
     root = _local_execution_root()
     artifacts_root = _artifact_root(root)
     operations, continue_on_error = _parse_operations(pack_inputs, metadata)
-    requested_tools = [_normalize_action_id(item.get("tool") or item.get("action")) for item in operations]
-    requested_tools = [tool for tool in requested_tools if tool]
-    _policy_gate(metadata, requested_tools)
+    resume_checkpoint = _local_execution_resume_checkpoint(run, metadata, operations)
+    resume_from_operation_index = _normalized_resume_operation_index(resume_checkpoint, operations)
+    _policy_gate(metadata, operations)
 
     outputs_actions: List[Dict[str, Any]] = []
     outputs_artifacts: List[Dict[str, Any]] = []
     errors: List[Dict[str, Any]] = []
     steps: List[Dict[str, Any]] = []
 
-    for index, operation in enumerate(operations):
+    def _control_state() -> Dict[str, Any]:
+        return _pause_requested_state(control_state_provider, run_id)
+
+    def _continue_allowed(next_operation_index: int, summary_label: str, *, browser_checkpoint: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        state = _control_state()
+        if not bool(state.get("pause_requested")):
+            return state
+        checkpoint: Dict[str, Any] = dict(resume_checkpoint) if isinstance(resume_checkpoint, dict) and resume_checkpoint else {}
+        checkpoint.update(
+            {
+                "kind": "local_execution_v1",
+                "next_operation_index": max(0, min(int(next_operation_index), len(operations))),
+                "total_operations": len(operations),
+                "phase": "paused",
+                "mode": "takeover" if bool(state.get("manual_takeover")) else "paused",
+                "current_label": summary_label,
+            }
+        )
+        pause_reason = str(state.get("wait_reason") or "manual_takeover_requested").strip() or "manual_takeover_requested"
+        summary = (
+            "Human now has control. AI execution is paused."
+            if bool(state.get("manual_takeover"))
+            else "Execution paused while waiting for human input."
+        )
+        raise LocalExecutionPauseRequired(
+            summary,
+            _local_execution_pause_result_data(
+                summary=summary,
+                pause_reason=pause_reason,
+                operations=operations,
+                outputs_actions=outputs_actions,
+                outputs_artifacts=outputs_artifacts,
+                errors=errors,
+                steps=steps,
+                root=root,
+                continue_on_error=continue_on_error,
+                checkpoint=checkpoint,
+                manual_takeover=bool(state.get("manual_takeover")),
+                browser_checkpoint=browser_checkpoint,
+            ),
+            browser_checkpoint=browser_checkpoint,
+        )
+
+    for index, operation in enumerate(operations[resume_from_operation_index:], start=resume_from_operation_index):
         operation_row = dict(operation)
         operation_row["__step_index__"] = index
         operation_row["__execution_target__"] = metadata.get("execution_target") or "local_companion"
         operation_row["__metadata__"] = metadata
+        operation_row["__pause_requested_fn__"] = _control_state
         operation_row["__browser_checkpoint__"] = (
             run.get("browser_checkpoint")
             if isinstance(run.get("browser_checkpoint"), dict)
@@ -1525,8 +1984,28 @@ def build_local_execution_pack_result(run: Dict[str, Any], metadata: Dict[str, A
         tool_id = _normalize_action_id(operation_row.get("tool") or operation_row.get("action"))
         summary_label = _operation_summary(operation_row, index)
         try:
+            _continue_allowed(index, summary_label)
             artifacts: List[Dict[str, Any]] = []
             artifact: Optional[Dict[str, Any]] = None
+            planned_payload = _live_computer_action_payload(
+                tool_id=tool_id,
+                step_index=index,
+                step_total=len(operations),
+                label=summary_label,
+                phase="planned",
+                mode="acting",
+                operation=operation_row,
+                success=None,
+            )
+            if planned_payload and callable(progress_callback):
+                progress_callback(
+                    {
+                        "event": "computer_action",
+                        "message": f"Step {index + 1}/{len(operations)}: {summary_label}",
+                        "data": planned_payload,
+                        "level": "info",
+                    }
+                )
             tracer = get_tracer("scripts.orion_local_worker_execution")
             with tracer.start_as_current_span("local_worker.execute_tool") as span:
                 set_span_attributes(
@@ -1556,14 +2035,45 @@ def build_local_execution_pack_result(run: Dict[str, Any], metadata: Dict[str, A
                 elif tool_id == "filesystem.read_write":
                     action, artifact = _run_file_operation(operation_row, root, metadata)
                 elif tool_id == "screenshot.capture":
-                    action, artifact = _run_screenshot_operation(run_id, index, operation_row, root, artifacts_root)
+                    action, artifact = _run_screenshot_operation(
+                        run_id,
+                        index,
+                        operation_row,
+                        root,
+                        artifacts_root,
+                        continue_allowed=lambda: _continue_allowed(index, summary_label),
+                    )
                     artifacts = [artifact]
                 elif tool_id == "browser_automation.interactive":
-                    action, artifacts = _run_browser_operation(run_id, index, operation_row, root, artifacts_root)
+                    action, artifacts = _run_browser_operation(
+                        run_id,
+                        index,
+                        operation_row,
+                        root,
+                        artifacts_root,
+                        pause_requested_fn=_control_state,
+                    )
                 elif tool_id == "computer_control":
-                    action, artifact = _run_computer_control_operation(index, operation_row)
+                    action, artifact = _run_computer_control_operation(
+                        index,
+                        operation_row,
+                        continue_allowed=lambda: _continue_allowed(index, summary_label),
+                    )
                 else:
                     raise RuntimeError(f"Unsupported local execution tool '{tool_id or 'unknown'}'.")
+                transient_artifacts = artifacts if tool_id == "browser_automation.interactive" else ([artifact] if isinstance(artifact, dict) else [])
+                canonical_artifacts, artifact_uri_by_source = _canonicalize_operation_artifacts(
+                    run,
+                    metadata,
+                    transient_artifacts,
+                    root=root,
+                    action=action,
+                )
+                action = _rewrite_action_artifact_references(action, artifact_uri_by_source)
+                if tool_id == "browser_automation.interactive":
+                    artifacts = canonical_artifacts
+                else:
+                    artifact = canonical_artifacts[0] if canonical_artifacts else None
                 set_span_attributes(
                     span,
                     {
@@ -1572,6 +2082,26 @@ def build_local_execution_pack_result(run: Dict[str, Any], metadata: Dict[str, A
                     },
                 )
             outputs_actions.append(action)
+            completed_payload = _live_computer_action_payload(
+                tool_id=tool_id,
+                step_index=index,
+                step_total=len(operations),
+                label=str(action.get("summary") or summary_label).strip() or summary_label,
+                phase="completed",
+                mode="acting",
+                action=action,
+                operation=operation_row,
+                success=True,
+            )
+            if completed_payload and callable(progress_callback):
+                progress_callback(
+                    {
+                        "event": "computer_action",
+                        "message": f"Completed: {completed_payload.get('label')}",
+                        "data": completed_payload,
+                        "level": "info",
+                    }
+                )
             if tool_id == "browser_automation.interactive":
                 outputs_artifacts.extend(artifacts)
             elif isinstance(artifact, dict):
@@ -1595,33 +2125,50 @@ def build_local_execution_pack_result(run: Dict[str, Any], metadata: Dict[str, A
                 }
             )
             if tool_id == "browser_automation.interactive" and str(action.get("status") or "").strip().lower() == "waiting_for_input":
+                paused_payload = _live_computer_action_payload(
+                    tool_id=tool_id,
+                    step_index=index,
+                    step_total=len(operations),
+                    label=str(action.get("pause_label") or summary_label).strip() or summary_label,
+                    phase="paused",
+                    mode="paused",
+                    action=action,
+                    operation=operation_row,
+                    success=False,
+                    error=str(action.get("pause_reason") or "").strip() or None,
+                )
+                if paused_payload and callable(progress_callback):
+                    progress_callback(
+                        {
+                            "event": "computer_action",
+                            "message": f"Paused: {paused_payload.get('label')}",
+                            "data": paused_payload,
+                            "level": "warn",
+                        }
+                    )
                 summary = str(action.get("pause_label") or "Browser operator paused for human unblock.").strip()
-                data = {
-                    "pack_id": LOCAL_EXECUTION_PACK_ID,
-                    "status": "waiting_for_input",
-                    "summary": summary,
-                    "pause_reason": action.get("pause_reason") or "human_unblock_required",
-                    "browser_checkpoint": action.get("browser_checkpoint") if isinstance(action.get("browser_checkpoint"), dict) else None,
-                    "inputs": {
-                        "operations_requested": len(operations),
-                        "local_root": str(root),
-                        "continue_on_error": continue_on_error,
-                    },
-                    "outputs": {
-                        "operations_requested": len(operations),
-                        "operations_executed": len(outputs_actions),
-                        "outbound_actions": 0,
-                        "urgent_count": 1,
-                        "steps": steps,
-                        "actions": outputs_actions,
-                        "artifacts": outputs_artifacts,
-                        "errors": errors,
-                    },
-                    "next_steps": [
-                        "Complete the required login or CAPTCHA on the laptop.",
-                        "Resume the same run from the saved browser checkpoint.",
-                    ],
+                checkpoint_payload = {
+                    "kind": "local_execution_v1",
+                    "next_operation_index": index,
+                    "total_operations": len(operations),
+                    "phase": "paused",
+                    "mode": "paused",
+                    "current_label": summary,
                 }
+                data = _local_execution_pause_result_data(
+                    summary=summary,
+                    pause_reason=str(action.get("pause_reason") or "human_unblock_required").strip() or "human_unblock_required",
+                    operations=operations,
+                    outputs_actions=outputs_actions,
+                    outputs_artifacts=outputs_artifacts,
+                    errors=errors,
+                    steps=steps,
+                    root=root,
+                    continue_on_error=continue_on_error,
+                    checkpoint=checkpoint_payload,
+                    manual_takeover=False,
+                    browser_checkpoint=(action.get("browser_checkpoint") if isinstance(action.get("browser_checkpoint"), dict) else None),
+                )
                 raise LocalExecutionPauseRequired(
                     summary,
                     data,
@@ -1630,6 +2177,26 @@ def build_local_execution_pack_result(run: Dict[str, Any], metadata: Dict[str, A
         except Exception as exc:
             if isinstance(exc, LocalExecutionPauseRequired):
                 raise
+            failed_payload = _live_computer_action_payload(
+                tool_id=tool_id,
+                step_index=index,
+                step_total=len(operations),
+                label=summary_label,
+                phase="failed",
+                mode="acting",
+                operation=operation_row,
+                success=False,
+                error=str(exc),
+            )
+            if failed_payload and callable(progress_callback):
+                progress_callback(
+                    {
+                        "event": "computer_action",
+                        "message": f"Failed: {summary_label}",
+                        "data": failed_payload,
+                        "level": "error",
+                    }
+                )
             sentry_sdk.capture_exception(exc)
             error_row = {
                 "tool": tool_id or "unknown",

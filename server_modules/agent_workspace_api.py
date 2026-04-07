@@ -12,6 +12,7 @@ from urllib.parse import urlencode
 from scripts.platform_execution import current_platform_context, supported_device_actions
 from server_modules.api_contract import ApiArtifactListResponse, ApiArtifactPreviewResponse
 from server_modules.auth import enforce_workspace_access
+from server_modules import artifact_service
 from server_modules import run_state_repository
 from server_modules.run_service import RunExecutionServices, build_server_system_run_execution_services
 from server_modules.schemas import DeviceExecuteRequest, WorkspaceFileDeleteRequest, WorkspaceFileWriteRequest
@@ -280,7 +281,7 @@ def _looks_like_workspace_path(value: str) -> bool:
     if any(char in text for char in ["\n", "\r", "\t"]):
         return False
     lowered = text.lower()
-    if lowered.startswith(("http://", "https://", "file://", "/", "./", "../", ".orion-")):
+    if lowered.startswith(("artifact://", "http://", "https://", "file://", "/", "./", "../", ".orion-")):
         return True
     for ext in AGENT_WORKSPACE_FILE_EXTENSIONS:
         if lowered.endswith(ext):
@@ -297,7 +298,7 @@ def _normalize_workspace_material_path(value: str) -> Optional[str]:
     if not text:
         return None
     lowered = text.lower()
-    if lowered.startswith(("http://", "https://", "file://")):
+    if lowered.startswith(("artifact://", "http://", "https://", "file://")):
         return text
     cwd = Path.cwd()
     try:
@@ -379,7 +380,11 @@ def _ensure_workspace_path_allowed(path_value: str) -> None:
 
 def _resolve_workspace_material_target(normalized_path: str) -> Optional[Path]:
     target_value = str(normalized_path or "").strip()
-    if not target_value or target_value.lower().startswith(("http://", "https://", "file://")):
+    if not target_value:
+        return None
+    if artifact_service.is_artifact_uri(target_value):
+        return artifact_service.resolve_artifact_content_path(target_value)
+    if target_value.lower().startswith(("http://", "https://", "file://")):
         return None
     if _workspace_path_is_restricted(target_value):
         return None
@@ -404,6 +409,52 @@ def _resolve_workspace_material_target(normalized_path: str) -> Optional[Path]:
             if resolved.exists() and resolved.is_file():
                 return resolved
     return None
+
+
+def _workspace_artifact_payload_rows(value: Any, *, run_id: str, updated_at: Any) -> List[Dict[str, Any]]:
+    rows: List[Dict[str, Any]] = []
+    if isinstance(value, dict):
+        if artifact_service.is_canonical_artifact_payload(value):
+            record = artifact_service.load_artifact_metadata(artifact_service.canonical_artifact_reference(value) or "") or {}
+            merged = dict(record) if isinstance(record, dict) else {}
+            merged.update(dict(value))
+            location = str(
+                merged.get("uri")
+                or merged.get("uri_or_path")
+                or merged.get("file_path")
+                or merged.get("path")
+                or ""
+            ).strip()
+            if location:
+                rows.append(
+                    {
+                        "artifact_id": str(merged.get("artifact_id") or "").strip() or None,
+                        "uri_or_path": location,
+                        "label": merged.get("label") or Path(location).name or location[:120],
+                        "kind": str(merged.get("kind") or "artifact").strip().lower() or "artifact",
+                        "source": "explicit",
+                        "run_id": run_id,
+                        "updated_at": merged.get("created_at") or updated_at,
+                        "created_at": merged.get("created_at") or updated_at,
+                        "content_type": merged.get("content_type") or merged.get("mime_type"),
+                        "byte_size": merged.get("byte_size"),
+                        "step_id": merged.get("step_id"),
+                        "step_index": merged.get("step_index"),
+                        "step_number": merged.get("step_number"),
+                        "machine_id": merged.get("machine_id"),
+                        "storage_backend": merged.get("storage_backend"),
+                        "object_key": merged.get("object_key"),
+                        "retention": merged.get("retention") if isinstance(merged.get("retention"), dict) else {},
+                    }
+                )
+            return rows
+        for nested in value.values():
+            rows.extend(_workspace_artifact_payload_rows(nested, run_id=run_id, updated_at=updated_at))
+        return rows
+    if isinstance(value, list):
+        for nested in value:
+            rows.extend(_workspace_artifact_payload_rows(nested, run_id=run_id, updated_at=updated_at))
+    return rows
 
 
 def _workspace_artifact_preview_kind(path: Path, media_type: str) -> str:
@@ -575,6 +626,11 @@ def _git_diff_for_workspace_path(normalized_path: str) -> Tuple[str, str]:
 def _iter_workspace_material_values(value: Any, key_hint: str = "") -> List[Tuple[str, str]]:
     found: List[Tuple[str, str]] = []
     if isinstance(value, dict):
+        if artifact_service.is_canonical_artifact_payload(value):
+            reference = artifact_service.canonical_artifact_reference(value)
+            if reference:
+                found.append((reference, key_hint or "artifact.uri"))
+            return found
         for key, nested in value.items():
             next_hint = f"{key_hint}.{key}" if key_hint else str(key)
             found.extend(_iter_workspace_material_values(nested, next_hint))
@@ -620,21 +676,21 @@ def _append_workspace_material(
     run_id: str,
     updated_at: Optional[str],
     path_key: str,
-) -> None:
+) -> Optional[Dict[str, Any]]:
     key = (run_id, identifier)
     if key in seen:
-        return
+        return None
     seen.add(key)
-    bucket.append(
-        {
-            path_key: identifier,
-            "label": label,
-            "kind": kind,
-            "source": source,
-            "run_id": run_id,
-            "updated_at": updated_at,
-        }
-    )
+    item = {
+        path_key: identifier,
+        "label": label,
+        "kind": kind,
+        "source": source,
+        "run_id": run_id,
+        "updated_at": updated_at,
+    }
+    bucket.append(item)
+    return item
 
 
 def _collect_workspace_materials_for_snapshot(
@@ -656,6 +712,45 @@ def _collect_workspace_materials_for_snapshot(
     for payload in sources:
         if payload is None:
             continue
+        for artifact_row in _workspace_artifact_payload_rows(payload, run_id=run_id, updated_at=updated_at):
+            if len(artifacts) >= artifact_limit:
+                break
+            identifier = str(artifact_row.get("uri_or_path") or "").strip()
+            if not identifier:
+                continue
+            artifact_payload = dict(artifact_row)
+            artifact_payload["label"] = artifact_row.get("label") or Path(identifier).name or identifier[:120]
+            artifact_payload["kind"] = artifact_row.get("kind") or "artifact"
+            artifact_payload["source"] = artifact_row.get("source") or "explicit"
+            artifact_payload["run_id"] = run_id
+            artifact_payload["updated_at"] = artifact_row.get("updated_at") or updated_at
+            appended = _append_workspace_material(
+                artifacts,
+                seen_artifacts,
+                identifier=identifier,
+                label=str(artifact_payload.get("label") or ""),
+                kind=str(artifact_payload.get("kind") or "artifact"),
+                source=str(artifact_payload.get("source") or "explicit"),
+                run_id=run_id,
+                updated_at=artifact_payload.get("updated_at"),
+                path_key="uri_or_path",
+            )
+            if appended is not None:
+                appended.update(
+                    {
+                        "artifact_id": artifact_payload.get("artifact_id"),
+                        "content_type": artifact_payload.get("content_type"),
+                        "byte_size": artifact_payload.get("byte_size"),
+                        "created_at": artifact_payload.get("created_at"),
+                        "step_id": artifact_payload.get("step_id"),
+                        "step_index": artifact_payload.get("step_index"),
+                        "step_number": artifact_payload.get("step_number"),
+                        "machine_id": artifact_payload.get("machine_id"),
+                        "storage_backend": artifact_payload.get("storage_backend"),
+                        "object_key": artifact_payload.get("object_key"),
+                        "retention": artifact_payload.get("retention") if isinstance(artifact_payload.get("retention"), dict) else {},
+                    }
+                )
         for raw_value, key_hint in _iter_workspace_material_values(payload):
             normalized_value = _normalize_workspace_material_path(str(raw_value or ""))
             if not normalized_value:
@@ -1489,7 +1584,18 @@ def register_agent_workspace_routes(app) -> None:
                     "source": item.get("source") or "inferred",
                     "run_id": run_id or None,
                     "updated_at": item.get("updated_at") or run_snapshot.get("updated_at") or run_snapshot.get("created_at"),
+                    "created_at": item.get("created_at"),
                     "uri_or_path": location,
+                    "artifact_id": item.get("artifact_id"),
+                    "content_type": item.get("content_type"),
+                    "byte_size": item.get("byte_size"),
+                    "step_id": item.get("step_id"),
+                    "step_index": item.get("step_index"),
+                    "step_number": item.get("step_number"),
+                    "machine_id": item.get("machine_id"),
+                    "storage_backend": item.get("storage_backend"),
+                    "object_key": item.get("object_key"),
+                    "retention": item.get("retention") if isinstance(item.get("retention"), dict) else {},
                     "focus_target": "screenshots" if kind in {"screenshot", "image"} else "artifacts",
                     "agent_role": agent_role,
                     "agent_label": AGENT_WORKSPACE_LABELS.get(agent_role or "", agent_role) if agent_role else None,
@@ -1562,6 +1668,39 @@ def register_agent_workspace_routes(app) -> None:
         if not normalized_path:
             raise HTTPException(status_code=400, detail="path is required.")
 
+        artifact_metadata = artifact_service.load_artifact_metadata(normalized_path)
+        if artifact_metadata is not None:
+            target = artifact_service.resolve_artifact_content_path(normalized_path)
+            if target is None:
+                raise HTTPException(status_code=404, detail="Artifact content is unavailable for this canonical artifact.")
+            media_type = str(
+                artifact_metadata.get("content_type")
+                or artifact_metadata.get("mime_type")
+                or mimetypes.guess_type(str(target.name))[0]
+                or "application/octet-stream"
+            ).strip() or "application/octet-stream"
+            preview_kind = _workspace_artifact_preview_kind(target, media_type)
+            text_preview = _read_workspace_text_preview(target) if preview_kind == "text" else None
+            file_name = str(artifact_metadata.get("file_name") or artifact_metadata.get("label") or target.name).strip() or target.name
+            return {
+                "ok": True,
+                "path": normalized_path,
+                "kind": preview_kind,
+                "media_type": media_type,
+                "byte_size": int(artifact_metadata.get("byte_size") or target.stat().st_size),
+                "text_preview": text_preview,
+                "file_url": f"/artifacts/file?{urlencode({'path': normalized_path})}",
+                "download_url": f"/artifacts/content?{urlencode({'path': normalized_path})}",
+                "file_name": file_name,
+                "note": (
+                    "Image preview available from object storage."
+                    if preview_kind == "image"
+                    else "Text preview available from object storage."
+                    if preview_kind == "text"
+                    else "Binary artifact available from object storage."
+                ),
+            }
+
         lowered = normalized_path.lower()
         if lowered.startswith(("http://", "https://")):
             return {
@@ -1617,6 +1756,19 @@ def register_agent_workspace_routes(app) -> None:
         normalized_path = _normalize_workspace_material_path(path)
         if not normalized_path:
             raise HTTPException(status_code=400, detail="path is required.")
+        artifact_metadata = artifact_service.load_artifact_metadata(normalized_path)
+        if artifact_metadata is not None:
+            target = artifact_service.resolve_artifact_content_path(normalized_path)
+            if target is None:
+                raise HTTPException(status_code=404, detail="Artifact content is unavailable for this canonical artifact.")
+            media_type = str(
+                artifact_metadata.get("content_type")
+                or artifact_metadata.get("mime_type")
+                or mimetypes.guess_type(str(target.name))[0]
+                or "application/octet-stream"
+            ).strip() or "application/octet-stream"
+            filename = str(artifact_metadata.get("file_name") or artifact_metadata.get("label") or target.name).strip() or target.name
+            return FileResponse(path=str(target), media_type=media_type, filename=filename)
         if normalized_path.lower().startswith(("http://", "https://", "file://")):
             raise HTTPException(status_code=400, detail="Only local artifact files are supported.")
 

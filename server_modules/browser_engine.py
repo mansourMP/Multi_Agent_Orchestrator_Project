@@ -10,7 +10,10 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-# Python-owned browser automation adapter. Must only be called through the capability-gated execution router. Direct imports outside execution_router are forbidden.
+# Python-owned browser automation adapter. This is the permanent DOM-aware
+# browser/session exception boundary and must only be called through the
+# capability-gated execution router. Direct imports outside execution_router
+# are forbidden.
 
 
 def enforce_browser_automation_gate(
@@ -331,6 +334,14 @@ class BrowserEngine:
         await locator.click()
         return {"clicked": True, "element_text": text}
 
+    async def wait_for_selector(self, selector: str, timeout_ms: int = 45_000) -> Dict[str, Any]:
+        page = await self._active_page()
+        target = str(selector or "").strip()
+        if not target:
+            raise RuntimeError("Selector is required.")
+        await page.wait_for_selector(target, timeout=max(1000, int(timeout_ms or 45_000)))
+        return {"waited": True, "selector": target}
+
     async def fill(self, selector: str, value: str) -> Dict[str, Any]:
         page = await self._active_page()
         locator = await self._resolve_locator(page, selector)
@@ -424,6 +435,26 @@ class BrowserEngine:
             }))"""
         )
         return links if isinstance(links, list) else []
+
+    async def list_tabs(self) -> List[Dict[str, Any]]:
+        await self._ensure_started()
+        snapshots: List[Dict[str, Any]] = []
+        for tab_id, page in list(self._tabs.items()):
+            if page is None or page.is_closed():
+                continue
+            try:
+                title = await page.title()
+            except Exception:
+                title = ""
+            snapshots.append(
+                {
+                    "tabId": str(tab_id),
+                    "url": str(page.url or "").strip(),
+                    "title": title,
+                    "active": tab_id == self._active_tab_id,
+                }
+            )
+        return snapshots
 
     async def new_tab(self, url: Optional[str] = None) -> int:
         await self._ensure_started()

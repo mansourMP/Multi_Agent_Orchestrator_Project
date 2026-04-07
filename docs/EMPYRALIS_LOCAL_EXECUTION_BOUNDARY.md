@@ -16,17 +16,17 @@ This note records the current local-execution ownership boundary after the Rust-
 
 These capabilities execute through the Rust supervisor and are invoked from Python through [supervisor_client.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/supervisor_client.py) and [computer_control.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/computer_control.py).
 
-### Python still owns temporarily
+### Python permanent exception boundary
 
 - browser/session automation in [browser_engine.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/browser_engine.py)
 
-This remains Python-owned because the current implementation depends on Playwright session management and DOM-aware browser operations that have not yet been moved behind the Rust supervisor. Live browser execution is authorized only through [execution_router.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/execution_router.py), which performs capability and policy gating before delegating to the temporary adapter.
+This remains Python-owned because the active implementation depends on Playwright session management, authenticated profile persistence, downloads, PDFs, and DOM-aware browser operations. Live browser execution is authorized only through [execution_router.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/execution_router.py), which performs capability and policy gating before delegating to the browser adapter. This is the accepted permanent exception boundary for browser/session work.
 
-### Planned migration
+### Future reconsideration
 
-- move authenticated browser/session automation behind the Rust local supervisor or an equivalent Rust-owned trusted boundary
-- keep Python responsible for orchestration and planning, not raw local execution
-- remove the temporary Python browser adapter once the Rust path can preserve session persistence, capture, downloads, and DOM-aware interaction semantics
+- Python remains responsible for orchestrating DOM-aware browser/session work through the authorized adapter
+- Rust remains responsible for direct device control and local high-trust capability enforcement
+- a future Rust browser path is allowed only if it preserves session persistence, downloads, PDFs, and DOM-aware interaction semantics without weakening the current policy chokepoint
 
 ### Non-goals
 

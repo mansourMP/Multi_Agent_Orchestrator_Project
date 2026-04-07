@@ -75,6 +75,7 @@ Python owns:
 - `memory_service()`
 - `skills_service()`
 - `policy_service()`
+- browser/session automation through [server_modules/execution_router.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/execution_router.py) and [server_modules/browser_engine.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/browser_engine.py) as the permanent DOM-aware browser boundary
 - connector adapters
 - provider routing
 - artifact assembly
@@ -1286,15 +1287,16 @@ We must:
 
 This section records the remaining non-canonical edges that are accepted temporarily as of the current repo audit.
 
-They are not alternate architectures. They are bounded exceptions that must remain explicit until removed.
+They are not alternate architectures. They are explicit boundaries that must remain documented so the active platform shape is unambiguous.
 
-1. Browser/session automation is still Python-owned.
+1. Browser/session automation is intentionally Python-owned.
 
-   Accepted boundary:
+   Permanent boundary:
 
-   - [browser_engine.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/browser_engine.py) remains the temporary Playwright-based adapter
+   - [browser_engine.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/browser_engine.py) remains the Playwright-based DOM-aware browser adapter
    - [execution_router.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/execution_router.py) is the only authorized path into that adapter
    - Rust remains the owner of direct device control
+   - moving browser automation to Rust is optional future redesign work, not a requirement for canonical compliance
 
 2. Memory is canonically accessed through one facade but still split internally.
 

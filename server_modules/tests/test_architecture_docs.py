@@ -25,3 +25,12 @@ def test_root_compose_no_longer_requires_redis_service() -> None:
     text = DOCKER_COMPOSE.read_text(encoding="utf-8")
     assert "\n  redis:\n" not in text
     assert "\n      - redis\n" not in text
+
+
+def test_browser_boundary_is_documented_as_permanent_not_temporary() -> None:
+    canonical = CANONICAL_DOC.read_text(encoding="utf-8")
+    final_audit = FINAL_AUDIT_DOC.read_text(encoding="utf-8")
+
+    assert "intentionally Python-owned" in canonical
+    assert "temporary Playwright-based adapter" not in canonical
+    assert "browser automation is still temporarily Python-owned" not in final_audit.lower()

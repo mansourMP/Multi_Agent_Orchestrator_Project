@@ -41,6 +41,7 @@ class RuntimeEventsApiTests(unittest.TestCase):
         fake_server.CHANNEL_EVENTS = [
             {
                 "id": "evt-1",
+                "tenant_id": "default",
                 "workspace_id": "default",
                 "channel": "telegram",
                 "session_key": "chat-1",
@@ -61,6 +62,7 @@ class RuntimeEventsApiTests(unittest.TestCase):
         )
         fake_server._summarize_channel_sessions = lambda items, limit=None: [{"session_key": "chat-1"}]
         fake_server._iter_channel_events_stream = lambda **kwargs: iter([{"id": "evt-1"}])
+        current_user = {"auth_type": "api_key", "is_admin": False}
 
         previous_server = sys.modules.get("server")
         sys.modules["server"] = fake_server
@@ -70,18 +72,46 @@ class RuntimeEventsApiTests(unittest.TestCase):
 
             self.assertIn(("GET", "/notifications"), app.routes)
             self.assertIn(("POST", "/notifications"), app.routes)
-            payload = self._run_async(app.routes[("GET", "/notifications")](workspace_id="default"))
+            payload = self._run_async(
+                app.routes[("GET", "/notifications")](
+                    tenant_id="default",
+                    workspace_id="default",
+                    current_user=current_user,
+                )
+            )
             self.assertEqual(payload["count"], 1)
             self.assertEqual(payload["session_count"], 1)
             self.assertIsNone(payload["items"][0].get("read_at"))
 
-            marked = self._run_async(app.routes[("POST", "/notifications")]({"notification_ids": ["evt-1"]}))
+            marked = self._run_async(
+                app.routes[("POST", "/notifications")](
+                    {
+                        "notification_ids": ["evt-1"],
+                        "tenant_id": "default",
+                        "workspace_id": "default",
+                    },
+                    current_user=current_user,
+                )
+            )
             self.assertEqual(marked["marked_count"], 1)
 
-            next_payload = self._run_async(app.routes[("GET", "/notifications")](workspace_id="default"))
+            next_payload = self._run_async(
+                app.routes[("GET", "/notifications")](
+                    tenant_id="default",
+                    workspace_id="default",
+                    current_user=current_user,
+                )
+            )
             self.assertTrue(bool(next_payload["items"][0].get("read_at")))
 
-            stream_payload = self._run_async(app.routes[("GET", "/notifications")](workspace_id="default", stream=True))
+            stream_payload = self._run_async(
+                app.routes[("GET", "/notifications")](
+                    tenant_id="default",
+                    workspace_id="default",
+                    stream=True,
+                    current_user=current_user,
+                )
+            )
             self.assertIsInstance(stream_payload, _FakeEventSourceResponse)
             self.assertEqual(stream_payload.ping, 5)
         finally:

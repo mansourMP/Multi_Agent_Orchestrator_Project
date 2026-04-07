@@ -34,6 +34,8 @@ def register_inbox_routes(app) -> None:
     def _notification_payload(
         *,
         limit: int,
+        current_user: Any,
+        tenant_id: Optional[str] = None,
         workspace_id: Optional[str] = None,
         channel: Optional[str] = None,
         session_key: Optional[str] = None,
@@ -44,15 +46,27 @@ def register_inbox_routes(app) -> None:
         include_sessions: bool = True,
         session_limit: int = ORION_CHANNEL_SESSIONS_LIMIT,
     ) -> dict[str, Any]:
+        from server_modules.auth import allowed_workspace_ids, enforce_workspace_access
+
         safe_limit = max(1, min(limit, 500))
+        requested_workspace_id = (
+            enforce_workspace_access(current_user, workspace_id, tenant_id=tenant_id, minimum_role="viewer")
+            if workspace_id
+            else None
+        )
+        allowed_workspaces = allowed_workspace_ids(current_user)
         with CHANNEL_EVENTS_LOCK:
             items = list(CHANNEL_EVENTS)
         filtered = [
             item
             for item in items
+            if (not tenant_id or str(item.get("tenant_id") or "").strip() == str(tenant_id).strip())
+            and (not requested_workspace_id or str(item.get("workspace_id") or "").strip() == requested_workspace_id)
+            and (allowed_workspaces is None or str(item.get("workspace_id") or "").strip() in allowed_workspaces)
             if _channel_event_matches(
                 item=item,
-                workspace_id=workspace_id,
+                workspace_id=requested_workspace_id,
+                tenant_id=tenant_id,
                 channel=channel,
                 session_key=session_key,
                 direction=direction,
@@ -76,24 +90,38 @@ def register_inbox_routes(app) -> None:
 
     def _mark_notifications_read(
         *,
+        current_user: Any,
         notification_ids: Optional[List[str]] = None,
+        tenant_id: Optional[str] = None,
         workspace_id: Optional[str] = None,
         mark_all: bool = False,
     ) -> Dict[str, Any]:
+        from server_modules.auth import allowed_workspace_ids, enforce_workspace_access
+
         normalized_ids = [
             str(item or "").strip()
             for item in (notification_ids or [])
             if str(item or "").strip()
         ]
         target_ids: List[str] = []
+        requested_workspace_id = (
+            enforce_workspace_access(current_user, workspace_id, tenant_id=tenant_id, minimum_role="viewer")
+            if workspace_id
+            else None
+        )
+        allowed_workspaces = allowed_workspace_ids(current_user)
         if mark_all:
             with CHANNEL_EVENTS_LOCK:
                 items = list(CHANNEL_EVENTS)
             filtered = [
                 item for item in items
+                if (not tenant_id or str(item.get("tenant_id") or "").strip() == str(tenant_id).strip())
+                and (not requested_workspace_id or str(item.get("workspace_id") or "").strip() == requested_workspace_id)
+                and (allowed_workspaces is None or str(item.get("workspace_id") or "").strip() in allowed_workspaces)
                 if _channel_event_matches(
                     item=item,
-                    workspace_id=workspace_id,
+                    workspace_id=requested_workspace_id,
+                    tenant_id=tenant_id,
                     channel=None,
                     session_key=None,
                     direction=None,
@@ -127,6 +155,8 @@ def register_inbox_routes(app) -> None:
 
     def _notification_stream_response(
         *,
+        allowed_workspaces: Optional[set[str]] = None,
+        tenant_id: Optional[str] = None,
         workspace_id: Optional[str] = None,
         channel: Optional[str] = None,
         session_key: Optional[str] = None,
@@ -145,7 +175,9 @@ def register_inbox_routes(app) -> None:
         safe_heartbeat = max(1.0, min(float(heartbeat_seconds), 60.0))
         return EventSourceResponse(
             _iter_channel_events_stream(
+                allowed_workspace_ids=allowed_workspaces,
                 workspace_id=workspace_id,
+                tenant_id=tenant_id,
                 channel=channel,
                 session_key=session_key,
                 direction=direction,
@@ -166,6 +198,7 @@ def register_inbox_routes(app) -> None:
     @app.get("/events/inbox", dependencies=[Depends(require_api_key)])
     async def get_channel_events(
         limit: int = 80,
+        tenant_id: Optional[str] = None,
         workspace_id: Optional[str] = None,
         channel: Optional[str] = None,
         session_key: Optional[str] = None,
@@ -175,9 +208,12 @@ def register_inbox_routes(app) -> None:
         trace_id: Optional[str] = None,
         include_sessions: bool = True,
         session_limit: int = ORION_CHANNEL_SESSIONS_LIMIT,
+        current_user=Depends(require_api_key),
     ):
         return _notification_payload(
             limit=limit,
+            current_user=current_user,
+            tenant_id=tenant_id,
             workspace_id=workspace_id,
             channel=channel,
             session_key=session_key,
@@ -191,6 +227,7 @@ def register_inbox_routes(app) -> None:
 
     @app.get("/events/inbox/stream", dependencies=[Depends(require_api_key)])
     async def stream_channel_events(
+        tenant_id: Optional[str] = None,
         workspace_id: Optional[str] = None,
         channel: Optional[str] = None,
         session_key: Optional[str] = None,
@@ -205,9 +242,21 @@ def register_inbox_routes(app) -> None:
         heartbeat_seconds: float = 5.0,
         timeout_seconds: float = 25.0,
         limit: int = 120,
+        current_user=Depends(require_api_key),
     ):
+        from server_modules.auth import enforce_workspace_access
+        from server_modules.auth import allowed_workspace_ids
+
+        requested_workspace_id = (
+            enforce_workspace_access(current_user, workspace_id, tenant_id=tenant_id, minimum_role="viewer")
+            if workspace_id
+            else None
+        )
+        allowed_workspaces = allowed_workspace_ids(current_user)
         return _notification_stream_response(
-            workspace_id=workspace_id,
+            allowed_workspaces=allowed_workspaces,
+            tenant_id=tenant_id,
+            workspace_id=requested_workspace_id,
             channel=channel,
             session_key=session_key,
             direction=direction,
@@ -226,6 +275,7 @@ def register_inbox_routes(app) -> None:
     @app.get("/notifications", dependencies=[Depends(require_api_key)], response_model=ApiNotificationListResponse)
     async def get_notifications(
         limit: int = 80,
+        tenant_id: Optional[str] = None,
         workspace_id: Optional[str] = None,
         channel: Optional[str] = None,
         session_key: Optional[str] = None,
@@ -242,10 +292,22 @@ def register_inbox_routes(app) -> None:
         poll_seconds: float = 0.35,
         heartbeat_seconds: float = 5.0,
         timeout_seconds: float = 25.0,
+        current_user=Depends(require_api_key),
     ):
         if stream:
+            from server_modules.auth import enforce_workspace_access
+            from server_modules.auth import allowed_workspace_ids
+
+            requested_workspace_id = (
+                enforce_workspace_access(current_user, workspace_id, tenant_id=tenant_id, minimum_role="viewer")
+                if workspace_id
+                else None
+            )
+            allowed_workspaces = allowed_workspace_ids(current_user)
             return _notification_stream_response(
-                workspace_id=workspace_id,
+                allowed_workspaces=allowed_workspaces,
+                tenant_id=tenant_id,
+                workspace_id=requested_workspace_id,
                 channel=channel,
                 session_key=session_key,
                 direction=direction,
@@ -262,6 +324,8 @@ def register_inbox_routes(app) -> None:
             )
         return _notification_payload(
             limit=limit,
+            current_user=current_user,
+            tenant_id=tenant_id,
             workspace_id=workspace_id,
             channel=channel,
             session_key=session_key,
@@ -274,15 +338,18 @@ def register_inbox_routes(app) -> None:
         )
 
     @app.post("/notifications", dependencies=[Depends(require_api_key)])
-    async def mark_notifications_read(body: Optional[Dict[str, Any]] = None):
+    async def mark_notifications_read(body: Optional[Dict[str, Any]] = None, current_user=Depends(require_api_key)):
         payload = body if isinstance(body, dict) else {}
         notification_ids = payload.get("notification_ids")
+        tenant_id = payload.get("tenant_id")
         workspace_id = payload.get("workspace_id")
         mark_all = bool(payload.get("mark_all"))
         if not mark_all and not isinstance(notification_ids, list):
             raise HTTPException(status_code=400, detail="notification_ids or mark_all is required.")
         return _mark_notifications_read(
+            current_user=current_user,
             notification_ids=notification_ids if isinstance(notification_ids, list) else None,
+            tenant_id=str(tenant_id or "").strip() or None,
             workspace_id=str(workspace_id or "").strip() or None,
             mark_all=mark_all,
         )
@@ -290,6 +357,7 @@ def register_inbox_routes(app) -> None:
     @app.get("/events/inbox/sessions", dependencies=[Depends(require_api_key)])
     async def get_channel_sessions(
         limit: int = ORION_CHANNEL_SESSIONS_LIMIT,
+        tenant_id: Optional[str] = None,
         workspace_id: Optional[str] = None,
         channel: Optional[str] = None,
         session_key: Optional[str] = None,
@@ -297,16 +365,29 @@ def register_inbox_routes(app) -> None:
         action: Optional[str] = None,
         run_id: Optional[str] = None,
         trace_id: Optional[str] = None,
+        current_user=Depends(require_api_key),
     ):
+        from server_modules.auth import allowed_workspace_ids, enforce_workspace_access
+
         safe_limit = max(1, min(limit, max(1, ORION_CHANNEL_SESSIONS_LIMIT)))
+        requested_workspace_id = (
+            enforce_workspace_access(current_user, workspace_id, tenant_id=tenant_id, minimum_role="viewer")
+            if workspace_id
+            else None
+        )
+        allowed_workspaces = allowed_workspace_ids(current_user)
         with CHANNEL_EVENTS_LOCK:
             items = list(CHANNEL_EVENTS)
         filtered = [
             item
             for item in items
+            if (not tenant_id or str(item.get("tenant_id") or "").strip() == str(tenant_id).strip())
+            and (not requested_workspace_id or str(item.get("workspace_id") or "").strip() == requested_workspace_id)
+            and (allowed_workspaces is None or str(item.get("workspace_id") or "").strip() in allowed_workspaces)
             if _channel_event_matches(
                 item=item,
-                workspace_id=workspace_id,
+                workspace_id=requested_workspace_id,
+                tenant_id=tenant_id,
                 channel=channel,
                 session_key=session_key,
                 direction=direction,
@@ -327,15 +408,25 @@ def register_inbox_routes(app) -> None:
     async def get_channel_event_trace(
         run_id: Optional[str] = None,
         trace_id: Optional[str] = None,
+        tenant_id: Optional[str] = None,
         workspace_id: Optional[str] = None,
         channel: Optional[str] = None,
         limit: int = 200,
+        current_user=Depends(require_api_key),
     ):
+        from server_modules.auth import allowed_workspace_ids, enforce_workspace_access
+
         if not str(run_id or "").strip() and not str(trace_id or "").strip():
             raise HTTPException(status_code=400, detail="run_id or trace_id is required.")
         safe_limit = max(1, min(limit, 500))
         run_id_value = str(run_id or "").strip()
         trace_id_value = str(trace_id or "").strip()
+        requested_workspace_id = (
+            enforce_workspace_access(current_user, workspace_id, tenant_id=tenant_id, minimum_role="viewer")
+            if workspace_id
+            else None
+        )
+        allowed_workspaces = allowed_workspace_ids(current_user)
         with CHANNEL_EVENTS_LOCK:
             snapshot = list(CHANNEL_EVENTS)
         ordered = list(reversed(snapshot))
@@ -343,7 +434,11 @@ def register_inbox_routes(app) -> None:
         for item in ordered:
             if not isinstance(item, dict):
                 continue
-            if workspace_id and str(item.get("workspace_id") or "").strip() != _normalize_workspace_id(workspace_id):
+            if tenant_id and str(item.get("tenant_id") or "").strip() != str(tenant_id).strip():
+                continue
+            if requested_workspace_id and str(item.get("workspace_id") or "").strip() != _normalize_workspace_id(requested_workspace_id):
+                continue
+            if allowed_workspaces is not None and str(item.get("workspace_id") or "").strip() not in allowed_workspaces:
                 continue
             if channel and str(item.get("channel") or "").strip().lower() != str(channel).strip().lower():
                 continue

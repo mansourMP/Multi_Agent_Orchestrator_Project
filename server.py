@@ -102,6 +102,7 @@ configure_runtime_events(
     utc_now_iso=runtime_common._utc_now_iso,
     parse_utc_ts=runtime_common._parse_utc_ts,
     normalize_workspace_id=runtime_common._normalize_workspace_id,
+    normalize_tenant_id=lambda value: str(value or "default").strip() or "default",
     compact_event_text=runs_output._compact_event_text,
     json_safe=runs_output._json_safe,
     safe_read_json=runtime_common._safe_read_json,

@@ -98,7 +98,9 @@ class RuntimeRuntimeApiTests(unittest.TestCase):
         )
 
         self.assertEqual(result["machine_id"], "machine-1")
+        self.assertEqual(mock_enroll.call_args.kwargs["tenant_id"], "default")
         self.assertEqual(mock_enroll.call_args.kwargs["workspace_id"], "default")
+        self.assertEqual(mock_enroll.call_args.kwargs["machine_enrollment_scope"], "workspace")
         mock_grant_trust.assert_called_once_with("default", "machine-1")
 
     @patch("server_modules.local_queue.create_machine_enrollment_intent")
@@ -117,7 +119,9 @@ class RuntimeRuntimeApiTests(unittest.TestCase):
         )
 
         self.assertEqual(result["machine_id"], "machine-1")
+        self.assertEqual(mock_create_intent.call_args.kwargs["tenant_id"], "default")
         self.assertEqual(mock_create_intent.call_args.kwargs["workspace_id"], "default")
+        self.assertEqual(mock_create_intent.call_args.kwargs["machine_enrollment_scope"], "workspace")
         mock_grant_trust.assert_called_once_with("default", "machine-1")
 
     @patch("server_modules.local_queue.complete_machine_bootstrap")
@@ -192,7 +196,7 @@ class RuntimeRuntimeApiTests(unittest.TestCase):
         runtime_runtime_api.register_runtime_routes(app)
         mock_delete.return_value = {"ok": True, "machine_id": "machine-1", "deleted": True}
         mock_status.return_value = {
-            "items": [{"machine_id": "machine-1", "workspace_id": "default"}],
+            "items": [{"machine_id": "machine-1", "tenant_id": "default", "workspace_id": "default"}],
             "summary": {},
         }
         handler = app.routes[("DELETE", "/machines/{machine_id}")]

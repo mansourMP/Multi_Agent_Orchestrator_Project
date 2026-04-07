@@ -278,6 +278,27 @@ In plain terms: the system should be able to read a screen, understand what is v
    Browser DOM, browser accessibility data, operating-system accessibility APIs, and app-specific automation adapters must be preferred over screenshot OCR or coordinate heuristics.
 
 10. Asynchronous work must have first-class durability.
+
+11. Policy inheritance must be explicit.
+   Policy resolution must never depend on hidden defaults or caller-local branching.
+
+   The canonical precedence order is:
+
+   - global
+   - tenant
+   - workspace
+   - machine
+   - capability
+
+   This precedence applies to:
+
+   - safe mode
+   - kill switches
+   - dangerous computer-action classes
+   - machine enrollment scope
+   - connector permissions
+
+   Every durable run, approval, artifact, notification, and machine event must carry enough tenant and workspace provenance for audit isolation.
     The system must define a durable outbox, dispatch queue, worker lease, retry policy, poison-message handling, replay path, and event stream instead of treating background execution as implicit side effects.
 
 ## Platform Capability Model

@@ -10,6 +10,7 @@ from server_modules.auth import (
     allowed_workspace_ids,
     build_workspace_authorization_metadata,
     enforce_workspace_access,
+    workspace_tenant_id,
 )
 
 from server_modules.agent_turn import (
@@ -152,8 +153,10 @@ def _stamp_workspace_authorization_on_turn_payload(
     workspace_id = enforce_workspace_access(
         current_user,
         _workspace_id_from_turn_payload(body),
+        tenant_id=body.get("tenant_id"),
         minimum_role=minimum_role,
     )
+    tenant_id = workspace_tenant_id(current_user, workspace_id)
     machine_target = _machine_target_from_turn_payload(body)
     context_hints = body.get("context_hints") if isinstance(body.get("context_hints"), dict) else {}
     metadata = context_hints.get("metadata") if isinstance(context_hints.get("metadata"), dict) else {}
@@ -162,9 +165,11 @@ def _stamp_workspace_authorization_on_turn_payload(
         **build_workspace_authorization_metadata(
             current_user,
             workspace_id,
+            connector_id=str(metadata.get("connector") or "").strip() or None,
             machine_id=machine_target,
         ),
     }
+    body["tenant_id"] = tenant_id
     body["workspace_id"] = workspace_id
     body["context_hints"] = {
         **context_hints,
@@ -711,8 +716,10 @@ def register_run_routes(app) -> None:
         workspace_id = enforce_workspace_access(
             current_user,
             payload.get("workspace_id"),
+            tenant_id=payload.get("tenant_id"),
             minimum_role="member",
         )
+        tenant_id = workspace_tenant_id(current_user, workspace_id)
         actor = dict(payload.get("actor") or {})
         if not str(actor.get("id") or "").strip():
             actor["id"] = str((current_user or {}).get("user_id") or (current_user or {}).get("email") or "anonymous").strip()
@@ -720,7 +727,7 @@ def register_run_routes(app) -> None:
             actor["display_name"] = str((current_user or {}).get("email") or actor.get("id") or "").strip()
         session_id = await session_service.create_session(
             workspace_id=workspace_id,
-            tenant_id=str(payload.get("tenant_id") or "default").strip() or "default",
+            tenant_id=tenant_id,
             actor=actor,
             channel=str(payload.get("channel") or "web").strip() or "web",
             metadata=dict(payload.get("metadata") or {}),
@@ -729,7 +736,7 @@ def register_run_routes(app) -> None:
         record = await session_service.get_session(session_id) or {
             "session_id": session_id,
             "workspace_id": workspace_id,
-            "tenant_id": str(payload.get("tenant_id") or "default").strip() or "default",
+            "tenant_id": tenant_id,
             "channel": str(payload.get("channel") or "web").strip() or "web",
             "actor": actor,
             "metadata": dict(payload.get("metadata") or {}),
@@ -750,6 +757,7 @@ def register_run_routes(app) -> None:
         enforce_workspace_access(
             current_user,
             record.get("workspace_id"),
+            tenant_id=record.get("tenant_id"),
             minimum_role="viewer",
         )
         return normalize_session_record(record)
@@ -764,6 +772,7 @@ def register_run_routes(app) -> None:
             enforce_workspace_access(
                 current_user,
                 record.get("workspace_id"),
+                tenant_id=record.get("tenant_id"),
                 minimum_role="member",
             )
         await session_service.terminate_session(session_id)

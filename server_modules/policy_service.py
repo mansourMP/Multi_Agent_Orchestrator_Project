@@ -7,6 +7,7 @@ from typing import Any, Callable, Dict, List, Optional
 from scripts.platform_execution import capability_metadata
 from server_modules.computer_action_safety import evaluate_dangerous_computer_action_policy
 from server_modules import skills_service
+from server_modules import safe_mode_service
 
 
 @dataclass(slots=True)
@@ -601,6 +602,18 @@ def evaluate_tool_policy_decision(
     )
     capability_ids = [str(item).strip().lower() for item in (capability_ids or []) if str(item).strip()]
     requested_capability_ids = capability_ids or ([clean_tool_id] if clean_tool_id else [])
+    tenant_id = str(metadata.get("tenant_id") or "").strip() or None
+    workspace_id = str(metadata.get("workspace_id") or "").strip() or None
+    machine_id = str(
+        metadata.get("machine_id")
+        or metadata.get("machine_target")
+        or (
+            (metadata.get("computer_action_policy") or {}).get("machine_id")
+            if isinstance(metadata.get("computer_action_policy"), dict)
+            else ""
+        )
+        or ""
+    ).strip() or None
     capability_details = [
         detail
         for detail in (
@@ -635,8 +648,30 @@ def evaluate_tool_policy_decision(
 
     execution_decision = "allow"
     reason = "policy_allow_default"
+    disabled_capability_state = next(
+        (
+            {
+                **disable_state,
+                "capability_id": capability_id,
+            }
+            for capability_id in requested_capability_ids
+            for disable_state in [
+                safe_mode_service.resolve_capability_disable_state(
+                    capability_id,
+                    tenant_id=tenant_id,
+                    workspace_id=workspace_id,
+                    machine_id=machine_id,
+                )
+            ]
+            if bool(disable_state.get("disabled"))
+        ),
+        None,
+    )
 
-    if any(
+    if disabled_capability_state:
+        execution_decision = "deny"
+        reason = "capability_disabled_by_policy_scope"
+    elif any(
         capability_id in workspace_denied_capabilities or "*" in workspace_denied_capabilities
         for capability_id in requested_capability_ids
     ):
@@ -739,6 +774,10 @@ def evaluate_tool_policy_decision(
         "browser_security_profile": browser_profile or None,
         "browser_requires_approval": browser_requires_approval,
         "browser_privileged_actions": browser_privileged_actions or None,
+        "policy_scope_precedence": list(
+            metadata.get("policy_scope_precedence") or ["global", "tenant", "workspace", "machine", "capability"]
+        ),
+        "disabled_capability_state": disabled_capability_state,
         "reviewed_approval_required": bool(
             clean_tool_id == "browser_automation.interactive"
             and effective_target == runtime_policy.EXECUTION_TARGET_LOCAL_COMPANION

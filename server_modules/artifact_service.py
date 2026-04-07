@@ -144,6 +144,8 @@ class ArtifactRecord:
     run_id: str
     kind: str
     uri: str
+    tenant_id: str = "default"
+    workspace_id: str = "default"
     label: str = ""
     mime_type: str = ""
     content_type: str = ""
@@ -163,6 +165,8 @@ class ArtifactRecord:
         payload = {
             "artifact_id": self.artifact_id,
             "run_id": self.run_id,
+            "tenant_id": self.tenant_id,
+            "workspace_id": self.workspace_id,
             "kind": self.kind,
             "uri": self.uri,
             "uri_or_path": self.uri,
@@ -201,6 +205,8 @@ def store_artifact_file(
     *,
     run_id: str,
     kind: str,
+    tenant_id: Optional[str] = None,
+    workspace_id: Optional[str] = None,
     label: Optional[str] = None,
     machine_id: Optional[str] = None,
     step_id: Optional[str] = None,
@@ -226,6 +232,8 @@ def store_artifact_file(
     record = ArtifactRecord(
         artifact_id=artifact_token,
         run_id=str(run_id or "").strip(),
+        tenant_id=str(tenant_id or "default").strip() or "default",
+        workspace_id=str(workspace_id or "default").strip() or "default",
         kind=str(kind or "artifact").strip() or "artifact",
         uri=artifact_uri(artifact_token, resolved_label),
         label=resolved_label,
@@ -252,6 +260,8 @@ def store_artifact_bytes(
     run_id: str,
     kind: str,
     file_name: str,
+    tenant_id: Optional[str] = None,
+    workspace_id: Optional[str] = None,
     label: Optional[str] = None,
     machine_id: Optional[str] = None,
     step_id: Optional[str] = None,
@@ -272,6 +282,8 @@ def store_artifact_bytes(
     record = ArtifactRecord(
         artifact_id=artifact_token,
         run_id=str(run_id or "").strip(),
+        tenant_id=str(tenant_id or "default").strip() or "default",
+        workspace_id=str(workspace_id or "default").strip() or "default",
         kind=str(kind or "artifact").strip() or "artifact",
         uri=artifact_uri(artifact_token, resolved_name),
         label=resolved_name,

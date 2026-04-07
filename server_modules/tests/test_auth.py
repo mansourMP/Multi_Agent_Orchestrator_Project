@@ -133,6 +133,42 @@ def test_workspace_capability_policy_denies_local_capability(monkeypatch: pytest
     assert exc.value.status_code == 403
 
 
+def test_tenant_binding_and_policy_precedence(monkeypatch: pytest.MonkeyPatch, tmp_path):
+    auth, _, _ = _reload_auth(monkeypatch, tmp_path)
+    created = auth.register_user("tenant.member@example.com", "password-123", name="Tenant Member")
+    auth.ensure_workspace_tenant_binding("finance", "tenant-acme")
+    auth.upsert_workspace_membership(created["user"]["id"], "finance", "owner")
+    auth.upsert_tenant_policy(
+        "tenant-acme",
+        capability_allow=["computer_control.type"],
+        connector_allow=["gmail"],
+        machine_enrollment_scope="tenant",
+    )
+    auth.upsert_workspace_policy(
+        "finance",
+        capability_deny=["computer_control.type"],
+        connector_deny=["gmail"],
+        machine_enrollment_scope="workspace",
+    )
+    current_user = auth.get_current_user(_Request(), authorization=f"Bearer {created['token']}")
+
+    assert auth.workspace_tenant_id(current_user, "finance") == "tenant-acme"
+    assert auth.tenant_role(current_user, "tenant-acme") == "owner"
+    assert auth.workspace_machine_enrollment_scope(current_user, "finance") == "workspace"
+    assert auth.workspace_connector_decision(current_user, "finance", "gmail")["decision"] == "deny"
+    assert auth.workspace_capability_decision(current_user, "finance", "computer_control.type")["decision"] == "deny"
+
+    with pytest.raises(HTTPException) as exc:
+        auth.enforce_workspace_access(
+            current_user,
+            "finance",
+            tenant_id="tenant-other",
+            minimum_role="viewer",
+        )
+
+    assert exc.value.status_code == 403
+
+
 def _build_auth_test_app() -> FastAPI:
     app = FastAPI()
     app.include_router(routes_auth_module.router)

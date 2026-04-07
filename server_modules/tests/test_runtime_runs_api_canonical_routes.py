@@ -270,7 +270,7 @@ class RuntimeRunsApiCanonicalRouteTests(unittest.TestCase):
                     app.routes[("POST", "/sessions")](
                         runtime_runs_api.ApiSessionRequest(
                             workspace_id="default",
-                            tenant_id="tenant-1",
+                            tenant_id="default",
                             channel="web",
                             actor={"type": "user", "id": "user-1"},
                             metadata={"source": "test"},
@@ -368,7 +368,7 @@ class RuntimeRunsApiCanonicalRouteTests(unittest.TestCase):
         return {
             "session_id": session_id,
             "workspace_id": "default",
-            "tenant_id": "tenant-1",
+            "tenant_id": "default",
             "channel": "web",
             "actor": {"type": "user", "id": "user-1"},
             "created_at": "2026-04-06T00:00:00Z",

@@ -19,6 +19,8 @@ class ArtifactServiceTests(TestCase):
                     source,
                     run_id="run-1",
                     kind="report",
+                    tenant_id="tenant-1",
+                    workspace_id="workspace-1",
                     step_number=2,
                     machine_id="machine-1",
                 )
@@ -28,6 +30,8 @@ class ArtifactServiceTests(TestCase):
                 self.assertIsNotNone(metadata)
                 self.assertEqual(metadata["artifact_id"], record.artifact_id)
                 self.assertEqual(metadata["run_id"], "run-1")
+                self.assertEqual(metadata["tenant_id"], "tenant-1")
+                self.assertEqual(metadata["workspace_id"], "workspace-1")
                 self.assertEqual(metadata["machine_id"], "machine-1")
                 self.assertEqual(metadata["step_number"], 2)
                 self.assertEqual(metadata["byte_size"], len("hello from empyralis".encode("utf-8")))
@@ -45,13 +49,16 @@ class ArtifactServiceTests(TestCase):
                     run_id="run-2",
                     kind="file_delete",
                     file_name="deleted-record.json",
+                    tenant_id="tenant-2",
+                    workspace_id="workspace-2",
                     content_type="application/json",
                     retention_days=30,
                 )
 
                 metadata = artifact_service.load_artifact_metadata(record.uri)
                 self.assertIsNotNone(metadata)
+                self.assertEqual(metadata["tenant_id"], "tenant-2")
+                self.assertEqual(metadata["workspace_id"], "workspace-2")
                 self.assertEqual(metadata["content_type"], "application/json")
                 self.assertEqual(metadata["retention"]["retention_days"], 30)
                 self.assertEqual(metadata["retention"]["policy_status"], "placeholder")
-

@@ -17,7 +17,9 @@ from server_modules.auth import (
     enforce_workspace_access,
     grant_workspace_owner_machine_trust,
     revoke_workspace_owner_machine_trust,
+    workspace_machine_enrollment_scope,
     workspace_role,
+    workspace_tenant_id,
 )
 from server_modules.runtime_common import require_api_key
 from server_modules import local_queue
@@ -54,6 +56,7 @@ class RuntimeHeartbeatPayload(BaseModel):
 
 
 class MachineEnrollPayload(BaseModel):
+    tenant_id: Optional[str] = None
     workspace_id: Optional[str] = None
     machine_id: Optional[str] = None
     runtime_type: str = "local_companion"
@@ -274,6 +277,8 @@ async def _iter_audio_chunks(chunks: List[bytes]) -> AsyncIterator[bytes]:
 
 def _runtime_summary_from_worker_item(item: Dict[str, Any]) -> Dict[str, Any]:
     return {
+        "tenant_id": str(item.get("tenant_id") or "default").strip() or "default",
+        "workspace_id": str(item.get("workspace_id") or "default").strip() or "default",
         "machine_id": str(item.get("machine_id") or item.get("runtime_id") or item.get("worker_id") or ""),
         "runtime_id": str(item.get("runtime_id") or item.get("worker_id") or ""),
         "runtime_type": str(item.get("runtime_type") or "local"),
@@ -298,6 +303,7 @@ def _runtime_summary_from_worker_item(item: Dict[str, Any]) -> Dict[str, Any]:
         "enrollment_requested_at": item.get("enrollment_requested_at"),
         "enrollment_updated_at": item.get("enrollment_updated_at"),
         "bootstrap_error": item.get("bootstrap_error"),
+        "machine_enrollment_scope": item.get("machine_enrollment_scope") or "workspace",
     }
 
 
@@ -393,11 +399,12 @@ def register_runtime_routes(app) -> None:
 
     @app.get("/machines", dependencies=[Depends(require_api_key)])
     async def get_machines(
+        tenant_id: Optional[str] = None,
         workspace_id: Optional[str] = None,
         current_user=Depends(require_api_key),
     ):
         requested_workspace_id = (
-            enforce_workspace_access(current_user, workspace_id, minimum_role="viewer")
+            enforce_workspace_access(current_user, workspace_id, tenant_id=tenant_id, minimum_role="viewer")
             if workspace_id
             else None
         )
@@ -408,7 +415,10 @@ def register_runtime_routes(app) -> None:
         for item in items:
             if not isinstance(item, dict):
                 continue
+            item_tenant_id = str(item.get("tenant_id") or "default").strip() or "default"
             item_workspace_id = str(item.get("workspace_id") or "default").strip() or "default"
+            if tenant_id and item_tenant_id != str(tenant_id).strip():
+                continue
             if requested_workspace_id and item_workspace_id != requested_workspace_id:
                 continue
             if allowed is not None and item_workspace_id not in allowed:
@@ -434,10 +444,18 @@ def register_runtime_routes(app) -> None:
         workspace_id = enforce_workspace_access(
             current_user,
             body.workspace_id,
+            tenant_id=body.tenant_id,
             minimum_role="member",
             capability_id="machines.manage",
         )
+        tenant_id = workspace_tenant_id(current_user, workspace_id)
+        enrollment_scope = workspace_machine_enrollment_scope(current_user, workspace_id)
+        if enrollment_scope == "tenant" and workspace_role(current_user, workspace_id) != "owner":
+            raise HTTPException(status_code=403, detail="Owner role required for tenant-scoped machine enrollment.")
+        if enrollment_scope == "global" and not bool((current_user or {}).get("is_admin")):
+            raise HTTPException(status_code=403, detail="Admin role required for global machine enrollment.")
         result = local_queue.handle_enroll_local_runtime(
+            tenant_id=tenant_id,
             workspace_id=workspace_id,
             machine_id=body.machine_id,
             runtime_type=body.runtime_type,
@@ -447,6 +465,7 @@ def register_runtime_routes(app) -> None:
             capabilities=body.capabilities,
             execution_targets=body.execution_targets,
             note=body.note,
+            machine_enrollment_scope=enrollment_scope,
         )
         if workspace_role(current_user, workspace_id) == "owner":
             grant_workspace_owner_machine_trust(workspace_id, str(result.get("machine_id") or "").strip())
@@ -461,10 +480,18 @@ def register_runtime_routes(app) -> None:
         workspace_id = enforce_workspace_access(
             current_user,
             body.workspace_id,
+            tenant_id=body.tenant_id,
             minimum_role="member",
             capability_id="machines.manage",
         )
+        tenant_id = workspace_tenant_id(current_user, workspace_id)
+        enrollment_scope = workspace_machine_enrollment_scope(current_user, workspace_id)
+        if enrollment_scope == "tenant" and workspace_role(current_user, workspace_id) != "owner":
+            raise HTTPException(status_code=403, detail="Owner role required for tenant-scoped machine enrollment.")
+        if enrollment_scope == "global" and not bool((current_user or {}).get("is_admin")):
+            raise HTTPException(status_code=403, detail="Admin role required for global machine enrollment.")
         result = local_queue.create_machine_enrollment_intent(
+            tenant_id=tenant_id,
             workspace_id=workspace_id,
             machine_id=body.machine_id,
             runtime_type=body.runtime_type,
@@ -474,6 +501,7 @@ def register_runtime_routes(app) -> None:
             capabilities=body.capabilities,
             execution_targets=body.execution_targets,
             note=body.note,
+            machine_enrollment_scope=enrollment_scope,
         )
         if workspace_role(current_user, workspace_id) == "owner":
             grant_workspace_owner_machine_trust(workspace_id, str(result.get("machine_id") or "").strip())
@@ -511,6 +539,7 @@ def register_runtime_routes(app) -> None:
         workspace_id = enforce_workspace_access(
             current_user,
             (machine or {}).get("workspace_id") or "default",
+            tenant_id=(machine or {}).get("tenant_id"),
             minimum_role="member",
             capability_id="machines.manage",
         )

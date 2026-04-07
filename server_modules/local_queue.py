@@ -273,8 +273,8 @@ def _emit_machine_outbox_event(action: str, record: Dict[str, Any], *, error: Op
     try:
         outbox_service.emit_machine_event(
             machine_id=machine_id,
-            tenant_id="default",
-            workspace_id="default",
+            tenant_id=str(record.get("tenant_id") or "default").strip() or "default",
+            workspace_id=str(record.get("workspace_id") or "default").strip() or "default",
             action=action,
             machine_payload=payload,
             trace_id=str(record.get("trace_id") or record.get("session_token") or machine_id).strip(),
@@ -604,6 +604,7 @@ def _upsert_runtime_registration(
 
 def create_machine_enrollment_intent(
     *,
+    tenant_id: Optional[str] = None,
     workspace_id: Optional[str] = None,
     machine_id: Optional[str] = None,
     runtime_type: str = "local_companion",
@@ -613,6 +614,7 @@ def create_machine_enrollment_intent(
     capabilities: Optional[List[str]] = None,
     execution_targets: Optional[List[str]] = None,
     note: Optional[str] = None,
+    machine_enrollment_scope: Optional[str] = None,
 ) -> Dict[str, Any]:
     _init()
     runtime_id = str(machine_id or "").strip() or f"machine-{uuid.uuid4().hex[:8]}"
@@ -638,7 +640,11 @@ def create_machine_enrollment_intent(
             capability_digest_fn=_capability_digest,
         )
         record["current_run_id"] = None
+        record["tenant_id"] = str(tenant_id or previous.get("tenant_id") or "default").strip() or "default"
         record["workspace_id"] = str(workspace_id or previous.get("workspace_id") or "default").strip() or "default"
+        record["machine_enrollment_scope"] = str(
+            machine_enrollment_scope or previous.get("machine_enrollment_scope") or "workspace"
+        ).strip() or "workspace"
         record["note"] = str(note or "machine_enrollment_requested")[:280]
         record["enrollment_token_hash"] = token_hash
         record["bootstrap_error"] = None
@@ -650,14 +656,19 @@ def create_machine_enrollment_intent(
     return {
         "ok": True,
         "machine_id": runtime_id,
+        "tenant_id": str(record.get("tenant_id") or "default").strip() or "default",
+        "workspace_id": str(record.get("workspace_id") or "default").strip() or "default",
         "token": token,
         "runtime_url": _machine_runtime_base_url(),
         "worker_config": {
             "worker_id": runtime_id,
+            "tenant_id": str(record.get("tenant_id") or "default").strip() or "default",
+            "workspace_id": str(record.get("workspace_id") or "default").strip() or "default",
             "runtime_type": runtime_type,
             "display_name": str(display_name or runtime_id).strip() or runtime_id,
             "execution_targets": list(execution_targets or ["local_companion"]),
             "policy_mode": str(policy_mode or _server.ORION_RUNTIME_POLICY_MODE_DEFAULT),
+            "machine_enrollment_scope": str(record.get("machine_enrollment_scope") or "workspace").strip() or "workspace",
         },
     }
 
@@ -1364,6 +1375,7 @@ def handle_get_local_workers_status() -> Dict[str, Any]:
 
 def handle_enroll_local_runtime(
     *,
+    tenant_id: Optional[str] = None,
     workspace_id: Optional[str] = None,
     machine_id: Optional[str] = None,
     runtime_type: str = "local_companion",
@@ -1373,8 +1385,10 @@ def handle_enroll_local_runtime(
     capabilities: Optional[List[str]] = None,
     execution_targets: Optional[List[str]] = None,
     note: Optional[str] = None,
+    machine_enrollment_scope: Optional[str] = None,
 ) -> Dict[str, Any]:
     return create_machine_enrollment_intent(
+        tenant_id=tenant_id,
         workspace_id=workspace_id,
         machine_id=machine_id,
         runtime_type=runtime_type,
@@ -1384,6 +1398,7 @@ def handle_enroll_local_runtime(
         capabilities=capabilities,
         execution_targets=execution_targets,
         note=note,
+        machine_enrollment_scope=machine_enrollment_scope,
     )
 
 

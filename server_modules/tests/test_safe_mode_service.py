@@ -28,6 +28,22 @@ class SafeModeServiceTests(unittest.TestCase):
         self.assertFalse(safe_mode_service.is_capability_disabled("filesystem.read_write", machine_id="machine-2"))
         self.assertTrue(safe_mode_service.is_capability_disabled("screenshot.capture"))
 
+    def test_tenant_scope_is_included_in_resolution_precedence(self) -> None:
+        safe_mode_service.set_safe_mode(enabled=True, tenant_id="tenant-1", reason="tenant incident")
+        safe_mode_service.set_kill_switch(scope="workspace", enabled=True, workspace_id="ws-1", reason="workspace freeze")
+        safe_mode_service.set_kill_switch(scope="capability", enabled=True, capability_id="computer_control.click", reason="cap freeze")
+
+        resolved = safe_mode_service.resolve_capability_disable_state(
+            "computer_control.click",
+            tenant_id="tenant-1",
+            workspace_id="ws-1",
+        )
+
+        self.assertTrue(resolved["disabled"])
+        self.assertEqual(resolved["scope"], "capability")
+        self.assertEqual(resolved["matched_chain"][0]["scope"], "tenant")
+        self.assertEqual(resolved["matched_chain"][-1]["scope"], "capability")
+
 
 if __name__ == "__main__":
     unittest.main()

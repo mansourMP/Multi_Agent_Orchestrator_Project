@@ -14,6 +14,7 @@ AppendChannelEventFn = Callable[[str, Dict[str, Any], int], None]
 UtcNowIsoFn = Callable[[], str]
 ParseUtcTsFn = Callable[[Any], Any]
 NormalizeWorkspaceFn = Callable[[Any], Optional[str]]
+NormalizeTenantFn = Callable[[Any], Optional[str]]
 CompactTextFn = Callable[[Any, int], str]
 JsonSafeFn = Callable[[Any], Any]
 SafeReadJsonFn = Callable[[Any, Dict[str, Any]], Dict[str, Any]]
@@ -32,6 +33,7 @@ append_channel_event: Optional[AppendChannelEventFn] = None
 _utc_now_iso: Optional[UtcNowIsoFn] = None
 _parse_utc_ts: Optional[ParseUtcTsFn] = None
 _normalize_workspace_id: Optional[NormalizeWorkspaceFn] = None
+_normalize_tenant_id: Optional[NormalizeTenantFn] = None
 _compact_event_text: Optional[CompactTextFn] = None
 _json_safe: Optional[JsonSafeFn] = None
 _safe_read_json: Optional[SafeReadJsonFn] = None
@@ -51,6 +53,7 @@ def configure_runtime_events(
     utc_now_iso: UtcNowIsoFn,
     parse_utc_ts: ParseUtcTsFn,
     normalize_workspace_id: NormalizeWorkspaceFn,
+    normalize_tenant_id: NormalizeTenantFn | None = None,
     compact_event_text: CompactTextFn,
     json_safe: JsonSafeFn,
     safe_read_json: SafeReadJsonFn,
@@ -67,6 +70,7 @@ def configure_runtime_events(
     global _utc_now_iso
     global _parse_utc_ts
     global _normalize_workspace_id
+    global _normalize_tenant_id
     global _compact_event_text
     global _json_safe
     global _safe_read_json
@@ -84,6 +88,7 @@ def configure_runtime_events(
     _utc_now_iso = utc_now_iso
     _parse_utc_ts = parse_utc_ts
     _normalize_workspace_id = normalize_workspace_id
+    _normalize_tenant_id = normalize_tenant_id or (lambda value: str(value or "default").strip() or "default")
     _compact_event_text = compact_event_text
     _json_safe = json_safe
     _safe_read_json = safe_read_json
@@ -138,6 +143,7 @@ def load_channel_events() -> None:
                     "channel": channel,
                     "direction": direction,
                     "event_type": event_type,
+                    "tenant_id": str(item.get("tenant_id") or "").strip(),
                     "workspace_id": str(item.get("workspace_id") or "").strip(),
                     "session_key": str(item.get("session_key") or "").strip(),
                     "session_id": str(
@@ -166,6 +172,7 @@ def append_channel_event_item(
     event_type: str,
     text: Optional[str] = None,
     workspace_id: Optional[str] = None,
+    tenant_id: Optional[str] = None,
     session_key: Optional[str] = None,
     session_id: Optional[str] = None,
     message_id: Optional[str] = None,
@@ -182,6 +189,7 @@ def append_channel_event_item(
     compact = _require_configured(_compact_event_text, "_compact_event_text")
     json_safe = _require_configured(_json_safe, "_json_safe")
     normalize_ws = _require_configured(_normalize_workspace_id, "_normalize_workspace_id")
+    normalize_tenant = _require_configured(_normalize_tenant_id, "_normalize_tenant_id")
 
     channel_id = str(channel or "").strip().lower() or "unknown"
     direction_id = str(direction or "").strip().lower()
@@ -200,6 +208,7 @@ def append_channel_event_item(
         "channel": channel_id,
         "direction": direction_id,
         "event_type": event_type_id,
+        "tenant_id": normalize_tenant(tenant_id),
         "workspace_id": normalize_ws(workspace_id),
         "session_key": session_key_value,
         "session_id": session_id_value,
@@ -229,6 +238,7 @@ def append_channel_event_item(
 def channel_event_matches(
     item: Dict[str, Any],
     workspace_id: Optional[str] = None,
+    tenant_id: Optional[str] = None,
     channel: Optional[str] = None,
     session_key: Optional[str] = None,
     direction: Optional[str] = None,
@@ -237,6 +247,9 @@ def channel_event_matches(
     trace_id: Optional[str] = None,
 ) -> bool:
     normalize_ws = _require_configured(_normalize_workspace_id, "_normalize_workspace_id")
+    normalize_tenant = _require_configured(_normalize_tenant_id, "_normalize_tenant_id")
+    if tenant_id and str(item.get("tenant_id") or "").strip() != normalize_tenant(tenant_id):
+        return False
     if workspace_id and str(item.get("workspace_id") or "").strip() != normalize_ws(workspace_id):
         return False
     if channel and str(item.get("channel") or "").strip().lower() != str(channel).strip().lower():
@@ -256,7 +269,9 @@ def channel_event_matches(
 
 def iter_channel_events_stream(
     *,
+    allowed_workspace_ids: Optional[set[str]] = None,
     workspace_id: Optional[str] = None,
+    tenant_id: Optional[str] = None,
     channel: Optional[str] = None,
     session_key: Optional[str] = None,
     direction: Optional[str] = None,
@@ -326,9 +341,11 @@ def iter_channel_events_stream(
         filtered = [
             item
             for item in candidates
+            if allowed_workspace_ids is None or str(item.get("workspace_id") or "").strip() in allowed_workspace_ids
             if channel_event_matches(
                 item=item,
                 workspace_id=workspace_id,
+                tenant_id=tenant_id,
                 channel=channel,
                 session_key=session_key,
                 direction=direction,

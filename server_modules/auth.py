@@ -29,6 +29,7 @@ JWT_EXP_SECONDS = int(os.getenv("ORION_JWT_EXP_SECONDS", "3600"))
 ORION_PUBLIC_REGISTRATION_ENABLED = str(os.getenv("ORION_PUBLIC_REGISTRATION_ENABLED", "0")).strip().lower() in {"1", "true", "yes", "on"}
 ORION_ADMIN_USER_IDS = {item.strip() for item in str(os.getenv("ORION_ADMIN_USER_IDS", "")).split(",") if item.strip()}
 ORION_ADMIN_EMAILS = {item.strip().lower() for item in str(os.getenv("ORION_ADMIN_EMAILS", "")).split(",") if item.strip()}
+ORION_DEFAULT_TENANT_ID = str(os.getenv("ORION_DEFAULT_TENANT_ID", "default")).strip() or "default"
 ORION_DEFAULT_WORKSPACE_IDS = tuple(
     item.strip() for item in str(os.getenv("ORION_DEFAULT_WORKSPACE_IDS", "default")).split(",") if item.strip()
 ) or ("default",)
@@ -48,6 +49,11 @@ def normalize_rbac_role(value: Any, *, default: str = "member") -> str:
 def _normalize_workspace_token(value: Any, *, default: str = "default") -> str:
     token = str(value or "").strip()
     return token or str(default or "default").strip() or "default"
+
+
+def _normalize_tenant_token(value: Any, *, default: str = ORION_DEFAULT_TENANT_ID) -> str:
+    token = str(value or "").strip()
+    return token or str(default or ORION_DEFAULT_TENANT_ID).strip() or ORION_DEFAULT_TENANT_ID
 
 
 def _normalize_distinct_tokens(value: Any) -> list[str]:
@@ -87,6 +93,37 @@ def _normalize_workspace_dangerous_policy(value: Any) -> dict[str, list[str]]:
     payload = value if isinstance(value, dict) else {}
     allow = _normalize_distinct_tokens(payload.get("allow"))
     deny = _normalize_distinct_tokens(payload.get("deny"))
+    return {"allow": allow, "deny": deny}
+
+
+def _normalize_connector_permission_policy(value: Any) -> dict[str, list[str]]:
+    payload = value if isinstance(value, dict) else {}
+    allow = _normalize_distinct_tokens(payload.get("allow"))
+    deny = _normalize_distinct_tokens(payload.get("deny"))
+    return {"allow": allow, "deny": deny}
+
+
+def _normalize_machine_enrollment_scope(value: Any, *, default: str = "workspace") -> str:
+    token = str(value or "").strip().lower()
+    if token in {"workspace", "tenant", "global"}:
+        return token
+    return str(default or "workspace").strip().lower() or "workspace"
+
+
+def _resolve_inherited_allow_deny(
+    *policies: Optional[dict[str, Any]],
+) -> dict[str, list[str]]:
+    allow: list[str] = []
+    deny: list[str] = []
+    for policy in policies:
+        if not isinstance(policy, dict):
+            continue
+        next_allow = _normalize_distinct_tokens(policy.get("allow"))
+        next_deny = _normalize_distinct_tokens(policy.get("deny"))
+        if next_allow:
+            allow = next_allow
+        if next_deny:
+            deny = next_deny
     return {"allow": allow, "deny": deny}
 
 
@@ -225,13 +262,41 @@ def _connect_auth_db() -> sqlite3.Connection:
     )
     connection.execute(
         """
+        CREATE TABLE IF NOT EXISTS workspace_registry (
+            workspace_id TEXT PRIMARY KEY,
+            tenant_id TEXT NOT NULL,
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL
+        )
+        """
+    )
+    connection.execute(
+        """
         CREATE TABLE IF NOT EXISTS workspace_policies (
             workspace_id TEXT PRIMARY KEY,
             capability_allow_json TEXT,
             capability_deny_json TEXT,
             dangerous_allow_json TEXT,
             dangerous_deny_json TEXT,
+            connector_allow_json TEXT,
+            connector_deny_json TEXT,
+            machine_enrollment_scope TEXT,
             trusted_owner_machine_ids_json TEXT,
+            updated_at INTEGER NOT NULL
+        )
+        """
+    )
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS tenant_policies (
+            tenant_id TEXT PRIMARY KEY,
+            capability_allow_json TEXT,
+            capability_deny_json TEXT,
+            dangerous_allow_json TEXT,
+            dangerous_deny_json TEXT,
+            connector_allow_json TEXT,
+            connector_deny_json TEXT,
+            machine_enrollment_scope TEXT,
             updated_at INTEGER NOT NULL
         )
         """
@@ -242,6 +307,26 @@ def _connect_auth_db() -> sqlite3.Connection:
     }
     if "avatar_url" not in existing_columns:
         connection.execute("ALTER TABLE users ADD COLUMN avatar_url TEXT")
+    workspace_policy_columns = {
+        str(row[1]).strip().lower()
+        for row in connection.execute("PRAGMA table_info(workspace_policies)").fetchall()
+    }
+    if "connector_allow_json" not in workspace_policy_columns:
+        connection.execute("ALTER TABLE workspace_policies ADD COLUMN connector_allow_json TEXT")
+    if "connector_deny_json" not in workspace_policy_columns:
+        connection.execute("ALTER TABLE workspace_policies ADD COLUMN connector_deny_json TEXT")
+    if "machine_enrollment_scope" not in workspace_policy_columns:
+        connection.execute("ALTER TABLE workspace_policies ADD COLUMN machine_enrollment_scope TEXT")
+    tenant_policy_columns = {
+        str(row[1]).strip().lower()
+        for row in connection.execute("PRAGMA table_info(tenant_policies)").fetchall()
+    }
+    if "connector_allow_json" not in tenant_policy_columns:
+        connection.execute("ALTER TABLE tenant_policies ADD COLUMN connector_allow_json TEXT")
+    if "connector_deny_json" not in tenant_policy_columns:
+        connection.execute("ALTER TABLE tenant_policies ADD COLUMN connector_deny_json TEXT")
+    if "machine_enrollment_scope" not in tenant_policy_columns:
+        connection.execute("ALTER TABLE tenant_policies ADD COLUMN machine_enrollment_scope TEXT")
     connection.commit()
     return connection
 
@@ -293,6 +378,72 @@ def _list_workspace_memberships(user_id: str) -> list[dict[str, Any]]:
     return [dict(row) for row in rows]
 
 
+def _write_workspace_registry(
+    connection: sqlite3.Connection,
+    *,
+    workspace_id: str,
+    tenant_id: str,
+    now_ts: Optional[int] = None,
+) -> None:
+    clean_workspace_id = _normalize_workspace_token(workspace_id)
+    clean_tenant_id = _normalize_tenant_token(tenant_id)
+    ts = int(now_ts or time.time())
+    existing = connection.execute(
+        "SELECT created_at FROM workspace_registry WHERE workspace_id = ?",
+        (clean_workspace_id,),
+    ).fetchone()
+    created_at = int(existing["created_at"]) if existing is not None else ts
+    connection.execute(
+        """
+        INSERT OR REPLACE INTO workspace_registry (
+            workspace_id, tenant_id, created_at, updated_at
+        ) VALUES (?, ?, ?, ?)
+        """,
+        (clean_workspace_id, clean_tenant_id, created_at, ts),
+    )
+
+
+def ensure_workspace_tenant_binding(workspace_id: str, tenant_id: Optional[str] = None) -> dict[str, Any]:
+    clean_workspace_id = _normalize_workspace_token(workspace_id)
+    clean_tenant_id = _normalize_tenant_token(tenant_id)
+    ts = int(time.time())
+    with AUTH_LOCK:
+        with _connect_auth_db() as connection:
+            _write_workspace_registry(
+                connection,
+                workspace_id=clean_workspace_id,
+                tenant_id=clean_tenant_id,
+                now_ts=ts,
+            )
+            connection.commit()
+    return {"workspace_id": clean_workspace_id, "tenant_id": clean_tenant_id}
+
+
+def tenant_id_for_workspace(workspace_id: str) -> str:
+    clean_workspace_id = _normalize_workspace_token(workspace_id)
+    with AUTH_LOCK:
+        with _connect_auth_db() as connection:
+            row = connection.execute(
+                """
+                SELECT tenant_id
+                FROM workspace_registry
+                WHERE workspace_id = ?
+                LIMIT 1
+                """,
+                (clean_workspace_id,),
+            ).fetchone()
+            if row is None:
+                _write_workspace_registry(
+                    connection,
+                    workspace_id=clean_workspace_id,
+                    tenant_id=ORION_DEFAULT_TENANT_ID,
+                    now_ts=int(time.time()),
+                )
+                connection.commit()
+                return ORION_DEFAULT_TENANT_ID
+            return _normalize_tenant_token(row["tenant_id"])
+
+
 def upsert_workspace_membership(user_id: str, workspace_id: str, role: str) -> dict[str, Any]:
     clean_user_id = str(user_id or "").strip()
     if not clean_user_id:
@@ -302,6 +453,23 @@ def upsert_workspace_membership(user_id: str, workspace_id: str, role: str) -> d
     ts = int(time.time())
     with AUTH_LOCK:
         with _connect_auth_db() as connection:
+            registry_row = connection.execute(
+                """
+                SELECT tenant_id
+                FROM workspace_registry
+                WHERE workspace_id = ?
+                LIMIT 1
+                """,
+                (clean_workspace_id,),
+            ).fetchone()
+            _write_workspace_registry(
+                connection,
+                workspace_id=clean_workspace_id,
+                tenant_id=_normalize_tenant_token(
+                    registry_row["tenant_id"] if registry_row is not None else ORION_DEFAULT_TENANT_ID
+                ),
+                now_ts=ts,
+            )
             _write_workspace_membership(
                 connection,
                 user_id=clean_user_id,
@@ -321,6 +489,9 @@ def _write_workspace_policy(
     capability_deny: Optional[list[str]] = None,
     dangerous_allow: Optional[list[str]] = None,
     dangerous_deny: Optional[list[str]] = None,
+    connector_allow: Optional[list[str]] = None,
+    connector_deny: Optional[list[str]] = None,
+    machine_enrollment_scope: Optional[str] = None,
     trusted_owner_machine_ids: Optional[list[str]] = None,
     updated_at: Optional[int] = None,
 ) -> None:
@@ -334,9 +505,12 @@ def _write_workspace_policy(
             capability_deny_json,
             dangerous_allow_json,
             dangerous_deny_json,
+            connector_allow_json,
+            connector_deny_json,
+            machine_enrollment_scope,
             trusted_owner_machine_ids_json,
             updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             clean_workspace_id,
@@ -344,6 +518,9 @@ def _write_workspace_policy(
             json.dumps(_normalize_distinct_tokens(capability_deny)),
             json.dumps(_normalize_distinct_tokens(dangerous_allow)),
             json.dumps(_normalize_distinct_tokens(dangerous_deny)),
+            json.dumps(_normalize_distinct_tokens(connector_allow)),
+            json.dumps(_normalize_distinct_tokens(connector_deny)),
+            _normalize_machine_enrollment_scope(machine_enrollment_scope, default="workspace"),
             json.dumps(_normalize_distinct_tokens(trusted_owner_machine_ids)),
             ts,
         ),
@@ -360,17 +537,22 @@ def _decode_json_token_list(raw: Any) -> list[str]:
     return _normalize_distinct_tokens(raw)
 
 
-def _workspace_policy_from_row(row: Any, workspace_id: str) -> dict[str, Any]:
+def _workspace_policy_from_row(row: Any, workspace_id: str, *, tenant_id: Optional[str] = None) -> dict[str, Any]:
+    resolved_tenant_id = _normalize_tenant_token(tenant_id or ORION_DEFAULT_TENANT_ID)
     if row is None:
         return {
             "workspace_id": workspace_id,
+            "tenant_id": resolved_tenant_id,
             "capabilities": {"allow": [], "deny": []},
             "dangerous_action_classes": {"allow": [], "deny": []},
+            "connectors": {"allow": [], "deny": []},
+            "machine_enrollment_scope": "workspace",
             "trusted_owner_machine_ids": [],
             "updated_at": None,
         }
     return {
         "workspace_id": workspace_id,
+        "tenant_id": resolved_tenant_id,
         "capabilities": {
             "allow": _decode_json_token_list(row["capability_allow_json"]),
             "deny": _decode_json_token_list(row["capability_deny_json"]),
@@ -379,6 +561,11 @@ def _workspace_policy_from_row(row: Any, workspace_id: str) -> dict[str, Any]:
             "allow": _decode_json_token_list(row["dangerous_allow_json"]),
             "deny": _decode_json_token_list(row["dangerous_deny_json"]),
         },
+        "connectors": {
+            "allow": _decode_json_token_list(row["connector_allow_json"]),
+            "deny": _decode_json_token_list(row["connector_deny_json"]),
+        },
+        "machine_enrollment_scope": _normalize_machine_enrollment_scope(row["machine_enrollment_scope"]),
         "trusted_owner_machine_ids": _decode_json_token_list(row["trusted_owner_machine_ids_json"]),
         "updated_at": int(row["updated_at"]) if row["updated_at"] is not None else None,
     }
@@ -388,6 +575,25 @@ def load_workspace_policy(workspace_id: str) -> dict[str, Any]:
     clean_workspace_id = _normalize_workspace_token(workspace_id)
     with AUTH_LOCK:
         with _connect_auth_db() as connection:
+            registry_row = connection.execute(
+                """
+                SELECT tenant_id
+                FROM workspace_registry
+                WHERE workspace_id = ?
+                LIMIT 1
+                """,
+                (clean_workspace_id,),
+            ).fetchone()
+            resolved_tenant_id = _normalize_tenant_token(
+                registry_row["tenant_id"] if registry_row is not None else ORION_DEFAULT_TENANT_ID
+            )
+            if registry_row is None:
+                _write_workspace_registry(
+                    connection,
+                    workspace_id=clean_workspace_id,
+                    tenant_id=resolved_tenant_id,
+                    now_ts=int(time.time()),
+                )
             row = connection.execute(
                 """
                 SELECT
@@ -396,6 +602,9 @@ def load_workspace_policy(workspace_id: str) -> dict[str, Any]:
                     capability_deny_json,
                     dangerous_allow_json,
                     dangerous_deny_json,
+                    connector_allow_json,
+                    connector_deny_json,
+                    machine_enrollment_scope,
                     trusted_owner_machine_ids_json,
                     updated_at
                 FROM workspace_policies
@@ -403,7 +612,127 @@ def load_workspace_policy(workspace_id: str) -> dict[str, Any]:
                 """,
                 (clean_workspace_id,),
             ).fetchone()
-    return _workspace_policy_from_row(row, clean_workspace_id)
+            connection.commit()
+    return _workspace_policy_from_row(row, clean_workspace_id, tenant_id=resolved_tenant_id)
+
+
+def _tenant_policy_from_row(row: Any, tenant_id: str) -> dict[str, Any]:
+    if row is None:
+        return {
+            "tenant_id": tenant_id,
+            "capabilities": {"allow": [], "deny": []},
+            "dangerous_action_classes": {"allow": [], "deny": []},
+            "connectors": {"allow": [], "deny": []},
+            "machine_enrollment_scope": "workspace",
+            "updated_at": None,
+        }
+    return {
+        "tenant_id": tenant_id,
+        "capabilities": {
+            "allow": _decode_json_token_list(row["capability_allow_json"]),
+            "deny": _decode_json_token_list(row["capability_deny_json"]),
+        },
+        "dangerous_action_classes": {
+            "allow": _decode_json_token_list(row["dangerous_allow_json"]),
+            "deny": _decode_json_token_list(row["dangerous_deny_json"]),
+        },
+        "connectors": {
+            "allow": _decode_json_token_list(row["connector_allow_json"]),
+            "deny": _decode_json_token_list(row["connector_deny_json"]),
+        },
+        "machine_enrollment_scope": _normalize_machine_enrollment_scope(row["machine_enrollment_scope"]),
+        "updated_at": int(row["updated_at"]) if row["updated_at"] is not None else None,
+    }
+
+
+def load_tenant_policy(tenant_id: str) -> dict[str, Any]:
+    clean_tenant_id = _normalize_tenant_token(tenant_id)
+    with AUTH_LOCK:
+        with _connect_auth_db() as connection:
+            row = connection.execute(
+                """
+                SELECT
+                    tenant_id,
+                    capability_allow_json,
+                    capability_deny_json,
+                    dangerous_allow_json,
+                    dangerous_deny_json,
+                    connector_allow_json,
+                    connector_deny_json,
+                    machine_enrollment_scope,
+                    updated_at
+                FROM tenant_policies
+                WHERE tenant_id = ?
+                """,
+                (clean_tenant_id,),
+            ).fetchone()
+    return _tenant_policy_from_row(row, clean_tenant_id)
+
+
+def upsert_tenant_policy(
+    tenant_id: str,
+    *,
+    capability_allow: Optional[list[str]] = None,
+    capability_deny: Optional[list[str]] = None,
+    dangerous_allow: Optional[list[str]] = None,
+    dangerous_deny: Optional[list[str]] = None,
+    connector_allow: Optional[list[str]] = None,
+    connector_deny: Optional[list[str]] = None,
+    machine_enrollment_scope: Optional[str] = None,
+) -> dict[str, Any]:
+    clean_tenant_id = _normalize_tenant_token(tenant_id)
+    ts = int(time.time())
+    with AUTH_LOCK:
+        with _connect_auth_db() as connection:
+            existing_row = connection.execute(
+                """
+                SELECT
+                    tenant_id,
+                    capability_allow_json,
+                    capability_deny_json,
+                    dangerous_allow_json,
+                    dangerous_deny_json,
+                    connector_allow_json,
+                    connector_deny_json,
+                    machine_enrollment_scope,
+                    updated_at
+                FROM tenant_policies
+                WHERE tenant_id = ?
+                """,
+                (clean_tenant_id,),
+            ).fetchone()
+            existing = _tenant_policy_from_row(existing_row, clean_tenant_id)
+            connection.execute(
+                """
+                INSERT OR REPLACE INTO tenant_policies (
+                    tenant_id,
+                    capability_allow_json,
+                    capability_deny_json,
+                    dangerous_allow_json,
+                    dangerous_deny_json,
+                    connector_allow_json,
+                    connector_deny_json,
+                    machine_enrollment_scope,
+                    updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    clean_tenant_id,
+                    json.dumps(_normalize_distinct_tokens(capability_allow if capability_allow is not None else existing["capabilities"]["allow"])),
+                    json.dumps(_normalize_distinct_tokens(capability_deny if capability_deny is not None else existing["capabilities"]["deny"])),
+                    json.dumps(_normalize_distinct_tokens(dangerous_allow if dangerous_allow is not None else existing["dangerous_action_classes"]["allow"])),
+                    json.dumps(_normalize_distinct_tokens(dangerous_deny if dangerous_deny is not None else existing["dangerous_action_classes"]["deny"])),
+                    json.dumps(_normalize_distinct_tokens(connector_allow if connector_allow is not None else existing["connectors"]["allow"])),
+                    json.dumps(_normalize_distinct_tokens(connector_deny if connector_deny is not None else existing["connectors"]["deny"])),
+                    _normalize_machine_enrollment_scope(
+                        machine_enrollment_scope if machine_enrollment_scope is not None else existing.get("machine_enrollment_scope"),
+                        default="workspace",
+                    ),
+                    ts,
+                ),
+            )
+            connection.commit()
+    return load_tenant_policy(clean_tenant_id)
 
 
 def upsert_workspace_policy(
@@ -413,9 +742,13 @@ def upsert_workspace_policy(
     capability_deny: Optional[list[str]] = None,
     dangerous_allow: Optional[list[str]] = None,
     dangerous_deny: Optional[list[str]] = None,
+    connector_allow: Optional[list[str]] = None,
+    connector_deny: Optional[list[str]] = None,
+    machine_enrollment_scope: Optional[str] = None,
     trusted_owner_machine_ids: Optional[list[str]] = None,
 ) -> dict[str, Any]:
     clean_workspace_id = _normalize_workspace_token(workspace_id)
+    resolved_tenant_id = tenant_id_for_workspace(clean_workspace_id)
     with AUTH_LOCK:
         with _connect_auth_db() as connection:
             existing_row = connection.execute(
@@ -426,6 +759,9 @@ def upsert_workspace_policy(
                     capability_deny_json,
                     dangerous_allow_json,
                     dangerous_deny_json,
+                    connector_allow_json,
+                    connector_deny_json,
+                    machine_enrollment_scope,
                     trusted_owner_machine_ids_json,
                     updated_at
                 FROM workspace_policies
@@ -433,7 +769,7 @@ def upsert_workspace_policy(
                 """,
                 (clean_workspace_id,),
             ).fetchone()
-            existing = _workspace_policy_from_row(existing_row, clean_workspace_id)
+            existing = _workspace_policy_from_row(existing_row, clean_workspace_id, tenant_id=resolved_tenant_id)
             _write_workspace_policy(
                 connection,
                 workspace_id=clean_workspace_id,
@@ -441,6 +777,13 @@ def upsert_workspace_policy(
                 capability_deny=capability_deny if capability_deny is not None else list(existing["capabilities"]["deny"]),
                 dangerous_allow=dangerous_allow if dangerous_allow is not None else list(existing["dangerous_action_classes"]["allow"]),
                 dangerous_deny=dangerous_deny if dangerous_deny is not None else list(existing["dangerous_action_classes"]["deny"]),
+                connector_allow=connector_allow if connector_allow is not None else list(existing["connectors"]["allow"]),
+                connector_deny=connector_deny if connector_deny is not None else list(existing["connectors"]["deny"]),
+                machine_enrollment_scope=(
+                    machine_enrollment_scope
+                    if machine_enrollment_scope is not None
+                    else str(existing.get("machine_enrollment_scope") or "workspace")
+                ),
                 trusted_owner_machine_ids=trusted_owner_machine_ids if trusted_owner_machine_ids is not None else list(existing["trusted_owner_machine_ids"]),
             )
             connection.commit()
@@ -461,6 +804,9 @@ def grant_workspace_owner_machine_trust(workspace_id: str, machine_id: str) -> d
         capability_deny=list(existing["capabilities"]["deny"]),
         dangerous_allow=list(existing["dangerous_action_classes"]["allow"]),
         dangerous_deny=list(existing["dangerous_action_classes"]["deny"]),
+        connector_allow=list(existing["connectors"]["allow"]),
+        connector_deny=list(existing["connectors"]["deny"]),
+        machine_enrollment_scope=str(existing.get("machine_enrollment_scope") or "workspace"),
         trusted_owner_machine_ids=trusted,
     )
 
@@ -475,6 +821,9 @@ def revoke_workspace_owner_machine_trust(workspace_id: str, machine_id: str) -> 
         capability_deny=list(existing["capabilities"]["deny"]),
         dangerous_allow=list(existing["dangerous_action_classes"]["allow"]),
         dangerous_deny=list(existing["dangerous_action_classes"]["deny"]),
+        connector_allow=list(existing["connectors"]["allow"]),
+        connector_deny=list(existing["connectors"]["deny"]),
+        machine_enrollment_scope=str(existing.get("machine_enrollment_scope") or "workspace"),
         trusted_owner_machine_ids=trusted,
     )
 
@@ -522,26 +871,53 @@ def _effective_workspace_access(
 
     access: dict[str, dict[str, Any]] = {}
     for workspace_id in sorted(effective_workspace_ids):
+        tenant_id = tenant_id_for_workspace(workspace_id)
+        tenant_policy = load_tenant_policy(tenant_id)
         policy_row = load_workspace_policy(workspace_id)
         role_value = membership_roles.get(workspace_id) or claim_roles.get(workspace_id)
         if not role_value and workspace_id in effective_workspace_ids:
             role_value = normalize_rbac_role(role, default="viewer")
-        capability_policy = {
+        workspace_capability_policy = {
             "allow": list(claim_capabilities.get(workspace_id, {}).get("allow") or policy_row["capabilities"]["allow"]),
             "deny": list(claim_capabilities.get(workspace_id, {}).get("deny") or policy_row["capabilities"]["deny"]),
         }
-        dangerous_policy = {
+        capability_policy = _resolve_inherited_allow_deny(
+            tenant_policy.get("capabilities"),
+            workspace_capability_policy,
+        )
+        workspace_dangerous_policy = {
             "allow": list(claim_dangerous.get(workspace_id, {}).get("allow") or policy_row["dangerous_action_classes"]["allow"]),
             "deny": list(claim_dangerous.get(workspace_id, {}).get("deny") or policy_row["dangerous_action_classes"]["deny"]),
         }
+        dangerous_policy = _resolve_inherited_allow_deny(
+            tenant_policy.get("dangerous_action_classes"),
+            workspace_dangerous_policy,
+        )
+        connector_policy = _resolve_inherited_allow_deny(
+            tenant_policy.get("connectors"),
+            policy_row.get("connectors"),
+        )
         trusted_owner_machine_ids = list(
             claim_trusted.get(workspace_id) or policy_row.get("trusted_owner_machine_ids") or []
         )
         access[workspace_id] = {
             "workspace_id": workspace_id,
+            "tenant_id": tenant_id,
+            "tenant_role": normalize_rbac_role(role_value, default="viewer"),
             "role": normalize_rbac_role(role_value, default="viewer"),
             "capabilities": _normalize_workspace_capability_policy(capability_policy),
+            "tenant_capabilities": _normalize_workspace_capability_policy(tenant_policy.get("capabilities")),
+            "workspace_capabilities": _normalize_workspace_capability_policy(workspace_capability_policy),
             "dangerous_action_classes": _normalize_workspace_dangerous_policy(dangerous_policy),
+            "tenant_dangerous_action_classes": _normalize_workspace_dangerous_policy(tenant_policy.get("dangerous_action_classes")),
+            "workspace_dangerous_action_classes": _normalize_workspace_dangerous_policy(workspace_dangerous_policy),
+            "connectors": _normalize_connector_permission_policy(connector_policy),
+            "tenant_connectors": _normalize_connector_permission_policy(tenant_policy.get("connectors")),
+            "workspace_connectors": _normalize_connector_permission_policy(policy_row.get("connectors")),
+            "machine_enrollment_scope": _normalize_machine_enrollment_scope(
+                policy_row.get("machine_enrollment_scope") or tenant_policy.get("machine_enrollment_scope"),
+                default="workspace",
+            ),
             "trusted_owner_machine_ids": _normalize_distinct_tokens(trusted_owner_machine_ids),
             "owner_user_id": str(user_id or "").strip() or None,
             "owner_email": str(email or "").strip().lower() or None,
@@ -613,6 +989,7 @@ def issue_token(user_id: str, *, email: Optional[str] = None, role: str = "membe
         "sub": str(user_id),
         "email": str(email or "").strip().lower() or None,
         "role": normalize_rbac_role(role),
+        "tenant_ids": [ORION_DEFAULT_TENANT_ID],
         "workspace_ids": list(ORION_DEFAULT_WORKSPACE_IDS),
         "iat": now,
         "exp": now + JWT_EXP_SECONDS,
@@ -686,6 +1063,22 @@ def allowed_workspace_ids(user: Optional[Dict[str, Any]]) -> Optional[set[str]]:
     return set(normalized)
 
 
+def allowed_tenant_ids(user: Optional[Dict[str, Any]]) -> Optional[set[str]]:
+    if not isinstance(user, dict):
+        return None
+    if bool(user.get("is_admin")):
+        return None
+    if str(user.get("auth_type") or "").strip() == "api_key":
+        return None
+    access = tenant_access_map(user)
+    if access:
+        return set(access.keys())
+    return {
+        tenant_id_for_workspace(workspace_id)
+        for workspace_id in _normalize_workspace_ids_claim(user.get("workspace_ids"))
+    }
+
+
 def workspace_access_map(current_user: Optional[Dict[str, Any]]) -> dict[str, dict[str, Any]]:
     if not isinstance(current_user, dict):
         return {}
@@ -698,10 +1091,27 @@ def workspace_access_map(current_user: Optional[Dict[str, Any]]) -> dict[str, di
                 continue
             out[workspace_id] = {
                 "workspace_id": workspace_id,
+                "tenant_id": _normalize_tenant_token(raw_entry.get("tenant_id")),
+                "tenant_role": normalize_rbac_role(raw_entry.get("tenant_role"), default="viewer"),
                 "role": normalize_rbac_role(raw_entry.get("role"), default="viewer"),
                 "capabilities": _normalize_workspace_capability_policy(raw_entry.get("capabilities")),
+                "tenant_capabilities": _normalize_workspace_capability_policy(raw_entry.get("tenant_capabilities")),
+                "workspace_capabilities": _normalize_workspace_capability_policy(raw_entry.get("workspace_capabilities")),
                 "dangerous_action_classes": _normalize_workspace_dangerous_policy(
                     raw_entry.get("dangerous_action_classes")
+                ),
+                "tenant_dangerous_action_classes": _normalize_workspace_dangerous_policy(
+                    raw_entry.get("tenant_dangerous_action_classes")
+                ),
+                "workspace_dangerous_action_classes": _normalize_workspace_dangerous_policy(
+                    raw_entry.get("workspace_dangerous_action_classes")
+                ),
+                "connectors": _normalize_connector_permission_policy(raw_entry.get("connectors")),
+                "tenant_connectors": _normalize_connector_permission_policy(raw_entry.get("tenant_connectors")),
+                "workspace_connectors": _normalize_connector_permission_policy(raw_entry.get("workspace_connectors")),
+                "machine_enrollment_scope": _normalize_machine_enrollment_scope(
+                    raw_entry.get("machine_enrollment_scope"),
+                    default="workspace",
                 ),
                 "trusted_owner_machine_ids": _normalize_distinct_tokens(
                     raw_entry.get("trusted_owner_machine_ids")
@@ -726,6 +1136,40 @@ def workspace_access_map(current_user: Optional[Dict[str, Any]]) -> dict[str, di
     )
 
 
+def tenant_access_map(current_user: Optional[Dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    workspace_access = workspace_access_map(current_user)
+    out: dict[str, dict[str, Any]] = {}
+    for workspace_id, entry in workspace_access.items():
+        if not isinstance(entry, dict):
+            continue
+        tenant_id = _normalize_tenant_token(entry.get("tenant_id"))
+        existing = out.get(tenant_id)
+        role = normalize_rbac_role(entry.get("role"), default="viewer")
+        if existing is None:
+            tenant_policy = load_tenant_policy(tenant_id)
+            out[tenant_id] = {
+                "tenant_id": tenant_id,
+                "role": role,
+                "workspace_ids": [workspace_id],
+                "capabilities": _normalize_workspace_capability_policy(tenant_policy.get("capabilities")),
+                "dangerous_action_classes": _normalize_workspace_dangerous_policy(
+                    tenant_policy.get("dangerous_action_classes")
+                ),
+                "connectors": _normalize_connector_permission_policy(tenant_policy.get("connectors")),
+                "machine_enrollment_scope": _normalize_machine_enrollment_scope(
+                    tenant_policy.get("machine_enrollment_scope"),
+                    default="workspace",
+                ),
+            }
+            continue
+        existing["workspace_ids"] = sorted(
+            {str(item) for item in list(existing.get("workspace_ids") or []) + [workspace_id] if str(item).strip()}
+        )
+        if RBAC_ROLE_ORDER[role] > RBAC_ROLE_ORDER[normalize_rbac_role(existing.get("role"), default="viewer")]:
+            existing["role"] = role
+    return out
+
+
 def workspace_role(current_user: Optional[Dict[str, Any]], workspace_id: Optional[str]) -> Optional[str]:
     if not isinstance(current_user, dict):
         return None
@@ -736,6 +1180,29 @@ def workspace_role(current_user: Optional[Dict[str, Any]], workspace_id: Optiona
         return "owner"
     token = _normalize_workspace_token(workspace_id)
     entry = workspace_access_map(current_user).get(token)
+    if isinstance(entry, dict):
+        return normalize_rbac_role(entry.get("role"), default="viewer")
+    return None
+
+
+def workspace_tenant_id(current_user: Optional[Dict[str, Any]], workspace_id: Optional[str]) -> str:
+    token = _normalize_workspace_token(workspace_id)
+    entry = workspace_access_map(current_user).get(token)
+    if isinstance(entry, dict):
+        return _normalize_tenant_token(entry.get("tenant_id"))
+    return tenant_id_for_workspace(token)
+
+
+def tenant_role(current_user: Optional[Dict[str, Any]], tenant_id: Optional[str]) -> Optional[str]:
+    if not isinstance(current_user, dict):
+        return None
+    if bool(current_user.get("is_admin")):
+        return "owner"
+    auth_type = str(current_user.get("auth_type") or "").strip().lower()
+    if auth_type in {"api_key", "disabled"}:
+        return "owner"
+    token = _normalize_tenant_token(tenant_id)
+    entry = tenant_access_map(current_user).get(token)
     if isinstance(entry, dict):
         return normalize_rbac_role(entry.get("role"), default="viewer")
     return None
@@ -765,6 +1232,22 @@ def workspace_trusted_owner_machine_ids(current_user: Optional[Dict[str, Any]], 
     return _normalize_distinct_tokens(entry.get("trusted_owner_machine_ids"))
 
 
+def workspace_connector_policy(current_user: Optional[Dict[str, Any]], workspace_id: Optional[str]) -> dict[str, list[str]]:
+    token = _normalize_workspace_token(workspace_id)
+    entry = workspace_access_map(current_user).get(token)
+    if not isinstance(entry, dict):
+        return {"allow": [], "deny": []}
+    return _normalize_connector_permission_policy(entry.get("connectors"))
+
+
+def workspace_machine_enrollment_scope(current_user: Optional[Dict[str, Any]], workspace_id: Optional[str]) -> str:
+    token = _normalize_workspace_token(workspace_id)
+    entry = workspace_access_map(current_user).get(token)
+    if not isinstance(entry, dict):
+        return "workspace"
+    return _normalize_machine_enrollment_scope(entry.get("machine_enrollment_scope"), default="workspace")
+
+
 def workspace_capability_decision(
     current_user: Optional[Dict[str, Any]],
     workspace_id: Optional[str],
@@ -784,21 +1267,49 @@ def workspace_capability_decision(
     return {"decision": "allow", "reason": "workspace_capability_allowed"}
 
 
+def workspace_connector_decision(
+    current_user: Optional[Dict[str, Any]],
+    workspace_id: Optional[str],
+    connector_id: Optional[str],
+) -> dict[str, Any]:
+    clean_connector_id = str(connector_id or "").strip().lower()
+    if not clean_connector_id:
+        return {"decision": "allow", "reason": "workspace_connector_not_applicable"}
+    policy = workspace_connector_policy(current_user, workspace_id)
+    denied = set(policy.get("deny") or [])
+    allowed = set(policy.get("allow") or [])
+    role = workspace_role(current_user, workspace_id)
+    if clean_connector_id in denied or WORKSPACE_CAPABILITY_ALL in denied:
+        return {"decision": "deny", "reason": "workspace_connector_denied"}
+    if allowed and WORKSPACE_CAPABILITY_ALL not in allowed and clean_connector_id not in allowed and role != "owner":
+        return {"decision": "deny", "reason": "workspace_connector_not_granted"}
+    return {"decision": "allow", "reason": "workspace_connector_allowed"}
+
+
 def build_workspace_authorization_metadata(
     current_user: Optional[Dict[str, Any]],
     workspace_id: Optional[str],
     *,
     capability_id: Optional[str] = None,
     machine_id: Optional[str] = None,
+    connector_id: Optional[str] = None,
 ) -> dict[str, Any]:
     token = _normalize_workspace_token(workspace_id)
+    resolved_tenant_id = workspace_tenant_id(current_user, token)
     trusted_owner_machine_ids = workspace_trusted_owner_machine_ids(current_user, token)
     clean_machine_id = str(machine_id or "").strip().lower() or None
+    connector_policy = workspace_connector_policy(current_user, token)
     return {
+        "tenant_id": resolved_tenant_id,
         "workspace_id": token,
+        "policy_scope_precedence": ["global", "tenant", "workspace", "machine", "capability"],
+        "tenant_role": tenant_role(current_user, resolved_tenant_id) or workspace_role(current_user, token) or current_user_role(current_user, default="viewer"),
         "workspace_role": workspace_role(current_user, token) or current_user_role(current_user, default="viewer"),
+        "tenant_access": tenant_access_map(current_user).get(resolved_tenant_id) or None,
         "workspace_capability_policy": workspace_capability_policy(current_user, token),
         "workspace_dangerous_action_policy": workspace_dangerous_action_policy(current_user, token),
+        "workspace_connector_policy": connector_policy,
+        "machine_enrollment_scope": workspace_machine_enrollment_scope(current_user, token),
         "computer_action_policy": {
             "allow_dangerous_classes": list(
                 workspace_dangerous_action_policy(current_user, token).get("allow") or []
@@ -814,6 +1325,11 @@ def build_workspace_authorization_metadata(
             token,
             capability_id,
         ),
+        "workspace_connector_decision": workspace_connector_decision(
+            current_user,
+            token,
+            connector_id,
+        ),
     }
 
 
@@ -821,10 +1337,22 @@ def enforce_workspace_access(
     current_user: Optional[Dict[str, Any]],
     workspace_id: Optional[str],
     *,
+    tenant_id: Optional[str] = None,
     minimum_role: str = "viewer",
     capability_id: Optional[str] = None,
+    connector_id: Optional[str] = None,
 ) -> str:
     token = _normalize_workspace_token(workspace_id)
+    resolved_tenant_id = workspace_tenant_id(current_user, token)
+    requested_tenant_id = _normalize_tenant_token(tenant_id) if tenant_id is not None else resolved_tenant_id
+    if requested_tenant_id != resolved_tenant_id:
+        raise HTTPException(
+            status_code=403,
+            detail=f"Workspace '{token}' is not available inside tenant '{requested_tenant_id}'.",
+        )
+    allowed_tenants = allowed_tenant_ids(current_user)
+    if allowed_tenants is not None and resolved_tenant_id not in allowed_tenants:
+        raise HTTPException(status_code=403, detail="Tenant is not accessible for this user.")
     allowed = allowed_workspace_ids(current_user)
     if allowed is None:
         capability_decision = workspace_capability_decision(current_user, token, capability_id)
@@ -832,6 +1360,12 @@ def enforce_workspace_access(
             raise HTTPException(
                 status_code=403,
                 detail=f"Capability '{str(capability_id or '').strip()}' is not allowed in workspace '{token}'.",
+            )
+        connector_decision = workspace_connector_decision(current_user, token, connector_id)
+        if connector_decision["decision"] != "allow":
+            raise HTTPException(
+                status_code=403,
+                detail=f"Connector '{str(connector_id or '').strip()}' is not allowed in workspace '{token}'.",
             )
         return token
     if token not in allowed:
@@ -848,6 +1382,12 @@ def enforce_workspace_access(
         raise HTTPException(
             status_code=403,
             detail=f"Capability '{str(capability_id or '').strip()}' is not allowed in workspace '{token}'.",
+        )
+    connector_decision = workspace_connector_decision(current_user, token, connector_id)
+    if connector_decision["decision"] != "allow":
+        raise HTTPException(
+            status_code=403,
+            detail=f"Connector '{str(connector_id or '').strip()}' is not allowed in workspace '{token}'.",
         )
     return token
 
@@ -919,6 +1459,12 @@ def register_user(email: str, password: str, *, name: Optional[str] = None) -> D
                 (user_id, email_token, user_name, password_hash, created_at),
             )
             for workspace_id in ORION_DEFAULT_WORKSPACE_IDS:
+                _write_workspace_registry(
+                    connection,
+                    workspace_id=workspace_id,
+                    tenant_id=ORION_DEFAULT_TENANT_ID,
+                    now_ts=created_at,
+                )
                 _write_workspace_membership(
                     connection,
                     user_id=user_id,
@@ -968,6 +1514,7 @@ def get_authenticated_user_profile(current_user: Optional[Dict[str, Any]]) -> Di
         "ok": True,
         "user": _public_user_payload(user, role=role),
         "workspace_access": list(workspace_access_map(current_user).values()),
+        "tenant_access": list(tenant_access_map(current_user).values()),
     }
 
 
@@ -1052,6 +1599,7 @@ def get_current_user(
             "user_id": user_id,
             "auth_type": "bearer",
             "email": email,
+            "tenant_ids": [entry.get("tenant_id") for entry in workspace_access.values() if isinstance(entry, dict)],
             "workspace_ids": workspace_ids,
             "workspace_roles": {
                 workspace_id: entry.get("role")
@@ -1059,6 +1607,7 @@ def get_current_user(
                 if isinstance(entry, dict)
             },
             "workspace_access": workspace_access,
+            "tenant_access": tenant_access_map({"workspace_access": workspace_access}),
             "role": role,
             "is_admin": role == "owner",
         }

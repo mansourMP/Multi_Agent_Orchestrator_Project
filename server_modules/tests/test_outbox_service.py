@@ -181,6 +181,8 @@ class OutboxServiceTests(unittest.TestCase):
         self.assertTrue(failures[0][1]["poison"])
         self.assertEqual(result["poisoned_ids"], ["evt-bad"])
         self.assertEqual(result["delivered_ids"], ["evt-good"])
+        self.assertEqual(result["status"]["last_delivery_error"]["event_id"], "evt-bad")
+        self.assertEqual(result["status"]["poisoned_count"], 1)
 
     def test_deliver_outbox_event_uses_stable_ids_for_duplicate_safety(self) -> None:
         channel_events = []
@@ -198,6 +200,7 @@ class OutboxServiceTests(unittest.TestCase):
                 utc_now_iso=lambda: "2026-04-07T00:00:00Z",
                 parse_utc_ts=lambda value: value,
                 normalize_workspace_id=lambda value: str(value or "default"),
+                normalize_tenant_id=lambda value: str(value or "default"),
                 compact_event_text=lambda value, limit=800: str(value or "")[:limit],
                 json_safe=lambda value: dict(value or {}) if isinstance(value, dict) else {},
                 safe_read_json=lambda path, default: default,
@@ -218,6 +221,7 @@ class OutboxServiceTests(unittest.TestCase):
 
             self.assertEqual(len(channel_events), 1)
             self.assertEqual(channel_events[0]["id"], "evt-1")
+            self.assertEqual(channel_events[0]["tenant_id"], "tenant-1")
             self.assertEqual(channel_events[0]["action"], "approval_resolved")
         finally:
             importlib.reload(runtime_events)

@@ -1663,6 +1663,8 @@ def register_agent_workspace_routes(app) -> None:
 
     async def _artifact_preview_payload(
         path: str,
+        *,
+        current_user: Any,
     ):
         normalized_path = _normalize_workspace_material_path(path)
         if not normalized_path:
@@ -1670,6 +1672,12 @@ def register_agent_workspace_routes(app) -> None:
 
         artifact_metadata = artifact_service.load_artifact_metadata(normalized_path)
         if artifact_metadata is not None:
+            enforce_workspace_access(
+                current_user,
+                artifact_metadata.get("workspace_id") or "default",
+                tenant_id=artifact_metadata.get("tenant_id"),
+                minimum_role="viewer",
+            )
             target = artifact_service.resolve_artifact_content_path(normalized_path)
             if target is None:
                 raise HTTPException(status_code=404, detail="Artifact content is unavailable for this canonical artifact.")
@@ -1747,17 +1755,26 @@ def register_agent_workspace_routes(app) -> None:
     @app.get("/artifacts/preview", dependencies=[Depends(require_api_key)], response_model=ApiArtifactPreviewResponse)
     async def get_artifact_preview(
         path: str,
+        current_user=Depends(require_api_key),
     ):
-        return await _artifact_preview_payload(path)
+        return await _artifact_preview_payload(path, current_user=current_user)
 
     async def _artifact_file_response(
         path: str,
+        *,
+        current_user: Any,
     ):
         normalized_path = _normalize_workspace_material_path(path)
         if not normalized_path:
             raise HTTPException(status_code=400, detail="path is required.")
         artifact_metadata = artifact_service.load_artifact_metadata(normalized_path)
         if artifact_metadata is not None:
+            enforce_workspace_access(
+                current_user,
+                artifact_metadata.get("workspace_id") or "default",
+                tenant_id=artifact_metadata.get("tenant_id"),
+                minimum_role="viewer",
+            )
             target = artifact_service.resolve_artifact_content_path(normalized_path)
             if target is None:
                 raise HTTPException(status_code=404, detail="Artifact content is unavailable for this canonical artifact.")
@@ -1782,14 +1799,16 @@ def register_agent_workspace_routes(app) -> None:
     @app.get("/artifacts/content", dependencies=[Depends(require_api_key)])
     async def get_artifact_content(
         path: str,
+        current_user=Depends(require_api_key),
     ):
-        return await _artifact_file_response(path)
+        return await _artifact_file_response(path, current_user=current_user)
 
     @app.get("/artifacts/file", dependencies=[Depends(require_api_key)])
     async def get_artifact_file(
         path: str,
+        current_user=Depends(require_api_key),
     ):
-        return await _artifact_file_response(path)
+        return await _artifact_file_response(path, current_user=current_user)
 
     @app.get("/agents/workspace/file-diff", dependencies=[Depends(require_admin_api_key)])
     async def get_agent_workspace_file_diff(

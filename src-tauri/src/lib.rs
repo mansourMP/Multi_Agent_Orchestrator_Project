@@ -1546,6 +1546,7 @@ fn bootstrap_machine_enrollment(
 
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .invoke_handler(tauri::generate_handler![
             open_external,
             openai_codex_oauth_login,

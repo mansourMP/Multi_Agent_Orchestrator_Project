@@ -1,7 +1,7 @@
 'use client';
 
 import type { ArtifactItem, ArtifactPreviewMode } from '@/lib/artifactsPresentation';
-import { artifactSurfaceLabel } from '@/lib/artifactsPresentation';
+import { artifactExtension, artifactSurfaceLabel } from '@/lib/artifactsPresentation';
 import { ArtifactHtmlPreview } from './ArtifactHtmlPreview';
 import { ArtifactMarkdownPreview } from './ArtifactMarkdownPreview';
 
@@ -16,6 +16,10 @@ type ArtifactPreviewViewProps = {
 };
 
 function parseCsvPreview(raw: string): string[][] {
+  return parseDelimitedPreview(raw, ',');
+}
+
+function parseDelimitedPreview(raw: string, delimiter: string): string[][] {
   const lines = String(raw || '')
     .replace(/\r\n/g, '\n')
     .replace(/\r/g, '\n')
@@ -38,7 +42,7 @@ function parseCsvPreview(raw: string): string[][] {
         inQuotes = !inQuotes;
         continue;
       }
-      if (char === ',' && !inQuotes) {
+      if (char === delimiter && !inQuotes) {
         values.push(current);
         current = '';
         continue;
@@ -59,6 +63,13 @@ export function ArtifactPreviewView({
   loading,
   error,
 }: ArtifactPreviewViewProps) {
+  const extension = artifactExtension(previewTarget.uri_or_path) || artifactExtension(previewTarget.label);
+  const spreadsheetDelimiter = previewTarget.content_type === 'text/tab-separated-values'
+    || extension === '.tsv'
+    || extension === '.tab'
+    ? '\t'
+    : ',';
+
   if (loading) {
     return <div className="orion-artifact-detail-fallback">Loading preview…</div>;
   }
@@ -105,9 +116,9 @@ export function ArtifactPreviewView({
   }
 
   if (previewMode === 'csv') {
-    const rows = parseCsvPreview(textContent);
+    const rows = spreadsheetDelimiter === ',' ? parseCsvPreview(textContent) : parseDelimitedPreview(textContent, spreadsheetDelimiter);
     if (rows.length === 0) {
-      return <div className="orion-artifact-detail-fallback">No previewable rows found in this CSV file.</div>;
+      return <div className="orion-artifact-detail-fallback">No previewable rows found in this spreadsheet text file.</div>;
     }
     const [header, ...body] = rows;
     return (

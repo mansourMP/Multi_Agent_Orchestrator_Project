@@ -8,7 +8,18 @@ type ArtifactCodeViewProps = {
   language: string;
 };
 
+function normalizeCode(code: string, language: string): string {
+  if (language !== 'json') return code;
+  try {
+    return JSON.stringify(JSON.parse(code), null, 2);
+  } catch {
+    return code;
+  }
+}
+
 export function ArtifactCodeView({ code, language }: ArtifactCodeViewProps) {
+  const normalizedCode = normalizeCode(code, language);
+
   return (
     <div className="orion-artifact-detail-code">
       <SyntaxHighlighter
@@ -26,7 +37,7 @@ export function ArtifactCodeView({ code, language }: ArtifactCodeViewProps) {
         }}
         codeTagProps={{ style: { fontFamily: 'var(--font-mono, "SFMono-Regular", Consolas, monospace)' } }}
       >
-        {code}
+        {normalizedCode}
       </SyntaxHighlighter>
     </div>
   );

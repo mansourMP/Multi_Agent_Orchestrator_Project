@@ -139,7 +139,7 @@ export function artifactFormat(item: ArtifactItem): ArtifactFormat {
   if (item.kind === 'screenshot' || item.kind === 'image') return 'image';
   if (ext === '.doc' || ext === '.docx') return 'word';
   if (ext === '.ppt' || ext === '.pptx') return 'powerpoint';
-  if (ext === '.xls' || ext === '.xlsx' || ext === '.csv') return 'spreadsheet';
+  if (ext === '.xls' || ext === '.xlsx' || ext === '.csv' || ext === '.tsv' || ext === '.tab') return 'spreadsheet';
   if (ext === '.pdf') return 'pdf';
   if (ext === '.png' || ext === '.jpg' || ext === '.jpeg' || ext === '.webp' || ext === '.gif' || ext === '.svg') return 'image';
   if (
@@ -173,7 +173,7 @@ export function artifactPreviewMode(item: ArtifactItem): ArtifactPreviewMode {
   if (ext === '.html' || ext === '.htm') return 'html';
   if (ext === '.md' || ext === '.markdown') return 'markdown';
   if (ext === '.pdf') return 'pdf';
-  if (ext === '.csv') return 'csv';
+  if (ext === '.csv' || ext === '.tsv' || ext === '.tab') return 'csv';
   if (artifactFormat(item) === 'image') return 'image';
   if (artifactFormat(item) === 'text') return 'text';
   return 'none';

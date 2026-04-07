@@ -12,6 +12,7 @@ import { ErrorState } from '@/components/orion/state/ErrorState';
 import { LoadingState } from '@/components/orion/state/LoadingState';
 import { RetryActions } from '@/components/orion/state/RetryActions';
 import { ArtifactCard } from '@/components/orion/artifacts/ArtifactCard';
+import { ArtifactDetailPane } from '@/components/orion/artifacts/ArtifactDetailPane';
 import {
   useArtifactsBrowser,
 } from '@/hooks/pages/useArtifactsBrowser';
@@ -45,6 +46,11 @@ export default function ArtifactsPage() {
     channelOptions,
     hasActiveFilters,
     clearFilters,
+    selectedArtifact,
+    selectedPreviewTarget,
+    selectArtifact,
+    artifactContentHref,
+    artifactDownloadHref,
     openArtifact,
     revealArtifact,
     revealLabel,
@@ -233,27 +239,47 @@ export default function ArtifactsPage() {
         />
       ) : (
         <PageCollection className="orion-home-list-panel" bodyClassName="orion-asset-collection-body">
-          <section className="orion-asset-grid">
-            {filteredItems.map((item, index) => {
-              const previewTarget = previewTargetById.get(item.id) || item;
-              const resolvedLocation = String(previewTarget.uri_or_path || '').trim();
-              const showReveal = Boolean(desktopBridge?.desktop && isLocalFileTarget(resolvedLocation));
-              const rowKey = [item.id, item.run_id || '', item.updated_at || '', item.uri_or_path || ''].join('::');
+          <div className="orion-artifact-workspace">
+            <section className="orion-artifact-list-pane">
+              <div className="orion-asset-grid">
+                {filteredItems.map((item, index) => {
+                  const previewTarget = previewTargetById.get(item.id) || item;
+                  const resolvedLocation = String(previewTarget.uri_or_path || '').trim();
+                  const showReveal = Boolean(desktopBridge?.desktop && isLocalFileTarget(resolvedLocation));
+                  const rowKey = [item.id, item.run_id || '', item.updated_at || '', item.uri_or_path || ''].join('::');
 
-              return (
-                <ArtifactCard
-                  key={`${rowKey}::${index}`}
-                  item={item}
-                  previewTarget={previewTarget}
-                  revealLabel={revealLabel}
-                  viewMode={viewMode}
-                  showReveal={showReveal}
-                  onOpen={() => void openArtifact(item)}
-                  onReveal={() => void revealArtifact(item)}
-                />
-              );
-            })}
-          </section>
+                  return (
+                    <ArtifactCard
+                      key={`${rowKey}::${index}`}
+                      item={item}
+                      previewTarget={previewTarget}
+                      isSelected={selectedArtifact?.id === item.id}
+                      revealLabel={revealLabel}
+                      viewMode={viewMode}
+                      showReveal={showReveal}
+                      onSelect={() => selectArtifact(item)}
+                      onReveal={() => void revealArtifact(item)}
+                    />
+                  );
+                })}
+              </div>
+            </section>
+
+            <ArtifactDetailPane
+              item={selectedArtifact}
+              previewTarget={selectedPreviewTarget}
+              contentHref={selectedPreviewTarget ? artifactContentHref(selectedPreviewTarget) : null}
+              downloadHref={selectedPreviewTarget ? artifactDownloadHref(selectedPreviewTarget) : null}
+              showReveal={Boolean(
+                selectedPreviewTarget
+                && desktopBridge?.desktop
+                && isLocalFileTarget(String(selectedPreviewTarget.uri_or_path || '').trim()),
+              )}
+              revealLabel={revealLabel}
+              onOpenExternal={() => (selectedArtifact ? void openArtifact(selectedArtifact) : undefined)}
+              onReveal={() => (selectedArtifact ? void revealArtifact(selectedArtifact) : undefined)}
+            />
+          </div>
         </PageCollection>
       )}
     </div>

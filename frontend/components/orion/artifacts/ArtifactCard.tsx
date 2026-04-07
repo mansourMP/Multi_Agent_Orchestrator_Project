@@ -22,20 +22,22 @@ import {
 type ArtifactCardProps = {
   item: ArtifactItem;
   previewTarget: ArtifactItem;
+  isSelected: boolean;
   revealLabel: string;
   viewMode: ArtifactView;
   showReveal: boolean;
-  onOpen: () => void;
+  onSelect: () => void;
   onReveal: () => void;
 };
 
 export function ArtifactCard({
   item,
   previewTarget,
+  isSelected,
   revealLabel,
   viewMode,
   showReveal,
-  onOpen,
+  onSelect,
   onReveal,
 }: ArtifactCardProps) {
   const kindGroup = artifactKindGroup(item.kind);
@@ -49,14 +51,14 @@ export function ArtifactCard({
 
   return (
     <article
-      className="orion-asset-card"
+      className={`orion-asset-card${isSelected ? ' is-selected' : ''}`}
       role="button"
       tabIndex={0}
-      onClick={onOpen}
+      onClick={onSelect}
       onKeyDown={(event) => {
         if (event.key === 'Enter' || event.key === ' ') {
           event.preventDefault();
-          onOpen();
+          onSelect();
         }
       }}
     >
@@ -122,10 +124,10 @@ export function ArtifactCard({
           style={{ minHeight: 34, paddingInline: 10 }}
           onClick={(event) => {
             event.stopPropagation();
-            onOpen();
+            onSelect();
           }}
         >
-          Open
+          Inspect
         </button>
         {showReveal ? (
           <button

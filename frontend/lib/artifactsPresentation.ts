@@ -40,6 +40,7 @@ export type ArtifactPayload = {
 export type KindFilter = 'all' | 'screenshots' | 'reports' | 'data' | 'links' | 'files';
 export type ArtifactView = 'deliverables' | 'evidence' | 'system' | 'all';
 export type ArtifactFormat = 'word' | 'powerpoint' | 'spreadsheet' | 'pdf' | 'image' | 'text' | 'generic';
+export type ArtifactPreviewMode = 'html' | 'markdown' | 'text' | 'none';
 
 export function toDateLabel(value?: string | null): string {
   if (!value) return '—';
@@ -104,7 +105,7 @@ function isTemporaryLocalArtifactLink(value?: string | null): boolean {
   return ['127.0.0.1', 'localhost', '0.0.0.0'].includes(parsed.hostname.toLowerCase());
 }
 
-function artifactExtension(value?: string | null): string {
+export function artifactExtension(value?: string | null): string {
   const normalized = String(value || '').trim().toLowerCase();
   if (!normalized) return '';
   const parsed = parseArtifactUrl(normalized);
@@ -121,8 +122,64 @@ export function artifactFormat(item: ArtifactItem): ArtifactFormat {
   if (ext === '.xls' || ext === '.xlsx' || ext === '.csv') return 'spreadsheet';
   if (ext === '.pdf') return 'pdf';
   if (ext === '.png' || ext === '.jpg' || ext === '.jpeg' || ext === '.webp' || ext === '.gif' || ext === '.svg') return 'image';
-  if (ext === '.txt' || ext === '.md' || ext === '.json' || ext === '.html' || ext === '.htm') return 'text';
+  if (
+    ext === '.txt'
+    || ext === '.md'
+    || ext === '.markdown'
+    || ext === '.json'
+    || ext === '.html'
+    || ext === '.htm'
+    || ext === '.js'
+    || ext === '.jsx'
+    || ext === '.ts'
+    || ext === '.tsx'
+    || ext === '.css'
+    || ext === '.scss'
+    || ext === '.sass'
+    || ext === '.xml'
+    || ext === '.yaml'
+    || ext === '.yml'
+    || ext === '.toml'
+    || ext === '.py'
+    || ext === '.sql'
+    || ext === '.sh'
+    || ext === '.ps1'
+  ) return 'text';
   return 'generic';
+}
+
+export function artifactPreviewMode(item: ArtifactItem): ArtifactPreviewMode {
+  const ext = artifactExtension(item.uri_or_path) || artifactExtension(item.label);
+  if (ext === '.html' || ext === '.htm') return 'html';
+  if (ext === '.md' || ext === '.markdown') return 'markdown';
+  if (artifactFormat(item) === 'text') return 'text';
+  return 'none';
+}
+
+export function artifactDefaultViewerTab(item: ArtifactItem): 'view' | 'code' {
+  const mode = artifactPreviewMode(item);
+  return mode === 'html' || mode === 'markdown' ? 'view' : 'code';
+}
+
+export function artifactCodeLanguage(item: ArtifactItem): string {
+  const ext = artifactExtension(item.uri_or_path) || artifactExtension(item.label);
+  if (ext === '.html' || ext === '.htm') return 'html';
+  if (ext === '.md' || ext === '.markdown') return 'markdown';
+  if (ext === '.json') return 'json';
+  if (ext === '.js') return 'javascript';
+  if (ext === '.jsx') return 'jsx';
+  if (ext === '.ts') return 'typescript';
+  if (ext === '.tsx') return 'tsx';
+  if (ext === '.css') return 'css';
+  if (ext === '.scss' || ext === '.sass') return 'scss';
+  if (ext === '.xml') return 'xml';
+  if (ext === '.yaml' || ext === '.yml') return 'yaml';
+  if (ext === '.toml') return 'toml';
+  if (ext === '.py') return 'python';
+  if (ext === '.sql') return 'sql';
+  if (ext === '.sh') return 'bash';
+  if (ext === '.ps1') return 'powershell';
+  return 'text';
 }
 
 export function artifactFormatLabel(item: ArtifactItem): string {

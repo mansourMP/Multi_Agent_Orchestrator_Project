@@ -108,6 +108,35 @@ export type RunReplayResponse = {
   } | null;
 };
 
+export type ComputerActionEventPayload = {
+  schema?: 'empyralis.computer_action.v1';
+  mode?: 'observing' | 'acting' | 'paused' | 'takeover' | string;
+  phase?: 'planned' | 'completed' | 'failed' | 'paused' | string;
+  step_number?: number | null;
+  step_total?: number | null;
+  tool?: string | null;
+  action_type?: string | null;
+  label?: string | null;
+  reason?: string | null;
+  detail?: string | null;
+  status?: string | null;
+  success?: boolean | null;
+  x?: number | null;
+  y?: number | null;
+  text_summary?: string | null;
+  file_path?: string | null;
+  url?: string | null;
+  error?: string | null;
+  confidence?: number | null;
+  certainty?: string | null;
+  retry_count?: number | null;
+  replanned?: boolean | null;
+  readiness_state?: string | null;
+  readiness_summary?: string | null;
+  grounding_summary?: string | null;
+  recovery_strategy?: string | null;
+};
+
 export type ArtifactItem = Record<string, unknown> & {
   id?: string | null;
   run_id?: string | null;

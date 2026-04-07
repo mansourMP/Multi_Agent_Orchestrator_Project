@@ -1885,6 +1885,8 @@ def _live_computer_action_payload(
         or tool_id
     )
     text_summary = str(action_row.get("text_preview") or operation_row.get("text") or "").strip()
+    confidence_value = action_row.get("confidence")
+    retry_count_value = action_row.get("retry_count")
     payload = {
         "schema": "empyralis.computer_action.v1",
         "mode": str(mode or "acting").strip().lower() or "acting",
@@ -1904,6 +1906,18 @@ def _live_computer_action_payload(
         "file_path": str(action_row.get("file_path") or "").strip() or None,
         "url": str(action_row.get("url") or operation_row.get("url") or "").strip() or None,
         "error": _bounded_text(str(error or "").strip(), 240) if str(error or "").strip() else None,
+        "confidence": float(confidence_value) if isinstance(confidence_value, (int, float)) else None,
+        "certainty": str(action_row.get("certainty") or "").strip().lower() or None,
+        "retry_count": int(retry_count_value) if isinstance(retry_count_value, (int, float)) else None,
+        "replanned": bool(action_row.get("replanned")) if action_row.get("replanned") is not None else None,
+        "readiness_state": str(action_row.get("readiness_state") or "").strip().lower() or None,
+        "readiness_summary": _bounded_text(str(action_row.get("readiness_summary") or "").strip(), 180)
+        if str(action_row.get("readiness_summary") or "").strip()
+        else None,
+        "grounding_summary": _bounded_text(str(action_row.get("grounding_summary") or "").strip(), 180)
+        if str(action_row.get("grounding_summary") or "").strip()
+        else None,
+        "recovery_strategy": str(action_row.get("recovery_strategy") or "").strip().lower() or None,
     }
     return {key: value for key, value in payload.items() if value is not None}
 

@@ -22,7 +22,7 @@ import {
   type AuthenticatedEventStreamConnection,
 } from '@/lib/authenticatedEventStream';
 import { apiClient } from '@/lib/api-client';
-import type { RunListItem } from '@shared/api-contract';
+import type { ComputerActionEventPayload, RunListItem } from '@shared/api-contract';
 import { OsPageHeader } from '@/components/ui/OsPageHeader';
 import { ensureControlPlaneSession } from '@/lib/controlPlaneSession';
 import { formatExecutionTargetLabel } from '@/lib/executionTargets';
@@ -156,6 +156,8 @@ type RunDiagnostics = {
   local_status?: string | null;
   local_last_heartbeat_at?: string | null;
   browser_resume_supported?: boolean | null;
+  local_execution_resume_supported?: boolean | null;
+  manual_takeover_active?: boolean | null;
   resumed_after_restart?: boolean;
   retry_of_run_id?: string | null;
   retry_root_run_id?: string | null;
@@ -207,6 +209,8 @@ type RunDetailPayload = {
   } | null;
   result_data?: unknown;
   tool_policy_precheck?: {
+    require_confirmation_count?: number;
+    approval_required_count?: number;
     capability_ids?: string[];
     capabilities?: Array<{
       id?: string;
@@ -302,6 +306,7 @@ type RunDetailPayload = {
   } | null;
   diagnostics?: RunDiagnostics;
   node_states?: RunNodeStatesPayload | null;
+  tool_policy_audit?: Array<Record<string, unknown>> | null;
 };
 
 type DesktopBridge = {
@@ -333,6 +338,72 @@ type TimelineEvent = {
   event: string;
   message: string;
   toolHint: string | null;
+  rawData: Record<string, unknown> | null;
+};
+
+type ComputerActionView = {
+  id: string;
+  ts: string;
+  mode: string;
+  phase: string;
+  stepNumber: number | null;
+  stepTotal: number | null;
+  tool: string;
+  actionType: string;
+  label: string;
+  reason: string | null;
+  detail: string | null;
+  success: boolean | null;
+  status: string | null;
+  textSummary: string | null;
+  filePath: string | null;
+  url: string | null;
+  error: string | null;
+  x: number | null;
+  y: number | null;
+  confidence: number | null;
+  certainty: string | null;
+  retryCount: number | null;
+  replanned: boolean;
+  readinessState: string | null;
+  readinessSummary: string | null;
+  groundingSummary: string | null;
+  recoveryStrategy: string | null;
+};
+
+type ReplayStepView = {
+  id: string;
+  order: number;
+  stepNumber: number | null;
+  stepTotal: number | null;
+  ts: string;
+  endTs: string | null;
+  elapsedMs: number | null;
+  tool: string;
+  actionType: string;
+  label: string;
+  reason: string | null;
+  detail: string | null;
+  textSummary: string | null;
+  textSummaryRedacted: boolean;
+  success: boolean | null;
+  status: string | null;
+  phase: string;
+  mode: string;
+  error: string | null;
+  x: number | null;
+  y: number | null;
+  screenshotPath: string | null;
+  filePath: string | null;
+  url: string | null;
+  confidence: number | null;
+  certainty: string | null;
+  retryCount: number | null;
+  replanned: boolean;
+  readinessState: string | null;
+  readinessSummary: string | null;
+  groundingSummary: string | null;
+  recoveryStrategy: string | null;
 };
 
 type LocalExecutionStepView = {
@@ -349,7 +420,7 @@ type LocalExecutionStepView = {
 
 type StreamState = 'idle' | 'connecting' | 'connected' | 'disconnected' | 'closed';
 const TERMINAL_RUN_STATUSES = new Set(['completed', 'failed', 'error', 'stopped', 'timeout', 'cancelled']);
-type InspectFocusTarget = 'workflow' | 'timeline' | 'logs' | 'approvals' | 'screenshots' | 'artifacts' | null;
+type InspectFocusTarget = 'workflow' | 'timeline' | 'logs' | 'approvals' | 'replay' | 'screenshots' | 'artifacts' | null;
 type InspectSectionTarget = Exclude<InspectFocusTarget, null>;
 
 function compactText(value: string | null | undefined, fallback = '--', maxLength = 180): string {
@@ -471,8 +542,68 @@ function workflowNodeTone(status?: string): { color: string; label: string; back
   };
 }
 
+function replayStepTone(step: ReplayStepView | null | undefined): { color: string; label: string; background: string; border: string } {
+  if (!step) {
+    return {
+      color: 'var(--text-tertiary)',
+      label: 'Unknown',
+      background: 'var(--bg-element)',
+      border: 'var(--border-default)',
+    };
+  }
+  const phase = String(step.phase || '').trim().toLowerCase();
+  const status = String(step.status || '').trim().toLowerCase();
+  if (phase === 'failed' || status === 'failed' || status === 'error' || step.success === false) {
+    return {
+      color: 'var(--error-fg)',
+      label: 'Failed',
+      background: 'var(--error-bg)',
+      border: 'var(--error-border)',
+    };
+  }
+  if (phase === 'paused' || status === 'waiting_for_input' || step.mode === 'paused' || step.mode === 'takeover') {
+    return {
+      color: 'var(--warning-fg)',
+      label: 'Paused',
+      background: 'var(--warning-bg)',
+      border: 'var(--warning-border)',
+    };
+  }
+  if (phase === 'completed' || status === 'completed' || step.success === true) {
+    return {
+      color: 'var(--success-fg)',
+      label: 'Completed',
+      background: 'var(--success-bg)',
+      border: 'var(--success-border)',
+    };
+  }
+  if (phase === 'planned') {
+    return {
+      color: 'var(--primary-base)',
+      label: 'Planned',
+      background: 'var(--primary-soft)',
+      border: 'var(--primary-border-soft)',
+    };
+  }
+  return {
+    color: 'var(--text-secondary)',
+    label: phase || status || 'Recorded',
+    background: 'var(--bg-element)',
+    border: 'var(--border-default)',
+  };
+}
+
+function formatConfidenceLabel(confidence?: number | null, certainty?: string | null): string | null {
+  if (typeof confidence === 'number' && Number.isFinite(confidence)) {
+    const certaintyLabel = String(certainty || '').trim();
+    return `confidence ${(confidence * 100).toFixed(0)}%${certaintyLabel ? ` · ${certaintyLabel}` : ''}`;
+  }
+  const certaintyLabel = String(certainty || '').trim();
+  return certaintyLabel ? `confidence ${certaintyLabel}` : null;
+}
+
 function normalizeInspectFocus(value: string | null): InspectFocusTarget {
-  if (value === 'workflow' || value === 'timeline' || value === 'logs' || value === 'approvals' || value === 'screenshots' || value === 'artifacts') {
+  if (value === 'workflow' || value === 'timeline' || value === 'logs' || value === 'approvals' || value === 'replay' || value === 'screenshots' || value === 'artifacts') {
     return value;
   }
   return null;
@@ -699,6 +830,152 @@ function ArtifactImagePreview({ path, alt }: { path: string; alt: string }) {
   );
 }
 
+function ReplayScreenshotPreview({
+  path,
+  alt,
+  marker,
+}: {
+  path: string;
+  alt: string;
+  marker?: { x: number | null; y: number | null } | null;
+}) {
+  const normalizedPath = String(path || '').trim();
+  const [blobPreview, setBlobPreview] = useState<{ path: string; url: string }>({ path: '', url: '' });
+  const [naturalSize, setNaturalSize] = useState<{ width: number; height: number }>({ width: 0, height: 0 });
+
+  useEffect(() => {
+    if (!normalizedPath || isHttpTarget(normalizedPath)) {
+      setNaturalSize({ width: 0, height: 0 });
+      return;
+    }
+    let active = true;
+    let nextObjectUrl = '';
+    void fetchRuntimeArtifactBlob(normalizedPath)
+      .then((blob) => {
+        nextObjectUrl = URL.createObjectURL(blob);
+        if (active) {
+          setBlobPreview((current) => {
+            if (current.url && current.url !== nextObjectUrl) URL.revokeObjectURL(current.url);
+            return { path: normalizedPath, url: nextObjectUrl };
+          });
+        } else {
+          URL.revokeObjectURL(nextObjectUrl);
+        }
+      })
+      .catch(() => {
+        if (active) {
+          setBlobPreview((current) => {
+            if (current.url) URL.revokeObjectURL(current.url);
+            return { path: normalizedPath, url: '' };
+          });
+        }
+      });
+    return () => {
+      active = false;
+      if (nextObjectUrl) {
+        setBlobPreview((current) => (current.url === nextObjectUrl ? { path: normalizedPath, url: '' } : current));
+        URL.revokeObjectURL(nextObjectUrl);
+      }
+    };
+  }, [normalizedPath]);
+
+  const objectUrl = !normalizedPath
+    ? ''
+    : isHttpTarget(normalizedPath)
+      ? normalizedPath
+      : blobPreview.path === normalizedPath
+        ? blobPreview.url
+        : '';
+
+  const markerVisible = Boolean(
+    objectUrl
+    && marker
+    && typeof marker.x === 'number'
+    && typeof marker.y === 'number'
+    && naturalSize.width > 0
+    && naturalSize.height > 0
+    && marker.x >= 0
+    && marker.y >= 0
+    && marker.x <= naturalSize.width
+    && marker.y <= naturalSize.height,
+  );
+  const markerLeft = markerVisible ? `${((marker!.x as number) / naturalSize.width) * 100}%` : '50%';
+  const markerTop = markerVisible ? `${((marker!.y as number) / naturalSize.height) * 100}%` : '50%';
+
+  if (!objectUrl) {
+    return (
+      <div
+        style={{
+          minHeight: 320,
+          display: 'grid',
+          placeItems: 'center',
+          color: 'var(--text-secondary)',
+          fontSize: 12,
+          background: 'var(--bg-element)',
+        }}
+      >
+        Preview unavailable
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ position: 'relative', width: '100%', background: 'var(--bg-panel)' }}>
+      <img
+        src={objectUrl}
+        alt={alt}
+        onLoad={(event) => {
+          const target = event.currentTarget;
+          setNaturalSize({ width: target.naturalWidth || 0, height: target.naturalHeight || 0 });
+        }}
+        style={{ display: 'block', width: '100%', height: 'auto' }}
+      />
+      {markerVisible ? (
+        <>
+          <div
+            style={{
+              position: 'absolute',
+              left: markerLeft,
+              top: markerTop,
+              width: 34,
+              height: 34,
+              transform: 'translate(-50%, -50%)',
+              borderRadius: '50%',
+              border: '3px solid rgba(59,130,246,0.95)',
+              boxShadow: '0 0 0 8px rgba(59,130,246,0.18), 0 8px 22px rgba(15,23,42,0.24)',
+              pointerEvents: 'none',
+            }}
+          />
+          <div
+            style={{
+              position: 'absolute',
+              left: markerLeft,
+              top: markerTop,
+              width: 2,
+              height: 46,
+              transform: 'translate(-50%, -50%)',
+              background: 'rgba(59,130,246,0.82)',
+              pointerEvents: 'none',
+            }}
+          />
+          <div
+            style={{
+              position: 'absolute',
+              left: markerLeft,
+              top: markerTop,
+              width: 46,
+              height: 2,
+              transform: 'translate(-50%, -50%)',
+              background: 'rgba(59,130,246,0.82)',
+              pointerEvents: 'none',
+            }}
+          />
+        </>
+      ) : null}
+    </div>
+  );
+}
+
 function extractRunMetadata(
   runDetail: RunDetailPayload | null,
   replayItem: ReplayPayload['item'] | null,
@@ -761,6 +1038,232 @@ function summarizeToolHint(data: unknown, event: string): string | null {
   return null;
 }
 
+function compactComputerActionDetail(record: Record<string, unknown>): string | null {
+  const candidates = [
+    record.detail,
+    record.text_summary,
+    record.textPreview,
+    record.text_preview,
+    record.output_preview,
+    record.title,
+    record.url,
+    record.file_path,
+    record.filePath,
+    record.summary,
+  ];
+  for (const value of candidates) {
+    const text = String(value || '').trim();
+    if (text) return compactText(text, '--', 220);
+  }
+  return null;
+}
+
+function normalizeComputerActionView(
+  payload: Record<string, unknown>,
+  options: {
+    fallbackId: string;
+    fallbackTs: string;
+  },
+): ComputerActionView | null {
+  const { fallbackId, fallbackTs } = options;
+  const raw = payload as ComputerActionEventPayload & Record<string, unknown>;
+  const label = String(raw.label || raw.reason || raw.detail || raw.action_type || raw.tool || '').trim();
+  if (!label) return null;
+  const stepNumber = typeof raw.step_number === 'number' && Number.isFinite(raw.step_number) ? raw.step_number : null;
+  const stepTotal = typeof raw.step_total === 'number' && Number.isFinite(raw.step_total) ? raw.step_total : null;
+  const success = typeof raw.success === 'boolean' ? raw.success : null;
+  const x = typeof raw.x === 'number' && Number.isFinite(raw.x) ? raw.x : null;
+  const y = typeof raw.y === 'number' && Number.isFinite(raw.y) ? raw.y : null;
+  const confidence = typeof raw.confidence === 'number' && Number.isFinite(raw.confidence) ? raw.confidence : null;
+  const retryCount = typeof raw.retry_count === 'number' && Number.isFinite(raw.retry_count) ? raw.retry_count : null;
+  return {
+    id: String(raw.id || fallbackId),
+    ts: String(raw.ts || fallbackTs || ''),
+    mode: String(raw.mode || 'acting').trim().toLowerCase() || 'acting',
+    phase: String(raw.phase || 'completed').trim().toLowerCase() || 'completed',
+    stepNumber,
+    stepTotal,
+    tool: String(raw.tool || 'computer_control').trim() || 'computer_control',
+    actionType: String(raw.action_type || raw.tool || 'action').trim().toLowerCase() || 'action',
+    label,
+    reason: String(raw.reason || '').trim() || null,
+    detail: compactComputerActionDetail(raw),
+    success,
+    status: String(raw.status || '').trim().toLowerCase() || null,
+    textSummary: String(raw.text_summary || '').trim() || null,
+    filePath: String(raw.file_path || '').trim() || null,
+    url: String(raw.url || '').trim() || null,
+    error: String(raw.error || '').trim() || null,
+    x,
+    y,
+    confidence,
+    certainty: String(raw.certainty || '').trim().toLowerCase() || null,
+    retryCount,
+    replanned: Boolean(raw.replanned),
+    readinessState: String(raw.readiness_state || '').trim().toLowerCase() || null,
+    readinessSummary: String(raw.readiness_summary || '').trim() || null,
+    groundingSummary: String(raw.grounding_summary || '').trim() || null,
+    recoveryStrategy: String(raw.recovery_strategy || '').trim().toLowerCase() || null,
+  };
+}
+
+function parseTimestampMs(value?: string | null): number | null {
+  if (!value) return null;
+  const ts = Date.parse(value);
+  return Number.isFinite(ts) ? ts : null;
+}
+
+function replayPhaseRank(value?: string | null): number {
+  const normalized = String(value || '').trim().toLowerCase();
+  if (normalized === 'failed') return 4;
+  if (normalized === 'paused') return 3;
+  if (normalized === 'completed') return 2;
+  if (normalized === 'planned') return 1;
+  return 0;
+}
+
+function isImageArtifactPath(value?: string | null): boolean {
+  return /\.(png|jpg|jpeg|webp|gif)$/i.test(String(value || '').trim());
+}
+
+function actionFingerprintForReplay(item: ComputerActionView): string {
+  if (typeof item.stepNumber === 'number') {
+    return `step:${item.stepNumber}:${item.tool}:${item.actionType}`;
+  }
+  return `${item.ts}:${item.tool}:${item.actionType}:${item.label}`;
+}
+
+function redactReplayTextSummary(
+  textSummary: string | null,
+  actionType: string,
+  toolPolicyAudit: Array<Record<string, unknown>> | null | undefined,
+): { value: string | null; redacted: boolean } {
+  const normalized = String(textSummary || '').trim();
+  if (!normalized) return { value: null, redacted: false };
+  if (normalized.includes('***redacted***')) return { value: '***redacted***', redacted: true };
+  const sensitiveTyping = String(actionType || '').trim().toLowerCase() === 'type'
+    && Array.isArray(toolPolicyAudit)
+    && toolPolicyAudit.some((item) => {
+      if (!item || typeof item !== 'object') return false;
+      const toolId = String(item.tool_id || '').trim().toLowerCase();
+      return toolId === 'computer_control.type' && Boolean(item.is_sensitive);
+    });
+  if (sensitiveTyping) return { value: '***redacted***', redacted: true };
+  return { value: normalized, redacted: false };
+}
+
+function chooseReplayScreenshotPath(
+  action: ComputerActionView,
+  order: number,
+  screenshotEntries: Array<{ path: string; stepNumber: number | null; order: number }>,
+): string | null {
+  if (isImageArtifactPath(action.filePath)) return action.filePath;
+  if (screenshotEntries.length === 0) return null;
+  if (typeof action.stepNumber === 'number') {
+    const exact = screenshotEntries.find((entry) => entry.stepNumber === action.stepNumber);
+    if (exact) return exact.path;
+    const preceding = [...screenshotEntries].reverse().find((entry) => typeof entry.stepNumber === 'number' && entry.stepNumber <= action.stepNumber!);
+    if (preceding) return preceding.path;
+    const following = screenshotEntries.find((entry) => typeof entry.stepNumber === 'number' && entry.stepNumber >= action.stepNumber!);
+    if (following) return following.path;
+  }
+  return screenshotEntries[Math.min(order, screenshotEntries.length - 1)]?.path || screenshotEntries[0]?.path || null;
+}
+
+function buildReplaySteps(
+  computerActionEvents: ComputerActionView[],
+  localExecutionSteps: LocalExecutionStepView[],
+  screenshotArtifacts: string[],
+  toolPolicyAudit: Array<Record<string, unknown>> | null | undefined,
+): ReplayStepView[] {
+  const screenshotEntries: Array<{ path: string; stepNumber: number | null; order: number }> = [];
+  const seenPaths = new Set<string>();
+  localExecutionSteps.forEach((step, index) => {
+    const artifact = String(step.artifact_file_path || '').trim();
+    if (!artifact || seenPaths.has(artifact) || !isImageArtifactPath(artifact)) return;
+    screenshotEntries.push({ path: artifact, stepNumber: typeof step.step_number === 'number' ? step.step_number : null, order: index });
+    seenPaths.add(artifact);
+  });
+  screenshotArtifacts.forEach((path, index) => {
+    const normalized = String(path || '').trim();
+    if (!normalized || seenPaths.has(normalized)) return;
+    screenshotEntries.push({ path: normalized, stepNumber: null, order: localExecutionSteps.length + index });
+    seenPaths.add(normalized);
+  });
+
+  const grouped = new Map<string, { order: number; items: ComputerActionView[] }>();
+  computerActionEvents.forEach((item, index) => {
+    const key = actionFingerprintForReplay(item);
+    const bucket = grouped.get(key);
+    if (bucket) {
+      bucket.items.push(item);
+      return;
+    }
+    grouped.set(key, { order: index, items: [item] });
+  });
+
+  return Array.from(grouped.values())
+    .sort((left, right) => {
+      const leftStep = left.items[0]?.stepNumber;
+      const rightStep = right.items[0]?.stepNumber;
+      if (typeof leftStep === 'number' && typeof rightStep === 'number' && leftStep !== rightStep) {
+        return leftStep - rightStep;
+      }
+      const leftTs = parseTimestampMs(left.items[0]?.ts);
+      const rightTs = parseTimestampMs(right.items[0]?.ts);
+      if (leftTs != null && rightTs != null && leftTs !== rightTs) return leftTs - rightTs;
+      return left.order - right.order;
+    })
+    .map((group, order) => {
+      const sorted = [...group.items].sort((left, right) => {
+        const leftTs = parseTimestampMs(left.ts);
+        const rightTs = parseTimestampMs(right.ts);
+        if (leftTs != null && rightTs != null && leftTs !== rightTs) return leftTs - rightTs;
+        return replayPhaseRank(left.phase) - replayPhaseRank(right.phase);
+      });
+      const first = sorted[0];
+      const resolved = [...sorted].sort((left, right) => replayPhaseRank(right.phase) - replayPhaseRank(left.phase))[0] || first;
+      const firstTs = parseTimestampMs(first.ts);
+      const lastTs = parseTimestampMs(sorted[sorted.length - 1]?.ts || resolved.ts);
+      const elapsedMs = firstTs != null && lastTs != null && lastTs >= firstTs ? lastTs - firstTs : null;
+      const redactedText = redactReplayTextSummary(resolved.textSummary || first.textSummary, resolved.actionType, toolPolicyAudit);
+      return {
+        id: resolved.id || `${actionFingerprintForReplay(resolved)}:${order}`,
+        order,
+        stepNumber: resolved.stepNumber ?? first.stepNumber,
+        stepTotal: resolved.stepTotal ?? first.stepTotal,
+        ts: first.ts || resolved.ts,
+        endTs: sorted.length > 1 ? (sorted[sorted.length - 1]?.ts || resolved.ts || null) : null,
+        elapsedMs,
+        tool: resolved.tool || first.tool,
+        actionType: resolved.actionType || first.actionType,
+        label: resolved.label || first.label,
+        reason: resolved.reason || first.reason,
+        detail: resolved.detail || first.detail,
+        textSummary: redactedText.value,
+        textSummaryRedacted: redactedText.redacted,
+        success: resolved.success ?? first.success ?? null,
+        status: resolved.status || first.status,
+        phase: resolved.phase || first.phase,
+        mode: resolved.mode || first.mode,
+        error: resolved.error || first.error,
+        x: resolved.x ?? first.x ?? null,
+        y: resolved.y ?? first.y ?? null,
+        screenshotPath: chooseReplayScreenshotPath(resolved, order, screenshotEntries),
+        filePath: resolved.filePath || first.filePath,
+        url: resolved.url || first.url,
+        confidence: resolved.confidence ?? first.confidence ?? null,
+        certainty: resolved.certainty || first.certainty || null,
+        retryCount: resolved.retryCount ?? first.retryCount ?? null,
+        replanned: Boolean(resolved.replanned || first.replanned),
+        readinessState: resolved.readinessState || first.readinessState || null,
+        readinessSummary: resolved.readinessSummary || first.readinessSummary || null,
+        groundingSummary: resolved.groundingSummary || first.groundingSummary || null,
+        recoveryStrategy: resolved.recoveryStrategy || first.recoveryStrategy || null,
+      } satisfies ReplayStepView;
+    });
+}
+
 function collectArtifactStrings(input: unknown, out: Set<string>, depth = 0): void {
   if (depth > 7 || input == null) return;
   if (typeof input === 'string') {
@@ -813,6 +1316,57 @@ function extractLocalExecutionSteps(...sources: unknown[]): LocalExecutionStepVi
   return [];
 }
 
+function extractLocalExecutionActions(...sources: unknown[]): ComputerActionView[] {
+  for (const source of sources) {
+    if (!source || typeof source !== 'object') continue;
+    const record = source as Record<string, unknown>;
+    if (String(record.pack_id || '').trim() !== 'local-execution-v1') continue;
+    const outputs = record.outputs;
+    if (!outputs || typeof outputs !== 'object') continue;
+    const actions = (outputs as Record<string, unknown>).actions;
+    if (!Array.isArray(actions)) continue;
+    return actions.reduce<ComputerActionView[]>((acc, item, index) => {
+      if (!item || typeof item !== 'object') return acc;
+      const row = item as Record<string, unknown>;
+      const tool = String(row.tool || '').trim().toLowerCase();
+      if (!['computer_control', 'screenshot.capture', 'browser_automation.interactive'].includes(tool)) return acc;
+      const normalized = normalizeComputerActionView(
+        {
+          tool,
+          action_type: row.computer_action || row.mode || row.action || tool,
+          label: row.summary || row.title || row.action || tool,
+          reason: row.summary || null,
+          detail: compactComputerActionDetail(row),
+          status: row.status || null,
+          phase: String(row.status || '').trim().toLowerCase() === 'waiting_for_input' ? 'paused' : 'completed',
+          mode: String(row.status || '').trim().toLowerCase() === 'waiting_for_input' ? 'paused' : 'acting',
+          step_number: row.step_number,
+          step_total: null,
+          text_summary: row.text_preview || null,
+          file_path: row.file_path || null,
+          url: row.url || null,
+          success: String(row.status || '').trim().toLowerCase() !== 'failed',
+          confidence: row.confidence ?? null,
+          certainty: row.certainty ?? null,
+          retry_count: row.retry_count ?? null,
+          replanned: row.replanned ?? null,
+          readiness_state: row.readiness_state ?? null,
+          readiness_summary: row.readiness_summary ?? null,
+          grounding_summary: row.grounding_summary ?? null,
+          recovery_strategy: row.recovery_strategy ?? null,
+        },
+        {
+          fallbackId: `local-action:${tool}:${index}`,
+          fallbackTs: '',
+        },
+      );
+      if (normalized) acc.push(normalized);
+      return acc;
+    }, []);
+  }
+  return [];
+}
+
 function parseEventJson(value: string): ReplayEvent | null {
   try {
     const parsed = JSON.parse(value);
@@ -836,6 +1390,7 @@ function toTimelineEvent(input: ReplayEvent, index: number, source: 'replay' | '
     event,
     message: message || event,
     toolHint: summarizeToolHint(input?.data, event),
+    rawData: input?.data && typeof input.data === 'object' ? (input.data as Record<string, unknown>) : null,
   };
 }
 
@@ -868,10 +1423,12 @@ export default function RunInspectPage() {
   const [retryingDelegation, setRetryingDelegation] = useState(false);
   const [delegateError, setDelegateError] = useState<string | null>(null);
   const [delegateNotice, setDelegateNotice] = useState<string | null>(null);
+  const [selectedReplayStepId, setSelectedReplayStepId] = useState<string | null>(null);
   const streamRef = useRef<AuthenticatedEventStreamConnection | null>(null);
   const workflowSectionRef = useRef<HTMLElement | null>(null);
   const timelineSectionRef = useRef<HTMLElement | null>(null);
   const approvalsSectionRef = useRef<HTMLElement | null>(null);
+  const replaySectionRef = useRef<HTMLElement | null>(null);
   const screenshotsSectionRef = useRef<HTMLElement | null>(null);
   const artifactsSectionRef = useRef<HTMLElement | null>(null);
   const desktopBridge = useMemo(() => {
@@ -1097,6 +1654,8 @@ export default function RunInspectPage() {
         ? workflowSectionRef
         : target === 'approvals'
         ? approvalsSectionRef
+        : target === 'replay'
+        ? replaySectionRef
         : target === 'screenshots'
         ? screenshotsSectionRef
         : target === 'artifacts'
@@ -1327,6 +1886,10 @@ export default function RunInspectPage() {
     () => extractLocalExecutionSteps(runDetail?.result_data, replayItem?.result_data),
     [replayItem?.result_data, runDetail?.result_data],
   );
+  const localExecutionActions = useMemo(
+    () => extractLocalExecutionActions(runDetail?.result_data, replayItem?.result_data),
+    [replayItem?.result_data, runDetail?.result_data],
+  );
 
   const screenshotArtifacts = useMemo(
     () => artifacts.filter((item) => /\.(png|jpg|jpeg|webp|gif)$/i.test(item) || /screenshot/i.test(item)),
@@ -1362,6 +1925,59 @@ export default function RunInspectPage() {
   const canDelegate = !singleAgentMode && effectiveAgentRole === 'orchestrator';
   const specialistAgentOptions = AGENT_ROLE_OPTIONS.filter((item) => item.id !== 'orchestrator');
   const connectorBinding = contractConnectorMutation?.binding || null;
+  const computerActionEvents = useMemo(() => {
+    const seen = new Set<string>();
+    const combined: ComputerActionView[] = [];
+    const pushUnique = (entry: ComputerActionView) => {
+      const identity = entry.id || `${entry.ts}|${entry.tool}|${entry.actionType}|${entry.label}|${entry.stepNumber ?? ''}`;
+      if (seen.has(identity)) return;
+      seen.add(identity);
+      combined.push(entry);
+    };
+    timelineEvents.forEach((item, index) => {
+      if (String(item.event || '').trim().toLowerCase() !== 'computer_action' || !item.rawData) return;
+      const normalized = normalizeComputerActionView(item.rawData, {
+        fallbackId: `${item.id}:computer_action:${index}`,
+        fallbackTs: item.ts,
+      });
+      if (normalized) pushUnique(normalized);
+    });
+    localExecutionActions.forEach((item) => pushUnique(item));
+    return combined;
+  }, [localExecutionActions, timelineEvents]);
+  const replaySteps = useMemo(
+    () => buildReplaySteps(computerActionEvents, localExecutionSteps, screenshotArtifacts, runDetail?.tool_policy_audit),
+    [computerActionEvents, localExecutionSteps, runDetail?.tool_policy_audit, screenshotArtifacts],
+  );
+  useEffect(() => {
+    if (replaySteps.length === 0) {
+      setSelectedReplayStepId(null);
+      return;
+    }
+    if (!selectedReplayStepId || !replaySteps.some((item) => item.id === selectedReplayStepId)) {
+      setSelectedReplayStepId(replaySteps[replaySteps.length - 1]?.id || null);
+    }
+  }, [replaySteps, selectedReplayStepId]);
+  const selectedReplayStep = useMemo(
+    () => replaySteps.find((item) => item.id === selectedReplayStepId) || replaySteps[replaySteps.length - 1] || null,
+    [replaySteps, selectedReplayStepId],
+  );
+  const selectedReplayIndex = selectedReplayStep ? replaySteps.findIndex((item) => item.id === selectedReplayStep.id) : -1;
+  const canSelectPreviousReplayStep = selectedReplayIndex > 0;
+  const canSelectNextReplayStep = selectedReplayIndex >= 0 && selectedReplayIndex < replaySteps.length - 1;
+  const latestComputerAction = computerActionEvents.length > 0 ? computerActionEvents[computerActionEvents.length - 1] : null;
+  const recentComputerActions = useMemo(
+    () => [...computerActionEvents].slice(-8).reverse(),
+    [computerActionEvents],
+  );
+  const localExecutionCheckpoint = useMemo(() => {
+    const resultData = runDetail?.result_data;
+    if (resultData && typeof resultData === 'object') {
+      const checkpoint = (resultData as Record<string, unknown>).local_execution_checkpoint;
+      if (checkpoint && typeof checkpoint === 'object') return checkpoint as Record<string, unknown>;
+    }
+    return null;
+  }, [runDetail?.result_data]);
   const openArtifactTarget = useCallback(async (targetPath: string) => {
     const normalized = String(targetPath || '').trim();
     if (!normalized) return;
@@ -1528,8 +2144,17 @@ export default function RunInspectPage() {
       : [],
     [runDetail?.execution_target_busy_runtime_labels],
   );
-  const canResumeRun = effectiveRunStatus === 'waiting_for_input' && !pendingConfirmation?.approval_id && Boolean(runDiagnostics?.browser_resume_supported);
+  const localExecutionResumeSupported = Boolean(
+    runDiagnostics?.local_execution_resume_supported
+    || localExecutionCheckpoint
+    || (runDetail?.result_data && typeof runDetail.result_data === 'object' && Boolean((runDetail.result_data as Record<string, unknown>).resume_available)),
+  );
+  const canResumeRun = effectiveRunStatus === 'waiting_for_input'
+    && !pendingConfirmation?.approval_id
+    && Boolean(runDiagnostics?.browser_resume_supported || localExecutionResumeSupported);
   const canTakeOverRun = !TERMINAL_RUN_STATUSES.has(effectiveRunStatus)
+    && effectiveRunStatus !== 'waiting_for_input'
+    && effectiveRunStatus !== 'queued_local'
     && (
       String(runDiagnostics?.selected_target || '').trim().toLowerCase() === 'local_companion'
       || String(runDiagnostics?.selected_target || '').trim().toLowerCase() === 'local'
@@ -1622,6 +2247,7 @@ export default function RunInspectPage() {
   }, [runDetail?.node_states]);
   const currentStepLabel = workflowNodeStates.activeNode?.label
     || localExecutionSteps.find((item) => String(item.status || '').trim().toLowerCase() !== 'completed')?.summary
+    || latestComputerAction?.label
     || workflowNodeStates.finalNode?.label
     || 'Waiting for the next execution step.';
   const logRows = useMemo(
@@ -1662,6 +2288,67 @@ export default function RunInspectPage() {
     borderColor: 'var(--primary-border-soft)',
     boxShadow: 'inset 0 0 0 1px var(--primary-ring-soft)',
   } as const;
+  const manualTakeover = Boolean(
+    runDiagnostics?.manual_takeover_active
+    || runDetail?.result_data
+    && typeof runDetail.result_data === 'object'
+    && Boolean((runDetail.result_data as Record<string, unknown>).manual_takeover),
+  );
+  const pendingComputerApproval = Boolean(
+    pendingConfirmation?.approval_id
+    && (
+      String(runDiagnostics?.selected_target || '').trim().toLowerCase() === 'local_companion'
+      || String(runDiagnostics?.selected_target || '').trim().toLowerCase() === 'local'
+      || String(historyItem?.execution_target_selected || '').trim().toLowerCase() === 'local_companion'
+      || String(historyItem?.execution_target_selected || '').trim().toLowerCase() === 'local'
+      || Boolean(runDetail?.tool_policy_precheck?.require_confirmation_count)
+    ),
+  );
+  const pendingComputerApprovalSummary = pendingComputerApproval
+    ? approvalDisplayText(
+      pendingConfirmation?.prompt,
+      pendingConfirmation?.metadata?.approval_labels,
+      pendingConfirmation?.metadata?.approval_capabilities,
+      'Approval required before the next local computer action.',
+    )
+    : null;
+  const liveComputerMode = manualTakeover
+    ? 'takeover'
+    : pendingComputerApproval
+      ? 'paused'
+    : effectiveRunStatus === 'waiting_for_input' || latestComputerAction?.phase === 'paused' || latestComputerAction?.mode === 'paused'
+      ? 'paused'
+      : latestComputerAction?.mode || 'observing';
+  const bannerStepNumber = latestComputerAction?.stepNumber
+    ?? (typeof localExecutionCheckpoint?.next_operation_index === 'number' ? Number(localExecutionCheckpoint.next_operation_index) + 1 : null);
+  const bannerStepTotal = latestComputerAction?.stepTotal
+    ?? (typeof localExecutionCheckpoint?.total_operations === 'number' ? Number(localExecutionCheckpoint.total_operations) : null);
+  const bannerLabel = latestComputerAction?.label
+    || (pendingComputerApproval
+      ? 'Awaiting approval'
+      : null)
+    || (liveComputerMode === 'takeover'
+      ? 'Human now has control'
+      : liveComputerMode === 'paused'
+        ? 'AI paused'
+        : currentStepLabel);
+  const bannerDetail = latestComputerAction?.reason
+    || pendingComputerApprovalSummary
+    || latestComputerAction?.readinessSummary
+    || latestComputerAction?.groundingSummary
+    || latestComputerAction?.detail
+    || latestComputerAction?.textSummary
+    || latestComputerAction?.url
+    || (liveComputerMode === 'takeover'
+      ? 'Pause requested by the operator. No further computer actions will execute until you resume.'
+      : liveComputerMode === 'paused'
+        ? 'The run is paused and waiting for input or a resume request.'
+        : 'Computer control active.');
+  const bannerConfidenceLabel = formatConfidenceLabel(latestComputerAction?.confidence, latestComputerAction?.certainty);
+  const showComputerBanner =
+    (Boolean(latestComputerAction) || canTakeOverRun || canResumeRun || pendingComputerApproval)
+    && !loading
+    && (!TERMINAL_RUN_STATUSES.has(effectiveRunStatus) || liveComputerMode === 'paused' || liveComputerMode === 'takeover');
 
   useEffect(() => {
     if (loading || !focusTarget) return;
@@ -1755,6 +2442,91 @@ export default function RunInspectPage() {
         </section>
       ) : null}
 
+      {showComputerBanner ? (
+        <section
+          className="orion-panel"
+          style={{
+            position: 'fixed',
+            top: 92,
+            right: 20,
+            zIndex: 60,
+            width: 'min(420px, calc(100vw - 32px))',
+            borderColor:
+              liveComputerMode === 'paused' || liveComputerMode === 'takeover'
+                ? 'var(--warning-border)'
+                : 'var(--primary-border-soft)',
+            background:
+              liveComputerMode === 'paused' || liveComputerMode === 'takeover'
+                ? 'color-mix(in srgb, var(--warning-bg) 90%, white 10%)'
+                : 'color-mix(in srgb, var(--primary-soft) 72%, var(--bg-surface) 28%)',
+            boxShadow: '0 18px 40px rgba(15,23,42,0.18)',
+            backdropFilter: 'blur(16px)',
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, justifyContent: 'space-between' }}>
+            <div style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+              <Activity size={14} style={{ color: liveComputerMode === 'paused' || liveComputerMode === 'takeover' ? 'var(--warning-fg)' : 'var(--primary-base)' }} />
+              <span style={{ fontSize: 11, fontWeight: 800, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--text-tertiary)' }}>
+                {liveComputerMode.replace(/_/g, ' ')}
+              </span>
+            </div>
+            <span className="orion-chip">
+              Step {bannerStepNumber ?? '--'}{bannerStepTotal ? `/${bannerStepTotal}` : ''}
+            </span>
+          </div>
+          <div style={{ marginTop: 8, fontSize: 15, fontWeight: 800, color: 'var(--text-primary)' }}>
+            {bannerLabel}
+          </div>
+          <div style={{ marginTop: 6, fontSize: 12, color: 'var(--text-secondary)' }}>
+            {bannerDetail}
+          </div>
+          <div style={{ marginTop: 10, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            {latestComputerAction ? <span className="orion-chip">{latestComputerAction.actionType.replace(/_/g, ' ')}</span> : null}
+            <span className="orion-chip">
+              {latestComputerAction?.success === false ? 'Failed' : (latestComputerAction?.phase || liveComputerMode).replace(/_/g, ' ')}
+            </span>
+            {bannerConfidenceLabel ? <span className="orion-chip">{bannerConfidenceLabel}</span> : null}
+            {latestComputerAction?.retryCount && latestComputerAction.retryCount > 1 ? (
+              <span className="orion-chip">retry {latestComputerAction.retryCount}</span>
+            ) : null}
+            {latestComputerAction?.replanned ? <span className="orion-chip">replanned</span> : null}
+            {latestComputerAction?.readinessState ? (
+              <span className="orion-chip">{latestComputerAction.readinessState.replace(/_/g, ' ')}</span>
+            ) : null}
+            <span className="orion-chip">{latestComputerAction ? fmtTime(latestComputerAction.ts) || '--' : 'live'}</span>
+          </div>
+          <div style={{ marginTop: 12, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            {canTakeOverRun ? (
+              <button
+                className="orion-btn orion-btn-primary"
+                style={{ minHeight: 44, paddingInline: 12 }}
+                onClick={() => void handleTakeOverRun()}
+                disabled={takeoverBusy || approvalBusy !== null || resumeBusy}
+              >
+                {takeoverBusy ? 'Pausing…' : 'Pause AI'}
+              </button>
+            ) : null}
+            {canResumeRun ? (
+              <button
+                className="orion-btn orion-btn-primary"
+                style={{ minHeight: 44, paddingInline: 12 }}
+                onClick={() => void handleResumeRun()}
+                disabled={resumeBusy || approvalBusy !== null || takeoverBusy}
+              >
+                {resumeBusy ? 'Resuming…' : 'Resume AI'}
+              </button>
+            ) : null}
+            <button
+              className="orion-btn orion-btn-ghost"
+              style={{ minHeight: 44, paddingInline: 12 }}
+              onClick={() => focusSection('screenshots')}
+            >
+              Open live view
+            </button>
+          </div>
+        </section>
+      ) : null}
+
       {!loading ? (
         <section
           className="orion-panel"
@@ -1774,6 +2546,7 @@ export default function RunInspectPage() {
             ['timeline', `Timeline ${timelineEvents.length}`],
             ['logs', `Logs ${logRows.length}`],
             ['approvals', `Confirmations ${approvalAudit.length}`],
+            ...(replaySteps.length > 0 ? [['replay', `Replay ${replaySteps.length}`] as [InspectSectionTarget, string]] : []),
             ['screenshots', `Screenshots ${screenshotArtifacts.length}`],
             ['artifacts', `Artifacts ${artifacts.length}`],
           ] as Array<[InspectSectionTarget, string]>).map(([target, label]) => {
@@ -2051,15 +2824,26 @@ export default function RunInspectPage() {
                 )}
               </div>
               <div style={{ marginTop: 12, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                <button
-                  className="orion-btn orion-btn-primary"
-                  style={{ minHeight: 44, paddingInline: 12 }}
-                  onClick={() => void handleTakeOverRun()}
-                  disabled={!canTakeOverRun || takeoverBusy || approvalBusy !== null || resumeBusy}
-                  title={!canTakeOverRun ? 'Take over is available only for active local-machine runs.' : undefined}
-                >
-                  {takeoverBusy ? 'Pausing…' : 'Take over'}
-                </button>
+                {canTakeOverRun ? (
+                  <button
+                    className="orion-btn orion-btn-primary"
+                    style={{ minHeight: 44, paddingInline: 12 }}
+                    onClick={() => void handleTakeOverRun()}
+                    disabled={takeoverBusy || approvalBusy !== null || resumeBusy}
+                  >
+                    {takeoverBusy ? 'Pausing…' : 'Pause AI'}
+                  </button>
+                ) : null}
+                {canResumeRun ? (
+                  <button
+                    className="orion-btn orion-btn-primary"
+                    style={{ minHeight: 44, paddingInline: 12 }}
+                    onClick={() => void handleResumeRun()}
+                    disabled={resumeBusy || approvalBusy !== null || takeoverBusy}
+                  >
+                    {resumeBusy ? 'Resuming…' : 'Resume AI'}
+                  </button>
+                ) : null}
                 <button
                   className="orion-btn orion-btn-ghost"
                   style={{ minHeight: 44, paddingInline: 12 }}
@@ -2067,6 +2851,67 @@ export default function RunInspectPage() {
                 >
                   Open screenshot history
                 </button>
+              </div>
+              <div style={{ marginTop: 10, fontSize: 12, color: liveComputerMode === 'takeover' ? 'var(--warning-fg)' : 'var(--text-tertiary)' }}>
+                {liveComputerMode === 'takeover'
+                  ? 'Manual takeover is active. The human has control until Resume AI is requested.'
+                  : liveComputerMode === 'paused'
+                    ? 'The run is paused and will not issue more computer actions until resumed.'
+                    : 'Pause AI instantly hands control back to the user on the local machine.'}
+              </div>
+              <div
+                style={{
+                  marginTop: 14,
+                  borderTop: '1px solid var(--border-default)',
+                  paddingTop: 12,
+                }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+                  <div style={{ fontSize: 11, fontWeight: 800, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+                    Live action log
+                  </div>
+                  <span className="orion-chip">{computerActionEvents.length} action{computerActionEvents.length === 1 ? '' : 's'}</span>
+                </div>
+                {recentComputerActions.length === 0 ? (
+                  <div style={{ marginTop: 10, fontSize: 12, color: 'var(--text-secondary)' }}>
+                    Waiting for the first computer-control event.
+                  </div>
+                ) : (
+                  <div style={{ marginTop: 10, display: 'grid', gap: 8 }}>
+                    {recentComputerActions.map((item) => (
+                      <div
+                        key={`computer-action:${item.id}`}
+                        style={{
+                          border: '1px solid var(--border-default)',
+                          borderRadius: 14,
+                          padding: '10px 12px',
+                          background: 'var(--bg-element)',
+                        }}
+                      >
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+                          <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-primary)' }}>{item.label}</div>
+                          <div style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>
+                            {item.stepNumber ?? '--'}{item.stepTotal ? `/${item.stepTotal}` : ''}
+                          </div>
+                        </div>
+                        <div style={{ marginTop: 4, fontSize: 12, color: 'var(--text-secondary)' }}>
+                          {item.reason || item.readinessSummary || item.groundingSummary || item.detail || item.textSummary || item.url || '--'}
+                        </div>
+                        <div style={{ marginTop: 8, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                          <span className="orion-chip">{item.actionType.replace(/_/g, ' ')}</span>
+                          <span className="orion-chip">{item.success === false ? 'Failed' : item.phase.replace(/_/g, ' ')}</span>
+                          {formatConfidenceLabel(item.confidence, item.certainty) ? (
+                            <span className="orion-chip">{formatConfidenceLabel(item.confidence, item.certainty)}</span>
+                          ) : null}
+                          {item.retryCount && item.retryCount > 1 ? <span className="orion-chip">retry {item.retryCount}</span> : null}
+                          {item.replanned ? <span className="orion-chip">replanned</span> : null}
+                          {item.readinessState ? <span className="orion-chip">{item.readinessState.replace(/_/g, ' ')}</span> : null}
+                          <span className="orion-chip">{fmtTime(item.ts)}</span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
             </article>
           </section>
@@ -3106,6 +3951,363 @@ export default function RunInspectPage() {
                 </div>
               )}
             </article>
+          </section>
+
+          <section
+            ref={replaySectionRef}
+            className="orion-panel"
+            style={{
+              minHeight: 320,
+              scrollMarginTop: 92,
+              ...(activeSection === 'replay' ? focusedSectionStyle : null),
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap' }}>
+              <div className="orion-panel-title" style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+                <Route size={14} />
+                Session Replay
+              </div>
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                <span className="orion-chip">{replaySteps.length} step{replaySteps.length === 1 ? '' : 's'}</span>
+                {selectedReplayStep?.stepNumber ? (
+                  <span className="orion-chip">
+                    Step {selectedReplayStep.stepNumber}{selectedReplayStep.stepTotal ? `/${selectedReplayStep.stepTotal}` : ''}
+                  </span>
+                ) : null}
+                {selectedReplayStep ? (
+                  <span className="orion-chip">
+                    {replayStepTone(selectedReplayStep).label}
+                  </span>
+                ) : null}
+              </div>
+            </div>
+            {replaySteps.length === 0 ? (
+              <div className="orion-panel-copy" style={{ marginTop: 10 }}>
+                No structured computer-control replay was recorded for this run.
+              </div>
+            ) : selectedReplayStep ? (
+              <div
+                style={{
+                  marginTop: 12,
+                  display: 'grid',
+                  gap: 14,
+                  gridTemplateColumns: 'minmax(260px, 320px) minmax(0, 1fr)',
+                }}
+              >
+                <div
+                  style={{
+                    display: 'grid',
+                    gap: 10,
+                    minHeight: 0,
+                  }}
+                >
+                  <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                    <button
+                      className="orion-btn orion-btn-ghost"
+                      style={{ minHeight: 44, paddingInline: 12 }}
+                      onClick={() => {
+                        if (!canSelectPreviousReplayStep) return;
+                        setSelectedReplayStepId(replaySteps[selectedReplayIndex - 1]?.id || null);
+                      }}
+                      disabled={!canSelectPreviousReplayStep}
+                    >
+                      Previous
+                    </button>
+                    <button
+                      className="orion-btn orion-btn-ghost"
+                      style={{ minHeight: 44, paddingInline: 12 }}
+                      onClick={() => {
+                        if (!canSelectNextReplayStep) return;
+                        setSelectedReplayStepId(replaySteps[selectedReplayIndex + 1]?.id || null);
+                      }}
+                      disabled={!canSelectNextReplayStep}
+                    >
+                      Next
+                    </button>
+                  </div>
+                  <div
+                    style={{
+                      borderTop: '1px solid var(--border-default)',
+                      borderBottom: '1px solid var(--border-default)',
+                      maxHeight: 560,
+                      overflowY: 'auto',
+                    }}
+                  >
+                    {replaySteps.map((step, index) => {
+                      const selected = step.id === selectedReplayStep.id;
+                      const tone = replayStepTone(step);
+                      return (
+                        <button
+                          key={step.id}
+                          type="button"
+                          onClick={() => setSelectedReplayStepId(step.id)}
+                          style={{
+                            width: '100%',
+                            display: 'grid',
+                            gap: 8,
+                            textAlign: 'left',
+                            padding: '12px 12px 13px',
+                            border: 'none',
+                            borderBottom: '1px solid var(--border-default)',
+                            background: selected ? 'var(--primary-soft)' : 'transparent',
+                            cursor: 'pointer',
+                          }}
+                        >
+                          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap' }}>
+                            <div style={{ display: 'inline-flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                              <span style={{ fontSize: 11, fontWeight: 800, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                                {step.stepNumber ? `Step ${step.stepNumber}` : `Event ${index + 1}`}
+                              </span>
+                              <span
+                                style={{
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  minHeight: 20,
+                                  padding: '0 8px',
+                                  borderRadius: 999,
+                                  border: `1px solid ${tone.border}`,
+                                  background: tone.background,
+                                  fontSize: 10,
+                                  color: tone.color,
+                                  fontWeight: 800,
+                                  letterSpacing: '0.03em',
+                                  textTransform: 'uppercase',
+                                }}
+                              >
+                                {tone.label}
+                              </span>
+                            </div>
+                            <span style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>{fmtTime(step.ts)}</span>
+                          </div>
+                          <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-primary)' }}>{step.label}</div>
+                          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                            <span className="orion-chip">{step.actionType.replace(/_/g, ' ')}</span>
+                            {step.elapsedMs != null ? <span className="orion-chip">{fmtMs(step.elapsedMs)}</span> : null}
+                            {step.mode ? <span className="orion-chip">{step.mode.replace(/_/g, ' ')}</span> : null}
+                            {formatConfidenceLabel(step.confidence, step.certainty) ? (
+                              <span className="orion-chip">{formatConfidenceLabel(step.confidence, step.certainty)}</span>
+                            ) : null}
+                            {step.retryCount && step.retryCount > 1 ? <span className="orion-chip">retry {step.retryCount}</span> : null}
+                            {step.replanned ? <span className="orion-chip">replanned</span> : null}
+                          </div>
+                          <div style={{ fontSize: 12, color: 'var(--text-secondary)', lineHeight: 1.5 }}>
+                            {compactText(step.reason || step.readinessSummary || step.groundingSummary || step.detail || step.textSummary || step.error || 'No planner note recorded.', 'No planner note recorded.', 140)}
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                <div style={{ display: 'grid', gap: 12, minWidth: 0 }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                    <div style={{ display: 'grid', gap: 4 }}>
+                      <div style={{ fontSize: 18, fontWeight: 800, color: 'var(--text-primary)' }}>
+                        {selectedReplayStep.label}
+                      </div>
+                      <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+                        {selectedReplayStep.stepNumber ? `Step ${selectedReplayStep.stepNumber}` : `Replay event ${selectedReplayIndex + 1}`}
+                        {selectedReplayStep.stepTotal ? ` of ${selectedReplayStep.stepTotal}` : ''}
+                        {' · '}
+                        {fmtTime(selectedReplayStep.ts)}
+                        {selectedReplayStep.elapsedMs != null ? ` · ${fmtMs(selectedReplayStep.elapsedMs)}` : ''}
+                      </div>
+                    </div>
+                    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                      <span className="orion-chip">{selectedReplayStep.actionType.replace(/_/g, ' ')}</span>
+                      <span className="orion-chip">{replayStepTone(selectedReplayStep).label}</span>
+                      {formatConfidenceLabel(selectedReplayStep.confidence, selectedReplayStep.certainty) ? (
+                        <span className="orion-chip">{formatConfidenceLabel(selectedReplayStep.confidence, selectedReplayStep.certainty)}</span>
+                      ) : null}
+                      {selectedReplayStep.retryCount && selectedReplayStep.retryCount > 1 ? (
+                        <span className="orion-chip">retry {selectedReplayStep.retryCount}</span>
+                      ) : null}
+                      {selectedReplayStep.replanned ? <span className="orion-chip">replanned</span> : null}
+                      {selectedReplayStep.readinessState ? (
+                        <span className="orion-chip">{selectedReplayStep.readinessState.replace(/_/g, ' ')}</span>
+                      ) : null}
+                      {selectedReplayStep.screenshotPath ? (
+                        <button
+                          className="orion-btn orion-btn-ghost"
+                          style={{ minHeight: 36, paddingInline: 12 }}
+                          onClick={() => void openArtifactTarget(selectedReplayStep.screenshotPath!)}
+                        >
+                          Open screenshot
+                        </button>
+                      ) : null}
+                    </div>
+                  </div>
+
+                  <div
+                    style={{
+                      borderRadius: 16,
+                      overflow: 'hidden',
+                      border: '1px solid var(--border-default)',
+                      background: 'var(--bg-panel)',
+                    }}
+                  >
+                    {selectedReplayStep.screenshotPath ? (
+                      <ReplayScreenshotPreview
+                        path={selectedReplayStep.screenshotPath}
+                        alt={selectedReplayStep.label}
+                        marker={{ x: selectedReplayStep.x, y: selectedReplayStep.y }}
+                      />
+                    ) : (
+                      <div
+                        style={{
+                          minHeight: 320,
+                          display: 'grid',
+                          placeItems: 'center',
+                          color: 'var(--text-secondary)',
+                          fontSize: 12,
+                        }}
+                      >
+                        No screenshot evidence was recorded for this step.
+                      </div>
+                    )}
+                  </div>
+
+                  <div
+                    style={{
+                      display: 'grid',
+                      gap: 10,
+                      gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
+                    }}
+                  >
+                    <div
+                      style={{
+                        borderRadius: 14,
+                        border: '1px solid var(--border-default)',
+                        background: 'var(--bg-element)',
+                        padding: '12px 14px',
+                        display: 'grid',
+                        gap: 6,
+                      }}
+                    >
+                      <div style={{ fontSize: 11, fontWeight: 800, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                        Planner reason
+                      </div>
+                      <div style={{ fontSize: 13, lineHeight: 1.55, color: 'var(--text-primary)' }}>
+                        {selectedReplayStep.reason || 'No planner reason recorded for this step.'}
+                      </div>
+                      {selectedReplayStep.replanned ? (
+                        <div style={{ fontSize: 11, color: 'var(--warning-fg)' }}>
+                          Planner explicitly replanned this step before continuing.
+                        </div>
+                      ) : null}
+                    </div>
+                    <div
+                      style={{
+                        borderRadius: 14,
+                        border: '1px solid var(--border-default)',
+                        background: 'var(--bg-element)',
+                        padding: '12px 14px',
+                        display: 'grid',
+                        gap: 6,
+                      }}
+                    >
+                      <div style={{ fontSize: 11, fontWeight: 800, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                        Step outcome
+                      </div>
+                      <div style={{ fontSize: 13, lineHeight: 1.55, color: selectedReplayStep.success === false ? 'var(--error-fg)' : 'var(--text-primary)' }}>
+                        {selectedReplayStep.error
+                          || selectedReplayStep.groundingSummary
+                          || selectedReplayStep.readinessSummary
+                          || selectedReplayStep.detail
+                          || (selectedReplayStep.phase === 'paused' || selectedReplayStep.mode === 'paused' || selectedReplayStep.mode === 'takeover'
+                            ? 'Paused for operator takeover or further input.'
+                            : selectedReplayStep.success === false
+                              ? 'This step failed.'
+                              : 'Step completed successfully.')}
+                      </div>
+                    </div>
+                    <div
+                      style={{
+                        borderRadius: 14,
+                        border: '1px solid var(--border-default)',
+                        background: 'var(--bg-element)',
+                        padding: '12px 14px',
+                        display: 'grid',
+                        gap: 6,
+                      }}
+                    >
+                      <div style={{ fontSize: 11, fontWeight: 800, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                        Action summary
+                      </div>
+                      <div style={{ fontSize: 13, lineHeight: 1.55, color: 'var(--text-primary)' }}>
+                        {selectedReplayStep.textSummary
+                          ? selectedReplayStep.textSummary
+                          : selectedReplayStep.url
+                            ? compactText(selectedReplayStep.url, '--', 180)
+                            : selectedReplayStep.x != null && selectedReplayStep.y != null
+                              ? `Targeted coordinates (${Math.round(selectedReplayStep.x)}, ${Math.round(selectedReplayStep.y)}).`
+                              : 'No action payload summary recorded.'}
+                      </div>
+                      {selectedReplayStep.textSummaryRedacted ? (
+                        <div style={{ fontSize: 11, color: 'var(--warning-fg)' }}>
+                          Redacted by policy.
+                        </div>
+                      ) : null}
+                    </div>
+                    <div
+                      style={{
+                        borderRadius: 14,
+                        border: '1px solid var(--border-default)',
+                        background: 'var(--bg-element)',
+                        padding: '12px 14px',
+                        display: 'grid',
+                        gap: 6,
+                      }}
+                    >
+                      <div style={{ fontSize: 11, fontWeight: 800, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                        Reliability signals
+                      </div>
+                      <div style={{ fontSize: 13, lineHeight: 1.55, color: 'var(--text-primary)' }}>
+                        {selectedReplayStep.readinessSummary
+                          || selectedReplayStep.groundingSummary
+                          || (selectedReplayStep.retryCount && selectedReplayStep.retryCount > 1
+                            ? `Retried ${selectedReplayStep.retryCount} times before reaching this state.`
+                            : 'No extra readiness or grounding note was recorded.')}
+                      </div>
+                      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                        {formatConfidenceLabel(selectedReplayStep.confidence, selectedReplayStep.certainty) ? (
+                          <span className="orion-chip">{formatConfidenceLabel(selectedReplayStep.confidence, selectedReplayStep.certainty)}</span>
+                        ) : null}
+                        {selectedReplayStep.retryCount && selectedReplayStep.retryCount > 1 ? (
+                          <span className="orion-chip">retry {selectedReplayStep.retryCount}</span>
+                        ) : null}
+                        {selectedReplayStep.replanned ? <span className="orion-chip">replanned</span> : null}
+                        {selectedReplayStep.recoveryStrategy ? (
+                          <span className="orion-chip">{selectedReplayStep.recoveryStrategy.replace(/_/g, ' ')}</span>
+                        ) : null}
+                      </div>
+                    </div>
+                    <div
+                      style={{
+                        borderRadius: 14,
+                        border: '1px solid var(--border-default)',
+                        background: 'var(--bg-element)',
+                        padding: '12px 14px',
+                        display: 'grid',
+                        gap: 6,
+                      }}
+                    >
+                      <div style={{ fontSize: 11, fontWeight: 800, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                        Evidence
+                      </div>
+                      <div style={{ fontSize: 12, color: 'var(--text-secondary)', lineHeight: 1.55, wordBreak: 'break-word' }}>
+                        {selectedReplayStep.screenshotPath || selectedReplayStep.filePath || 'No artifact path recorded.'}
+                      </div>
+                      {(selectedReplayStep.x != null && selectedReplayStep.y != null) ? (
+                        <div style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>
+                          Target marker at {Math.round(selectedReplayStep.x)}, {Math.round(selectedReplayStep.y)}
+                        </div>
+                      ) : null}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            ) : null}
           </section>
 
           <section className="orion-grid-2">

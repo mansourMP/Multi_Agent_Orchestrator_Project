@@ -32,7 +32,8 @@ export type DecisionVariant = 'if_else' | 'classifier' | 'field_router';
 export type HumanVariant = 'approval' | 'review' | 'wait_for_reply';
 export type DataVariant = 'transform' | 'compose' | 'validate';
 export type SubflowVariant = 'call_workflow';
-export type WorkflowNodeType = 'trigger' | 'agent' | 'tool' | 'decision' | 'human' | 'data' | 'subflow';
+export type LoopVariant = 'for_each' | 'while' | 'repeat';
+export type WorkflowNodeType = 'trigger' | 'agent' | 'tool' | 'decision' | 'human' | 'data' | 'subflow' | 'loop';
 
 export type FileMountGrant = {
     mount: FileMountId;
@@ -95,6 +96,7 @@ const WORKFLOW_NODE_TYPES = new Set<WorkflowNodeType>([
     'human',
     'data',
     'subflow',
+    'loop',
 ]);
 const TRIGGER_VARIANTS = new Set<TriggerVariant>([
     'connector_event',
@@ -118,6 +120,7 @@ const DECISION_VARIANTS = new Set<DecisionVariant>(['if_else', 'classifier', 'fi
 const HUMAN_VARIANTS = new Set<HumanVariant>(['approval', 'review', 'wait_for_reply']);
 const DATA_VARIANTS = new Set<DataVariant>(['transform', 'compose', 'validate']);
 const SUBFLOW_VARIANTS = new Set<SubflowVariant>(['call_workflow']);
+const LOOP_VARIANTS = new Set<LoopVariant>(['for_each', 'while', 'repeat']);
 const FILE_MOUNTS: FileMountId[] = ['artifacts', 'project', 'shared', 'knowledge', 'local_root', 'connector_files'];
 const FILE_GRANTS = new Set<FileGrant>(['none', 'read', 'read_write', 'create_only', 'append_only']);
 const TRUST_PRESETS = new Set<TrustPreset>(['standard_local', 'trusted_workflow', 'elevated_local']);
@@ -133,6 +136,90 @@ const BROWSER_INTERACTIVE_ACTIONS = new Set([
     'close_tab',
     'navigate',
 ]);
+const WORKFLOW_NODE_CAPABILITY_IDS: Record<string, string> = {
+    'trigger:manual': 'workflow.trigger.manual',
+    'trigger:schedule': 'workflow.trigger.schedule',
+    'trigger:webhook': 'workflow.trigger.webhook',
+    'trigger:connector_event': 'workflow.trigger.connector_event',
+    'trigger:workflow': 'workflow.trigger.workflow',
+    'trigger:file_watch': 'workflow.trigger.file_watch',
+    'agent:': 'workflow.agent.execute',
+    'decision:if_else': 'workflow.decision.if_else',
+    'decision:classifier': 'workflow.decision.classifier',
+    'decision:field_router': 'workflow.decision.field_router',
+    'human:approval': 'workflow.human.approval',
+    'human:review': 'workflow.human.review',
+    'human:wait_for_reply': 'workflow.human.wait_for_reply',
+    'data:transform': 'workflow.data.transform',
+    'data:compose': 'workflow.data.compose',
+    'data:validate': 'workflow.data.validate',
+    'subflow:call_workflow': 'workflow.subflow.call_workflow',
+    'loop:for_each': 'workflow.loop.for_each',
+    'loop:while': 'workflow.loop.while',
+    'loop:repeat': 'workflow.loop.repeat',
+};
+const CONNECTOR_ACTION_CAPABILITY_MAP: Record<string, string> = {
+    send_email: 'send_message',
+    send_message: 'send_message',
+    send_embed: 'send_message',
+    send_dm: 'send_message',
+    delete_message: 'send_message',
+    post_reply: 'send_message',
+    publish_reply: 'send_message',
+    send_media: 'send_message',
+    update_message: 'send_message',
+    upload_file: 'send_message',
+    create_issue: 'issue_write',
+    comment_on_issue: 'issue_write',
+    update_issue: 'issue_write',
+    add_comment: 'issue_write',
+    create_pull_request: 'pr_write',
+    create_or_update_file: 'repo_write',
+    create_page: 'notion_write',
+    update_page: 'notion_write',
+    append_blocks: 'notion_write',
+    create_database_item: 'notion_write',
+    draft_email: 'draft_email',
+    create_calendar_event: 'create_calendar_event',
+    create_doc: 'document_create',
+    create_document: 'document_create',
+    create_sheet: 'spreadsheet_create',
+    create_spreadsheet: 'spreadsheet_create',
+    upload_drive_file: 'filesystem.read_write',
+    http_request: 'http_request',
+    signed_webhook: 'http_request',
+    delete: 'storage_write',
+    move: 'storage_write',
+    delete_object: 'storage_write',
+    create_bucket: 'storage_write',
+    publish_content: 'publish_content',
+    external_research: 'external_research',
+};
+const READ_ONLY_CONNECTOR_ACTIONS = new Set([
+    'fetch_emails',
+    'list_channels',
+    'get_history',
+    'list_guilds',
+    'list_members',
+    'get_message_history',
+    'list_repos',
+    'get_repo',
+    'list_issues',
+    'list_pull_requests',
+    'get_file_content',
+    'list_buckets',
+    'list_objects',
+    'download_file',
+    'get_presigned_url',
+    'list_folder',
+    'search',
+    'get_page',
+    'query_database',
+    'list_teams',
+    'list_projects',
+    'get_issue',
+    'list_commits',
+]);
 
 function isRecord(value: unknown): value is Record<string, any> {
     return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -143,6 +230,10 @@ function compactText(value: unknown, max = 160): string {
     if (!normalized) return '';
     if (normalized.length <= max) return normalized;
     return `${normalized.slice(0, Math.max(0, max - 1)).trimEnd()}…`;
+}
+
+function normalizeCapabilityToken(value: unknown): string {
+    return String(value || '').trim().toLowerCase().replace(/\s+/g, '_');
 }
 
 function asArray<T = unknown>(value: unknown): T[] {
@@ -205,6 +296,84 @@ function normalizePosition(rawNode: Record<string, any>, index: number): { x: nu
     return {
         x: Number.isFinite(x) ? x : 180 + index * 220,
         y: Number.isFinite(y) ? y : 160,
+    };
+}
+
+function normalizeNodeResources(rawNode: Record<string, any>): Record<string, any> {
+    return isRecord(rawNode.resources) ? rawNode.resources : {};
+}
+
+function workflowToolCapabilityId(variant: string, config: Record<string, any>): string {
+    const cleanVariant = normalizeCapabilityToken(variant);
+    if (cleanVariant === 'browser') return 'browser_automation.interactive';
+    if (cleanVariant === 'file') return 'filesystem.read_write';
+    if (cleanVariant === 'shell') return 'shell.execute';
+    if (cleanVariant === 'code') return 'code.execute_reviewed';
+    if (cleanVariant === 'http') return 'http_request';
+    if (cleanVariant === 'document') {
+        const operation = normalizeCapabilityToken(config.operation ?? config.mode ?? 'create');
+        const filePath = String(config.file_path ?? config.path ?? '').trim().toLowerCase();
+        if (filePath.endsWith('.pptx')) {
+            return operation === 'update' || operation === 'edit' || operation === 'append'
+                ? 'presentation_update'
+                : 'presentation_create';
+        }
+        return operation === 'update' || operation === 'edit' || operation === 'append'
+            ? 'document_update'
+            : 'document_create';
+    }
+    if (cleanVariant === 'spreadsheet') {
+        const operation = normalizeCapabilityToken(config.operation ?? config.mode ?? 'read');
+        if (operation === 'append') return 'spreadsheet_append';
+        if (operation === 'update' || operation === 'edit') return 'spreadsheet_update';
+        if (operation === 'create' || operation === 'new') return 'spreadsheet_create';
+        return 'spreadsheet_read';
+    }
+    if (cleanVariant === 'connector_action') {
+        const actionId = normalizeCapabilityToken(config.action_id);
+        const connectorId = normalizeCapabilityToken(config.connector);
+        if (actionId && CONNECTOR_ACTION_CAPABILITY_MAP[actionId]) {
+            return CONNECTOR_ACTION_CAPABILITY_MAP[actionId];
+        }
+        if (connectorId === 'custom_api' && (actionId === 'http_request' || actionId === 'signed_webhook')) {
+            return 'http_request';
+        }
+        if (READ_ONLY_CONNECTOR_ACTIONS.has(actionId)) {
+            return 'connector.action.read';
+        }
+        if (actionId) {
+            return 'connector.action.write';
+        }
+    }
+    return 'connector.action.execute';
+}
+
+function workflowNodeCapabilityId(
+    nodeType: WorkflowNodeType,
+    variant: string,
+    config: Record<string, any>,
+    rawPolicy: Record<string, any>,
+): string {
+    const existing = compactText(rawPolicy.capability_id ?? '', 160) || '';
+    if (existing) return existing;
+    if (nodeType === 'tool') {
+        return workflowToolCapabilityId(variant, config);
+    }
+    return WORKFLOW_NODE_CAPABILITY_IDS[`${nodeType}:${variant}`]
+        || WORKFLOW_NODE_CAPABILITY_IDS[`${nodeType}:`]
+        || 'connector.action.execute';
+}
+
+function normalizeNodePolicy(
+    rawNode: Record<string, any>,
+    nodeType: WorkflowNodeType,
+    variant: string,
+    config: Record<string, any>,
+): Record<string, any> {
+    const rawPolicy = isRecord(rawNode.policy) ? { ...rawNode.policy } : {};
+    return {
+        ...rawPolicy,
+        capability_id: workflowNodeCapabilityId(nodeType, variant, config, rawPolicy),
     };
 }
 
@@ -352,6 +521,8 @@ function normalizeTriggerNode(rawNode: Record<string, any>, index: number): Cano
         type: 'trigger',
         variant,
         config,
+        resources: normalizeNodeResources(rawNode),
+        policy: normalizeNodePolicy(rawNode, 'trigger', variant, config),
         position: normalizePosition(rawNode, index),
         data: {
             label: compactText(rawData.label ?? rawNode.label ?? 'Start', 80) || 'Start',
@@ -449,6 +620,8 @@ function normalizeToolNode(rawNode: Record<string, any>, index: number): Canonic
         type: 'tool',
         variant,
         config,
+        resources: normalizeNodeResources(rawNode),
+        policy: normalizeNodePolicy(rawNode, 'tool', variant, config),
         position: normalizePosition(rawNode, index),
         data: {
             ...data,
@@ -474,6 +647,8 @@ function normalizeDecisionNode(rawNode: Record<string, any>, index: number): Can
         type: 'decision',
         variant,
         config,
+        resources: normalizeNodeResources(rawNode),
+        policy: normalizeNodePolicy(rawNode, 'decision', variant, config),
         position: normalizePosition(rawNode, index),
         data: {
             label: compactText(rawData.label ?? rawNode.label ?? 'Condition', 80) || 'Condition',
@@ -502,6 +677,8 @@ function normalizeHumanNode(rawNode: Record<string, any>, index: number): Canoni
         type: 'human',
         variant,
         config,
+        resources: normalizeNodeResources(rawNode),
+        policy: normalizeNodePolicy(rawNode, 'human', variant, config),
         position: normalizePosition(rawNode, index),
         data: {
             label: config.title,
@@ -527,6 +704,8 @@ function normalizeDataNode(rawNode: Record<string, any>, index: number): Canonic
         type: 'data',
         variant,
         config,
+        resources: normalizeNodeResources(rawNode),
+        policy: normalizeNodePolicy(rawNode, 'data', variant, config),
         position: normalizePosition(rawNode, index),
         data: {
             label: compactText(rawData.label ?? rawNode.label ?? 'Transform', 80) || 'Transform',
@@ -552,10 +731,82 @@ function normalizeSubflowNode(rawNode: Record<string, any>, index: number): Cano
         type: 'subflow',
         variant,
         config,
+        resources: normalizeNodeResources(rawNode),
+        policy: normalizeNodePolicy(rawNode, 'subflow', variant, config),
         position: normalizePosition(rawNode, index),
         data: {
             label: compactText(rawData.label ?? rawNode.label ?? 'Call workflow', 80) || 'Call workflow',
             description: compactText(rawData.description ?? '', 200),
+        },
+    };
+}
+
+function normalizeLoopNode(rawNode: Record<string, any>, index: number): CanonicalWorkflowNode {
+    const rawData = isRecord(rawNode.data) ? rawNode.data : {};
+    const rawConfig = isRecord(rawNode.config) ? rawNode.config : {};
+    const rawVariant = compactText(rawNode.variant ?? rawConfig.variant ?? rawData.loopType ?? '', 40).toLowerCase();
+    const variant: LoopVariant = LOOP_VARIANTS.has(rawVariant as LoopVariant)
+        ? rawVariant as LoopVariant
+        : 'for_each';
+    const rawBody = isRecord(rawConfig.body) ? rawConfig.body : {};
+    const normalizedBody = normalizeWorkflowDefinition(rawBody);
+    const config = {
+        array_source: compactText(rawConfig.array_source ?? '', 600),
+        item_variable_name: compactText(rawConfig.item_variable_name ?? 'item', 80) || 'item',
+        parallel: Boolean(rawConfig.parallel),
+        max_iterations: rawConfig.max_iterations == null ? null : parseInteger(rawConfig.max_iterations, 0),
+        continue_on_error: Boolean(rawConfig.continue_on_error),
+        condition: isRecord(rawConfig.condition) ? rawConfig.condition : {},
+        expression: compactText(rawConfig.expression ?? '', 1000),
+        count: rawConfig.count == null ? null : parseInteger(rawConfig.count, 0),
+        count_source: compactText(rawConfig.count_source ?? '', 600),
+        body: normalizedBody.nodes.length > 0
+            ? normalizedBody
+            : {
+                version: EMPYRALIST_WORKFLOW_SCHEMA_VERSION,
+                nodes: [
+                    {
+                        id: 'loop_body_data_1',
+                        type: 'data',
+                        variant: 'transform',
+                        config: {
+                            mapping: 'Transform the current loop input into the next step payload.',
+                            template: '',
+                            schema: {},
+                        },
+                        resources: {},
+                        policy: { capability_id: 'workflow.data.transform' },
+                    },
+                ],
+                edges: [],
+                defaults: {},
+                resources: {},
+                policy: {},
+                meta: {},
+            },
+    };
+    return {
+        id: compactText(rawNode.id || `loop-${index + 1}`, 120) || `loop-${index + 1}`,
+        type: 'loop',
+        variant,
+        config,
+        resources: normalizeNodeResources(rawNode),
+        policy: normalizeNodePolicy(rawNode, 'loop', variant, config),
+        position: normalizePosition(rawNode, index),
+        data: {
+            label: compactText(rawData.label ?? rawNode.label ?? (variant === 'while' ? 'While condition' : variant === 'repeat' ? 'Repeat' : 'For each item'), 80)
+                || (variant === 'while' ? 'While condition' : variant === 'repeat' ? 'Repeat' : 'For each item'),
+            loopType: variant,
+            summary: compactText(
+                rawData.summary
+                ?? (variant === 'while'
+                    ? config.expression
+                    : variant === 'repeat'
+                        ? config.count_source ?? config.count
+                        : config.array_source)
+                ?? '',
+                160,
+            ) || 'Repeat a sub-workflow',
         },
     };
 }
@@ -570,6 +821,8 @@ function normalizeAgentNode(
         id: compactText(rawNode.id || `agent-${index + 1}`, 120) || `agent-${index + 1}`,
         type: 'agent',
         config,
+        resources: normalizeNodeResources(rawNode),
+        policy: normalizeNodePolicy(rawNode, 'agent', '', config),
         position: normalizePosition(rawNode, index),
         data: buildLegacyAgentData(config),
     };
@@ -601,6 +854,9 @@ function normalizeNode(rawNode: unknown, index: number, meta: Record<string, any
     }
     if (canonicalType === 'subflow') {
         return normalizeSubflowNode(rawNode, index);
+    }
+    if (canonicalType === 'loop') {
+        return normalizeLoopNode(rawNode, index);
     }
     return null;
 }
@@ -763,6 +1019,32 @@ function validateSubflowNode(node: CanonicalWorkflowNode, issues: WorkflowValida
     const workflowId = compactText(isRecord(node.config) ? node.config.workflow_id : '', 160);
     if (!workflowId) {
         issues.push({ code: 'subflow_target_missing', message: 'Subflow nodes require a target workflow_id.', level: 'error', nodeId: node.id });
+    }
+}
+
+function validateLoopNode(node: CanonicalWorkflowNode, issues: WorkflowValidationIssue[]): void {
+    const variant = String(node.variant || '').trim();
+    if (!LOOP_VARIANTS.has(variant as LoopVariant)) {
+        issues.push({ code: 'loop_variant_invalid', message: `Loop node variant '${variant || 'unknown'}' is not supported.`, level: 'error', nodeId: node.id });
+        return;
+    }
+    const config = isRecord(node.config) ? node.config : {};
+    const body = isRecord(config.body) ? config.body : {};
+    const bodyNodes = Array.isArray(body.nodes) ? body.nodes : [];
+    if (bodyNodes.length === 0) {
+        issues.push({ code: 'loop_body_missing', message: 'Loop nodes require a non-empty body workflow.', level: 'error', nodeId: node.id });
+    }
+    if (config.max_iterations != null && Number(config.max_iterations) <= 0) {
+        issues.push({ code: 'loop_max_iterations_invalid', message: 'Loop nodes require max_iterations greater than zero.', level: 'error', nodeId: node.id });
+    }
+    if (variant === 'for_each' && !compactText(config.array_source ?? '', 600)) {
+        issues.push({ code: 'loop_array_source_missing', message: 'FOR_EACH loop nodes require array_source.', level: 'error', nodeId: node.id });
+    }
+    if (variant === 'while' && !compactText(config.expression ?? '', 1000)) {
+        issues.push({ code: 'loop_condition_missing', message: 'WHILE loop nodes require expression or condition.', level: 'error', nodeId: node.id });
+    }
+    if (variant === 'repeat' && config.count == null && !compactText(config.count_source ?? '', 600)) {
+        issues.push({ code: 'loop_count_missing', message: 'REPEAT loop nodes require count or count_source.', level: 'error', nodeId: node.id });
     }
 }
 
@@ -1036,6 +1318,7 @@ export function validateWorkflowDefinition(
         if (node.type === 'tool') validateToolNode(node, issues);
         if (node.type === 'human') validateHumanNode(node, issues);
         if (node.type === 'subflow') validateSubflowNode(node, issues);
+        if (node.type === 'loop') validateLoopNode(node, issues);
     }
 
     return issues;

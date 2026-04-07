@@ -85,6 +85,7 @@ from server_modules.connectors.s3_connector import (
 )
 from server_modules import runtime_config as config
 from server_modules import run_service as run_service
+from server_modules.capability_registry import workflow_node_capability_id
 from server_modules import shared as shared
 from server_modules import runtime_common as common
 from server_modules import outbox_service
@@ -484,74 +485,18 @@ def _update_run_node_state(
 
 
 def _workflow_variant_default_tool_id(variant: str) -> str:
-    mapping = {
-        "shell": "shell.execute",
-        "code": "",
-        "browser": "browser_automation.interactive",
-        "file": "filesystem.read_write",
-        "document": "document_create",
-        "spreadsheet": "spreadsheet_update",
-    }
-    return mapping.get(str(variant or "").strip().lower(), "")
+    return workflow_node_capability_id("tool", variant=variant, config={})
 
 
 def _workflow_tool_policy_tool_id(variant: str, config: Dict[str, Any]) -> str:
-    clean_variant = str(variant or "").strip().lower()
-    if clean_variant == "code":
-        return ""
-    if clean_variant == "connector_action":
-        action_id = normalize_action_id(config.get("action_id"))
-        connector_id = str(config.get("connector") or "").strip().lower()
-        action_mapping = {
-            "send_email": "send_message",
-            "send_message": "send_message",
-            "send_embed": "send_message",
-            "send_dm": "send_message",
-            "post_reply": "send_message",
-            "publish_reply": "send_message",
-            "send_media": "send_message",
-            "update_message": "send_message",
-            "upload_file": "send_message",
-            "create_issue": "issue_write",
-            "comment_on_issue": "issue_write",
-            "create_pull_request": "pr_write",
-            "create_or_update_file": "repo_write",
-            "create_page": "notion_write",
-            "update_page": "notion_write",
-            "create_database_item": "notion_write",
-            "update_issue": "issue_write",
-            "add_comment": "issue_write",
-            "draft_email": "draft_email",
-            "create_calendar_event": "create_calendar_event",
-            "create_doc": "document_create",
-            "create_document": "document_create",
-            "create_sheet": "spreadsheet_create",
-            "create_spreadsheet": "spreadsheet_create",
-            "upload_drive_file": "filesystem.read_write",
-            "http_request": "http_request",
-            "signed_webhook": "http_request",
-        }
-        if connector_id in {"dropbox", "s3"} and action_id == "upload_file":
-            return "storage_write"
-        if action_id in {"delete", "move", "delete_object", "create_bucket"}:
-            return "storage_write"
-        return action_mapping.get(action_id, action_id)
-    if clean_variant == "spreadsheet":
-        operation = normalize_action_id(config.get("operation") or "read")
-        if operation == "append":
-            return "spreadsheet_append"
-        if operation in {"update", "edit"}:
-            return "spreadsheet_update"
-        if operation in {"create", "new"}:
-            return "spreadsheet_create"
-        return "spreadsheet_read"
-    if clean_variant == "document":
-        operation = normalize_action_id(config.get("operation") or "create")
-        file_path = str(config.get("file_path") or config.get("path") or "").strip().lower()
-        if file_path.endswith(".pptx"):
-            return "presentation_update" if operation in {"update", "edit", "append"} else "presentation_create"
-        return "document_update" if operation in {"update", "edit", "append"} else "document_create"
-    return normalize_action_id(config.get("action_id") or _workflow_variant_default_tool_id(clean_variant))
+    policy = config.get("policy") if isinstance(config.get("policy"), dict) else {}
+    capability_id = workflow_node_capability_id(
+        "tool",
+        variant=variant,
+        config=config,
+        policy=policy,
+    )
+    return normalize_action_id(capability_id or _workflow_variant_default_tool_id(variant))
 
 
 def _predict_tool_ids_from_workflow_definition(definition: Dict[str, Any]) -> List[str]:
@@ -571,6 +516,7 @@ def _predict_tool_ids_from_workflow_definition(definition: Dict[str, Any]) -> Li
         node_type = str(node.get("type") or "").strip().lower()
         variant = str(node.get("variant") or "").strip().lower()
         config = node.get("config") if isinstance(node.get("config"), dict) else {}
+        policy = node.get("policy") if isinstance(node.get("policy"), dict) else {}
         if node_type == "agent":
             tools = config.get("tools") if isinstance(config.get("tools"), dict) else {}
             for item in tools.get("dynamic_allowed") if isinstance(tools.get("dynamic_allowed"), list) else []:
@@ -578,7 +524,7 @@ def _predict_tool_ids_from_workflow_definition(definition: Dict[str, Any]) -> Li
             for item in tools.get("explicit_required") if isinstance(tools.get("explicit_required"), list) else []:
                 _append(item)
         elif node_type == "tool":
-            _append(_workflow_tool_policy_tool_id(variant, config))
+            _append(workflow_node_capability_id("tool", variant=variant, config=config, policy=policy))
     return out
 
 

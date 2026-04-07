@@ -724,7 +724,11 @@ class RunsExecutionGraphTests(unittest.TestCase):
             "headers": {"Content-Type": "application/json"},
         },
     )
-    def test_execute_workflow_graph_extracts_simple_json_field_without_llm(self, _http_mock, _llm_mock):
+    @patch(
+        "server_modules.runs_execution.wait_for_human_decision",
+        return_value=True,
+    )
+    def test_execute_workflow_graph_extracts_simple_json_field_without_llm(self, _approval_mock, _http_mock, _llm_mock):
         definition = {
             "version": "empyralist.workflow.v2",
             "nodes": [
@@ -736,6 +740,9 @@ class RunsExecutionGraphTests(unittest.TestCase):
                     "config": {
                         "method": "GET",
                         "url": "https://httpbin.org/get",
+                        "permissions": {
+                            "trust_preset": "trusted_workflow",
+                        },
                     },
                 },
                 {

@@ -126,6 +126,38 @@ class BuilderRouteTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(node["variant"], "connector_action")
         self.assertEqual(node["config"]["connector"], "telegram_bot")
         self.assertEqual(node["config"]["action_id"], "send_message")
+        self.assertEqual(node["policy"]["capability_id"], "send_message")
+
+    def test_parse_workflow_payload_stamps_canonical_capability_ids(self):
+        payload = _parse_workflow_payload(
+            """
+            {
+              "version": "empyralist.workflow.v2",
+              "nodes": [
+                {
+                  "id": "trigger_1",
+                  "type": "trigger",
+                  "variant": "manual"
+                },
+                {
+                  "id": "loop_1",
+                  "type": "loop",
+                  "variant": "for_each",
+                  "config": {
+                    "array_source": "$.items"
+                  }
+                }
+              ],
+              "edges": [
+                {"source": "trigger_1", "target": "loop_1"}
+              ]
+            }
+            """
+        )
+        self.assertEqual(payload["nodes"][0]["policy"]["capability_id"], "workflow.trigger.manual")
+        self.assertEqual(payload["nodes"][1]["policy"]["capability_id"], "workflow.loop.for_each")
+        self.assertEqual(payload["nodes"][1]["config"]["body"]["version"], "empyralist.workflow.v2")
+        self.assertEqual(payload["nodes"][1]["config"]["body"]["nodes"][0]["policy"]["capability_id"], "workflow.data.transform")
 
     def test_parse_workflow_payload_flags_custom_api_signed_webhook_without_secret(self):
         payload = _parse_workflow_payload(

@@ -38,6 +38,7 @@ import {
     normalizeExecutionTarget,
 } from '@/lib/executionTargets';
 import { buildRunStartedMessage, OPEN_LIVE_RUN_LABEL, RUN_WAITING_STATUS_COPY } from '@/lib/runStartCopy';
+import { workflowCapabilityIdForNode } from '@/lib/workflowCapabilityMap';
 import { buildDefaultCanonicalConfig, resetCanonicalConfigForVariant } from '@/lib/workflowNodeDefaults';
 import {
     formatWorkflowRunNodeStatusLabel,
@@ -1210,6 +1211,7 @@ function serializeCanvasNodes(nodes: CanvasWorkflowNode[]): Array<Record<string,
         const canonicalType: CanonicalNodeType = compatibility.__canonicalType ?? canonicalTypeForCanvasType(canvasType);
         const canonicalVariant = compatibility.__canonicalVariant || canonicalVariantForCanvasNode(canvasType, node.data);
         const config = canonicalConfigFromCanvasNode(canvasType, node.data, compatibility.__canonicalConfig);
+        const basePolicy = compatibility.__canonicalPolicy || {};
         const strippedData = Object.fromEntries(
             Object.entries(node.data as Record<string, unknown>).filter(([key]) => !key.startsWith('__canonical')),
         );
@@ -1219,7 +1221,10 @@ function serializeCanvasNodes(nodes: CanvasWorkflowNode[]): Array<Record<string,
             variant: canonicalVariant,
             config,
             resources: compatibility.__canonicalResources || {},
-            policy: compatibility.__canonicalPolicy || {},
+            policy: {
+                ...basePolicy,
+                capability_id: workflowCapabilityIdForNode(canonicalType, canonicalVariant, config, basePolicy),
+            },
             position: node.position,
             data: strippedData,
         };
@@ -4096,7 +4101,7 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
             const res = await controlPlaneFetch(`/api/workflows/${encodeURIComponent(activeWorkflowId)}/run`, {
                 method: 'POST',
                 body: JSON.stringify({
-                    engine: 'codex',
+                    engine: 'orion',
                     workflow_id: activeWorkflowId,
                     workspace_id: workspaceId,
                     user_goal: operator.userGoal.trim(),

@@ -10,6 +10,7 @@ from server_modules.builder_runtime_mapping import (
     normalize_trust_preset,
     validate_file_mount_grants,
 )
+from server_modules.capability_registry import workflow_node_capability_id
 from server_modules.connector_manifests import CONNECTOR_MANIFESTS
 from server_modules.runtime_policy import normalize_execution_target, normalize_trust_mode
 from server_modules.url_security import obvious_private_url_reason
@@ -379,19 +380,10 @@ def _default_node_config(node_type: str, variant: str, raw_node: Dict[str, Any],
     if node_type == "loop":
         raw_config = raw_node.get("config") if _is_record(raw_node.get("config")) else {}
         body = raw_config.get("body") if _is_record(raw_config.get("body")) else {}
-        return {
-            "array_source": _clean_text(raw_config.get("array_source"), 600),
-            "item_variable_name": _clean_text(raw_config.get("item_variable_name"), 80) or "item",
-            "parallel": bool(raw_config.get("parallel")),
-            "max_iterations": raw_config.get("max_iterations"),
-            "continue_on_error": bool(raw_config.get("continue_on_error")),
-            "condition": raw_config.get("condition") if _is_record(raw_config.get("condition")) else {},
-            "expression": _clean_text(raw_config.get("expression"), 1000),
-            "count": raw_config.get("count"),
-            "count_source": _clean_text(raw_config.get("count_source"), 600),
-            "body": {
-                "version": str(body.get("version") or EMPYRALIST_WORKFLOW_SCHEMA_VERSION).strip() or EMPYRALIST_WORKFLOW_SCHEMA_VERSION,
-                "nodes": body.get("nodes") if isinstance(body.get("nodes"), list) else [
+        normalized_body = normalize_builder_generated_workflow(
+            body if isinstance(body.get("nodes"), list) else {
+                "version": EMPYRALIST_WORKFLOW_SCHEMA_VERSION,
+                "nodes": [
                     {
                         "id": "loop_body_data_1",
                         "type": "data",
@@ -402,8 +394,22 @@ def _default_node_config(node_type: str, variant: str, raw_node: Dict[str, Any],
                         },
                     }
                 ],
-                "edges": body.get("edges") if isinstance(body.get("edges"), list) else [],
+                "edges": [],
             },
+            prompt=prompt,
+            for_publish=False,
+        )
+        return {
+            "array_source": _clean_text(raw_config.get("array_source"), 600),
+            "item_variable_name": _clean_text(raw_config.get("item_variable_name"), 80) or "item",
+            "parallel": bool(raw_config.get("parallel")),
+            "max_iterations": raw_config.get("max_iterations"),
+            "continue_on_error": bool(raw_config.get("continue_on_error")),
+            "condition": raw_config.get("condition") if _is_record(raw_config.get("condition")) else {},
+            "expression": _clean_text(raw_config.get("expression"), 1000),
+            "count": raw_config.get("count"),
+            "count_source": _clean_text(raw_config.get("count_source"), 600),
+            "body": normalized_body,
         }
     return {}
 
@@ -639,13 +645,23 @@ def normalize_builder_generated_workflow(payload: Dict[str, Any], *, prompt: str
 
         config = _default_node_config(node_type, variant, item, prompt)
         compatibility = _compatibility_fields(node_type, variant, config, item, index)
+        raw_policy = item.get("policy") if isinstance(item.get("policy"), dict) else {}
+        capability_id = workflow_node_capability_id(
+            node_type,
+            variant=variant,
+            config=config,
+            policy=raw_policy,
+        )
         node = {
             "id": node_id,
             "type": node_type,
             "variant": variant if variant else None,
             "config": config,
             "resources": item.get("resources") if isinstance(item.get("resources"), dict) else {},
-            "policy": item.get("policy") if isinstance(item.get("policy"), dict) else {},
+            "policy": {
+                **raw_policy,
+                "capability_id": capability_id,
+            },
             "position": {
                 "x": compatibility["x"],
                 "y": compatibility["y"],

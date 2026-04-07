@@ -71,6 +71,7 @@ import {
   normalizeExecutionTarget,
 } from '@/lib/executionTargets';
 import { OPEN_LIVE_RUN_LABEL, RUN_STARTED_STATUS_COPY } from '@/lib/runStartCopy';
+import { workflowCapabilityIdForNode } from '@/lib/workflowCapabilityMap';
 import { buildDefaultCanonicalConfig, resetCanonicalConfigForVariant } from '@/lib/workflowNodeDefaults';
 import {
   formatWorkflowRunCountsSummary,
@@ -1231,6 +1232,7 @@ function serializeCanvasNode(node: CanvasWorkflowNode): Record<string, unknown> 
   const canonicalType: CanonicalNodeType = compatibility.__canonicalType ?? canonicalTypeForCanvasType(canvasType);
   const canonicalVariant = compatibility.__canonicalVariant || canonicalVariantForCanvasNode(canvasType, node.data);
   const config = canonicalConfigFromCanvasNode(canvasType, node.data, compatibility.__canonicalConfig);
+  const basePolicy = compatibility.__canonicalPolicy || {};
   const strippedData = Object.fromEntries(
     Object.entries(node.data as Record<string, unknown>).filter(([key]) => !key.startsWith('__canonical')),
   );
@@ -1240,7 +1242,10 @@ function serializeCanvasNode(node: CanvasWorkflowNode): Record<string, unknown> 
     variant: canonicalVariant,
     config,
     resources: compatibility.__canonicalResources || {},
-    policy: compatibility.__canonicalPolicy || {},
+    policy: {
+      ...basePolicy,
+      capability_id: workflowCapabilityIdForNode(canonicalType, canonicalVariant, config, basePolicy),
+    },
     position: node.position,
     data: strippedData,
   };

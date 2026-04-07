@@ -34,6 +34,10 @@ const DEFAULT_AGENT_FILTER: 'all' | AgentRoleId = 'all';
 const DEFAULT_CHANNEL_FILTER = 'all';
 const NARROW_VIEWPORT_QUERY = '(max-width: 980px)';
 
+function normalizeArtifactLocation(value?: string | null): string {
+  return String(value || '').trim();
+}
+
 function parseArtifactView(value?: string | null): ArtifactView {
   if (value === 'deliverables' || value === 'evidence' || value === 'system' || value === 'all') return value;
   return DEFAULT_ARTIFACT_VIEW;
@@ -94,6 +98,7 @@ export function useArtifactsBrowser() {
   });
   const [channelFilter, setChannelFilterState] = useState(() => String(searchParams.get('channel') || '').trim() || DEFAULT_CHANNEL_FILTER);
   const [selectedArtifactId, setSelectedArtifactId] = useState<string | null>(() => searchParams.get('artifact'));
+  const [selectedArtifactPath, setSelectedArtifactPath] = useState<string | null>(() => normalizeArtifactLocation(searchParams.get('artifactPath')) || null);
   const [isNarrowViewport, setIsNarrowViewport] = useState(false);
   const desktopBridge = useMemo(() => {
     if (typeof window === 'undefined') return null;
@@ -147,6 +152,7 @@ export function useArtifactsBrowser() {
 
   const replaceBrowserUrl = useCallback((updates: {
     artifact?: string | null;
+    artifactPath?: string | null;
     q?: string | null;
     view?: ArtifactView | null;
     kind?: KindFilter | null;
@@ -162,6 +168,7 @@ export function useArtifactsBrowser() {
       next.set(key, value);
     };
     if (Object.prototype.hasOwnProperty.call(updates, 'artifact')) apply('artifact', updates.artifact);
+    if (Object.prototype.hasOwnProperty.call(updates, 'artifactPath')) apply('artifactPath', normalizeArtifactLocation(updates.artifactPath));
     if (Object.prototype.hasOwnProperty.call(updates, 'q')) apply('q', updates.q);
     if (Object.prototype.hasOwnProperty.call(updates, 'view')) apply('view', updates.view || null, DEFAULT_ARTIFACT_VIEW);
     if (Object.prototype.hasOwnProperty.call(updates, 'kind')) apply('kind', updates.kind || null, DEFAULT_KIND_FILTER);
@@ -171,11 +178,14 @@ export function useArtifactsBrowser() {
     router.replace(href, { scroll: false });
   }, [pathname, router, searchParams]);
 
-  const syncSelectedArtifact = useCallback((artifactId: string | null) => {
+  const syncSelectedArtifact = useCallback((artifactId: string | null, artifactPath: string | null = null) => {
+    const normalizedPath = normalizeArtifactLocation(artifactPath) || null;
     setSelectedArtifactId(artifactId);
+    setSelectedArtifactPath(normalizedPath);
     const current = searchParams.get('artifact');
-    if ((current || null) === artifactId) return;
-    replaceBrowserUrl({ artifact: artifactId });
+    const currentPath = normalizeArtifactLocation(searchParams.get('artifactPath')) || null;
+    if ((current || null) === artifactId && currentPath === normalizedPath) return;
+    replaceBrowserUrl({ artifact: artifactId, artifactPath: normalizedPath });
   }, [replaceBrowserUrl, searchParams]);
 
   useEffect(() => {
@@ -190,6 +200,7 @@ export function useArtifactsBrowser() {
 
   useEffect(() => {
     const artifactFromUrl = searchParams.get('artifact');
+    const artifactPathFromUrl = normalizeArtifactLocation(searchParams.get('artifactPath')) || null;
     const nextQuery = searchParams.get('q') || '';
     const nextView = parseArtifactView(searchParams.get('view'));
     const nextKind = parseKindFilter(searchParams.get('kind'));
@@ -197,25 +208,39 @@ export function useArtifactsBrowser() {
     const nextChannel = String(searchParams.get('channel') || '').trim() || DEFAULT_CHANNEL_FILTER;
 
     if ((artifactFromUrl || null) !== selectedArtifactId) setSelectedArtifactId(artifactFromUrl);
+    if (artifactPathFromUrl !== selectedArtifactPath) setSelectedArtifactPath(artifactPathFromUrl);
     if (nextQuery !== query) setQueryState(nextQuery);
     if (nextView !== viewMode) setViewModeState(nextView);
     if (nextKind !== kindFilter) setKindFilterState(nextKind);
     if (nextAgent !== agentFilter) setAgentFilterState(nextAgent);
     if (nextChannel !== channelFilter) setChannelFilterState(nextChannel);
-  }, [agentFilter, channelFilter, kindFilter, query, searchParams, selectedArtifactId, viewMode]);
+  }, [agentFilter, channelFilter, kindFilter, query, searchParams, selectedArtifactId, selectedArtifactPath, viewMode]);
 
   useEffect(() => {
     if (!payload) return;
     const allItems = payload.items || [];
-    if (selectedArtifactId && allItems.some((item) => item.id === selectedArtifactId)) return;
-    if (filteredItems.length === 0) {
-      if (selectedArtifactId) syncSelectedArtifact(null);
+    const selectedById = selectedArtifactId
+      ? allItems.find((item) => item.id === selectedArtifactId) || null
+      : null;
+    if (selectedById) {
+      if (selectedArtifactPath) syncSelectedArtifact(selectedById.id, null);
       return;
     }
-    const hasExplicitSelection = Boolean(searchParams.get('artifact'));
-    if (isNarrowViewport && !hasExplicitSelection && !selectedArtifactId) return;
+    const selectedByPath = selectedArtifactPath
+      ? allItems.find((item) => normalizeArtifactLocation(item.uri_or_path) === selectedArtifactPath) || null
+      : null;
+    if (selectedByPath) {
+      syncSelectedArtifact(selectedByPath.id, null);
+      return;
+    }
+    if (filteredItems.length === 0) {
+      if (selectedArtifactId || selectedArtifactPath) syncSelectedArtifact(null);
+      return;
+    }
+    const hasExplicitSelection = Boolean(searchParams.get('artifact') || searchParams.get('artifactPath'));
+    if (isNarrowViewport && !hasExplicitSelection && !selectedArtifactId && !selectedArtifactPath) return;
     syncSelectedArtifact(filteredItems[0]?.id || null);
-  }, [filteredItems, isNarrowViewport, payload, searchParams, selectedArtifactId, syncSelectedArtifact]);
+  }, [filteredItems, isNarrowViewport, payload, searchParams, selectedArtifactId, selectedArtifactPath, syncSelectedArtifact]);
 
   const hasActiveFilters =
     query.trim().length > 0
@@ -268,10 +293,15 @@ export function useArtifactsBrowser() {
   const selectedArtifact = useMemo(() => {
     const allItems = payload?.items || [];
     if (selectedArtifactId) {
-      return allItems.find((item) => item.id === selectedArtifactId) || filteredItems[0] || allItems[0] || null;
+      const selectedById = allItems.find((item) => item.id === selectedArtifactId);
+      if (selectedById) return selectedById;
+    }
+    if (selectedArtifactPath) {
+      const selectedByPath = allItems.find((item) => normalizeArtifactLocation(item.uri_or_path) === selectedArtifactPath);
+      if (selectedByPath) return selectedByPath;
     }
     return filteredItems[0] || allItems[0] || null;
-  }, [filteredItems, payload, selectedArtifactId]);
+  }, [filteredItems, payload, selectedArtifactId, selectedArtifactPath]);
 
   const selectedPreviewTarget = useMemo(
     () => (selectedArtifact ? previewTargetById.get(selectedArtifact.id) || selectedArtifact : null),

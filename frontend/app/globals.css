@@ -8348,6 +8348,70 @@ body.orion-modal-open .orion-page-shell {
   padding-inline: 10px;
 }
 
+.orion-artifact-provenance-card {
+  margin: 0 20px;
+  padding: 16px;
+  border-radius: 16px;
+  border: 1px solid color-mix(in srgb, var(--border-subtle) 88%, transparent 12%);
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--bg-element) 76%, white 24%) 0%, color-mix(in srgb, var(--bg-surface) 90%, white 10%) 100%);
+  display: grid;
+  gap: 14px;
+}
+
+.orion-artifact-provenance-head {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+}
+
+.orion-artifact-provenance-heading {
+  display: grid;
+  gap: 4px;
+}
+
+.orion-artifact-provenance-kicker {
+  font-size: 11px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-tertiary);
+  font-weight: 700;
+}
+
+.orion-artifact-provenance-title {
+  font-size: 14px;
+  color: var(--text-primary);
+  font-weight: 800;
+}
+
+.orion-artifact-provenance-grid {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+}
+
+.orion-artifact-provenance-item {
+  display: grid;
+  gap: 4px;
+}
+
+.orion-artifact-provenance-label {
+  font-size: 10.5px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-tertiary);
+  font-weight: 700;
+}
+
+.orion-artifact-provenance-value {
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--text-primary);
+  word-break: break-word;
+}
+
 .orion-artifact-detail-tabs {
   display: flex;
   gap: 8px;

@@ -2017,6 +2017,11 @@ export default function RunInspectPage() {
       setStreamError(error instanceof Error ? error.message : 'Could not open artifact preview.');
     }
   }, [desktopBridge]);
+  const artifactWorkspaceHref = useCallback((targetPath: string) => {
+    const normalized = String(targetPath || '').trim();
+    if (!normalized) return '/artifacts';
+    return `/artifacts?artifactPath=${encodeURIComponent(normalized)}`;
+  }, []);
   const revealArtifactTarget = useCallback(async (targetPath: string) => {
     const normalized = String(targetPath || '').trim();
     if (!desktopBridge?.desktop || !desktopBridge.revealPath || !isLocalFileTarget(normalized)) return;
@@ -2782,7 +2787,7 @@ export default function RunInspectPage() {
                 <button className="orion-btn orion-btn-ghost" style={{ minHeight: 44, paddingInline: 12 }} onClick={() => focusSection('artifacts')}>
                   Open artifacts
                 </button>
-                <Link className="orion-btn orion-btn-ghost" style={{ minHeight: 44, paddingInline: 12 }} href="/artifacts">
+                <Link className="orion-btn orion-btn-ghost" style={{ minHeight: 44, paddingInline: 12 }} href={latestArtifact ? artifactWorkspaceHref(latestArtifact) : '/artifacts'}>
                   Open outputs
                 </Link>
               </div>
@@ -3598,6 +3603,13 @@ export default function RunInspectPage() {
                               >
                                 Open
                               </button>
+                              <Link
+                                className="orion-btn orion-btn-ghost"
+                                style={{ minHeight: 44, paddingInline: 12 }}
+                                href={artifactWorkspaceHref(step.artifact_file_path)}
+                              >
+                                Inspect in assets
+                              </Link>
                               {desktopBridge?.desktop && isLocalFileTarget(step.artifact_file_path) ? (
                                 <button
                                   className="orion-btn orion-btn-ghost"
@@ -4381,6 +4393,14 @@ export default function RunInspectPage() {
                         >
                           Open
                         </button>
+                        <Link
+                          className="orion-btn orion-btn-ghost"
+                          style={{ minHeight: 44, paddingInline: 12 }}
+                          href={artifactWorkspaceHref(item)}
+                          onClick={(event) => event.stopPropagation()}
+                        >
+                          Inspect in assets
+                        </Link>
                         {desktopBridge?.desktop && isLocalFileTarget(item) ? (
                           <button
                             className="orion-btn orion-btn-ghost"
@@ -4469,6 +4489,13 @@ export default function RunInspectPage() {
                           >
                             Open
                           </button>
+                          <Link
+                            className="orion-btn orion-btn-ghost"
+                            style={{ minHeight: 44, paddingInline: 12 }}
+                            href={artifactWorkspaceHref(item)}
+                          >
+                            Inspect in assets
+                          </Link>
                           {desktopBridge?.desktop && isLocalFileTarget(item) ? (
                             <button
                               className="orion-btn orion-btn-ghost"

@@ -19,6 +19,7 @@ import {
   artifactSurfaceLabel,
   compactText,
   connectorBindingText,
+  toDateLabel,
   type ArtifactItem,
 } from '@/lib/artifactsPresentation';
 import { ArtifactCodeView } from './ArtifactCodeView';
@@ -43,6 +44,16 @@ type ArtifactDetailPaneProps = {
 };
 
 type ViewTab = 'view' | 'code' | 'meta';
+
+function formatRunStatusLabel(value?: string | null): string {
+  const normalized = String(value || '').trim().toLowerCase();
+  if (!normalized) return '—';
+  return normalized
+    .split(/[_\s-]+/)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(' ');
+}
 
 export function ArtifactDetailPane({
   item,
@@ -135,6 +146,15 @@ export function ArtifactDetailPane({
     : null;
   const codeLanguage = artifactCodeLanguage(previewTarget);
   const resolvedLocation = String(previewTarget.uri_or_path || '').trim();
+  const connectorContext = connectorBindingText(item.connector_binding);
+  const sourceRunContextVisible = Boolean(
+    item.run_id
+    || item.agent_label
+    || item.agent_role
+    || item.run_status
+    || item.created_at
+    || connectorContext,
+  );
   const viewLabel = previewMode === 'html'
     ? 'Rendered page'
     : previewMode === 'markdown'
@@ -195,7 +215,7 @@ export function ArtifactDetailPane({
             <span>{artifactPathTail(resolvedLocation) || 'Saved artifact'}</span>
             {item.run_id ? <span>Run {item.run_id.slice(0, 8)}</span> : null}
             {item.agent_label ? <span>{item.agent_label}</span> : null}
-            {connectorBindingText(item.connector_binding) ? <span>{connectorBindingText(item.connector_binding)}</span> : null}
+            {connectorContext ? <span>{connectorContext}</span> : null}
           </div>
         </div>
 
@@ -240,14 +260,49 @@ export function ArtifactDetailPane({
               {revealLabel}
             </button>
           ) : null}
-          {inspectHref ? (
-            <Link href={inspectHref} className="orion-btn orion-btn-ghost">
-              <ArrowUpRight size={13} />
-              Source run
-            </Link>
-          ) : null}
         </div>
       </div>
+
+      {sourceRunContextVisible ? (
+        <section className="orion-artifact-provenance-card" aria-label="Source run context">
+          <div className="orion-artifact-provenance-head">
+            <div className="orion-artifact-provenance-heading">
+              <div className="orion-artifact-provenance-kicker">Source run context</div>
+              <div className="orion-artifact-provenance-title">
+                {item.run_id ? `Run ${item.run_id.slice(0, 8)}` : 'Artifact provenance'}
+              </div>
+            </div>
+            {inspectHref ? (
+              <Link href={inspectHref} className="orion-btn orion-btn-ghost">
+                <ArrowUpRight size={13} />
+                Open run inspection
+              </Link>
+            ) : null}
+          </div>
+          <div className="orion-artifact-provenance-grid">
+            <div className="orion-artifact-provenance-item">
+              <div className="orion-artifact-provenance-label">Run id</div>
+              <div className="orion-artifact-provenance-value">{item.run_id || '—'}</div>
+            </div>
+            <div className="orion-artifact-provenance-item">
+              <div className="orion-artifact-provenance-label">Agent</div>
+              <div className="orion-artifact-provenance-value">{item.agent_label || item.agent_role || '—'}</div>
+            </div>
+            <div className="orion-artifact-provenance-item">
+              <div className="orion-artifact-provenance-label">Status</div>
+              <div className="orion-artifact-provenance-value">{formatRunStatusLabel(item.run_status)}</div>
+            </div>
+            <div className="orion-artifact-provenance-item">
+              <div className="orion-artifact-provenance-label">Created</div>
+              <div className="orion-artifact-provenance-value">{toDateLabel(item.created_at)}</div>
+            </div>
+            <div className="orion-artifact-provenance-item">
+              <div className="orion-artifact-provenance-label">Channel</div>
+              <div className="orion-artifact-provenance-value">{connectorContext || '—'}</div>
+            </div>
+          </div>
+        </section>
+      ) : null}
 
       <div className="orion-artifact-detail-tabs">
         <button

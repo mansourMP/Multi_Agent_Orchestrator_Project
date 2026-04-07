@@ -5,7 +5,7 @@ The current packaged desktop shell is Tauri.
 ## Current Desktop Surfaces
 
 - Active packaged shell: [src-tauri](/Users/mansur/Multi_Agent_Orchestrator_Project/src-tauri)
-- Frozen legacy Electron shell: [desktop](/Users/mansur/Multi_Agent_Orchestrator_Project/desktop)
+- Archived historical Electron shell: removed from the active repo tree
 
 The desktop app should be treated as a shell over the main web/runtime stack, not as a separate product.
 
@@ -45,4 +45,4 @@ tail -f .orion-stack/logs/frontend.log
 
 ## Important Note
 
-The Electron wrapper is frozen and should not be treated as the main desktop implementation anymore. The active desktop build path is Tauri.
+The active desktop build path is Tauri. Historical Electron material is archived and not a supported runtime path.

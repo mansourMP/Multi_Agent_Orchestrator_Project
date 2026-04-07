@@ -7,13 +7,14 @@ Empyralis is web-first.
 - Primary product surface: web application
 - Preferred installable experience: PWA
 - Packaged desktop shell: Tauri in [src-tauri](/Users/mansur/Multi_Agent_Orchestrator_Project/src-tauri)
-- Frozen legacy shell: Electron in [desktop](/Users/mansur/Multi_Agent_Orchestrator_Project/desktop)
+- Archived legacy Electron shell: removed from the active repo tree
 
 ## What This Means
 
 - The web app remains the main control plane.
 - Desktop packaging exists, but it should stay aligned with the web app rather than becoming a separate product.
-- The old Electron wrapper is retained only for local bridge and compatibility reasons.
+- Tauri is the only supported packaged desktop shell.
+- Any legacy Electron notes are historical only and not part of the active runtime.
 
 ## Current Desktop Build Path
 

@@ -174,7 +174,7 @@ It is one platform with:
 ### Archive After Cutover
 
 - legacy NestJS runtime paths
-- frozen Electron launcher — read-only health probe and web shell boot only
+- archived legacy Electron launcher assets and notes
 - stale mobile direct-AI bridge files
 - checked-in runtime database artifacts
 
@@ -1063,12 +1063,12 @@ Examples:
 - `server_modules/connectors/discord.py`
 - Rust device supervisor under desktop or runtime boundary
 
-### Archive Later, Not Immediately
+### Archived Or Frozen Legacy Paths
 
 - [backend](/Users/mansur/Multi_Agent_Orchestrator_Project/backend)
-- [desktop](/Users/mansur/Multi_Agent_Orchestrator_Project/desktop)
+- historical Electron launcher path removed from the active repo tree
 
-These are legacy paths and should be removed only after the canonical runtime and Tauri path fully replace them.
+[backend](/Users/mansur/Multi_Agent_Orchestrator_Project/backend) remains frozen for reference. The legacy Electron shell has already been archived out of the active repo and is no longer a supported runtime path.
 
 ## What The Platform Should Include To Be Truly Powerful
 
@@ -1280,6 +1280,50 @@ We must:
 - add CI on PRs and main
 - add dependency and secrets scanning
 - add incident runbooks and customer-facing reliability docs
+
+## Current Accepted Temporary Boundaries
+
+This section records the remaining non-canonical edges that are accepted temporarily as of the current repo audit.
+
+They are not alternate architectures. They are bounded exceptions that must remain explicit until removed.
+
+1. Browser/session automation is still Python-owned.
+
+   Accepted boundary:
+
+   - [browser_engine.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/browser_engine.py) remains the temporary Playwright-based adapter
+   - [execution_router.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/execution_router.py) is the only authorized path into that adapter
+   - Rust remains the owner of direct device control
+
+2. Memory is canonically accessed through one facade but still split internally.
+
+   Accepted boundary:
+
+   - [memory_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/memory_service.py) is the only public access path
+   - [agent_memory.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/agent_memory.py) and [runtime_memory.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/runtime_memory.py) remain private implementation modules behind that facade
+
+3. Object storage is canonical at the interface level, but development storage is still filesystem-backed.
+
+   Accepted boundary:
+
+   - [artifact_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/artifact_service.py) exposes canonical artifact records and object-store-shaped URIs
+   - the current development backend stores objects under `.orion-object-store/`
+   - external S3-compatible backing remains a deployment follow-through item
+
+4. Redis is still deferred.
+
+   Accepted boundary:
+
+   - durable run truth, outbox, and notifications already live on Postgres and runtime state stores
+   - there is no active Redis coordination layer in the runtime yet
+   - Redis remains part of the target data plane, not the current mandatory dev substrate
+
+5. Enterprise hardening is still incomplete.
+
+   Accepted boundary:
+
+   - tenant/workspace policy inheritance, kill switches, safe mode, notifications, and machine fleet controls are implemented
+   - SSO, MFA, SCIM, SBOM/provenance attestations, PR/main CI, dependency and secrets scanning, and customer-facing runbooks remain deferred enterprise work
 
 ## Reliability Targets
 

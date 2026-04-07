@@ -28,6 +28,38 @@ export type ArtifactSummary = {
   label: string;
   kind?: string;
   preview_url?: string;
+  uri_or_path?: string;
+};
+
+export type MachineSummary = {
+  runtime_id: string;
+  display_name: string;
+  status: string;
+  online: boolean;
+  current_lease_holder?: string;
+  current_task_id?: string;
+  platform?: string;
+  last_seen_at?: string;
+};
+
+export type ConnectorSummary = {
+  id: string;
+  label: string;
+  connector: string;
+  status: string;
+  connected: boolean;
+  runtime_usable?: boolean | null;
+  summary?: string;
+};
+
+export type NotificationSummary = {
+  id: string;
+  text: string;
+  action?: string;
+  channel?: string;
+  ts?: string;
+  run_id?: string;
+  read_at?: string;
 };
 
 export type AppRecordSource = "core" | "platform" | "preview";

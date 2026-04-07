@@ -64,6 +64,12 @@ export default function InboxScreen() {
         subtitle="Approvals, completed work, and saved outputs in one trust layer."
       />
 
+      <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 10 }}>
+        <MiniAction label="Approvals" onPress={() => router.push("/approvals" as never)} />
+        <MiniAction label="Artifacts" onPress={() => router.push("/artifacts" as never)} />
+        <MiniAction label="Machines" onPress={() => router.push("/machines" as never)} />
+      </View>
+
       {!connected ? (
         <View
           style={{
@@ -186,6 +192,28 @@ export default function InboxScreen() {
         {!loading && connected && artifacts.length === 0 ? <EmptyCard label="Saved outputs will appear here." /> : null}
       </View>
     </ScrollView>
+  );
+}
+
+function MiniAction({ label, onPress }: { label: string; onPress: () => void }) {
+  const theme = useTheme();
+  return (
+    <TouchableOpacity
+      activeOpacity={0.86}
+      onPress={onPress}
+      style={{
+        height: 36,
+        paddingHorizontal: 14,
+        borderRadius: 999,
+        borderWidth: 1,
+        borderColor: theme.colors.border,
+        backgroundColor: theme.colors.surface,
+        alignItems: "center",
+        justifyContent: "center",
+      }}
+    >
+      <Text style={{ color: theme.colors.text, fontSize: 12, fontWeight: "700" }}>{label}</Text>
+    </TouchableOpacity>
   );
 }
 

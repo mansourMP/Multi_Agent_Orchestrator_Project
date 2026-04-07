@@ -105,6 +105,7 @@ class ApiNotificationItem(BaseModel):
     trace_id: Optional[str] = None
     action: Optional[str] = None
     text: Optional[str] = None
+    read_at: Optional[str] = None
     metadata: Dict[str, Any] = Field(default_factory=dict)
 
 
@@ -115,6 +116,18 @@ class ApiNotificationListResponse(BaseModel):
     sessions: List[Dict[str, Any]] = Field(default_factory=list)
     session_count: int = 0
     stream: bool = False
+
+
+class ApiNotificationReadRequest(BaseModel):
+    notification_ids: List[str] = Field(default_factory=list)
+    workspace_id: Optional[str] = None
+    mark_all: bool = False
+
+
+class ApiNotificationReadResponse(BaseModel):
+    status: str = "ok"
+    marked_count: int = 0
+    marked_ids: List[str] = Field(default_factory=list)
 
 
 class ApiArtifactListResponse(BaseModel):
@@ -217,10 +230,10 @@ CANONICAL_API_ENDPOINTS: Dict[str, Dict[str, Any]] = {
         "notes": "Canonical durable run detail endpoint.",
     },
     "notifications": {
-        "method": "GET",
+        "method": "GET/POST",
         "path": "/notifications",
         "response_model": "ApiNotificationListResponse",
-        "notes": "Canonical notification feed. `stream=true` returns SSE.",
+        "notes": "Canonical notification feed. `stream=true` returns SSE. POST marks notifications as read.",
     },
     "approvals_list": {
         "method": "GET",

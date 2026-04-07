@@ -52,3 +52,25 @@ export async function GET(request: NextRequest) {
     return Response.json({ detail: message, items: [], count: 0, total: 0, sessions: [], session_count: 0 }, { status: 503 });
   }
 }
+
+export async function POST(request: NextRequest) {
+  const rejection = enforceBffRouteGuard(request, { methods: ['POST'] });
+  if (rejection) return rejection;
+  const authFailure = await requireControlPlaneSession(request);
+  if (authFailure) return authFailure;
+  const roleFailure = await requireControlPlaneRole(request, 'viewer');
+  if (roleFailure) return roleFailure;
+
+  const rawBody = await request.text();
+  try {
+    const { status, payload } = await runtimeJsonRequest('/notifications', {
+      method: 'POST',
+      body: rawBody || undefined,
+      headers: rawBody ? { 'Content-Type': request.headers.get('content-type') || 'application/json' } : undefined,
+    });
+    return Response.json(payload, { status });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Notifications update failed.';
+    return Response.json({ detail: message, marked_count: 0, marked_ids: [] }, { status: 503 });
+  }
+}

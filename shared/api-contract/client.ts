@@ -9,6 +9,8 @@ import type {
   HealthResponse,
   MachineListResponse,
   NotificationListResponse,
+  NotificationReadRequest,
+  NotificationReadResponse,
   RunDetailResponse,
   RunListResponse,
   RunReplayResponse,
@@ -281,6 +283,14 @@ export function createApiClient(init: ApiClientInit = {}) {
         onEvent: options.onEvent,
         onError: options.onError,
         onClose: options.onClose,
+      });
+    },
+
+    markNotificationsRead(request: NotificationReadRequest): Promise<NotificationReadResponse> {
+      return jsonRequest<NotificationReadResponse>("/notifications", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(request),
       });
     },
 

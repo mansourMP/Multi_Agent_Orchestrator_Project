@@ -5,17 +5,22 @@ import { useRouter } from "expo-router";
 import { MobileScreen } from "@/src/components/MobileScreen";
 import { ScreenHeader } from "@/src/components/ScreenHeader";
 import { SectionCard } from "@/src/components/SectionCard";
+import { mobileApi } from "@/src/lib/api";
+import { useMobileNotifications } from "@/src/lib/mobile-data";
 import {
   getStoredNotificationState,
   registerForPushNotificationsAsync,
   scheduleAgentTestNotification,
   StoredNotificationState,
 } from "@/src/lib/notifications";
+import { useSessionState } from "@/src/lib/session-context";
 import { useAppTheme as useTheme } from "@/src/theme/useAppTheme";
 
 export default function NotificationsScreen() {
   const theme = useTheme();
   const router = useRouter();
+  const { session } = useSessionState();
+  const notificationsQuery = useMobileNotifications();
   const [notificationState, setNotificationState] = React.useState<StoredNotificationState>({ permissionStatus: "undetermined" });
   const [busy, setBusy] = React.useState(false);
 
@@ -127,6 +132,59 @@ export default function NotificationsScreen() {
               <Text style={{ color: theme.colors.text, fontSize: 14, fontWeight: "700" }}>Send test</Text>
             </TouchableOpacity>
           </View>
+        </View>
+      </SectionCard>
+
+      <SectionCard title="Recent Runtime Alerts" subtitle="Live notifications mirrored from the runtime feed.">
+        <View style={{ gap: 12 }}>
+          {(notificationsQuery.data ?? []).slice(0, 6).map((item) => (
+            <View
+              key={item.id}
+              style={{
+                borderRadius: 14,
+                borderWidth: 1,
+                borderColor: theme.colors.border,
+                backgroundColor: theme.colors.background,
+                padding: 12,
+                gap: 6,
+              }}
+            >
+              <View style={{ flexDirection: "row", justifyContent: "space-between", gap: 10 }}>
+                <Text style={{ flex: 1, color: theme.colors.text, fontSize: 14, fontWeight: "700" }}>
+                  {item.action || item.channel || "Notification"}
+                </Text>
+                <Text style={{ color: theme.colors.textSecondary, fontSize: 11 }}>
+                  {item.ts ? new Date(item.ts).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) : ""}
+                </Text>
+              </View>
+              <Text style={{ color: theme.colors.textSecondary, fontSize: 13, lineHeight: 19 }}>{item.text}</Text>
+              {!item.read_at && session ? (
+                <TouchableOpacity
+                  activeOpacity={0.86}
+                  onPress={async () => {
+                    await mobileApi.markNotificationsRead(session, [item.id]);
+                    await notificationsQuery.refetch();
+                  }}
+                  style={{
+                    alignSelf: "flex-start",
+                    height: 34,
+                    paddingHorizontal: 12,
+                    borderRadius: 999,
+                    backgroundColor: theme.colors.accent,
+                    alignItems: "center",
+                    justifyContent: "center",
+                  }}
+                >
+                  <Text style={{ color: "#FFFFFF", fontSize: 12, fontWeight: "700" }}>Mark read</Text>
+                </TouchableOpacity>
+              ) : null}
+            </View>
+          ))}
+          {!notificationsQuery.isLoading && (notificationsQuery.data ?? []).length === 0 ? (
+            <Text style={{ color: theme.colors.textSecondary, fontSize: 13 }}>
+              No runtime alerts yet. Once the feed is active, new events will appear here and sync to push.
+            </Text>
+          ) : null}
         </View>
       </SectionCard>
     </MobileScreen>

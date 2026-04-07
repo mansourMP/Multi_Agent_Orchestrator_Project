@@ -146,6 +146,13 @@ export default function HomeScreen() {
         <SummaryStat label="Outputs" value={recentOutputs.length} />
       </View>
 
+      <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 10, marginTop: 12 }}>
+        <QuickLink label="Approvals" onPress={() => router.push("/approvals" as never)} />
+        <QuickLink label="Artifacts" onPress={() => router.push("/artifacts" as never)} />
+        <QuickLink label="Machines" onPress={() => router.push("/machines" as never)} />
+        <QuickLink label="Connectors" onPress={() => router.push("/connectors" as never)} />
+      </View>
+
       <View
         style={{
           marginTop: 12,
@@ -410,6 +417,28 @@ export default function HomeScreen() {
         {!featuredApps.length ? <EmptyCard label="Pick active apps in Profile to pin them here." /> : null}
       </View>
     </ScrollView>
+  );
+}
+
+function QuickLink({ label, onPress }: { label: string; onPress: () => void }) {
+  const theme = useTheme();
+  return (
+    <TouchableOpacity
+      activeOpacity={0.86}
+      onPress={onPress}
+      style={{
+        height: 38,
+        paddingHorizontal: 14,
+        borderRadius: 999,
+        borderWidth: 1,
+        borderColor: theme.colors.border,
+        backgroundColor: theme.colors.surface,
+        alignItems: "center",
+        justifyContent: "center",
+      }}
+    >
+      <Text style={{ color: theme.colors.text, fontSize: 13, fontWeight: "700" }}>{label}</Text>
+    </TouchableOpacity>
   );
 }
 

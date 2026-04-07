@@ -1,8 +1,18 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
+import threading
 from typing import Any, Dict, List, Optional
 
 from server_modules.api_contract import ApiNotificationListResponse
+
+
+_NOTIFICATION_READ_STATE_LOCK = threading.Lock()
+_NOTIFICATION_READ_AT_BY_ID: Dict[str, str] = {}
+
+
+def _utc_now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
 def register_inbox_routes(app) -> None:
@@ -10,6 +20,16 @@ def register_inbox_routes(app) -> None:
 
     module_globals = globals()
     module_globals.update(_server.__dict__)
+
+    def _notification_with_read_state(item: Any) -> Dict[str, Any]:
+        record = dict(item) if isinstance(item, dict) else {}
+        notification_id = str(record.get("id") or "").strip()
+        if notification_id:
+            with _NOTIFICATION_READ_STATE_LOCK:
+                read_at = _NOTIFICATION_READ_AT_BY_ID.get(notification_id)
+            if read_at:
+                record["read_at"] = read_at
+        return record
 
     def _notification_payload(
         *,
@@ -41,7 +61,7 @@ def register_inbox_routes(app) -> None:
                 trace_id=trace_id,
             )
         ]
-        payload = filtered[:safe_limit]
+        payload = [_notification_with_read_state(item) for item in filtered[:safe_limit]]
         sessions: List[Dict[str, Any]] = []
         if include_sessions:
             sessions = _summarize_channel_sessions(filtered, limit=session_limit)
@@ -52,6 +72,57 @@ def register_inbox_routes(app) -> None:
             "sessions": sessions,
             "session_count": len(sessions),
             "stream": False,
+        }
+
+    def _mark_notifications_read(
+        *,
+        notification_ids: Optional[List[str]] = None,
+        workspace_id: Optional[str] = None,
+        mark_all: bool = False,
+    ) -> Dict[str, Any]:
+        normalized_ids = [
+            str(item or "").strip()
+            for item in (notification_ids or [])
+            if str(item or "").strip()
+        ]
+        target_ids: List[str] = []
+        if mark_all:
+            with CHANNEL_EVENTS_LOCK:
+                items = list(CHANNEL_EVENTS)
+            filtered = [
+                item for item in items
+                if _channel_event_matches(
+                    item=item,
+                    workspace_id=workspace_id,
+                    channel=None,
+                    session_key=None,
+                    direction=None,
+                    action=None,
+                    run_id=None,
+                    trace_id=None,
+                )
+            ]
+            target_ids.extend(
+                str(item.get("id") or "").strip()
+                for item in filtered
+                if isinstance(item, dict) and str(item.get("id") or "").strip()
+            )
+        target_ids.extend(normalized_ids)
+        deduped_ids: List[str] = []
+        seen = set()
+        for item in target_ids:
+            if not item or item in seen:
+                continue
+            seen.add(item)
+            deduped_ids.append(item)
+        marked_at = _utc_now_iso()
+        with _NOTIFICATION_READ_STATE_LOCK:
+            for notification_id in deduped_ids:
+                _NOTIFICATION_READ_AT_BY_ID[notification_id] = marked_at
+        return {
+            "status": "ok",
+            "marked_count": len(deduped_ids),
+            "marked_ids": deduped_ids,
         }
 
     def _notification_stream_response(
@@ -200,6 +271,20 @@ def register_inbox_routes(app) -> None:
             trace_id=trace_id,
             include_sessions=include_sessions,
             session_limit=session_limit,
+        )
+
+    @app.post("/notifications", dependencies=[Depends(require_api_key)])
+    async def mark_notifications_read(body: Optional[Dict[str, Any]] = None):
+        payload = body if isinstance(body, dict) else {}
+        notification_ids = payload.get("notification_ids")
+        workspace_id = payload.get("workspace_id")
+        mark_all = bool(payload.get("mark_all"))
+        if not mark_all and not isinstance(notification_ids, list):
+            raise HTTPException(status_code=400, detail="notification_ids or mark_all is required.")
+        return _mark_notifications_read(
+            notification_ids=notification_ids if isinstance(notification_ids, list) else None,
+            workspace_id=str(workspace_id or "").strip() or None,
+            mark_all=mark_all,
         )
 
     @app.get("/events/inbox/sessions", dependencies=[Depends(require_api_key)])

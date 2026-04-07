@@ -12,6 +12,7 @@ import type {
   RunDetailResponse,
   RunListResponse,
   NotificationListResponse,
+  NotificationReadResponse,
 } from "@shared/api-contract";
 import { createApiClient } from "@shared/api-contract/client";
 import type { MobileSession } from "./types";
@@ -417,6 +418,37 @@ export const mobileApi = {
     return buildMobileRuntimeClient(session).listNotifications(
       Object.fromEntries(query.entries()),
     ) as Promise<NotificationListResponse>;
+  },
+  markNotificationsRead(session: MobileSession, notificationIds: string[], options?: { markAll?: boolean }) {
+    return buildMobileRuntimeClient(session).markNotificationsRead({
+      notification_ids: notificationIds,
+      workspace_id: session.workspaceId,
+      mark_all: Boolean(options?.markAll),
+    }) as Promise<NotificationReadResponse>;
+  },
+  async testConnector(session: MobileSession, connectorId: string) {
+    const baseUrl = normalizeServerUrl(session.runtimeUrl);
+    const response = await fetch(`${baseUrl}/connectors/vault/${encodeURIComponent(connectorId)}/test?workspace_id=${encodeURIComponent(session.workspaceId)}`, {
+      method: "POST",
+      headers: session.runtimeKey ? { "X-API-Key": session.runtimeKey } : undefined,
+    });
+    const payload = await response.json().catch(() => null);
+    if (!response.ok) {
+      throw new Error(typeof payload?.detail === "string" ? payload.detail : "Connector test failed.");
+    }
+    return payload;
+  },
+  async disconnectConnector(session: MobileSession, connectorId: string) {
+    const baseUrl = normalizeServerUrl(session.runtimeUrl);
+    const response = await fetch(`${baseUrl}/connectors/vault/${encodeURIComponent(connectorId)}?workspace_id=${encodeURIComponent(session.workspaceId)}`, {
+      method: "DELETE",
+      headers: session.runtimeKey ? { "X-API-Key": session.runtimeKey } : undefined,
+    });
+    const payload = await response.json().catch(() => null);
+    if (!response.ok) {
+      throw new Error(typeof payload?.detail === "string" ? payload.detail : "Connector disconnect failed.");
+    }
+    return payload;
   },
   createRun(
     session: MobileSession,

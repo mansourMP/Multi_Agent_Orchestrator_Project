@@ -186,6 +186,7 @@ export type NotificationItem = {
   trace_id?: string | null;
   action?: string | null;
   text?: string | null;
+  read_at?: string | null;
   metadata?: Record<string, unknown>;
 };
 
@@ -196,6 +197,18 @@ export type NotificationListResponse = {
   sessions: Array<Record<string, unknown>>;
   session_count: number;
   stream?: boolean;
+};
+
+export type NotificationReadRequest = {
+  notification_ids?: string[];
+  workspace_id?: string;
+  mark_all?: boolean;
+};
+
+export type NotificationReadResponse = {
+  status?: string;
+  marked_count: number;
+  marked_ids: string[];
 };
 
 export type HealthResponse = Record<string, unknown> & {

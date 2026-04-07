@@ -19,9 +19,14 @@ import {
 
 import { initDatabase } from "@/src/services/db";
 import { SessionProvider } from "@/src/lib/session-context";
+import { useSessionState } from "@/src/lib/session-context";
 import { ThemeProvider } from "@/src/theme";
 import { queryClient } from "@/src/lib/queryClient";
-import { configureNotificationChannelAsync, getNotificationHref } from "@/src/lib/notifications";
+import {
+  configureNotificationChannelAsync,
+  getNotificationHref,
+  syncRuntimeNotifications,
+} from "@/src/lib/notifications";
 
 SplashScreen.preventAutoHideAsync();
 
@@ -80,6 +85,7 @@ export default function RootLayout() {
           <SessionProvider>
             <SafeAreaProvider>
               <StatusBar style="auto" />
+              <MobileRuntimeNotificationBridge />
               <Stack screenOptions={{ headerShown: false }}>
                 <Stack.Screen name="index" />
                 <Stack.Screen name="(tabs)" />
@@ -89,6 +95,34 @@ export default function RootLayout() {
                     animation: 'slide_from_left',
                     presentation: 'card' 
                   }} 
+                />
+                <Stack.Screen
+                  name="artifacts"
+                  options={{
+                    animation: "slide_from_right",
+                    presentation: "card",
+                  }}
+                />
+                <Stack.Screen
+                  name="approvals"
+                  options={{
+                    animation: "slide_from_right",
+                    presentation: "card",
+                  }}
+                />
+                <Stack.Screen
+                  name="connectors"
+                  options={{
+                    animation: "slide_from_right",
+                    presentation: "card",
+                  }}
+                />
+                <Stack.Screen
+                  name="machines"
+                  options={{
+                    animation: "slide_from_right",
+                    presentation: "card",
+                  }}
                 />
                 <Stack.Screen
                   name="notifications"
@@ -134,4 +168,34 @@ export default function RootLayout() {
       </QueryClientProvider>
     </GestureHandlerRootView>
   );
+}
+
+function MobileRuntimeNotificationBridge() {
+  const { session } = useSessionState();
+
+  useEffect(() => {
+    if (!session?.runtimeUrl || !session?.runtimeKey) return;
+
+    let cancelled = false;
+    const runSync = async () => {
+      if (cancelled) return;
+      try {
+        await syncRuntimeNotifications(session);
+      } catch (error) {
+        console.warn("Notification sync failed", error);
+      }
+    };
+
+    void runSync();
+    const interval = setInterval(() => {
+      void runSync();
+    }, 15000);
+
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [session]);
+
+  return null;
 }

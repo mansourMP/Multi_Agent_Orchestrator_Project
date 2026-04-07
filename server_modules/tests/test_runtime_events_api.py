@@ -20,6 +20,9 @@ class _FakeApp:
     def get(self, path, **kwargs):
         return self._register("GET", path, **kwargs)
 
+    def post(self, path, **kwargs):
+        return self._register("POST", path, **kwargs)
+
 
 class _FakeEventSourceResponse:
     def __init__(self, iterator, ping):
@@ -66,9 +69,17 @@ class RuntimeEventsApiTests(unittest.TestCase):
             runtime_events_api.register_inbox_routes(app)
 
             self.assertIn(("GET", "/notifications"), app.routes)
+            self.assertIn(("POST", "/notifications"), app.routes)
             payload = self._run_async(app.routes[("GET", "/notifications")](workspace_id="default"))
             self.assertEqual(payload["count"], 1)
             self.assertEqual(payload["session_count"], 1)
+            self.assertIsNone(payload["items"][0].get("read_at"))
+
+            marked = self._run_async(app.routes[("POST", "/notifications")]({"notification_ids": ["evt-1"]}))
+            self.assertEqual(marked["marked_count"], 1)
+
+            next_payload = self._run_async(app.routes[("GET", "/notifications")](workspace_id="default"))
+            self.assertTrue(bool(next_payload["items"][0].get("read_at")))
 
             stream_payload = self._run_async(app.routes[("GET", "/notifications")](workspace_id="default", stream=True))
             self.assertIsInstance(stream_payload, _FakeEventSourceResponse)

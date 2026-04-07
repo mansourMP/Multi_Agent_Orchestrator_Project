@@ -2,8 +2,11 @@ import { Platform } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import Constants from "expo-constants";
 import * as Notifications from "expo-notifications";
+import { mobileApi } from "./api";
+import type { MobileSession } from "./types";
 
 const STORAGE_KEY = "empyralis.mobile.notifications.v1";
+const RUNTIME_SYNC_STORAGE_KEY = "empyralis.mobile.notifications.runtime-sync.v1";
 
 export type StoredNotificationState = {
   permissionStatus: Notifications.PermissionStatus | "undetermined";
@@ -20,6 +23,11 @@ type NotificationRouteData = {
   tab?: string;
 };
 
+type RuntimeSyncState = {
+  deliveredIds: string[];
+  lastSyncedAt?: number;
+};
+
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
     shouldShowBanner: true,
@@ -31,6 +39,27 @@ Notifications.setNotificationHandler({
 
 async function persist(state: StoredNotificationState) {
   await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+}
+
+async function getRuntimeSyncState(): Promise<RuntimeSyncState> {
+  const raw = await AsyncStorage.getItem(RUNTIME_SYNC_STORAGE_KEY);
+  if (!raw) return { deliveredIds: [] };
+  try {
+    const parsed = JSON.parse(raw) as RuntimeSyncState;
+    return {
+      deliveredIds: Array.isArray(parsed.deliveredIds) ? parsed.deliveredIds.map((item) => String(item || "")).filter(Boolean).slice(-200) : [],
+      lastSyncedAt: parsed.lastSyncedAt,
+    };
+  } catch {
+    return { deliveredIds: [] };
+  }
+}
+
+async function persistRuntimeSyncState(state: RuntimeSyncState) {
+  await AsyncStorage.setItem(RUNTIME_SYNC_STORAGE_KEY, JSON.stringify({
+    deliveredIds: state.deliveredIds.slice(-200),
+    lastSyncedAt: state.lastSyncedAt ?? Date.now(),
+  }));
 }
 
 export async function getStoredNotificationState(): Promise<StoredNotificationState> {
@@ -111,6 +140,51 @@ export async function registerForPushNotificationsAsync(): Promise<StoredNotific
     await persist(failedState);
     return failedState;
   }
+}
+
+export async function syncRuntimeNotifications(session: MobileSession): Promise<number> {
+  const permission = await getStoredNotificationState();
+  if (permission.permissionStatus !== "granted") {
+    return 0;
+  }
+
+  const syncState = await getRuntimeSyncState();
+  const payload = await mobileApi.getNotifications(session, {
+    workspace_id: session.workspaceId,
+    include_backlog: true,
+    limit: 12,
+  });
+  const items = Array.isArray(payload?.items) ? payload.items : [];
+  const delivered = new Set(syncState.deliveredIds);
+  const fresh = items.filter((item) => {
+    const id = String(item?.id ?? "");
+    return id && !delivered.has(id);
+  });
+
+  for (const item of fresh.reverse()) {
+    const id = String(item?.id ?? "");
+    const title = String(item?.action || item?.channel || "Empyralis");
+    const body = String(item?.text || "A runtime event needs your attention.");
+    await Notifications.scheduleNotificationAsync({
+      content: {
+        title,
+        body,
+        data: {
+          path: item?.run_id ? `/approvals` : "/notifications",
+          runId: item?.run_id ?? undefined,
+          notificationId: id,
+        },
+      },
+      trigger: null,
+    });
+    delivered.add(id);
+  }
+
+  await persistRuntimeSyncState({
+    deliveredIds: [...delivered],
+    lastSyncedAt: Date.now(),
+  });
+  return fresh.length;
 }
 
 export function getNotificationHref(data: NotificationRouteData | undefined | null) {

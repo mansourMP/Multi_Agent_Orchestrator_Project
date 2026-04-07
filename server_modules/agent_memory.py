@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-"""Internal implementation only. All external access must go through memory_service.py."""
+"""Private implementation. No external caller may import from this module directly. Use memory_service.py."""
 
 import re
 import sqlite3
@@ -128,7 +128,7 @@ def _semantic_model():
     return _SEMANTIC_MODEL
 
 
-def embed_text(text: str) -> List[float]:
+def _embed_text(text: str) -> List[float]:
     normalized = re.sub(r"\s+", " ", str(text or "").strip())
     if not normalized:
         return []
@@ -141,7 +141,7 @@ def embed_text(text: str) -> List[float]:
     return [float(item) for item in vector]
 
 
-def list_memory_entries(workspace_id: str) -> List[Dict[str, Any]]:
+def _list_memory_entries(workspace_id: str) -> List[Dict[str, Any]]:
     with _connect_memory_db(workspace_id) as connection:
         rows = connection.execute(
             """
@@ -161,7 +161,7 @@ def list_memory_entries(workspace_id: str) -> List[Dict[str, Any]]:
     ]
 
 
-def save_memory(workspace_id: str, key: str, content: str, *, sync_memory_md: bool = True) -> None:
+def _save_memory(workspace_id: str, key: str, content: str, *, sync_memory_md: bool = True) -> None:
     normalized_key = str(key or "").strip()
     normalized_content = str(content or "").strip()
     if not normalized_key or not normalized_content:
@@ -181,13 +181,13 @@ def save_memory(workspace_id: str, key: str, content: str, *, sync_memory_md: bo
         connection.commit()
     if sync_memory_md:
         try:
-            export_memory_md(workspace_id)
+            _export_memory_md(workspace_id)
         except Exception:
             pass
 
 
-def get_memory(workspace_id: str) -> str:
-    entries = list_memory_entries(workspace_id)
+def _get_memory(workspace_id: str) -> str:
+    entries = _list_memory_entries(workspace_id)
     if not entries:
         return ""
     return "\n".join(
@@ -197,7 +197,7 @@ def get_memory(workspace_id: str) -> str:
     ).strip()
 
 
-def search_memory(workspace_id: str, query: str) -> List[Dict[str, Any]]:
+def _search_memory(workspace_id: str, query: str) -> List[Dict[str, Any]]:
     normalized_query = str(query or "").strip()
     if not normalized_query:
         return []
@@ -223,20 +223,20 @@ def search_memory(workspace_id: str, query: str) -> List[Dict[str, Any]]:
     ]
 
 
-def semantic_search(workspace_id: str, query: str, top_k: int = 5) -> List[Dict[str, Any]]:
+def _semantic_search(workspace_id: str, query: str, top_k: int = 5) -> List[Dict[str, Any]]:
     normalized_query = str(query or "").strip()
     if not normalized_query:
         return []
-    entries = list_memory_entries(workspace_id)
+    entries = _list_memory_entries(workspace_id)
     if not entries:
         return []
-    query_vector = embed_text(normalized_query)
+    query_vector = _embed_text(normalized_query)
     if not query_vector:
-        return search_memory(workspace_id, normalized_query)[: max(1, min(int(top_k or 5), 20))]
+        return _search_memory(workspace_id, normalized_query)[: max(1, min(int(top_k or 5), 20))]
     scored: List[Dict[str, Any]] = []
     for entry in entries:
         combined_text = f"{entry.get('key')}: {entry.get('content')}"
-        memory_vector = embed_text(combined_text)
+        memory_vector = _embed_text(combined_text)
         if not memory_vector:
             continue
         scored.append(
@@ -249,7 +249,7 @@ def semantic_search(workspace_id: str, query: str, top_k: int = 5) -> List[Dict[
     return scored[: max(1, min(int(top_k or 5), 20))]
 
 
-def delete_memory(workspace_id: str, key: str) -> bool:
+def _delete_memory(workspace_id: str, key: str) -> bool:
     normalized_key = str(key or "").strip()
     if not normalized_key:
         return False
@@ -262,13 +262,13 @@ def delete_memory(workspace_id: str, key: str) -> bool:
         deleted = bool(cursor.rowcount)
     if deleted:
         try:
-            export_memory_md(workspace_id)
+            _export_memory_md(workspace_id)
         except Exception:
             pass
     return deleted
 
 
-def save_daily_log(workspace_id: str, content: str) -> None:
+def _save_daily_log(workspace_id: str, content: str) -> None:
     normalized_content = str(content or "").strip()
     if not normalized_content:
         return
@@ -283,7 +283,7 @@ def save_daily_log(workspace_id: str, content: str) -> None:
         handle.write("\n" + entry)
 
 
-def get_recent_logs(workspace_id: str, days: int = 7) -> str:
+def _get_recent_logs(workspace_id: str, days: int = 7) -> str:
     safe_days = max(1, min(int(days or 7), 30))
     log_dir = _memory_logs_dir(workspace_id)
     now = datetime.now(timezone.utc).astimezone()
@@ -302,7 +302,7 @@ def get_recent_logs(workspace_id: str, days: int = 7) -> str:
     return "\n\n".join(parts).strip()
 
 
-def update_memory_md(workspace_id: str, content: str) -> Dict[str, Any]:
+def _update_memory_md(workspace_id: str, content: str) -> Dict[str, Any]:
     _ = _normalize_workspace_token(workspace_id)
     saved = write_workspace_context_file("MEMORY.md", str(content or ""))
     return {
@@ -311,8 +311,8 @@ def update_memory_md(workspace_id: str, content: str) -> Dict[str, Any]:
     }
 
 
-def export_memory_md(workspace_id: str) -> Dict[str, Any]:
-    entries = list_memory_entries(workspace_id)
+def _export_memory_md(workspace_id: str) -> Dict[str, Any]:
+    entries = _list_memory_entries(workspace_id)
     lines = ["# Curated Memory", ""]
     for entry in entries:
         key = str(entry.get("key") or "").strip()
@@ -320,10 +320,10 @@ def export_memory_md(workspace_id: str) -> Dict[str, Any]:
         if not key or not content:
             continue
         lines.append(f"- {key}: {content}")
-    return update_memory_md(workspace_id, "\n".join(lines).strip() + "\n")
+    return _update_memory_md(workspace_id, "\n".join(lines).strip() + "\n")
 
 
-def import_memory_md(workspace_id: str) -> Dict[str, Any]:
+def _import_memory_md(workspace_id: str) -> Dict[str, Any]:
     raw = read_workspace_context_file("MEMORY.md")
     imported = 0
     for raw_line in str(raw or "").splitlines():
@@ -335,16 +335,16 @@ def import_memory_md(workspace_id: str) -> Dict[str, Any]:
         normalized_content = str(content or "").strip()
         if not normalized_key or not normalized_content:
             continue
-        save_memory(workspace_id, normalized_key, normalized_content, sync_memory_md=False)
+        _save_memory(workspace_id, normalized_key, normalized_content, sync_memory_md=False)
         imported += 1
-    export_memory_md(workspace_id)
+    _export_memory_md(workspace_id)
     return {
         "workspace_id": _normalize_workspace_token(workspace_id),
         "imported": imported,
     }
 
 
-def list_memory_notebook_files(workspace_id: str) -> List[Dict[str, Any]]:
+def _list_memory_notebook_files(workspace_id: str) -> List[Dict[str, Any]]:
     docs: List[Dict[str, Any]] = []
     for item in _memory_notebook_documents(workspace_id):
         path = item.get("abs_path")
@@ -364,7 +364,7 @@ def list_memory_notebook_files(workspace_id: str) -> List[Dict[str, Any]]:
     return docs
 
 
-def search_memory_notebook(workspace_id: str, query: str, *, max_results: int = 5) -> List[Dict[str, Any]]:
+def _search_memory_notebook(workspace_id: str, query: str, *, max_results: int = 5) -> List[Dict[str, Any]]:
     normalized_query = re.sub(r"\s+", " ", str(query or "").strip()).lower()
     if not normalized_query:
         return []
@@ -424,7 +424,7 @@ def search_memory_notebook(workspace_id: str, query: str, *, max_results: int = 
     return results[: max(1, min(int(max_results or 5), 20))]
 
 
-def get_memory_notebook_excerpt(
+def _get_memory_notebook_excerpt(
     workspace_id: str,
     rel_path: str,
     *,

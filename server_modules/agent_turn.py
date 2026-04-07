@@ -648,6 +648,34 @@ def _build_noop_direct_chat_execution_services():
     )
 
 
+def execute_system_agent_turn(
+    *,
+    turn_request: AgentTurnRequest,
+    run_execution_services: Any,
+    direct_chat_services: Any = None,
+    chat_body: Optional[Dict[str, Any]] = None,
+    run_request: Optional[Any] = None,
+    current_user: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    from server_modules.direct_tool_config_service import run_async_tool_call
+
+    system_user = (
+        dict(current_user)
+        if isinstance(current_user, dict)
+        else {"auth_type": "api_key", "user_id": "", "email": ""}
+    )
+    return run_async_tool_call(
+        agent_turn(
+            turn_request=turn_request,
+            current_user=system_user,
+            run_execution_services=run_execution_services,
+            direct_chat_services=direct_chat_services,
+            chat_body=chat_body,
+            run_request=run_request,
+        )
+    )
+
+
 async def agent_turn(
     *,
     turn_request: AgentTurnRequest,

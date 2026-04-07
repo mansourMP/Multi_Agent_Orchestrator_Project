@@ -373,10 +373,10 @@ def _run_browser_capture_task(
     type_text: str = "",
     timeout_seconds: int = 45,
 ) -> Dict[str, Any]:
-    from server_modules.browser_engine import BrowserEngine, enforce_browser_automation_gate
+    from server_modules.execution_router import enforce_browser_execution_gate, get_browser_engine
 
     project_root = _project_root()
-    enforce_browser_automation_gate(
+    enforce_browser_execution_gate(
         {
             "execution_target_selected": "local_companion",
             "browser_automation_policy": {
@@ -399,7 +399,15 @@ def _run_browser_capture_task(
         normalized_actions.append({"action": "click", "selector": click_selector})
 
     async def _capture() -> Dict[str, Any]:
-        engine = BrowserEngine()
+        engine = get_browser_engine(
+            {
+                "execution_target_selected": "local_companion",
+                "browser_automation_policy": {
+                    "profile": "authenticated_interactive" if str(session_profile or "").strip() else "public_interactive",
+                },
+            },
+            target="local_companion",
+        )
         final_url = str(url or "").strip()
         if browser_checkpoint and str(browser_checkpoint.get("current_url") or "").strip():
             final_url = str(browser_checkpoint.get("current_url") or "").strip()

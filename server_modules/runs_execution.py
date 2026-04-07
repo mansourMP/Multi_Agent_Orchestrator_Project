@@ -4853,6 +4853,7 @@ def run_orion_mission(run_id: str):
 
 
 def run_mission(run_id):
+    # Internal delegate. Not an alternate turn engine. Called only from agent_turn().
     run = runs.get(run_id)
     if not run:
         return

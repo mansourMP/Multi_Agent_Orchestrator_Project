@@ -24,6 +24,7 @@ class AutopilotRunEntryService:
         normalize_execution_target: Callable[[str], str],
         decide_execution_target: Callable[[Dict[str, Any]], Any],
         apply_execution_route_metadata: Callable[[Dict[str, Any], Any], Dict[str, Any]],
+        execute_agent_turn_request: Optional[Callable[..., Dict[str, Any]]] = None,
         run_start_request_class: Optional[Callable[..., Any]] = None,
         start_run_request: Optional[Callable[[Any], Dict[str, Any]]] = None,
         create_run: Callable[..., str],
@@ -44,6 +45,7 @@ class AutopilotRunEntryService:
         self.normalize_execution_target = normalize_execution_target
         self.decide_execution_target = decide_execution_target
         self.apply_execution_route_metadata = apply_execution_route_metadata
+        self.execute_agent_turn_request = execute_agent_turn_request
         self.run_start_request_class = run_start_request_class
         self.start_run_request = start_run_request
         self.create_run = create_run
@@ -356,6 +358,13 @@ class AutopilotRunEntryService:
         metadata: Dict[str, Any],
         turn_request: AgentTurnRequest,
     ) -> Dict[str, Any]:
+        if callable(self.execute_agent_turn_request):
+            result = self.execute_agent_turn_request(turn_request=turn_request)
+            if isinstance(result, dict) and str(result.get("run_id") or "").strip():
+                return dict(result)
+            if result is not None:
+                return {"result": result}
+
         if callable(self.start_run_request) and callable(self.run_start_request_class):
             base_request = self.run_start_request_class(
                 engine=engine,

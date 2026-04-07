@@ -4,8 +4,6 @@ import { ConfigModule } from '@nestjs/config';
 import { PrismaModule } from './prisma/prisma.module';
 import { AuthModule } from './auth/auth.module';
 import { HealthController } from './health.controller';
-import { WorkflowsModule } from './workflows/workflows.module';
-import { ExecutionsModule } from './executions/executions.module';
 import { ChatModule } from './chat/chat.module';
 import { OrganizationsModule } from './organizations/organizations.module';
 import { BillingModule } from './billing/billing.module';
@@ -25,8 +23,6 @@ import { IntegrationsModule } from './integrations/integrations.module';
         }),
         PrismaModule,
         AuthModule,
-        WorkflowsModule,
-        ExecutionsModule,
         AgentsModule,
         AeskModule,
         ChatModule,

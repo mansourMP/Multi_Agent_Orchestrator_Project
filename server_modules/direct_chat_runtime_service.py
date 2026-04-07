@@ -459,6 +459,7 @@ def collect_direct_operator_reply(
     services: DirectChatRuntimeServices,
     **kwargs: Any,
 ) -> Dict[str, Any]:
+    # Internal delegate. Not an alternate turn engine. Called only from agent_turn().
     final_payload: Dict[str, Any] = {}
     accumulated_reply = ""
     for event in build_direct_operator_reply(services=services, **kwargs):

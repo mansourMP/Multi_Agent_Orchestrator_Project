@@ -21,6 +21,7 @@ def build_direct_operator_reply(
     session_ctx: Optional[dict[str, Any]] = None,
     agent_turn_request: Optional[Any] = None,
 ) -> Iterator[Dict[str, Any]]:
+    # Internal delegate. Not an alternate turn engine. Called only from agent_turn().
     yield from direct_chat_runtime_service.build_direct_operator_reply(
         services=services,
         message=message,
@@ -43,6 +44,7 @@ def collect_direct_operator_reply(
     services: direct_chat_runtime_service.DirectChatRuntimeServices,
     **kwargs: Any,
 ) -> Dict[str, Any]:
+    # Internal delegate. Not an alternate turn engine. Called only from agent_turn().
     return direct_chat_runtime_service.collect_direct_operator_reply(
         services=services,
         **kwargs,

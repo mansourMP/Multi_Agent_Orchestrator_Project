@@ -35,6 +35,7 @@ async def execute_agent_turn_request(
     chat_body: Optional[dict[str, Any]] = None,
     run_request: Optional[Any] = None,
 ) -> dict[str, Any]:
+    # Internal delegate. Not an alternate turn engine. Called only from agent_turn().
     durable_execution = await run_service.execute_durable_agent_turn_dispatch(
         turn_request=turn_request,
         current_user=current_user,

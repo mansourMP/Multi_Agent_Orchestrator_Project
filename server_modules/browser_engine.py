@@ -10,7 +10,7 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-# Browser automation is a Python-owned capability adapter. All calls must be gated through capability_registry and policy_service before execution.
+# Python-owned browser automation adapter. Must only be called through the capability-gated execution router. Direct imports outside execution_router are forbidden.
 
 
 def enforce_browser_automation_gate(

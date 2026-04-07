@@ -3,13 +3,18 @@ import Constants from "expo-constants";
 import type {
   AgentTurnRequest,
   AgentTurnResponse,
+  ApprovalListResponse,
+  ApprovalResolveResponse,
+  ArtifactListResponse,
   ConnectorListResponse,
+  HealthResponse,
   MachineListResponse,
   RunDetailResponse,
   RunListResponse,
   NotificationListResponse,
 } from "@shared/api-contract";
-import type { ApprovalSummary, ArtifactSummary, MobileSession, RunSummary } from "./types";
+import { createApiClient } from "@shared/api-contract/client";
+import type { MobileSession } from "./types";
 
 const extra = (Constants.expoConfig?.extra ?? {}) as {
   runtimeUrl?: string;
@@ -142,6 +147,21 @@ function getEmpyralistChatEndpoint(session?: MobileSession | null) {
   return `${getEmpyralistApiBaseUrl(session)}/turn`;
 }
 
+function buildMobileRuntimeClient(session: MobileSession) {
+  const baseUrl = normalizeServerUrl(session.runtimeUrl);
+  return createApiClient({
+    buildUrl: (path) => `${baseUrl}${path.startsWith("/") ? path : `/${path}`}`,
+    getHeaders: () => (session.runtimeKey ? { "X-API-Key": session.runtimeKey } : undefined),
+    fetchFn: async (input, init) => {
+      try {
+        return await fetch(input, init);
+      } catch (error) {
+        throw new Error(error instanceof TypeError ? formatNetworkError(baseUrl) : "Request failed.");
+      }
+    },
+  });
+}
+
 function normalizeEmpyralistChatResponse(payload: unknown): EmpyralistDirectChatResponse {
   const record = payload && typeof payload === "object" ? (payload as Record<string, unknown>) : {};
   return {
@@ -269,52 +289,6 @@ async function parseEmpyralistEventStream(
   return finalPayload || { reply: streamedReply, actions: [] };
 }
 
-async function request<T>(session: MobileSession, path: string, init?: RequestInit): Promise<T> {
-  const baseUrl = normalizeServerUrl(session.runtimeUrl);
-  let response: Response;
-  try {
-    response = await fetch(`${baseUrl}${path}`, {
-      ...init,
-      headers: {
-        "Content-Type": "application/json",
-        "X-API-Key": session.runtimeKey,
-        ...(init?.headers || {}),
-      },
-    });
-  } catch (error) {
-    throw new Error(error instanceof TypeError ? formatNetworkError(baseUrl) : "Request failed.");
-  }
-
-  if (!response.ok) {
-    throw new Error(`API request failed: ${response.status}`);
-  }
-
-  return response.json() as Promise<T>;
-}
-
-async function requestBase<T>(baseUrl: string, apiKey: string | undefined, path: string, init?: RequestInit): Promise<T> {
-  const normalizedBaseUrl = normalizeServerUrl(baseUrl);
-  let response: Response;
-  try {
-    response = await fetch(`${normalizedBaseUrl}${path}`, {
-      ...init,
-      headers: {
-        "Content-Type": "application/json",
-        ...(apiKey ? { "X-API-Key": apiKey } : {}),
-        ...(init?.headers || {}),
-      },
-    });
-  } catch (error) {
-    throw new Error(error instanceof TypeError ? formatNetworkError(normalizedBaseUrl) : "Request failed.");
-  }
-
-  if (!response.ok) {
-    throw new Error(`API request failed: ${response.status}`);
-  }
-
-  return response.json() as Promise<T>;
-}
-
 export const mobileApi = {
   async respondChat(
     session: MobileSession,
@@ -347,14 +321,7 @@ export const mobileApi = {
           },
         },
       };
-      response = await fetch(chatUrl, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "X-API-Key": session.runtimeKey,
-        },
-        body: JSON.stringify(requestBody),
-      });
+      response = await buildMobileRuntimeClient(session).openTurnStreamResponse(requestBody);
     } catch (error) {
       throw new Error(error instanceof TypeError ? formatNetworkError(chatUrl) : "Request failed.");
     }
@@ -366,10 +333,10 @@ export const mobileApi = {
     return parseEmpyralistEventStream(response, options?.onChunk);
   },
   getRun(session: MobileSession, runId: string) {
-    return request<RunDetailResponse>(session, `/runs/${encodeURIComponent(runId)}`);
+    return buildMobileRuntimeClient(session).getRunDetail(runId) as Promise<RunDetailResponse>;
   },
   getCoreStatus(session: MobileSession) {
-    return request<any>(session, "/health").then((payload) => ({
+    return buildMobileRuntimeClient(session).getHealth().then((payload: HealthResponse) => ({
       ok: Boolean(payload?.ok),
       runtime: {
         ok: Boolean(payload?.ok),
@@ -381,28 +348,27 @@ export const mobileApi = {
     }));
   },
   getRuns(session: MobileSession) {
-    return request<RunListResponse>(
-      session,
-      `/runs?workspace_id=${encodeURIComponent(session.workspaceId)}`,
-    );
+    return buildMobileRuntimeClient(session).listRuns({
+      workspace_id: session.workspaceId,
+    }) as Promise<RunListResponse>;
   },
   getApprovals(session: MobileSession) {
-    return request<{ pending?: ApprovalSummary[]; items?: ApprovalSummary[] }>(
-      session,
-      `/approvals?workspace_id=${encodeURIComponent(session.workspaceId)}`,
-    );
+    return buildMobileRuntimeClient(session).listApprovals({
+      workspace_id: session.workspaceId,
+    }) as Promise<ApprovalListResponse>;
   },
   getArtifacts(session: MobileSession) {
-    return request<{ items?: ArtifactSummary[] }>(
-      session,
-      `/artifacts?workspace_id=${encodeURIComponent(session.workspaceId)}`,
-    );
+    return buildMobileRuntimeClient(session).listArtifacts({
+      workspace_id: session.workspaceId,
+    }) as Promise<ArtifactListResponse>;
   },
   getMachines(session: MobileSession) {
-    return request<MachineListResponse>(session, "/machines");
+    return buildMobileRuntimeClient(session).listMachines() as Promise<MachineListResponse>;
   },
   getConnectors(session: MobileSession) {
-    return request<ConnectorListResponse>(session, "/connectors");
+    return buildMobileRuntimeClient(session).listConnectors({
+      workspace_id: session.workspaceId,
+    }) as Promise<ConnectorListResponse>;
   },
   getNotifications(session: MobileSession, params?: {
     workspace_id?: string;
@@ -422,8 +388,9 @@ export const mobileApi = {
       if (value == null || value === "") continue;
       query.set(key, String(value));
     }
-    const suffix = query.toString();
-    return request<NotificationListResponse>(session, `/notifications${suffix ? `?${suffix}` : ""}`);
+    return buildMobileRuntimeClient(session).listNotifications(
+      Object.fromEntries(query.entries()),
+    ) as Promise<NotificationListResponse>;
   },
   createRun(
     session: MobileSession,
@@ -451,10 +418,7 @@ export const mobileApi = {
         metadata,
       },
     };
-    return request<AgentTurnResponse>(session, "/turn", {
-      method: "POST",
-      body: JSON.stringify(turnRequest),
-    });
+    return buildMobileRuntimeClient(session).turn(turnRequest) as Promise<AgentTurnResponse>;
   },
   resolveApproval(
     session: MobileSession,
@@ -464,9 +428,10 @@ export const mobileApi = {
   ) {
     void runId;
     const mapped = decision === "approved" ? "approved" : "rejected";
-    return request(session, `/approvals/${encodeURIComponent(approvalId)}/resolve`, {
-      method: "POST",
-      body: JSON.stringify({ approval_id: approvalId, resolution: mapped, actor: "user" }),
-    });
+    return buildMobileRuntimeClient(session).resolveApproval(approvalId, {
+      approval_id: approvalId,
+      resolution: mapped,
+      actor: "user",
+    }) as Promise<ApprovalResolveResponse>;
   },
 };

@@ -96,6 +96,7 @@ class AutopilotRegistryFacadeService:
         normalize_execution_target: Callable[[Any], str],
         decide_execution_target: Callable[[Dict[str, Any]], Dict[str, Any]],
         apply_execution_route_metadata: Callable[[Dict[str, Any], Dict[str, Any]], Dict[str, Any]],
+        execute_agent_turn_request: Optional[Callable[..., Dict[str, Any]]] = None,
         run_start_request_class: Optional[Callable[..., Any]] = None,
         start_run_request: Optional[Callable[[Any], Dict[str, Any]]] = None,
         create_run: Callable[..., Any],
@@ -209,6 +210,7 @@ class AutopilotRegistryFacadeService:
         self.normalize_execution_target = normalize_execution_target
         self.decide_execution_target = decide_execution_target
         self.apply_execution_route_metadata = apply_execution_route_metadata
+        self.execute_agent_turn_request = execute_agent_turn_request
         self.run_start_request_class = run_start_request_class
         self.start_run_request = start_run_request
         self.create_run = create_run
@@ -450,6 +452,7 @@ class AutopilotRegistryFacadeService:
                 normalize_execution_target=self.normalize_execution_target,
                 decide_execution_target=self.decide_execution_target,
                 apply_execution_route_metadata=self.apply_execution_route_metadata,
+                execute_agent_turn_request=self.execute_agent_turn_request,
                 run_start_request_class=self.run_start_request_class,
                 start_run_request=self.start_run_request,
                 create_run=self.create_run,

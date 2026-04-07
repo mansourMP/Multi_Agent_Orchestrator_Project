@@ -2469,6 +2469,7 @@ async def execute_durable_agent_turn_dispatch(
     base_request: Optional[Any] = None,
     execute_durable_turn_request_fn: Any = None,
 ) -> Optional[dict[str, Any]]:
+    # Internal delegate. Not an alternate turn engine. Called only from agent_turn().
     if turn_request.execution_mode != "durable":
         return None
     durable_execute = execute_durable_turn_request_fn or execute_durable_turn_request

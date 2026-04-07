@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-"""Internal implementation only. All external access must go through memory_service.py."""
+"""Private implementation. No external caller may import from this module directly. Use memory_service.py."""
 
 import sqlite3
 import threading
@@ -44,7 +44,7 @@ MEMORY_MANAGER_INSTANCE: Any = None
 MEMORY_MANAGER_ERROR: Optional[str] = None
 
 
-def configure_runtime_memory(
+def _configure_runtime_memory(
     *,
     memory_enabled: bool,
     memory_lancedb_uri: str,

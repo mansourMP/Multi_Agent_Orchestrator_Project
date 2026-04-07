@@ -794,6 +794,7 @@ def dispatch_inbound_event(
     connector_entry: Dict[str, Any],
     credentials: Dict[str, Any],
     append_event_fn: Optional[DiscordAppendEvent] = None,
+    execute_agent_turn_request: Optional[Callable[..., Dict[str, Any]]] = None,
     create_run_fn: Optional[DiscordCreateRun] = None,
     run_start_request_class: Optional[DiscordRunStartRequestFactory] = None,
     start_run_request: Optional[DiscordStartRunRequest] = None,
@@ -878,7 +879,14 @@ def dispatch_inbound_event(
         context["metadata"]["owner_user_id"] = owner_user_id
 
     run_id = ""
-    if callable(start_run_request) and callable(run_start_request_class):
+    if callable(execute_agent_turn_request):
+        created = execute_agent_turn_request(turn_request=turn_request)
+        if isinstance(created, dict):
+            run_id = str(created.get("run_id") or "").strip()
+        elif created is not None:
+            run_id = str(created or "").strip()
+
+    if not run_id and callable(start_run_request) and callable(run_start_request_class):
         base_request = run_start_request_class(
             engine="orion",
             workspace_id=workspace_id,

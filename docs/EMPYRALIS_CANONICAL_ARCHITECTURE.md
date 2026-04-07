@@ -174,7 +174,7 @@ It is one platform with:
 ### Archive After Cutover
 
 - legacy NestJS runtime paths
-- frozen Electron shell
+- frozen Electron launcher — read-only health probe and web shell boot only
 - stale mobile direct-AI bridge files
 - checked-in runtime database artifacts
 

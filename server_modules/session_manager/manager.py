@@ -8,7 +8,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterator, Optional
 
-from server_modules.browser_engine import BrowserEngine
 from server_modules.runtime_state_store import (
     delete_runtime_session,
     get_runtime_session,
@@ -46,7 +45,7 @@ class EmpyralisSessionManager:
         self.db_path = Path(db_path).expanduser().resolve()
         self.stale_session_seconds = max(1, int(stale_session_seconds))
         self.handle_idle_ttl_seconds = max(1, int(handle_idle_ttl_seconds))
-        self.browser_factory = browser_factory or BrowserEngine
+        self.browser_factory = browser_factory
         self.actor_queue = SessionActorQueue()
         self.runtime_cache = RuntimeHandleCache()
         self._stats_lock = threading.Lock()
@@ -57,15 +56,17 @@ class EmpyralisSessionManager:
         init_runtime_state_db(self.db_path)
 
     def _should_eager_create_browser(self) -> bool:
-        return self.browser_factory is not BrowserEngine
+        return callable(self.browser_factory)
 
     def _close_owned_browser(self, browser: Any) -> None:
         if browser is None:
             return
-        # Direct chat still uses the global BrowserEngine singleton from operator_chat.
-        # The session manager does not own that lifecycle yet, so evictions must not
-        # tear down the shared engine for other sessions or request paths.
-        if isinstance(browser, BrowserEngine):
+        # Direct chat can still attach the global browser singleton to a handle.
+        # The session manager does not own that lifecycle, so it must not close it.
+        if (
+            type(browser).__name__ == "BrowserEngine"
+            and str(type(browser).__module__ or "").strip() == "server_modules.browser_engine"
+        ):
             return
         if hasattr(browser, "close_sync"):
             try:

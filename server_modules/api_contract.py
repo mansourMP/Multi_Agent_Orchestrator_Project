@@ -82,6 +82,14 @@ class ApiRunListResponse(BaseModel):
     next_offset: Optional[int] = None
 
 
+class ApiApprovalListResponse(BaseModel):
+    items: List[Dict[str, Any]] = Field(default_factory=list)
+    pending: List[Dict[str, Any]] = Field(default_factory=list)
+    count: int = 0
+    total: int = 0
+    workspace_id: str = "default"
+
+
 class ApiNotificationItem(BaseModel):
     id: Optional[str] = None
     ts: Optional[str] = None
@@ -169,6 +177,25 @@ class ApiApprovalResolveResponse(BaseModel):
     outbox_event: Dict[str, Any] = Field(default_factory=dict)
 
 
+class ApiMachineListResponse(BaseModel):
+    items: List[Dict[str, Any]] = Field(default_factory=list)
+    runtimes: List[Dict[str, Any]] = Field(default_factory=list)
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+
+
+class ApiConnectorListResponse(BaseModel):
+    items: List[Dict[str, Any]] = Field(default_factory=list)
+    connectors: List[Dict[str, Any]] = Field(default_factory=list)
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+
+
+class ApiHealthResponse(BaseModel):
+    ok: bool = False
+    status: Optional[str] = None
+    detail: Optional[str] = None
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+
+
 CANONICAL_API_ENDPOINTS: Dict[str, Dict[str, Any]] = {
     "turn": {
         "method": "POST",
@@ -183,11 +210,23 @@ CANONICAL_API_ENDPOINTS: Dict[str, Dict[str, Any]] = {
         "response_model": "ApiRunListResponse",
         "notes": "Canonical run listing endpoint; /runs/{run_id} remains the canonical detail endpoint.",
     },
+    "runs_detail": {
+        "method": "GET",
+        "path": "/runs/{run_id}",
+        "response_model": "dict",
+        "notes": "Canonical durable run detail endpoint.",
+    },
     "notifications": {
         "method": "GET",
         "path": "/notifications",
         "response_model": "ApiNotificationListResponse",
         "notes": "Canonical notification feed. `stream=true` returns SSE.",
+    },
+    "approvals_list": {
+        "method": "GET",
+        "path": "/approvals",
+        "response_model": "ApiApprovalListResponse",
+        "notes": "Canonical approval queue endpoint.",
     },
     "approvals_resolve": {
         "method": "POST",
@@ -223,9 +262,21 @@ CANONICAL_API_ENDPOINTS: Dict[str, Dict[str, Any]] = {
     },
     "machines": {
         "method": "GET",
-        "path": "/runtime/runtimes/status and /local/workers/status",
-        "response_model": "varies",
-        "notes": "Machine/runtime endpoints still exist but are not yet unified into one canonical runtime surface.",
+        "path": "/machines",
+        "response_model": "ApiMachineListResponse",
+        "notes": "Canonical machine and runtime status surface.",
+    },
+    "connectors": {
+        "method": "GET",
+        "path": "/connectors",
+        "response_model": "ApiConnectorListResponse",
+        "notes": "Canonical connector inventory surface.",
+    },
+    "health": {
+        "method": "GET",
+        "path": "/health",
+        "response_model": "ApiHealthResponse",
+        "notes": "Canonical runtime health probe.",
     },
 }
 

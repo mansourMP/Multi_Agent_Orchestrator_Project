@@ -1118,10 +1118,9 @@ def _resolve_direct_tool_browser_engine(session_ctx: Any) -> Any:
     if browser is None:
         browser = context.get("browser")
     if browser is None:
-        from server_modules.browser_engine import BrowserEngine, enforce_browser_automation_gate
+        from server_modules.execution_router import get_browser_engine
 
-        enforce_browser_automation_gate(metadata, target="local_companion")
-        browser = BrowserEngine()
+        browser = get_browser_engine(metadata, target="local_companion")
         if runtime_handle is not None:
             try:
                 runtime_handle.browser = browser

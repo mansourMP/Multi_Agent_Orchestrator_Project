@@ -70,11 +70,11 @@ class WorkspaceMemorySnapshot:
 
 
 def list_memory_entries(workspace_id: str) -> List[Dict[str, Any]]:
-    return agent_memory.list_memory_entries(_normalize_workspace_id(workspace_id))
+    return agent_memory._list_memory_entries(_normalize_workspace_id(workspace_id))
 
 
 def save_memory(workspace_id: str, key: str, content: str, *, sync_memory_md: bool = True) -> None:
-    agent_memory.save_memory(
+    agent_memory._save_memory(
         _normalize_workspace_id(workspace_id),
         key,
         content,
@@ -83,27 +83,27 @@ def save_memory(workspace_id: str, key: str, content: str, *, sync_memory_md: bo
 
 
 def get_memory(workspace_id: str) -> str:
-    return agent_memory.get_memory(_normalize_workspace_id(workspace_id))
+    return agent_memory._get_memory(_normalize_workspace_id(workspace_id))
 
 
 def semantic_search(workspace_id: str, query: str, top_k: int = 5) -> List[Dict[str, Any]]:
-    return agent_memory.semantic_search(_normalize_workspace_id(workspace_id), query, top_k=top_k)
+    return agent_memory._semantic_search(_normalize_workspace_id(workspace_id), query, top_k=top_k)
 
 
 def delete_memory(workspace_id: str, key: str) -> bool:
-    return agent_memory.delete_memory(_normalize_workspace_id(workspace_id), key)
+    return agent_memory._delete_memory(_normalize_workspace_id(workspace_id), key)
 
 
 def save_daily_log(workspace_id: str, content: str) -> None:
-    agent_memory.save_daily_log(_normalize_workspace_id(workspace_id), content)
+    agent_memory._save_daily_log(_normalize_workspace_id(workspace_id), content)
 
 
 def get_recent_logs(workspace_id: str, days: int = 7) -> str:
-    return agent_memory.get_recent_logs(_normalize_workspace_id(workspace_id), days=days)
+    return agent_memory._get_recent_logs(_normalize_workspace_id(workspace_id), days=days)
 
 
 def search_memory_notebook(workspace_id: str, query: str, *, max_results: int = 5) -> List[Dict[str, Any]]:
-    return agent_memory.search_memory_notebook(
+    return agent_memory._search_memory_notebook(
         _normalize_workspace_id(workspace_id),
         query,
         max_results=max_results,
@@ -117,7 +117,7 @@ def get_memory_notebook_excerpt(
     from_line: int | None = None,
     line_count: int | None = None,
 ) -> Dict[str, Any]:
-    return agent_memory.get_memory_notebook_excerpt(
+    return agent_memory._get_memory_notebook_excerpt(
         _normalize_workspace_id(workspace_id),
         rel_path,
         from_line=from_line,
@@ -550,7 +550,7 @@ def runtime_memory_upsert(
 
 
 def configure_runtime_memory(**kwargs: Any) -> None:
-    runtime_memory.configure_runtime_memory(**kwargs)
+    runtime_memory._configure_runtime_memory(**kwargs)
 
 
 def _runtime_workspace_id(value: Any) -> str:

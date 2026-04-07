@@ -81,6 +81,7 @@ class AutopilotRuntimeRegistryBridgeService:
         local_claimed_runs: Any,
         local_worker_registry: Dict[str, Any],
         truncate_one_line: Callable[[str, int], str],
+        execute_agent_turn_request: Optional[Callable[..., Dict[str, Any]]] = None,
         runtime_registry_class: Callable[..., Any] = AutopilotRuntimeServiceRegistry,
         connector_support_service_class: Callable[..., Any] = TelegramConnectorSupportService,
         transport_service_class: Callable[..., Any] = TelegramTransportService,
@@ -134,6 +135,7 @@ class AutopilotRuntimeRegistryBridgeService:
         self.normalize_execution_target = normalize_execution_target
         self.decide_execution_target = decide_execution_target
         self.apply_execution_route_metadata = apply_execution_route_metadata
+        self.execute_agent_turn_request = execute_agent_turn_request
         self.run_start_request_class = run_start_request_class
         self.start_run_request = start_run_request
         self.create_run = create_run
@@ -219,6 +221,7 @@ class AutopilotRuntimeRegistryBridgeService:
                     normalize_execution_target=self.normalize_execution_target,
                     decide_execution_target=self.decide_execution_target,
                     apply_execution_route_metadata=self.apply_execution_route_metadata,
+                    execute_agent_turn_request=self.execute_agent_turn_request,
                     run_start_request_class=self.run_start_request_class,
                     start_run_request=self.start_run_request,
                     create_run=self.create_run,

@@ -124,6 +124,43 @@ export type ArtifactListResponse = {
   items: ArtifactItem[];
 };
 
+export type ApprovalItem = Record<string, unknown> & {
+  approval_id?: string | null;
+  run_id?: string | null;
+  workspace_id?: string | null;
+  status?: string | null;
+  action?: string | null;
+  summary?: string | null;
+  requested_at?: string | null;
+  expires_at?: string | null;
+  correlation_id?: string | null;
+};
+
+export type ApprovalListResponse = {
+  items: ApprovalItem[];
+  pending?: ApprovalItem[];
+  count?: number;
+  total?: number;
+  workspace_id?: string;
+};
+
+export type ApprovalResolveRequest = {
+  approval_id?: string | null;
+  resolution: "approved" | "rejected";
+  actor?: string;
+  reason?: string | null;
+};
+
+export type ApprovalResolveResponse = Record<string, unknown> & {
+  status?: string;
+  approval_id: string;
+  run_id?: string | null;
+  resolution: "approved" | "rejected";
+  actor?: string;
+  reason?: string;
+  outbox_event?: Record<string, unknown>;
+};
+
 export type MachineListResponse = Record<string, unknown> & {
   items?: Array<Record<string, unknown>>;
   runtimes?: Array<Record<string, unknown>>;
@@ -159,4 +196,15 @@ export type NotificationListResponse = {
   sessions: Array<Record<string, unknown>>;
   session_count: number;
   stream?: boolean;
+};
+
+export type HealthResponse = Record<string, unknown> & {
+  ok?: boolean;
+  status?: string | null;
+  detail?: string | null;
+  model?: string | null;
+  codex_model?: string | null;
+  model_name?: string | null;
+  model_id?: string | null;
+  modelId?: string | null;
 };

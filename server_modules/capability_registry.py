@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Dict, List, Literal, Optional
 
+from server_modules import safe_mode_service
+
 
 RiskLevel = Literal["low", "medium", "high", "critical"]
 
@@ -753,6 +755,13 @@ def _normalize_token(value: Any) -> str:
     return str(value or "").strip().lower().replace(" ", "_")
 
 
+def canonical_capability_id(capability_id: Any) -> str:
+    token = str(capability_id or "").strip().lower()
+    if not token:
+        return ""
+    return _CAPABILITY_ALIASES.get(token, token)
+
+
 def workflow_tool_capability_id(variant: Any, config: Optional[Dict[str, Any]] = None) -> str:
     clean_variant = _normalize_token(variant)
     cfg = dict(config or {})
@@ -805,9 +814,9 @@ def workflow_node_capability_id(
     raw_policy = dict(policy or {})
     existing = _normalize_token(raw_policy.get("capability_id"))
     if existing:
-        resolved = resolve_capability(existing)
-        if resolved is not None:
-            return resolved.capability_id
+        resolved = canonical_capability_id(existing)
+        if resolved in CAPABILITY_REGISTRY:
+            return resolved
 
     clean_type = _normalize_token(node_type)
     clean_variant = _normalize_token(variant)
@@ -820,9 +829,23 @@ def workflow_node_capability_id(
     return "connector.action.execute"
 
 
-def resolve_capability(capability_id: str) -> Optional[CapabilityContract]:
-    token = str(capability_id or "").strip().lower()
-    if not token:
+def resolve_capability(
+    capability_id: str,
+    *,
+    workspace_id: Optional[str] = None,
+    machine_id: Optional[str] = None,
+    enforce_kill_switch: bool = True,
+) -> Optional[CapabilityContract]:
+    canonical = canonical_capability_id(capability_id)
+    if not canonical:
         return None
-    canonical = _CAPABILITY_ALIASES.get(token, token)
-    return CAPABILITY_REGISTRY.get(canonical)
+    contract = CAPABILITY_REGISTRY.get(canonical)
+    if contract is None:
+        return None
+    if enforce_kill_switch and safe_mode_service.is_capability_disabled(
+        canonical,
+        workspace_id=workspace_id,
+        machine_id=machine_id,
+    ):
+        return None
+    return contract

@@ -1,13 +1,18 @@
 import unittest
 
 from server_modules.capability_registry import (
+    canonical_capability_id,
     resolve_capability,
     workflow_node_capability_id,
     workflow_tool_capability_id,
 )
+from server_modules import safe_mode_service
 
 
 class CapabilityRegistryTests(unittest.TestCase):
+    def tearDown(self) -> None:
+        safe_mode_service.reset_state_for_tests()
+
     def test_resolve_capability_returns_contract(self) -> None:
         contract = resolve_capability("screenshot.capture")
 
@@ -24,6 +29,30 @@ class CapabilityRegistryTests(unittest.TestCase):
         assert contract is not None
         self.assertEqual(contract.risk_level, "critical")
         self.assertTrue(contract.requires_approval)
+
+    def test_resolve_capability_denies_when_global_safe_mode_blocks_unsafe_capability(self) -> None:
+        safe_mode_service.set_safe_mode(enabled=True, reason="incident")
+
+        self.assertIsNone(resolve_capability("computer_control.click"))
+        self.assertIsNone(resolve_capability("browser_automation.interactive"))
+        self.assertIsNone(resolve_capability("shell.execute"))
+        self.assertIsNotNone(resolve_capability("screenshot.capture"))
+
+    def test_resolve_capability_denies_workspace_machine_and_capability_scoped_switches(self) -> None:
+        safe_mode_service.set_kill_switch(scope="workspace", enabled=True, workspace_id="ws-1", reason="workspace freeze")
+        safe_mode_service.set_kill_switch(scope="machine", enabled=True, machine_id="machine-1", reason="machine freeze")
+        safe_mode_service.set_kill_switch(scope="capability", enabled=True, capability_id="screenshot.capture", reason="cap freeze")
+
+        self.assertIsNone(resolve_capability("filesystem.read_write", workspace_id="ws-1"))
+        self.assertIsNone(resolve_capability("filesystem.read_write", machine_id="machine-1"))
+        self.assertIsNone(resolve_capability("screenshot.capture"))
+        self.assertIsNotNone(resolve_capability("filesystem.read_write", workspace_id="ws-2"))
+
+    def test_canonical_capability_id_resolves_alias_even_if_switch_blocks_execution(self) -> None:
+        safe_mode_service.set_safe_mode(enabled=True, reason="incident")
+
+        self.assertEqual(canonical_capability_id("browser_automation"), "browser_automation.interactive")
+        self.assertEqual(canonical_capability_id("execute_shell_command"), "shell.execute")
 
     def test_workflow_node_capability_id_maps_core_node_families(self) -> None:
         self.assertEqual(

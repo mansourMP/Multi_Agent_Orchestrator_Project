@@ -20,6 +20,7 @@ from server_modules import runtime_run_replay_service as _runtime_run_replay_ser
 from server_modules import runtime_usage_service as _runtime_usage_service
 from server_modules import runtime_webhook_trigger_service as _runtime_webhook_trigger_service
 from server_modules import runtime_workspace_service as _runtime_workspace_service
+from server_modules import safe_mode_service
 from server_modules import run_state_repository
 
 
@@ -89,6 +90,17 @@ def register_runtime_run_routes(
     runtime_usage_service=_runtime_usage_service,
     build_direct_chat_stream_response=_build_direct_chat_stream_response,
 ) -> None:
+    def _payload_bool(payload: dict[str, Any], key: str, *, default: bool = False) -> bool:
+        value = payload.get(key)
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, (int, float)):
+            return bool(value)
+        text = str(value or "").strip().lower()
+        if not text:
+            return default
+        return text in {"1", "true", "yes", "on", "enabled"}
+
     @app.get("/memory/{workspace_id}", dependencies=[depends(require_api_key)])
     async def list_workspace_memory(
         workspace_id: str,
@@ -149,6 +161,40 @@ def register_runtime_run_routes(
             heartbeat_scheduler=heartbeat_scheduler,
             trigger_heartbeat_payload=runtime_heartbeat_service.trigger_heartbeat_payload,
         )
+
+    @app.post("/admin/kill-switch", dependencies=[depends(require_admin_api_key)])
+    async def set_kill_switch(request: Request, current_user=depends(require_admin_api_key)):
+        refresh_server_exports()
+        payload = runtime_request_service.read_json_object_payload(request)
+        return {
+            "ok": True,
+            "result": safe_mode_service.set_kill_switch(
+                scope=str(payload.get("scope") or "global").strip().lower() or "global",
+                enabled=_payload_bool(payload, "enabled"),
+                reason=str(payload.get("reason") or "").strip(),
+                workspace_id=str(payload.get("workspace_id") or "").strip() or None,
+                machine_id=str(payload.get("machine_id") or "").strip() or None,
+                capability_id=str(payload.get("capability_id") or "").strip() or None,
+                metadata=payload.get("metadata") if isinstance(payload.get("metadata"), dict) else None,
+            ),
+            "state": safe_mode_service.state_snapshot(),
+        }
+
+    @app.post("/admin/safe-mode", dependencies=[depends(require_admin_api_key)])
+    async def set_safe_mode(request: Request, current_user=depends(require_admin_api_key)):
+        refresh_server_exports()
+        payload = runtime_request_service.read_json_object_payload(request)
+        return {
+            "ok": True,
+            "result": safe_mode_service.set_safe_mode(
+                enabled=_payload_bool(payload, "enabled"),
+                reason=str(payload.get("reason") or "").strip(),
+                workspace_id=str(payload.get("workspace_id") or "").strip() or None,
+                machine_id=str(payload.get("machine_id") or "").strip() or None,
+                metadata=payload.get("metadata") if isinstance(payload.get("metadata"), dict) else None,
+            ),
+            "state": safe_mode_service.state_snapshot(),
+        }
 
     @app.post("/webhooks/register", dependencies=[depends(require_api_key)])
     async def register_webhook_trigger(

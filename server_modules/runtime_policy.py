@@ -5,7 +5,7 @@ from typing import Any, Dict, List, Optional, Set
 from pathlib import Path
 
 from scripts.platform_execution import capability_metadata
-from server_modules.capability_registry import resolve_capability
+from server_modules.capability_registry import canonical_capability_id, resolve_capability
 
 _server = None
 def _init():
@@ -662,6 +662,7 @@ ACTION_SIGNAL_PATTERNS: Dict[str, List[str]] = {
 def normalize_action_id(raw: Any) -> str:
     value = str(raw or "").strip().lower().replace("-", "_").replace(" ", "_")
     normalized = re.sub(r"[^a-z0-9_.]", "", value)
+    normalized = canonical_capability_id(normalized) or normalized
     contract = resolve_capability(normalized)
     if contract is not None:
         return str(contract.capability_id or normalized).strip().lower()

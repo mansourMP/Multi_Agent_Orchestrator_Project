@@ -38,6 +38,51 @@ export async function readServerRuntimeKey(): Promise<string> {
   return normalized;
 }
 
+export async function readServerRuntimeKeyIfPresent(): Promise<string> {
+  try {
+    return await readServerRuntimeKey();
+  } catch {
+    return '';
+  }
+}
+
+export async function writeServerRuntimeKey(runtimeKey: string): Promise<void> {
+  const normalized = String(runtimeKey || '').replace(/\s+/g, '');
+  if (!normalized) {
+    throw new Error('Runtime key is required.');
+  }
+  const root = await resolveProjectRoot();
+  const stateDir = path.join(root, '.orion-stack');
+  const keyPath = path.join(stateDir, 'runtime_key');
+  await fs.mkdir(stateDir, { recursive: true });
+  await fs.writeFile(keyPath, normalized, { encoding: 'utf8', mode: 0o600 });
+}
+
+export async function probeRuntimeHealthWithKey(runtimeKey: string): Promise<{ status: number; payload: unknown }> {
+  const normalized = String(runtimeKey || '').replace(/\s+/g, '');
+  if (!normalized) {
+    return { status: 400, payload: { detail: 'Runtime key is required.' } };
+  }
+  const response = await fetch(`${RUNTIME_API_BASE}/health`, {
+    method: 'GET',
+    headers: {
+      'X-API-Key': normalized,
+    },
+    cache: 'no-store',
+  });
+  const raw = await response.text().catch(() => '');
+  let payload: unknown = raw || {};
+  try {
+    payload = raw ? JSON.parse(raw) : {};
+  } catch {
+    payload = raw || {};
+  }
+  return {
+    status: response.status,
+    payload,
+  };
+}
+
 export async function runtimeAuthorizedFetch(
   runtimePath: string,
   init?: RequestInit,

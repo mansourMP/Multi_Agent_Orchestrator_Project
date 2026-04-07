@@ -9,6 +9,7 @@ import { PageHeroCard } from '@/components/orion/page/PageHeroCard';
 import { PageSection } from '@/components/orion/page/PageSection';
 import { PageStatePanel } from '@/components/orion/page/PageStatePanel';
 import { fetchWorkflows } from '@/lib/api';
+import { fetchRuntimeConnectionStatus } from '@/lib/runtimeConnection';
 import { buildSetupRoute, fetchSetupReadiness } from '@/lib/setupReadiness';
 
 type WorkflowRecord = {
@@ -58,6 +59,12 @@ export default function HomePage() {
 
     const guardSetup = async () => {
       try {
+        const runtimeStatus = await fetchRuntimeConnectionStatus();
+        if (!active) return;
+        if (!runtimeStatus.configured || !runtimeStatus.healthy) {
+          router.replace('/onboarding');
+          return;
+        }
         const readiness = await fetchSetupReadiness();
         if (!active || readiness.complete) return;
         router.replace(buildSetupRoute('/home'));

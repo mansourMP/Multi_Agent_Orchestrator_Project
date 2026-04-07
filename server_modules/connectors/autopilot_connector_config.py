@@ -59,7 +59,11 @@ EMPYRALIS_STATE_HOME = Path(
 ).expanduser()
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 EMPYRALIST_RUNTIME_URL = os.getenv("EMPYRALIST_RUNTIME_URL", "http://127.0.0.1:8001").strip().rstrip("/") or "http://127.0.0.1:8001"
-EMPYRALIST_WORKFLOW_API_URL = os.getenv("EMPYRALIST_WORKFLOW_API_URL", "http://127.0.0.1:4000/api/v1").strip().rstrip("/") or "http://127.0.0.1:4000/api/v1"
+EMPYRALIST_WORKFLOW_API_URL = (
+    os.getenv("EMPYRALIST_WORKFLOW_API_URL")
+    or os.getenv("ORION_API_URL")
+    or EMPYRALIST_RUNTIME_URL
+).strip().rstrip("/") or EMPYRALIST_RUNTIME_URL
 EMPYRALIST_WEB_URL = os.getenv("EMPYRALIST_WEB_URL", "http://127.0.0.1:3000").strip().rstrip("/") or "http://127.0.0.1:3000"
 _TELEGRAM_POLL_LOCK_DIR = EMPYRALIS_STATE_HOME / "channels" / "telegram"
 

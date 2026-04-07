@@ -10,8 +10,12 @@ globals().update({key: value for key, value in vars(config).items() if not key.s
 globals().update({key: value for key, value in vars(shared).items() if not key.startswith("__")})
 
 EMPYRALIST_WORKFLOW_API_URL = (
-    str(os.getenv("EMPYRALIST_WORKFLOW_API_URL", "http://127.0.0.1:8080/api/v1")).strip().rstrip("/")
-    or "http://127.0.0.1:8080/api/v1"
+    str(
+        os.getenv("EMPYRALIST_WORKFLOW_API_URL")
+        or os.getenv("ORION_API_URL")
+        or "http://127.0.0.1:8001"
+    ).strip().rstrip("/")
+    or "http://127.0.0.1:8001"
 )
 
 def metrics_inc(key: str, amount: float = 1):

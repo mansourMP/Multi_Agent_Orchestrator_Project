@@ -532,6 +532,6 @@ def electron_command(project_root: Path) -> List[str]:
     if fallback:
         return [fallback]
     raise RuntimeError(
-        "Electron runtime not found for browser capture. Run `cd desktop && npm install` first "
+        "Browser runtime not found for browser capture. Install the required local browser capture runtime "
         "or set EMPYRALIS_DESKTOP_ELECTRON_BIN."
     )

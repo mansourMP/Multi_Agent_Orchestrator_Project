@@ -1082,7 +1082,7 @@ export function WorkbenchControlDeck({
                 <div style={{ display: 'grid', gap: 4, fontSize: 11, lineHeight: 1.45 }}>
                   <div style={{ color: UI.textMuted }}>
                     {activeLocalExecutionOperation.browserMode === 'capture_page'
-                      ? 'Browser capture uses the local Electron browser to load the page and save a real screenshot artifact.'
+                      ? 'Browser capture uses the local browser runtime to load the page and save a real screenshot artifact.'
                       : 'Browser automation fetches public pages through the local companion and stores HTML or extraction reports as artifacts.'}
                   </div>
                   {activeLocalExecutionOperation.browserMode === 'capture_page' ? (

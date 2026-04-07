@@ -9,9 +9,10 @@ export class HealthController {
             name: 'AgentForge API',
             version: '1.0.0',
             timestamp: new Date().toISOString(),
+            frozen: true,
             endpoints: {
-                workflows: '/api/v1/workflows',
-                executions: '/api/v1/executions',
+                workflows: '/workflows',
+                executions: 'frozen_legacy_backend',
                 auth: '/api/v1/auth',
                 agents: '/api/v1/agents',
             }

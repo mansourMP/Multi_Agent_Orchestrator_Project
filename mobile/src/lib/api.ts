@@ -68,6 +68,32 @@ export function getDefaultPlatformUrl() {
   return process.env.EXPO_PUBLIC_PLATFORM_URL || extra.platformUrl || "";
 }
 
+export async function testRuntimeConnection(apiKey: string, runtimeUrl: string = getDefaultRuntimeUrl()) {
+  const baseUrl = normalizeServerUrl(runtimeUrl);
+  if (!String(apiKey || "").trim()) {
+    throw new Error("API key is required.");
+  }
+  let response: Response;
+  try {
+    response = await fetch(`${baseUrl}/health`, {
+      method: "GET",
+      headers: {
+        "X-API-Key": String(apiKey || "").trim(),
+      },
+    });
+  } catch (error) {
+    throw new Error(error instanceof TypeError ? formatNetworkError(baseUrl) : "Request failed.");
+  }
+  if (!response.ok) {
+    const payload = await response.json().catch(() => null) as { detail?: unknown } | null;
+    const detail = payload && typeof payload.detail === "string" && payload.detail.trim()
+      ? payload.detail.trim()
+      : "Health check failed.";
+    throw new Error(detail);
+  }
+  return response.json().catch(() => ({}));
+}
+
 export type EmpyralistChatPriorMessage = {
   role: "user" | "assistant";
   content: string;

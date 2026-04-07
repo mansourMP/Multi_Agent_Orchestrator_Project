@@ -1,7 +1,7 @@
 import type { NextRequest } from 'next/server';
 import { enforceBffRouteGuard } from '@/lib/server/bffRouteGuard';
 import { requireControlPlaneSession } from '@/lib/server/controlPlaneSession';
-import { backendJsonRequest } from '@/lib/server/backendControlPlane';
+import { runtimeJsonRequest } from '@/lib/server/runtimeControlPlane';
 
 export const dynamic = 'force-dynamic';
 
@@ -15,7 +15,7 @@ async function proxyWorkflowCollection(request: NextRequest, method: 'GET' | 'PO
   const rawBody = method === 'POST' ? await request.text() : '';
 
   try {
-    const { status, payload } = await backendJsonRequest(`/workflows${query}`, {
+    const { status, payload } = await runtimeJsonRequest(`/workflows${query}`, {
       method,
       body: rawBody || undefined,
       headers: rawBody ? { 'Content-Type': request.headers.get('content-type') || 'application/json' } : undefined,

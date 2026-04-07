@@ -58,6 +58,7 @@ import {
 import { BRAND } from '@/lib/brand';
 import { SINGLE_AGENT_MODE } from '@/lib/appFlags';
 import { controlPlaneSignInUrl, ensureControlPlaneSession } from '@/lib/controlPlaneSession';
+import { fetchRuntimeConnectionStatus } from '@/lib/runtimeConnection';
 import { buildSetupRoute, fetchSetupReadiness } from '@/lib/setupReadiness';
 
 const WORKBENCH_DECK_MODE_STORAGE_KEY = 'orion_workbench_deck_mode_v1';
@@ -1880,6 +1881,12 @@ export function AutopilotWorkspace() {
 
     const checkSetupGate = async () => {
       try {
+        const runtimeStatus = await fetchRuntimeConnectionStatus();
+        if (!active) return;
+        if (!runtimeStatus.configured || !runtimeStatus.healthy) {
+          router.replace('/onboarding');
+          return;
+        }
         const readiness = await fetchSetupReadiness();
         if (!active || readiness.complete) return;
         const returnTo = `${window.location.pathname || '/'}${window.location.search || ''}`;

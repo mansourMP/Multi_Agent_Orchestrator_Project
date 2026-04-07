@@ -1,7 +1,7 @@
 import type { NextRequest } from 'next/server';
 import { enforceBffRouteGuard } from '@/lib/server/bffRouteGuard';
 import { requireControlPlaneSession } from '@/lib/server/controlPlaneSession';
-import { backendJsonRequest } from '@/lib/server/backendControlPlane';
+import { runtimeJsonRequest } from '@/lib/server/runtimeControlPlane';
 
 export const dynamic = 'force-dynamic';
 
@@ -12,7 +12,7 @@ type Params = {
 async function proxyWorkflowDetail(
   request: NextRequest,
   { params }: Params,
-  method: 'GET' | 'PATCH' | 'DELETE',
+  method: 'GET' | 'PUT' | 'DELETE',
 ) {
   const rejection = enforceBffRouteGuard(request, { methods: [method] });
   if (rejection) return rejection;
@@ -21,10 +21,10 @@ async function proxyWorkflowDetail(
 
   const { id } = await params;
   const workflowId = encodeURIComponent(String(id || '').trim());
-  const rawBody = method === 'PATCH' ? await request.text() : '';
+  const rawBody = method === 'PUT' ? await request.text() : '';
 
   try {
-    const { status, payload } = await backendJsonRequest(`/workflows/${workflowId}`, {
+    const { status, payload } = await runtimeJsonRequest(`/workflows/${workflowId}`, {
       method,
       body: rawBody || undefined,
       headers: rawBody ? { 'Content-Type': request.headers.get('content-type') || 'application/json' } : undefined,
@@ -40,8 +40,8 @@ export async function GET(request: NextRequest, context: Params) {
   return proxyWorkflowDetail(request, context, 'GET');
 }
 
-export async function PATCH(request: NextRequest, context: Params) {
-  return proxyWorkflowDetail(request, context, 'PATCH');
+export async function PUT(request: NextRequest, context: Params) {
+  return proxyWorkflowDetail(request, context, 'PUT');
 }
 
 export async function DELETE(request: NextRequest, context: Params) {

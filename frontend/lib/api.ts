@@ -284,7 +284,7 @@ export async function getWorkflow(id: string): Promise<WorkflowRecordShape> {
 
 export async function updateWorkflow(id: string, definition: unknown): Promise<WorkflowRecordShape> {
     return internalApiFetch(`/api/workflows/${encodeURIComponent(id)}`, {
-        method: 'PATCH',
+        method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ definition }),
     });

@@ -905,6 +905,7 @@ export default function HealthPage() {
             summary.includes('screen recording permission') ||
             summary.includes('active display session') ||
             summary.includes('electron runtime not found') ||
+            summary.includes('browser runtime not found') ||
             summary.includes('browser capture failed') ||
             summary.includes('capture page')
           );
@@ -916,7 +917,10 @@ export default function HealthPage() {
             title = 'Screen Recording permission missing';
           } else if (summary.toLowerCase().includes('active display session')) {
             title = 'Desktop session unavailable';
-          } else if (summary.toLowerCase().includes('electron runtime not found')) {
+          } else if (
+            summary.toLowerCase().includes('electron runtime not found') ||
+            summary.toLowerCase().includes('browser runtime not found')
+          ) {
             title = 'Browser runtime unavailable';
           }
           setDesktopIssue({

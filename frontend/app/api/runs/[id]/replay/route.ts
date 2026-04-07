@@ -1,6 +1,6 @@
 import type { NextRequest } from 'next/server';
 import { enforceBffRouteGuard } from '@/lib/server/bffRouteGuard';
-import { requireControlPlaneSession } from '@/lib/server/controlPlaneSession';
+import { requireControlPlaneRole, requireControlPlaneSession } from '@/lib/server/controlPlaneSession';
 import { runtimeJsonRequest } from '@/lib/server/runtimeControlPlane';
 import { requireOwnedRun } from '@/lib/server/runOwnership';
 
@@ -15,6 +15,8 @@ export async function GET(request: NextRequest, { params }: Params) {
   if (rejection) return rejection;
   const authFailure = await requireControlPlaneSession(request);
   if (authFailure) return authFailure;
+  const roleFailure = await requireControlPlaneRole(request, 'owner');
+  if (roleFailure) return roleFailure;
 
   const { id } = await params;
   const rawRunId = String(id || '').trim();

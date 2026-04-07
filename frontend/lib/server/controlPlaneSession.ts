@@ -15,6 +15,9 @@ const CONTROL_PLANE_AUTH_URL =
   process.env.ORION_API_URL || process.env.NEXT_PUBLIC_ORION_API_URL || API_BASE;
 const CONTROL_PLANE_BACKEND_URL =
   process.env.NEXT_PUBLIC_API_URL || API_BASE;
+const CONTROL_PLANE_ROLE_ORDER = { viewer: 0, member: 1, owner: 2 } as const;
+
+export type ControlPlaneRole = keyof typeof CONTROL_PLANE_ROLE_ORDER;
 
 type ControlPlaneAuthProviders = {
   email: { enabled: boolean };
@@ -29,14 +32,16 @@ type ControlPlaneSessionPayload = {
   ua: string;
   sub: string;
   authType: 'bearer' | 'trusted_local';
-  admin: true;
+  role: ControlPlaneRole;
+  admin: boolean;
 };
 
 type ControlPlaneIdentity = {
   sub: string;
   email: string | null;
   authType: 'bearer' | 'trusted_local';
-  admin: true;
+  role: ControlPlaneRole;
+  admin: boolean;
 };
 
 type PendingControlPlaneOauth = {
@@ -52,6 +57,16 @@ type PendingDesktopControlPlaneAuth = {
   exp: number;
 };
 
+function normalizeControlPlaneRole(value: unknown, fallback: ControlPlaneRole = 'member'): ControlPlaneRole {
+  const token = String(value || '').trim().toLowerCase();
+  if (token === 'owner' || token === 'member' || token === 'viewer') return token;
+  return fallback;
+}
+
+function controlPlaneRoleAllowed(actual: ControlPlaneRole, minimum: ControlPlaneRole): boolean {
+  return CONTROL_PLANE_ROLE_ORDER[actual] >= CONTROL_PLANE_ROLE_ORDER[minimum];
+}
+
 function trustedDesktopSessionPayload(request: NextRequest): ControlPlaneSessionPayload | null {
   const identity = getTrustedDesktopIdentity(request);
   if (!identity) return null;
@@ -62,7 +77,8 @@ function trustedDesktopSessionPayload(request: NextRequest): ControlPlaneSession
     ua: uaDigest(request),
     sub: identity.sub,
     authType: identity.authType,
-    admin: true,
+    role: identity.role,
+    admin: identity.admin,
   };
 }
 
@@ -301,7 +317,7 @@ function decodeBearerPayloadSegment(token: string): Record<string, unknown> {
   }
 }
 
-function parseBearerClaims(token: string): { sub: string; email: string | null; exp: number } | Response {
+function parseBearerClaims(token: string): { sub: string; email: string | null; exp: number; role: ControlPlaneRole } | Response {
   let payload: Record<string, unknown>;
   try {
     payload = decodeBearerPayloadSegment(token);
@@ -317,7 +333,7 @@ function parseBearerClaims(token: string): { sub: string; email: string | null; 
   if (Number.isFinite(exp) && exp > 0 && exp < Math.floor(Date.now() / 1000)) {
     return Response.json({ detail: 'Bearer token has expired.' }, { status: 401 });
   }
-  return { sub, email, exp };
+  return { sub, email, exp, role: normalizeControlPlaneRole(payload.role, 'member') };
 }
 
 async function verifyBearerSignature(token: string): Promise<Response | null> {
@@ -338,77 +354,58 @@ async function verifyBearerSignature(token: string): Promise<Response | null> {
   return null;
 }
 
+async function fetchRuntimeRole(token: string): Promise<Pick<ControlPlaneIdentity, 'email' | 'role' | 'admin'> | null> {
+  try {
+    const response = await fetch(`${CONTROL_PLANE_BACKEND_URL}/auth/me`, {
+      method: 'GET',
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+      cache: 'no-store',
+    });
+    if (!response.ok) return null;
+    const payload = (await response.json().catch(() => null)) as {
+      user?: { email?: string | null; role?: string | null; is_admin?: boolean | null } | null;
+    } | null;
+    const user = payload?.user;
+    if (!user || typeof user !== 'object') return null;
+    const role = normalizeControlPlaneRole(user.role, Boolean(user.is_admin) ? 'owner' : 'member');
+    return {
+      email: String(user.email || '').trim().toLowerCase() || null,
+      role,
+      admin: role === 'owner',
+    };
+  } catch {
+    return null;
+  }
+}
+
 async function verifyAdminBearerIdentity(token: string): Promise<ControlPlaneIdentity | Response> {
   const claims = parseBearerClaims(token);
   if (claims instanceof Response) return claims;
 
   const signatureFailure = await verifyBearerSignature(token);
+  const resolved = await fetchRuntimeRole(token);
   if (!signatureFailure) {
+    const role = resolved?.role || claims.role;
     return {
       sub: claims.sub,
-      email: claims.email,
+      email: resolved?.email ?? claims.email,
       authType: 'bearer',
-      admin: true,
+      role,
+      admin: role === 'owner',
     };
   }
-
-  let runtimeResponse: Response | null = null;
-  try {
-    runtimeResponse = await fetch(`${CONTROL_PLANE_AUTH_URL}/approvals/audit?limit=1`, {
-      method: 'GET',
-      headers: {
-        Authorization: `Bearer ${token}`,
-      },
-      cache: 'no-store',
-    });
-  } catch {
-    runtimeResponse = null;
-  }
-
-  if (runtimeResponse?.ok) {
+  if (resolved) {
     return {
       sub: claims.sub,
-      email: claims.email,
+      email: resolved.email ?? claims.email,
       authType: 'bearer',
-      admin: true,
+      role: resolved.role,
+      admin: resolved.admin,
     };
   }
-
-  let backendResponse: Response | null = null;
-  try {
-    backendResponse = await fetch(`${CONTROL_PLANE_BACKEND_URL}/auth/me`, {
-      method: 'GET',
-      headers: {
-        Authorization: `Bearer ${token}`,
-      },
-      cache: 'no-store',
-    });
-  } catch {
-    backendResponse = null;
-  }
-
-  if (backendResponse?.ok) {
-    return {
-      sub: claims.sub,
-      email: claims.email,
-      authType: 'bearer',
-      admin: true,
-    };
-  }
-
-  if (runtimeResponse?.status === 403 || backendResponse?.status === 403) {
-    return Response.json({ detail: 'Admin control-plane access required.' }, { status: 403 });
-  }
-
-  if (runtimeResponse?.status === 401 && backendResponse?.status === 401) {
-    return Response.json({ detail: 'Invalid bearer token.' }, { status: 401 });
-  }
-
-  if ((runtimeResponse && !runtimeResponse.ok) || (backendResponse && !backendResponse.ok)) {
-    return Response.json({ detail: 'Admin auth verification failed.' }, { status: 503 });
-  }
-
-  return Response.json({ detail: 'Admin auth verification is unavailable.' }, { status: 503 });
+  return Response.json({ detail: 'Invalid bearer token.' }, { status: 401 });
 }
 
 function clearCookie(response: NextResponse, request: NextRequest, name: string) {
@@ -482,9 +479,10 @@ async function decodeSession(token: string, request: NextRequest): Promise<Contr
   if (!Number.isFinite(parsed.exp) || parsed.exp <= Math.floor(Date.now() / 1000)) return null;
   if (String(parsed.host || '').trim() !== request.nextUrl.host) return null;
   if (String(parsed.ua || '').trim() !== uaDigest(request)) return null;
-  if (parsed.admin !== true) return null;
   if (!String(parsed.sub || '').trim()) return null;
   if (!['bearer', 'trusted_local'].includes(String(parsed.authType || '').trim())) return null;
+  parsed.role = normalizeControlPlaneRole(parsed.role, parsed.admin ? 'owner' : 'member');
+  parsed.admin = parsed.role === 'owner';
   return parsed;
 }
 
@@ -511,6 +509,7 @@ export function getTrustedDesktopIdentity(request: NextRequest): ControlPlaneIde
     sub: 'trusted-local-desktop',
     email: null,
     authType: 'trusted_local',
+    role: 'owner',
     admin: true,
   };
 }
@@ -535,7 +534,8 @@ export async function issueAdminBrowserIdentityResponse(
     : NextResponse.json({
       ok: true,
       auth_type: identity.authType,
-      admin: true,
+      admin: identity.admin,
+      role: identity.role,
       user_id: identity.sub,
       email: identity.email,
     });
@@ -555,7 +555,8 @@ export async function issueAdminBrowserIdentityResponse(
     ua: uaDigest(request),
     sub: identity.sub,
     authType: identity.authType,
-    admin: true,
+    role: identity.role,
+    admin: identity.admin,
   };
   const sessionToken = await encodeSession(sessionPayload);
   response.cookies.set({
@@ -574,7 +575,7 @@ export async function requireAdminBrowserIdentity(request: NextRequest): Promise
   const token = request.cookies.get(CONTROL_PLANE_ADMIN_COOKIE)?.value || '';
   if (!token) {
     return Response.json(
-      { detail: 'Admin browser login required.', requires_login: true },
+      { detail: 'Browser login required.', requires_login: true },
       { status: 401 },
     );
   }
@@ -582,7 +583,7 @@ export async function requireAdminBrowserIdentity(request: NextRequest): Promise
   const identity = await verifyAdminBearerIdentity(token);
   if (identity instanceof Response) {
     const next = NextResponse.json(
-      { detail: 'Admin browser login required.', requires_login: true },
+      { detail: 'Browser login required.', requires_login: true },
       { status: 401 },
     );
     clearCookie(next, request, CONTROL_PLANE_ADMIN_COOKIE);
@@ -603,10 +604,11 @@ export async function issueControlPlaneSessionResponse(
     ua: uaDigest(request),
     sub: identity.sub,
     authType: identity.authType,
-    admin: true,
+    role: identity.role,
+    admin: identity.admin,
   };
   const token = await encodeSession(payload);
-  const response = NextResponse.json({ ok: true, expires_in: CONTROL_PLANE_SESSION_TTL_SECONDS });
+  const response = NextResponse.json({ ok: true, expires_in: CONTROL_PLANE_SESSION_TTL_SECONDS, role: identity.role });
   response.cookies.set({
     name: CONTROL_PLANE_SESSION_COOKIE,
     value: token,
@@ -623,6 +625,22 @@ export async function requireControlPlaneSession(request: NextRequest): Promise<
   const parsed = await getControlPlaneSession(request);
   if (parsed) return null;
   return Response.json({ detail: 'Control-plane session required.' }, { status: 401 });
+}
+
+export async function requireControlPlaneRole(
+  request: NextRequest,
+  minimumRole: ControlPlaneRole,
+): Promise<Response | null> {
+  const parsed = await getControlPlaneSession(request);
+  if (!parsed) {
+    return Response.json({ detail: 'Control-plane session required.' }, { status: 401 });
+  }
+  const actualRole = normalizeControlPlaneRole(parsed.role, parsed.admin ? 'owner' : 'member');
+  if (controlPlaneRoleAllowed(actualRole, minimumRole)) return null;
+  return Response.json(
+    { detail: `${minimumRole} role required.`, required_role: minimumRole, role: actualRole },
+    { status: 403 },
+  );
 }
 
 export function controlPlaneAuthProviders(): ControlPlaneAuthProviders {

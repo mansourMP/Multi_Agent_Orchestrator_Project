@@ -19,7 +19,7 @@ async function proxyAuthMe(request: NextRequest, method: 'GET' | 'PATCH', body?:
 
   const token = adminBearerToken(request);
   if (!token) {
-    return Response.json({ detail: 'Admin browser login required.', requires_login: true }, { status: 401 });
+    return Response.json({ detail: 'Browser login required.', requires_login: true }, { status: 401 });
   }
 
   let upstream: Response;

@@ -1,6 +1,6 @@
 import type { NextRequest } from 'next/server';
 import { enforceBffRouteGuard } from '@/lib/server/bffRouteGuard';
-import { getControlPlaneSession, requireControlPlaneSession } from '@/lib/server/controlPlaneSession';
+import { getControlPlaneSession, requireControlPlaneRole, requireControlPlaneSession } from '@/lib/server/controlPlaneSession';
 import { runtimeJsonRequest } from '@/lib/server/runtimeControlPlane';
 
 export const dynamic = 'force-dynamic';
@@ -29,7 +29,11 @@ export async function GET(request: NextRequest) {
   if (rejection) return rejection;
   const authFailure = await requireControlPlaneSession(request);
   if (authFailure) return authFailure;
-  const ownerUserId = String((await getControlPlaneSession(request))?.sub || '').trim();
+  const roleFailure = await requireControlPlaneRole(request, 'viewer');
+  if (roleFailure) return roleFailure;
+  const session = await getControlPlaneSession(request);
+  const ownerUserId = String(session?.sub || '').trim();
+  const role = String(session?.role || '').trim().toLowerCase();
 
   const query = sanitizeRunsQuery(request);
   const runtimePath = `/runs${query ? `?${query}` : ''}`;
@@ -38,7 +42,7 @@ export async function GET(request: NextRequest) {
     const { status, payload } = await runtimeJsonRequest(runtimePath, { method: 'GET' });
     const record = payload && typeof payload === 'object' ? payload as Record<string, unknown> : {};
     const rawItems = Array.isArray(record.items) ? record.items : [];
-    const items = rawItems.filter((item) => {
+    const items = role === 'owner' ? rawItems : rawItems.filter((item) => {
       if (!ownerUserId || !item || typeof item !== 'object') return true;
       const owner = String((item as Record<string, unknown>).owner_user_id || '').trim();
       return !owner || owner === ownerUserId;

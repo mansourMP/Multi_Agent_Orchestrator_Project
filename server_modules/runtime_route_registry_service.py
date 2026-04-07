@@ -90,6 +90,14 @@ def register_runtime_run_routes(
     runtime_usage_service=_runtime_usage_service,
     build_direct_chat_stream_response=_build_direct_chat_stream_response,
 ) -> None:
+    viewer_dependency = require_api_key
+    member_dependency = globals().get("require_member_api_key", None)
+    if member_dependency is None:
+        try:
+            from server_modules.runtime_common import require_member_api_key as member_dependency  # type: ignore
+        except Exception:
+            member_dependency = require_api_key
+
     def _payload_bool(payload: dict[str, Any], key: str, *, default: bool = False) -> bool:
         value = payload.get(key)
         if isinstance(value, bool):
@@ -234,11 +242,11 @@ def register_runtime_run_routes(
             run_execution_services=run_execution_services,
         )
 
-    @app.post("/runs/{run_id}/delegate", dependencies=[depends(require_api_key)])
+    @app.post("/runs/{run_id}/delegate", dependencies=[depends(member_dependency)])
     async def delegate_run(
         run_id: uuid.UUID,
         body: run_delegation_request_class,
-        current_user=depends(require_api_key),
+        current_user=depends(member_dependency),
     ):
         refresh_server_exports()
         return runtime_route_run_handlers_service.delegate_run_route_response(
@@ -250,11 +258,11 @@ def register_runtime_run_routes(
             callbacks=delegate_run_children_callbacks,
         )
 
-    @app.post("/runs/{run_id}/delegate/auto", dependencies=[depends(require_api_key)])
+    @app.post("/runs/{run_id}/delegate/auto", dependencies=[depends(member_dependency)])
     async def auto_delegate_run(
         run_id: uuid.UUID,
         body: Optional[run_auto_delegation_request_class] = None,
-        current_user=depends(require_api_key),
+        current_user=depends(member_dependency),
     ):
         refresh_server_exports()
         return runtime_route_run_handlers_service.auto_delegate_run_route_response(
@@ -267,11 +275,11 @@ def register_runtime_run_routes(
             callbacks=auto_delegate_run_children_callbacks,
         )
 
-    @app.post("/runs/{run_id}/delegate/retry-failed", dependencies=[depends(require_api_key)])
+    @app.post("/runs/{run_id}/delegate/retry-failed", dependencies=[depends(member_dependency)])
     async def retry_failed_delegation_runs(
         run_id: uuid.UUID,
         body: Optional[run_delegation_retry_request_class] = None,
-        current_user=depends(require_api_key),
+        current_user=depends(member_dependency),
     ):
         refresh_server_exports()
         return runtime_route_run_handlers_service.retry_failed_delegation_runs_route_response(
@@ -284,7 +292,7 @@ def register_runtime_run_routes(
             callbacks=retry_failed_delegation_callbacks,
         )
 
-    @app.post("/routing/preview", dependencies=[depends(require_api_key)])
+    @app.post("/routing/preview", dependencies=[depends(member_dependency)])
     async def preview_routing(body: Optional[run_start_request_class] = None):
         refresh_server_exports()
         return runtime_route_run_handlers_service.preview_routing_route_response(
@@ -295,7 +303,7 @@ def register_runtime_run_routes(
             run_routing_preview_services=run_routing_preview_services,
         )
 
-    @app.post("/runs/precheck", dependencies=[depends(require_api_key)])
+    @app.post("/runs/precheck", dependencies=[depends(member_dependency)])
     async def precheck_run(body: Optional[run_start_request_class] = None):
         refresh_server_exports()
         return await runtime_route_run_handlers_service.precheck_run_route_response(
@@ -307,7 +315,7 @@ def register_runtime_run_routes(
         )
 
     @app.get("/runs/{run_id}")
-    async def get_run(run_id: uuid.UUID, current_user=depends(require_api_key)):
+    async def get_run(run_id: uuid.UUID, current_user=depends(viewer_dependency)):
         refresh_server_exports()
         return runtime_run_query_service.build_run_detail_response(
             str(run_id),
@@ -317,13 +325,13 @@ def register_runtime_run_routes(
             **run_detail_callbacks,
         )
 
-    @app.get("/history/runs", dependencies=[depends(require_api_key)])
+    @app.get("/history/runs", dependencies=[depends(viewer_dependency)])
     async def get_runs_history(
         limit: int = 30,
         workspace_id: Optional[str] = None,
         status: Optional[str] = None,
         pack_id: Optional[str] = None,
-        current_user=depends(require_api_key),
+        current_user=depends(viewer_dependency),
     ):
         return runtime_history_service.build_runs_history_payload(
             limit=limit,
@@ -334,8 +342,8 @@ def register_runtime_run_routes(
             **runs_history_callbacks,
         )
 
-    @app.get("/usage/summary", dependencies=[depends(require_api_key)])
-    async def get_usage_summary(period: str = "all", current_user=depends(require_api_key)):
+    @app.get("/usage/summary", dependencies=[depends(viewer_dependency)])
+    async def get_usage_summary(period: str = "all", current_user=depends(viewer_dependency)):
         return runtime_usage_service.usage_summary_payload(
             period=period,
             current_user=current_user,
@@ -343,12 +351,12 @@ def register_runtime_run_routes(
             aggregate_usage_summary_fn=aggregate_usage_summary_fn,
         )
 
-    @app.get("/usage/runs", dependencies=[depends(require_api_key)])
+    @app.get("/usage/runs", dependencies=[depends(viewer_dependency)])
     async def get_usage_runs(
         limit: int = 50,
         offset: int = 0,
         period: str = "all",
-        current_user=depends(require_api_key),
+        current_user=depends(viewer_dependency),
     ):
         return runtime_usage_service.usage_runs_payload(
             limit=limit,
@@ -381,8 +389,8 @@ def register_runtime_run_routes(
             run_execution_services=run_execution_services,
         )
 
-    @app.get("/runs/{run_id}/stream", dependencies=[depends(require_api_key)])
-    async def stream_run(run_id: uuid.UUID, current_user=depends(require_api_key)):
+    @app.get("/runs/{run_id}/stream", dependencies=[depends(viewer_dependency)])
+    async def stream_run(run_id: uuid.UUID, current_user=depends(viewer_dependency)):
         refresh_server_exports()
         return runtime_route_run_handlers_service.stream_run_route_response(
             run_id,
@@ -396,11 +404,11 @@ def register_runtime_run_routes(
             iter_logs_for_run=iter_logs_for_run,
         )
 
-    @app.post("/runs/{run_id}/decision", dependencies=[depends(require_api_key)])
+    @app.post("/runs/{run_id}/decision", dependencies=[depends(member_dependency)])
     async def submit_run_decision(
         run_id: uuid.UUID,
         payload: decision_payload_class,
-        current_user=depends(require_api_key),
+        current_user=depends(member_dependency),
     ):
         refresh_server_exports()
         return runtime_route_run_handlers_service.submit_run_decision_route_response(
@@ -413,12 +421,12 @@ def register_runtime_run_routes(
             callbacks=submit_run_decision_callbacks,
         )
 
-    @app.post("/runs/{run_id}/approvals/{approval_id}/resolve", dependencies=[depends(require_api_key)])
+    @app.post("/runs/{run_id}/approvals/{approval_id}/resolve", dependencies=[depends(member_dependency)])
     async def resolve_run_approval(
         run_id: uuid.UUID,
         approval_id: str,
         payload: approval_resolve_payload_class,
-        current_user=depends(require_api_key),
+        current_user=depends(member_dependency),
     ):
         refresh_server_exports()
         return runtime_route_run_handlers_service.resolve_run_approval_route_response(
@@ -432,11 +440,11 @@ def register_runtime_run_routes(
             callbacks=resolve_run_approval_callbacks,
         )
 
-    @app.post("/approvals/{approval_id}/resolve", dependencies=[depends(require_api_key)])
+    @app.post("/approvals/{approval_id}/resolve", dependencies=[depends(member_dependency)])
     async def resolve_standalone_approval(
         approval_id: str,
         request: Request,
-        current_user=depends(require_api_key),
+        current_user=depends(member_dependency),
     ):
         refresh_server_exports()
         payload = runtime_request_service.read_json_object_payload(request)
@@ -453,8 +461,8 @@ def register_runtime_run_routes(
             emit_approval_resolved_event_fn=outbox_service.emit_approval_resolved_event,
         )
 
-    @app.post("/runs/{run_id}/resume", dependencies=[depends(require_api_key)])
-    async def resume_run(run_id: uuid.UUID, current_user=depends(require_api_key)):
+    @app.post("/runs/{run_id}/resume", dependencies=[depends(member_dependency)])
+    async def resume_run(run_id: uuid.UUID, current_user=depends(member_dependency)):
         refresh_server_exports()
         return runtime_route_run_handlers_service.resume_run_route_response(
             run_id,

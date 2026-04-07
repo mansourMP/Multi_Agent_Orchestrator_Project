@@ -1527,12 +1527,12 @@ def register_agent_workspace_routes(app) -> None:
             "items": combined_items,
         }
 
-    @app.get("/artifacts", dependencies=[Depends(require_admin_api_key)], response_model=ApiArtifactListResponse)
+    @app.get("/artifacts", dependencies=[Depends(require_api_key)], response_model=ApiArtifactListResponse)
     async def get_artifacts(
         workspace_id: Optional[str] = None,
         history_limit: int = 80,
         limit: int = 120,
-        current_user=Depends(require_admin_api_key),
+        current_user=Depends(require_api_key),
     ):
         return await _workspace_artifacts_payload(
             workspace_id=workspace_id,
@@ -1541,12 +1541,12 @@ def register_agent_workspace_routes(app) -> None:
             current_user=current_user,
         )
 
-    @app.get("/artifacts/workspace", dependencies=[Depends(require_admin_api_key)], response_model=ApiArtifactListResponse)
+    @app.get("/artifacts/workspace", dependencies=[Depends(require_api_key)], response_model=ApiArtifactListResponse)
     async def get_workspace_artifacts(
         workspace_id: Optional[str] = None,
         history_limit: int = 80,
         limit: int = 120,
-        current_user=Depends(require_admin_api_key),
+        current_user=Depends(require_api_key),
     ):
         return await _workspace_artifacts_payload(
             workspace_id=workspace_id,
@@ -1605,7 +1605,7 @@ def register_agent_workspace_routes(app) -> None:
             ),
         }
 
-    @app.get("/artifacts/preview", dependencies=[Depends(require_admin_api_key)], response_model=ApiArtifactPreviewResponse)
+    @app.get("/artifacts/preview", dependencies=[Depends(require_api_key)], response_model=ApiArtifactPreviewResponse)
     async def get_artifact_preview(
         path: str,
     ):
@@ -1627,13 +1627,13 @@ def register_agent_workspace_routes(app) -> None:
         media_type = mimetypes.guess_type(str(target.name))[0] or "application/octet-stream"
         return FileResponse(path=str(target), media_type=media_type, filename=target.name)
 
-    @app.get("/artifacts/content", dependencies=[Depends(require_admin_api_key)])
+    @app.get("/artifacts/content", dependencies=[Depends(require_api_key)])
     async def get_artifact_content(
         path: str,
     ):
         return await _artifact_file_response(path)
 
-    @app.get("/artifacts/file", dependencies=[Depends(require_admin_api_key)])
+    @app.get("/artifacts/file", dependencies=[Depends(require_api_key)])
     async def get_artifact_file(
         path: str,
     ):

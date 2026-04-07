@@ -1,7 +1,12 @@
 import type { NextRequest } from 'next/server';
 import type { AgentTurnRequest } from '@/lib/api-contract';
 import { enforceBffRouteGuard } from '@/lib/server/bffRouteGuard';
-import { getAdminBrowserIdentity, getControlPlaneSession, requireControlPlaneSession } from '@/lib/server/controlPlaneSession';
+import {
+  getAdminBrowserIdentity,
+  getControlPlaneSession,
+  requireControlPlaneRole,
+  requireControlPlaneSession,
+} from '@/lib/server/controlPlaneSession';
 import { runtimeAuthorizedFetch, runtimeJsonRequest } from '@/lib/server/runtimeControlPlane';
 
 export const dynamic = 'force-dynamic';
@@ -82,6 +87,8 @@ export async function POST(request: NextRequest) {
   if (rejection) return rejection;
   const authFailure = await requireControlPlaneSession(request);
   if (authFailure) return authFailure;
+  const roleFailure = await requireControlPlaneRole(request, 'member');
+  if (roleFailure) return roleFailure;
 
   const rawBody = await request.text();
   const stampedBody = await stampTurnOwnerBody(request, rawBody);

@@ -19,6 +19,7 @@ export async function GET(request: NextRequest) {
       expires_in: 60 * 30,
       reused: true,
       auth_type: existingSession.authType,
+      role: existingSession.role,
     });
   }
   const trustedDesktopIdentity = getTrustedDesktopIdentity(request);

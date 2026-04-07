@@ -4,6 +4,7 @@ import { enforceBffRouteGuard } from '@/lib/server/bffRouteGuard';
 import {
   getAdminBrowserIdentity,
   getControlPlaneSession,
+  requireControlPlaneRole,
   requireControlPlaneSession,
 } from '@/lib/server/controlPlaneSession';
 import { runtimeJsonRequest } from '@/lib/server/runtimeControlPlane';
@@ -49,6 +50,8 @@ export async function POST(request: NextRequest) {
   if (rejection) return rejection;
   const authFailure = await requireControlPlaneSession(request);
   if (authFailure) return authFailure;
+  const roleFailure = await requireControlPlaneRole(request, 'member');
+  if (roleFailure) return roleFailure;
 
   try {
     const rawBody = await request.text();

@@ -1,6 +1,6 @@
 import type { NextRequest } from 'next/server';
 import { enforceBffRouteGuard } from '@/lib/server/bffRouteGuard';
-import { getControlPlaneSession, requireControlPlaneSession } from '@/lib/server/controlPlaneSession';
+import { getControlPlaneSession, requireControlPlaneRole, requireControlPlaneSession } from '@/lib/server/controlPlaneSession';
 import { runtimeJsonRequest } from '@/lib/server/runtimeControlPlane';
 
 export const dynamic = 'force-dynamic';
@@ -96,8 +96,11 @@ export async function GET(request: NextRequest) {
   if (rejection) return rejection;
   const authFailure = await requireControlPlaneSession(request);
   if (authFailure) return authFailure;
+  const roleFailure = await requireControlPlaneRole(request, 'viewer');
+  if (roleFailure) return roleFailure;
   const session = await getControlPlaneSession(request);
   const ownerUserId = String(session?.sub || '').trim();
+  const role = String(session?.role || '').trim().toLowerCase();
 
   try {
     const [pending, history, audit] = await Promise.all([
@@ -108,8 +111,12 @@ export async function GET(request: NextRequest) {
 
     const pendingPayload = normalizePendingPayload(pending.status, pending.payload);
     const historyPayload = normalizeHistoryPayload(history.status, history.payload);
-    const ownedPending = pendingPayload.items.filter((item) => String(item.owner_user_id || '').trim() === ownerUserId);
-    const ownedHistory = historyPayload.items.filter((item) => String(item.owner_user_id || '').trim() === ownerUserId);
+    const ownedPending = role === 'owner'
+      ? pendingPayload.items
+      : pendingPayload.items.filter((item) => String(item.owner_user_id || '').trim() === ownerUserId);
+    const ownedHistory = role === 'owner'
+      ? historyPayload.items
+      : historyPayload.items.filter((item) => String(item.owner_user_id || '').trim() === ownerUserId);
     const ownedRunIds = new Set<string>([
       ...ownedPending.map((item) => item.run_id),
       ...ownedHistory.map((item) => item.run_id),

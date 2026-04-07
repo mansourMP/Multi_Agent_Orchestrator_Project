@@ -51,7 +51,9 @@ export async function requireOwnedRun(
   request: NextRequest,
   runId: string,
 ): Promise<{ payload?: RunRecord; response?: Response }> {
-  const ownerUserId = await getSessionOwnerUserId(request);
+  const session = await getControlPlaneSession(request);
+  const ownerUserId = String(session?.sub || '').trim();
+  const role = String(session?.role || '').trim().toLowerCase();
   if (!ownerUserId) {
     return {
       response: Response.json({ detail: 'Control-plane session required.' }, { status: 401 }),
@@ -78,6 +80,9 @@ export async function requireOwnedRun(
   }
 
   const payload = asRecord(result.payload);
+  if (role === 'owner') {
+    return { payload };
+  }
   const runOwnerUserId = extractOwnerUserId(payload);
   if (!runOwnerUserId) {
     return {

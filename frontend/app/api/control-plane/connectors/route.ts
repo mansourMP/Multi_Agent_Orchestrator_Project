@@ -1,6 +1,6 @@
 import type { NextRequest } from 'next/server';
 import { enforceBffRouteGuard } from '@/lib/server/bffRouteGuard';
-import { requireControlPlaneSession } from '@/lib/server/controlPlaneSession';
+import { requireControlPlaneRole, requireControlPlaneSession } from '@/lib/server/controlPlaneSession';
 import { runtimeProxyResponse } from '@/lib/server/runtimeControlPlane';
 
 export const dynamic = 'force-dynamic';
@@ -10,6 +10,8 @@ export async function GET(request: NextRequest) {
   if (rejection) return rejection;
   const authFailure = await requireControlPlaneSession(request);
   if (authFailure) return authFailure;
+  const roleFailure = await requireControlPlaneRole(request, 'viewer');
+  if (roleFailure) return roleFailure;
 
   const search = new URLSearchParams();
   const workspaceId = String(request.nextUrl.searchParams.get('workspace_id') || '').trim();
@@ -29,6 +31,8 @@ export async function POST(request: NextRequest) {
   if (rejection) return rejection;
   const authFailure = await requireControlPlaneSession(request);
   if (authFailure) return authFailure;
+  const roleFailure = await requireControlPlaneRole(request, 'member');
+  if (roleFailure) return roleFailure;
 
   const rawBody = await request.text();
 

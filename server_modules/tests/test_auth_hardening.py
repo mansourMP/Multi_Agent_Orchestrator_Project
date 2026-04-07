@@ -64,6 +64,7 @@ class AuthHardeningTests(unittest.TestCase):
         with patch("server_modules.auth.get_current_user", return_value={"user_id": "service", "auth_type": "api_key"}):
             result = auth.require_admin_access(request=request)
         self.assertTrue(result["is_admin"])
+        self.assertEqual(result["role"], "owner")
 
     def test_require_admin_access_blocks_non_admin_bearer_identity(self):
         request = _request()
@@ -71,6 +72,28 @@ class AuthHardeningTests(unittest.TestCase):
             with self.assertRaises(HTTPException) as ctx:
                 auth.require_admin_access(request=request)
         self.assertEqual(ctx.exception.status_code, 403)
+
+    def test_get_current_user_defaults_bearer_role_to_member(self):
+        request = _request()
+        token = auth.issue_token("user-1", email="user@example.com")
+        user = auth.get_current_user(request=request, authorization=f"Bearer {token}")
+        self.assertEqual(user["role"], "member")
+        self.assertFalse(user["is_admin"])
+
+    def test_get_current_user_respects_viewer_role_claim(self):
+        request = _request()
+        token = auth.issue_token("viewer-1", email="viewer@example.com", role="viewer")
+        user = auth.get_current_user(request=request, authorization=f"Bearer {token}")
+        self.assertEqual(user["role"], "viewer")
+        self.assertFalse(user["is_admin"])
+
+    def test_get_current_user_elevates_admin_allowlist_to_owner(self):
+        request = _request()
+        token = auth.issue_token("admin-1", email="admin@example.com", role="member")
+        with patch.object(auth, "ORION_ADMIN_USER_IDS", {"admin-1"}), patch.object(auth, "ORION_ADMIN_EMAILS", set()):
+            user = auth.get_current_user(request=request, authorization=f"Bearer {token}")
+        self.assertEqual(user["role"], "owner")
+        self.assertTrue(user["is_admin"])
 
 
 if __name__ == "__main__":

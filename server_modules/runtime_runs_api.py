@@ -383,6 +383,8 @@ _schedule_restored_run_resume = runtime_run_resume_service.build_schedule_restor
 
 def register_run_routes(app) -> None:
     import server as _server
+    viewer_dependency = getattr(_server, "require_viewer_api_key", _server.require_api_key)
+    member_dependency = getattr(_server, "require_member_api_key", _server.require_api_key)
 
     global _HEARTBEAT_SCHEDULER
     _HEARTBEAT_SCHEDULER = runtime_route_registration_service.register_runtime_run_routes_from_api(
@@ -429,11 +431,11 @@ def register_run_routes(app) -> None:
             return True
         return "message" in payload and "session_id" not in payload and "actor" not in payload
 
-    @app.post("/turn", dependencies=[Depends(_server.require_api_key)], response_model=ApiAgentTurnResponse)
+    @app.post("/turn", dependencies=[Depends(member_dependency)], response_model=ApiAgentTurnResponse)
     async def canonical_turn(
         request: Request,
         body: Optional[dict[str, Any]] = None,
-        current_user=Depends(_server.require_api_key),
+        current_user=Depends(member_dependency),
     ):
         _refresh_server_exports()
         payload = dict(body or {})
@@ -473,14 +475,14 @@ def register_run_routes(app) -> None:
         )
         return normalize_agent_turn_result(result, turn_request=turn_request)
 
-    @app.get("/runs", dependencies=[Depends(_server.require_api_key)], response_model=ApiRunListResponse)
+    @app.get("/runs", dependencies=[Depends(viewer_dependency)], response_model=ApiRunListResponse)
     async def list_runs(
         limit: int = 50,
         offset: int = 0,
         workspace_id: Optional[str] = None,
         status: Optional[str] = None,
         pack_id: Optional[str] = None,
-        current_user=Depends(_server.require_api_key),
+        current_user=Depends(viewer_dependency),
     ):
         _refresh_server_exports()
         return runtime_run_query_service.build_run_list_response(
@@ -502,10 +504,10 @@ def register_run_routes(app) -> None:
             parse_utc_ts=_late_server_export("_parse_utc_ts"),
         )
 
-    @app.get("/approvals", dependencies=[Depends(_server.require_api_key)])
+    @app.get("/approvals", dependencies=[Depends(viewer_dependency)])
     async def list_approvals(
         workspace_id: Optional[str] = None,
-        current_user=Depends(_server.require_api_key),
+        current_user=Depends(viewer_dependency),
     ):
         _refresh_server_exports()
         request_user_id = str((current_user or {}).get("user_id") or "").strip()
@@ -572,10 +574,10 @@ def register_run_routes(app) -> None:
             "workspace_id": str(workspace_id or "default").strip() or "default",
         }
 
-    @app.post("/sessions", dependencies=[Depends(_server.require_api_key)], response_model=ApiSessionResponse)
+    @app.post("/sessions", dependencies=[Depends(member_dependency)], response_model=ApiSessionResponse)
     async def create_runtime_session(
         body: ApiSessionRequest,
-        current_user=Depends(_server.require_api_key),
+        current_user=Depends(member_dependency),
     ):
         payload = body.model_dump() if hasattr(body, "model_dump") else body.dict()
         actor = dict(payload.get("actor") or {})
@@ -602,10 +604,10 @@ def register_run_routes(app) -> None:
         }
         return normalize_session_record(record)
 
-    @app.get("/sessions/{session_id}", dependencies=[Depends(_server.require_api_key)], response_model=ApiSessionResponse)
+    @app.get("/sessions/{session_id}", dependencies=[Depends(viewer_dependency)], response_model=ApiSessionResponse)
     async def get_runtime_session(
         session_id: str,
-        current_user=Depends(_server.require_api_key),
+        current_user=Depends(viewer_dependency),
     ):
         del current_user
         record = await session_service.get_session(session_id)
@@ -615,10 +617,10 @@ def register_run_routes(app) -> None:
             raise HTTPException(status_code=404, detail="Session not found.")
         return normalize_session_record(record)
 
-    @app.delete("/sessions/{session_id}", dependencies=[Depends(_server.require_api_key)])
+    @app.delete("/sessions/{session_id}", dependencies=[Depends(member_dependency)])
     async def delete_runtime_session(
         session_id: str,
-        current_user=Depends(_server.require_api_key),
+        current_user=Depends(member_dependency),
     ):
         del current_user
         await session_service.terminate_session(session_id)

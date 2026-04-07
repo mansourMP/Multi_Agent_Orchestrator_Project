@@ -210,6 +210,32 @@ def require_api_key(
     )
 
 
+def require_viewer_api_key(
+    request: Request,
+    authorization: Optional[str] = Header(default=None, alias="Authorization"),
+    x_api_key: Optional[str] = Header(default=None, alias="X-API-Key"),
+):
+    return require_api_key(
+        request=request,
+        authorization=authorization,
+        x_api_key=x_api_key,
+    )
+
+
+def require_member_api_key(
+    request: Request,
+    authorization: Optional[str] = Header(default=None, alias="Authorization"),
+    x_api_key: Optional[str] = Header(default=None, alias="X-API-Key"),
+):
+    from server_modules.auth import require_member_access
+
+    return require_member_access(
+        request=request,
+        authorization=authorization,
+        x_api_key=x_api_key,
+    )
+
+
 def require_admin_api_key(
     request: Request,
     authorization: Optional[str] = Header(default=None, alias="Authorization"),

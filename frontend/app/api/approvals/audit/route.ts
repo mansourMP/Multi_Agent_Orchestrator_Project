@@ -1,6 +1,6 @@
 import type { NextRequest } from 'next/server';
 import { enforceBffRouteGuard } from '@/lib/server/bffRouteGuard';
-import { getControlPlaneSession, requireControlPlaneSession } from '@/lib/server/controlPlaneSession';
+import { getControlPlaneSession, requireControlPlaneRole, requireControlPlaneSession } from '@/lib/server/controlPlaneSession';
 import { runtimeJsonRequest } from '@/lib/server/runtimeControlPlane';
 
 export const dynamic = 'force-dynamic';
@@ -20,8 +20,11 @@ export async function GET(request: NextRequest) {
   if (rejection) return rejection;
   const authFailure = await requireControlPlaneSession(request);
   if (authFailure) return authFailure;
+  const roleFailure = await requireControlPlaneRole(request, 'viewer');
+  if (roleFailure) return roleFailure;
   const session = await getControlPlaneSession(request);
   const ownerUserId = String(session?.sub || '').trim();
+  const role = String(session?.role || '').trim().toLowerCase();
 
   const query = sanitizeAuditQuery(request);
   const runtimePath = `/approvals/audit${query ? `?${query}` : ''}`;
@@ -47,7 +50,7 @@ export async function GET(request: NextRequest) {
       audit.payload && typeof audit.payload === 'object' && Array.isArray((audit.payload as { items?: unknown[] }).items)
         ? (audit.payload as { items: unknown[] }).items
         : [];
-    const filtered = auditItems.filter((item) => {
+    const filtered = role === 'owner' ? auditItems : auditItems.filter((item) => {
       const record = item && typeof item === 'object' ? (item as Record<string, unknown>) : {};
       const runId = String(record.run_id || '').trim();
       return runId && ownedRunIds.has(runId);

@@ -33,6 +33,55 @@ ORION_DEFAULT_WORKSPACE_IDS = tuple(
     item.strip() for item in str(os.getenv("ORION_DEFAULT_WORKSPACE_IDS", "default")).split(",") if item.strip()
 ) or ("default",)
 ORION_SERVICE_RATE_LIMIT_PER_MINUTE = int(os.getenv("ORION_SERVICE_RATE_LIMIT_PER_MINUTE", "600"))
+RBAC_ROLE_ORDER = {"viewer": 0, "member": 1, "owner": 2}
+
+
+def normalize_rbac_role(value: Any, *, default: str = "member") -> str:
+    token = str(value or "").strip().lower()
+    if token in RBAC_ROLE_ORDER:
+        return token
+    fallback = str(default or "member").strip().lower()
+    return fallback if fallback in RBAC_ROLE_ORDER else "member"
+
+
+def current_user_role(current_user: Optional[Dict[str, Any]], *, default: str = "member") -> str:
+    if not isinstance(current_user, dict):
+        return normalize_rbac_role(default)
+    if bool(current_user.get("is_admin")):
+        return "owner"
+    auth_type = str(current_user.get("auth_type") or "").strip().lower()
+    if auth_type in {"api_key", "disabled"}:
+        return "owner"
+    return normalize_rbac_role(current_user.get("role"), default=default)
+
+
+def current_user_is_owner(current_user: Optional[Dict[str, Any]]) -> bool:
+    return current_user_role(current_user, default="viewer") == "owner"
+
+
+def enforce_minimum_role(current_user: Optional[Dict[str, Any]], minimum_role: str) -> Dict[str, Any]:
+    if not isinstance(current_user, dict):
+        raise HTTPException(status_code=401, detail="Authentication required.")
+    actual_role = current_user_role(current_user)
+    required_role = normalize_rbac_role(minimum_role)
+    if RBAC_ROLE_ORDER[actual_role] < RBAC_ROLE_ORDER[required_role]:
+        raise HTTPException(
+            status_code=403,
+            detail=f"{required_role.capitalize()} role required.",
+        )
+    enriched = dict(current_user)
+    enriched["role"] = actual_role
+    enriched["is_admin"] = actual_role == "owner"
+    return enriched
+
+
+def _resolved_bearer_role(user_id: str, email: Optional[str], claimed_role: Any) -> str:
+    role = normalize_rbac_role(claimed_role, default="member")
+    if user_id and user_id in ORION_ADMIN_USER_IDS:
+        return "owner"
+    if email and email in ORION_ADMIN_EMAILS:
+        return "owner"
+    return role
 
 
 def _orion_api_key() -> str:
@@ -129,21 +178,27 @@ def _find_user_by_id(user_id: str) -> Optional[Dict[str, Any]]:
     return None
 
 
-def _public_user_payload(user: Dict[str, Any]) -> Dict[str, Any]:
-    return {
+def _public_user_payload(user: Dict[str, Any], *, role: Optional[str] = None) -> Dict[str, Any]:
+    payload = {
         "id": str(user.get("id") or "").strip(),
         "email": str(user.get("email") or "").strip().lower(),
         "name": str(user.get("name") or "").strip() or None,
         "avatar_url": str(user.get("avatar_url") or "").strip() or None,
     }
+    if role is not None:
+        normalized_role = normalize_rbac_role(role)
+        payload["role"] = normalized_role
+        payload["is_admin"] = normalized_role == "owner"
+    return payload
 
 
-def issue_token(user_id: str, *, email: Optional[str] = None) -> str:
+def issue_token(user_id: str, *, email: Optional[str] = None, role: str = "member") -> str:
     header = {"alg": "HS256", "typ": "JWT"}
     now = int(time.time())
     payload = {
         "sub": str(user_id),
         "email": str(email or "").strip().lower() or None,
+        "role": normalize_rbac_role(role),
         "workspace_ids": list(ORION_DEFAULT_WORKSPACE_IDS),
         "iat": now,
         "exp": now + JWT_EXP_SECONDS,
@@ -293,8 +348,8 @@ def register_user(email: str, password: str, *, name: Optional[str] = None) -> D
             connection.commit()
     return {
         "ok": True,
-        "user": {"id": user_id, "email": email_token, "name": user_name, "avatar_url": None},
-        "token": issue_token(user_id, email=email_token),
+        "user": {"id": user_id, "email": email_token, "name": user_name, "avatar_url": None, "role": "member", "is_admin": False},
+        "token": issue_token(user_id, email=email_token, role="member"),
     }
 
 
@@ -307,8 +362,8 @@ def login_user(email: str, password: str) -> Dict[str, Any]:
         raise HTTPException(status_code=401, detail="Invalid user record.")
     return {
         "ok": True,
-        "user": _public_user_payload(user),
-        "token": issue_token(user_id, email=str(user.get("email") or "")),
+        "user": _public_user_payload(user, role="member"),
+        "token": issue_token(user_id, email=str(user.get("email") or ""), role="member"),
     }
 
 
@@ -327,7 +382,8 @@ def get_authenticated_user_profile(current_user: Optional[Dict[str, Any]]) -> Di
     user = _find_user_by_id(_current_bearer_user_id(current_user))
     if user is None:
         raise HTTPException(status_code=404, detail="User not found.")
-    return {"ok": True, "user": _public_user_payload(user)}
+    role = current_user_role(current_user)
+    return {"ok": True, "user": _public_user_payload(user, role=role)}
 
 
 def update_authenticated_user_profile(
@@ -358,7 +414,8 @@ def update_authenticated_user_profile(
             connection.commit()
     if row is None:
         raise HTTPException(status_code=404, detail="User not found.")
-    return {"ok": True, "user": _public_user_payload(dict(row))}
+    role = current_user_role(current_user)
+    return {"ok": True, "user": _public_user_payload(dict(row), role=role)}
 
 
 def get_current_user(
@@ -367,7 +424,7 @@ def get_current_user(
     x_api_key: Optional[str] = Header(default=None, alias="X-API-Key"),
 ) -> Dict[str, Any]:
     if not _orion_auth_required():
-        user = {"user_id": "anonymous", "auth_type": "disabled"}
+        user = {"user_id": "anonymous", "auth_type": "disabled", "role": "owner", "is_admin": True}
         _enforce_window_limit(
             buckets=USER_RATE_LIMIT_BUCKETS,
             lock=USER_RATE_LIMIT_LOCK,
@@ -387,13 +444,21 @@ def get_current_user(
             raise HTTPException(status_code=401, detail="Bearer token has expired.")
         email = str(payload.get("email") or "").strip().lower() or None
         workspace_ids = _normalize_workspace_ids_claim(payload.get("workspace_ids"))
+        role = _resolved_bearer_role(user_id, email, payload.get("role"))
         _enforce_window_limit(
             buckets=USER_RATE_LIMIT_BUCKETS,
             lock=USER_RATE_LIMIT_LOCK,
             key=f"user:{user_id}",
             limit=60,
         )
-        return {"user_id": user_id, "auth_type": "bearer", "email": email, "workspace_ids": workspace_ids}
+        return {
+            "user_id": user_id,
+            "auth_type": "bearer",
+            "email": email,
+            "workspace_ids": workspace_ids,
+            "role": role,
+            "is_admin": role == "owner",
+        }
 
     expected_api_key = _orion_api_key()
     provided_api_key = str(x_api_key or "").strip()
@@ -405,7 +470,7 @@ def get_current_user(
                 key="user:service",
                 limit=ORION_SERVICE_RATE_LIMIT_PER_MINUTE,
             )
-        return {"user_id": "service", "auth_type": "api_key", "email": None}
+        return {"user_id": "service", "auth_type": "api_key", "email": None, "role": "owner", "is_admin": True}
 
     raise HTTPException(status_code=401, detail="Authentication required.")
 
@@ -426,18 +491,19 @@ def require_admin_access(
         authorization=authorization,
         x_api_key=x_api_key,
     )
-    if not _orion_auth_required():
-        user["is_admin"] = True
-        return user
-    if str(user.get("auth_type") or "").strip() == "api_key":
-        user["is_admin"] = True
-        return user
-    user_id = str(user.get("user_id") or "").strip()
-    email = str(user.get("email") or "").strip().lower()
-    if user_id and user_id in ORION_ADMIN_USER_IDS:
-        user["is_admin"] = True
-        return user
-    if email and email in ORION_ADMIN_EMAILS:
-        user["is_admin"] = True
-        return user
-    raise HTTPException(status_code=403, detail="Admin access required.")
+    user = enforce_minimum_role(user, "owner")
+    user["is_admin"] = True
+    return user
+
+
+def require_member_access(
+    request: Request,
+    authorization: Optional[str] = Header(default=None, alias="Authorization"),
+    x_api_key: Optional[str] = Header(default=None, alias="X-API-Key"),
+) -> Dict[str, Any]:
+    user = get_current_user(
+        request=request,
+        authorization=authorization,
+        x_api_key=x_api_key,
+    )
+    return enforce_minimum_role(user, "member")

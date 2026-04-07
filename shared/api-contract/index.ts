@@ -129,6 +129,11 @@ export type MachineListResponse = Record<string, unknown> & {
   runtimes?: Array<Record<string, unknown>>;
 };
 
+export type ConnectorListResponse = Record<string, unknown> & {
+  items?: Array<Record<string, unknown>>;
+  connectors?: Array<Record<string, unknown>>;
+};
+
 export type NotificationItem = {
   id?: string | null;
   ts?: string | null;

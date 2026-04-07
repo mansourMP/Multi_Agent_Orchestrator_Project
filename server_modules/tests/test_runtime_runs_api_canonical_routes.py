@@ -60,6 +60,7 @@ class RuntimeRunsApiCanonicalRouteTests(unittest.TestCase):
         original_privileged = runtime_runs_api._current_user_is_privileged
         original_extract_owner = runtime_runs_api._extract_run_owner_user_id
         original_list_live_runs = runtime_runs_api.run_state_repository.sync_list_live_runs
+        original_resolve_run_start_turn_request = runtime_runs_api.resolve_run_start_turn_request
         try:
             runtime_runs_api.runtime_route_registration_service.register_runtime_run_routes_from_api = lambda *args, **kwargs: None
             runtime_runs_api._refresh_server_exports = lambda: fake_server
@@ -70,6 +71,7 @@ class RuntimeRunsApiCanonicalRouteTests(unittest.TestCase):
             runtime_runs_api._direct_chat_stream_response_services = lambda: "stream-services"
             runtime_runs_api._current_user_is_privileged = lambda current_user: False
             runtime_runs_api._extract_run_owner_user_id = lambda item: str(item.get("owner_user_id") or "")
+            runtime_runs_api.resolve_run_start_turn_request = self._fake_resolve_run_start_turn_request
             runtime_runs_api.run_state_repository.sync_list_live_runs = lambda: [
                 {
                     "run_id": "run-live",
@@ -205,6 +207,28 @@ class RuntimeRunsApiCanonicalRouteTests(unittest.TestCase):
             self.assertEqual(legacy_stream_payload["body"]["thread_id"], "legacy-thread")
             self.assertEqual(legacy_stream_payload["body"]["provider"], "anthropic")
 
+            legacy_run_payload = self._run_async(
+                app.routes[("POST", "/turn")](
+                    _FakeRequest(
+                        {
+                            "engine": "orion",
+                            "workspace_id": "default",
+                            "user_goal": "legacy durable hello",
+                            "metadata": {"trust_mode": "auto"},
+                        }
+                    ),
+                    {
+                        "engine": "orion",
+                        "workspace_id": "default",
+                        "user_goal": "legacy durable hello",
+                        "metadata": {"trust_mode": "auto"},
+                    },
+                    current_user={"user_id": "user-1"},
+                )
+            )
+            self.assertEqual(legacy_run_payload.status, "accepted")
+            self.assertEqual(legacy_run_payload.run_id, "run-from-legacy-start")
+
             runs_payload = self._run_async(app.routes[("GET", "/runs")](current_user={"user_id": "user-1"}))
             self.assertEqual(runs_payload["count"], 2)
             self.assertEqual(runs_payload["items"][0]["source"], "live")
@@ -262,6 +286,7 @@ class RuntimeRunsApiCanonicalRouteTests(unittest.TestCase):
             runtime_runs_api._late_server_export = original_late_export
             runtime_runs_api._current_user_is_privileged = original_privileged
             runtime_runs_api._extract_run_owner_user_id = original_extract_owner
+            runtime_runs_api.resolve_run_start_turn_request = original_resolve_run_start_turn_request
             runtime_runs_api.run_state_repository.sync_list_live_runs = original_list_live_runs
             if previous_server is None:
                 sys.modules.pop("server", None)
@@ -269,6 +294,13 @@ class RuntimeRunsApiCanonicalRouteTests(unittest.TestCase):
                 sys.modules["server"] = previous_server
 
     async def _fake_agent_turn(self, **kwargs):
+        if kwargs.get("run_request") is not None:
+            return {
+                "status": "accepted",
+                "run_id": "run-from-legacy-start",
+                "session_id": "legacy-run-start-session",
+                "metadata": {"kind": "legacy_run_start"},
+            }
         return {
             "kind": "direct_chat_stream",
             "workspace_id": "default",
@@ -284,6 +316,26 @@ class RuntimeRunsApiCanonicalRouteTests(unittest.TestCase):
             "last_event_id": kwargs["last_event_id"],
             "services": kwargs["services"],
         }
+
+    def _fake_resolve_run_start_turn_request(self, *, current_user, body, stamp_request_owner_fn):
+        request = body
+        turn_request = runtime_runs_api.request_body_to_turn_request(
+            ApiAgentTurnRequest(
+                tenant_id="default",
+                workspace_id=str(getattr(request, "workspace_id", None) or "default"),
+                session_id="legacy-run-start-session",
+                channel="web",
+                actor={"type": "user", "id": "user-1"},
+                message=str(getattr(request, "user_goal", None) or ""),
+                execution_mode="durable",
+                response_mode="artifact",
+                context_hints={
+                    "engine": str(getattr(request, "engine", None) or "orion"),
+                    "metadata": getattr(request, "metadata", None) or {},
+                },
+            )
+        )
+        return types.SimpleNamespace(request=request, turn_request=turn_request)
 
     async def _fake_create_session(self, *args, **kwargs):
         return "session-created"

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import queue
 from typing import Any, Callable
 
 from server_modules import runtime_history_service
@@ -8,6 +9,7 @@ from server_modules import runtime_run_control_service
 from server_modules import runtime_run_approval_service
 from server_modules import runtime_run_delegation_service
 from server_modules import runtime_run_query_service
+from server_modules.run_execution_handle import attach_execution_handle
 
 
 @dataclass(frozen=True)
@@ -57,6 +59,39 @@ def build_runtime_route_bindings(
     schedule_restored_run_resume: Callable[[str, dict[str, Any]], bool],
 ) -> RuntimeRouteBindings:
     serialize_run_snapshot = late_server_export("_serialize_run_snapshot")
+    def _ensure_live_run_handle(run_id: str, run_record: dict[str, Any]) -> dict[str, Any] | None:
+        if not isinstance(run_record, dict):
+            return None
+        try:
+            runs_by_id = late_server_export("runs")
+            run_queue_index = late_server_export("RUN_QUEUE_INDEX")
+            persist_live_run_state = late_server_export("_persist_live_run_state")
+        except Exception:
+            return None
+        existing = runs_by_id.get(run_id) if isinstance(runs_by_id, dict) else None
+        if isinstance(existing, dict):
+            return existing
+        restored = attach_execution_handle(
+            dict(run_record),
+            log_queue=queue.Queue(),
+            input_queue=queue.Queue(),
+            started_mono=None,
+            finished_mono=None,
+            first_value_mono=None,
+            hitl_wait_start_mono=None,
+            thread_id=None,
+            event_seq=int(run_record.get("_event_seq") or 0),
+        )
+        if isinstance(runs_by_id, dict):
+            runs_by_id[run_id] = restored
+        log_queue = restored.get("logs")
+        if log_queue is not None and isinstance(run_queue_index, dict):
+            run_queue_index[id(log_queue)] = run_id
+        try:
+            persist_live_run_state(run_id, restored)
+        except Exception:
+            pass
+        return restored
 
     delegate_run_children_callbacks = runtime_run_delegation_service.build_delegate_run_children_callbacks(
         lookup_run_snapshot=late_server_export("_lookup_run_snapshot"),
@@ -140,6 +175,7 @@ def build_runtime_route_bindings(
         run_thread_is_alive=run_thread_is_alive,
         emit_log=emit_log,
         schedule_restored_run_resume=schedule_restored_run_resume,
+        ensure_live_run_handle=_ensure_live_run_handle,
     )
     resume_waiting_run_callbacks = runtime_run_control_service.build_resume_waiting_run_callbacks(
         serialize_run_snapshot=serialize_run_snapshot,

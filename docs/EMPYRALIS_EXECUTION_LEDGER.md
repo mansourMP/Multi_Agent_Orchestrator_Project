@@ -1092,7 +1092,7 @@ The platform still uses the older execution internals, but both direct chat and 
   - metadata binding helpers
   - turn request resolution helpers
 - Updated [server_modules/runtime_runs_api.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/runtime_runs_api.py) so:
-  - `POST /runs/start` binds a canonical `agent_turn_request` into run metadata before the existing run-start pipeline continues
+  - `POST /turn` binds a canonical `agent_turn_request` into run metadata before the existing run-start pipeline continues
   - `POST /chat/respond` builds a canonical direct-chat turn envelope before streaming starts
   - direct-chat request meta now carries the serialized canonical turn request
   - direct-chat session context now carries the serialized canonical turn request
@@ -1153,7 +1153,7 @@ The live runtime still relies on older internal chat and run implementations, bu
 - Added a shared executor helper in [server_modules/runtime_runs_api.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/runtime_runs_api.py):
   - `_execute_agent_turn_request()`
 - Rewired both live entrypoints to use that helper:
-  - `POST /runs/start`
+  - `POST /turn`
   - `POST /chat/respond`
 - Added focused tests for the new composition layer:
   - direct-chat stream plan branch
@@ -1569,7 +1569,7 @@ This is still not a full direct-chat engine extraction. The LLM-driven memory ex
 
 ### Why This Cut
 
-The `/runs/start` endpoint in [server_modules/runtime_runs_api.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/runtime_runs_api.py) was still stamping the request owner and constructing the run-start turn contract inline before handing control to the shared turn runtime. That left one more inbound durable-run normalization step outside [server_modules/agent_turn.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/agent_turn.py).
+The `/turn` endpoint in [server_modules/runtime_runs_api.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/runtime_runs_api.py) was still stamping the request owner and constructing the run-start turn contract inline before handing control to the shared turn runtime. That left one more inbound durable-run normalization step outside [server_modules/agent_turn.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/agent_turn.py).
 
 ### What Changed
 
@@ -1578,13 +1578,13 @@ The `/runs/start` endpoint in [server_modules/runtime_runs_api.py](/Users/mansur
     - creates a default `RunStartRequest` when needed
     - applies the owner-stamping callback
     - returns both the stamped request and the canonical durable `AgentTurnRequest`
-- Updated [server_modules/runtime_runs_api.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/runtime_runs_api.py) so `/runs/start` now delegates that normalization through `resolve_run_start_turn_request(...)` instead of assembling it inline.
+- Updated [server_modules/runtime_runs_api.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/runtime_runs_api.py) so `/turn` now delegates that normalization through `resolve_run_start_turn_request(...)` instead of assembling it inline.
 - Added focused coverage in [server_modules/tests/test_agent_turn.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_agent_turn.py) to verify stamped owner metadata reaches the durable turn contract.
 
 ### Current Truth
 
 - Both direct-chat and run-start entry normalization now have explicit canonical helpers in [server_modules/agent_turn.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/agent_turn.py).
-- [server_modules/runtime_runs_api.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/runtime_runs_api.py) is thinner at the `/runs/start` boundary and no longer owns that request-to-turn translation step inline.
+- [server_modules/runtime_runs_api.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/runtime_runs_api.py) is thinner at the `/turn` boundary and no longer owns that request-to-turn translation step inline.
 - The durable run path is closer to the Bible rule that every inbound message enters the same turn contract first.
 
 ### Open Gaps
@@ -7605,7 +7605,7 @@ This is not the final run-service cutover yet. The legacy run modules still own 
   - auto-delegated child-run creation
   - retry-failed child-run creation
   - replay-triggered run creation
-  - the canonical `/runs/start` and `/chat/respond` service wiring now also shares `_run_execution_services()`
+  - the canonical `/turn` and `/chat/respond` service wiring now also shares `_run_execution_services()`
 - Added focused coverage in:
   - [server_modules/tests/test_run_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_run_service.py)
 

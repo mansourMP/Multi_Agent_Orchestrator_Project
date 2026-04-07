@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import asdict, is_dataclass
 from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field
@@ -230,6 +231,8 @@ CANONICAL_API_ENDPOINTS: Dict[str, Dict[str, Any]] = {
 
 
 def model_to_dict(model: Any) -> Dict[str, Any]:
+    if is_dataclass(model):
+        return dict(asdict(model))
     if hasattr(model, "model_dump"):
         return dict(model.model_dump())
     if hasattr(model, "dict"):

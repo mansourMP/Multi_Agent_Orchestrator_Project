@@ -1,5 +1,5 @@
 import type { NextRequest } from 'next/server';
-import type { SessionCreateRequest } from '@/lib/api-contract';
+import type { SessionCreateRequest } from '@shared/api-contract';
 import { enforceBffRouteGuard } from '@/lib/server/bffRouteGuard';
 import {
   getAdminBrowserIdentity,

@@ -1,5 +1,5 @@
 import type { NextRequest } from 'next/server';
-import type { AgentTurnRequest, AgentTurnResponse } from '@/lib/api-contract';
+import type { AgentTurnRequest, AgentTurnResponse } from '@shared/api-contract';
 import { enforceBffRouteGuard } from '@/lib/server/bffRouteGuard';
 import { requireControlPlaneSession } from '@/lib/server/controlPlaneSession';
 import { runtimeJsonRequest } from '@/lib/server/runtimeControlPlane';

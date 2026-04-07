@@ -85,7 +85,7 @@ Implemented the next Empyralis Autopilot product pass across runtime + default f
   - `run_orion_mission(...)` now executes all supported outcome packs through one path.
   - Retains HITL approval guard using `outbound_actions` when trust mode is not `auto`.
 - Hardened run start validation:
-  - `POST /runs/start` now rejects unknown `metadata.outcome_pack` with HTTP 400.
+  - `POST /turn` now rejects unknown `metadata.outcome_pack` with HTTP 400.
 
 ### Frontend changes (`frontend/app/page.tsx`)
 - Expanded outcome packs from 1 -> 3:
@@ -741,7 +741,7 @@ uvicorn server:app --host 0.0.0.0 --port 8001
 
 ### What was fixed
 - Added **Run Session API (engine-ready)** in Crew runtime:
-  - `POST /runs/start`
+  - `POST /turn`
   - `GET /runs/{run_id}`
   - `GET /runs/{run_id}/stream`
   - `POST /runs/{run_id}/decision`
@@ -796,7 +796,7 @@ uvicorn server:app --host 0.0.0.0 --port 8001
   - `crew` (existing CrewAI flow)
   - `codex` (OpenAI Responses API-backed flow)
 - `codex` engine now accepts business-plan context and runs via:
-  - `POST /runs/start` with `{ "engine": "codex", "business_plan": "...", ... }`
+  - `POST /turn` with `{ "engine": "codex", "business_plan": "...", ... }`
 - Added Codex/OpenAI runtime settings:
   - `OPENAI_RESPONSES_URL` (default `https://api.openai.com/v1/responses`)
   - `CODEX_MODEL` (default `gpt-4.1`)
@@ -804,7 +804,7 @@ uvicorn server:app --host 0.0.0.0 --port 8001
 
 ### Workflow editor wiring (updated)
 - Workflow run UI now targets new run-session API:
-  - start: `POST /runs/start`
+  - start: `POST /turn`
   - stream: `GET /runs/{run_id}/stream`
   - decision: `POST /runs/{run_id}/decision`
 - Added engine selector in top bar (`CODEX` / `CREW`) and run button reflects selected engine.
@@ -814,7 +814,7 @@ uvicorn server:app --host 0.0.0.0 --port 8001
 
 ### Backward compatibility
 - Legacy endpoints kept and mapped:
-  - `/start-mission` -> `/runs/start`
+  - `/start-mission` -> `/turn`
   - `/stream-logs/{run_id}` -> `/runs/{run_id}/stream`
   - `/submit-decision` -> `/runs/{run_id}/decision`
 
@@ -902,7 +902,7 @@ uvicorn server:app --host 0.0.0.0 --port 8001
 
 ### Runtime flow in new UI
 - Start run via:
-  - `POST /runs/start` with engine=`codex`
+  - `POST /turn` with engine=`codex`
 - Stream logs via:
   - `GET /runs/{run_id}/stream` (SSE)
 - Submit approval decision via:
@@ -1016,7 +1016,7 @@ Implemented the approved hardening items:
 - `DELETE /credentials/vault/{credential_id}?workspace_id=...` enforces workspace visibility.
 - `POST /credentials/vault/{credential_id}/test?workspace_id=...` enforces workspace visibility.
 - `GET /providers/{provider}/models?credential_id=...&workspace_id=...` supports scoped credential resolve.
-- `POST /runs/start` now accepts and stores `workspace_id` in run context.
+- `POST /turn` now accepts and stores `workspace_id` in run context.
 
 ### New vault hardening endpoints
 - `POST /credentials/vault/rotate-key`
@@ -1307,7 +1307,7 @@ Move from compatibility mode to Empyralis-native product behavior with real SMB 
     - inbox messages
     - leads
     - booking slots
-  - sends `metadata.pack_inputs` on `/runs/start`
+  - sends `metadata.pack_inputs` on `/turn`
   - switched default run engine from `codex` to `orion` for pack execution path
   - renders `Customer Ops Output` card from `pack_summary` stream event or `/runs/{id}` snapshot.
 
@@ -1399,7 +1399,7 @@ Close the remaining productization gaps for simple-user mode:
 - Runtime error quality improvements in `server.py`:
   - Added `friendly_runtime_error_message(...)`.
   - Retry and terminal run errors now emit user-facing actionable messages while preserving raw error in retry diagnostics.
-- `/runs/start` input hardening in `server.py`:
+- `/turn` input hardening in `server.py`:
   - Validates `metadata.trust_mode`.
   - Validates `metadata.pack_inputs` object shape.
   - Validates `metadata.outcome_scope` and `metadata.connector_credential_id` types.

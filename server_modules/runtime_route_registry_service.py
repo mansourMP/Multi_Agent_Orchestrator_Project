@@ -459,6 +459,7 @@ def register_runtime_run_routes(
             resolve_run_approval_callbacks=resolve_run_approval_callbacks,
             record_approval_resolution_fn=run_state_repository.sync_record_approval_resolution,
             emit_approval_resolved_event_fn=outbox_service.emit_approval_resolved_event,
+            resume_run_after_persist_fn=resolve_run_approval_callbacks.get("schedule_restored_run_resume"),
         )
 
     @app.post("/runs/{run_id}/resume", dependencies=[depends(member_dependency)])

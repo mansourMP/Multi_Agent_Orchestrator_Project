@@ -6,8 +6,9 @@ use tokio::time::{sleep, Duration};
 
 #[derive(Debug, Deserialize)]
 struct ClickArguments {
-    x: i32,
-    y: i32,
+    x: Option<i32>,
+    y: Option<i32>,
+    text: Option<String>,
     button: String,
     double: bool,
 }
@@ -26,9 +27,29 @@ struct KeyArguments {
 pub fn click(arguments: &Value) -> Result<Value> {
     let args: ClickArguments = serde_json::from_value(arguments.clone())
         .context("invalid computer_control.click arguments")?;
+    let (click_x, click_y, matched_text) = if let (Some(x), Some(y)) = (args.x, args.y) {
+        (x, y, None)
+    } else if args.text.as_deref().map(str::trim).filter(|value| !value.is_empty()).is_some() {
+        let resolved = crate::capabilities::ocr::find_text_center(arguments)?;
+        let x = resolved
+            .get("x")
+            .and_then(Value::as_i64)
+            .ok_or_else(|| anyhow::anyhow!("OCR text resolution did not return x"))? as i32;
+        let y = resolved
+            .get("y")
+            .and_then(Value::as_i64)
+            .ok_or_else(|| anyhow::anyhow!("OCR text resolution did not return y"))? as i32;
+        let matched = resolved
+            .get("matched_text")
+            .and_then(Value::as_str)
+            .map(|value| value.to_string());
+        (x, y, matched)
+    } else {
+        bail!("computer_control.click requires x/y or text");
+    };
     let mut enigo = Enigo::new(&Settings::default()).context("failed to initialize enigo")?;
     enigo
-        .move_mouse(args.x, args.y, Coordinate::Abs)
+        .move_mouse(click_x, click_y, Coordinate::Abs)
         .context("failed to move mouse")?;
     let button = parse_button(&args.button)?;
     enigo
@@ -39,7 +60,12 @@ pub fn click(arguments: &Value) -> Result<Value> {
             .button(button, Direction::Click)
             .context("failed to double click mouse")?;
     }
-    Ok(json!({ "clicked": true }))
+    Ok(json!({
+        "clicked": true,
+        "x": click_x,
+        "y": click_y,
+        "matched_text": matched_text,
+    }))
 }
 
 pub async fn type_text(arguments: &Value) -> Result<Value> {

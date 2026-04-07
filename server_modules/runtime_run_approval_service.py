@@ -43,6 +43,7 @@ def build_resolve_run_approval_callbacks(
     run_thread_is_alive: Callable[[dict[str, Any]], bool],
     emit_log: Callable[..., None],
     schedule_restored_run_resume: Callable[[str, dict[str, Any]], bool],
+    ensure_live_run_handle: Callable[[str, dict[str, Any]], dict[str, Any] | None] = lambda _run_id, _run_record: None,
 ) -> dict[str, Any]:
     callbacks = build_submit_run_decision_callbacks(
         serialize_run_snapshot=serialize_run_snapshot,
@@ -63,6 +64,7 @@ def build_resolve_run_approval_callbacks(
             "run_thread_is_alive": run_thread_is_alive,
             "emit_log": emit_log,
             "schedule_restored_run_resume": schedule_restored_run_resume,
+            "ensure_live_run_handle": ensure_live_run_handle,
         }
     )
     return callbacks
@@ -159,6 +161,7 @@ def resolve_run_approval(
     run_thread_is_alive: Callable[[dict[str, Any]], bool],
     emit_log: Callable[..., None],
     schedule_restored_run_resume: Callable[[str, dict[str, Any]], bool],
+    ensure_live_run_handle: Callable[[str, dict[str, Any]], dict[str, Any] | None] = lambda _run_id, _run_record: None,
 ) -> dict[str, Any]:
     snapshot_run = run if isinstance(run, dict) else run_record if isinstance(run_record, dict) else None
     if not isinstance(snapshot_run, dict):
@@ -209,9 +212,10 @@ def resolve_run_approval(
         if isinstance(run, dict):
             set_pending_confirmation(run, pending)
         raise HTTPException(status_code=409, detail="Confirmation request has already expired.")
-    if not isinstance(run, dict):
+    active_run = run if isinstance(run, dict) else ensure_live_run_handle(run_id, snapshot_run)
+    if not isinstance(active_run, dict):
         raise HTTPException(status_code=409, detail="Run is not active in this process.")
-    run["input_queue"].put(
+    active_run["input_queue"].put(
         {
             "approval_id": approval_id,
             "decision": payload.decision,
@@ -236,14 +240,14 @@ def resolve_run_approval(
             "reusable": False,
         },
     )
-    if not run_thread_is_alive(run) and str(run.get("status") or "").strip().lower() == "waiting_for_input":
+    if not run_thread_is_alive(active_run) and str(active_run.get("status") or "").strip().lower() == "waiting_for_input":
         pending["status"] = "resolved"
         pending["resolved_at"] = utc_now_iso()
         pending["decision"] = decision_text
         pending["note"] = str(payload.note or "")
-        set_pending_confirmation(run, pending)
+        set_pending_confirmation(active_run, pending)
         emit_log(
-            run["logs"],
+            active_run["logs"],
             "info" if approved else "warn",
             "Confirmation recorded. Restored run is resuming.",
             event="approval_resume_scheduled",
@@ -255,7 +259,10 @@ def resolve_run_approval(
                 "reusable": False,
             },
         )
-        schedule_restored_run_resume(run_id, run)
+        if bool(active_run.get("_defer_resume_until_approval_persisted")):
+            active_run["_resume_ready_after_persist"] = bool(approved)
+        else:
+            schedule_restored_run_resume(run_id, active_run)
     return {
         "status": "ok",
         "run_id": run_id,
@@ -278,6 +285,7 @@ def resolve_standalone_approval(
     resolve_run_approval_callbacks: dict[str, Any],
     record_approval_resolution_fn: Callable[..., Any],
     emit_approval_resolved_event_fn: Callable[..., Any],
+    resume_run_after_persist_fn: Callable[[str, dict[str, Any]], bool] | None = None,
 ) -> dict[str, Any]:
     approval_token = str(approval_id or "").strip()
     if not approval_token:
@@ -297,6 +305,11 @@ def resolve_standalone_approval(
     if not matched_run_id or not isinstance(matched_run, dict):
         raise HTTPException(status_code=404, detail="approval_id not found")
     live_run = runs.get(matched_run_id) if isinstance(runs, dict) else None
+    ensure_live_run_handle = resolve_run_approval_callbacks.get("ensure_live_run_handle")
+    if not isinstance(live_run, dict) and callable(ensure_live_run_handle):
+        live_run = ensure_live_run_handle(matched_run_id, matched_run)
+    if isinstance(live_run, dict):
+        live_run["_defer_resume_until_approval_persisted"] = True
 
     result = resolve_run_approval_fn(
         matched_run_id,
@@ -345,6 +358,16 @@ def resolve_standalone_approval(
         trace_id=trace_id,
     )
     response = dict(result or {})
+    if (
+        resolution == "approved"
+        and isinstance(live_run, dict)
+        and bool(live_run.pop("_resume_ready_after_persist", False))
+        and callable(resume_run_after_persist_fn)
+    ):
+        live_run.pop("_defer_resume_until_approval_persisted", None)
+        response["resumed"] = bool(resume_run_after_persist_fn(matched_run_id, live_run))
+    elif isinstance(live_run, dict):
+        live_run.pop("_defer_resume_until_approval_persisted", None)
     response["run_id"] = matched_run_id
     response["approval_id"] = approval_token
     response["resolution"] = resolution

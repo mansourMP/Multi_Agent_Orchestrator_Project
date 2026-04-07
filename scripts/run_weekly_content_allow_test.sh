@@ -30,7 +30,7 @@ JSON
 python3 -m json.tool /tmp/orion-run-allow.json >/dev/null
 
 RUN_JSON="$(
-  curl -sS -X POST "${API_URL}/runs/start" \
+  curl -sS -X POST "${API_URL}/turn" \
     -H "X-API-Key: ${RUNTIME_KEY}" \
     -H "Content-Type: application/json" \
     --data-binary @/tmp/orion-run-allow.json

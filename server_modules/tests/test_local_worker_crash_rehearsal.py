@@ -19,15 +19,12 @@ rehearsal = _load_rehearsal_module()
 
 class LocalWorkerCrashRehearsalTests(TestCase):
     def test_run_crash_rehearsal_exhausts_auto_retry_and_requires_manual_gate(self):
-        try:
-            summary = rehearsal.run_crash_rehearsal(
-                cycles=4,
-                kill_after_task_heartbeat_count=1,
-                step_delay_seconds=30.0,
-                quiet_worker=True,
-            )
-        except PermissionError as exc:
-            self.skipTest(f"Loopback socket bind is not permitted in this environment: {exc}")
+        summary = rehearsal.run_crash_rehearsal(
+            cycles=4,
+            kill_after_task_heartbeat_count=1,
+            step_delay_seconds=30.0,
+            quiet_worker=True,
+        )
 
         self.assertEqual(summary["final_status"], "waiting_for_input")
         self.assertEqual(summary["final_error"], "local_worker_recovery_exhausted")

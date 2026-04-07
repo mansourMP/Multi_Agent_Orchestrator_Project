@@ -16,7 +16,12 @@ from server_modules.runtime_config import (
 )
 from server_modules import outbox_service
 from server_modules import run_state_repository
-from server_modules.run_execution_handle import durable_run_payload, restore_run_state, should_restore_execution_handle
+from server_modules.run_execution_handle import (
+    RunExecutionHandle,
+    durable_run_payload,
+    restore_run_state,
+    should_restore_execution_handle,
+)
 from server_modules.runtime_state_store import (
     init_runtime_state_db,
     load_local_runtime_state,
@@ -182,8 +187,8 @@ class _PersistentRunStore(dict):
         self._manager = manager
         self._loading = False
 
-    def _wrap_run(self, run_id: str, payload: Dict[str, Any]) -> _PersistentDict:
-        holder: Dict[str, _PersistentDict] = {}
+    def _wrap_run(self, run_id: str, payload: Dict[str, Any] | RunExecutionHandle) -> RunExecutionHandle:
+        holder: Dict[str, RunExecutionHandle] = {}
 
         def _persist() -> None:
             current = holder.get("run")
@@ -191,13 +196,46 @@ class _PersistentRunStore(dict):
                 return
             self._manager.persist_live_run(run_id, current)
 
-        run = _PersistentDict(payload, callback=_persist)
+        if isinstance(payload, RunExecutionHandle):
+            durable_payload = durable_run_payload(run_id, payload, json_safe=_json_safe)
+            record_payload = _PersistentDict(durable_payload, callback=_persist)
+            run = RunExecutionHandle(
+                record_payload,
+                logs=payload.get("logs"),
+                input_queue=payload.get("input_queue"),
+                thread_id=payload.get("thread_id"),
+                active_coroutine=payload.get("active_coroutine"),
+                stream_handle=payload.get("stream_handle"),
+                iteration_count=int(payload.get("iteration_count") or 0),
+                in_process_flags=dict(payload.get("in_process_flags") or {}),
+                started_mono=payload.get("_started_mono"),
+                finished_mono=payload.get("_finished_mono"),
+                first_value_mono=payload.get("_first_value_mono"),
+                hitl_wait_start_mono=payload.get("_hitl_wait_start_mono"),
+            )
+        else:
+            durable_payload = durable_run_payload(run_id, payload, json_safe=_json_safe)
+            record_payload = _PersistentDict(durable_payload, callback=_persist)
+            run = RunExecutionHandle(
+                record_payload,
+                logs=payload.get("logs") if isinstance(payload, dict) else None,
+                input_queue=payload.get("input_queue") if isinstance(payload, dict) else None,
+                thread_id=payload.get("thread_id") if isinstance(payload, dict) else None,
+                active_coroutine=payload.get("active_coroutine") if isinstance(payload, dict) else None,
+                stream_handle=payload.get("stream_handle") if isinstance(payload, dict) else None,
+                iteration_count=int((payload.get("iteration_count") if isinstance(payload, dict) else 0) or 0),
+                in_process_flags=dict(payload.get("in_process_flags") or {}) if isinstance(payload, dict) else {},
+                started_mono=payload.get("_started_mono") if isinstance(payload, dict) else None,
+                finished_mono=payload.get("_finished_mono") if isinstance(payload, dict) else None,
+                first_value_mono=payload.get("_first_value_mono") if isinstance(payload, dict) else None,
+                hitl_wait_start_mono=payload.get("_hitl_wait_start_mono") if isinstance(payload, dict) else None,
+            )
         holder["run"] = run
         return run
 
-    def __setitem__(self, key: str, value: Dict[str, Any]) -> None:
+    def __setitem__(self, key: str, value: Dict[str, Any] | RunExecutionHandle) -> None:
         run_id = str(key or "").strip()
-        wrapped = self._wrap_run(run_id, value if isinstance(value, dict) else {})
+        wrapped = self._wrap_run(run_id, value if isinstance(value, (dict, RunExecutionHandle)) else {})
         dict.__setitem__(self, run_id, wrapped)
         if not self._loading:
             self._manager.persist_live_run(run_id, wrapped)
@@ -223,11 +261,11 @@ class _PersistentRunStore(dict):
         try:
             dict.clear(self)
             for item in persisted_items:
+                if active_only and not should_restore_execution_handle(item):
+                    continue
                 restored = self._manager.restore_live_run(
                     item,
-                    hydrate_execution_handle=(
-                        should_restore_execution_handle(item) if active_only else True
-                    ),
+                    hydrate_execution_handle=(should_restore_execution_handle(item) if active_only else True),
                 )
                 if not restored:
                     continue

@@ -16,7 +16,7 @@ import {
   type AuthenticatedEventStreamConnection,
 } from '@/lib/authenticatedEventStream';
 import { apiClient } from '@/lib/api-client';
-import type { RunListItem } from '@/lib/api-contract';
+import type { RunListItem } from '@shared/api-contract';
 import { ensureControlPlaneSession } from '@/lib/controlPlaneSession';
 import { LocalCompanionRunPanel } from '@/components/orion/runs/LocalCompanionRunPanel';
 import { RunRemediationGuide, shouldShowRunRemediationGuide } from '@/components/orion/runs/RunRemediationGuide';

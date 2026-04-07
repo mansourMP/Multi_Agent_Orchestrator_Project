@@ -284,5 +284,5 @@ curl -s -H "X-API-Key: replace-with-strong-key" -H "Content-Type: application/js
       }
     }
   }' \
-  http://127.0.0.1:8001/runs/start | jq
+  http://127.0.0.1:8001/turn | jq
 ```

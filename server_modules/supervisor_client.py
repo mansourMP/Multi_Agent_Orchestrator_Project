@@ -27,12 +27,20 @@ def capture_screenshot(monitor: str = "primary", region: dict[str, Any] | None =
     )
 
 
-def click(x: int, y: int, button: str = "left", double: bool = False) -> dict[str, Any]:
+def click(
+    x: int | None = None,
+    y: int | None = None,
+    *,
+    text: str | None = None,
+    button: str = "left",
+    double: bool = False,
+) -> dict[str, Any]:
     return _execute(
         "computer_control.click",
         {
             "x": x,
             "y": y,
+            "text": str(text or "").strip() or None,
             "button": button,
             "double": double,
         },

@@ -301,7 +301,7 @@ class RuntimeClient:
         return self._call("/runs/precheck", method="POST", payload=payload)
 
     def start_run(self, payload: Dict[str, Any]) -> Dict[str, Any]:
-        return self._call("/runs/start", method="POST", payload=payload)
+        return self._call("/turn", method="POST", payload=payload)
 
     def get_run(self, run_id: str) -> Dict[str, Any]:
         return self._call(f"/runs/{urlparse.quote(run_id)}")

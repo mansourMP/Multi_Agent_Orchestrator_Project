@@ -22,7 +22,7 @@ import {
   type AuthenticatedEventStreamConnection,
 } from '@/lib/authenticatedEventStream';
 import { apiClient } from '@/lib/api-client';
-import type { RunListItem } from '@/lib/api-contract';
+import type { RunListItem } from '@shared/api-contract';
 import { OsPageHeader } from '@/components/ui/OsPageHeader';
 import { ensureControlPlaneSession } from '@/lib/controlPlaneSession';
 import { formatExecutionTargetLabel } from '@/lib/executionTargets';

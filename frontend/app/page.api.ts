@@ -38,7 +38,7 @@ import {
 } from './page.catalog';
 import { type PageState } from './page.state';
 import { apiClient } from '@/lib/api-client';
-import type { AgentTurnRequest, AgentTurnResponse } from '@/lib/api-contract';
+import type { AgentTurnRequest, AgentTurnResponse } from '@shared/api-contract';
 import { loadActiveSkills, resolveSkillsByIds } from '@/lib/skills';
 import { BRAND } from '@/lib/brand';
 import { API_BASE } from '@/lib/config';

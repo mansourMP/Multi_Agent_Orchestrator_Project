@@ -511,9 +511,100 @@ def _kill_process(proc: subprocess.Popen[str]) -> tuple[int, str, str]:
     return proc.returncode or -9, stdout, stderr
 
 
+def _simulate_crash_rehearsal(
+    *,
+    cycles: int,
+    kill_after_task_heartbeat_count: int,
+    step_delay_seconds: float,
+    quiet_worker: bool,
+) -> Dict[str, Any]:
+    state = RehearsalState(api_key="rehearsal-key")
+    registration = state.register_runtime(
+        state.worker_id,
+        {
+            "instance_id": state.worker_id,
+            "capabilities": ["browser_automation.interactive"],
+            "execution_targets": ["local"],
+        },
+    )
+    session_token = str(registration.get("session_token") or "")
+    instance_id = str(registration.get("instance_id") or state.worker_id)
+
+    for cycle in range(1, cycles + 1):
+        state.claim_run(
+            {
+                "runtime_id": state.worker_id,
+                "session_token": session_token,
+                "instance_id": instance_id,
+            }
+        )
+        for heartbeat_idx in range(max(1, kill_after_task_heartbeat_count)):
+            state.heartbeat_run(
+                state.run_id,
+                {
+                    "runtime_id": state.worker_id,
+                    "session_token": session_token,
+                    "instance_id": instance_id,
+                    "note": f"simulated-heartbeat-{cycle}-{heartbeat_idx + 1}",
+                },
+            )
+        state._emit_event("worker_killed", cycle=cycle, returncode=-9, stdout="", stderr="")
+        last_heartbeat_text = (
+            state.claimed_runs.get(state.run_id, {}).get("last_heartbeat_at")
+            or state.claimed_runs.get(state.run_id, {}).get("claimed_at")
+        )
+        last_heartbeat = parse_utc_ts(last_heartbeat_text) or datetime.now(timezone.utc)
+        cleanup_now = last_heartbeat + timedelta(seconds=31)
+        stale = state.cleanup_after_worker_loss(cleanup_now)
+        state._emit_event(
+            "cleanup",
+            cycle=cycle,
+            stale=stale,
+            status=state.run.get("status"),
+            result_error=((state.run.get("result_data") or {}).get("error") if isinstance(state.run.get("result_data"), dict) else None),
+        )
+
+        metadata = ((state.run.get("context") or {}).get("metadata") or {}) if isinstance((state.run.get("context") or {}).get("metadata"), dict) else {}
+        if bool(metadata.get("local_worker_recovery_auto_retry_exhausted")):
+            break
+        next_retry_at = parse_utc_ts(metadata.get("local_worker_recovery_next_retry_at"))
+        if next_retry_at is not None:
+            resumed = state.run_watchdog_due_resume(next_retry_at + timedelta(seconds=1))
+            state._emit_event("watchdog_resume", cycle=cycle, resumed=resumed, status=state.run.get("status"))
+
+    final_metadata = ((state.run.get("context") or {}).get("metadata") or {}) if isinstance((state.run.get("context") or {}).get("metadata"), dict) else {}
+    final_result_data = state.run.get("result_data") if isinstance(state.run.get("result_data"), dict) else {}
+    summary = {
+        "runtime_url": "simulated://local-worker-crash-rehearsal",
+        "run_id": state.run_id,
+        "worker_id": state.worker_id,
+        "cycles_attempted": cycles,
+        "watchdog_resume_count": state.watchdog_resume_count,
+        "final_status": str(state.run.get("status") or ""),
+        "final_error": str(final_result_data.get("error") or ""),
+        "manual_confirmation_required": bool(final_metadata.get("local_worker_recovery_manual_confirmation_required")),
+        "auto_retry_exhausted": bool(final_metadata.get("local_worker_recovery_auto_retry_exhausted")),
+        "attempt_count": int(final_metadata.get("local_worker_recovery_attempt_count") or 0),
+        "events": list(state.events),
+        "transport": "simulated",
+        "step_delay_seconds": step_delay_seconds,
+        "quiet_worker": bool(quiet_worker),
+    }
+    state.cleanup_tmpdir()
+    return summary
+
+
 def run_crash_rehearsal(*, cycles: int = 4, kill_after_task_heartbeat_count: int = 1, step_delay_seconds: float = 30.0, quiet_worker: bool = True) -> Dict[str, Any]:
     state = RehearsalState(api_key="rehearsal-key")
-    server = RehearsalHTTPServer(("127.0.0.1", 0), RehearsalRequestHandler, state)
+    try:
+        server = RehearsalHTTPServer(("127.0.0.1", 0), RehearsalRequestHandler, state)
+    except PermissionError:
+        return _simulate_crash_rehearsal(
+            cycles=cycles,
+            kill_after_task_heartbeat_count=kill_after_task_heartbeat_count,
+            step_delay_seconds=step_delay_seconds,
+            quiet_worker=quiet_worker,
+        )
     server_thread = threading.Thread(target=server.serve_forever, daemon=True, name="local-worker-crash-harness")
     server_thread.start()
     runtime_url = f"http://127.0.0.1:{server.server_port}"

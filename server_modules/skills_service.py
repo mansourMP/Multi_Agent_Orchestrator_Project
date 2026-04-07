@@ -1112,13 +1112,15 @@ def build_direct_local_tool_config(
 
 def _resolve_direct_tool_browser_engine(session_ctx: Any) -> Any:
     context = session_ctx if isinstance(session_ctx, dict) else {}
+    metadata = context.get("metadata") if isinstance(context.get("metadata"), dict) else {}
     runtime_handle = context.get("runtime_handle")
     browser = getattr(runtime_handle, "browser", None)
     if browser is None:
         browser = context.get("browser")
     if browser is None:
-        from server_modules.browser_engine import BrowserEngine
+        from server_modules.browser_engine import BrowserEngine, enforce_browser_automation_gate
 
+        enforce_browser_automation_gate(metadata, target="local_companion")
         browser = BrowserEngine()
         if runtime_handle is not None:
             try:

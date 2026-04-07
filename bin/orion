@@ -1568,7 +1568,7 @@ PY
       run_json="$(curl -fsS -X POST \
         -H "X-API-Key: ${RUNTIME_KEY_VALUE}" \
         -H "Content-Type: application/json" \
-        "${API_URL}/runs/start" \
+        "${API_URL}/turn" \
         -d "${payload}")"
       run_id="$(echo "${run_json}" | jq -r '.run_id // empty')"
       if [[ -z "${run_id}" ]]; then

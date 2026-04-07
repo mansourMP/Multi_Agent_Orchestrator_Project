@@ -7,7 +7,11 @@ from typing import Any, Optional
 from fastapi import Depends, Request
 from sse_starlette.sse import EventSourceResponse
 
-from server_modules.agent_turn import agent_turn as execute_canonical_agent_turn, resolve_direct_chat_turn_request
+from server_modules.agent_turn import (
+    agent_turn as execute_canonical_agent_turn,
+    resolve_direct_chat_turn_request,
+    resolve_run_start_turn_request,
+)
 from server_modules.api_contract import (
     ApiAgentTurnRequest,
     ApiAgentTurnResponse,
@@ -109,6 +113,14 @@ def _chat_stream_metrics_inc(key: str, amount: float = 1) -> None:
         metrics_fn = _late_server_export("metrics_inc")
     except Exception:
         return
+
+
+def _looks_like_legacy_run_start_body(payload: dict[str, Any]) -> bool:
+    if not isinstance(payload, dict) or not payload:
+        return False
+    if "actor" in payload or "session_id" in payload or "thread_id" in payload:
+        return False
+    return any(key in payload for key in ("user_goal", "business_plan", "workflow_id", "engine"))
     try:
         metrics_fn(key, amount)
     except Exception:
@@ -453,6 +465,25 @@ def register_run_routes(app) -> None:
                 last_event_id=request.headers.get("last-event-id") or payload.get("last_event_id"),
                 services=_direct_chat_stream_response_services(),
             )
+
+        if _looks_like_legacy_run_start_body(payload):
+            from server_modules.runtime_models import RunStartRequest
+
+            run_request = RunStartRequest(**payload)
+            resolution = resolve_run_start_turn_request(
+                current_user=current_user,
+                body=run_request,
+                stamp_request_owner_fn=_stamp_request_owner,
+            )
+            result = await execute_canonical_agent_turn(
+                turn_request=resolution.turn_request,
+                current_user=current_user,
+                run_execution_services=_run_execution_services(),
+                direct_chat_services=_direct_chat_execution_services(),
+                chat_body=build_turn_chat_body(resolution.turn_request),
+                run_request=resolution.request,
+            )
+            return normalize_agent_turn_result(result, turn_request=resolution.turn_request)
 
         turn_request = request_body_to_turn_request(payload)
         if (

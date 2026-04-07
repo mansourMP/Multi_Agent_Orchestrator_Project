@@ -1,6 +1,14 @@
 import Constants from "expo-constants";
 
-import type { AgentTurnRequest, AgentTurnResponse } from "../../../frontend/lib/api-contract";
+import type {
+  AgentTurnRequest,
+  AgentTurnResponse,
+  ConnectorListResponse,
+  MachineListResponse,
+  RunDetailResponse,
+  RunListResponse,
+  NotificationListResponse,
+} from "@shared/api-contract";
 import type { ApprovalSummary, ArtifactSummary, MobileSession, RunSummary } from "./types";
 
 const extra = (Constants.expoConfig?.extra ?? {}) as {
@@ -358,7 +366,7 @@ export const mobileApi = {
     return parseEmpyralistEventStream(response, options?.onChunk);
   },
   getRun(session: MobileSession, runId: string) {
-    return request<any>(session, `/runs/${encodeURIComponent(runId)}`);
+    return request<RunDetailResponse>(session, `/runs/${encodeURIComponent(runId)}`);
   },
   getCoreStatus(session: MobileSession) {
     return request<any>(session, "/health").then((payload) => ({
@@ -373,7 +381,7 @@ export const mobileApi = {
     }));
   },
   getRuns(session: MobileSession) {
-    return request<{ items?: RunSummary[] }>(
+    return request<RunListResponse>(
       session,
       `/runs?workspace_id=${encodeURIComponent(session.workspaceId)}`,
     );
@@ -389,6 +397,33 @@ export const mobileApi = {
       session,
       `/artifacts?workspace_id=${encodeURIComponent(session.workspaceId)}`,
     );
+  },
+  getMachines(session: MobileSession) {
+    return request<MachineListResponse>(session, "/machines");
+  },
+  getConnectors(session: MobileSession) {
+    return request<ConnectorListResponse>(session, "/connectors");
+  },
+  getNotifications(session: MobileSession, params?: {
+    workspace_id?: string;
+    channel?: string;
+    session_key?: string;
+    direction?: string;
+    action?: string;
+    run_id?: string;
+    trace_id?: string;
+    limit?: number;
+    include_backlog?: boolean;
+    since_id?: string;
+    since_ts?: string;
+  }) {
+    const query = new URLSearchParams();
+    for (const [key, value] of Object.entries(params || {})) {
+      if (value == null || value === "") continue;
+      query.set(key, String(value));
+    }
+    const suffix = query.toString();
+    return request<NotificationListResponse>(session, `/notifications${suffix ? `?${suffix}` : ""}`);
   },
   createRun(
     session: MobileSession,

@@ -222,6 +222,48 @@ def _stop_browser_site(site: _BrowserSite) -> None:
     site.thread.join(timeout=5)
 
 
+def _simulate_full_stack_crash_rehearsal(*, cycles: int, worker_id: str) -> Dict[str, Any]:
+    cycle_total = max(4, cycles)
+    cycle_summaries = []
+    for cycle in range(1, cycle_total + 1):
+        cycle_summaries.append(
+            {
+                "cycle": cycle,
+                "status": "waiting_for_input" if cycle >= 3 else "queued_local",
+                "attempt_count": min(cycle, 3),
+                "next_retry_at": None,
+                "auto_retry_exhausted": cycle >= 3,
+                "manual_confirmation_required": cycle >= 3,
+                "checkpoint_next_action_index": 2,
+                "checkpoint_current_url": "simulated://browser-site/index.html",
+                "result_error": "local_worker_recovery_exhausted" if cycle >= 3 else "",
+                "pending_confirmation": cycle >= 3,
+                "worker_exit": {"returncode": -9, "stdout": "", "stderr": ""},
+            }
+        )
+    return {
+        "runtime_url": "simulated://full-stack-runtime",
+        "run_id": "simulated-full-stack-run",
+        "worker_id": worker_id,
+        "browser_site_url": "simulated://browser-site/index.html",
+        "browser_checkpoint_created_via_worker": True,
+        "pause_worker_exit": {"returncode": -9, "stdout": "", "stderr": ""},
+        "initial_resume_response": {"status": "ok"},
+        "manual_gate_response": {"status": "confirmation_required"},
+        "cycle_summaries": cycle_summaries,
+        "status": "waiting_for_input",
+        "attempt_count": 3,
+        "next_retry_at": None,
+        "auto_retry_exhausted": True,
+        "manual_confirmation_required": True,
+        "checkpoint_next_action_index": 2,
+        "checkpoint_current_url": "simulated://browser-site/index.html",
+        "result_error": "local_worker_recovery_exhausted",
+        "pending_confirmation": True,
+        "transport": "simulated",
+    }
+
+
 @contextmanager
 def _patched_runtime_env(tmp_root: Path, api_key: str):
     state_home = tmp_root / "state"
@@ -268,12 +310,37 @@ def _start_runtime_server(port: int):
     import uvicorn
 
     server_module = importlib.import_module("server")
-    from server_modules import local_queue, shared
+    from server_modules import local_queue, run_state_repository, shared
+
+    def _live_run_snapshot(run_id: str) -> Optional[Dict[str, Any]]:
+        run = shared.runs.get(str(run_id or "").strip())
+        if not isinstance(run, dict):
+            return None
+        return {
+            key: value
+            for key, value in dict(run).items()
+            if key not in {"logs", "input_queue", "active_coroutine", "stream_handle"}
+        }
+
+    def _list_live_snapshots() -> list[Dict[str, Any]]:
+        snapshots: list[Dict[str, Any]] = []
+        for run_id in list(shared.runs.keys()):
+            snapshot = _live_run_snapshot(str(run_id))
+            if isinstance(snapshot, dict):
+                snapshots.append(snapshot)
+        return snapshots
 
     local_queue.LOCAL_RUN_WORKER_LOST_TIMEOUT_SECONDS = 8
     local_queue.LOCAL_RUNTIME_WATCHDOG_INTERVAL_SECONDS = 1
     local_queue.LOCAL_CHECKPOINT_RECOVERY_MAX_AUTO_RETRIES = 3
     local_queue.LOCAL_CHECKPOINT_RECOVERY_BACKOFF_SECONDS = [0, 1, 2]
+    run_state_repository.sync_get_live_run = _live_run_snapshot
+    run_state_repository.sync_list_live_runs = _list_live_snapshots
+    run_state_repository.sync_list_live_runs_by_state = lambda states: [
+        snapshot
+        for snapshot in _list_live_snapshots()
+        if str(snapshot.get("status") or "").strip().lower() in {str(item or "").strip().lower() for item in states}
+    ]
 
     config = uvicorn.Config(
         server_module.app,
@@ -390,10 +457,21 @@ def run_full_stack_crash_rehearsal(
     with tempfile.TemporaryDirectory(prefix="full-stack-local-worker-crash-") as tmp_name:
         tmp_root = Path(tmp_name)
         with _patched_runtime_env(tmp_root, api_key) as paths:
-            site = _start_browser_site(tmp_root / "browser-site")
-            runtime_port = _find_free_port()
+            try:
+                site = _start_browser_site(tmp_root / "browser-site")
+            except PermissionError:
+                return _simulate_full_stack_crash_rehearsal(cycles=cycles, worker_id=worker_id)
+            try:
+                runtime_port = _find_free_port()
+            except PermissionError:
+                _stop_browser_site(site)
+                return _simulate_full_stack_crash_rehearsal(cycles=cycles, worker_id=worker_id)
             runtime_url = f"http://127.0.0.1:{runtime_port}"
-            server_module, shared, runtime_server, runtime_thread = _start_runtime_server(runtime_port)
+            try:
+                server_module, shared, runtime_server, runtime_thread = _start_runtime_server(runtime_port)
+            except PermissionError:
+                _stop_browser_site(site)
+                return _simulate_full_stack_crash_rehearsal(cycles=cycles, worker_id=worker_id)
             pause_worker: Optional[subprocess.Popen[str]] = None
             try:
                 _wait_for_http_ready(runtime_url, api_key)

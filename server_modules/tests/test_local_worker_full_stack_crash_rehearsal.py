@@ -1,5 +1,4 @@
 import json
-import os
 import subprocess
 import sys
 from pathlib import Path
@@ -8,8 +7,6 @@ from unittest import TestCase
 
 class LocalWorkerFullStackCrashRehearsalTests(TestCase):
     def test_full_stack_rehearsal_reaches_manual_degradation_gate(self):
-        if not str(os.getenv("DATABASE_URL") or "").strip():
-            self.skipTest("DATABASE_URL is required for Postgres-authoritative full-stack crash rehearsal.")
         script_path = (
             Path(__file__).resolve().parents[2] / "scripts" / "run_local_worker_full_stack_crash_rehearsal.py"
         )

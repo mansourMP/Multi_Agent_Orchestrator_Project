@@ -2,11 +2,10 @@ from __future__ import annotations
 
 import logging
 import os
-import shutil
 import subprocess
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, Optional, Tuple
 
 import requests
 
@@ -88,12 +87,6 @@ def _import_psutil():
     import psutil  # type: ignore[import-not-found]
 
     return psutil
-
-
-def _import_pytesseract():
-    import pytesseract  # type: ignore[import-not-found]
-
-    return pytesseract
 
 
 def _capture_screenshot_image(region: Any = None):
@@ -216,37 +209,12 @@ def click_element_by_text(text: str) -> str:
     target = str(text or "").strip()
     if not target:
         raise RuntimeError("Text is required.")
-    pytesseract = _import_pytesseract()
-    if not shutil.which("tesseract"):
-        raise RuntimeError("tesseract is not installed on this machine.")
-    image = _capture_screenshot_image()
-    data = pytesseract.image_to_data(image, output_type=pytesseract.Output.DICT)
-    if not isinstance(data, dict):
-        raise RuntimeError("OCR output was invalid.")
-    matches: List[Tuple[int, int]] = []
-    texts = data.get("text") if isinstance(data.get("text"), list) else []
-    lefts = data.get("left") if isinstance(data.get("left"), list) else []
-    tops = data.get("top") if isinstance(data.get("top"), list) else []
-    widths = data.get("width") if isinstance(data.get("width"), list) else []
-    heights = data.get("height") if isinstance(data.get("height"), list) else []
-    normalized_target = target.lower()
-    for index, raw_text in enumerate(texts):
-        candidate = str(raw_text or "").strip()
-        if not candidate:
-            continue
-        normalized_candidate = candidate.lower()
-        if normalized_target not in normalized_candidate and normalized_candidate not in normalized_target:
-            continue
-        try:
-            center_x = int(lefts[index]) + int(widths[index]) // 2
-            center_y = int(tops[index]) + int(heights[index]) // 2
-        except Exception:
-            continue
-        matches.append((center_x, center_y))
-    if not matches:
-        raise RuntimeError(f"Could not find visible text matching '{target}'.")
-    click_x, click_y = matches[0]
-    return mouse_click(click_x, click_y)
+    result = _supervisor_call(supervisor_client.click, text=target)
+    if not result.get("success", False):
+        raise RuntimeError(str(result.get("error") or f"Could not find visible text matching '{target}'.").strip())
+    click_x = int(result.get("x") or 0)
+    click_y = int(result.get("y") or 0)
+    return f"Clicked at ({click_x}, {click_y})."
 
 
 def keyboard_type(text: str) -> str:

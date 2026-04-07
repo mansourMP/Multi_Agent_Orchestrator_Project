@@ -13,7 +13,7 @@ import type {
   RunReplayResponse,
   SessionCreateRequest,
   SessionResponse,
-} from '@/lib/api-contract';
+} from '@shared/api-contract';
 import { ensureControlPlaneSession } from '@/lib/controlPlaneSession';
 import { API_BASE } from '@/lib/config';
 

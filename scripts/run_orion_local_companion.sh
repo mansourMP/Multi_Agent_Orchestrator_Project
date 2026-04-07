@@ -71,7 +71,7 @@ print(json.dumps(payload, separators=(",", ":")))
 PY
 
 RESP="$(
-  curl -sS -w '\nHTTP_STATUS:%{http_code}\n' -X POST "${API_URL}/runs/start" \
+  curl -sS -w '\nHTTP_STATUS:%{http_code}\n' -X POST "${API_URL}/turn" \
     -H "X-API-Key: ${RUNTIME_KEY}" \
     -H "Content-Type: application/json" \
     --data-binary @"${PAYLOAD_FILE}"

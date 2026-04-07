@@ -13,7 +13,7 @@ Every user-facing prompt extracted from `scripts/orion_terminal/core.py`, `scrip
 | # | Flow | Step | Prompt Text | Widget | Options / Input | Default | Conditional Trigger | Destination Fn | Payload/Side-Effect |
 |---|------|------|-------------|--------|-----------------|---------|--------------------|----|-----|
 | 1 | `app.main` | Pre-launch | `"Runtime API key (ORION_API_KEY / RUNTIME_KEY)"` | `ui.input(secret)` | free-text | None | `--runtime-key` empty AND `RUNTIME_KEY` / `ORION_API_KEY` env empty | Stored in `runtime_key` | Passed as `X-API-Key` header on every HTTP call |
-| 2 | `app.main` | Pre-launch | `"What should Orion run now?"` | `ui.input(required)` | free-text | None | `--mode run` AND `--goal ""` | `run_once()` | `user_goal` field in `/runs/start` payload |
+| 2 | `app.main` | Pre-launch | `"What should Orion run now?"` | `ui.input(required)` | free-text | None | `--mode run` AND `--goal ""` | `run_once()` | `user_goal` field in `/turn` payload |
 
 ### A-2. Launcher Hub (flows.py:1189–1281)
 
@@ -302,7 +302,7 @@ After the health check block (~line 68):
 | 2 | **`setup_complete` field may not exist** in older backends — auto-redirect could misfire | High | Guard with `health.get("setup_complete", True)` — if field is absent, assume already set up (current default) |
 | 3 | **Credential masking** — `_mask_credential_label()` is already applied in the onboard flow but must be applied consistently in the new preflight credential sub-flow | Medium | Reuse existing `value_log(ui, "Credential", _mask_credential_label(...))` pattern |
 | 4 | **Connector re-entry loop** — `choose_and_create_connectors()` has its own Y/N loop; nesting it inside preflight step 5 could confuse users who cancel mid-wizard | Low | The existing `"Add another connector?"` confirm with `default_yes=False` naturally exits. No code change needed. |
-| 5 | **FILE_ACCESS_SCOPES** — this is a new concept not yet supported by the backend `/runs/start` endpoint | High | The `metadata.file_access_scope` field must be added to the backend run schema. If backend doesn't support it yet, pass it as metadata and have the runtime ignore unknown keys gracefully. |
+| 5 | **FILE_ACCESS_SCOPES** — this is a new concept not yet supported by the backend `/turn` endpoint | High | The `metadata.file_access_scope` field must be added to the backend run schema. If backend doesn't support it yet, pass it as metadata and have the runtime ignore unknown keys gracefully. |
 | 6 | **Curses fallback** — the preflight flow uses standard `ui.choose`/`ui.confirm` which already fall through to curses → text mode. No new widget types needed. | Low | Covered by existing `UI.__init__` cascade |
 | 7 | **User muscle memory** — existing users who ran `--mode onboard` will now see a different flow when launching bare `orion`. The `onboard` command must still work. | Medium | Keep `onboard_flow()` intact. Preflight is additive, not a replacement. Users can still `--mode onboard`. |
 | 8 | **PREFLIGHT_TRUST_MODES vs TRUST_MODES** — having two lists that overlap creates a maintenance burden | Low | `PREFLIGHT_TRUST_MODES` is a strict subset. Document that the full list is the canonical one. |
@@ -315,4 +315,4 @@ After the health check block (~line 68):
 
 The current Orion terminal has **58 prompt touchpoints** spread across 8 flows, with significant duplication (trust mode is asked in 5 places, execution target in 4 places). The proposed **7-step Preflight flow** consolidates the security-critical surface into a single pre-run gate while preserving full backwards compatibility with existing flows for power users.
 
-> **IMPORTANT**: The `FILE_ACCESS_SCOPES` concept (step 6) requires backend coordination — the `/runs/start` endpoint must accept the new `metadata.file_access_scope` field. Without backend support, this field will be silently passed but not enforced.
+> **IMPORTANT**: The `FILE_ACCESS_SCOPES` concept (step 6) requires backend coordination — the `/turn` endpoint must accept the new `metadata.file_access_scope` field. Without backend support, this field will be silently passed but not enforced.

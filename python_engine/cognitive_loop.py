@@ -392,7 +392,7 @@ class CognitiveLoop:
         started = self._runtime_request(
             config=config,
             method="POST",
-            path="/runs/start",
+            path="/turn",
             payload=payload,
             timeout=30.0,
         )

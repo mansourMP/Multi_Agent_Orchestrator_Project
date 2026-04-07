@@ -82,7 +82,9 @@ class RunsCoreRunServiceTests(unittest.TestCase):
             args, kwargs = transition_mock.call_args
             self.assertEqual(args[0], "run-1")
             self.assertEqual(args[1], "completed")
-            self.assertEqual(kwargs["run"], run)
+            self.assertEqual(kwargs["run"].get("status"), "running")
+            self.assertIs(kwargs["run"].get("logs"), run["logs"])
+            self.assertEqual(kwargs["run"].get("context"), run["context"])
             self.assertIs(kwargs["local_pending_run_ids"], runs_core.LOCAL_PENDING_RUN_IDS)
             self.assertIs(kwargs["local_claimed_runs"], runs_core.LOCAL_CLAIMED_RUNS)
         finally:

@@ -10,6 +10,27 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+# Browser automation is a Python-owned capability adapter. All calls must be gated through capability_registry and policy_service before execution.
+
+
+def enforce_browser_automation_gate(
+    metadata: Optional[Dict[str, Any]] = None,
+    *,
+    target: str = "local_companion",
+) -> None:
+    from server_modules.capability_registry import resolve_capability
+    from server_modules import policy_service
+
+    if resolve_capability("browser_automation.interactive") is None:
+        raise RuntimeError("Browser automation capability is disabled.")
+    evaluation = policy_service.evaluate_tool_policy_decision(
+        tool_id="browser_automation.interactive",
+        trust_mode=str((metadata or {}).get("trust_mode") or "reviewed"),
+        target=target,
+        metadata=metadata or {},
+    )
+    if str(evaluation.get("execution_decision") or "").strip().lower() == "deny":
+        raise RuntimeError(str(evaluation.get("reason") or "Browser automation is blocked by policy."))
 
 def _repo_root() -> Path:
     return Path(__file__).resolve().parents[1]

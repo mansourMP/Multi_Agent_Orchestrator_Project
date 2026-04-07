@@ -16,7 +16,7 @@ fi
 cd "${ROOT_DIR}"
 
 echo "Starting local-companion run..."
-RUN_JSON="$(curl -sS -X POST "${API_URL}/runs/start" \
+RUN_JSON="$(curl -sS -X POST "${API_URL}/turn" \
   -H "X-API-Key: ${RUNTIME_KEY}" \
   -H "Content-Type: application/json" \
   -d '{"engine":"orion","user_goal":"Smoke test local worker","metadata":{"execution_target":"local_companion","connection_mode":"local_companion","trust_mode":"auto","outcome_pack":"weekly-content-studio","pack_inputs":{"topics":"Smoke Topic","channels":"Instagram","offers":"Book now"}}}')"

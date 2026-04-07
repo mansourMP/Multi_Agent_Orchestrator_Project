@@ -65,22 +65,30 @@ if [[ "${openai_ready_count}" == "0" ]]; then
   exit 0
 fi
 
-run_payload="$(jq -n '{
-  engine:"orion",
+run_payload="$(jq -n --arg email "$email" '{
+  tenant_id:"default",
   workspace_id:"default",
-  user_goal:"Reply with exactly READY and nothing else.",
-  agent_role:"orchestrator",
-  provider:"openai",
-  metadata:{
-    origin:"frontend_chat_smoke",
-    trust_mode:"auto",
-    connection_mode:"managed",
-    execution_target:"cloud",
-    source:"launch_gate"
+  session_id:"frontend-chat-smoke",
+  channel:"web",
+  actor:{type:"user", id:$email, display_name:$email},
+  message:"Reply with exactly READY and nothing else.",
+  execution_mode:"durable",
+  response_mode:"artifact",
+  context_hints:{
+    engine:"orion",
+    agent_role:"orchestrator",
+    provider:"openai",
+    metadata:{
+      origin:"frontend_chat_smoke",
+      trust_mode:"auto",
+      connection_mode:"managed",
+      execution_target:"cloud",
+      source:"launch_gate"
+    }
   }
 }')"
 
-curl -sS -c "$cookiejar" -b "$cookiejar" -X POST "${FRONTEND_URL}/api/runs/start" \
+curl -sS -c "$cookiejar" -b "$cookiejar" -X POST "${FRONTEND_URL}/api/turn" \
   "${common_headers[@]}" \
   -H 'Content-Type: application/json' \
   -d "$run_payload" \

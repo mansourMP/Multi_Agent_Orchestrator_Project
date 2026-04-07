@@ -373,9 +373,18 @@ def _run_browser_capture_task(
     type_text: str = "",
     timeout_seconds: int = 45,
 ) -> Dict[str, Any]:
-    from server_modules.browser_engine import BrowserEngine
+    from server_modules.browser_engine import BrowserEngine, enforce_browser_automation_gate
 
     project_root = _project_root()
+    enforce_browser_automation_gate(
+        {
+            "execution_target_selected": "local_companion",
+            "browser_automation_policy": {
+                "profile": "authenticated_interactive" if str(session_profile or "").strip() else "public_interactive",
+            },
+        },
+        target="local_companion",
+    )
     if expected_execution_binding:
         current_execution_binding = _browser_execution_binding(project_root, browser_plan_hash, session_profile)
         if not local_operator_execution_binding_matches(expected_execution_binding, current_execution_binding):

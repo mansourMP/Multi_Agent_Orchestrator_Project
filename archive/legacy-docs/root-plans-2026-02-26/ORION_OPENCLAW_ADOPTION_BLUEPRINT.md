@@ -7,12 +7,12 @@
   | app.main | 1 | Runtime API key (ORION_API_KEY / RUNTIME_KEY) | free text (secret) | none | shown when CLI arg/env
   key missing | main() | runtime auth value for all API calls (X-API-Key) |
   | app.main | 2 | What should Orion run now? | free text | none | when --mode run and no --goal value | run_once()
-  | /runs/start.user_goal |
+  | /turn.user_goal |
   | launcher | 1 | Choose action | Guided Run, Quick Start, Custom Goal, Specialist Template, Onboard, Configure,
   Connect Channels, Runtime Doctor, Live TUI, Exit | Guided Run | always in launcher loop | launcher_flow() | routes
   to selected subflow |
   | guided_run | 1 | What do you want Orion to accomplish? | free text | DEFAULT_QUICK_GOAL | action=guided |
-  guided_run_flow() | /runs/start.user_goal |
+  guided_run_flow() | /turn.user_goal |
   | guided_run | 2 | Choose operating mode | General Digital Worker, Specialist Template | General Digital Worker |
   always | guided_run_flow() | sets pack / metadata outcome_pack |
   | guided_run | 3 | Choose specialist template | Client Workflow Autopilot, Weekly Content Studio, Competitor Brief
@@ -26,13 +26,13 @@
   | guided_run | 7 | Connect channels/tools now (Google Workspace / Telegram / WhatsApp)? | yes/no | No | always |
   guided_run_flow() | controls connector setup before run |
   | guided_run | 8 | Start run with this configuration? | yes/no | Yes | after summary | guided_run_flow() ->
-  run_once() | starts /runs/start |
+  run_once() | starts /turn |
   | run_once | 1 | Connect channels/tools before this run (Google Workspace / Telegram / WhatsApp)? | yes/no | No |
   only when prompt_connectors=True | run_once() | may create connector vault entries; adds metadata connector ids |
   | stream_run | 1 | Resolve approval | Proceed, Hold | Proceed | on SSE pause event | stream_run() | POST /runs/{id}/
   decision with decision |
   | launcher.goal_path | 1 | What do you want Orion to do? | free text | none | action=goal | launcher_flow() ->
-  run_once() | /runs/start.user_goal |
+  run_once() | /turn.user_goal |
   | launcher.goal_path | 2 | Choose trust mode | trust mode set | Guarded | action=goal | launcher_flow() | metadata
   trust_mode |
   | launcher.goal_path | 3 | Choose execution target | execution target set | Auto | action=goal | launcher_flow() |
@@ -42,7 +42,7 @@
   | launcher.specialist_path | 1 | Choose specialist template | specialist packs | first pack | action=specialist |
   launcher_flow() | metadata outcome_pack |
   | launcher.specialist_path | 2 | Goal | free text | Execute {pack} end-to-end... | action=specialist |
-  launcher_flow() | /runs/start.user_goal |
+  launcher_flow() | /turn.user_goal |
   | launcher.specialist_path | 3 | Choose trust mode | trust mode set | Guarded | action=specialist | launcher_flow()
   | metadata trust_mode |
   | launcher.specialist_path | 4 | Choose execution target | execution target set | Auto | action=specialist |

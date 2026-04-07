@@ -465,7 +465,7 @@ read_payload="$(jq -nc '{
   }
 }')"
 read_start_json="${TMP_DIR}/read-start.json"
-api_post "/runs/start" "${read_payload}" > "${read_start_json}"
+api_post "/turn" "${read_payload}" > "${read_start_json}"
 read_run_id="$(jq -r '.run_id // empty' "${read_start_json}")"
 read_run_json="${TMP_DIR}/read-run.json"
 if [[ -n "${read_run_id}" ]] && poll_run_terminal "${read_run_id}" "${SMOKE_POLL_ATTEMPTS}" "${SMOKE_POLL_SLEEP}" "${read_run_json}"; then
@@ -509,7 +509,7 @@ browser_payload="$(jq -nc '{
 }')"
 ensure_browser_session_server
 browser_start_json="${TMP_DIR}/browser-start.json"
-api_post "/runs/start" "${browser_payload}" > "${browser_start_json}"
+api_post "/turn" "${browser_payload}" > "${browser_start_json}"
 browser_run_id="$(jq -r '.run_id // empty' "${browser_start_json}")"
 browser_run_json="${TMP_DIR}/browser-run.json"
 if [[ -n "${browser_run_id}" ]] && poll_run_terminal "${browser_run_id}" "${SMOKE_POLL_ATTEMPTS}" "${SMOKE_POLL_SLEEP}" "${browser_run_json}"; then
@@ -544,7 +544,7 @@ browser_capture_payload="$(jq -nc '{
 }')"
 ensure_browser_session_server
 browser_capture_start_json="${TMP_DIR}/browser-capture-start.json"
-api_post "/runs/start" "${browser_capture_payload}" > "${browser_capture_start_json}"
+api_post "/turn" "${browser_capture_payload}" > "${browser_capture_start_json}"
 browser_capture_run_id="$(jq -r '.run_id // empty' "${browser_capture_start_json}")"
 browser_capture_run_json="${TMP_DIR}/browser-capture-run.json"
 if [[ -n "${browser_capture_run_id}" ]] && poll_run_terminal "${browser_capture_run_id}" "${SMOKE_POLL_ATTEMPTS}" "${SMOKE_POLL_SLEEP}" "${browser_capture_run_json}"; then
@@ -589,7 +589,7 @@ ensure_browser_session_server
 browser_session_seed_start_json="${TMP_DIR}/browser-session-seed-start.json"
 browser_session_seed_precheck_json="${TMP_DIR}/browser-session-seed-precheck.json"
 api_post "/runs/precheck" "${browser_session_seed_payload}" > "${browser_session_seed_precheck_json}"
-api_post "/runs/start" "${browser_session_seed_payload}" > "${browser_session_seed_start_json}"
+api_post "/turn" "${browser_session_seed_payload}" > "${browser_session_seed_start_json}"
 browser_session_seed_run_id="$(jq -r '.run_id // empty' "${browser_session_seed_start_json}")"
 browser_session_seed_approval_id="$(jq -r '.pending_approval.approval_id // empty' "${browser_session_seed_start_json}")"
 browser_session_seed_run_json="${TMP_DIR}/browser-session-seed-run.json"
@@ -628,7 +628,7 @@ if [[ -n "${browser_session_seed_run_id}" && -n "${browser_session_seed_approval
 fi
 if [[ -n "${browser_session_seed_run_id}" ]] && poll_run_terminal "${browser_session_seed_run_id}" "${SMOKE_POLL_ATTEMPTS}" "${SMOKE_POLL_SLEEP}" "${browser_session_seed_run_json}" \
   && [[ "$(jq -r '.status // empty' "${browser_session_seed_run_json}")" == "completed" ]]; then
-  api_post "/runs/start" "${browser_session_check_payload}" > "${browser_session_check_start_json}"
+  api_post "/turn" "${browser_session_check_payload}" > "${browser_session_check_start_json}"
   browser_session_check_run_id="$(jq -r '.run_id // empty' "${browser_session_check_start_json}")"
   browser_session_check_approval_id="$(jq -r '.pending_approval.approval_id // empty' "${browser_session_check_start_json}")"
   browser_session_check_run_json="${TMP_DIR}/browser-session-check-run.json"
@@ -679,7 +679,7 @@ browser_script_payload="$(jq -nc --arg url "${browser_session_url}" '{
 }')"
 ensure_browser_session_server
 browser_script_start_json="${TMP_DIR}/browser-script-start.json"
-api_post "/runs/start" "${browser_script_payload}" > "${browser_script_start_json}"
+api_post "/turn" "${browser_script_payload}" > "${browser_script_start_json}"
 browser_script_run_id="$(jq -r '.run_id // empty' "${browser_script_start_json}")"
 browser_script_run_json="${TMP_DIR}/browser-script-run.json"
 if [[ -n "${browser_script_run_id}" ]] && poll_run_terminal "${browser_script_run_id}" 120 1 "${browser_script_run_json}" \
@@ -725,7 +725,7 @@ browser_upload_payload="$(jq -nc --arg url "${browser_session_url}" --arg upload
 }')"
 ensure_browser_session_server
 browser_upload_start_json="${TMP_DIR}/browser-upload-start.json"
-api_post "/runs/start" "${browser_upload_payload}" > "${browser_upload_start_json}"
+api_post "/turn" "${browser_upload_payload}" > "${browser_upload_start_json}"
 browser_upload_run_id="$(jq -r '.run_id // empty' "${browser_upload_start_json}")"
 browser_upload_run_json="${TMP_DIR}/browser-upload-run.json"
 if [[ -n "${browser_upload_run_id}" ]] && poll_run_terminal "${browser_upload_run_id}" 120 1 "${browser_upload_run_json}" \
@@ -767,7 +767,7 @@ approval_payload="$(jq -nc --arg url "${browser_session_url}" '{
 precheck_json="${TMP_DIR}/approval-precheck.json"
 api_post "/runs/precheck" "${approval_payload}" > "${precheck_json}"
 approval_start_json="${TMP_DIR}/approval-start.json"
-api_post "/runs/start" "${approval_payload}" > "${approval_start_json}"
+api_post "/turn" "${approval_payload}" > "${approval_start_json}"
 approval_run_id="$(jq -r '.run_id // empty' "${approval_start_json}")"
 approval_id="$(jq -r '.pending_approval.approval_id // empty' "${approval_start_json}")"
 if [[ -n "${approval_run_id}" && -n "${approval_id}" ]] \
@@ -813,7 +813,7 @@ delegate_parent_payload="$(jq -nc '{
   }
 }')"
 delegate_parent_start_json="${TMP_DIR}/delegate-parent-start.json"
-api_post "/runs/start" "${delegate_parent_payload}" > "${delegate_parent_start_json}"
+api_post "/turn" "${delegate_parent_payload}" > "${delegate_parent_start_json}"
 delegate_parent_run_id="$(jq -r '.run_id // empty' "${delegate_parent_start_json}")"
 if [[ -n "${delegate_parent_run_id}" ]]; then
   delegate_payload="$(jq -nc '{
@@ -859,7 +859,7 @@ auto_delegate_parent_payload="$(jq -nc '{
   }
 }')"
 auto_delegate_parent_start_json="${TMP_DIR}/auto-delegate-parent-start.json"
-api_post "/runs/start" "${auto_delegate_parent_payload}" > "${auto_delegate_parent_start_json}"
+api_post "/turn" "${auto_delegate_parent_payload}" > "${auto_delegate_parent_start_json}"
 auto_delegate_parent_run_id="$(jq -r '.run_id // empty' "${auto_delegate_parent_start_json}")"
 if [[ -n "${auto_delegate_parent_run_id}" ]]; then
   auto_delegate_result_json="${TMP_DIR}/auto-delegate-result.json"
@@ -927,7 +927,7 @@ retry_delegate_parent_payload="$(jq -nc '{
   }
 }')"
 retry_delegate_parent_start_json="${TMP_DIR}/retry-delegate-parent-start.json"
-api_post "/runs/start" "${retry_delegate_parent_payload}" > "${retry_delegate_parent_start_json}"
+api_post "/turn" "${retry_delegate_parent_payload}" > "${retry_delegate_parent_start_json}"
 retry_delegate_parent_run_id="$(jq -r '.run_id // empty' "${retry_delegate_parent_start_json}")"
 if [[ -n "${retry_delegate_parent_run_id}" ]]; then
   a21_summary_jq="$(read_jq_program <<'JQ'
@@ -1029,7 +1029,7 @@ browser_iframe_payload="$(jq -nc --arg url "${browser_session_url}" '{
 }')"
 ensure_browser_session_server
 browser_iframe_start_json="${TMP_DIR}/browser-iframe-start.json"
-api_post "/runs/start" "${browser_iframe_payload}" > "${browser_iframe_start_json}"
+api_post "/turn" "${browser_iframe_payload}" > "${browser_iframe_start_json}"
 browser_iframe_run_id="$(jq -r '.run_id // empty' "${browser_iframe_start_json}")"
 browser_iframe_run_json="${TMP_DIR}/browser-iframe-run.json"
 if [[ -n "${browser_iframe_run_id}" ]] && poll_run_terminal "${browser_iframe_run_id}" 120 1 "${browser_iframe_run_json}" \
@@ -1074,7 +1074,7 @@ browser_tab_payload="$(jq -nc --arg url "${browser_session_url}" --arg second_ur
 }')"
 ensure_browser_session_server
 browser_tab_start_json="${TMP_DIR}/browser-tab-start.json"
-api_post "/runs/start" "${browser_tab_payload}" > "${browser_tab_start_json}"
+api_post "/turn" "${browser_tab_payload}" > "${browser_tab_start_json}"
 browser_tab_run_id="$(jq -r '.run_id // empty' "${browser_tab_start_json}")"
 browser_tab_run_json="${TMP_DIR}/browser-tab-run.json"
 if [[ -n "${browser_tab_run_id}" ]] && poll_run_terminal "${browser_tab_run_id}" 120 1 "${browser_tab_run_json}" \
@@ -1118,7 +1118,7 @@ browser_download_payload="$(jq -nc --arg url "${browser_session_url}" '{
 }')"
 ensure_browser_session_server
 browser_download_start_json="${TMP_DIR}/browser-download-start.json"
-api_post "/runs/start" "${browser_download_payload}" > "${browser_download_start_json}"
+api_post "/turn" "${browser_download_payload}" > "${browser_download_start_json}"
 browser_download_run_id="$(jq -r '.run_id // empty' "${browser_download_start_json}")"
 browser_download_run_json="${TMP_DIR}/browser-download-run.json"
 if [[ -n "${browser_download_run_id}" ]] && poll_run_terminal "${browser_download_run_id}" 120 1 "${browser_download_run_json}" \
@@ -1164,7 +1164,7 @@ browser_popup_payload="$(jq -nc --arg url "${browser_session_url}" '{
 }')"
 ensure_browser_session_server
 browser_popup_start_json="${TMP_DIR}/browser-popup-start.json"
-api_post "/runs/start" "${browser_popup_payload}" > "${browser_popup_start_json}"
+api_post "/turn" "${browser_popup_payload}" > "${browser_popup_start_json}"
 browser_popup_run_id="$(jq -r '.run_id // empty' "${browser_popup_start_json}")"
 browser_popup_run_json="${TMP_DIR}/browser-popup-run.json"
 if [[ -n "${browser_popup_run_id}" ]] && poll_run_terminal "${browser_popup_run_id}" 120 1 "${browser_popup_run_json}" \
@@ -1214,7 +1214,7 @@ ensure_browser_session_server
 browser_auth_precheck_json="${TMP_DIR}/browser-auth-precheck.json"
 api_post "/runs/precheck" "${browser_auth_payload}" > "${browser_auth_precheck_json}"
 browser_auth_start_json="${TMP_DIR}/browser-auth-start.json"
-api_post "/runs/start" "${browser_auth_payload}" > "${browser_auth_start_json}"
+api_post "/turn" "${browser_auth_payload}" > "${browser_auth_start_json}"
 browser_auth_run_id="$(jq -r '.run_id // empty' "${browser_auth_start_json}")"
 browser_auth_approval_id="$(jq -r '.pending_approval.approval_id // empty' "${browser_auth_start_json}")"
 browser_auth_run_json="${TMP_DIR}/browser-auth-run.json"
@@ -1265,7 +1265,7 @@ ensure_browser_session_server
 browser_auth_priv_precheck_json="${TMP_DIR}/browser-auth-priv-precheck.json"
 api_post "/runs/precheck" "${browser_auth_priv_payload}" > "${browser_auth_priv_precheck_json}"
 browser_auth_priv_start_json="${TMP_DIR}/browser-auth-priv-start.json"
-api_post "/runs/start" "${browser_auth_priv_payload}" > "${browser_auth_priv_start_json}"
+api_post "/turn" "${browser_auth_priv_payload}" > "${browser_auth_priv_start_json}"
 browser_auth_priv_run_id="$(jq -r '.run_id // empty' "${browser_auth_priv_start_json}")"
 browser_auth_priv_approval_id="$(jq -r '.pending_approval.approval_id // empty' "${browser_auth_priv_start_json}")"
 browser_auth_priv_run_json="${TMP_DIR}/browser-auth-priv-run.json"
@@ -1340,7 +1340,7 @@ workflow_id = created["id"]
 status, fetched = req("GET", f"/workflows/{workflow_id}")
 status, published = req("POST", f"/workflows/{workflow_id}/publish")
 runtime_base = os.environ.get("EMPYRALIS_API_URL") or os.environ.get("ORION_API_URL") or "http://127.0.0.1:8001"
-status, execution = req("POST", f"{runtime_base.rstrip('/')}/runs/start", {
+status, execution = req("POST", f"{runtime_base.rstrip('/')}/turn", {
     "engine": "orion",
     "workflow_id": workflow_id,
     "workspace_id": "default",
@@ -1397,7 +1397,7 @@ if [[ "${SCREENSHOT_SMOKE}" == "1" ]]; then
     }
   }')"
   screenshot_start_json="${TMP_DIR}/screenshot-start.json"
-  api_post "/runs/start" "${screenshot_payload}" > "${screenshot_start_json}"
+  api_post "/turn" "${screenshot_payload}" > "${screenshot_start_json}"
   screenshot_run_id="$(jq -r '.run_id // empty' "${screenshot_start_json}")"
   screenshot_run_json="${TMP_DIR}/screenshot-run.json"
   if [[ -n "${screenshot_run_id}" ]] && poll_run_terminal "${screenshot_run_id}" 90 1 "${screenshot_run_json}" && [[ "$(jq -r '.status // empty' "${screenshot_run_json}")" == "completed" ]]; then

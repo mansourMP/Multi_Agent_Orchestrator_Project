@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { apiClient } from '@/lib/api-client';
-import type { RunDetailResponse } from '@/lib/api-contract';
+import type { RunDetailResponse } from '@shared/api-contract';
 
 export interface WorkflowRunNodeState {
   node_id?: string | null;

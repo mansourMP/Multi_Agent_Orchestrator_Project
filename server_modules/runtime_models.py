@@ -48,6 +48,7 @@ def configure_runtime_model_context(
 class RunStartRequest(BaseModel):
     engine: str = "orion"
     workflow_id: Optional[str] = None
+    workflow_version_id: Optional[str] = None
     workspace_id: Optional[str] = None
     user_goal: Optional[str] = None
     business_plan: Optional[str] = None

@@ -145,6 +145,7 @@ class RunExecutionServices:
 class DurableTurnExecutionRequest:
     engine: str = "orion"
     workflow_id: Optional[str] = None
+    workflow_version_id: Optional[str] = None
     workspace_id: str = "default"
     user_goal: str = ""
     business_plan: Optional[str] = None
@@ -3402,6 +3403,11 @@ def build_turn_seed_from_request(
     return {
         "engine": _hint_text(getattr(base_request, "engine", None)) or _hint_text(turn_request.context_hints.get("engine")) or "orion",
         "workflow_id": _hint_text(getattr(base_request, "workflow_id", None)) or _hint_text(turn_request.context_hints.get("workflow_id")),
+        "workflow_version_id": (
+            _hint_text(getattr(base_request, "workflow_version_id", None))
+            or _hint_text(turn_request.context_hints.get("workflow_version_id"))
+            or _hint_text(metadata.get("workflow_version_id"))
+        ),
         "workspace_id": str(turn_request.workspace_id or getattr(base_request, "workspace_id", None) or "default").strip() or "default",
         "user_goal": _hint_text(turn_request.message) or _hint_text(getattr(base_request, "user_goal", None)) or "",
         "business_plan": _hint_text(getattr(base_request, "business_plan", None)) or _hint_text(turn_request.context_hints.get("business_plan")),
@@ -3438,6 +3444,9 @@ def build_run_preview_context(
 ) -> Dict[str, Any]:
     return {
         "workflow_id": req.workflow_id,
+        "workflow_version_id": getattr(req, "workflow_version_id", None) or (
+            workflow_snapshot.get("workflowVersionId") if isinstance(workflow_snapshot, dict) else None
+        ),
         "workspace_id": req.workspace_id,
         "user_goal": req.user_goal,
         "business_plan": req.business_plan,
@@ -3451,6 +3460,66 @@ def build_run_preview_context(
         "workflow_definition": workflow_snapshot.get("definition") if isinstance(workflow_snapshot, dict) else None,
         "workflow_name": workflow_snapshot.get("name") if isinstance(workflow_snapshot, dict) else None,
         "workflow_status": workflow_snapshot.get("status") if isinstance(workflow_snapshot, dict) else None,
+    }
+
+
+def _fetch_workflow_snapshot_for_request(
+    fetcher: Callable[..., Any],
+    req: Any,
+    *,
+    metadata: Dict[str, Any],
+) -> Any:
+    workflow_id = str(getattr(req, "workflow_id", None) or "").strip()
+    if not workflow_id:
+        return None
+    workflow_version_id = str(
+        getattr(req, "workflow_version_id", None)
+        or metadata.get("workflow_version_id")
+        or ""
+    ).strip() or None
+    try:
+        return fetcher(
+            workflow_id,
+            workflow_version_id=workflow_version_id,
+            workspace_id=str(getattr(req, "workspace_id", None) or metadata.get("workspace_id") or "").strip() or None,
+            tenant_id=str(metadata.get("tenant_id") or "").strip() or None,
+        )
+    except TypeError:
+        return fetcher(workflow_id)
+
+
+def _workflow_snapshot_from_metadata(
+    req: Any,
+    *,
+    metadata: Dict[str, Any],
+) -> Optional[Dict[str, Any]]:
+    direct_snapshot = metadata.get("workflow_snapshot") if isinstance(metadata.get("workflow_snapshot"), dict) else None
+    if isinstance(direct_snapshot, dict) and isinstance(direct_snapshot.get("definition"), dict):
+        return dict(direct_snapshot)
+    direct_definition = metadata.get("workflow_definition") if isinstance(metadata.get("workflow_definition"), dict) else None
+    if not isinstance(direct_definition, dict):
+        return None
+    workflow_id = str(
+        getattr(req, "workflow_id", None)
+        or metadata.get("compiled_workflow_id")
+        or metadata.get("workflow_id")
+        or ""
+    ).strip()
+    workflow_version_id = str(
+        getattr(req, "workflow_version_id", None)
+        or metadata.get("compiled_workflow_version_id")
+        or metadata.get("workflow_version_id")
+        or ""
+    ).strip()
+    return {
+        "id": workflow_id or "compiled-template",
+        "name": str(metadata.get("workflow_name") or metadata.get("compiled_workflow_name") or "").strip() or "Compiled Template",
+        "status": str(metadata.get("workflow_status") or "compiled").strip() or "compiled",
+        "definition": dict(direct_definition),
+        "workflowVersionId": workflow_version_id or None,
+        "currentVersionId": workflow_version_id or None,
+        "versionNumber": metadata.get("workflow_version_number"),
+        "metadata": dict(metadata.get("workflow_metadata") or {}) if isinstance(metadata.get("workflow_metadata"), dict) else {},
     }
 
 
@@ -3743,9 +3812,14 @@ def prepare_run_start_request(
             {"action_policy": app_policy},
         )
 
-    workflow_snapshot = None
+    workflow_snapshot = _workflow_snapshot_from_metadata(req, metadata=metadata)
     if str(req.workflow_id or "").strip():
-        workflow_snapshot = services.fetch_workflow_snapshot(req.workflow_id)
+        if not isinstance(workflow_snapshot, dict):
+            workflow_snapshot = _fetch_workflow_snapshot_for_request(
+                services.fetch_workflow_snapshot,
+                req,
+                metadata=metadata,
+            )
         if isinstance(workflow_snapshot, dict):
             metadata["workflow_schema_version"] = str(
                 workflow_snapshot.get("definition", {}).get("version") or ""
@@ -3754,6 +3828,17 @@ def prepare_run_start_request(
                 metadata["workflow_name"] = workflow_snapshot.get("name")
             if workflow_snapshot.get("status"):
                 metadata["workflow_status"] = workflow_snapshot.get("status")
+            workflow_version_id = str(
+                workflow_snapshot.get("workflowVersionId")
+                or workflow_snapshot.get("currentVersionId")
+                or getattr(req, "workflow_version_id", None)
+                or ""
+            ).strip()
+            if workflow_version_id:
+                metadata["workflow_version_id"] = workflow_version_id
+            workflow_version_number = workflow_snapshot.get("versionNumber")
+            if workflow_version_number is not None:
+                metadata["workflow_version_number"] = workflow_version_number
 
     if callable(services.postprocess_metadata):
         metadata = services.postprocess_metadata(req, metadata)

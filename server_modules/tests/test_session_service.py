@@ -2,7 +2,7 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 from server_modules import session_service
 
@@ -107,6 +107,31 @@ class SessionServiceTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertIsNotNone(extended)
         self.assertIsNone(missing)
+
+    async def test_create_session_mirrors_master_agent_and_runtime_profile_bindings(self):
+        upsert_mock = AsyncMock(return_value={"id": "session-1"})
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "runtime.db"
+            with (
+                patch.dict(os.environ, {"ORION_RUNTIME_STATE_DB": str(db_path)}, clear=False),
+                patch("server_modules.session_service.runtime_db.get_pool", return_value=None),
+                patch("server_modules.session_service.control_plane_repository.upsert_agent_session", new=upsert_mock),
+            ):
+                await session_service.create_session(
+                    workspace_id="workspace-1",
+                    tenant_id="tenant-1",
+                    actor={"type": "user", "id": "user-1"},
+                    channel="web",
+                    metadata={
+                        "thread_id": "thread-1",
+                        "master_agent_install_id": "install-master",
+                        "runtime_profile_id": "profile-1",
+                    },
+                    session_id="session-1",
+                )
+
+        self.assertEqual(upsert_mock.await_args.kwargs["master_agent_install_id"], "install-master")
+        self.assertEqual(upsert_mock.await_args.kwargs["runtime_profile_id"], "profile-1")
 
 
 if __name__ == "__main__":

@@ -246,6 +246,7 @@ CREATE TABLE IF NOT EXISTS workspace_agent_installs (
     status TEXT NOT NULL DEFAULT 'active',
     enabled BOOLEAN NOT NULL DEFAULT TRUE,
     runtime_profile_id TEXT NULL REFERENCES runtime_profiles(id) ON DELETE SET NULL,
+    compiled_workflow_version_id TEXT NULL REFERENCES workflow_versions(id) ON DELETE SET NULL,
     root_folder_uri TEXT NULL,
     tool_toggles JSONB NOT NULL DEFAULT '{}'::jsonb,
     folder_grants JSONB NOT NULL DEFAULT '[]'::jsonb,
@@ -267,6 +268,9 @@ ALTER TABLE agent_sessions
 ALTER TABLE agent_turns
     ADD COLUMN IF NOT EXISTS active_agent_install_id TEXT NULL,
     ADD COLUMN IF NOT EXISTS runtime_profile_id TEXT NULL;
+
+ALTER TABLE workspace_agent_installs
+    ADD COLUMN IF NOT EXISTS compiled_workflow_version_id TEXT NULL;
 
 CREATE INDEX IF NOT EXISTS idx_users_workspace ON users(tenant_id, workspace_id);
 CREATE INDEX IF NOT EXISTS idx_workspace_memberships_user ON workspace_memberships(user_id, tenant_id, workspace_id);
@@ -291,6 +295,7 @@ CREATE INDEX IF NOT EXISTS idx_agent_definition_versions_workflow_version ON age
 CREATE INDEX IF NOT EXISTS idx_workspace_agent_installs_status_enabled ON workspace_agent_installs(tenant_id, workspace_id, status, enabled);
 CREATE INDEX IF NOT EXISTS idx_workspace_agent_installs_thread ON workspace_agent_installs(tenant_id, workspace_id, thread_id);
 CREATE INDEX IF NOT EXISTS idx_workspace_agent_installs_runtime_profile ON workspace_agent_installs(tenant_id, workspace_id, runtime_profile_id);
+CREATE INDEX IF NOT EXISTS idx_workspace_agent_installs_compiled_workflow ON workspace_agent_installs(tenant_id, workspace_id, compiled_workflow_version_id);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_turns_request_role
     ON agent_turns(tenant_id, workspace_id, thread_id, role, request_id)
     WHERE request_id IS NOT NULL;
@@ -361,6 +366,20 @@ BEGIN
         ALTER TABLE agent_turns
             ADD CONSTRAINT fk_agent_turns_runtime_profile
             FOREIGN KEY (runtime_profile_id) REFERENCES runtime_profiles(id) ON DELETE SET NULL;
+    END IF;
+END
+$$;
+
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1
+        FROM pg_constraint
+        WHERE conname = 'fk_workspace_agent_installs_compiled_workflow_version'
+    ) THEN
+        ALTER TABLE workspace_agent_installs
+            ADD CONSTRAINT fk_workspace_agent_installs_compiled_workflow_version
+            FOREIGN KEY (compiled_workflow_version_id) REFERENCES workflow_versions(id) ON DELETE SET NULL;
     END IF;
 END
 $$;

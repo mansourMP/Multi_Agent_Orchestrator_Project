@@ -112,6 +112,12 @@ class WorkspaceAgentInstallModel(WorkflowControlPlaneBase):
         nullable=True,
         index=True,
     )
+    compiled_workflow_version_id: Mapped[Optional[str]] = mapped_column(
+        Text,
+        ForeignKey("workflow_versions.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
     root_folder_uri: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     tool_toggles: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
     folder_grants: Mapped[list[Any]] = mapped_column(JSONB, nullable=False, default=list)

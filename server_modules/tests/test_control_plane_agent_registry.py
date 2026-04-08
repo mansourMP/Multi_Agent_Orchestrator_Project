@@ -19,12 +19,15 @@ class ControlPlaneAgentRegistrySchemaTests(unittest.TestCase):
             "CREATE TABLE IF NOT EXISTS agent_definitions",
             "CREATE TABLE IF NOT EXISTS agent_definition_versions",
             "CREATE TABLE IF NOT EXISTS workspace_agent_installs",
+            "compiled_workflow_version_id TEXT NULL REFERENCES workflow_versions(id) ON DELETE SET NULL",
+            "ALTER TABLE workspace_agent_installs\n    ADD COLUMN IF NOT EXISTS compiled_workflow_version_id TEXT NULL;",
             "ALTER TABLE agent_threads\n    ADD COLUMN IF NOT EXISTS master_agent_install_id TEXT NULL;",
             "ALTER TABLE agent_sessions\n    ADD COLUMN IF NOT EXISTS master_agent_install_id TEXT NULL,",
             "ALTER TABLE agent_turns\n    ADD COLUMN IF NOT EXISTS active_agent_install_id TEXT NULL,",
             "fk_agent_threads_master_agent_install",
             "fk_agent_sessions_runtime_profile",
             "fk_agent_turns_active_agent_install",
+            "fk_workspace_agent_installs_compiled_workflow_version",
         ):
             self.assertIn(fragment, schema)
 
@@ -50,6 +53,11 @@ class ControlPlaneAgentRegistrySchemaTests(unittest.TestCase):
             for foreign_key in WorkspaceAgentInstallModel.__table__.c["runtime_profile_id"].foreign_keys
         }
         self.assertIn("runtime_profiles.id", install_fk_targets)
+        compiled_fk_targets = {
+            foreign_key.target_fullname
+            for foreign_key in WorkspaceAgentInstallModel.__table__.c["compiled_workflow_version_id"].foreign_keys
+        }
+        self.assertIn("workflow_versions.id", compiled_fk_targets)
 
 
 class ThreadServiceAgentBindingTests(unittest.IsolatedAsyncioTestCase):

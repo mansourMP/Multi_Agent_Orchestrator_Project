@@ -42,7 +42,13 @@ class AgentTurnTests(unittest.TestCase):
             message="hello world",
             execution_mode="sync",
             response_mode="stream",
-            context_hints={"request_id": "req-1"},
+            context_hints={
+                "request_id": "req-1",
+                "metadata": {
+                    "workspace_agent_install_id": "install-1",
+                    "runtime_profile_id": "profile-1",
+                },
+            },
         )
 
         with patch("server_modules.agent_turn.session_service.get_session", new=AsyncMock(return_value={
@@ -75,10 +81,14 @@ class AgentTurnTests(unittest.TestCase):
         self.assertEqual(result["reply"], "done")
         ensure_thread_mock.assert_awaited_once()
         self.assertEqual(ensure_thread_mock.await_args.kwargs["thread_id"], "thread-1")
+        self.assertEqual(ensure_thread_mock.await_args.kwargs["master_agent_install_id"], "install-1")
         record_user_mock.assert_awaited_once()
         self.assertEqual(record_user_mock.await_args.kwargs["content"], "hello world")
+        self.assertEqual(record_user_mock.await_args.kwargs["runtime_profile_id"], "profile-1")
         record_assistant_mock.assert_awaited_once()
         self.assertEqual(record_assistant_mock.await_args.kwargs["run_id"], "run-1")
+        self.assertEqual(record_assistant_mock.await_args.kwargs["active_agent_install_id"], "install-1")
+        self.assertEqual(record_assistant_mock.await_args.kwargs["runtime_profile_id"], "profile-1")
 
     def test_build_inbound_agent_turn_request_normalizes_generic_inputs(self):
         request = build_inbound_agent_turn_request(

@@ -70,6 +70,12 @@ def _coerce_actor(value: Any) -> Dict[str, Any]:
     }
 
 
+def _metadata_binding_token(metadata: Any, key: str) -> Optional[str]:
+    payload = _coerce_dict(metadata)
+    token = str(payload.get(key) or "").strip()
+    return token or None
+
+
 def _canonical_session_record(
     *,
     session_id: str,
@@ -266,6 +272,8 @@ async def create_session(
             thread_id=thread_id,
             channel=record["channel"],
             actor=record["actor"],
+            master_agent_install_id=_metadata_binding_token(record.get("metadata"), "master_agent_install_id"),
+            runtime_profile_id=_metadata_binding_token(record.get("metadata"), "runtime_profile_id"),
             metadata=record.get("metadata") if isinstance(record.get("metadata"), dict) else {},
             expires_at=record["expires_at"],
             status=str(record.get("status") or "active").strip() or "active",
@@ -343,6 +351,8 @@ async def extend_session(session_id: str) -> Optional[Dict[str, Any]]:
             thread_id=thread_id,
             channel=existing["channel"],
             actor=existing["actor"],
+            master_agent_install_id=_metadata_binding_token(existing.get("metadata"), "master_agent_install_id"),
+            runtime_profile_id=_metadata_binding_token(existing.get("metadata"), "runtime_profile_id"),
             metadata=existing.get("metadata") if isinstance(existing.get("metadata"), dict) else {},
             expires_at=existing["expires_at"],
             status="active",

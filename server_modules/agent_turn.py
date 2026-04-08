@@ -821,6 +821,7 @@ async def agent_turn(
     resolved_turn_request.thread_id = resolved_thread_id
     session_record = None
     if preferred_session_id:
+        binding_metadata = _metadata_dict(resolved_turn_request.context_hints.get("metadata"))
         session_record = await session_service.get_session(preferred_session_id)
         if isinstance(session_record, dict) and str(session_record.get("status") or "").strip().lower() != "expired":
             await session_service.extend_session(preferred_session_id)
@@ -834,11 +835,14 @@ async def agent_turn(
                     "source": "agent_turn",
                     "thread_id": resolved_thread_id,
                     "machine_target": turn_request.machine_target,
+                    "master_agent_install_id": str(binding_metadata.get("master_agent_install_id") or binding_metadata.get("workspace_agent_install_id") or "").strip() or None,
+                    "runtime_profile_id": str(binding_metadata.get("runtime_profile_id") or "").strip() or None,
                 },
                 session_id=preferred_session_id,
             )
             session_record = await session_service.get_session(resolved_turn_request.session_id)
     else:
+        binding_metadata = _metadata_dict(resolved_turn_request.context_hints.get("metadata"))
         resolved_turn_request.session_id = await session_service.create_session(
             workspace_id=turn_request.workspace_id,
             tenant_id=turn_request.tenant_id,
@@ -848,6 +852,8 @@ async def agent_turn(
                 "source": "agent_turn",
                 "thread_id": resolved_thread_id,
                 "machine_target": turn_request.machine_target,
+                "master_agent_install_id": str(binding_metadata.get("master_agent_install_id") or binding_metadata.get("workspace_agent_install_id") or "").strip() or None,
+                "runtime_profile_id": str(binding_metadata.get("runtime_profile_id") or "").strip() or None,
             },
         )
         session_record = await session_service.get_session(resolved_turn_request.session_id)
@@ -857,11 +863,22 @@ async def agent_turn(
             context_hints["session"] = dict(session_record)
         context_hints.setdefault("thread_id", resolved_thread_id)
         resolved_turn_request.context_hints = context_hints
+    binding_metadata = _metadata_dict(resolved_turn_request.context_hints.get("metadata"))
+    master_agent_install_id = (
+        str(binding_metadata.get("master_agent_install_id") or binding_metadata.get("workspace_agent_install_id") or "").strip()
+        or None
+    )
+    active_agent_install_id = (
+        str(binding_metadata.get("active_agent_install_id") or binding_metadata.get("workspace_agent_install_id") or "").strip()
+        or None
+    )
+    runtime_profile_id = str(binding_metadata.get("runtime_profile_id") or "").strip() or None
     await thread_service.ensure_master_thread(
         thread_id=resolved_thread_id,
         tenant_id=resolved_turn_request.tenant_id,
         workspace_id=resolved_turn_request.workspace_id,
         owner_user_id=str((current_user or {}).get("user_id") or resolved_turn_request.actor.id or "").strip() or None,
+        master_agent_install_id=master_agent_install_id,
         channel=resolved_turn_request.channel,
         title=thread_service.build_default_thread_title(resolved_turn_request.message),
         metadata={
@@ -876,6 +893,7 @@ async def agent_turn(
         session_id=resolved_turn_request.session_id,
         actor=serialize_turn_actor(resolved_turn_request.actor),
         content=resolved_turn_request.message,
+        runtime_profile_id=runtime_profile_id,
         metadata={
             **_metadata_dict(resolved_turn_request.context_hints),
             "request_id": str(resolved_turn_request.context_hints.get("request_id") or "").strip() or None,
@@ -932,6 +950,8 @@ async def agent_turn(
                     reply=str(result.get("reply") or ""),
                     status=str(result.get("status") or "completed").strip() or "completed",
                     run_id=str(result.get("run_id") or "").strip() or None,
+                    active_agent_install_id=active_agent_install_id,
+                    runtime_profile_id=runtime_profile_id,
                     approvals=list(result.get("approvals") or []) if isinstance(result.get("approvals"), list) else [],
                     interventions=list(result.get("interventions") or []) if isinstance(result.get("interventions"), list) else [],
                     metadata={

@@ -1,8 +1,9 @@
 'use client';
 
+import type { CSSProperties } from 'react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { CheckCircle2, FolderOpen, Monitor, RefreshCw, ShieldCheck, Sparkles } from 'lucide-react';
+import { ArrowRight, FolderOpen, Monitor, RefreshCw, ShieldCheck } from 'lucide-react';
 import { PageStatePanel } from '@/components/orion/page/PageStatePanel';
 import {
   completeDesktopSetup,
@@ -11,27 +12,71 @@ import {
   type DesktopSetupStatus,
 } from '@/lib/desktopFirstRun';
 import { getDesktopBridge } from '@/lib/desktopBridge';
+import {
+  DESIGN_TOKENS,
+  badgeStyle,
+  bodyTextStyle,
+  buttonStyle,
+  eyebrowStyle,
+  mergeStyles,
+  metaTextStyle,
+  pageShellStyle,
+  panelStyle,
+  sectionTitleStyle,
+  statCardStyle,
+} from '@/design-constraints';
 
-function statusTone(value?: string): 'green' | 'red' | 'yellow' | 'grey' {
+function statusTone(value?: string): 'success' | 'warning' | 'danger' | 'neutral' {
   const normalized = String(value || '').trim().toLowerCase();
-  if (normalized === 'granted') return 'green';
-  if (normalized === 'denied') return 'red';
-  if (normalized === 'unsupported') return 'grey';
-  return 'yellow';
+  if (normalized === 'granted') return 'success';
+  if (normalized === 'denied') return 'danger';
+  if (normalized === 'unsupported') return 'neutral';
+  return 'warning';
 }
 
 function statusLabel(value?: string): string {
   const normalized = String(value || '').trim().toLowerCase();
   if (normalized === 'granted') return 'Ready';
   if (normalized === 'denied') return 'Needs access';
-  if (normalized === 'unsupported') return 'Not supported';
+  if (normalized === 'unsupported') return 'Unavailable';
   return 'Checking';
 }
 
+function checkAccentStyle(value?: string): CSSProperties {
+  const normalized = String(value || '').trim().toLowerCase();
+  if (normalized === 'granted') {
+    return {
+      background: DESIGN_TOKENS.color.successSoft,
+      borderColor: DESIGN_TOKENS.color.successSoft,
+    };
+  }
+  if (normalized === 'denied') {
+    return {
+      background: DESIGN_TOKENS.color.dangerSoft,
+      borderColor: DESIGN_TOKENS.color.dangerSoft,
+    };
+  }
+  return {
+    background: DESIGN_TOKENS.color.surfaceMuted,
+    borderColor: DESIGN_TOKENS.color.borderSubtle,
+  };
+}
+
 function iconForCheck(id: string) {
-  if (id === 'screen_recording') return <Monitor size={18} />;
-  if (id === 'filesystem') return <FolderOpen size={18} />;
-  return <ShieldCheck size={18} />;
+  if (id === 'screen_recording') return <Monitor size={16} />;
+  if (id === 'filesystem') return <FolderOpen size={16} />;
+  return <ShieldCheck size={16} />;
+}
+
+function actionButtonBaseStyle(disabled = false): CSSProperties {
+  return {
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    textDecoration: 'none',
+    cursor: disabled ? 'not-allowed' : 'pointer',
+  };
 }
 
 function CheckRow({
@@ -44,32 +89,65 @@ function CheckRow({
   onOpenSettings: (target: string) => void;
 }) {
   const canOpenSettings = Boolean(item.settings_target);
+
   return (
-    <article className="orion-desktop-setup-check">
-      <div className="orion-desktop-setup-check__icon">
+    <article
+      style={mergeStyles(panelStyle({ muted: true, padding: DESIGN_TOKENS.space[4] }), {
+        ...checkAccentStyle(item.status),
+        display: 'grid',
+        gridTemplateColumns: 'auto minmax(0, 1fr) auto',
+        gap: DESIGN_TOKENS.space[4],
+        alignItems: 'center',
+      })}
+    >
+      <div
+        style={{
+          width: 38,
+          height: 38,
+          borderRadius: DESIGN_TOKENS.radius.md,
+          border: `1px solid ${DESIGN_TOKENS.color.borderSubtle}`,
+          background: DESIGN_TOKENS.color.surface,
+          display: 'inline-flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          color: DESIGN_TOKENS.color.textPrimary,
+        }}
+      >
         {iconForCheck(item.id)}
       </div>
-      <div className="orion-desktop-setup-check__body">
-        <div className="orion-desktop-setup-check__head">
-          <div className="orion-desktop-setup-check__title">{item.label}</div>
-          <span className="orion-chip" data-status-tone={statusTone(item.status)}>
-            {statusLabel(item.status)}
-          </span>
+
+      <div style={{ display: 'grid', gap: 6, minWidth: 0 }}>
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: DESIGN_TOKENS.space[3],
+            flexWrap: 'wrap',
+          }}
+        >
+          <div style={mergeStyles(sectionTitleStyle(), { fontSize: DESIGN_TOKENS.type.size.bodyLg })}>
+            {item.label}
+          </div>
+          <span style={badgeStyle(statusTone(item.status))}>{statusLabel(item.status)}</span>
         </div>
-        <div className="orion-desktop-setup-check__detail">
-          {item.detail || 'Empyralis will verify this capability before running the local demo.'}
-        </div>
+        <p style={bodyTextStyle()}>
+          {item.detail || 'Empyralis verifies this capability before it enables local desktop execution.'}
+        </p>
       </div>
+
       {canOpenSettings ? (
         <button
           type="button"
-          className="orion-btn orion-btn-ghost"
           onClick={() => onOpenSettings(String(item.settings_target || ''))}
           disabled={busy}
+          style={mergeStyles(buttonStyle({ tone: 'secondary', size: 'sm', disabled: busy }), actionButtonBaseStyle(busy))}
         >
           {busy ? 'Opening…' : 'Open settings'}
         </button>
-      ) : null}
+      ) : (
+        <span style={mergeStyles(metaTextStyle(), { whiteSpace: 'nowrap' })}>Checked locally</span>
+      )}
     </article>
   );
 }
@@ -115,6 +193,8 @@ export function DesktopSetupWizard() {
   }, [loading, router, status]);
 
   const missingCount = useMemo(() => status?.missing_ids.length || 0, [status]);
+  const totalChecks = useMemo(() => status?.checks.length || 0, [status]);
+  const readyCount = useMemo(() => totalChecks - missingCount, [missingCount, totalChecks]);
   const canContinue = Boolean(status?.can_continue);
   const machineLabel = useMemo(() => {
     const display = String(status?.machine?.display_name || '').trim();
@@ -152,88 +232,282 @@ export function DesktopSetupWizard() {
     }
   }, [canContinue, router]);
 
-  return (
-    <div className="orion-page-shell narrow orion-animate-in" style={{ width: 'min(720px, 100%)', margin: '0 auto', gap: 18 }}>
-      <section className="orion-desktop-setup-hero">
-        <div className="orion-desktop-setup-hero__kicker">Desktop setup</div>
-        <div className="orion-desktop-setup-hero__title-row">
-          <h1 className="orion-auth-card__title">Empyralis can see your computer, act carefully, and show every result in one place.</h1>
-          <Sparkles size={20} />
+  const readinessFacts = [
+    {
+      title: 'Permission-aware by design',
+      copy: 'Screen capture, accessibility, and local storage are verified explicitly before any demo or agent action begins.',
+    },
+    {
+      title: 'No hidden browser tabs',
+      copy: 'The desktop handoff stays inside Empyralis. Results, screenshots, and the first-run proof all come back into the app.',
+    },
+    {
+      title: 'Local proof first',
+      copy: 'The first demo is a fast offline screenshot test so users see capability immediately without needing cloud setup first.',
+    },
+  ];
+
+  const shell = (
+    <div
+      style={mergeStyles(pageShellStyle(), {
+        minHeight: '100vh',
+        paddingTop: DESIGN_TOKENS.space[7],
+        paddingBottom: DESIGN_TOKENS.space[8],
+      })}
+    >
+      <div style={{ display: 'grid', gap: DESIGN_TOKENS.space[6] }}>
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'flex-start',
+            justifyContent: 'space-between',
+            gap: DESIGN_TOKENS.space[4],
+            flexWrap: 'wrap',
+          }}
+        >
+          <div style={{ display: 'grid', gap: DESIGN_TOKENS.space[3], maxWidth: 720 }}>
+            <p style={eyebrowStyle()}>Desktop readiness</p>
+            <h1
+              style={{
+                margin: 0,
+                color: DESIGN_TOKENS.color.textPrimary,
+                fontSize: DESIGN_TOKENS.type.size.hero,
+                fontWeight: DESIGN_TOKENS.type.weight.semibold,
+                lineHeight: DESIGN_TOKENS.type.lineHeight.tight,
+                letterSpacing: DESIGN_TOKENS.type.tracking.tight,
+              }}
+            >
+              Verify local trust once, then prove the desktop can see the machine without leaving the app.
+            </h1>
+            <p style={mergeStyles(bodyTextStyle('primary'), { fontSize: DESIGN_TOKENS.type.size.bodyLg, maxWidth: 660 })}>
+              Empyralis uses this pass to confirm the local shell has the permissions it needs for screenshot capture,
+              careful control, and artifact logging. Nothing proceeds until the required checks are actually ready.
+            </p>
+          </div>
+
+          <div style={{ display: 'flex', gap: DESIGN_TOKENS.space[2], flexWrap: 'wrap' }}>
+            <span style={badgeStyle('accent')}>Desktop shell</span>
+            <span style={badgeStyle(canContinue ? 'success' : 'warning')}>
+              {canContinue ? 'Ready for demo' : 'Awaiting permissions'}
+            </span>
+            <span style={badgeStyle('neutral')}>Offline first-run proof</span>
+          </div>
         </div>
-        <p className="orion-auth-card__copy">
-          Give the desktop app the permissions it needs once, then run a local screenshot demo to prove the agent can observe your machine without leaving the app.
-        </p>
-      </section>
 
-      {loading ? (
-        <PageStatePanel variant="loading" title="Checking desktop permissions…" copy="Empyralis is verifying local machine access." />
-      ) : error ? (
-        <PageStatePanel
-          variant="error"
-          title="Desktop setup needs attention"
-          copy={error}
-          actions={(
-            <button type="button" className="orion-btn orion-btn-primary" onClick={() => void loadStatus()}>
-              <RefreshCw size={14} />
-              Retry check
-            </button>
-          )}
-        />
-      ) : !status ? (
-        <PageStatePanel variant="loading" title="Checking desktop permissions…" copy="Empyralis is verifying local machine access." />
-      ) : (
-        <>
-          <section className="orion-desktop-setup-panel">
-            <div className="orion-desktop-setup-panel__summary">
-              <div>
-                <div className="orion-desktop-setup-panel__label">Machine</div>
-                <div className="orion-desktop-setup-panel__value">{machineLabel}</div>
-              </div>
-              <div>
-                <div className="orion-desktop-setup-panel__label">Checks ready</div>
-                <div className="orion-desktop-setup-panel__value">
-                  {status.checks.length - missingCount}/{status.checks.length}
-                </div>
-              </div>
-              <div>
-                <div className="orion-desktop-setup-panel__label">Demo mode</div>
-                <div className="orion-desktop-setup-panel__value">Offline screenshot test</div>
-              </div>
-            </div>
-
-            <div className="orion-desktop-setup-panel__checklist">
-              {status.checks.map((item) => (
-                <CheckRow
-                  key={item.id}
-                  item={item}
-                  busy={openingTarget === item.settings_target}
-                  onOpenSettings={openSettings}
-                />
-              ))}
-            </div>
-
-            <div className="orion-desktop-setup-note">
-              Continue stays locked until every required check passes. After that, Empyralis will run a one-click local demo in under 10 seconds and save the screenshot as an artifact.
-            </div>
-
-            <div className="orion-desktop-setup-actions">
-              <button type="button" className="orion-btn orion-btn-ghost" onClick={() => void loadStatus()}>
-                <RefreshCw size={14} />
-                Recheck permissions
-              </button>
+        {loading ? (
+          <PageStatePanel
+            variant="loading"
+            title="Checking local machine readiness"
+            copy="Empyralis is verifying the permissions required for trusted desktop execution."
+          />
+        ) : error ? (
+          <PageStatePanel
+            variant="error"
+            title="Desktop setup needs attention"
+            copy={error}
+            actions={(
               <button
                 type="button"
-                className="orion-btn orion-btn-primary"
-                onClick={() => void continueToDemo()}
-                disabled={!canContinue || continuing}
+                onClick={() => void loadStatus()}
+                style={mergeStyles(buttonStyle({ tone: 'primary', size: 'md' }), actionButtonBaseStyle())}
               >
-                {continuing ? <RefreshCw size={14} className="orion-spin" /> : <CheckCircle2 size={14} />}
-                {continuing ? 'Finishing setup…' : 'Continue to demo'}
+                <RefreshCw size={14} />
+                Retry check
               </button>
-            </div>
-          </section>
-        </>
-      )}
+            )}
+          />
+        ) : !status ? (
+          <PageStatePanel
+            variant="loading"
+            title="Checking local machine readiness"
+            copy="Empyralis is verifying the permissions required for trusted desktop execution."
+          />
+        ) : (
+          <div
+            style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(auto-fit, minmax(340px, 1fr))',
+              gap: DESIGN_TOKENS.space[6],
+              alignItems: 'start',
+            }}
+          >
+            <section
+              style={mergeStyles(panelStyle({ muted: true, padding: DESIGN_TOKENS.space[6] }), {
+                display: 'grid',
+                gap: DESIGN_TOKENS.space[5],
+                background: DESIGN_TOKENS.color.surfaceSubtle,
+              })}
+            >
+              <div style={{ display: 'grid', gap: DESIGN_TOKENS.space[3] }}>
+                <p style={eyebrowStyle()}>What this unlocks</p>
+                <h2 style={sectionTitleStyle()}>A trustworthy first-run path</h2>
+                <p style={bodyTextStyle()}>
+                  This setup is not generic onboarding. It is the explicit local boundary that lets Empyralis inspect the
+                  screen, save artifacts, and hand results back into the workspace without hidden state or side exits.
+                </p>
+              </div>
+
+              <div style={{ display: 'grid', gap: DESIGN_TOKENS.space[3] }}>
+                {readinessFacts.map((fact) => (
+                  <div
+                    key={fact.title}
+                    style={mergeStyles(panelStyle({ padding: DESIGN_TOKENS.space[4] }), {
+                      display: 'grid',
+                      gap: 8,
+                      background: DESIGN_TOKENS.color.surface,
+                    })}
+                  >
+                    <div style={mergeStyles(sectionTitleStyle(), { fontSize: DESIGN_TOKENS.type.size.bodyLg })}>
+                      {fact.title}
+                    </div>
+                    <p style={bodyTextStyle()}>{fact.copy}</p>
+                  </div>
+                ))}
+              </div>
+
+              <div
+                style={mergeStyles(panelStyle({ padding: DESIGN_TOKENS.space[4] }), {
+                  display: 'grid',
+                  gap: 10,
+                  background: DESIGN_TOKENS.color.surface,
+                })}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                  <ShieldCheck size={16} color={DESIGN_TOKENS.color.textPrimary} />
+                  <span
+                    style={{
+                      color: DESIGN_TOKENS.color.textPrimary,
+                      fontSize: DESIGN_TOKENS.type.size.label,
+                      fontWeight: DESIGN_TOKENS.type.weight.semibold,
+                    }}
+                  >
+                    Trust model
+                  </span>
+                </div>
+                <p style={bodyTextStyle()}>
+                  Permissions are checked locally, the demo stays inside the app, and the first screenshot is stored as an
+                  artifact so the user sees proof instead of a promise.
+                </p>
+              </div>
+            </section>
+
+            <section
+              style={mergeStyles(panelStyle({ padding: DESIGN_TOKENS.space[6] }), {
+                display: 'grid',
+                gap: DESIGN_TOKENS.space[5],
+              })}
+            >
+              <div style={{ display: 'grid', gap: DESIGN_TOKENS.space[3] }}>
+                <div
+                  style={{
+                    display: 'flex',
+                    alignItems: 'flex-start',
+                    justifyContent: 'space-between',
+                    gap: DESIGN_TOKENS.space[4],
+                    flexWrap: 'wrap',
+                  }}
+                >
+                  <div style={{ display: 'grid', gap: 6 }}>
+                    <p style={eyebrowStyle()}>Machine execution boundary</p>
+                    <h2 style={sectionTitleStyle()}>Confirm required permissions</h2>
+                  </div>
+                  <span style={badgeStyle(canContinue ? 'success' : 'warning')}>
+                    {canContinue ? 'All required checks passed' : `${missingCount} check${missingCount === 1 ? '' : 's'} missing`}
+                  </span>
+                </div>
+                <p style={bodyTextStyle()}>
+                  Review each capability below. Open the relevant system settings when access is missing, then re-run the
+                  check from here.
+                </p>
+              </div>
+
+              <div
+                style={{
+                  display: 'grid',
+                  gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))',
+                  gap: DESIGN_TOKENS.space[3],
+                }}
+              >
+                <div style={statCardStyle()}>
+                  <p style={metaTextStyle()}>Machine</p>
+                  <div style={sectionTitleStyle()}>{machineLabel}</div>
+                  <p style={bodyTextStyle('tertiary')}>{String(status.platform || 'desktop').toUpperCase()}</p>
+                </div>
+                <div style={statCardStyle()}>
+                  <p style={metaTextStyle()}>Checks ready</p>
+                  <div style={sectionTitleStyle()}>{readyCount}/{totalChecks || 0}</div>
+                  <p style={bodyTextStyle('tertiary')}>Required capabilities verified</p>
+                </div>
+                <div style={statCardStyle()}>
+                  <p style={metaTextStyle()}>Next proof</p>
+                  <div style={sectionTitleStyle()}>Offline demo</div>
+                  <p style={bodyTextStyle('tertiary')}>Screenshot + saved artifact</p>
+                </div>
+              </div>
+
+              <div style={{ display: 'grid', gap: DESIGN_TOKENS.space[3] }}>
+                {status.checks.map((item) => (
+                  <CheckRow
+                    key={item.id}
+                    item={item}
+                    busy={openingTarget === item.settings_target}
+                    onOpenSettings={openSettings}
+                  />
+                ))}
+              </div>
+
+              <div
+                style={mergeStyles(panelStyle({ muted: true, padding: DESIGN_TOKENS.space[4] }), {
+                  display: 'grid',
+                  gap: 8,
+                  background: DESIGN_TOKENS.color.surfaceMuted,
+                })}
+              >
+                <div style={mergeStyles(sectionTitleStyle(), { fontSize: DESIGN_TOKENS.type.size.body })}>
+                  Continue unlocks the local proof run
+                </div>
+                <p style={bodyTextStyle()}>
+                  Once every required permission is ready, Empyralis runs a fast screenshot demo, stores the capture as an
+                  artifact, and returns the result inside the workspace.
+                </p>
+              </div>
+
+              <div
+                style={{
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  alignItems: 'center',
+                  gap: DESIGN_TOKENS.space[3],
+                  flexWrap: 'wrap',
+                }}
+              >
+                <button
+                  type="button"
+                  onClick={() => void loadStatus()}
+                  style={mergeStyles(buttonStyle({ tone: 'secondary', size: 'md' }), actionButtonBaseStyle())}
+                >
+                  <RefreshCw size={14} />
+                  Recheck permissions
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void continueToDemo()}
+                  disabled={!canContinue || continuing}
+                  style={mergeStyles(
+                    buttonStyle({ tone: 'primary', size: 'md', disabled: !canContinue || continuing }),
+                    actionButtonBaseStyle(!canContinue || continuing),
+                  )}
+                >
+                  {continuing ? <RefreshCw size={14} /> : <ArrowRight size={14} />}
+                  {continuing ? 'Finishing setup…' : 'Continue to demo'}
+                </button>
+              </div>
+            </section>
+          </div>
+        )}
+      </div>
     </div>
   );
+
+  return shell;
 }

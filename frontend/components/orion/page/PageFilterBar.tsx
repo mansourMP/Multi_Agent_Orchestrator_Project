@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react';
+import { DESIGN_TOKENS, bodyTextStyle, mergeStyles, panelStyle, sectionTitleStyle } from '@/design-constraints';
 
 type PageFilterBarProps = {
   title?: ReactNode;
@@ -18,22 +19,28 @@ export function PageFilterBar({
   className,
 }: PageFilterBarProps) {
   return (
-    <section className={`orion-panel muted orion-page-filter-bar${className ? ` ${className}` : ''}`}>
+    <section
+      className={className}
+      style={mergeStyles(panelStyle({ muted: true }), {
+        display: 'grid',
+        gap: DESIGN_TOKENS.space[4],
+      })}
+    >
       {title || description || summary || actions ? (
-        <div className="orion-page-filter-header">
-          <div>
-            {title ? <div className="orion-panel-title">{title}</div> : null}
-            {description ? <div className="orion-panel-copy">{description}</div> : null}
+        <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: DESIGN_TOKENS.space[4], flexWrap: 'wrap' }}>
+          <div style={{ display: 'grid', gap: DESIGN_TOKENS.space[2] }}>
+            {title ? <div style={sectionTitleStyle()}>{title}</div> : null}
+            {description ? <div style={bodyTextStyle()}>{description}</div> : null}
           </div>
           {summary || actions ? (
-            <div className="orion-page-filter-summary">
+            <div style={{ display: 'flex', alignItems: 'center', gap: DESIGN_TOKENS.space[3], flexWrap: 'wrap' }}>
               {summary}
               {actions}
             </div>
           ) : null}
         </div>
       ) : null}
-      <div className="orion-page-filter-body">{children}</div>
+      <div style={{ display: 'grid', gap: DESIGN_TOKENS.space[3] }}>{children}</div>
     </section>
   );
 }

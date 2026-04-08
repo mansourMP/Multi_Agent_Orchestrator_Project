@@ -10,6 +10,8 @@ import {
   RefreshCw,
   ShieldCheck,
 } from 'lucide-react';
+import { Button } from '@/components/ui/button';
+import { OsPageHeader } from '@/components/ui/OsPageHeader';
 import {
   AUTH_STREAM_CLOSED,
   openAuthenticatedEventStream,
@@ -20,6 +22,7 @@ import type { RunListItem } from '@shared/api-contract';
 import { ensureControlPlaneSession } from '@/lib/controlPlaneSession';
 import { LocalCompanionRunPanel } from '@/components/orion/runs/LocalCompanionRunPanel';
 import { RunRemediationGuide, shouldShowRunRemediationGuide } from '@/components/orion/runs/RunRemediationGuide';
+import { DESIGN_TOKENS, badgeStyle, buttonStyle, mergeStyles, pageShellStyle, panelStyle } from '@/design-constraints';
 const TERMINAL_RUN_STATUSES = new Set(['completed', 'failed', 'error', 'stopped', 'timeout', 'cancelled']);
 
 type HistoryItem = {
@@ -820,22 +823,31 @@ export default function RunDetailPage() {
   }, [load, runId]);
 
   return (
-    <div className="orion-page-shell narrow orion-animate-in">
-      <div className="orion-page-header">
-        <div className="orion-page-title-wrap">
-          <div className="orion-page-title">Run</div>
-          <div className="orion-page-subtitle">See the result, confirmation state, and routing context for this task.</div>
-        </div>
-        <div className="orion-page-actions">
-          <Link href="/executions" className="btn-secondary">Back to Runs</Link>
-          <button type="button" className="btn-secondary" onClick={() => void load()}>
-            <RefreshCw size={14} />
-            Refresh
-          </button>
-        </div>
-      </div>
+    <div style={pageShellStyle({ narrow: true })}>
+      <OsPageHeader
+        icon={<Bot size={18} />}
+        title="Run"
+        subtitle="See the result, confirmation state, and routing context for this task."
+        actions={
+          <>
+            <Link
+              href="/executions"
+              style={mergeStyles(
+                { display: 'inline-flex', alignItems: 'center', textDecoration: 'none' },
+                buttonStyle({ tone: 'secondary', size: 'md' }),
+              )}
+            >
+              Back to Runs
+            </Link>
+            <Button type="button" variant="secondary" onClick={() => void load()}>
+              <RefreshCw size={14} />
+              Refresh
+            </Button>
+          </>
+        }
+      />
 
-      <section className="orion-panel">
+      <section style={panelStyle()}>
         {loading ? (
           <div className="hekor-run-loading">
             <Loader2 size={18} className="hekor-spin" />
@@ -902,7 +914,10 @@ export default function RunDetailPage() {
                           <>
                             <button
                               type="button"
-                              className="btn-primary"
+                              style={mergeStyles(
+                                { display: 'inline-flex', alignItems: 'center', gap: DESIGN_TOKENS.space[2] },
+                                buttonStyle({ tone: 'primary', size: 'md' }),
+                              )}
                               onClick={() => void handleResolveApproval('Proceed')}
                               disabled={approvalBusy !== null || resumeBusy || retryBusy}
                             >
@@ -910,19 +925,33 @@ export default function RunDetailPage() {
                             </button>
                             <button
                               type="button"
-                              className="btn-secondary"
+                              style={mergeStyles(
+                                { display: 'inline-flex', alignItems: 'center', gap: DESIGN_TOKENS.space[2] },
+                                buttonStyle({ tone: 'secondary', size: 'md' }),
+                              )}
                               onClick={() => void handleResolveApproval('Hold')}
                               disabled={approvalBusy !== null || resumeBusy || retryBusy}
                             >
                               {approvalBusy === 'Hold' ? 'Declining…' : 'Decline'}
                             </button>
-                            <Link href="/approvals" className="btn-secondary">Open approvals</Link>
+                            <Link
+                              href="/approvals"
+                              style={mergeStyles(
+                                { display: 'inline-flex', alignItems: 'center', textDecoration: 'none' },
+                                buttonStyle({ tone: 'secondary', size: 'md' }),
+                              )}
+                            >
+                              Open approvals
+                            </Link>
                           </>
                         ) : null}
                         {canResumeRun ? (
                           <button
                             type="button"
-                            className="btn-primary"
+                            style={mergeStyles(
+                              { display: 'inline-flex', alignItems: 'center', gap: DESIGN_TOKENS.space[2] },
+                              buttonStyle({ tone: 'primary', size: 'md' }),
+                            )}
                             onClick={() => void handleResumeRun()}
                             disabled={resumeBusy || approvalBusy !== null || retryBusy}
                           >
@@ -932,7 +961,10 @@ export default function RunDetailPage() {
                         {retryableFailedChildren > 0 ? (
                           <button
                             type="button"
-                            className="btn-secondary"
+                            style={mergeStyles(
+                              { display: 'inline-flex', alignItems: 'center', gap: DESIGN_TOKENS.space[2] },
+                              buttonStyle({ tone: 'secondary', size: 'md' }),
+                            )}
                             onClick={() => void handleRetryFailedDelegation()}
                             disabled={retryBusy || approvalBusy !== null || resumeBusy}
                           >
@@ -941,15 +973,39 @@ export default function RunDetailPage() {
                         ) : null}
                         {needsLocalMachineAttention ? (
                           <>
-                            <Link href="/machines" className="btn-secondary">Open machines</Link>
-                            <Link href="/health" className="btn-secondary">Open machine health</Link>
+                            <Link
+                              href="/machines"
+                              style={mergeStyles(
+                                { display: 'inline-flex', alignItems: 'center', textDecoration: 'none' },
+                                buttonStyle({ tone: 'secondary', size: 'md' }),
+                              )}
+                            >
+                              Open machines
+                            </Link>
+                            <Link
+                              href="/health"
+                              style={mergeStyles(
+                                { display: 'inline-flex', alignItems: 'center', textDecoration: 'none' },
+                                buttonStyle({ tone: 'secondary', size: 'md' }),
+                              )}
+                            >
+                              Open machine health
+                            </Link>
                           </>
                         ) : null}
-                        <Link href={`/runs/${encodeURIComponent(runId)}/inspect`} className="btn-secondary">Open inspect</Link>
+                        <Link
+                          href={`/runs/${encodeURIComponent(runId)}/inspect`}
+                          style={mergeStyles(
+                            { display: 'inline-flex', alignItems: 'center', textDecoration: 'none' },
+                            buttonStyle({ tone: 'secondary', size: 'md' }),
+                          )}
+                        >
+                          Open inspect
+                        </Link>
                       </>
                     )}
                     feedback={actionNotice ? (
-                      <div style={{ color: 'var(--success-fg)', fontSize: 12 }}>{actionNotice}</div>
+                      <div style={{ color: DESIGN_TOKENS.color.success, fontSize: DESIGN_TOKENS.type.size.caption }}>{actionNotice}</div>
                     ) : null}
                   />
                 </div>
@@ -1075,13 +1131,19 @@ export default function RunDetailPage() {
                   </div>
                   <div style={{ marginTop: 10, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                     {Object.entries(workflowNodeStates.counts).map(([status, count]) => (
-                      <span key={`run-node-count:${status}`} className="orion-chip">
+                      <span key={`run-node-count:${status}`} style={badgeStyle('neutral')}>
                         {count} {formatWorkflowNodeStatus(status)}
                       </span>
                     ))}
                   </div>
                   <div style={{ marginTop: 10 }}>
-                    <Link href={`/runs/${encodeURIComponent(runId)}/inspect?focus=workflow`} className="btn-secondary">
+                    <Link
+                      href={`/runs/${encodeURIComponent(runId)}/inspect?focus=workflow`}
+                      style={mergeStyles(
+                        { display: 'inline-flex', alignItems: 'center', textDecoration: 'none' },
+                        buttonStyle({ tone: 'secondary', size: 'md' }),
+                      )}
+                    >
                       Open workflow inspect
                     </Link>
                   </div>
@@ -1218,7 +1280,10 @@ export default function RunDetailPage() {
                 <div className="hekor-run-actions">
                   <button
                     type="button"
-                    className="btn-primary"
+                    style={mergeStyles(
+                      { display: 'inline-flex', alignItems: 'center', gap: DESIGN_TOKENS.space[2] },
+                      buttonStyle({ tone: 'primary', size: 'md' }),
+                    )}
                     onClick={() => void handleResolveApproval('Proceed')}
                     disabled={approvalBusy !== null}
                   >
@@ -1233,7 +1298,10 @@ export default function RunDetailPage() {
                   </button>
                   <button
                     type="button"
-                    className="btn-secondary"
+                    style={mergeStyles(
+                      { display: 'inline-flex', alignItems: 'center', gap: DESIGN_TOKENS.space[2] },
+                      buttonStyle({ tone: 'secondary', size: 'md' }),
+                    )}
                     onClick={() => void handleResolveApproval('Hold')}
                     disabled={approvalBusy !== null}
                   >

@@ -3,7 +3,9 @@
 import Link from 'next/link';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Cpu, RefreshCw } from 'lucide-react';
+import { Button } from '@/components/ui/button';
 import { ensureControlPlaneSession } from '@/lib/controlPlaneSession';
+import { DESIGN_TOKENS, badgeStyle, bodyTextStyle, buttonStyle, mergeStyles, panelStyle, sectionTitleStyle } from '@/design-constraints';
 
 type RunDiagnostics = {
   category?: string | null;
@@ -155,15 +157,21 @@ export function LocalCompanionRunPanel({
   if (!needsLocalDiagnostics) return null;
 
   return (
-    <div className="orion-panel muted" style={{ marginTop: 14 }}>
-      <div className="orion-panel-title" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+    <div
+      style={mergeStyles(panelStyle({ muted: true }), {
+        marginTop: DESIGN_TOKENS.space[4],
+        display: 'grid',
+        gap: DESIGN_TOKENS.space[4],
+      })}
+    >
+      <div style={mergeStyles(sectionTitleStyle(), { display: 'flex', alignItems: 'center', gap: DESIGN_TOKENS.space[2] })}>
         <Cpu size={14} />
         Local companion diagnosis
       </div>
-      <div className="orion-panel-copy">
+      <div style={bodyTextStyle()}>
         {String(queueItem?.waiting_reason || diagnostics?.summary || 'This run depends on a local companion machine.').trim()}
       </div>
-      <div className="hekor-run-info-list" style={{ marginTop: 10 }}>
+      <div className="hekor-run-info-list">
         <div className="hekor-run-info-row">
           <span>Machine status</span>
           <strong>
@@ -198,71 +206,87 @@ export function LocalCompanionRunPanel({
       </div>
 
       {requiredCapabilities.length > 0 ? (
-        <div className="hekor-run-capability-block">
-          <div className="hekor-run-capability-title">Required for this run</div>
+        <div style={{ display: 'grid', gap: DESIGN_TOKENS.space[2] }}>
+          <div style={{ ...bodyTextStyle('tertiary'), fontSize: DESIGN_TOKENS.type.size.caption }}>Required for this run</div>
           <div className="hekor-run-capability-row">
             {requiredCapabilities.map((item) => (
-              <span key={`required:${item}`} className="hekor-run-capability-chip">{item}</span>
+              <span key={`required:${item}`} style={badgeStyle('accent')}>{item}</span>
             ))}
           </div>
         </div>
       ) : null}
 
       {missingCapabilities.length > 0 ? (
-        <div className="hekor-run-capability-block">
-          <div className="hekor-run-capability-title">Missing online now</div>
+        <div style={{ display: 'grid', gap: DESIGN_TOKENS.space[2] }}>
+          <div style={{ ...bodyTextStyle('tertiary'), fontSize: DESIGN_TOKENS.type.size.caption }}>Missing online now</div>
           <div className="hekor-run-capability-row">
             {missingCapabilities.map((item) => (
-              <span key={`missing:${item}`} className="hekor-run-capability-chip is-warning">{item}</span>
+              <span key={`missing:${item}`} style={badgeStyle('warning')}>{item}</span>
             ))}
           </div>
         </div>
       ) : null}
 
       {busyCapableMachines.length > 0 || busyRuntimeLabels.length > 0 ? (
-        <div className="hekor-run-capability-block">
-          <div className="hekor-run-capability-title">Busy capable machines</div>
+        <div style={{ display: 'grid', gap: DESIGN_TOKENS.space[2] }}>
+          <div style={{ ...bodyTextStyle('tertiary'), fontSize: DESIGN_TOKENS.type.size.caption }}>Busy capable machines</div>
           <div className="hekor-run-capability-row">
             {(busyCapableMachines.length > 0 ? busyCapableMachines.map(machineLabel) : busyRuntimeLabels).map((item) => (
-              <span key={`busy:${item}`} className="hekor-run-capability-chip">{item}</span>
+              <span key={`busy:${item}`} style={badgeStyle('neutral')}>{item}</span>
             ))}
           </div>
         </div>
       ) : null}
 
       {idleCapableMachines.length > 0 ? (
-        <div className="hekor-run-capability-block">
-          <div className="hekor-run-capability-title">Capable machines ready now</div>
+        <div style={{ display: 'grid', gap: DESIGN_TOKENS.space[2] }}>
+          <div style={{ ...bodyTextStyle('tertiary'), fontSize: DESIGN_TOKENS.type.size.caption }}>Capable machines ready now</div>
           <div className="hekor-run-capability-row">
             {idleCapableMachines.slice(0, 6).map((machine) => (
-              <span key={`ready:${machine.runtime_id}`} className="hekor-run-capability-chip">{machineLabel(machine)}</span>
+              <span key={`ready:${machine.runtime_id}`} style={badgeStyle('success')}>{machineLabel(machine)}</span>
             ))}
           </div>
         </div>
       ) : null}
 
       {onlineCapabilities.length > 0 ? (
-        <div className="hekor-run-capability-block">
-          <div className="hekor-run-capability-title">Capabilities online now</div>
+        <div style={{ display: 'grid', gap: DESIGN_TOKENS.space[2] }}>
+          <div style={{ ...bodyTextStyle('tertiary'), fontSize: DESIGN_TOKENS.type.size.caption }}>Capabilities online now</div>
           <div className="hekor-run-capability-row">
             {onlineCapabilities.slice(0, 10).map((item) => (
-              <span key={`online-cap:${item}`} className="hekor-run-capability-chip">{item}</span>
+              <span key={`online-cap:${item}`} style={badgeStyle('neutral')}>{item}</span>
             ))}
           </div>
         </div>
       ) : null}
 
       {error ? (
-        <div style={{ marginTop: 10, color: 'var(--error-fg)', fontSize: 12 }}>{error}</div>
+        <div style={{ color: DESIGN_TOKENS.color.danger, fontSize: DESIGN_TOKENS.type.size.caption }}>{error}</div>
       ) : null}
 
-      <div style={{ marginTop: 10, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-        <button type="button" className="btn-secondary" onClick={() => void load()} disabled={loading}>
+      <div style={{ display: 'flex', gap: DESIGN_TOKENS.space[3], flexWrap: 'wrap' }}>
+        <Button type="button" variant="secondary" onClick={() => void load()} disabled={loading}>
           <RefreshCw size={14} />
           {loading ? 'Refreshing…' : 'Refresh machine status'}
-        </button>
-        <Link href="/machines" className="btn-secondary">Open machines</Link>
-        <Link href="/health" className="btn-secondary">Open machine health</Link>
+        </Button>
+        <Link
+          href="/machines"
+          style={mergeStyles(
+            { display: 'inline-flex', alignItems: 'center', textDecoration: 'none' },
+            buttonStyle({ tone: 'secondary', size: 'md' }),
+          )}
+        >
+          Open machines
+        </Link>
+        <Link
+          href="/health"
+          style={mergeStyles(
+            { display: 'inline-flex', alignItems: 'center', textDecoration: 'none' },
+            buttonStyle({ tone: 'secondary', size: 'md' }),
+          )}
+        >
+          Open machine health
+        </Link>
       </div>
     </div>
   );

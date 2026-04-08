@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useState, type CSSProperties, type ReactNode } from 'react';
+import { DESIGN_TOKENS, mergeStyles, metaTextStyle, statCardStyle } from '@/design-constraints';
 
 type MetricStripItem = {
   label: string;
@@ -53,16 +54,35 @@ function AnimatedMetricValue({ value }: { value: ReactNode }) {
 export function MetricStrip({ items, minWidth = 180 }: MetricStripProps) {
   return (
     <section
-      className="orion-metric-strip orion-stagger-grid"
-      style={{ '--orion-metric-min-width': `${minWidth}px` } as CSSProperties}
+      style={{
+        display: 'grid',
+        gridTemplateColumns: `repeat(auto-fit, minmax(${minWidth}px, 1fr))`,
+        gap: DESIGN_TOKENS.space[4],
+      } as CSSProperties}
     >
       {items.map((item) => (
-        <section key={item.label} className="orion-stat-card">
-          <div className="orion-stat-label">{item.label}</div>
-          <div className="orion-stat-value">
+        <section key={item.label} style={statCardStyle()}>
+          <div style={metaTextStyle()}>{item.label}</div>
+          <div
+            style={{
+              color: DESIGN_TOKENS.color.textPrimary,
+              fontSize: DESIGN_TOKENS.type.size.title,
+              fontWeight: DESIGN_TOKENS.type.weight.semibold,
+              lineHeight: DESIGN_TOKENS.type.lineHeight.tight,
+              letterSpacing: DESIGN_TOKENS.type.tracking.tight,
+            }}
+          >
             <AnimatedMetricValue value={item.value} />
           </div>
-          {item.note ? <div className="orion-stat-note">{item.note}</div> : null}
+          {item.note ? (
+            <div
+              style={mergeStyles(metaTextStyle(), {
+                lineHeight: DESIGN_TOKENS.type.lineHeight.relaxed,
+              })}
+            >
+              {item.note}
+            </div>
+          ) : null}
         </section>
       ))}
     </section>

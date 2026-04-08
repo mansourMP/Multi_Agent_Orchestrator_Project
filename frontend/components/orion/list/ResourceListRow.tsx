@@ -1,4 +1,5 @@
 import type { ComponentPropsWithoutRef, ReactNode } from 'react';
+import { DESIGN_TOKENS, listRowStyle } from '@/design-constraints';
 
 type ResourceListRowProps = ComponentPropsWithoutRef<'article'> & {
   leading?: ReactNode;
@@ -14,10 +15,20 @@ export function ResourceListRow({
   ...props
 }: ResourceListRowProps) {
   return (
-    <article className={`orion-list-row${className ? ` ${className}` : ''}`} {...props}>
-      {leading ? <div className="orion-item-leading">{leading}</div> : null}
-      {!leading ? children : <>{children}</>}
-      {end ? <div className="orion-list-row-end">{end}</div> : null}
+    <article
+      className={className}
+      style={listRowStyle({ interactive: props.onClick != null })}
+      {...props}
+    >
+      {leading ? (
+        <div style={{ display: 'flex', alignItems: 'flex-start', gap: DESIGN_TOKENS.space[4], minWidth: 0, flex: 1 }}>
+          {leading}
+          <div style={{ minWidth: 0, flex: 1 }}>{children}</div>
+        </div>
+      ) : (
+        children
+      )}
+      {end ? <div style={{ display: 'flex', alignItems: 'center', gap: DESIGN_TOKENS.space[2], flexWrap: 'wrap' }}>{end}</div> : null}
     </article>
   );
 }

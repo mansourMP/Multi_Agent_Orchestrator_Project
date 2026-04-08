@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react';
+import { Button } from '@/components/ui/button';
 
 type RetryActionsProps = {
   onRetry?: () => void;
@@ -12,9 +13,9 @@ export function RetryActions({ onRetry, retryLabel = 'Retry', children }: RetryA
   return (
     <>
       {onRetry ? (
-        <button type="button" className="btn-secondary" onClick={onRetry}>
+        <Button type="button" variant="secondary" onClick={onRetry}>
           {retryLabel}
-        </button>
+        </Button>
       ) : null}
       {children}
     </>

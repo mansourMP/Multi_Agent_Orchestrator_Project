@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react';
+import { DESIGN_TOKENS, eyebrowStyle, mergeStyles, panelStyle } from '@/design-constraints';
 
 type PageHeroCardProps = {
   label?: ReactNode;
@@ -8,8 +9,14 @@ type PageHeroCardProps = {
 
 export function PageHeroCard({ label, children, className }: PageHeroCardProps) {
   return (
-    <div className={`orion-home-side-card${className ? ` ${className}` : ''}`}>
-      {label ? <div className="orion-home-side-label">{label}</div> : null}
+    <div
+      className={className}
+      style={mergeStyles(panelStyle({ muted: true, padding: DESIGN_TOKENS.space[5] }), {
+        display: 'grid',
+        gap: DESIGN_TOKENS.space[3],
+      })}
+    >
+      {label ? <div style={eyebrowStyle()}>{label}</div> : null}
       {children}
     </div>
   );

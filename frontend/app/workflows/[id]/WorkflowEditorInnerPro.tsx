@@ -58,6 +58,7 @@ import LoopNode from '@/components/nodes/LoopNode';
 import SmoothConnectionLine from '@/components/nodes/SmoothConnectionLine';
 import SmoothActionEdge, { type SmoothActionEdgeData } from '@/components/nodes/SmoothActionEdge';
 import WorkflowValidationPanel from '@/components/workflows/WorkflowValidationPanel';
+import { DESIGN_TOKENS, inputStyle, mergeStyles, panelStyle } from '@/design-constraints';
 
 type RunStatus = 'idle' | 'running' | 'waiting' | 'completed' | 'error';
 type LogLevel = 'info' | 'warn' | 'error';
@@ -1274,42 +1275,38 @@ function isStreamPayload(value: unknown): value is StreamLogPayload {
 
 const workflowLabelStyle = {
     display: 'block',
-    fontSize: 11,
-    color: 'var(--text-secondary)',
+    fontSize: DESIGN_TOKENS.type.size.caption,
+    color: DESIGN_TOKENS.color.textSecondary,
     marginBottom: 5,
-    fontWeight: 700,
-    letterSpacing: '0.02em',
+    fontWeight: DESIGN_TOKENS.type.weight.semibold,
+    letterSpacing: DESIGN_TOKENS.type.tracking.normal,
 };
 
 const workflowInputSurfaceStyle = {
-    width: '100%',
-    borderRadius: 8,
-    border: '1px solid var(--border-default)',
-    background: 'var(--bg-element)',
-    color: 'var(--text-primary)',
+    ...inputStyle(),
     padding: '7px 9px',
 };
 
 const workflowCompactSelectStyle = {
-    borderRadius: 8,
-    border: '1px solid var(--border-default)',
-    background: 'var(--bg-element)',
-    color: 'var(--text-secondary)',
+    borderRadius: DESIGN_TOKENS.radius.md,
+    border: `1px solid ${DESIGN_TOKENS.color.borderStrong}`,
+    background: DESIGN_TOKENS.color.surface,
+    color: DESIGN_TOKENS.color.textSecondary,
     height: 30,
     padding: '0 9px',
     fontSize: 11.5,
 };
 
 const workflowSectionDividerStyle = {
-    borderTop: '1px solid var(--border-subtle)',
+    borderTop: `1px solid ${DESIGN_TOKENS.color.borderSubtle}`,
     paddingTop: 10,
     display: 'grid',
     gap: 8,
 };
 
 const workflowMutedCopyStyle = {
-    fontSize: 11,
-    color: 'var(--text-tertiary)',
+    fontSize: DESIGN_TOKENS.type.size.caption,
+    color: DESIGN_TOKENS.color.textTertiary,
 };
 
 function normalizeProvider(provider: string): ProviderId {
@@ -4249,12 +4246,22 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
                 minHeight: 'calc(100vh - var(--topbar-height))',
                 display: 'flex',
                 flexDirection: 'column',
-                background: 'var(--bg-app)',
-                color: 'var(--text-primary)',
+                background: DESIGN_TOKENS.color.canvas,
+                color: DESIGN_TOKENS.color.textPrimary,
                 overflow: 'hidden',
             }}
         >
-            <div className="workflow-pro-toolbar">
+            <div
+                className="workflow-pro-toolbar"
+                style={{
+                    display: 'flex',
+                    alignItems: 'flex-start',
+                    justifyContent: 'space-between',
+                    gap: DESIGN_TOKENS.space[4],
+                    flexWrap: 'wrap',
+                    padding: `${DESIGN_TOKENS.space[5]}px ${DESIGN_TOKENS.space[5]}px ${DESIGN_TOKENS.space[4]}px`,
+                }}
+            >
                 <div style={{ display: 'grid', gap: 6 }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
                         <div className="workflow-pro-log-title">{workflow?.name || (workflowId ? 'Workflow' : 'New workflow')}</div>
@@ -4280,7 +4287,10 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
                         </div>
                     ) : null}
                 </div>
-                <div className="workflow-pro-toolbar-actions">
+                <div
+                    className="workflow-pro-toolbar-actions"
+                    style={{ display: 'flex', alignItems: 'center', gap: DESIGN_TOKENS.space[3], flexWrap: 'wrap' }}
+                >
                     {isSimplifiedCanvasWorkflow ? (
                         <>
                             <button
@@ -4355,7 +4365,18 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
                     )}
                 </div>
             </div>
-            <div className={`workflow-pro-toolbar-note${routeBlocked ? ' is-warning' : ''}`.trim()}>
+            <div
+                className={`workflow-pro-toolbar-note${routeBlocked ? ' is-warning' : ''}`.trim()}
+                style={{
+                    margin: `0 ${DESIGN_TOKENS.space[5]}px ${DESIGN_TOKENS.space[4]}px`,
+                    padding: `${DESIGN_TOKENS.space[3]}px ${DESIGN_TOKENS.space[4]}px`,
+                    borderRadius: DESIGN_TOKENS.radius.lg,
+                    background: routeBlocked ? DESIGN_TOKENS.color.warningSoft : DESIGN_TOKENS.color.surfaceMuted,
+                    border: `1px solid ${routeBlocked ? DESIGN_TOKENS.color.warningSoft : DESIGN_TOKENS.color.borderSubtle}`,
+                    color: routeBlocked ? DESIGN_TOKENS.color.warning : DESIGN_TOKENS.color.textSecondary,
+                    fontSize: DESIGN_TOKENS.type.size.label,
+                }}
+            >
                 Route: {formatExecutionTargetLabel(executionTarget)}. {describeExecutionTarget(executionTarget, hasLocalRuntime)}
             </div>
             {hasWorkflowValidationIssues ? (
@@ -4383,13 +4404,13 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
                 <div
                     className="workflow-pro-panel"
                     style={{
+                        ...panelStyle({ muted: true, padding: DESIGN_TOKENS.space[4] }),
                         margin: '12px 12px 0',
                         display: 'flex',
                         alignItems: 'center',
                         justifyContent: 'space-between',
                         gap: 12,
                         flexWrap: 'wrap',
-                        padding: '14px 16px',
                     }}
                 >
                     <div style={{ display: 'grid', gap: 4 }}>
@@ -4413,13 +4434,13 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
                 <div
                     className="workflow-pro-panel"
                     style={{
+                        ...panelStyle({ muted: true, padding: DESIGN_TOKENS.space[4] }),
                         margin: '12px 12px 0',
                         display: 'flex',
                         alignItems: 'center',
                         justifyContent: 'space-between',
                         gap: 12,
                         flexWrap: 'wrap',
-                        padding: '12px 16px',
                     }}
                 >
                     <div style={{ display: 'grid', gap: 4 }}>
@@ -4459,7 +4480,10 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
                             alignItems: 'stretch',
                         }}
                     >
-                        <section className="workflow-pro-panel" style={{ overflowY: 'auto', display: 'grid', gap: 12, alignContent: 'start' }}>
+                        <section
+                            className="workflow-pro-panel"
+                            style={mergeStyles(panelStyle(), { overflowY: 'auto', display: 'grid', gap: 12, alignContent: 'start' })}
+                        >
                             <div className="workflow-pro-section-title">Palette</div>
                             {groupedCanvasNodeLibrary.map((group) => (
                                 <div key={group.label} style={{ display: 'grid', gap: 8 }}>
@@ -4484,7 +4508,11 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
                             </div>
                         </section>
 
-                        <section ref={canvasHostRef} className="workflow-pro-panel workflow-canvas-panel" style={{ padding: 0, overflow: 'hidden', height: '100%', display: 'flex', position: 'relative' }}>
+                        <section
+                            ref={canvasHostRef}
+                            className="workflow-pro-panel workflow-canvas-panel"
+                            style={mergeStyles(panelStyle({ padding: 0 }), { overflow: 'hidden', height: '100%', display: 'flex', position: 'relative' })}
+                        >
                             <ReactFlow
                                 style={{ flex: 1, minHeight: 0, height: 'calc(100vh - 120px)' }}
                                 nodes={renderedCanvasNodes}
@@ -4550,17 +4578,15 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
                             {canvasNodeSearch ? (
                                 <div
                                     className="workflow-pro-panel"
-                                    style={{
+                                    style={mergeStyles(panelStyle({ padding: 10 }), {
                                         position: 'absolute',
                                         top: Math.max(12, Math.min(canvasNodeSearch.screenY, (canvasHostRef.current?.clientHeight || 0) - 220)),
                                         left: Math.max(12, Math.min(canvasNodeSearch.screenX, (canvasHostRef.current?.clientWidth || 0) - 240)),
                                         width: 220,
-                                        padding: 10,
                                         zIndex: 20,
                                         display: 'grid',
                                         gap: 8,
-                                        boxShadow: '0 18px 40px rgba(15, 23, 42, 0.18)',
-                                    }}
+                                    })}
                                 >
                                     <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                                         <Search size={14} color="var(--text-tertiary)" />
@@ -4600,7 +4626,10 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
                             ) : null}
                         </section>
 
-                        <section className="workflow-pro-panel" style={{ overflowY: 'auto', display: 'grid', gap: 12, alignContent: 'start' }}>
+                        <section
+                            className="workflow-pro-panel"
+                            style={mergeStyles(panelStyle(), { overflowY: 'auto', display: 'grid', gap: 12, alignContent: 'start' })}
+                        >
                             <div className="workflow-pro-section-title">Inspector</div>
                             {renderCanvasInspector()}
                         </section>
@@ -4608,7 +4637,7 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
                 </div>
             ) : (
             <div className="workflow-pro-grid" style={{ flex: 1, minHeight: 0, padding: 12 }}>
-                <section className="workflow-pro-panel" style={{ overflowY: 'auto' }}>
+                <section className="workflow-pro-panel" style={mergeStyles(panelStyle(), { overflowY: 'auto' })}>
                     <div className="workflow-pro-section-title">Goal</div>
 
                     <div>
@@ -5057,7 +5086,7 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
                     </div>
                 </section>
 
-                <section className="workflow-pro-panel log">
+                <section className="workflow-pro-panel log" style={mergeStyles(panelStyle(), { display: 'flex', flexDirection: 'column', minHeight: 0 })}>
                     <div style={{ marginBottom: 10, display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
                         <div>
                             <div className="workflow-pro-log-title">{isSimplifiedCanvasWorkflow ? 'Recent runs' : 'Live run log'}</div>

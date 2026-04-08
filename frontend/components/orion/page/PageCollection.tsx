@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react';
+import { DESIGN_TOKENS, bodyTextStyle, mergeStyles, panelStyle, sectionTitleStyle } from '@/design-constraints';
 
 type PageCollectionProps = {
   title?: ReactNode;
@@ -18,17 +19,23 @@ export function PageCollection({
   bodyClassName,
 }: PageCollectionProps) {
   return (
-    <section className={`orion-panel orion-panel-shell${className ? ` ${className}` : ''}`}>
+    <section
+      className={className}
+      style={mergeStyles(panelStyle(), {
+        display: 'grid',
+        gap: DESIGN_TOKENS.space[5],
+      })}
+    >
       {title || description || actions ? (
-        <div className="orion-panel-header orion-panel-shell-header">
-          <div>
-            {title ? <div className="orion-panel-title">{title}</div> : null}
-            {description ? <div className="orion-panel-copy">{description}</div> : null}
+        <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: DESIGN_TOKENS.space[4], flexWrap: 'wrap' }}>
+          <div style={{ display: 'grid', gap: DESIGN_TOKENS.space[2] }}>
+            {title ? <div style={sectionTitleStyle()}>{title}</div> : null}
+            {description ? <div style={bodyTextStyle()}>{description}</div> : null}
           </div>
-          {actions ? <div className="orion-page-section-actions">{actions}</div> : null}
+          {actions ? <div style={{ display: 'flex', gap: DESIGN_TOKENS.space[3], flexWrap: 'wrap' }}>{actions}</div> : null}
         </div>
       ) : null}
-      <div className={`orion-panel-shell-body${bodyClassName ? ` ${bodyClassName}` : ''}`}>{children}</div>
+      <div className={bodyClassName} style={{ display: 'grid', gap: DESIGN_TOKENS.space[4] }}>{children}</div>
     </section>
   );
 }

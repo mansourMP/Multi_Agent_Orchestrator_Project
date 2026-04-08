@@ -24,6 +24,7 @@ import {
 import { apiClient } from '@/lib/api-client';
 import type { ComputerActionEventPayload, RunListItem } from '@shared/api-contract';
 import { OsPageHeader } from '@/components/ui/OsPageHeader';
+import { Button } from '@/components/ui/button';
 import { ensureControlPlaneSession } from '@/lib/controlPlaneSession';
 import { formatExecutionTargetLabel } from '@/lib/executionTargets';
 import { fetchRuntimeArtifactBlob } from '@/lib/runtimeArtifacts';
@@ -32,6 +33,7 @@ import { SINGLE_AGENT_MODE } from '@/lib/appFlags';
 import { getLocalExecutionCapabilityTitle } from '@/lib/localExecutionCapabilities';
 import { LocalCompanionRunPanel } from '@/components/orion/runs/LocalCompanionRunPanel';
 import { RunRemediationGuide, shouldShowRunRemediationGuide } from '@/components/orion/runs/RunRemediationGuide';
+import { DESIGN_TOKENS, buttonStyle, mergeStyles, pageShellStyle, panelStyle } from '@/design-constraints';
 
 type HistoryItem = {
   run_id: string;
@@ -2365,14 +2367,14 @@ export default function RunInspectPage() {
 
   if (!runId) {
     return (
-      <div className="orion-page-shell">
-        <section className="orion-panel">Invalid run id.</section>
+      <div style={pageShellStyle()}>
+        <section style={panelStyle()}>Invalid run id.</section>
       </div>
     );
   }
 
   return (
-    <div className="orion-page-shell orion-animate-in">
+    <div style={pageShellStyle()}>
       <OsPageHeader
         icon={<Eye size={18} />}
         title="Run Inspect"
@@ -2387,10 +2389,11 @@ export default function RunInspectPage() {
                 alignItems: 'center',
                 gap: 6,
                 borderRadius: 999,
-                border: '1px solid var(--border-default)',
+                border: `1px solid ${DESIGN_TOKENS.color.borderStrong}`,
                 padding: '6px 10px',
                 fontSize: 11,
-                color: 'var(--text-tertiary)',
+                color: DESIGN_TOKENS.color.textTertiary,
+                background: DESIGN_TOKENS.color.surface,
               }}
             >
               <span
@@ -2404,11 +2407,17 @@ export default function RunInspectPage() {
               />
               stream {streamLabel}
             </div>
-            <button className="orion-btn orion-btn-ghost" onClick={() => void load()}>
+            <Button variant="secondary" onClick={() => void load()}>
               <RefreshCw size={14} />
               Refresh
-            </button>
-            <Link className="orion-btn orion-btn-ghost" href="/executions">
+            </Button>
+            <Link
+              href="/executions"
+              style={mergeStyles(
+                { display: 'inline-flex', alignItems: 'center', textDecoration: 'none' },
+                buttonStyle({ tone: 'secondary', size: 'md' }),
+              )}
+            >
               Back to Runs
             </Link>
           </>
@@ -2417,12 +2426,11 @@ export default function RunInspectPage() {
 
       {error ? (
         <section
-          className="orion-panel"
-          style={{
+          style={mergeStyles(panelStyle({ muted: true }), {
             borderColor: 'rgba(239,68,68,0.35)',
             background: 'var(--error-bg)',
             color: 'var(--error-fg)',
-          }}
+          })}
         >
           <div style={{ display: 'inline-flex', alignItems: 'center', gap: 8, fontSize: 13, fontWeight: 700 }}>
             <AlertTriangle size={14} />
@@ -2433,12 +2441,11 @@ export default function RunInspectPage() {
 
       {!error && streamError && !TERMINAL_RUN_STATUSES.has(effectiveRunStatus) ? (
         <section
-          className="orion-panel"
-          style={{
+          style={mergeStyles(panelStyle({ muted: true }), {
             borderColor: 'rgba(245,158,11,0.35)',
             background: 'var(--warning-bg)',
             color: 'var(--warning-fg)',
-          }}
+          })}
         >
           <div style={{ display: 'inline-flex', alignItems: 'center', gap: 8, fontSize: 13, fontWeight: 600 }}>
             <AlertTriangle size={14} />

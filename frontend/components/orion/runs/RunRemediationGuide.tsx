@@ -1,6 +1,7 @@
 'use client';
 
 import type { ReactNode } from 'react';
+import { DESIGN_TOKENS, bodyTextStyle, eyebrowStyle, mergeStyles } from '@/design-constraints';
 
 type RunDiagnostics = {
   category?: string | null;
@@ -259,47 +260,60 @@ export function RunRemediationGuide({
   });
 
   return (
-    <div>
-      <div className="orion-panel-title">Guided next steps</div>
-      <div className="orion-panel-copy" style={{ marginTop: 4 }}>
-        {guide.intro}
-      </div>
-      <div style={{ marginTop: 8, fontSize: 16, fontWeight: 700, color: 'var(--text-primary)' }}>
+    <div style={{ display: 'grid', gap: DESIGN_TOKENS.space[4] }}>
+      <div style={eyebrowStyle()}>Guided next steps</div>
+      <div style={bodyTextStyle()}>{guide.intro}</div>
+      <div
+        style={{
+          color: DESIGN_TOKENS.color.textPrimary,
+          fontSize: DESIGN_TOKENS.type.size.titleSm,
+          fontWeight: DESIGN_TOKENS.type.weight.semibold,
+          lineHeight: DESIGN_TOKENS.type.lineHeight.snug,
+        }}
+      >
         {guide.title}
       </div>
-      <ol style={{ marginTop: 12, display: 'grid', gap: 10, padding: 0, listStyle: 'none' }}>
+      <ol style={{ display: 'grid', gap: DESIGN_TOKENS.space[3], padding: 0, margin: 0, listStyle: 'none' }}>
         {guide.steps.map((step, index) => (
           <li
             key={`${step.title}:${index + 1}`}
             style={{
               display: 'grid',
-              gridTemplateColumns: '28px 1fr',
-              gap: 10,
+              gridTemplateColumns: '32px 1fr',
+              gap: DESIGN_TOKENS.space[3],
               alignItems: 'start',
-              padding: '10px 12px',
-              borderRadius: 12,
-              border: '1px solid var(--panel-border)',
-              background: 'color-mix(in srgb, var(--panel-bg) 86%, transparent)',
+              padding: `${DESIGN_TOKENS.space[4]}px ${DESIGN_TOKENS.space[4]}px`,
+              borderRadius: DESIGN_TOKENS.radius.lg,
+              border: `1px solid ${DESIGN_TOKENS.color.borderSubtle}`,
+              background: DESIGN_TOKENS.color.surface,
             }}
           >
             <div
               style={{
-                width: 28,
-                height: 28,
+                width: 32,
+                height: 32,
                 borderRadius: 999,
                 display: 'grid',
                 placeItems: 'center',
-                fontSize: 12,
-                fontWeight: 800,
-                color: 'var(--text-primary)',
-                background: 'color-mix(in srgb, var(--accent) 16%, transparent)',
+                fontSize: DESIGN_TOKENS.type.size.caption,
+                fontWeight: DESIGN_TOKENS.type.weight.semibold,
+                color: DESIGN_TOKENS.color.accentText,
+                background: DESIGN_TOKENS.color.accentSoft,
               }}
             >
               {index + 1}
             </div>
             <div>
-              <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-primary)' }}>{step.title}</div>
-              <div style={{ marginTop: 4, fontSize: 12, lineHeight: 1.55, color: 'var(--text-secondary)' }}>
+              <div
+                style={{
+                  fontSize: DESIGN_TOKENS.type.size.label,
+                  fontWeight: DESIGN_TOKENS.type.weight.semibold,
+                  color: DESIGN_TOKENS.color.textPrimary,
+                }}
+              >
+                {step.title}
+              </div>
+              <div style={mergeStyles(bodyTextStyle(), { marginTop: DESIGN_TOKENS.space[1], fontSize: DESIGN_TOKENS.type.size.label })}>
                 {step.body}
               </div>
             </div>
@@ -307,16 +321,14 @@ export function RunRemediationGuide({
         ))}
       </ol>
       {actions ? (
-        <div style={{ marginTop: 12 }}>
-          <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
-            Do this now
-          </div>
-          <div style={{ marginTop: 8, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+        <div style={{ display: 'grid', gap: DESIGN_TOKENS.space[2] }}>
+          <div style={eyebrowStyle()}>Do this now</div>
+          <div style={{ display: 'flex', gap: DESIGN_TOKENS.space[3], flexWrap: 'wrap' }}>
             {actions}
           </div>
         </div>
       ) : null}
-      {feedback ? <div style={{ marginTop: 10 }}>{feedback}</div> : null}
+      {feedback ? <div>{feedback}</div> : null}
     </div>
   );
 }

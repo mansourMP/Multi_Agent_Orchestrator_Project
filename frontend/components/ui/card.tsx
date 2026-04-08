@@ -1,10 +1,12 @@
 import * as React from "react"
 
+import { DESIGN_TOKENS, bodyTextStyle, mergeStyles, panelStyle, sectionTitleStyle } from "@/design-constraints"
 import { cn } from "@/lib/utils"
 
 function Card({
   className,
   size = "default",
+  style,
   ...props
 }: React.ComponentProps<"div"> & { size?: "default" | "sm" }) {
   return (
@@ -12,45 +14,57 @@ function Card({
       data-slot="card"
       data-size={size}
       className={cn(
-        "group/card flex flex-col gap-4 overflow-hidden rounded-xl bg-card py-4 text-sm text-card-foreground ring-1 ring-foreground/10 has-data-[slot=card-footer]:pb-0 has-[>img:first-child]:pt-0 data-[size=sm]:gap-3 data-[size=sm]:py-3 data-[size=sm]:has-data-[slot=card-footer]:pb-0 *:[img:first-child]:rounded-t-xl *:[img:last-child]:rounded-b-xl",
+        "group/card flex flex-col overflow-hidden",
         className
+      )}
+      style={mergeStyles(
+        panelStyle({ padding: size === "sm" ? DESIGN_TOKENS.space[5] : DESIGN_TOKENS.space[6] }),
+        {
+          gap: size === "sm" ? DESIGN_TOKENS.space[4] : DESIGN_TOKENS.space[5],
+        },
+        style,
       )}
       {...props}
     />
   )
 }
 
-function CardHeader({ className, ...props }: React.ComponentProps<"div">) {
+function CardHeader({ className, style, ...props }: React.ComponentProps<"div">) {
   return (
     <div
       data-slot="card-header"
       className={cn(
-        "group/card-header @container/card-header grid auto-rows-min items-start gap-1 rounded-t-xl px-4 group-data-[size=sm]/card:px-3 has-data-[slot=card-action]:grid-cols-[1fr_auto] has-data-[slot=card-description]:grid-rows-[auto_auto] [.border-b]:pb-4 group-data-[size=sm]/card:[.border-b]:pb-3",
+        "group/card-header grid auto-rows-min items-start",
         className
+      )}
+      style={mergeStyles(
+        {
+          gap: DESIGN_TOKENS.space[2],
+        },
+        style,
       )}
       {...props}
     />
   )
 }
 
-function CardTitle({ className, ...props }: React.ComponentProps<"div">) {
+function CardTitle({ className, style, ...props }: React.ComponentProps<"div">) {
   return (
     <div
       data-slot="card-title"
-      className={cn(
-        "font-heading text-base leading-snug font-medium group-data-[size=sm]/card:text-sm",
-        className
-      )}
+      className={cn(className)}
+      style={mergeStyles(sectionTitleStyle(), style)}
       {...props}
     />
   )
 }
 
-function CardDescription({ className, ...props }: React.ComponentProps<"div">) {
+function CardDescription({ className, style, ...props }: React.ComponentProps<"div">) {
   return (
     <div
       data-slot="card-description"
-      className={cn("text-sm text-muted-foreground", className)}
+      className={cn(className)}
+      style={mergeStyles(bodyTextStyle(), style)}
       {...props}
     />
   )
@@ -69,23 +83,36 @@ function CardAction({ className, ...props }: React.ComponentProps<"div">) {
   )
 }
 
-function CardContent({ className, ...props }: React.ComponentProps<"div">) {
+function CardContent({ className, style, ...props }: React.ComponentProps<"div">) {
   return (
     <div
       data-slot="card-content"
-      className={cn("px-4 group-data-[size=sm]/card:px-3", className)}
+      className={cn(className)}
+      style={style}
       {...props}
     />
   )
 }
 
-function CardFooter({ className, ...props }: React.ComponentProps<"div">) {
+function CardFooter({ className, style, ...props }: React.ComponentProps<"div">) {
   return (
     <div
       data-slot="card-footer"
       className={cn(
-        "flex items-center rounded-b-xl border-t bg-muted/50 p-4 group-data-[size=sm]/card:p-3",
+        "flex items-center",
         className
+      )}
+      style={mergeStyles(
+        {
+          paddingTop: DESIGN_TOKENS.space[4],
+          borderTop: `1px solid ${DESIGN_TOKENS.color.borderSubtle}`,
+          background: DESIGN_TOKENS.color.surfaceMuted,
+          marginInline: -DESIGN_TOKENS.space[6],
+          marginBottom: -DESIGN_TOKENS.space[6],
+          paddingInline: DESIGN_TOKENS.space[6],
+          paddingBottom: DESIGN_TOKENS.space[6],
+        },
+        style,
       )}
       {...props}
     />

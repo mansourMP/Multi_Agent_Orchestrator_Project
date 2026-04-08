@@ -5,6 +5,8 @@ import { useCallback, useState } from 'react';
 import { Plus, PlayCircle, Search } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { MetricStrip } from '@/components/ui/MetricStrip';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
 import { PageCollection } from '@/components/orion/page/PageCollection';
 import { PageDialog } from '@/components/orion/page/PageDialog';
 import { PageFilterBar } from '@/components/orion/page/PageFilterBar';
@@ -19,6 +21,7 @@ import { WorkflowListRow } from '@/components/orion/workflows/WorkflowListRow';
 import { useToast } from '@/components/Toast';
 import { humanizeUiError, UI_ERROR_COPY } from '@/lib/uiError';
 import { runWorkflow } from '@/lib/api';
+import { DESIGN_TOKENS, bodyTextStyle, buttonStyle, mergeStyles, pageShellStyle } from '@/design-constraints';
 
 export default function WorkflowsPage() {
   const router = useRouter();
@@ -71,18 +74,40 @@ export default function WorkflowsPage() {
   }, [addToast, router]);
 
   return (
-    <div className="orion-page-shell is-static-entry">
+    <div style={pageShellStyle()}>
       <PageHero
         kicker="Workflows"
         title="Save the tasks that work well and run them again."
         copy="Start with a task. When the steps are stable, keep it here as a reusable workflow for your team."
         actions={
           <>
-            <Link href="/workflows/new" className="btn-primary">
+            <Link
+              href="/workflows/new"
+              style={mergeStyles(
+                {
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: DESIGN_TOKENS.space[2],
+                  textDecoration: 'none',
+                },
+                buttonStyle({ tone: 'primary', size: 'md' }),
+              )}
+            >
               <Plus size={14} />
               New Workflow
             </Link>
-            <Link href="/setup" className="btn-secondary">
+            <Link
+              href="/setup"
+              style={mergeStyles(
+                {
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: DESIGN_TOKENS.space[2],
+                  textDecoration: 'none',
+                },
+                buttonStyle({ tone: 'secondary', size: 'md' }),
+              )}
+            >
               <PlayCircle size={14} />
               Start from a task
             </Link>
@@ -91,24 +116,24 @@ export default function WorkflowsPage() {
         aside={
           <>
             <PageHeroCard label="Library snapshot">
-              <div className="orion-home-side-stats">
-                <div>
-                  <div className="orion-home-side-value">{statusSummary.total}</div>
-                  <div className="orion-home-side-note">Saved workflows</div>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: DESIGN_TOKENS.space[4] }}>
+                <div style={{ display: 'grid', gap: DESIGN_TOKENS.space[1] }}>
+                  <div style={{ fontSize: DESIGN_TOKENS.type.size.title, fontWeight: DESIGN_TOKENS.type.weight.semibold, color: DESIGN_TOKENS.color.textPrimary }}>{statusSummary.total}</div>
+                  <div style={bodyTextStyle('tertiary')}>Saved workflows</div>
                 </div>
-                <div>
-                  <div className="orion-home-side-value">{recentWorkflowCount}</div>
-                  <div className="orion-home-side-note">Updated this week</div>
+                <div style={{ display: 'grid', gap: DESIGN_TOKENS.space[1] }}>
+                  <div style={{ fontSize: DESIGN_TOKENS.type.size.title, fontWeight: DESIGN_TOKENS.type.weight.semibold, color: DESIGN_TOKENS.color.textPrimary }}>{recentWorkflowCount}</div>
+                  <div style={bodyTextStyle('tertiary')}>Updated this week</div>
                 </div>
               </div>
-              <div className="orion-runs-overview-side-note">
+              <div style={bodyTextStyle()}>
                 {statusSummary.active > 0
                   ? `${statusSummary.active} workflow${statusSummary.active === 1 ? '' : 's'} already active.`
                   : 'No active workflows yet. Start with one repeatable task.'}
               </div>
             </PageHeroCard>
             <PageHeroCard label="When to use this">
-              <div className="orion-home-side-empty">
+              <div style={bodyTextStyle()}>
                 Use workflows for recurring business work that already has a clear process, tools, and approvals.
               </div>
             </PageHeroCard>
@@ -150,18 +175,27 @@ export default function WorkflowsPage() {
             <PageFilterBar
               title="Find a workflow"
               description="Search by name or purpose."
-              summary={<span className="orion-toolbar-summary">{filteredWorkflows.length} of {workflows.length} workflows</span>}
+              summary={<span style={bodyTextStyle('tertiary')}>{filteredWorkflows.length} of {workflows.length} workflows</span>}
             >
-              <div className="orion-toolbar">
-                <div className="orion-toolbar-input-wrap">
-                  <Search size={14} className="icon" />
-                  <input
+              <div style={{ display: 'grid', gap: DESIGN_TOKENS.space[3] }}>
+                <div style={{ position: 'relative', width: '100%', maxWidth: 420 }}>
+                  <Input
                     type="text"
                     value={query}
                     onChange={(event) => setQuery(event.target.value)}
                     placeholder="Search workflows…"
-                    className="input"
                     style={{ paddingLeft: 36 }}
+                  />
+                  <Search
+                    size={14}
+                    style={{
+                      position: 'absolute',
+                      left: DESIGN_TOKENS.space[3],
+                      top: '50%',
+                      transform: 'translateY(-50%)',
+                      color: DESIGN_TOKENS.color.textTertiary,
+                      pointerEvents: 'none',
+                    }}
                   />
                 </div>
               </div>
@@ -181,7 +215,18 @@ export default function WorkflowsPage() {
                 hasQuery ? (
                   <RetryActions onRetry={clearQuery} retryLabel="Clear search" />
                 ) : workflows.length === 0 ? (
-                  <Link href="/workflows/new" className="btn-primary">
+                  <Link
+                    href="/workflows/new"
+                    style={mergeStyles(
+                      {
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: DESIGN_TOKENS.space[2],
+                        textDecoration: 'none',
+                      },
+                      buttonStyle({ tone: 'primary', size: 'md' }),
+                    )}
+                  >
                     <Plus size={14} />
                     New Workflow
                   </Link>
@@ -193,7 +238,7 @@ export default function WorkflowsPage() {
               title="Saved workflows"
               description="Reusable playbooks you can open, refine, and run again."
             >
-              <section className="orion-list">
+              <section style={{ overflow: 'hidden', borderRadius: DESIGN_TOKENS.radius.lg, border: `1px solid ${DESIGN_TOKENS.color.borderSubtle}` }}>
                 {filteredWorkflows.map((workflow) => (
                   <WorkflowListRow
                     key={workflow.id}
@@ -227,10 +272,10 @@ export default function WorkflowsPage() {
         onClose={() => setDeleteTarget(null)}
         footer={
           <>
-            <button type="button" onClick={() => setDeleteTarget(null)} className="btn-secondary">
+            <Button type="button" variant="secondary" onClick={() => setDeleteTarget(null)}>
               Cancel
-            </button>
-            <button
+            </Button>
+            <Button
               type="button"
               onClick={() => {
                 void confirmDelete().catch((error) => {
@@ -241,11 +286,11 @@ export default function WorkflowsPage() {
                   });
                 });
               }}
-              className="orion-btn orion-btn-danger"
+              variant="destructive"
               disabled={isDeleting}
             >
               {isDeleting ? 'Deleting…' : 'Delete'}
-            </button>
+            </Button>
           </>
         }
       >

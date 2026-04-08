@@ -1,9 +1,13 @@
 'use client';
 
 import { Clock, Copy, Pencil, Play, Trash } from 'lucide-react';
-import type { WorkflowRecord } from '@/hooks/pages/useWorkflowLibrary';
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
 import { ResourceActionGroup } from '@/components/orion/list/ResourceActionGroup';
+import { ResourceListRow } from '@/components/orion/list/ResourceListRow';
 import { ResourceMetaLine } from '@/components/orion/list/ResourceMetaLine';
+import type { WorkflowRecord } from '@/hooks/pages/useWorkflowLibrary';
+import { DESIGN_TOKENS, bodyTextStyle, mergeStyles } from '@/design-constraints';
 
 function compactWorkflowText(value?: string, fallback = 'No description yet') {
   const normalized = String(value || '').replace(/\s+/g, ' ').trim();
@@ -31,13 +35,13 @@ function runtimeProfileLabel(workflow: WorkflowRecord) {
 function getStatusDisplay(status?: string) {
   switch (status) {
     case 'published':
-      return { color: 'var(--success-fg)', ring: 'var(--success-border)', label: 'Active' };
+      return { variant: 'default' as const, label: 'Active' };
     case 'paused':
-      return { color: 'var(--warning-fg)', ring: 'var(--warning-border)', label: 'Paused' };
+      return { variant: 'secondary' as const, label: 'Paused' };
     case 'error':
-      return { color: 'var(--error-fg)', ring: 'var(--error-border)', label: 'Error' };
+      return { variant: 'destructive' as const, label: 'Error' };
     default:
-      return { color: 'var(--text-tertiary)', ring: 'var(--border-default)', label: 'Draft' };
+      return { variant: 'secondary' as const, label: 'Draft' };
   }
 }
 
@@ -54,8 +58,7 @@ export function WorkflowListRow({ workflow, onEdit, onRun, onDelete, onDuplicate
   const status = getStatusDisplay(workflow.status);
 
   return (
-    <article
-      className="orion-list-row"
+    <ResourceListRow
       onClick={onEdit}
       role="button"
       tabIndex={0}
@@ -65,84 +68,100 @@ export function WorkflowListRow({ workflow, onEdit, onRun, onDelete, onDuplicate
           onEdit();
         }
       }}
-    >
-      <div className="orion-item-leading">
-        <div className="orion-item-avatar is-accent">
+      leading={
+        <div
+          style={{
+            width: 40,
+            height: 40,
+            borderRadius: DESIGN_TOKENS.radius.lg,
+            display: 'grid',
+            placeItems: 'center',
+            background: DESIGN_TOKENS.color.accentSoft,
+            color: DESIGN_TOKENS.color.accentText,
+            fontSize: DESIGN_TOKENS.type.size.label,
+            fontWeight: DESIGN_TOKENS.type.weight.semibold,
+            flexShrink: 0,
+          }}
+        >
           {workflow.name?.slice(0, 2).toUpperCase() || 'WF'}
         </div>
-        <div className="orion-list-row-main">
-          <div className="orion-list-row-title">{workflow.name || 'Untitled Workflow'}</div>
-          <div className="orion-list-row-subtitle">{compactWorkflowText(workflow.description)}</div>
-          <ResourceMetaLine>
-            <span
-              className="orion-chip"
-              style={{
-                color: status.color,
-                border: `1px solid ${status.ring}`,
-                background: 'var(--bg-surface)',
-              }}
-            >
-              {status.label}
-            </span>
-            <span className="orion-item-meta-entry">
-              <Clock size={11} />
-              Updated {formatDate(workflow.updatedAt)}
-            </span>
-            <span>Last run {formatDate(workflow.lastRun)}</span>
-            {runtimeProfileLabel(workflow) ? <span>AI {runtimeProfileLabel(workflow)}</span> : null}
-          </ResourceMetaLine>
+      }
+      end={
+        <ResourceActionGroup>
+          <Button
+            type="button"
+            variant="secondary"
+            size="sm"
+            onClick={(event) => {
+              event.stopPropagation();
+              onEdit();
+            }}
+          >
+            <Pencil size={14} />
+            Edit
+          </Button>
+          <Button
+            type="button"
+            variant="default"
+            size="sm"
+            onClick={(event) => {
+              event.stopPropagation();
+              onRun();
+            }}
+            disabled={runBusy}
+          >
+            <Play size={14} />
+            {runBusy ? 'Running…' : 'Run'}
+          </Button>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-sm"
+            onClick={(event) => {
+              event.stopPropagation();
+              onDuplicate();
+            }}
+            aria-label="Duplicate workflow"
+          >
+            <Copy size={14} />
+          </Button>
+          <Button
+            type="button"
+            variant="destructive"
+            size="icon-sm"
+            onClick={(event) => {
+              event.stopPropagation();
+              onDelete();
+            }}
+            aria-label="Delete workflow"
+          >
+            <Trash size={14} />
+          </Button>
+        </ResourceActionGroup>
+      }
+    >
+      <div style={{ display: 'grid', gap: DESIGN_TOKENS.space[2], minWidth: 0 }}>
+        <div
+          style={{
+            color: DESIGN_TOKENS.color.textPrimary,
+            fontSize: DESIGN_TOKENS.type.size.bodyLg,
+            fontWeight: DESIGN_TOKENS.type.weight.semibold,
+            lineHeight: DESIGN_TOKENS.type.lineHeight.snug,
+          }}
+        >
+          {workflow.name || 'Untitled Workflow'}
         </div>
+        <div style={mergeStyles(bodyTextStyle(), { maxWidth: 720 })}>{compactWorkflowText(workflow.description)}</div>
+        <ResourceMetaLine>
+          <Badge variant={status.variant}>{status.label}</Badge>
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+            <Clock size={11} />
+            Updated {formatDate(workflow.updatedAt)}
+          </span>
+          <span>Last run {formatDate(workflow.lastRun)}</span>
+          {runtimeProfileLabel(workflow) ? <span>AI {runtimeProfileLabel(workflow)}</span> : null}
+        </ResourceMetaLine>
       </div>
-
-      <ResourceActionGroup>
-        <button
-          type="button"
-          className="orion-btn orion-btn-ghost"
-          style={{ minHeight: 44, paddingInline: 10 }}
-          onClick={(event) => {
-            event.stopPropagation();
-            onEdit();
-          }}
-        >
-          <Pencil size={14} />
-          Edit
-        </button>
-        <button
-          type="button"
-          className="orion-btn orion-btn-primary"
-          style={{ minHeight: 44, paddingInline: 10 }}
-          onClick={(event) => {
-            event.stopPropagation();
-            onRun();
-          }}
-          disabled={runBusy}
-        >
-          <Play size={14} />
-          {runBusy ? 'Running…' : 'Run'}
-        </button>
-        <button
-          type="button"
-          className="orion-icon-btn"
-          onClick={(event) => {
-            event.stopPropagation();
-            onDelete();
-          }}
-          aria-label="Delete workflow"
-        >
-          <Trash size={14} />
-        </button>
-        <button
-          type="button"
-          className="orion-icon-btn"
-          onClick={(event) => {
-            event.stopPropagation();
-            onDuplicate();
-          }}
-          aria-label="Duplicate workflow"
-        >
-          <Copy size={14} />
-        </button>
-      </ResourceActionGroup>
-    </article>
+    </ResourceListRow>
   );
 }

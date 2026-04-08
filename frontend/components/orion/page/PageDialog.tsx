@@ -2,6 +2,7 @@
 
 import { useEffect, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
+import { DESIGN_TOKENS, bodyTextStyle, iconButtonStyle, mergeStyles, modalCardStyle, modalOverlayStyle, sectionTitleStyle } from '@/design-constraints';
 
 type PageDialogProps = {
   open: boolean;
@@ -38,26 +39,56 @@ export function PageDialog({
   if (!open || !portalTarget) return null;
 
   return createPortal(
-    <div className="orion-modal-overlay" onClick={onClose}>
+    <div style={modalOverlayStyle()} onClick={onClose}>
       <div
-        className={`orion-modal${className ? ` ${className}` : ''}`}
+        className={className}
+        style={modalCardStyle()}
         onClick={(event) => event.stopPropagation()}
         role="dialog"
         aria-modal="true"
       >
-        <header className="orion-panel-header orion-page-dialog-header">
-          <h2 className="orion-page-dialog-title">{title}</h2>
+        <header
+          style={{
+            display: 'flex',
+            alignItems: 'flex-start',
+            justifyContent: 'space-between',
+            gap: DESIGN_TOKENS.space[4],
+            padding: `${DESIGN_TOKENS.space[5]}px ${DESIGN_TOKENS.space[6]}px`,
+            borderBottom: `1px solid ${DESIGN_TOKENS.color.borderSubtle}`,
+          }}
+        >
+          <h2 style={sectionTitleStyle()}>{title}</h2>
           <button
             type="button"
-            className="orion-icon-btn"
+            style={iconButtonStyle()}
             onClick={onClose}
             aria-label="Close dialog"
           >
             ×
           </button>
         </header>
-        <div className="orion-page-dialog-body">{children}</div>
-        {footer ? <footer className="orion-page-dialog-footer">{footer}</footer> : null}
+        <div
+          style={mergeStyles(bodyTextStyle(), {
+            padding: `${DESIGN_TOKENS.space[5]}px ${DESIGN_TOKENS.space[6]}px`,
+          })}
+        >
+          {children}
+        </div>
+        {footer ? (
+          <footer
+            style={{
+              display: 'flex',
+              justifyContent: 'flex-end',
+              gap: DESIGN_TOKENS.space[3],
+              flexWrap: 'wrap',
+              padding: `${DESIGN_TOKENS.space[4]}px ${DESIGN_TOKENS.space[6]}px ${DESIGN_TOKENS.space[6]}px`,
+              borderTop: `1px solid ${DESIGN_TOKENS.color.borderSubtle}`,
+              background: DESIGN_TOKENS.color.surfaceMuted,
+            }}
+          >
+            {footer}
+          </footer>
+        ) : null}
       </div>
     </div>,
     portalTarget,

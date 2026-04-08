@@ -8,6 +8,14 @@ export type ChatStepKind = 'file' | 'shell' | 'connector' | 'thinking' | 'screen
 export type ChatMessageActionKind = 'run' | 'workflow' | 'connect' | 'open' | 'approval_required';
 export type ChatMessageActionVariant = 'primary' | 'secondary';
 export type ChatRunCardStatus = 'preparing' | 'running' | 'waiting' | 'completed' | 'needs_attention' | 'failed';
+export type ChatInterventionKind =
+  | 'system_notice'
+  | 'system_error'
+  | 'connect_required'
+  | 'run_offer'
+  | 'workflow_offer'
+  | 'run_handoff'
+  | 'loop_detected';
 
 export type ChatStepRecord = {
   id: string;
@@ -69,6 +77,18 @@ export type ChatApprovalRequestRecord = {
   resolution?: 'waiting' | 'approved' | 'rejected';
 };
 
+export type ChatInterventionRecord = {
+  id: string;
+  kind: ChatInterventionKind;
+  title: string;
+  detail?: string | null;
+  severity?: 'info' | 'warning' | 'error';
+  status?: 'ready' | 'waiting' | 'active' | 'completed' | 'failed';
+  code?: string | null;
+  runId?: string | null;
+  metadata?: Record<string, unknown> | null;
+};
+
 export type ChatRunCardRecord = {
   title: string;
   summary?: string;
@@ -121,6 +141,7 @@ export type ChatMessageRecord = {
   actions?: ChatMessageActionRecord[];
   runCard?: ChatRunCardRecord | null;
   approvalRequests?: ChatApprovalRequestRecord[];
+  interventions?: ChatInterventionRecord[];
   contextUsed?: ChatContextUsedRecord | null;
 };
 
@@ -206,6 +227,7 @@ export function dedupeChatMessages(messages: ChatMessageRecord[]): ChatMessageRe
           actions: nextMessage.actions ?? previous.actions,
           runCard: nextMessage.runCard ?? previous.runCard ?? null,
           approvalRequests: nextMessage.approvalRequests ?? previous.approvalRequests,
+          interventions: nextMessage.interventions ?? previous.interventions,
           contextUsed: nextMessage.contextUsed ?? previous.contextUsed ?? null,
         };
         continue;
@@ -265,6 +287,7 @@ export function sanitizeChatStore(value: unknown): ChatStoreRecord | null {
               const content = normalizeChatContent(String(item.content || ''));
               const hasRunCard = Boolean(item.runCard && typeof item.runCard === 'object');
               const hasApprovalRequests = Boolean(Array.isArray(item.approvalRequests) && item.approvalRequests.length > 0);
+              const hasInterventions = Boolean(Array.isArray(item.interventions) && item.interventions.length > 0);
               const steps = Array.isArray(item.steps)
                 ? item.steps
                     .map((step): ChatStepRecord | null => {
@@ -286,7 +309,7 @@ export function sanitizeChatStore(value: unknown): ChatStoreRecord | null {
                     })
                     .filter((step): step is ChatStepRecord => Boolean(step))
                 : [];
-              if (!content && steps.length === 0 && !hasRunCard && !hasApprovalRequests) return null;
+              if (!content && steps.length === 0 && !hasRunCard && !hasApprovalRequests && !hasInterventions) return null;
               return {
                 id,
                 role: normalizeChatRole(String(item.role || 'assistant')),
@@ -408,6 +431,34 @@ export function sanitizeChatStore(value: unknown): ChatStoreRecord | null {
                         } satisfies ChatApprovalRequestRecord;
                       })
                       .filter((entry): entry is ChatApprovalRequestRecord => Boolean(entry))
+                  : undefined,
+                interventions: Array.isArray(item.interventions)
+                  ? item.interventions
+                      .map((entry): ChatInterventionRecord | null => {
+                        if (!entry || typeof entry !== 'object') return null;
+                        const record = entry as Record<string, unknown>;
+                        const title = String(record.title || '').trim();
+                        const kind = String(record.kind || '').trim() as ChatInterventionKind;
+                        if (!title || !kind) return null;
+                        const severity = String(record.severity || 'info').trim().toLowerCase();
+                        const status = String(record.status || '').trim().toLowerCase();
+                        return {
+                          id: String(record.id || '').trim() || createChatId('intervention'),
+                          kind,
+                          title,
+                          detail: typeof record.detail === 'string' ? record.detail : null,
+                          severity: severity === 'warning' || severity === 'error' ? severity : 'info',
+                          status: status === 'ready' || status === 'waiting' || status === 'active' || status === 'completed' || status === 'failed'
+                            ? status
+                            : undefined,
+                          code: typeof record.code === 'string' ? record.code : null,
+                          runId: typeof record.runId === 'string' ? record.runId : null,
+                          metadata: record.metadata && typeof record.metadata === 'object'
+                            ? record.metadata as Record<string, unknown>
+                            : null,
+                        } satisfies ChatInterventionRecord;
+                      })
+                      .filter((entry): entry is ChatInterventionRecord => Boolean(entry))
                   : undefined,
                 contextUsed: item.contextUsed && typeof item.contextUsed === 'object'
                   ? (() => {

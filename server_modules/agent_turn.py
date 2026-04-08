@@ -55,6 +55,7 @@ class AgentTurnResponse:
     session_id: Optional[str] = None
     artifacts: List[Dict[str, Any]] = field(default_factory=list)
     approvals: List[Dict[str, Any]] = field(default_factory=list)
+    interventions: List[Dict[str, Any]] = field(default_factory=list)
     metadata: Dict[str, Any] = field(default_factory=dict)
 
 

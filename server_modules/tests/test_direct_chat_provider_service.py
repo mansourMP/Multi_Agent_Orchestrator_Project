@@ -83,7 +83,9 @@ class DirectChatProviderServiceTests(unittest.TestCase):
         )
 
         self.assertEqual(payload["mode"], "connect")
-        self.assertIn("not ready", payload["reply"])
+        self.assertEqual(payload["reply"], "")
+        self.assertEqual(payload["interventions"][0]["kind"], "connect_required")
+        self.assertEqual(payload["interventions"][0]["title"], "Workspace AI account is not ready")
         self.assertEqual(payload["actions"], [{"label": "Connect", "href": "/connect-ai"}])
 
     def test_resolve_provider_for_direct_chat_message_forces_codex_for_connector_heavy_requests(self) -> None:

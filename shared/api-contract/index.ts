@@ -33,6 +33,26 @@ export type AgentTurnApprovalRequest = {
   status?: 'waiting' | 'approved' | 'rejected';
 };
 
+export type AgentTurnInterventionKind =
+  | 'system_notice'
+  | 'system_error'
+  | 'connect_required'
+  | 'run_offer'
+  | 'workflow_offer'
+  | 'run_handoff'
+  | 'loop_detected';
+
+export type AgentTurnIntervention = {
+  kind: AgentTurnInterventionKind;
+  title: string;
+  detail?: string | null;
+  severity?: 'info' | 'warning' | 'error';
+  status?: 'ready' | 'waiting' | 'active' | 'completed' | 'failed';
+  code?: string | null;
+  run_id?: string | null;
+  metadata?: Record<string, unknown>;
+};
+
 export type AgentTurnRequest = {
   tenant_id?: string;
   workspace_id: string;
@@ -56,6 +76,7 @@ export type AgentTurnResponse = {
   session_id?: string | null;
   artifacts?: Array<Record<string, unknown>>;
   approvals?: AgentTurnApprovalRequest[];
+  interventions?: AgentTurnIntervention[];
   metadata?: Record<string, unknown>;
 };
 

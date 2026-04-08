@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Callable, Dict, List, Optional
 
+from server_modules.direct_chat_intervention_service import build_intervention
 from server_modules import skills_service
 
 
@@ -171,9 +172,19 @@ def no_ai_chat_response(
         "Connect the workspace AI account to use normal chat and reasoning."
     )
     return {
-        "reply": reply,
+        "reply": "",
         "actions": [connect_action_fn("Connect", "/connect-ai")],
         "mode": "connect",
+        "interventions": [
+            build_intervention(
+                "connect_required",
+                "Workspace AI account is required",
+                detail=reply,
+                severity="warning",
+                status="waiting",
+                code="no_ai_chat",
+            )
+        ],
     }
 
 
@@ -197,39 +208,45 @@ def tool_gate_response(
     compact = compact_text_fn(message)
     if is_obvious_smtp_write_request_fn(compact) and not tool_connected_fn(availability, "google_workspace") and not tool_connected_fn(availability, "smtp"):
         return {
-            "reply": "No email connector is connected in this workspace.",
+            "reply": "",
             "actions": [connect_action_fn("Connect", "/credentials?connector=smtp")],
             "mode": "connect",
+            "interventions": [build_intervention("connect_required", "No email connector connected", detail="Connect SMTP or Google Workspace before sending email from chat.", severity="warning", status="waiting", code="email_connector_missing")],
         }
     if is_obvious_smtp_write_request_fn(compact) and tool_runtime_usable_fn(availability, "google_workspace") is not True and tool_runtime_usable_fn(availability, "smtp") is False:
         return {
-            "reply": "An email connector is connected here, but it is not usable right now.",
+            "reply": "",
             "actions": [],
             "mode": "connect",
+            "interventions": [build_intervention("connect_required", "Email connector unavailable", detail="An email connector is connected here, but it is not usable right now.", severity="warning", status="waiting", code="email_connector_unusable")],
         }
     if is_obvious_smtp_write_request_fn(compact) and tool_runtime_usable_fn(availability, "google_workspace") is not True and tool_runtime_usable_fn(availability, "smtp") is not True and tool_connected_fn(availability, "smtp"):
         return {
-            "reply": "SMTP is connected here, but its capability state is not verified right now.",
+            "reply": "",
             "actions": [],
             "mode": "connect",
+            "interventions": [build_intervention("connect_required", "SMTP capability not verified", detail="SMTP is connected here, but its capability state is not verified right now.", severity="warning", status="waiting", code="smtp_not_verified")],
         }
     if mentions_any_fn(compact, google_workspace_keywords) and not is_obvious_smtp_write_request_fn(compact) and not tool_connected_fn(availability, "google_workspace"):
         return {
-            "reply": "Google Workspace is not connected in this workspace.",
+            "reply": "",
             "actions": [connect_action_fn("Connect", "/credentials?connector=google_workspace")],
             "mode": "connect",
+            "interventions": [build_intervention("connect_required", "Google Workspace is not connected", detail="Connect Google Workspace before using those actions from chat.", severity="warning", status="waiting", code="google_workspace_missing")],
         }
     if mentions_any_fn(compact, google_workspace_keywords) and not is_obvious_smtp_write_request_fn(compact) and tool_runtime_usable_fn(availability, "google_workspace") is False:
         return {
-            "reply": "Google Workspace is connected here, but is not usable right now.",
+            "reply": "",
             "actions": [google_repair_action_fn()],
             "mode": "connect",
+            "interventions": [build_intervention("connect_required", "Google Workspace is unavailable", detail="Google Workspace is connected here, but is not usable right now.", severity="warning", status="waiting", code="google_workspace_unusable")],
         }
     if mentions_any_fn(compact, google_workspace_keywords) and not is_obvious_smtp_write_request_fn(compact) and tool_runtime_usable_fn(availability, "google_workspace") is not True:
         return {
-            "reply": "Google Workspace is connected here, but its capability state is not verified right now.",
+            "reply": "",
             "actions": [],
             "mode": "connect",
+            "interventions": [build_intervention("connect_required", "Google Workspace capability not verified", detail="Google Workspace is connected here, but its capability state is not verified right now.", severity="warning", status="waiting", code="google_workspace_not_verified")],
         }
     for tool_id, label, keywords in (
         ("telegram_bot", "Telegram", telegram_keywords),
@@ -241,21 +258,24 @@ def tool_gate_response(
             continue
         if not tool_connected_fn(availability, tool_id):
             return {
-                "reply": f"{label} is not connected in this workspace.",
+                "reply": "",
                 "actions": [connect_action_fn("Connect", f"/credentials?connector={tool_id}")],
                 "mode": "connect",
+                "interventions": [build_intervention("connect_required", f"{label} is not connected", detail=f"Connect {label} before using it from chat.", severity="warning", status="waiting", code=f"{tool_id}_missing")],
             }
         if tool_runtime_usable_fn(availability, tool_id) is False:
             return {
-                "reply": f"{label} is connected here, but is not usable right now.",
+                "reply": "",
                 "actions": [],
                 "mode": "connect",
+                "interventions": [build_intervention("connect_required", f"{label} is unavailable", detail=f"{label} is connected here, but is not usable right now.", severity="warning", status="waiting", code=f"{tool_id}_unusable")],
             }
         if tool_runtime_usable_fn(availability, tool_id) is not True:
             return {
-                "reply": f"{label} is connected here, but its capability state is not verified right now.",
+                "reply": "",
                 "actions": [],
                 "mode": "connect",
+                "interventions": [build_intervention("connect_required", f"{label} capability not verified", detail=f"{label} is connected here, but its capability state is not verified right now.", severity="warning", status="waiting", code=f"{tool_id}_not_verified")],
             }
     return None
 

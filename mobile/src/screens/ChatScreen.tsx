@@ -347,9 +347,12 @@ export default function ChatScreen({ sessionId }: ChatScreenProps) {
           },
         },
       );
+      const hasStructuredCards =
+        (Array.isArray(payload.approvals) && payload.approvals.length > 0) ||
+        (Array.isArray(payload.interventions) && payload.interventions.length > 0);
 
       updateMessage(sessionId, placeholderIndex, {
-        speech: payload.reply || streamedReply || "I couldn't form a clean reply just now.",
+        speech: hasStructuredCards ? "" : (payload.reply || streamedReply || ""),
       });
 
       const approvalAction = payload.actions.find(
@@ -361,11 +364,12 @@ export default function ChatScreen({ sessionId }: ChatScreenProps) {
       );
 
       if (approvalAction) {
+        const firstApproval = Array.isArray(payload.approvals) ? payload.approvals[0] : null;
         const approvalCard: ApprovalCard = {
           kind: "direct",
           action: approvalAction.action || approvalAction.label || "Approval required",
           target: approvalAction.connector || undefined,
-          reason: payload.reply || "This action requires your approval before I send it. Confirm?",
+          reason: typeof firstApproval?.prompt === "string" ? firstApproval.prompt : "",
           connector: approvalAction.connector || undefined,
           actionId: approvalAction.action || undefined,
           input: approvalAction.input || undefined,
@@ -443,7 +447,7 @@ export default function ChatScreen({ sessionId }: ChatScreenProps) {
           },
         );
         updateMessage(activeSession.id, placeholderIndex, {
-          speech: payload.reply || streamedReply || "Action completed.",
+          speech: payload.reply || streamedReply || "",
         });
         setRunActivity([]);
         setIsLoading(false);

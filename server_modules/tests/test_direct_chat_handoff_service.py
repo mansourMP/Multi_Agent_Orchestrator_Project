@@ -48,9 +48,11 @@ class DirectChatHandoffServiceTests(unittest.TestCase):
             open_action_fn=lambda label, href, variant=None: {"label": label, "href": href, "variant": variant},
         )
 
-        self.assertIn("needs confirmation", payload["reply"])
+        self.assertEqual(payload["reply"], "")
         self.assertEqual(payload["detail"], "Waiting for confirmation")
         self.assertEqual(payload["actions"][0]["href"], "/approvals")
+        self.assertEqual(payload["interventions"][0]["kind"], "run_handoff")
+        self.assertEqual(payload["interventions"][0]["title"], "Durable run is waiting for confirmation")
 
     def test_stream_direct_chat_run_handoff_waiting_for_runtime_then_continuing(self) -> None:
         monotonic_values = iter([0.0, 20.0])
@@ -96,7 +98,12 @@ class DirectChatHandoffServiceTests(unittest.TestCase):
         self.assertEqual(events[0]["type"], "step")
         self.assertEqual(events[0]["label"], "Waiting for your laptop")
         self.assertEqual(events[-1]["type"], "final")
-        self.assertIn("waiting for your laptop to become available", events[-1]["payload"]["reply"])
+        self.assertEqual(events[-1]["payload"]["reply"], "")
+        self.assertEqual(events[-1]["payload"]["interventions"][0]["kind"], "run_handoff")
+        self.assertEqual(
+            events[-1]["payload"]["interventions"][0]["detail"],
+            "The durable run is waiting for your laptop to become available.",
+        )
 
 
 if __name__ == "__main__":

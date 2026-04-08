@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, Iterator, List, Optional
 
+from server_modules.direct_chat_intervention_service import build_intervention
+
 
 @dataclass(slots=True)
 class DirectChatGenerationServices:
@@ -114,8 +116,18 @@ def stream_provider_backed_direct_chat(
                         yield {
                             "type": "final",
                             "payload": {
-                                "reply": "I detected the same tool action repeating, so I stopped here. Start a durable run if you want me to keep going end-to-end.",
+                                "reply": "",
                                 "actions": [],
+                                "interventions": [
+                                    build_intervention(
+                                        "loop_detected",
+                                        "Stopped repeated tool loop",
+                                        detail="The same tool action kept repeating, so direct execution was halted. Start a durable run to continue end-to-end.",
+                                        severity="warning",
+                                        status="failed",
+                                        code="tool_loop_detected",
+                                    )
+                                ],
                                 "suggestions": proactive_suggestions,
                                 "mode": "answer",
                                 "usage_masked": usage_masked,
@@ -245,8 +257,18 @@ def stream_provider_backed_direct_chat(
                         yield {
                             "type": "final",
                             "payload": {
-                                "reply": f"Connector action failed: {llm_error}",
+                                "reply": "",
                                 "actions": [],
+                                "interventions": [
+                                    build_intervention(
+                                        "system_error",
+                                        "Direct tool action failed",
+                                        detail=llm_error,
+                                        severity="error",
+                                        status="failed",
+                                        code=llm_error,
+                                    )
+                                ],
                                 "suggestions": proactive_suggestions,
                                 "mode": "answer",
                                 "usage_masked": usage_masked,
@@ -343,8 +365,18 @@ def stream_provider_backed_direct_chat(
     yield {
         "type": "final",
         "payload": {
-            "reply": services.direct_chat_error_reply(llm_error),
+            "reply": "",
             "actions": actions,
+            "interventions": [
+                build_intervention(
+                    "system_error",
+                    "Chat execution failed",
+                    detail=services.direct_chat_error_reply(llm_error),
+                    severity="error",
+                    status="failed",
+                    code=llm_error or "unknown_error",
+                )
+            ],
             "suggestions": proactive_suggestions,
             "mode": "answer_with_action" if actions else "answer",
             "usage_masked": usage_masked,

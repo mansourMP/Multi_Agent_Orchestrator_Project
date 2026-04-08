@@ -50,6 +50,7 @@ class ApiAgentTurnResponse(BaseModel):
     session_id: Optional[str] = None
     artifacts: List[Dict[str, Any]] = Field(default_factory=list)
     approvals: List[Dict[str, Any]] = Field(default_factory=list)
+    interventions: List[Dict[str, Any]] = Field(default_factory=list)
     metadata: Dict[str, Any] = Field(default_factory=dict)
 
 
@@ -375,6 +376,7 @@ def normalize_agent_turn_result(
         session_id=str(result.get("session_id") or turn_request.session_id or "").strip() or None,
         artifacts=list(result.get("artifacts") or []),
         approvals=list(result.get("approvals") or []),
+        interventions=list(result.get("interventions") or []),
         metadata=dict(result.get("metadata") or {}),
     )
     return ApiAgentTurnResponse(**model_to_dict(normalized))

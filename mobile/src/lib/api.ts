@@ -1,6 +1,7 @@
 import Constants from "expo-constants";
 
 import type {
+  AgentTurnIntervention,
   AgentTurnRequest,
   AgentTurnResponse,
   ApprovalListResponse,
@@ -116,6 +117,8 @@ export type EmpyralistChatAction = {
 export type EmpyralistDirectChatResponse = {
   reply: string;
   actions: EmpyralistChatAction[];
+  approvals?: Array<Record<string, unknown>>;
+  interventions?: AgentTurnIntervention[];
   mode?: string;
   error?: string;
   context_used?: Record<string, unknown> | null;
@@ -195,6 +198,8 @@ function normalizeEmpyralistChatResponse(payload: unknown): EmpyralistDirectChat
   return {
     reply: typeof record.reply === "string" ? record.reply : "",
     actions: Array.isArray(record.actions) ? (record.actions as EmpyralistChatAction[]) : [],
+    approvals: Array.isArray(record.approvals) ? (record.approvals as Array<Record<string, unknown>>) : [],
+    interventions: Array.isArray(record.interventions) ? (record.interventions as AgentTurnIntervention[]) : [],
     mode: typeof record.mode === "string" ? record.mode : undefined,
     error: typeof record.error === "string" ? record.error : undefined,
     context_used: record.context_used && typeof record.context_used === "object"

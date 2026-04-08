@@ -123,7 +123,9 @@ class DirectChatGenerationServiceTests(unittest.TestCase):
         )
 
         self.assertEqual(events[-1]["type"], "final")
-        self.assertEqual(events[-1]["payload"]["reply"], "Chat failed: temporary backend error")
+        self.assertEqual(events[-1]["payload"]["reply"], "")
+        self.assertEqual(events[-1]["payload"]["interventions"][0]["kind"], "system_error")
+        self.assertEqual(events[-1]["payload"]["interventions"][0]["detail"], "Chat failed: temporary backend error")
         self.assertEqual(events[-1]["payload"]["attempted_providers"], "openai")
 
 

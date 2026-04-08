@@ -23,6 +23,7 @@ import {
   CHAT_STORE_STORAGE_KEY,
   CHAT_STORE_UPDATED_EVENT,
   type ChatApprovalRequestRecord,
+  type ChatInterventionRecord,
   createChatId,
   createEmptyChatSession,
   dedupeChatMessages,
@@ -1064,6 +1065,37 @@ function buildOperatorChatApprovalRequests(
       };
     })
     .filter((entry): entry is ChatApprovalRequestRecord => Boolean(entry));
+}
+
+function buildOperatorChatInterventions(
+  interventions: Array<Record<string, unknown>> | null | undefined,
+): ChatInterventionRecord[] {
+  return (Array.isArray(interventions) ? interventions : [])
+    .map((entry): ChatInterventionRecord | null => {
+      if (!entry || typeof entry !== 'object') return null;
+      const record = entry as Record<string, unknown>;
+      const title = String(record.title || '').trim();
+      const kind = String(record.kind || '').trim();
+      if (!title || !kind) return null;
+      const severity = String(record.severity || 'info').trim().toLowerCase();
+      const status = String(record.status || '').trim().toLowerCase();
+      return {
+        id: String(record.id || '').trim() || createChatId('intervention'),
+        kind: kind as ChatInterventionRecord['kind'],
+        title,
+        detail: String(record.detail || '').trim() || null,
+        severity: severity === 'warning' || severity === 'error' ? severity : 'info',
+        status: status === 'ready' || status === 'waiting' || status === 'active' || status === 'completed' || status === 'failed'
+          ? status as ChatInterventionRecord['status']
+          : undefined,
+        code: String(record.code || '').trim() || null,
+        runId: String(record.run_id || '').trim() || null,
+        metadata: record.metadata && typeof record.metadata === 'object'
+          ? record.metadata as Record<string, unknown>
+          : null,
+      };
+    })
+    .filter((entry): entry is ChatInterventionRecord => Boolean(entry));
 }
 
 function summarizeCapabilitySystems(
@@ -2333,11 +2365,13 @@ export function AutopilotWorkspace() {
           approvals: (payload.approvals || []) as Array<Record<string, unknown>>,
           actions: nextActions,
         });
+        const nextInterventions = buildOperatorChatInterventions((payload.interventions || []) as Array<Record<string, unknown>>);
         patchSimpleChatMessage(sessionId, messageId, {
-          content: payload.reply || streamedReply || (nextApprovalRequests.length > 0 ? '' : 'Action completed.'),
-          status: nextApprovalRequests.length > 0 ? 'waiting' : 'completed',
+          content: nextApprovalRequests.length > 0 || nextInterventions.length > 0 ? '' : (payload.reply || streamedReply || ''),
+          status: nextApprovalRequests.length > 0 ? 'waiting' : payload.error ? 'error' : 'completed',
           actions: nextActions,
           approvalRequests: nextApprovalRequests,
+          interventions: nextInterventions,
           contextUsed: payload.context_used || null,
           steps: Array.isArray(payload.steps) && payload.steps.length > 0 ? payload.steps : streamedSteps,
           ts: new Date().toISOString(),
@@ -2362,6 +2396,7 @@ export function AutopilotWorkspace() {
           status: 'error',
           actions: [],
           approvalRequests: [],
+          interventions: [],
           contextUsed: null,
           steps: streamedSteps,
           ts: new Date().toISOString(),
@@ -2871,11 +2906,13 @@ export function AutopilotWorkspace() {
         approvals: (payload.approvals || []) as Array<Record<string, unknown>>,
         actions: nextActions,
       });
+      const nextInterventions = buildOperatorChatInterventions((payload.interventions || []) as Array<Record<string, unknown>>);
       patchSimpleChatMessage(sessionId, placeholderId, {
-        content: payload.reply || streamedReply || (nextApprovalRequests.length > 0 ? '' : 'I couldn’t form a clean reply just now.'),
-        status: nextApprovalRequests.length > 0 ? 'waiting' : 'completed',
+        content: nextApprovalRequests.length > 0 || nextInterventions.length > 0 ? '' : (payload.reply || streamedReply || ''),
+        status: nextApprovalRequests.length > 0 ? 'waiting' : payload.error ? 'error' : 'completed',
         actions: nextActions,
         approvalRequests: nextApprovalRequests,
+        interventions: nextInterventions,
         contextUsed: payload.context_used || null,
         steps: Array.isArray(payload.steps) && payload.steps.length > 0 ? payload.steps : streamedSteps,
         ts: new Date().toISOString(),

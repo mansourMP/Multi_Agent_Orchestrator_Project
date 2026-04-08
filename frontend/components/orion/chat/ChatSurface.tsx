@@ -25,12 +25,14 @@ import {
   CHAT_STORE_UPDATED_EVENT,
   sanitizeChatStore,
   type ChatApprovalRequestRecord,
+  type ChatInterventionRecord,
   type ChatMessageActionRecord,
   type ChatMessageRecord,
   type ChatSessionRecord,
   type ChatStepRecord,
 } from './chatSchema';
 import { ApprovalRequestCard } from './ApprovalRequestCard';
+import { InterventionCard } from './InterventionCards';
 import { normalizeAssistantDisplayText, normalizeInlineErrorMessage } from './displayText';
 import { resolveAssistantStreamState } from '@/lib/useStreamProcessor';
 import { normalizeAssembledAssistantText } from '@/lib/StreamAssembler';
@@ -1525,11 +1527,12 @@ export function ChatSurface({
               const isFirstAssistantEntry = !isUser && isFirstThread && index <= 1;
               const artifactsForMessage = !isUser ? messageArtifacts.byMessage.get(message.id) || [] : [];
               const codeArtifacts = artifactsForMessage.filter((artifact) => artifact.source === 'code');
-              if (!isUser && suppressBody && artifactsForMessage.length === 0 && (!message.approvalRequests || message.approvalRequests.length === 0)) {
+              if (!isUser && suppressBody && artifactsForMessage.length === 0 && (!message.approvalRequests || message.approvalRequests.length === 0) && (!message.interventions || message.interventions.length === 0)) {
                 return null;
               }
               let codeArtifactIndex = 0;
               const approvalRequests = Array.isArray(message.approvalRequests) ? message.approvalRequests : [];
+              const interventions = Array.isArray(message.interventions) ? message.interventions : [];
               const handleApprovalDecision = (approval: ChatApprovalRequestRecord, decision: 'proceed' | 'hold') => {
                 if (onApprovalDecision) {
                   return onApprovalDecision(message.id, approval, decision);
@@ -1541,6 +1544,10 @@ export function ChatSurface({
                 if (decision === 'proceed') {
                   return onMessageAction(message.id, linkedAction);
                 }
+              };
+              const handleInterventionAction = (action: ChatMessageActionRecord) => {
+                if (!onMessageAction) return;
+                return onMessageAction(message.id, action);
               };
               return (
                 <article
@@ -1604,6 +1611,23 @@ export function ChatSurface({
                               onDecision={(decision) => handleApprovalDecision(approval, decision)}
                             />
                           ))}
+                        </div>
+                      ) : null}
+                      {interventions.length > 0 ? (
+                        <div>
+                          {interventions.map((intervention) => {
+                            const interventionActions = Array.isArray(message.actions)
+                              ? message.actions.filter((action) => action.kind !== 'approval_required')
+                              : [];
+                            return (
+                              <InterventionCard
+                                key={intervention.id}
+                                intervention={intervention as ChatInterventionRecord}
+                                actions={interventionActions}
+                                onAction={onMessageAction ? handleInterventionAction : undefined}
+                              />
+                            );
+                          })}
                         </div>
                       ) : null}
                       {displayContent || artifactsForMessage.length > 0 ? (

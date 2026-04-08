@@ -16,9 +16,11 @@ class DirectChatAvailabilityServiceTests(unittest.TestCase):
             connect_action_fn=direct_chat_availability_service.connect_action,
         )
 
-        self.assertIn("Connected here right now: Google Workspace, Telegram.", payload["reply"])
-        self.assertIn("Usable now: Google Workspace.", payload["reply"])
-        self.assertIn("Unavailable now: Telegram.", payload["reply"])
+        self.assertEqual(payload["reply"], "")
+        self.assertEqual(payload["interventions"][0]["kind"], "connect_required")
+        self.assertIn("Connected here right now: Google Workspace, Telegram.", payload["interventions"][0]["detail"])
+        self.assertIn("Usable now: Google Workspace.", payload["interventions"][0]["detail"])
+        self.assertIn("Unavailable now: Telegram.", payload["interventions"][0]["detail"])
         self.assertEqual(payload["actions"][0]["kind"], "connect")
 
     def test_tool_gate_response_requires_google_connection(self) -> None:
@@ -40,7 +42,9 @@ class DirectChatAvailabilityServiceTests(unittest.TestCase):
         )
 
         self.assertIsNotNone(payload)
-        self.assertIn("Google Workspace is not connected", payload["reply"])
+        self.assertEqual(payload["reply"], "")
+        self.assertEqual(payload["interventions"][0]["kind"], "connect_required")
+        self.assertEqual(payload["interventions"][0]["title"], "Google Workspace is not connected")
         self.assertEqual(payload["actions"][0]["href"], "/credentials?connector=google_workspace")
 
     def test_suggest_actions_prefers_workflow_action(self) -> None:

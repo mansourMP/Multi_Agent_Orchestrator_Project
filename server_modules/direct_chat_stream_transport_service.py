@@ -5,6 +5,8 @@ import threading
 import time
 from typing import Any, Callable, Optional
 
+from server_modules.direct_chat_intervention_service import build_intervention
+
 
 def chat_stream_payload(raw_event: dict[str, Any]) -> tuple[Optional[str], Optional[dict[str, Any]]]:
     if not isinstance(raw_event, dict):
@@ -20,10 +22,20 @@ def chat_stream_payload(raw_event: dict[str, Any]) -> tuple[Optional[str], Optio
 def chat_stream_error_payload(message: str) -> dict[str, Any]:
     detail = str(message or "").strip() or "unknown_error"
     return {
-        "reply": f"Chat failed: {detail}",
+        "reply": "",
         "actions": [],
         "mode": "answer",
         "error": detail,
+        "interventions": [
+            build_intervention(
+                "system_error",
+                "Chat failed",
+                detail=detail,
+                severity="error",
+                status="failed",
+                code=detail,
+            )
+        ],
     }
 
 

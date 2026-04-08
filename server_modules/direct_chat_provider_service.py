@@ -3,6 +3,8 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Optional
 
+from server_modules.direct_chat_intervention_service import build_intervention
+
 from scripts.orion_local_worker_llm import (
     SUPPORTED_PROVIDERS,
     get_claude_code_session_token,
@@ -154,14 +156,36 @@ def provider_unavailable_response(
     label = provider_display_name(provider)
     if provider == "codex_cli":
         return {
-            "reply": "The workspace AI account is not ready to answer chat right now.",
+            "reply": "",
             "actions": [connect_action("Connect", "/connect-ai")],
             "mode": "connect",
+            "interventions": [
+                build_intervention(
+                    "connect_required",
+                    "Workspace AI account is not ready",
+                    detail="Connect the workspace AI account to use model-backed chat in this workspace.",
+                    severity="warning",
+                    status="waiting",
+                    code="provider_unavailable",
+                    metadata={"provider": provider},
+                )
+            ],
         }
     return {
-        "reply": f"{label} is selected for chat but is not available right now.",
+        "reply": "",
         "actions": [connect_action("Connect", "/connect-ai")],
         "mode": "connect",
+        "interventions": [
+            build_intervention(
+                "connect_required",
+                f"{label} is not available",
+                detail=f"{label} is selected for chat but is not available right now.",
+                severity="warning",
+                status="waiting",
+                code="provider_unavailable",
+                metadata={"provider": provider},
+            )
+        ],
     }
 
 

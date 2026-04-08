@@ -40,6 +40,7 @@ import { type PageState } from './page.state';
 import { apiClient } from '@/lib/api-client';
 import type {
   AgentTurnApprovalRequest,
+  AgentTurnIntervention,
   AgentTurnPolicyContext,
   AgentTurnRequest,
   AgentTurnResponse,
@@ -349,6 +350,7 @@ export type OperatorChatResponsePayload = {
   reply: string;
   actions?: OperatorChatActionPayload[];
   approvals?: AgentTurnApprovalRequest[];
+  interventions?: AgentTurnIntervention[];
   suggestions?: string[];
   mode?: string;
   usage_masked?: Record<string, unknown> | null;
@@ -430,6 +432,32 @@ function normalizeOperatorChatResponsePayload(payload: unknown): OperatorChatRes
           .map((approval) => normalizeOperatorChatApprovalPayload(approval))
           .filter((approval): approval is AgentTurnApprovalRequest => Boolean(approval))
       : [],
+    interventions: Array.isArray(record.interventions)
+      ? record.interventions
+          .map((entry): AgentTurnIntervention | null => {
+            const record = entry && typeof entry === 'object' ? entry as Record<string, unknown> : null;
+            const title = typeof record?.title === 'string' ? record.title.trim() : '';
+            const kind = typeof record?.kind === 'string' ? record.kind.trim() : '';
+            if (!title || !kind) return null;
+            const severity = typeof record?.severity === 'string' ? record.severity.trim().toLowerCase() : '';
+            const status = typeof record?.status === 'string' ? record.status.trim().toLowerCase() : '';
+            return {
+              kind: kind as AgentTurnIntervention['kind'],
+              title,
+              detail: typeof record?.detail === 'string' && record.detail.trim() ? record.detail.trim() : null,
+              severity: severity === 'warning' || severity === 'error' ? severity : 'info',
+              status: status === 'ready' || status === 'waiting' || status === 'active' || status === 'completed' || status === 'failed'
+                ? status as AgentTurnIntervention['status']
+                : undefined,
+              code: typeof record?.code === 'string' && record.code.trim() ? record.code.trim() : null,
+              run_id: typeof record?.run_id === 'string' && record.run_id.trim() ? record.run_id.trim() : null,
+              metadata: record?.metadata && typeof record.metadata === 'object'
+                ? record.metadata as Record<string, unknown>
+                : undefined,
+            };
+          })
+          .filter((entry): entry is AgentTurnIntervention => Boolean(entry))
+      : [],
     suggestions: Array.isArray(record.suggestions)
       ? record.suggestions.map((item) => String(item || '').trim()).filter(Boolean).slice(0, 3)
       : [],
@@ -450,6 +478,13 @@ function normalizeOperatorChatResponsePayload(payload: unknown): OperatorChatRes
           .filter((step): step is OperatorChatStepPayload => Boolean(step))
       : [],
   };
+}
+
+function responseContainsStructuredIntervention(payload: Pick<OperatorChatResponsePayload, 'approvals' | 'interventions'>): boolean {
+  return Boolean(
+    (Array.isArray(payload.approvals) && payload.approvals.length > 0)
+      || (Array.isArray(payload.interventions) && payload.interventions.length > 0),
+  );
 }
 
 export function humanizeError(message: string): string {
@@ -2243,9 +2278,13 @@ export function usePlatformApi(state: PageState, streamRef: MutableRefObject<Aut
         const contentType = res.headers.get('content-type') || '';
         if (!contentType.includes('text/event-stream') || !res.body) {
           const payload = normalizeOperatorChatResponsePayload(await res.json());
-          const finalizedReply = streamAssembler.finalize(payload.reply || streamedReply);
+          const finalizedReply = responseContainsStructuredIntervention(payload)
+            ? ''
+            : streamAssembler.finalize(payload.reply || streamedReply);
           if (finalizedReply) {
             payload.reply = finalizedReply;
+          } else if (responseContainsStructuredIntervention(payload)) {
+            payload.reply = '';
           }
           if ((!Array.isArray(payload.steps) || payload.steps.length === 0) && streamedSteps.length > 0) {
             payload.steps = streamedSteps;
@@ -2332,10 +2371,14 @@ export function usePlatformApi(state: PageState, streamRef: MutableRefObject<Aut
 
         if (finalPayloadRaw != null) {
           const resolvedFinalPayload = normalizeOperatorChatResponsePayload(finalPayloadRaw);
-          const finalizedReply = streamAssembler.finalize(resolvedFinalPayload.reply || streamedReply);
+          const finalizedReply = responseContainsStructuredIntervention(resolvedFinalPayload)
+            ? ''
+            : streamAssembler.finalize(resolvedFinalPayload.reply || streamedReply);
           streamedReply = finalizedReply;
           if (finalizedReply) {
             resolvedFinalPayload.reply = finalizedReply;
+          } else if (responseContainsStructuredIntervention(resolvedFinalPayload)) {
+            resolvedFinalPayload.reply = '';
           }
           if ((!Array.isArray(resolvedFinalPayload.steps) || resolvedFinalPayload.steps.length === 0) && streamedSteps.length > 0) {
             resolvedFinalPayload.steps = streamedSteps;

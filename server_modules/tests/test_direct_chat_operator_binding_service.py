@@ -343,7 +343,8 @@ class DirectChatOperatorBindingServiceTests(unittest.TestCase):
 
         self.assertTrue(bindings.question_like("what can you do"))
         self.assertIsNotNone(gate)
-        self.assertIn("Google Workspace is not connected", gate["reply"])
+        self.assertEqual(gate["reply"], "")
+        self.assertEqual(gate["interventions"][0]["title"], "Google Workspace is not connected")
         self.assertIsInstance(suggestions, list)
         self.assertTrue(suggestions)
 

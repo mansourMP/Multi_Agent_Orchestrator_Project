@@ -4,6 +4,8 @@ import re
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional
 
+from server_modules.direct_chat_intervention_service import build_intervention
+
 
 @dataclass(slots=True)
 class DirectChatRouteDecision:
@@ -47,15 +49,33 @@ def preview_run_response(
     compact = callbacks.compact_text(message)
     if callbacks.is_explicit_workflow_request(message):
         return {
-            "reply": "I can help turn that into a workflow.",
+            "reply": "",
             "actions": [callbacks.workflow_action(message)],
             "mode": "answer_with_action",
+            "interventions": [
+                build_intervention(
+                    "workflow_offer",
+                    "Ready to turn this into a workflow",
+                    detail="This request looks like a repeatable workflow.",
+                    severity="info",
+                    status="ready",
+                )
+            ],
         }
     if callbacks.mentions_any(compact, callbacks.execution_markers) and callbacks.starts_like_direct_run(compact) and not callbacks.question_like(compact):
         return {
-            "reply": "I can run that here.",
+            "reply": "",
             "actions": [callbacks.run_action(message)],
             "mode": "answer_with_action",
+            "interventions": [
+                build_intervention(
+                    "run_offer",
+                    "Ready to run this task",
+                    detail="This request looks like an execution task the runtime can perform directly.",
+                    severity="info",
+                    status="ready",
+                )
+            ],
         }
     return None
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional
 
+from server_modules.direct_chat_intervention_service import build_intervention
 from server_modules import memory_service
 
 
@@ -78,8 +79,18 @@ def empty_message_payload(
 ) -> Dict[str, Any]:
     return services.with_context_used(
         {
-            "reply": "Tell me the outcome you want and I’ll help you move it forward.",
+            "reply": "",
             "actions": [],
+            "interventions": [
+                build_intervention(
+                    "system_notice",
+                    "Describe the outcome you want",
+                    detail="Tell the system what you want done, and it will help move it forward.",
+                    severity="info",
+                    status="ready",
+                    code="empty_message",
+                )
+            ],
             "suggestions": proactive_suggestions,
             "mode": "answer",
         },
@@ -121,8 +132,18 @@ def approval_confirmation_payload(
     if approved_action_payload is None:
         return services.with_context_used(
             {
-                "reply": "Approval confirmation is missing the connector action payload.",
+                "reply": "",
                 "actions": [],
+                "interventions": [
+                    build_intervention(
+                        "system_error",
+                        "Approval confirmation payload is missing",
+                        detail="The approved connector action payload was not present, so the action could not be executed.",
+                        severity="error",
+                        status="failed",
+                        code="missing_approved_action",
+                    )
+                ],
                 "suggestions": proactive_suggestions,
                 "mode": "answer",
                 "error": "missing_approved_action",
@@ -136,8 +157,18 @@ def approval_confirmation_payload(
     ):
         return services.with_context_used(
             {
-                "reply": "That connector action is not available in this workspace right now.",
+                "reply": "",
                 "actions": [],
+                "interventions": [
+                    build_intervention(
+                        "system_error",
+                        "Connector action is unavailable",
+                        detail="That connector action is not available in this workspace right now.",
+                        severity="error",
+                        status="failed",
+                        code="unavailable_approved_action",
+                    )
+                ],
                 "suggestions": proactive_suggestions,
                 "mode": "answer",
                 "error": "unavailable_approved_action",
@@ -156,8 +187,20 @@ def approval_confirmation_payload(
             session_ctx=session_ctx,
         )
         return {
-            "reply": tool_reply or "Connector action completed.",
+            "reply": tool_reply or "",
             "actions": [],
+            "interventions": []
+            if tool_reply
+            else [
+                build_intervention(
+                    "system_notice",
+                    "Connector action completed",
+                    detail="The connector action finished successfully.",
+                    severity="info",
+                    status="completed",
+                    code="approved_action_completed",
+                )
+            ],
             "suggestions": proactive_suggestions,
             "mode": "answer",
             "usage_masked": {},
@@ -171,8 +214,18 @@ def approval_confirmation_payload(
         error_text = str(exc).strip() or "connector_action_failed"
         services.capture_exception(exc)
         return {
-            "reply": f"Connector action failed: {error_text}",
+            "reply": "",
             "actions": [],
+            "interventions": [
+                build_intervention(
+                    "system_error",
+                    "Connector action failed",
+                    detail=error_text,
+                    severity="error",
+                    status="failed",
+                    code=error_text,
+                )
+            ],
             "suggestions": proactive_suggestions,
             "mode": "answer",
             "usage_masked": {},

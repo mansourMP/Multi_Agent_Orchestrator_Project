@@ -97,7 +97,9 @@ class DirectChatResponseServiceTests(unittest.TestCase):
         )
 
         self.assertEqual(payload["error"], "missing_approved_action")
-        self.assertIn("missing the connector action payload", payload["reply"])
+        self.assertEqual(payload["reply"], "")
+        self.assertEqual(payload["interventions"][0]["kind"], "system_error")
+        self.assertEqual(payload["interventions"][0]["title"], "Approval confirmation payload is missing")
 
     def test_unavailable_fallback_payload_uses_no_provider_response_when_no_tool_result(self) -> None:
         payload = direct_chat_response_service.unavailable_fallback_payload(

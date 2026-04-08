@@ -3,6 +3,8 @@ from __future__ import annotations
 import time
 from typing import Any, Callable, Dict, Iterator, List, Optional
 
+from server_modules.direct_chat_intervention_service import build_intervention
+
 
 def durable_run_preferred_response(
     message: str,
@@ -10,9 +12,18 @@ def durable_run_preferred_response(
     run_action_fn: Callable[[str], Dict[str, Any]],
 ) -> Dict[str, Any]:
     return {
-        "reply": "I can run that here.",
+        "reply": "",
         "actions": [run_action_fn(message)],
         "mode": "answer_with_action",
+        "interventions": [
+            build_intervention(
+                "run_offer",
+                "Ready to run this task",
+                detail="This request is better handled as a durable run so the system can execute it end-to-end.",
+                severity="info",
+                status="ready",
+            )
+        ],
     }
 
 
@@ -42,10 +53,20 @@ def direct_chat_run_handoff_failure_payload(
 ) -> Dict[str, Any]:
     detail = str(error_detail or "").strip() or "unknown_error"
     return {
-        "reply": f"I couldn't start a durable run automatically: {detail}",
+        "reply": "",
         "actions": [run_action_fn(message)],
         "mode": "answer_with_action",
         "error": detail,
+        "interventions": [
+            build_intervention(
+                "system_error",
+                "Could not start durable run",
+                detail=detail,
+                severity="error",
+                status="failed",
+                code=detail,
+            )
+        ],
     }
 
 
@@ -95,33 +116,58 @@ def direct_chat_run_handoff_reply(
     waiting_for_confirmation = bool(pending) or str(started.get("status") or "").strip().lower() == "waiting_for_input"
 
     if waiting_for_confirmation:
-        reply = "I started a durable run for this task, but it needs confirmation before local execution begins."
         actions = [
             open_action_fn("Open approvals", "/approvals", variant="primary"),
             open_action_fn("Open run", f"/runs/{run_id}", variant="secondary") if run_id else open_action_fn("Open runs", "/executions", variant="secondary"),
         ]
         detail = "Waiting for confirmation"
+        intervention = build_intervention(
+            "run_handoff",
+            "Durable run is waiting for confirmation",
+            detail="Local execution is paused until you approve the sensitive action.",
+            severity="warning",
+            status="waiting",
+            run_id=run_id or None,
+            metadata={"route": route, "pending_confirmation": pending if pending else None},
+        )
     elif selected_target == "local_companion":
-        reply = "I started a durable run for this task on your local machine."
         actions = [
             open_action_fn("Open run", f"/runs/{run_id}", variant="primary") if run_id else open_action_fn("Open runs", "/executions", variant="primary"),
             open_action_fn("Open runs", "/executions", variant="secondary"),
         ]
         detail = "Queued for Local Companion"
+        intervention = build_intervention(
+            "run_handoff",
+            "Durable run started on your local machine",
+            detail="The run has been handed off to your local companion runtime.",
+            severity="info",
+            status="active",
+            run_id=run_id or None,
+            metadata={"route": route},
+        )
     else:
-        reply = "I started a durable run for this task."
         actions = [
             open_action_fn("Open run", f"/runs/{run_id}", variant="primary") if run_id else open_action_fn("Open runs", "/executions", variant="primary"),
             open_action_fn("Open runs", "/executions", variant="secondary"),
         ]
         detail = "Run started"
+        intervention = build_intervention(
+            "run_handoff",
+            "Durable run started",
+            detail="The task was handed off to the durable runtime.",
+            severity="info",
+            status="active",
+            run_id=run_id or None,
+            metadata={"route": route},
+        )
 
     return {
-        "reply": reply,
+        "reply": "",
         "actions": actions,
         "mode": "answer_with_action",
         "run_id": run_id or None,
         "detail": detail,
+        "interventions": [intervention],
         "route": route if route else None,
         "pending_confirmation": pending if pending else None,
         "status": str(started.get("status") or "").strip() or None,
@@ -297,39 +343,91 @@ def direct_chat_run_final_payload(
     actual_fallback_reason = str(snapshot.get("fallback_reason") or fallback_reason or "").strip() or None
     base_reply = str(reply_override or snapshot.get("result_summary") or (run.get("result") if isinstance(run, dict) else "") or "").strip()
 
+    interventions: List[Dict[str, Any]] = []
     if status == "completed":
-        reply = base_reply or "Durable run completed."
+        reply = base_reply
         actions = direct_chat_run_actions(run_id, open_action_fn=open_action_fn)
         error = ""
+        if not reply:
+            interventions.append(
+                build_intervention(
+                    "run_handoff",
+                    "Durable run completed",
+                    detail="The durable run finished successfully.",
+                    severity="info",
+                    status="completed",
+                    run_id=run_id,
+                    metadata={"snapshot_status": status},
+                )
+            )
     elif status == "waiting_for_input":
         prompt = str(pending.get("prompt") or "").strip()
-        if prompt:
-            reply = f"I started a durable run for this task, and it is waiting for confirmation. {prompt}"
-        else:
-            reply = "I started a durable run for this task, and it is waiting for confirmation before continuing."
+        reply = ""
         actions = direct_chat_run_actions(run_id, waiting_for_confirmation=True, open_action_fn=open_action_fn)
         error = ""
+        interventions.append(
+            build_intervention(
+                "run_handoff",
+                "Durable run is waiting for confirmation",
+                detail=prompt or "The run is paused until you approve the next sensitive action.",
+                severity="warning",
+                status="waiting",
+                run_id=run_id,
+                metadata={"pending_confirmation": pending if pending else None},
+            )
+        )
     elif continuing:
+        reply = ""
         if bool(snapshot.get("execution_target_waiting_for_runtime")):
-            reply = "The durable run is waiting for your laptop to become available. You can keep monitoring it live in Runs."
+            detail = "The durable run is waiting for your laptop to become available."
+            handoff_status = "waiting"
         elif bool(snapshot.get("execution_target_waiting_for_capacity")):
-            reply = "The durable run is waiting for local machine capacity. You can keep monitoring it live in Runs."
+            detail = "The durable run is waiting for local machine capacity."
+            handoff_status = "waiting"
         elif selected_target == "local_companion" and status in {"queued_local", "queued", "starting"}:
-            reply = "The durable run is queued for your laptop. You can keep monitoring it live in Runs."
+            detail = "The durable run is queued for your laptop."
+            handoff_status = "waiting"
         elif selected_target == "local_companion":
-            reply = "The durable run is still working on your laptop. You can keep monitoring it live in Runs."
+            detail = "The durable run is still working on your laptop."
+            handoff_status = "active"
         else:
-            reply = "The durable run is still working. You can keep monitoring it live in Runs."
+            detail = "The durable run is still working."
+            handoff_status = "active"
         actions = direct_chat_run_actions(run_id, open_action_fn=open_action_fn)
         error = ""
+        interventions.append(
+            build_intervention(
+                "run_handoff",
+                "Durable run in progress",
+                detail=detail,
+                severity="info",
+                status=handoff_status,
+                run_id=run_id,
+                metadata={"snapshot_status": status, "execution_target_selected": selected_target},
+            )
+        )
     else:
-        reply = base_reply or f"Durable run ended with status '{status}'."
+        reply = base_reply
         actions = direct_chat_run_actions(run_id, open_action_fn=open_action_fn)
         error = status if status not in {"completed", "waiting_for_input"} else ""
+        if not reply:
+            interventions.append(
+                build_intervention(
+                    "system_error",
+                    "Durable run ended with an unexpected status",
+                    detail=f"Status: {status}",
+                    severity="error",
+                    status="failed",
+                    run_id=run_id,
+                    code=status,
+                    metadata={"snapshot_status": status},
+                )
+            )
 
     return {
         "reply": reply,
         "actions": actions,
+        "interventions": interventions,
         "mode": "answer_with_action" if actions else "answer",
         "usage_masked": snapshot.get("usage_masked") if isinstance(snapshot.get("usage_masked"), dict) else {},
         "provider": effective_provider,
@@ -380,8 +478,18 @@ def stream_direct_chat_run_handoff(
         yield {
             "type": "final",
             "payload": {
-                "reply": "A durable run was requested, but the runtime did not return a run id.",
+                "reply": "",
                 "actions": [open_action_fn("Open runs", "/executions", variant="primary")],
+                "interventions": [
+                    build_intervention(
+                        "system_error",
+                        "Durable run did not return an id",
+                        detail="The runtime accepted the handoff request but did not return a run identifier.",
+                        severity="error",
+                        status="failed",
+                        code="missing_run_id",
+                    )
+                ],
                 "mode": "answer_with_action",
                 "error": "missing_run_id",
                 "context_used": build_context_used_fn(

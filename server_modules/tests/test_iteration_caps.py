@@ -94,7 +94,10 @@ class IterationCapTests(unittest.TestCase):
         )
 
         self.assertEqual(payload["error"], "max_tool_iterations_reached:2")
-        self.assertIn("Reached maximum steps (2).", payload["reply"])
+        self.assertEqual(payload["reply"], "")
+        self.assertEqual(payload["interventions"][0]["kind"], "system_error")
+        self.assertEqual(payload["interventions"][0]["title"], "Chat execution failed")
+        self.assertIn("Reached maximum steps (2).", payload["interventions"][0]["detail"])
 
         with self.assertRaises(RuntimeError) as ctx:
             worker_execution._parse_operations(

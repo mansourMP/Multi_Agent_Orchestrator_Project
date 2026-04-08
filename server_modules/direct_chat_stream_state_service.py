@@ -4,6 +4,8 @@ import threading
 import time
 from typing import Any, Callable, Optional
 
+from server_modules.direct_chat_intervention_service import build_intervention
+
 
 def ensure_single_worker_runtime(*, configured_worker_count: int) -> None:
     if configured_worker_count <= 1:
@@ -108,13 +110,22 @@ def persist_chat_stream_session_state(
 
 def chat_stream_interrupted_final_payload(partial_text: str, error_text: str) -> dict[str, Any]:
     detail = str(error_text or "").strip() or "Chat stream was interrupted while the runtime was unavailable."
-    partial = str(partial_text or "").strip()
-    reply = f"{partial}\n\n{detail}" if partial else detail
     return {
-        "reply": reply,
+        "reply": "",
         "actions": [],
         "mode": "answer",
         "error": detail,
+        "interventions": [
+            build_intervention(
+                "system_error",
+                "Chat stream was interrupted",
+                detail=detail,
+                severity="error",
+                status="failed",
+                code="chat_stream_interrupted",
+                metadata={"partial_text": str(partial_text or "").strip() or None},
+            )
+        ],
     }
 
 
@@ -124,12 +135,24 @@ def chat_stream_replay_payload_from_state(state: dict[str, Any]) -> dict[str, An
         final_payload = state.get("final_payload")
         if isinstance(final_payload, dict) and final_payload:
             return final_payload
-        fallback_reply = str(state.get("partial_text") or "").strip() or "Chat completed."
+        fallback_reply = str(state.get("partial_text") or "").strip()
         return {
             "reply": fallback_reply,
             "actions": [],
             "mode": "answer",
             "error": "",
+            "interventions": []
+            if fallback_reply
+            else [
+                build_intervention(
+                    "system_notice",
+                    "Chat completed",
+                    detail="The stream completed without a final assistant message body.",
+                    severity="info",
+                    status="completed",
+                    code="chat_stream_completed",
+                )
+            ],
         }
     return chat_stream_interrupted_final_payload(
         str(state.get("partial_text") or ""),

@@ -124,7 +124,10 @@ class DirectChatRuntimeServiceTests(unittest.TestCase):
 
         self.assertEqual(len(events), 1)
         self.assertEqual(events[0]["type"], "final")
-        self.assertIn("Tell me the outcome you want", events[0]["payload"]["reply"])
+        self.assertEqual(events[0]["payload"]["reply"], "")
+        self.assertEqual(events[0]["payload"]["interventions"][0]["kind"], "system_notice")
+        self.assertEqual(events[0]["payload"]["interventions"][0]["title"], "Describe the outcome you want")
+        self.assertIn("Tell the system what you want done", events[0]["payload"]["interventions"][0]["detail"])
         self.assertEqual(events[0]["payload"]["suggestions"], ["next"])
 
     def test_collect_direct_operator_reply_accumulates_chunks(self) -> None:

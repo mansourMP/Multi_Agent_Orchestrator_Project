@@ -68,6 +68,18 @@ stream_direct_operator_reply = operator_chat.build_direct_operator_reply
 
 
 class OperatorChatTests(unittest.TestCase):
+    def assertIntervention(self, payload, kind: str, *, title: str | None = None, detail_contains: str | None = None) -> dict:
+        self.assertEqual(payload["reply"], "")
+        interventions = payload.get("interventions")
+        self.assertTrue(interventions)
+        intervention = interventions[0]
+        self.assertEqual(intervention["kind"], kind)
+        if title is not None:
+            self.assertEqual(intervention["title"], title)
+        if detail_contains is not None:
+            self.assertIn(detail_contains, str(intervention.get("detail") or ""))
+        return intervention
+
     def setUp(self) -> None:
         self._semantic_model_patch = patch.object(operator_chat.memory_service._workspace_memory_store, "_SEMANTIC_MODEL", False)
         self._semantic_model_patch.start()
@@ -225,7 +237,7 @@ class OperatorChatTests(unittest.TestCase):
             availability={"ai_ready": True},
         )
 
-        self.assertIn("Google Workspace is not connected", payload["reply"])
+        self.assertIntervention(payload, "connect_required", title="Google Workspace is not connected")
         self.assertEqual(payload["actions"][0]["kind"], "connect")
         self.assertEqual(payload["actions"][0]["label"], "Connect")
 
@@ -256,7 +268,7 @@ class OperatorChatTests(unittest.TestCase):
         )
 
         self.assertEqual(payload["mode"], "answer_with_action")
-        self.assertEqual(payload["reply"], "I can run that here.")
+        self.assertIntervention(payload, "run_offer", title="Ready to run this task")
         self.assertTrue(any(action["kind"] == "run" for action in payload["actions"]))
         generate_reply.assert_not_called()
 
@@ -286,7 +298,7 @@ class OperatorChatTests(unittest.TestCase):
             )
 
         self.assertEqual(payload["mode"], "answer_with_action")
-        self.assertEqual(payload["reply"], "I can run that here.")
+        self.assertIntervention(payload, "run_offer", title="Ready to run this task")
         self.assertTrue(any(action["kind"] == "run" for action in payload["actions"]))
         generate_reply.assert_not_called()
 
@@ -316,7 +328,7 @@ class OperatorChatTests(unittest.TestCase):
             )
 
         self.assertEqual(payload["mode"], "answer_with_action")
-        self.assertEqual(payload["reply"], "I can run that here.")
+        self.assertIntervention(payload, "run_offer", title="Ready to run this task")
         self.assertTrue(any(action["kind"] == "run" for action in payload["actions"]))
         generate_reply.assert_not_called()
 
@@ -416,7 +428,7 @@ class OperatorChatTests(unittest.TestCase):
 
         self.assertEqual(payload["mode"], "answer_with_action")
         self.assertTrue(any(action["kind"] == "workflow" for action in payload["actions"]))
-        self.assertEqual(payload["reply"], "I can help turn that into a workflow.")
+        self.assertIntervention(payload, "workflow_offer", title="Ready to turn this into a workflow")
         generate_reply.assert_not_called()
 
     @patch(
@@ -487,7 +499,12 @@ class OperatorChatTests(unittest.TestCase):
             availability={"ai_ready": True},
         )
 
-        self.assertEqual(payload["reply"], "Chat failed: direct_chat_transport_unavailable: codex_cli_backend_unavailable")
+        self.assertIntervention(
+            payload,
+            "system_error",
+            title="Chat execution failed",
+            detail_contains="direct_chat_transport_unavailable: codex_cli_backend_unavailable",
+        )
 
     @patch(
         "operator_chat_under_test.generate_chat_reply_with_provider_fallback",
@@ -583,7 +600,12 @@ class OperatorChatTests(unittest.TestCase):
             availability={"ai_ready": True},
         )
 
-        self.assertIn("not verified", payload["reply"].lower())
+        self.assertIntervention(
+            payload,
+            "connect_required",
+            title="Google Workspace capability not verified",
+            detail_contains="not verified",
+        )
         self.assertEqual(payload["mode"], "connect")
         self.assertEqual(payload["actions"], [])
 
@@ -609,7 +631,12 @@ class OperatorChatTests(unittest.TestCase):
             availability={"ai_ready": True},
         )
 
-        self.assertIn("not usable", payload["reply"].lower())
+        self.assertIntervention(
+            payload,
+            "connect_required",
+            title="Google Workspace is unavailable",
+            detail_contains="not usable right now",
+        )
         self.assertEqual(payload["mode"], "connect")
         self.assertEqual(len(payload["actions"]), 1)
         self.assertEqual(payload["actions"][0]["kind"], "connect")
@@ -652,7 +679,12 @@ class OperatorChatTests(unittest.TestCase):
             availability={"ai_ready": True},
         )
 
-        self.assertEqual(payload["reply"], "Chat failed: temporary backend error")
+        self.assertIntervention(
+            payload,
+            "system_error",
+            title="Chat execution failed",
+            detail_contains="temporary backend error",
+        )
 
     @patch("operator_chat_under_test._direct_chat_run_snapshot")
     @patch("operator_chat_under_test._start_direct_chat_run_handoff")
@@ -719,7 +751,7 @@ class OperatorChatTests(unittest.TestCase):
             availability={"ai_ready": True, "connection_mode": "byok"},
         )
 
-        self.assertEqual(payload["reply"], "I can run that here.")
+        self.assertIntervention(payload, "run_offer", title="Ready to run this task")
         self.assertEqual(payload["mode"], "answer_with_action")
         self.assertFalse(payload["context_used"]["run_created"])
         start_run_mock.assert_not_called()
@@ -808,7 +840,12 @@ class OperatorChatTests(unittest.TestCase):
         self.assertEqual(events[0]["label"], "Waiting for your laptop")
         self.assertEqual(events[0]["detail"], "Mansur's MacBook Air")
         self.assertEqual(events[-1]["type"], "final")
-        self.assertIn("waiting for your laptop to become available", events[-1]["payload"]["reply"])
+        self.assertIntervention(
+            events[-1]["payload"],
+            "run_handoff",
+            title="Durable run in progress",
+            detail_contains="waiting for your laptop to become available",
+        )
 
     @patch("operator_chat_under_test._direct_chat_run_snapshot")
     def test_handoff_stream_emits_snapshot_waiting_for_confirmation_step(
@@ -847,8 +884,12 @@ class OperatorChatTests(unittest.TestCase):
         self.assertEqual(events[0]["label"], "Waiting for confirmation")
         self.assertEqual(events[0]["detail"], "Confirm local execution before continuing.")
         self.assertEqual(events[-1]["type"], "final")
-        self.assertIn("waiting for confirmation", events[-1]["payload"]["reply"])
-        self.assertIn("Confirm local execution before continuing.", events[-1]["payload"]["reply"])
+        self.assertIntervention(
+            events[-1]["payload"],
+            "run_handoff",
+            title="Durable run is waiting for confirmation",
+            detail_contains="Confirm local execution before continuing.",
+        )
 
 
 if __name__ == "__main__":

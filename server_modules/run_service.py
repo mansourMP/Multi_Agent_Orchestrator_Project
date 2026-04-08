@@ -19,7 +19,7 @@ from server_modules.policy_service import apply_execution_route_metadata, decide
 from server_modules.run_execution_handle import attach_execution_handle, build_run_record
 from server_modules import run_state_repository
 from server_modules.runtime_models import RunStartRequest
-from server_modules.telemetry import get_tracer, set_span_attributes
+from server_modules.telemetry import get_tracer, record_reliability_latency_sample, set_span_attributes
 
 LOGGER = logging.getLogger(__name__)
 
@@ -340,6 +340,19 @@ def _run_trace_id(run: Dict[str, Any], *, fallback: Optional[str] = None) -> str
         or str(fallback or "").strip()
     )
     return token
+
+
+def _elapsed_ms_between_iso(started_at: Any, ended_at: Any) -> Optional[float]:
+    started_raw = str(started_at or "").strip()
+    ended_raw = str(ended_at or "").strip()
+    if not started_raw or not ended_raw:
+        return None
+    try:
+        started = datetime.fromisoformat(started_raw.replace("Z", "+00:00")).astimezone(timezone.utc)
+        ended = datetime.fromisoformat(ended_raw.replace("Z", "+00:00")).astimezone(timezone.utc)
+    except Exception:
+        return None
+    return max(0.0, (ended - started).total_seconds() * 1000.0)
 
 
 def _persist_run_repository_snapshot(
@@ -737,6 +750,19 @@ def wait_for_human_response(
                     "resumed_after_restart": True,
                 },
             )
+            elapsed_ms = _elapsed_ms_between_iso(existing_pending.get("requested_at"), existing_pending.get("resolved_at"))
+            if elapsed_ms is not None:
+                record_reliability_latency_sample(
+                    "approval_propagation_latency_ms",
+                    elapsed_ms,
+                    recorded_at=str(existing_pending.get("resolved_at") or "").strip() or None,
+                    metadata={
+                        "run_id": run_id,
+                        "approval_id": approval_id,
+                        "decision": decision_text,
+                        "resumed_after_restart": True,
+                    },
+                )
             clear_pending_confirmation_fn(run)
             return {
                 "approval_id": approval_id,
@@ -832,6 +858,7 @@ def wait_for_human_response(
         pending["resolved_at"] = utc_now_iso_fn()
         pending["decision"] = decision_text
         set_pending_confirmation_fn(run, pending)
+        elapsed_ms = _elapsed_ms_between_iso(pending.get("requested_at"), pending.get("resolved_at"))
         set_run_status_fn(run_id, "executing")
         emit_log_fn(
             run["logs"],
@@ -896,6 +923,18 @@ def wait_for_human_response(
                 "reusable": False,
             },
         )
+        if elapsed_ms is not None:
+            record_reliability_latency_sample(
+                "approval_propagation_latency_ms",
+                elapsed_ms,
+                recorded_at=str(pending.get("resolved_at") or "").strip() or None,
+                metadata={
+                    "run_id": run_id,
+                    "approval_id": approval_id,
+                    "decision": decision_text,
+                    "resumed_after_restart": False,
+                },
+            )
         clear_pending_confirmation_fn(run)
         return {
             "approval_id": approval_id,
@@ -1026,7 +1065,7 @@ def create_live_run(
         metrics_inc_fn=metrics_inc_fn,
         persist_live_run_state_fn=persist_live_run_state_fn,
     )
-    return activate_live_run(
+    active_run_id = activate_live_run(
         run_id,
         run,
         selected_target=selected_target,
@@ -1036,6 +1075,17 @@ def create_live_run(
         enqueue_local_companion_run_fn=enqueue_local_companion_run_fn,
         start_background_run_fn=start_background_run_fn,
     )
+    record_reliability_latency_sample(
+        "run_enqueue_ack_latency_ms",
+        max(0.0, (monotonic_fn() - started_mono) * 1000.0),
+        recorded_at=utc_now_iso_fn(),
+        metadata={
+            "run_id": active_run_id,
+            "engine": engine,
+            "execution_target_selected": selected_target,
+        },
+    )
+    return active_run_id
 
 
 def transition_live_run_status(

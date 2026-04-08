@@ -8,6 +8,7 @@ CANONICAL_DOC = ROOT / "docs" / "EMPYRALIS_CANONICAL_ARCHITECTURE.md"
 FINAL_AUDIT_DOC = ROOT / "docs" / "EMPYRALIS_FINAL_COMPLIANCE_AUDIT.md"
 DOCKER_COMPOSE = ROOT / "docker-compose.yml"
 ENTERPRISE_BASELINE_DOC = ROOT / "docs" / "EMPYRALIS_ENTERPRISE_BASELINE.md"
+RELIABILITY_METRICS_DOC = ROOT / "docs" / "EMPYRALIS_RELIABILITY_METRICS.md"
 CI_WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
 SECURITY_WORKFLOW = ROOT / ".github" / "workflows" / "security-baseline.yml"
 SUPPLY_CHAIN_WORKFLOW = ROOT / ".github" / "workflows" / "supply-chain.yml"
@@ -85,3 +86,16 @@ def test_enterprise_baseline_workflows_exist_and_cover_ci_scanning_and_attestati
     assert "anchore/sbom-action" in supply_chain
     assert "actions/attest-build-provenance" in supply_chain
     assert "actions/attest-build-provenance" in release
+
+
+def test_reliability_metrics_are_documented_and_no_longer_listed_as_missing() -> None:
+    canonical = CANONICAL_DOC.read_text(encoding="utf-8")
+    final_audit = FINAL_AUDIT_DOC.read_text(encoding="utf-8")
+    reliability = RELIABILITY_METRICS_DOC.read_text(encoding="utf-8")
+
+    assert "/runtime/runtimes/reliability" in canonical
+    assert "EMPYRALIS_RELIABILITY_METRICS.md" in canonical
+    assert "control-plane api health and latency" in reliability.lower()
+    assert "Historical gaps before this instrumentation existed are not backfilled." in reliability
+    assert "there is not yet a measurable SLO dashboard" not in final_audit
+    assert "| Reliability Targets | Aligned |" in final_audit

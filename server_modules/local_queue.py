@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import hashlib
 import threading
+import time
 import uuid
 from datetime import datetime
 from typing import Any, Dict, List, Optional
@@ -14,6 +15,7 @@ from typing import Any, Dict, List, Optional
 from fastapi import HTTPException
 from pydantic import BaseModel, Field
 from server_modules import machine_lease_service, outbox_service, safe_mode_service, worker_dispatch_service
+from server_modules.telemetry import mark_machine_revocation_requested, observe_machine_revocation_propagated
 
 _server = None
 LOCAL_RUN_STILL_WORKING_INTERVAL_SECONDS = 15
@@ -1579,6 +1581,7 @@ def handle_delete_local_runtime(machine_id: str) -> Dict[str, Any]:
     runtime_id = str(machine_id or "").strip()
     if not runtime_id:
         raise HTTPException(status_code=400, detail="machine_id is required.")
+    started_mono = time.monotonic()
 
     with _server.LOCAL_QUEUE_LOCK:
         record = _server.LOCAL_WORKER_REGISTRY.get(runtime_id) if isinstance(_server.LOCAL_WORKER_REGISTRY.get(runtime_id), dict) else None
@@ -1587,6 +1590,7 @@ def handle_delete_local_runtime(machine_id: str) -> Dict[str, Any]:
         _set_machine_control_state(record, "revoked", reason="Revoked from fleet controls.")
         record["note"] = "machine_revoked"
         _server.LOCAL_WORKER_REGISTRY[runtime_id] = record
+    mark_machine_revocation_requested(runtime_id, started_monotonic=started_mono, recorded_at=_server._utc_now_iso())
 
     _persist_local_runtime_state()
     _emit_machine_outbox_event("revoked", record)
@@ -1815,6 +1819,13 @@ def handle_get_local_run_control_state(
         or ""
     ).strip() or None
     manual_takeover = _manual_takeover_active(run)
+    if machine_wait_reason == "machine_revoked":
+        observed_at = _server._utc_now_iso() if callable(getattr(_server, "_utc_now_iso", None)) else None
+        observe_machine_revocation_propagated(
+            machine_id,
+            observed_monotonic=time.monotonic(),
+            observed_at=observed_at,
+        )
     return {
         "status": status,
         "pause_requested": status == "waiting_for_input" or bool(machine_wait_reason),

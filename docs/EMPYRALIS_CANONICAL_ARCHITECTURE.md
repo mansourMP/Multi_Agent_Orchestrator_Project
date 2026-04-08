@@ -1330,6 +1330,19 @@ Initial targets should be:
 - safe-mode downgrade under operator command in under 10 seconds
 - machine lease revocation propagation under 5 seconds
 
+Measured reliability is exposed through the canonical runtime snapshot path:
+
+- `/runtime/runtimes/reliability`
+
+The measurement contract is documented in:
+
+- [docs/EMPYRALIS_RELIABILITY_METRICS.md](/Users/mansur/Multi_Agent_Orchestrator_Project/docs/EMPYRALIS_RELIABILITY_METRICS.md)
+
+Important truth boundary:
+
+- control-plane API health and latency, run enqueue latency, approval propagation latency, artifact availability latency, and machine revocation propagation are measured live from runtime process start and are not backfilled
+- failed-run replay completeness is measured from the current live/archive snapshot set, not from synthetic historical reconstruction
+
 ## Final Verdict
 
 The best architecture is:

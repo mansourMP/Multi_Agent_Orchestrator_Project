@@ -397,6 +397,50 @@ class RunServiceTests(unittest.TestCase):
         self.assertEqual(emitted[0][1]["event"], "approval_timeout")
         self.assertEqual(audits[0]["stage"], "timeout")
 
+    @patch("server_modules.run_service.record_reliability_latency_sample")
+    def test_wait_for_human_response_records_approval_propagation_latency(self, mock_record_latency):
+        input_queue = queue.Queue()
+        input_queue.put({"approval_id": "approval-3", "decision": "approve"})
+        run = {
+            "run_id": "run-approval-metric",
+            "status": "waiting_for_input",
+            "logs": queue.Queue(),
+            "input_queue": input_queue,
+        }
+
+        def _begin(*args, **kwargs):
+            payload = {
+                "approval_id": "approval-3",
+                "correlation_id": "corr-3",
+                "ttl_seconds": 300,
+                "status": "waiting",
+                "prompt": "Confirm",
+                "requested_at": "2026-04-06T00:00:00Z",
+            }
+            set_pending_confirmation(run, payload)
+            return payload
+
+        payload = wait_for_human_response(
+            "run-approval-metric",
+            "Confirm",
+            runs_by_id={"run-approval-metric": run},
+            begin_run_pending_confirmation_fn=_begin,
+            clear_pending_confirmation_fn=clear_pending_confirmation,
+            get_pending_confirmation_fn=get_pending_confirmation,
+            set_pending_confirmation_fn=set_pending_confirmation,
+            approval_correlation_id_fn=lambda approval_id, run_id=None: f"corr:{run_id}:{approval_id}",
+            append_approval_audit_fn=lambda **kwargs: None,
+            emit_log_fn=lambda *args, **kwargs: None,
+            set_run_status_fn=lambda run_id, status: None,
+            utc_now_iso_fn=lambda: "2026-04-06T00:00:01Z",
+            approval_ttl_seconds=600,
+            monotonic_fn=lambda: 10.0,
+        )
+
+        self.assertTrue(payload["approved"])
+        self.assertEqual(mock_record_latency.call_args.args[0], "approval_propagation_latency_ms")
+        self.assertEqual(mock_record_latency.call_args.args[1], 1000.0)
+
     def test_register_live_run_indexes_and_persists(self):
         runs = {}
         queue_index = {}
@@ -1533,6 +1577,36 @@ class RunServiceTests(unittest.TestCase):
         self.assertEqual(live_run["active_provider"], None)
         self.assertEqual(live_run["context"]["metadata"]["tool_policy_precheck"]["blocked_count"], 0)
         self.assertTrue(live_run["context"]["metadata"]["skill_defaults"])
+
+    @patch("server_modules.run_service.record_reliability_latency_sample")
+    def test_create_live_run_records_enqueue_ack_latency(self, mock_record_latency):
+        monotonic_values = iter([123.0, 123.25])
+
+        run_id = create_live_run(
+            "orion",
+            {"workspace_id": "default", "metadata": {}},
+            runtime_db_path="runtime.sqlite3",
+            sync_acp_manager_paths_fn=lambda **kwargs: None,
+            selected_execution_target_from_context_fn=lambda context: "cloud",
+            runs_by_id={},
+            run_queue_index={},
+            metrics_inc_fn=lambda key, amount: None,
+            persist_live_run_state_fn=lambda run_id, run: None,
+            hydrate_run_memory_context_fn=lambda run_id, run: None,
+            enqueue_local_companion_run_fn=lambda run_id: None,
+            start_background_run_fn=lambda active_run_id: None,
+            local_companion_target="local_companion",
+            provider_profiles={},
+            memory_enabled=False,
+            utc_now_iso_fn=lambda: "2026-04-06T00:00:01Z",
+            uuid4_fn=lambda: "run-live-metric",
+            utcnow_fn=lambda: datetime(2026, 4, 6, 0, 0, 0),
+            monotonic_fn=lambda: next(monotonic_values),
+        )
+
+        self.assertEqual(run_id, "run-live-metric")
+        self.assertEqual(mock_record_latency.call_args.args[0], "run_enqueue_ack_latency_ms")
+        self.assertEqual(mock_record_latency.call_args.args[1], 250.0)
 
     def test_create_live_run_queues_local_companion_target_without_background_start(self):
         enqueued = []

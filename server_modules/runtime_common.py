@@ -1,10 +1,22 @@
+import hashlib
+import json
 import os
-from urllib.parse import quote_plus
+from datetime import datetime, timezone
+from pathlib import Path
+import ssl
+import time
+from typing import Any, Dict, Optional
+from urllib import request as urlrequest
+from urllib.parse import quote_plus, urlencode
+import uuid
 
-from fastapi import HTTPException
+import certifi
+from fastapi import Header, HTTPException, Request, Response
+from fastapi.responses import JSONResponse
 
 from server_modules import runtime_config as config
 from server_modules import shared as shared
+from server_modules.telemetry import record_control_plane_request
 
 globals().update({key: value for key, value in vars(config).items() if not key.startswith("__")})
 globals().update({key: value for key, value in vars(shared).items() if not key.startswith("__")})
@@ -149,56 +161,79 @@ def _control_plane_rate_limit(request: Request) -> Optional[JSONResponse]:
 
 
 async def control_plane_guard_middleware(request: Request, call_next):
-    origin_failure = _check_control_plane_origin(request)
-    if origin_failure is not None:
-        return origin_failure
-
-    rate_limit_failure = _control_plane_rate_limit(request)
-    if rate_limit_failure is not None:
-        return rate_limit_failure
-
-    if not _is_control_plane_mutation(request):
-        return await call_next(request)
-
-    idempotency_key = request.headers.get("x-idempotency-key") or request.headers.get("X-Idempotency-Key")
-    if not isinstance(idempotency_key, str) or not idempotency_key.strip():
-        return await call_next(request)
-
-    body = await request.body()
-    body_hash = hashlib.sha256(body).hexdigest()
-    lookup = _idempotency_get(request.method, request.url.path, idempotency_key.strip(), body_hash)
-    if lookup.get("hit") and lookup.get("conflict"):
-        return JSONResponse(status_code=409, content={"detail": "Idempotency key reused with different payload."})
-    if lookup.get("hit") and isinstance(lookup.get("record"), dict):
-        record = lookup["record"]
-        headers = {"X-Idempotent-Replay": "1"}
-        return JSONResponse(status_code=int(record.get("status_code", 200)), content=record.get("response"), headers=headers)
-
-    response = await call_next(request)
-    if response.status_code >= 500:
-        return response
-
-    if response.media_type and "application/json" not in response.media_type.lower():
-        return response
-    if response.headers.get("content-type") and "application/json" not in response.headers.get("content-type", "").lower():
-        return response
-
-    body_bytes = b""
-    async for chunk in response.body_iterator:
-        body_bytes += chunk
-    replay_response = Response(
-        content=body_bytes,
-        status_code=response.status_code,
-        headers=dict(response.headers),
-        media_type=response.media_type,
-    )
+    started_mono = time.monotonic()
+    response: Optional[Response] = None
+    error_type: Optional[str] = None
     try:
-        parsed = json.loads(body_bytes.decode("utf-8")) if body_bytes else None
-    except Exception:
-        parsed = None
-    if parsed is not None:
-        _idempotency_store(request.method, request.url.path, idempotency_key.strip(), body_hash, response.status_code, parsed)
-    return replay_response
+        origin_failure = _check_control_plane_origin(request)
+        if origin_failure is not None:
+            response = origin_failure
+            return response
+
+        rate_limit_failure = _control_plane_rate_limit(request)
+        if rate_limit_failure is not None:
+            response = rate_limit_failure
+            return response
+
+        if not _is_control_plane_mutation(request):
+            response = await call_next(request)
+            return response
+
+        idempotency_key = request.headers.get("x-idempotency-key") or request.headers.get("X-Idempotency-Key")
+        if not isinstance(idempotency_key, str) or not idempotency_key.strip():
+            response = await call_next(request)
+            return response
+
+        body = await request.body()
+        body_hash = hashlib.sha256(body).hexdigest()
+        lookup = _idempotency_get(request.method, request.url.path, idempotency_key.strip(), body_hash)
+        if lookup.get("hit") and lookup.get("conflict"):
+            response = JSONResponse(status_code=409, content={"detail": "Idempotency key reused with different payload."})
+            return response
+        if lookup.get("hit") and isinstance(lookup.get("record"), dict):
+            record = lookup["record"]
+            headers = {"X-Idempotent-Replay": "1"}
+            response = JSONResponse(status_code=int(record.get("status_code", 200)), content=record.get("response"), headers=headers)
+            return response
+
+        response = await call_next(request)
+        if response.status_code >= 500:
+            return response
+
+        if response.media_type and "application/json" not in response.media_type.lower():
+            return response
+        if response.headers.get("content-type") and "application/json" not in response.headers.get("content-type", "").lower():
+            return response
+
+        body_bytes = b""
+        async for chunk in response.body_iterator:
+            body_bytes += chunk
+        replay_response = Response(
+            content=body_bytes,
+            status_code=response.status_code,
+            headers=dict(response.headers),
+            media_type=response.media_type,
+        )
+        try:
+            parsed = json.loads(body_bytes.decode("utf-8")) if body_bytes else None
+        except Exception:
+            parsed = None
+        if parsed is not None:
+            _idempotency_store(request.method, request.url.path, idempotency_key.strip(), body_hash, response.status_code, parsed)
+        response = replay_response
+        return response
+    except Exception as exc:
+        error_type = type(exc).__name__
+        raise
+    finally:
+        record_control_plane_request(
+            method=str(request.method or "GET").upper(),
+            path=str(request.url.path or "").strip() or "/",
+            status_code=int(getattr(response, "status_code", 500) or 500),
+            duration_ms=max(0.0, (time.monotonic() - started_mono) * 1000.0),
+            recorded_at=_utc_now_iso(),
+            error_type=error_type,
+        )
 
 def require_api_key(
     request: Request,

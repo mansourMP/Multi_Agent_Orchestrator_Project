@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import re
 import shutil
+import time
 from typing import Any, Dict, Mapping, Optional
 from urllib.parse import urlparse
 import uuid
@@ -21,6 +22,8 @@ try:
     from botocore.config import Config as _BotocoreConfig
 except Exception:  # pragma: no cover - optional dependency at runtime
     _BotocoreConfig = None
+
+from server_modules.telemetry import record_reliability_latency_sample
 
 
 ARTIFACT_URI_SCHEME = "artifact"
@@ -433,6 +436,7 @@ def store_artifact_file(
     artifact_id: Optional[str] = None,
     created_at: Optional[str] = None,
 ) -> ArtifactRecord:
+    started_mono = time.monotonic()
     source = Path(source_path).expanduser().resolve()
     if not source.exists() or not source.is_file():
         raise FileNotFoundError(source)
@@ -469,6 +473,16 @@ def store_artifact_file(
             file_name=_safe_filename(resolved_label),
         )
         _persist_record(record, source_path=source)
+        record_reliability_latency_sample(
+            "artifact_availability_latency_ms",
+            max(0.0, (time.monotonic() - started_mono) * 1000.0),
+            recorded_at=record.created_at,
+            metadata={
+                "artifact_id": record.artifact_id,
+                "run_id": record.run_id,
+                "storage_backend": record.storage_backend,
+            },
+        )
         return record
 
     target = _artifact_object_path_for_key(object_key, ensure_parent=True)
@@ -497,6 +511,16 @@ def store_artifact_file(
         file_name=target.name,
     )
     _persist_record(record, stored_path=target, source_path=source)
+    record_reliability_latency_sample(
+        "artifact_availability_latency_ms",
+        max(0.0, (time.monotonic() - started_mono) * 1000.0),
+        recorded_at=record.created_at,
+        metadata={
+            "artifact_id": record.artifact_id,
+            "run_id": record.run_id,
+            "storage_backend": record.storage_backend,
+        },
+    )
     return record
 
 
@@ -520,6 +544,7 @@ def store_artifact_bytes(
     artifact_id: Optional[str] = None,
     created_at: Optional[str] = None,
 ) -> ArtifactRecord:
+    started_mono = time.monotonic()
     artifact_token = str(artifact_id or uuid.uuid4().hex).strip() or uuid.uuid4().hex
     resolved_name = str(label or file_name or "artifact.bin").strip() or "artifact.bin"
     mime = _guess_content_type(resolved_name, explicit=content_type)
@@ -553,6 +578,16 @@ def store_artifact_bytes(
             file_name=_safe_filename(resolved_name),
         )
         _persist_record(record)
+        record_reliability_latency_sample(
+            "artifact_availability_latency_ms",
+            max(0.0, (time.monotonic() - started_mono) * 1000.0),
+            recorded_at=record.created_at,
+            metadata={
+                "artifact_id": record.artifact_id,
+                "run_id": record.run_id,
+                "storage_backend": record.storage_backend,
+            },
+        )
         return record
 
     target = _artifact_object_path_for_key(object_key, ensure_parent=True)
@@ -579,6 +614,16 @@ def store_artifact_bytes(
         file_name=target.name,
     )
     _persist_record(record, stored_path=target)
+    record_reliability_latency_sample(
+        "artifact_availability_latency_ms",
+        max(0.0, (time.monotonic() - started_mono) * 1000.0),
+        recorded_at=record.created_at,
+        metadata={
+            "artifact_id": record.artifact_id,
+            "run_id": record.run_id,
+            "storage_backend": record.storage_backend,
+        },
+    )
     return record
 
 

@@ -88,6 +88,22 @@ class ArtifactServiceTests(TestCase):
                 self.assertEqual(metadata["retention"]["retention_days"], 30)
                 self.assertEqual(metadata["retention"]["policy_status"], "placeholder")
 
+    @patch("server_modules.artifact_service.record_reliability_latency_sample")
+    def test_store_artifact_bytes_records_artifact_availability_latency(self, mock_record_latency) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            store_root = Path(tempdir) / "object-store"
+            with patch.dict(os.environ, {"EMPYRALIS_OBJECT_STORAGE_ROOT": str(store_root)}, clear=False):
+                record = artifact_service.store_artifact_bytes(
+                    b"hello",
+                    run_id="run-metric",
+                    kind="report",
+                    file_name="report.txt",
+                )
+
+        self.assertEqual(record.run_id, "run-metric")
+        self.assertEqual(mock_record_latency.call_args.args[0], "artifact_availability_latency_ms")
+        self.assertGreaterEqual(mock_record_latency.call_args.args[1], 0.0)
+
     def test_store_artifact_file_uses_s3_backend_when_configured(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:
             source = Path(tempdir) / "report.txt"

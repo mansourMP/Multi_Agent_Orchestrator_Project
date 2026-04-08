@@ -24,6 +24,7 @@ from server_modules.auth import (
 from server_modules.runtime_common import require_api_key
 from server_modules import local_queue
 from server_modules import outbox_service
+from server_modules import run_state_repository, runs_output, shared, telemetry
 
 SUPPORTED_STT_CONTENT_TYPES: Dict[str, str] = {
     "audio/webm": "input.webm",
@@ -357,6 +358,61 @@ def runtime_status_payload() -> Dict[str, Any]:
     }
 
 
+def _recent_failed_run_snapshots(limit: int = 100) -> List[Dict[str, Any]]:
+    snapshots: List[Dict[str, Any]] = []
+    seen: set[str] = set()
+    try:
+        live_failed = run_state_repository.sync_list_live_runs_by_state(["failed", "timeout"])
+    except Exception:
+        live_failed = []
+    for item in live_failed:
+        if not isinstance(item, dict):
+            continue
+        run_id = str(item.get("run_id") or "").strip()
+        if not run_id or run_id in seen:
+            continue
+        try:
+            snapshots.append(runs_output._serialize_run_snapshot(run_id, item))
+            seen.add(run_id)
+        except Exception:
+            continue
+        if len(snapshots) >= limit:
+            return snapshots
+    try:
+        archived = run_state_repository.sync_list_run_archive(limit=limit)
+    except Exception:
+        archived = []
+    for item in archived:
+        if not isinstance(item, dict):
+            continue
+        run_id = str(item.get("run_id") or "").strip()
+        if not run_id or run_id in seen:
+            continue
+        snapshots.append(dict(item))
+        seen.add(run_id)
+        if len(snapshots) >= limit:
+            return snapshots
+    with shared.RUN_HISTORY_LOCK:
+        history_items = list(shared.RUN_HISTORY)
+    for item in history_items:
+        if not isinstance(item, dict):
+            continue
+        run_id = str(item.get("run_id") or "").strip()
+        if not run_id or run_id in seen:
+            continue
+        snapshots.append(dict(item))
+        seen.add(run_id)
+        if len(snapshots) >= limit:
+            break
+    return snapshots
+
+
+def runtime_reliability_payload() -> Dict[str, Any]:
+    payload = telemetry.get_reliability_snapshot(failed_run_snapshots=_recent_failed_run_snapshots())
+    payload["outbox"] = outbox_service.get_outbox_delivery_status()
+    return payload
+
+
 def legacy_local_workers_status_payload() -> Dict[str, Any]:
     payload = runtime_status_payload()
     items = payload.get("items") if isinstance(payload.get("items"), list) else []
@@ -412,6 +468,10 @@ def register_runtime_routes(app) -> None:
     @app.get("/runtime/runtimes/status", dependencies=[Depends(require_api_key)])
     async def get_runtime_status():
         return runtime_status_payload()
+
+    @app.get("/runtime/runtimes/reliability", dependencies=[Depends(require_api_key)])
+    async def get_runtime_reliability():
+        return runtime_reliability_payload()
 
     @app.get("/machines", dependencies=[Depends(require_api_key)])
     async def get_machines(

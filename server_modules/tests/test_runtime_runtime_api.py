@@ -88,6 +88,20 @@ class RuntimeRuntimeApiTests(unittest.TestCase):
         self.assertEqual(payload["online_workers"], 1)
         self.assertEqual(payload["offline"], 1)
 
+    @patch("server_modules.runtime_runtime_api.telemetry.get_reliability_snapshot")
+    @patch("server_modules.runtime_runtime_api.outbox_service.get_outbox_delivery_status")
+    @patch("server_modules.runtime_runtime_api._recent_failed_run_snapshots")
+    def test_runtime_reliability_payload_combines_snapshot_and_outbox(self, mock_failed_runs, mock_outbox_status, mock_snapshot):
+        mock_failed_runs.return_value = [{"run_id": "run-1", "status": "failed"}]
+        mock_outbox_status.return_value = {"undelivered_count": 1}
+        mock_snapshot.return_value = {"generated_at": "2026-04-08T00:00:00Z", "control_plane_api": {"request_count": 1}}
+
+        payload = runtime_runtime_api.runtime_reliability_payload()
+
+        self.assertEqual(payload["outbox"]["undelivered_count"], 1)
+        self.assertEqual(payload["control_plane_api"]["request_count"], 1)
+        mock_snapshot.assert_called_once()
+
     @patch("server_modules.local_queue.handle_enroll_local_runtime")
     @patch("server_modules.runtime_runtime_api.grant_workspace_owner_machine_trust")
     def test_register_runtime_routes_exposes_machine_enroll(self, mock_grant_trust, mock_enroll):
@@ -108,6 +122,18 @@ class RuntimeRuntimeApiTests(unittest.TestCase):
         self.assertEqual(mock_enroll.call_args.kwargs["workspace_id"], "default")
         self.assertEqual(mock_enroll.call_args.kwargs["machine_enrollment_scope"], "workspace")
         mock_grant_trust.assert_called_once_with("default", "machine-1")
+
+    @patch("server_modules.runtime_runtime_api.runtime_reliability_payload")
+    def test_register_runtime_routes_exposes_runtime_reliability(self, mock_reliability_payload):
+        app = _FakeApp()
+        runtime_runtime_api.register_runtime_routes(app)
+        mock_reliability_payload.return_value = {"generated_at": "2026-04-08T00:00:00Z", "control_plane_api": {"request_count": 2}}
+        handler = app.routes[("GET", "/runtime/runtimes/reliability")]
+
+        result = self._run_async(handler())
+
+        self.assertEqual(result["control_plane_api"]["request_count"], 2)
+        mock_reliability_payload.assert_called_once()
 
     @patch("server_modules.local_queue.create_machine_enrollment_intent")
     @patch("server_modules.runtime_runtime_api.grant_workspace_owner_machine_trust")

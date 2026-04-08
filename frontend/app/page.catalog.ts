@@ -921,7 +921,7 @@ export const DEFAULT_PROVIDER_OPTIONS: ProviderOption[] = [
       { id: 'access_token', label: 'OpenAI access token', secretRequired: true },
       { id: 'oauth_token', label: 'Saved OpenAI / Codex token', secretRequired: true },
     ],
-    note: 'Use a direct OpenAI credential, or sign in with ChatGPT in your browser on the connect page and import the local session from this Mac.',
+    note: 'Use a direct OpenAI credential, or connect your ChatGPT / Codex browser session on the connect page and import that provider session from this Mac.',
   },
   {
     id: 'anthropic',

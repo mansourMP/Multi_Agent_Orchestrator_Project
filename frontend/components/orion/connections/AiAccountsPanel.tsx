@@ -467,7 +467,7 @@ function providerConfigureLabel(provider: ProviderId): string {
 function providerSetupGuidance(provider: ProviderId, authMode: string, option: ProviderOption): string {
   if (provider === 'openai') {
     if (authMode === 'oauth_token') {
-      return 'Paste a saved OpenAI token you already control, or use the ChatGPT action above when desktop sign-in or local session import is available.';
+      return 'Paste a saved OpenAI token you already control, or use the OpenAI connect action above when desktop browser linking or local session import is available. This links provider capability only.';
     }
     if (authMode === 'access_token') {
       return 'Paste a direct OpenAI access token. Use this only if your organization issues access tokens instead of API keys.';
@@ -679,8 +679,8 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
         {
           id: 'openai_browser_oauth',
           provider: 'openai',
-          label: 'Sign in with OpenAI',
-          description: 'Open OpenAI in your browser and connect the session automatically.',
+          label: 'Connect OpenAI',
+          description: 'Open OpenAI in your browser and link that provider to Empyralis. Your OpenAI account remains separate from your Empyralis account.',
           authMode: 'oauth_token',
           action: 'openai_browser_oauth',
         },
@@ -1768,9 +1768,14 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
       await loadProviderAccounts();
       setRecentlyConnectedCredentialId(credentialId || null);
       setLastConnectedAccountLabel(String(body?.label || 'OpenAI / Codex'));
-      setProviderNotice(String(body?.message || 'OpenAI / Codex connected and ready.'));
+      setProviderNotice(
+        String(
+          body?.message
+          || 'OpenAI / Codex connected as a provider capability. Your Empyralis account remains separate; add a backup sign-in method in Settings if you have not done that yet.',
+        ),
+      );
     } catch (error) {
-      setProviderError(error instanceof Error ? error.message : 'Failed to complete OpenAI sign-in.');
+      setProviderError(error instanceof Error ? error.message : 'Failed to complete OpenAI provider connection.');
     } finally {
       setProviderActionBusy('openai-codex-oauth', null);
     }
@@ -1809,7 +1814,7 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
 
   const selectedConnectDisabledReason = selectedConnectMethod?.disabledReason || '';
   const selectedConnectPrimaryLabel = selectedConnectMethod?.action === 'openai_browser_oauth'
-    ? (selectedConnectBusy ? 'Opening browser…' : 'Open browser to sign in')
+    ? (selectedConnectBusy ? 'Opening browser…' : 'Open browser to connect OpenAI')
     : selectedConnectMethod?.action === 'anthropic_local_import'
       ? (selectedConnectBusy ? 'Connecting…' : 'Use local Claude session')
       : selectedConnectBusy
@@ -1950,8 +1955,12 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
               </div>
               <div style={{ fontSize: 12, lineHeight: 1.5 }}>
                 {returningToSetup
-                  ? 'Return to setup and connect one integration before you start your first task.'
-                  : 'Return to chat and continue. You can manage provider order later from Connectors if you need to.'}
+                  ? readyProviderCard.provider === 'openai'
+                    ? 'Return to setup and continue. OpenAI is linked as a provider capability, while your Empyralis account stays separate.'
+                    : 'Return to setup and connect one integration before you start your first task.'
+                  : readyProviderCard.provider === 'openai'
+                    ? 'Return to chat and continue. OpenAI is linked for capability only, and you can manage provider order later from Connectors.'
+                    : 'Return to chat and continue. You can manage provider order later from Connectors if you need to.'}
               </div>
             </div>
             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>

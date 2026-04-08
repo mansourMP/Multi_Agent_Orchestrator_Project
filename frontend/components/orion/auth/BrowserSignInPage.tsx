@@ -2,7 +2,7 @@
 
 import { FormEvent, useEffect, useState } from 'react';
 import Link from 'next/link';
-import { ArrowLeft, Chrome, LockKeyhole, Smartphone } from 'lucide-react';
+import { ArrowLeft, Chrome, Link2, LockKeyhole, Smartphone } from 'lucide-react';
 import { getDesktopBridge } from '@/lib/desktopBridge';
 import { waitForDesktopControlPlaneSignIn } from '@/lib/controlPlaneSession';
 import { buildBrowserVisibleControlPlaneAuthStartPath } from '@/lib/server/controlPlaneAuthRouting';
@@ -61,11 +61,14 @@ export default function BrowserSignInPage({ returnTo, errorCode = '', desktopMod
   const subheadline = inDesktopWindow
     ? 'Sign in to your Empyralis account here. Google and Apple open in your browser and return automatically.'
     : authMode === 'signup'
-      ? 'Create your Empyralis account. AI providers connect separately after sign-in.'
+      ? 'Create your Empyralis account first. OpenAI and other AI providers connect separately after sign-in.'
       : 'Sign in to your Empyralis account to continue.';
   const accountBoundaryNote = authMode === 'signup'
     ? 'Your Empyralis account owns your runs, artifacts, workspaces, and recovery path.'
     : 'Your Empyralis account remains separate from any AI provider you connect later.';
+  const providerLinkingNote = inDesktopWindow
+    ? 'After account sign-in, connect OpenAI or Codex from Credentials or Settings. That links provider capability only and does not replace your Empyralis account.'
+    : 'After account sign-in, connect OpenAI from Credentials or Settings. OpenAI remains a linked provider, not the owner of your Empyralis account.';
   const googleStartPath = buildBrowserVisibleControlPlaneAuthStartPath('google', returnTo, desktopMode);
   const appleStartPath = buildBrowserVisibleControlPlaneAuthStartPath('apple', returnTo, desktopMode);
 
@@ -244,6 +247,14 @@ export default function BrowserSignInPage({ returnTo, errorCode = '', desktopMod
           <p className="orion-auth-card__copy">{accountBoundaryNote}</p>
         </div>
 
+        <div className="orion-auth-note" style={{ display: 'grid', gap: 6 }}>
+          <div style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+            <Link2 size={14} />
+            <span>Sign in to Empyralis first. Connect OpenAI separately.</span>
+          </div>
+          <div>{providerLinkingNote}</div>
+        </div>
+
         {!loadingProviders && socialProvidersEnabled ? (
           <div className="orion-auth-social">
             {providers.google.enabled ? (
@@ -269,14 +280,14 @@ export default function BrowserSignInPage({ returnTo, errorCode = '', desktopMod
         {!loadingProviders && !providers.google.enabled && !providers.apple.enabled ? (
           <div className="orion-auth-note">
             {inDesktopWindow
-              ? 'Google or Apple sign-in is not configured in this build yet. Use your Empyralis account here, then connect providers separately later.'
-              : 'This local build is not configured for Google or Apple sign-in yet. Use your Empyralis account here, then connect providers separately later.'}
+              ? 'Google or Apple sign-in is not configured in this build yet. Use your Empyralis account here, then connect OpenAI or another provider separately later.'
+              : 'This local build is not configured for Google or Apple sign-in yet. Use your Empyralis account here, then connect OpenAI or another provider separately later.'}
           </div>
         ) : null}
 
         {oauthSubmitting && inDesktopWindow ? (
           <div className="orion-auth-note">
-            Finish sign-in in your browser. Empyralis will return you to the app automatically when authentication completes.
+            Finish account sign-in in your browser. Empyralis will return you to the app automatically when authentication completes.
           </div>
         ) : null}
 

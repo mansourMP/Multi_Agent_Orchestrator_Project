@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::sync::mpsc;
 use std::sync::Mutex;
-use std::thread::sleep;
+use std::thread::{self, sleep};
 use std::time::{Duration, Instant};
 
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
@@ -23,6 +23,9 @@ const BACKEND_HOST: &str = "127.0.0.1";
 const BACKEND_PORT: &str = "8080";
 const NEXT_HOST: &str = "localhost";
 const NEXT_PORT: &str = "3000";
+const OVERLAY_BRIDGE_HOST: &str = "127.0.0.1";
+const OVERLAY_BRIDGE_PORT: &str = "7790";
+const OVERLAY_WINDOW_LABEL: &str = "computer-control-overlay";
 const WINDOW_LABEL: &str = "main";
 const WINDOW_TITLE: &str = "Empyralis";
 const WINDOW_WIDTH: f64 = 1280.0;
@@ -44,6 +47,19 @@ const OPENAI_CODEX_CALLBACK_TIMEOUT: Duration = Duration::from_secs(180);
 struct DesktopShellLockState {
     lock_path: PathBuf,
     start_meta_path: PathBuf,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+struct OverlayActionEvent {
+    kind: String,
+    x: Option<f64>,
+    y: Option<f64>,
+    text: Option<String>,
+    length: Option<usize>,
+    button: Option<String>,
+    double: Option<bool>,
+    phase: Option<String>,
 }
 
 #[tauri::command]
@@ -454,7 +470,7 @@ fn run_openai_codex_oauth_flow() -> Result<OpenAiCodexOauthResult, String> {
                         let _ = write_http_response(
                             &mut stream,
                             "HTTP/1.1 200 OK",
-                            &oauth_success_html("ChatGPT sign-in completed. You can close this window and return to Empyralis."),
+                            &oauth_success_html("OpenAI connection completed. This links provider capability to Empyralis while your Empyralis account remains separate. You can close this window and return to the app."),
                         );
                     }
                     Err(message) => {
@@ -864,6 +880,10 @@ fn next_url() -> String {
     format!("http://{NEXT_HOST}:{NEXT_PORT}")
 }
 
+fn overlay_url() -> String {
+    format!("{}/overlay.html", next_url())
+}
+
 fn next_health_url() -> String {
     next_url()
 }
@@ -1190,7 +1210,6 @@ fn wait_for_ready(url: &str, accept_client_errors: bool, label: &str) -> Result<
 
 fn spawn_runtime<Rt: Runtime, M: Manager<Rt>>(app: &M, runtime_key: &str) -> Result<Child, String> {
     let (launcher, prefix_args) = runtime_launcher(app)?;
-    let use_uvicorn_module = !prefix_args.is_empty();
     let mut command = Command::new(launcher);
     command
         .args(prefix_args)
@@ -1202,14 +1221,12 @@ fn spawn_runtime<Rt: Runtime, M: Manager<Rt>>(app: &M, runtime_key: &str) -> Res
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit());
 
-    if use_uvicorn_module {
-        command
-            .arg("server:app")
-            .arg("--host")
-            .arg(RUNTIME_HOST)
-            .arg("--port")
-            .arg(RUNTIME_PORT);
-    }
+    command
+        .arg("server:app")
+        .arg("--host")
+        .arg(RUNTIME_HOST)
+        .arg("--port")
+        .arg(RUNTIME_PORT);
 
     command
         .spawn()
@@ -1318,7 +1335,7 @@ fn desktop_bridge_script() -> String {
       if (window.__TAURI_INTERNALS__ && typeof window.__TAURI_INTERNALS__.invoke === "function") {{
         return await window.__TAURI_INTERNALS__.invoke("openai_codex_oauth_login");
       }}
-      throw new Error("OpenAI Codex OAuth is only available in the Empyralis desktop app.");
+      throw new Error("OpenAI provider linking is only available in the Empyralis desktop app.");
     }},
   }};
   window.empyralisDesktop = Object.assign(window.empyralisDesktop || {{}}, bridge);
@@ -1327,6 +1344,193 @@ fn desktop_bridge_script() -> String {
 "#,
         platform = std::env::consts::OS
     )
+}
+
+fn overlay_monitor_bounds<R: Runtime>(app: &tauri::App<R>) -> Result<(f64, f64, f64, f64), String> {
+    let monitor = app
+        .primary_monitor()
+        .map_err(|error| format!("Failed to resolve primary monitor for overlay: {error}"))?;
+    if let Some(monitor) = monitor {
+        let scale = monitor.scale_factor();
+        let size = monitor.size();
+        let position = monitor.position();
+        return Ok((
+            position.x as f64 / scale,
+            position.y as f64 / scale,
+            size.width as f64 / scale,
+            size.height as f64 / scale,
+        ));
+    }
+    Ok((0.0, 0.0, WINDOW_WIDTH, WINDOW_HEIGHT))
+}
+
+fn create_overlay_window<R: Runtime>(app: &tauri::App<R>) -> Result<(), String> {
+    if app.get_webview_window(OVERLAY_WINDOW_LABEL).is_some() {
+        return Ok(());
+    }
+
+    let overlay_target = overlay_url()
+        .parse::<Url>()
+        .map_err(|error| format!("Invalid overlay URL: {error}"))?;
+    let (x, y, width, height) = overlay_monitor_bounds(app)?;
+
+    let overlay_window = WebviewWindowBuilder::new(
+        app,
+        OVERLAY_WINDOW_LABEL,
+        WebviewUrl::External(overlay_target),
+    )
+    .title("Empyralis Overlay")
+    .position(x, y)
+    .inner_size(width, height)
+    .resizable(false)
+    .decorations(false)
+    .transparent(true)
+    .always_on_top(true)
+    .shadow(false)
+    .skip_taskbar(true)
+    .focusable(false)
+    .build()
+    .map_err(|error| format!("Failed to build computer-control overlay window: {error}"))?;
+
+    let _ = overlay_window.set_always_on_top(true);
+    let _ = overlay_window.set_ignore_cursor_events(true);
+    let _ = overlay_window.set_focusable(false);
+    let _ = overlay_window.set_shadow(false);
+    Ok(())
+}
+
+fn write_overlay_response(
+    stream: &mut std::net::TcpStream,
+    status_line: &str,
+    body: &str,
+) -> Result<(), String> {
+    let response = format!(
+        "{status_line}\r\nContent-Type: application/json; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+        body.len(),
+        body
+    );
+    stream
+        .write_all(response.as_bytes())
+        .map_err(|error| format!("Failed to write overlay bridge response: {error}"))
+}
+
+fn read_overlay_request(stream: &mut std::net::TcpStream) -> Result<(String, Vec<u8>), String> {
+    let mut buffer = Vec::new();
+    let mut chunk = [0u8; 4096];
+    let mut header_end = None;
+
+    while header_end.is_none() {
+        let read = stream
+            .read(&mut chunk)
+            .map_err(|error| format!("Failed reading overlay bridge request: {error}"))?;
+        if read == 0 {
+            break;
+        }
+        buffer.extend_from_slice(&chunk[..read]);
+        if let Some(index) = buffer.windows(4).position(|window| window == b"\r\n\r\n") {
+            header_end = Some(index + 4);
+        }
+        if buffer.len() > 1024 * 1024 {
+            return Err("Overlay bridge request exceeded maximum size.".into());
+        }
+    }
+
+    let header_end = header_end.ok_or_else(|| "Overlay bridge request was missing headers.".to_string())?;
+    let header_bytes = &buffer[..header_end];
+    let headers = String::from_utf8_lossy(header_bytes);
+    let request_line = headers
+        .lines()
+        .next()
+        .ok_or_else(|| "Overlay bridge request was empty.".to_string())?
+        .to_string();
+    let content_length = headers
+        .lines()
+        .find_map(|line| {
+            let (name, value) = line.split_once(':')?;
+            if name.trim().eq_ignore_ascii_case("content-length") {
+                return value.trim().parse::<usize>().ok();
+            }
+            None
+        })
+        .unwrap_or(0);
+
+    let mut body = buffer[header_end..].to_vec();
+    while body.len() < content_length {
+        let read = stream
+            .read(&mut chunk)
+            .map_err(|error| format!("Failed reading overlay bridge body: {error}"))?;
+        if read == 0 {
+            break;
+        }
+        body.extend_from_slice(&chunk[..read]);
+    }
+    body.truncate(content_length);
+    Ok((request_line, body))
+}
+
+fn emit_overlay_event<R: Runtime, M: Manager<R>>(manager: &M, event: &OverlayActionEvent) -> Result<(), String> {
+    let Some(window) = manager.get_webview_window(OVERLAY_WINDOW_LABEL) else {
+        return Ok(());
+    };
+    let serialized = serde_json::to_string(event)
+        .map_err(|error| format!("Failed to serialize overlay event: {error}"))?;
+    let script = format!(
+        "window.dispatchEvent(new CustomEvent('empyralis-overlay-event', {{ detail: {} }}));",
+        serialized
+    );
+    window
+        .eval(&script)
+        .map_err(|error| format!("Failed to deliver overlay event: {error}"))
+}
+
+fn start_overlay_bridge<R: Runtime + 'static>(app_handle: tauri::AppHandle<R>) {
+    thread::spawn(move || {
+        let listener = match TcpListener::bind(format!("{OVERLAY_BRIDGE_HOST}:{OVERLAY_BRIDGE_PORT}")) {
+            Ok(listener) => listener,
+            Err(error) => {
+                eprintln!("Empyralis overlay bridge failed to bind: {error}");
+                return;
+            }
+        };
+
+        for connection in listener.incoming() {
+            let Ok(mut stream) = connection else {
+                continue;
+            };
+
+            let outcome = (|| -> Result<(), String> {
+                let (request_line, body) = read_overlay_request(&mut stream)?;
+                let mut parts = request_line.split_whitespace();
+                let method = parts.next().unwrap_or_default();
+                let path = parts.next().unwrap_or_default();
+                if method != "POST" || path != "/overlay-events" {
+                    write_overlay_response(
+                        &mut stream,
+                        "HTTP/1.1 404 Not Found",
+                        r#"{"ok":false,"error":"not_found"}"#,
+                    )?;
+                    return Ok(());
+                }
+                let event: OverlayActionEvent = serde_json::from_slice(&body)
+                    .map_err(|error| format!("Invalid overlay event payload: {error}"))?;
+                let _ = emit_overlay_event(&app_handle, &event);
+                write_overlay_response(
+                    &mut stream,
+                    "HTTP/1.1 204 No Content",
+                    "",
+                )?;
+                Ok(())
+            })();
+
+            if outcome.is_err() {
+                let _ = write_overlay_response(
+                    &mut stream,
+                    "HTTP/1.1 400 Bad Request",
+                    r#"{"ok":false,"error":"invalid_request"}"#,
+                );
+            }
+        }
+    });
 }
 
 fn spawn_worker(runtime_key: &str, worker_id: &str) -> Result<Child, String> {
@@ -1732,6 +1936,15 @@ pub fn run() {
                     "Failed to build main window: {error}"
                 ))));
             }
+
+            if let Err(error) = create_overlay_window(app) {
+                stop_sidecars(&state);
+                release_desktop_start_metadata(&start_meta_path);
+                release_desktop_shell_lock(&lock_path);
+                return Err(Box::new(std::io::Error::other(error)));
+            }
+
+            start_overlay_bridge(app_handle);
 
             Ok(())
         })

@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import Image from 'next/image';
 import Link from 'next/link';
-import { Settings } from 'lucide-react';
+import { Link2, Settings } from 'lucide-react';
 import { PageHero } from '@/components/orion/page/PageHero';
 import {
   displayNameFromEmail,
@@ -160,6 +160,24 @@ export default function AccountPage() {
           <div style={{ fontSize: 13, fontWeight: 500 }}>{loadError}</div>
         </section>
       ) : null}
+
+      <section className="orion-panel muted" style={{ display: 'grid', gap: 10 }}>
+        <div style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+          <Link2 size={14} />
+          <div className="orion-panel-title">Empyralis account vs AI providers</div>
+        </div>
+        <div className="orion-panel-copy" style={{ margin: 0 }}>
+          Sign in to Empyralis with your account methods here. OpenAI, Codex, and other AI providers connect separately as capability links and do not own this account.
+        </div>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          <Link href="/settings" className="orion-btn orion-btn-secondary" style={{ minHeight: 40, paddingInline: 12 }}>
+            Review sign-in methods
+          </Link>
+          <Link href="/credentials" className="orion-btn orion-btn-ghost" style={{ minHeight: 40, paddingInline: 12 }}>
+            Connect OpenAI
+          </Link>
+        </div>
+      </section>
 
       <section className="orion-panel">
         <div className="orion-panel-header" style={{ marginBottom: 18 }}>

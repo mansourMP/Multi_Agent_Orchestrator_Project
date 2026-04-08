@@ -306,9 +306,13 @@ export default function SettingsPage() {
 
       <PageSection
         title="Account access"
-        description="Manage your sign-in methods, recovery path, and linked AI capabilities."
+        description="Manage Empyralis sign-in methods here, then connect OpenAI or other AI providers separately."
       >
         {accessNotice ? <div className="orion-panel-copy" style={{ marginBottom: 10 }}>{accessNotice}</div> : null}
+        <div className="orion-panel-copy" style={{ marginBottom: 10 }}>
+          OpenAI remains a linked provider capability, not the owner of this Empyralis account.{' '}
+          <Link href="/credentials">Connect or manage providers</Link>.
+        </div>
         <AccountAccessPanel
           access={accountAccess}
           authProviders={authProviders}

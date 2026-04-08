@@ -110,6 +110,26 @@ def _normalize_machine_enrollment_scope(value: Any, *, default: str = "workspace
     return str(default or "workspace").strip().lower() or "workspace"
 
 
+def _normalize_sso_provider(value: Any, *, default: str = "oidc") -> str:
+    token = str(value or "").strip().lower()
+    if token in {"oidc", "saml", "google_workspace", "azure_ad", "okta", "generic"}:
+        return token
+    return str(default or "oidc").strip().lower() or "oidc"
+
+
+def _normalize_mfa_methods(value: Any) -> list[str]:
+    allowed = {"totp", "webauthn", "backup_codes", "sms"}
+    methods = _normalize_distinct_tokens(value)
+    return [method for method in methods if method in allowed]
+
+
+def _normalize_scim_provisioning_mode(value: Any, *, default: str = "admin_api") -> str:
+    token = str(value or "").strip().lower()
+    if token in {"admin_api", "scim_bridge", "disabled"}:
+        return token
+    return str(default or "admin_api").strip().lower() or "admin_api"
+
+
 def _resolve_inherited_allow_deny(
     *policies: Optional[dict[str, Any]],
 ) -> dict[str, list[str]]:
@@ -301,6 +321,46 @@ def _connect_auth_db() -> sqlite3.Connection:
         )
         """
     )
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS tenant_enterprise_settings (
+            tenant_id TEXT PRIMARY KEY,
+            sso_enabled INTEGER NOT NULL DEFAULT 0,
+            sso_provider TEXT,
+            sso_issuer_url TEXT,
+            sso_metadata_url TEXT,
+            sso_client_id TEXT,
+            sso_audience TEXT,
+            sso_domains_json TEXT,
+            sso_scopes_json TEXT,
+            mfa_required INTEGER NOT NULL DEFAULT 0,
+            mfa_methods_json TEXT,
+            mfa_grace_period_hours INTEGER,
+            scim_enabled INTEGER NOT NULL DEFAULT 0,
+            scim_base_url TEXT,
+            scim_provisioning_mode TEXT,
+            scim_last_token_rotation_at INTEGER,
+            updated_at INTEGER NOT NULL
+        )
+        """
+    )
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS user_enterprise_security (
+            user_id TEXT PRIMARY KEY,
+            mfa_enrolled INTEGER NOT NULL DEFAULT 0,
+            mfa_method TEXT,
+            mfa_enrolled_at INTEGER,
+            mfa_last_verified_at INTEGER,
+            auth_provider TEXT,
+            sso_subject TEXT,
+            provisioning_source TEXT,
+            external_id TEXT,
+            last_provisioned_at INTEGER,
+            updated_at INTEGER NOT NULL
+        )
+        """
+    )
     existing_columns = {
         str(row[1]).strip().lower()
         for row in connection.execute("PRAGMA table_info(users)").fetchall()
@@ -327,6 +387,58 @@ def _connect_auth_db() -> sqlite3.Connection:
         connection.execute("ALTER TABLE tenant_policies ADD COLUMN connector_deny_json TEXT")
     if "machine_enrollment_scope" not in tenant_policy_columns:
         connection.execute("ALTER TABLE tenant_policies ADD COLUMN machine_enrollment_scope TEXT")
+    tenant_enterprise_columns = {
+        str(row[1]).strip().lower()
+        for row in connection.execute("PRAGMA table_info(tenant_enterprise_settings)").fetchall()
+    }
+    if "sso_provider" not in tenant_enterprise_columns:
+        connection.execute("ALTER TABLE tenant_enterprise_settings ADD COLUMN sso_provider TEXT")
+    if "sso_issuer_url" not in tenant_enterprise_columns:
+        connection.execute("ALTER TABLE tenant_enterprise_settings ADD COLUMN sso_issuer_url TEXT")
+    if "sso_metadata_url" not in tenant_enterprise_columns:
+        connection.execute("ALTER TABLE tenant_enterprise_settings ADD COLUMN sso_metadata_url TEXT")
+    if "sso_client_id" not in tenant_enterprise_columns:
+        connection.execute("ALTER TABLE tenant_enterprise_settings ADD COLUMN sso_client_id TEXT")
+    if "sso_audience" not in tenant_enterprise_columns:
+        connection.execute("ALTER TABLE tenant_enterprise_settings ADD COLUMN sso_audience TEXT")
+    if "sso_domains_json" not in tenant_enterprise_columns:
+        connection.execute("ALTER TABLE tenant_enterprise_settings ADD COLUMN sso_domains_json TEXT")
+    if "sso_scopes_json" not in tenant_enterprise_columns:
+        connection.execute("ALTER TABLE tenant_enterprise_settings ADD COLUMN sso_scopes_json TEXT")
+    if "mfa_required" not in tenant_enterprise_columns:
+        connection.execute("ALTER TABLE tenant_enterprise_settings ADD COLUMN mfa_required INTEGER NOT NULL DEFAULT 0")
+    if "mfa_methods_json" not in tenant_enterprise_columns:
+        connection.execute("ALTER TABLE tenant_enterprise_settings ADD COLUMN mfa_methods_json TEXT")
+    if "mfa_grace_period_hours" not in tenant_enterprise_columns:
+        connection.execute("ALTER TABLE tenant_enterprise_settings ADD COLUMN mfa_grace_period_hours INTEGER")
+    if "scim_enabled" not in tenant_enterprise_columns:
+        connection.execute("ALTER TABLE tenant_enterprise_settings ADD COLUMN scim_enabled INTEGER NOT NULL DEFAULT 0")
+    if "scim_base_url" not in tenant_enterprise_columns:
+        connection.execute("ALTER TABLE tenant_enterprise_settings ADD COLUMN scim_base_url TEXT")
+    if "scim_provisioning_mode" not in tenant_enterprise_columns:
+        connection.execute("ALTER TABLE tenant_enterprise_settings ADD COLUMN scim_provisioning_mode TEXT")
+    if "scim_last_token_rotation_at" not in tenant_enterprise_columns:
+        connection.execute("ALTER TABLE tenant_enterprise_settings ADD COLUMN scim_last_token_rotation_at INTEGER")
+    user_enterprise_columns = {
+        str(row[1]).strip().lower()
+        for row in connection.execute("PRAGMA table_info(user_enterprise_security)").fetchall()
+    }
+    if "mfa_method" not in user_enterprise_columns:
+        connection.execute("ALTER TABLE user_enterprise_security ADD COLUMN mfa_method TEXT")
+    if "mfa_enrolled_at" not in user_enterprise_columns:
+        connection.execute("ALTER TABLE user_enterprise_security ADD COLUMN mfa_enrolled_at INTEGER")
+    if "mfa_last_verified_at" not in user_enterprise_columns:
+        connection.execute("ALTER TABLE user_enterprise_security ADD COLUMN mfa_last_verified_at INTEGER")
+    if "auth_provider" not in user_enterprise_columns:
+        connection.execute("ALTER TABLE user_enterprise_security ADD COLUMN auth_provider TEXT")
+    if "sso_subject" not in user_enterprise_columns:
+        connection.execute("ALTER TABLE user_enterprise_security ADD COLUMN sso_subject TEXT")
+    if "provisioning_source" not in user_enterprise_columns:
+        connection.execute("ALTER TABLE user_enterprise_security ADD COLUMN provisioning_source TEXT")
+    if "external_id" not in user_enterprise_columns:
+        connection.execute("ALTER TABLE user_enterprise_security ADD COLUMN external_id TEXT")
+    if "last_provisioned_at" not in user_enterprise_columns:
+        connection.execute("ALTER TABLE user_enterprise_security ADD COLUMN last_provisioned_at INTEGER")
     connection.commit()
     return connection
 
@@ -826,6 +938,420 @@ def revoke_workspace_owner_machine_trust(workspace_id: str, machine_id: str) -> 
         machine_enrollment_scope=str(existing.get("machine_enrollment_scope") or "workspace"),
         trusted_owner_machine_ids=trusted,
     )
+
+
+def _tenant_enterprise_settings_from_row(row: Any, tenant_id: str) -> dict[str, Any]:
+    if row is None:
+        return {
+            "tenant_id": tenant_id,
+            "sso": {
+                "enabled": False,
+                "provider": "oidc",
+                "issuer_url": None,
+                "metadata_url": None,
+                "client_id": None,
+                "audience": None,
+                "domains": [],
+                "scopes": [],
+            },
+            "mfa": {
+                "required": False,
+                "methods": [],
+                "grace_period_hours": None,
+            },
+            "scim": {
+                "enabled": False,
+                "base_url": None,
+                "provisioning_mode": "admin_api",
+                "last_token_rotation_at": None,
+            },
+            "updated_at": None,
+        }
+    return {
+        "tenant_id": tenant_id,
+        "sso": {
+            "enabled": bool(row["sso_enabled"]),
+            "provider": _normalize_sso_provider(row["sso_provider"]),
+            "issuer_url": str(row["sso_issuer_url"] or "").strip() or None,
+            "metadata_url": str(row["sso_metadata_url"] or "").strip() or None,
+            "client_id": str(row["sso_client_id"] or "").strip() or None,
+            "audience": str(row["sso_audience"] or "").strip() or None,
+            "domains": _decode_json_token_list(row["sso_domains_json"]),
+            "scopes": _decode_json_token_list(row["sso_scopes_json"]),
+        },
+        "mfa": {
+            "required": bool(row["mfa_required"]),
+            "methods": _normalize_mfa_methods(row["mfa_methods_json"]),
+            "grace_period_hours": int(row["mfa_grace_period_hours"]) if row["mfa_grace_period_hours"] is not None else None,
+        },
+        "scim": {
+            "enabled": bool(row["scim_enabled"]),
+            "base_url": str(row["scim_base_url"] or "").strip() or None,
+            "provisioning_mode": _normalize_scim_provisioning_mode(row["scim_provisioning_mode"]),
+            "last_token_rotation_at": int(row["scim_last_token_rotation_at"]) if row["scim_last_token_rotation_at"] is not None else None,
+        },
+        "updated_at": int(row["updated_at"]) if row["updated_at"] is not None else None,
+    }
+
+
+def load_tenant_enterprise_settings(tenant_id: str) -> dict[str, Any]:
+    clean_tenant_id = _normalize_tenant_token(tenant_id)
+    with AUTH_LOCK:
+        with _connect_auth_db() as connection:
+            row = connection.execute(
+                """
+                SELECT
+                    tenant_id,
+                    sso_enabled,
+                    sso_provider,
+                    sso_issuer_url,
+                    sso_metadata_url,
+                    sso_client_id,
+                    sso_audience,
+                    sso_domains_json,
+                    sso_scopes_json,
+                    mfa_required,
+                    mfa_methods_json,
+                    mfa_grace_period_hours,
+                    scim_enabled,
+                    scim_base_url,
+                    scim_provisioning_mode,
+                    scim_last_token_rotation_at,
+                    updated_at
+                FROM tenant_enterprise_settings
+                WHERE tenant_id = ?
+                """,
+                (clean_tenant_id,),
+            ).fetchone()
+    return _tenant_enterprise_settings_from_row(row, clean_tenant_id)
+
+
+def upsert_tenant_enterprise_settings(
+    tenant_id: str,
+    *,
+    sso: Optional[dict[str, Any]] = None,
+    mfa: Optional[dict[str, Any]] = None,
+    scim: Optional[dict[str, Any]] = None,
+) -> dict[str, Any]:
+    clean_tenant_id = _normalize_tenant_token(tenant_id)
+    existing = load_tenant_enterprise_settings(clean_tenant_id)
+    next_sso = dict(existing.get("sso") or {})
+    next_sso.update(dict(sso or {}))
+    next_mfa = dict(existing.get("mfa") or {})
+    next_mfa.update(dict(mfa or {}))
+    next_scim = dict(existing.get("scim") or {})
+    next_scim.update(dict(scim or {}))
+    ts = int(time.time())
+    with AUTH_LOCK:
+        with _connect_auth_db() as connection:
+            connection.execute(
+                """
+                INSERT OR REPLACE INTO tenant_enterprise_settings (
+                    tenant_id,
+                    sso_enabled,
+                    sso_provider,
+                    sso_issuer_url,
+                    sso_metadata_url,
+                    sso_client_id,
+                    sso_audience,
+                    sso_domains_json,
+                    sso_scopes_json,
+                    mfa_required,
+                    mfa_methods_json,
+                    mfa_grace_period_hours,
+                    scim_enabled,
+                    scim_base_url,
+                    scim_provisioning_mode,
+                    scim_last_token_rotation_at,
+                    updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    clean_tenant_id,
+                    1 if bool(next_sso.get("enabled")) else 0,
+                    _normalize_sso_provider(next_sso.get("provider"), default=str(existing.get("sso", {}).get("provider") or "oidc")),
+                    str(next_sso.get("issuer_url") or "").strip() or None,
+                    str(next_sso.get("metadata_url") or "").strip() or None,
+                    str(next_sso.get("client_id") or "").strip() or None,
+                    str(next_sso.get("audience") or "").strip() or None,
+                    json.dumps(_normalize_distinct_tokens(next_sso.get("domains"))),
+                    json.dumps(_normalize_distinct_tokens(next_sso.get("scopes"))),
+                    1 if bool(next_mfa.get("required")) else 0,
+                    json.dumps(_normalize_mfa_methods(next_mfa.get("methods"))),
+                    int(next_mfa.get("grace_period_hours")) if next_mfa.get("grace_period_hours") not in {None, ""} else None,
+                    1 if bool(next_scim.get("enabled")) else 0,
+                    str(next_scim.get("base_url") or "").strip() or None,
+                    _normalize_scim_provisioning_mode(next_scim.get("provisioning_mode"), default=str(existing.get("scim", {}).get("provisioning_mode") or "admin_api")),
+                    int(next_scim.get("last_token_rotation_at")) if next_scim.get("last_token_rotation_at") not in {None, ""} else None,
+                    ts,
+                ),
+            )
+            connection.commit()
+    return load_tenant_enterprise_settings(clean_tenant_id)
+
+
+def _user_enterprise_security_from_row(row: Any, user_id: str) -> dict[str, Any]:
+    if row is None:
+        return {
+            "user_id": user_id,
+            "mfa_enrolled": False,
+            "mfa_method": None,
+            "mfa_enrolled_at": None,
+            "mfa_last_verified_at": None,
+            "auth_provider": None,
+            "sso_subject": None,
+            "provisioning_source": None,
+            "external_id": None,
+            "last_provisioned_at": None,
+            "updated_at": None,
+        }
+    return {
+        "user_id": user_id,
+        "mfa_enrolled": bool(row["mfa_enrolled"]),
+        "mfa_method": str(row["mfa_method"] or "").strip() or None,
+        "mfa_enrolled_at": int(row["mfa_enrolled_at"]) if row["mfa_enrolled_at"] is not None else None,
+        "mfa_last_verified_at": int(row["mfa_last_verified_at"]) if row["mfa_last_verified_at"] is not None else None,
+        "auth_provider": str(row["auth_provider"] or "").strip() or None,
+        "sso_subject": str(row["sso_subject"] or "").strip() or None,
+        "provisioning_source": str(row["provisioning_source"] or "").strip() or None,
+        "external_id": str(row["external_id"] or "").strip() or None,
+        "last_provisioned_at": int(row["last_provisioned_at"]) if row["last_provisioned_at"] is not None else None,
+        "updated_at": int(row["updated_at"]) if row["updated_at"] is not None else None,
+    }
+
+
+def load_user_enterprise_security(user_id: str) -> dict[str, Any]:
+    clean_user_id = str(user_id or "").strip()
+    if not clean_user_id:
+        return _user_enterprise_security_from_row(None, "")
+    with AUTH_LOCK:
+        with _connect_auth_db() as connection:
+            row = connection.execute(
+                """
+                SELECT
+                    user_id,
+                    mfa_enrolled,
+                    mfa_method,
+                    mfa_enrolled_at,
+                    mfa_last_verified_at,
+                    auth_provider,
+                    sso_subject,
+                    provisioning_source,
+                    external_id,
+                    last_provisioned_at,
+                    updated_at
+                FROM user_enterprise_security
+                WHERE user_id = ?
+                """,
+                (clean_user_id,),
+            ).fetchone()
+    return _user_enterprise_security_from_row(row, clean_user_id)
+
+
+def upsert_user_enterprise_security(
+    user_id: str,
+    *,
+    mfa_enrolled: Optional[bool] = None,
+    mfa_method: Optional[str] = None,
+    mfa_enrolled_at: Optional[int] = None,
+    mfa_last_verified_at: Optional[int] = None,
+    auth_provider: Optional[str] = None,
+    sso_subject: Optional[str] = None,
+    provisioning_source: Optional[str] = None,
+    external_id: Optional[str] = None,
+    last_provisioned_at: Optional[int] = None,
+) -> dict[str, Any]:
+    clean_user_id = str(user_id or "").strip()
+    if not clean_user_id:
+        raise HTTPException(status_code=400, detail="user_id is required.")
+    existing = load_user_enterprise_security(clean_user_id)
+    resolved_mfa_enrolled = existing["mfa_enrolled"] if mfa_enrolled is None else bool(mfa_enrolled)
+    resolved_mfa_method = existing["mfa_method"] if mfa_method is None else (str(mfa_method or "").strip() or None)
+    resolved_enrolled_at = existing["mfa_enrolled_at"] if mfa_enrolled_at is None else int(mfa_enrolled_at)
+    resolved_verified_at = existing["mfa_last_verified_at"] if mfa_last_verified_at is None else int(mfa_last_verified_at)
+    ts = int(time.time())
+    with AUTH_LOCK:
+        with _connect_auth_db() as connection:
+            connection.execute(
+                """
+                INSERT OR REPLACE INTO user_enterprise_security (
+                    user_id,
+                    mfa_enrolled,
+                    mfa_method,
+                    mfa_enrolled_at,
+                    mfa_last_verified_at,
+                    auth_provider,
+                    sso_subject,
+                    provisioning_source,
+                    external_id,
+                    last_provisioned_at,
+                    updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    clean_user_id,
+                    1 if resolved_mfa_enrolled else 0,
+                    resolved_mfa_method,
+                    resolved_enrolled_at,
+                    resolved_verified_at,
+                    existing["auth_provider"] if auth_provider is None else (str(auth_provider or "").strip() or None),
+                    existing["sso_subject"] if sso_subject is None else (str(sso_subject or "").strip() or None),
+                    existing["provisioning_source"] if provisioning_source is None else (str(provisioning_source or "").strip() or None),
+                    existing["external_id"] if external_id is None else (str(external_id or "").strip() or None),
+                    existing["last_provisioned_at"] if last_provisioned_at is None else int(last_provisioned_at),
+                    ts,
+                ),
+            )
+            connection.commit()
+    return load_user_enterprise_security(clean_user_id)
+
+
+def enterprise_status_for_user(current_user: Optional[Dict[str, Any]]) -> dict[str, Any]:
+    user_id = _current_bearer_user_id(current_user)
+    user_security = load_user_enterprise_security(user_id)
+    tenant_ids = sorted(allowed_tenant_ids(current_user) or {ORION_DEFAULT_TENANT_ID})
+    tenant_settings = [load_tenant_enterprise_settings(tenant_id) for tenant_id in tenant_ids]
+    mfa_required = any(bool(item.get("mfa", {}).get("required")) for item in tenant_settings)
+    return {
+        "ok": True,
+        "user": user_security,
+        "tenants": tenant_settings,
+        "summary": {
+            "sso_enabled": any(bool(item.get("sso", {}).get("enabled")) for item in tenant_settings),
+            "mfa_required": mfa_required,
+            "mfa_enrolled": bool(user_security.get("mfa_enrolled")),
+            "scim_enabled": any(bool(item.get("scim", {}).get("enabled")) for item in tenant_settings),
+        },
+    }
+
+
+def provision_user_account(
+    *,
+    email: str,
+    name: Optional[str] = None,
+    tenant_id: Optional[str] = None,
+    workspace_roles: Optional[dict[str, Any]] = None,
+    provisioning_source: str = "admin_api",
+    external_id: Optional[str] = None,
+    auth_provider: Optional[str] = None,
+    sso_subject: Optional[str] = None,
+) -> dict[str, Any]:
+    email_token = str(email or "").strip().lower()
+    if not email_token or "@" not in email_token:
+        raise HTTPException(status_code=400, detail="Valid email is required.")
+    resolved_tenant_id = _normalize_tenant_token(tenant_id)
+    normalized_workspace_roles: dict[str, str] = {}
+    for raw_workspace_id, raw_role in dict(workspace_roles or {"default": "member"}).items():
+        workspace_id = _normalize_workspace_token(raw_workspace_id, default="")
+        if not workspace_id:
+            continue
+        normalized_workspace_roles[workspace_id] = normalize_rbac_role(raw_role, default="member")
+    if not normalized_workspace_roles:
+        normalized_workspace_roles = {"default": "member"}
+    created_at = int(time.time())
+    with AUTH_LOCK:
+        with _connect_auth_db() as connection:
+            existing = connection.execute(
+                "SELECT id, email, name, avatar_url, password_hash, created_at FROM users WHERE lower(email) = lower(?)",
+                (email_token,),
+            ).fetchone()
+            if existing is None:
+                user_id = str(uuid.uuid4())
+                password_hash = _hash_password(secrets.token_urlsafe(32))
+                connection.execute(
+                    "INSERT INTO users (id, email, name, password_hash, created_at) VALUES (?, ?, ?, ?, ?)",
+                    (user_id, email_token, str(name or "").strip() or None, password_hash, created_at),
+                )
+            else:
+                user_id = str(existing["id"] or "").strip()
+                next_name = str(name or "").strip() or str(existing["name"] or "").strip() or None
+                connection.execute(
+                    "UPDATE users SET name = ? WHERE id = ?",
+                    (next_name, user_id),
+                )
+            for workspace_id, role in normalized_workspace_roles.items():
+                _write_workspace_registry(
+                    connection,
+                    workspace_id=workspace_id,
+                    tenant_id=resolved_tenant_id,
+                    now_ts=created_at,
+                )
+                _write_workspace_membership(
+                    connection,
+                    user_id=user_id,
+                    workspace_id=workspace_id,
+                    role=role,
+                    now_ts=created_at,
+                )
+            current_security_row = connection.execute(
+                """
+                SELECT
+                    user_id,
+                    mfa_enrolled,
+                    mfa_method,
+                    mfa_enrolled_at,
+                    mfa_last_verified_at,
+                    auth_provider,
+                    sso_subject,
+                    provisioning_source,
+                    external_id,
+                    last_provisioned_at,
+                    updated_at
+                FROM user_enterprise_security
+                WHERE user_id = ?
+                """,
+                (user_id,),
+            ).fetchone()
+            current_security = _user_enterprise_security_from_row(current_security_row, user_id)
+            connection.execute(
+                """
+                INSERT OR REPLACE INTO user_enterprise_security (
+                    user_id,
+                    mfa_enrolled,
+                    mfa_method,
+                    mfa_enrolled_at,
+                    mfa_last_verified_at,
+                    auth_provider,
+                    sso_subject,
+                    provisioning_source,
+                    external_id,
+                    last_provisioned_at,
+                    updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    user_id,
+                    1 if bool(current_security.get("mfa_enrolled")) else 0,
+                    current_security.get("mfa_method"),
+                    current_security.get("mfa_enrolled_at"),
+                    current_security.get("mfa_last_verified_at"),
+                    str(auth_provider or current_security.get("auth_provider") or "").strip() or None,
+                    str(sso_subject or current_security.get("sso_subject") or "").strip() or None,
+                    str(provisioning_source or current_security.get("provisioning_source") or "admin_api").strip() or "admin_api",
+                    str(external_id or current_security.get("external_id") or "").strip() or None,
+                    created_at,
+                    created_at,
+                ),
+            )
+            connection.commit()
+    user = _find_user_by_id(user_id)
+    if user is None:
+        raise HTTPException(status_code=500, detail="Provisioned user was not persisted.")
+    workspace_access = _effective_workspace_access(
+        user_id=user_id,
+        email=email_token,
+        role="member",
+        auth_type="bearer",
+        is_admin=False,
+        workspace_ids=list(normalized_workspace_roles.keys()),
+    )
+    return {
+        "ok": True,
+        "user": _public_user_payload(user, role="member"),
+        "workspace_access": list(workspace_access.values()),
+        "tenant_access": list(tenant_access_map({"workspace_access": workspace_access}).values()),
+        "enterprise_security": load_user_enterprise_security(user_id),
+    }
 
 
 def _effective_workspace_access(
@@ -1458,6 +1984,24 @@ def register_user(email: str, password: str, *, name: Optional[str] = None) -> D
                 "INSERT INTO users (id, email, name, password_hash, created_at) VALUES (?, ?, ?, ?, ?)",
                 (user_id, email_token, user_name, password_hash, created_at),
             )
+            connection.execute(
+                """
+                INSERT OR REPLACE INTO user_enterprise_security (
+                    user_id,
+                    mfa_enrolled,
+                    mfa_method,
+                    mfa_enrolled_at,
+                    mfa_last_verified_at,
+                    auth_provider,
+                    sso_subject,
+                    provisioning_source,
+                    external_id,
+                    last_provisioned_at,
+                    updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (user_id, 0, None, None, None, None, None, "local_password", None, None, created_at),
+            )
             for workspace_id in ORION_DEFAULT_WORKSPACE_IDS:
                 _write_workspace_registry(
                     connection,
@@ -1515,6 +2059,7 @@ def get_authenticated_user_profile(current_user: Optional[Dict[str, Any]]) -> Di
         "user": _public_user_payload(user, role=role),
         "workspace_access": list(workspace_access_map(current_user).values()),
         "tenant_access": list(tenant_access_map(current_user).values()),
+        "enterprise_security": enterprise_status_for_user(current_user),
     }
 
 

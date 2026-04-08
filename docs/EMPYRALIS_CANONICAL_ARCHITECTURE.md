@@ -1114,9 +1114,9 @@ This section answers the product question directly.
 ### Enterprise-Grade Additions
 
 - tenant isolation
-- SSO
-- MFA
-- SCIM roadmap
+- SSO hooks and policy-aware provider boundaries
+- MFA hooks and enforcement boundaries
+- SCIM and admin provisioning boundary
 - approval policies by workspace, action, and environment
 - retention policies
 - audit export
@@ -1275,7 +1275,7 @@ Time: ongoing
 
 We must:
 
-- add SSO, MFA, RBAC, SCIM roadmap
+- add SSO hooks, MFA hooks, and an admin provisioning / SCIM boundary
 - add retention and audit export
 - add release signing, SBOMs, provenance
 - add CI on PRs and main
@@ -1303,12 +1303,18 @@ Object storage is no longer a temporary boundary:
    - Rust remains the owner of direct device control
    - moving browser automation to Rust is optional future redesign work, not a requirement for canonical compliance
 
-2. Enterprise hardening is still incomplete.
+2. Enterprise hardening now has a real baseline, but not full external identity depth.
 
    Accepted boundary:
 
    - tenant/workspace policy inheritance, kill switches, safe mode, notifications, and machine fleet controls are implemented
-   - SSO, MFA, SCIM, SBOM/provenance attestations, PR/main CI, dependency and secrets scanning, and customer-facing runbooks remain deferred enterprise work
+   - tenant-scoped SSO configuration, MFA policy hooks, and an admin provisioning / SCIM boundary now exist in [server_modules/auth.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/auth.py) and [server_modules/routes_auth.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/routes_auth.py)
+   - PR/main CI, dependency review, secrets scanning, SBOM generation, release provenance attestation, and customer-facing runbooks now exist in:
+     - [docs/EMPYRALIS_ENTERPRISE_BASELINE.md](/Users/mansur/Multi_Agent_Orchestrator_Project/docs/EMPYRALIS_ENTERPRISE_BASELINE.md)
+     - [.github/workflows/ci.yml](/Users/mansur/Multi_Agent_Orchestrator_Project/.github/workflows/ci.yml)
+     - [.github/workflows/security-baseline.yml](/Users/mansur/Multi_Agent_Orchestrator_Project/.github/workflows/security-baseline.yml)
+     - [.github/workflows/supply-chain.yml](/Users/mansur/Multi_Agent_Orchestrator_Project/.github/workflows/supply-chain.yml)
+   - full external OIDC/SAML exchange flows, MFA challenge verification, and a full SCIM server remain future depth rather than missing baseline
 
 ## Reliability Targets
 

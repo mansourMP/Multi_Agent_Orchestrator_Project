@@ -8,6 +8,7 @@ The canonical workflow is:
 - GitHub Actions generates a CI-only Tauri release config with updater metadata
 - macOS artifacts are code signed and notarized
 - Windows installer artifacts are Authenticode signed
+- release bundles are attested in GitHub Actions provenance
 - installers plus updater metadata are attached to the GitHub Release
 
 ## Release artifacts
@@ -83,6 +84,7 @@ git push origin v0.1.0
 
 4. Wait for `.github/workflows/build.yml` to finish.
 5. Download the signed installers from the GitHub Release page.
+6. Use the GitHub attestation view for the release run if supply-chain provenance needs to be inspected.
 
 ## Local development
 

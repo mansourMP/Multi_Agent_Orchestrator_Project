@@ -169,6 +169,55 @@ def test_tenant_binding_and_policy_precedence(monkeypatch: pytest.MonkeyPatch, t
     assert exc.value.status_code == 403
 
 
+def test_enterprise_settings_and_admin_provisioning_hooks(monkeypatch: pytest.MonkeyPatch, tmp_path):
+    auth, _, _ = _reload_auth(monkeypatch, tmp_path)
+    auth.upsert_tenant_enterprise_settings(
+        "tenant-acme",
+        sso={
+            "enabled": True,
+            "provider": "oidc",
+            "issuer_url": "https://id.example.com",
+            "domains": ["example.com"],
+            "scopes": ["openid", "profile", "email"],
+        },
+        mfa={
+            "required": True,
+            "methods": ["totp", "webauthn"],
+            "grace_period_hours": 24,
+        },
+        scim={
+            "enabled": True,
+            "base_url": "https://control.example.com/api/v1/auth/admin/provision/users",
+            "provisioning_mode": "admin_api",
+        },
+    )
+
+    enterprise = auth.load_tenant_enterprise_settings("tenant-acme")
+    assert enterprise["sso"]["enabled"] is True
+    assert enterprise["mfa"]["required"] is True
+    assert enterprise["scim"]["enabled"] is True
+
+    provisioned = auth.provision_user_account(
+        email="provisioned@example.com",
+        name="Provisioned User",
+        tenant_id="tenant-acme",
+        workspace_roles={"finance": "viewer", "ops": "member"},
+        provisioning_source="scim_bridge",
+        external_id="scim-user-123",
+        auth_provider="oidc",
+        sso_subject="oidc|user-123",
+    )
+
+    security = auth.load_user_enterprise_security(provisioned["user"]["id"])
+    workspace_ids = {item["workspace_id"] for item in provisioned["workspace_access"]}
+
+    assert workspace_ids == {"finance", "ops"}
+    assert security["auth_provider"] == "oidc"
+    assert security["provisioning_source"] == "scim_bridge"
+    assert security["external_id"] == "scim-user-123"
+    assert security["sso_subject"] == "oidc|user-123"
+
+
 def _build_auth_test_app() -> FastAPI:
     app = FastAPI()
     app.include_router(routes_auth_module.router)
@@ -204,3 +253,97 @@ async def test_auth_status_returns_authenticated_payload(monkeypatch: pytest.Mon
         "authenticated": True,
         "user": {"id": "user-1", "email": "user@example.com"},
     }
+
+
+@pytest.mark.anyio
+async def test_auth_enterprise_status_returns_enterprise_summary(monkeypatch: pytest.MonkeyPatch):
+    app = _build_auth_test_app()
+    app.dependency_overrides[routes_auth_module.get_current_user] = lambda: {
+        "auth_type": "bearer",
+        "user_id": "user-1",
+        "workspace_access": {"default": {"tenant_id": "tenant-acme"}},
+    }
+    monkeypatch.setattr(
+        routes_auth_module,
+        "enterprise_status_for_user",
+        lambda current_user: {
+            "ok": True,
+            "summary": {"sso_enabled": True, "mfa_required": True, "mfa_enrolled": False, "scim_enabled": True},
+            "user": {"user_id": "user-1", "mfa_enrolled": False},
+            "tenants": [{"tenant_id": "tenant-acme"}],
+        },
+    )
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        response = await client.get("/api/v1/auth/enterprise/status")
+
+    assert response.status_code == 200
+    assert response.json()["summary"]["mfa_required"] is True
+
+
+@pytest.mark.anyio
+async def test_admin_enterprise_config_endpoints(monkeypatch: pytest.MonkeyPatch):
+    app = _build_auth_test_app()
+    app.dependency_overrides[routes_auth_module.require_admin_access] = lambda: {"auth_type": "api_key", "is_admin": True, "role": "owner"}
+    monkeypatch.setattr(
+        routes_auth_module,
+        "load_tenant_enterprise_settings",
+        lambda tenant_id: {"tenant_id": tenant_id, "sso": {"enabled": False}, "mfa": {"required": False}, "scim": {"enabled": False}},
+    )
+    monkeypatch.setattr(
+        routes_auth_module,
+        "upsert_tenant_enterprise_settings",
+        lambda tenant_id, sso=None, mfa=None, scim=None: {
+            "tenant_id": tenant_id,
+            "sso": {"enabled": bool((sso or {}).get("enabled"))},
+            "mfa": {"required": bool((mfa or {}).get("required"))},
+            "scim": {"enabled": bool((scim or {}).get("enabled"))},
+        },
+    )
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        get_response = await client.get("/api/v1/auth/admin/enterprise-config", params={"tenant_id": "tenant-acme"})
+        patch_response = await client.patch(
+            "/api/v1/auth/admin/enterprise-config",
+            json={
+                "tenant_id": "tenant-acme",
+                "sso": {"enabled": True},
+                "mfa": {"required": True},
+                "scim": {"enabled": True},
+            },
+        )
+
+    assert get_response.status_code == 200
+    assert get_response.json()["config"]["tenant_id"] == "tenant-acme"
+    assert patch_response.status_code == 200
+    assert patch_response.json()["config"]["sso"]["enabled"] is True
+    assert patch_response.json()["config"]["mfa"]["required"] is True
+    assert patch_response.json()["config"]["scim"]["enabled"] is True
+
+
+@pytest.mark.anyio
+async def test_admin_provision_user_endpoint(monkeypatch: pytest.MonkeyPatch):
+    app = _build_auth_test_app()
+    app.dependency_overrides[routes_auth_module.require_admin_access] = lambda: {"auth_type": "api_key", "is_admin": True, "role": "owner"}
+    monkeypatch.setattr(
+        routes_auth_module,
+        "provision_user_account",
+        lambda **kwargs: {"ok": True, "user": {"email": kwargs["email"]}, "workspace_access": [{"workspace_id": "finance"}]},
+    )
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        response = await client.post(
+            "/api/v1/auth/admin/provision/users",
+            json={
+                "email": "provisioned@example.com",
+                "tenant_id": "tenant-acme",
+                "workspace_roles": {"finance": "viewer"},
+                "provisioning_source": "admin_api",
+            },
+        )
+
+    assert response.status_code == 200
+    assert response.json()["user"]["email"] == "provisioned@example.com"

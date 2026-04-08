@@ -7,6 +7,8 @@ on:
 
 permissions:
   contents: write
+  attestations: write
+  id-token: write
 
 concurrency:
   group: desktop-release-${{ github.ref }}
@@ -116,6 +118,13 @@ jobs:
           updaterJsonPreferNsis: false
           args: --config tauri.release.conf.json
 
+      - name: Attest macOS release provenance
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: |
+            dist/empyralis-backend*
+            src-tauri/target/release/bundle/**/*
+
   windows:
     name: Windows signed release
     runs-on: windows-latest
@@ -199,3 +208,10 @@ jobs:
           uploadUpdaterJson: true
           updaterJsonPreferNsis: false
           args: --config tauri.release.conf.json
+
+      - name: Attest Windows release provenance
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: |
+            dist/empyralis-backend*.exe
+            src-tauri/target/release/bundle/**/*

@@ -1,5 +1,4 @@
 import type { NextRequest } from 'next/server';
-import { API_BASE } from '@/lib/config';
 import { enforceBffRouteGuard } from '@/lib/server/bffRouteGuard';
 import {
   desktopAuthHandoffEnabled,
@@ -7,11 +6,9 @@ import {
   issueDesktopControlPlaneAuthHandoff,
   sanitizeReturnTo,
 } from '@/lib/server/controlPlaneSession';
+import { buildDesktopSignInCompletionPath, resolveControlPlaneBackendUrl } from '@/lib/server/controlPlaneAuthRouting';
 
 export const dynamic = 'force-dynamic';
-
-const CONTROL_PLANE_BACKEND_URL =
-  process.env.NEXT_PUBLIC_API_URL || API_BASE;
 
 type LoginBody = {
   email?: string;
@@ -35,7 +32,7 @@ export async function POST(request: NextRequest) {
 
   let loginResponse: Response;
   try {
-    loginResponse = await fetch(`${CONTROL_PLANE_BACKEND_URL}/auth/login`, {
+    loginResponse = await fetch(`${resolveControlPlaneBackendUrl()}/auth/login`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -82,7 +79,7 @@ export async function POST(request: NextRequest) {
     return Response.json({
       ok: true,
       desktop_handoff: true,
-      redirect_to: `/sign-in/complete?mode=desktop&returnTo=${encodeURIComponent(returnTo)}`,
+      redirect_to: buildDesktopSignInCompletionPath(returnTo),
     });
   }
 

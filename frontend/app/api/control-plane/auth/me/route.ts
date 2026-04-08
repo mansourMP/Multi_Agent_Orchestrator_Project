@@ -1,12 +1,9 @@
 import type { NextRequest } from 'next/server';
-import { API_BASE } from '@/lib/config';
 import { enforceBffRouteGuard } from '@/lib/server/bffRouteGuard';
 import { requireAdminBrowserIdentity } from '@/lib/server/controlPlaneSession';
+import { resolveControlPlaneBackendUrl } from '@/lib/server/controlPlaneAuthRouting';
 
 export const dynamic = 'force-dynamic';
-
-const CONTROL_PLANE_BACKEND_URL =
-  process.env.NEXT_PUBLIC_API_URL || API_BASE;
 const CONTROL_PLANE_ADMIN_COOKIE = 'orion_cp_admin';
 
 function adminBearerToken(request: NextRequest): string {
@@ -24,7 +21,7 @@ async function proxyAuthMe(request: NextRequest, method: 'GET' | 'PATCH', body?:
 
   let upstream: Response;
   try {
-    upstream = await fetch(`${CONTROL_PLANE_BACKEND_URL}/auth/me`, {
+    upstream = await fetch(`${resolveControlPlaneBackendUrl()}/auth/me`, {
       method,
       headers: {
         Authorization: `Bearer ${token}`,

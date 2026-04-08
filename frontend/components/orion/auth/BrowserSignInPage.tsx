@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { ArrowLeft, Chrome, LockKeyhole, Smartphone } from 'lucide-react';
 import { getDesktopBridge } from '@/lib/desktopBridge';
 import { waitForDesktopControlPlaneSignIn } from '@/lib/controlPlaneSession';
+import { buildBrowserVisibleControlPlaneAuthStartPath } from '@/lib/server/controlPlaneAuthRouting';
 import { buildPostSignInSetupHref } from '@/lib/setupReadiness';
 import { humanizeUiError } from '@/lib/uiError';
 
@@ -65,6 +66,8 @@ export default function BrowserSignInPage({ returnTo, errorCode = '', desktopMod
   const accountBoundaryNote = authMode === 'signup'
     ? 'Your Empyralis account owns your runs, artifacts, workspaces, and recovery path.'
     : 'Your Empyralis account remains separate from any AI provider you connect later.';
+  const googleStartPath = buildBrowserVisibleControlPlaneAuthStartPath('google', returnTo, desktopMode);
+  const appleStartPath = buildBrowserVisibleControlPlaneAuthStartPath('apple', returnTo, desktopMode);
 
   useEffect(() => {
     setInDesktopWindow(Boolean(desktopMode && getDesktopBridge()?.desktop));
@@ -111,15 +114,9 @@ export default function BrowserSignInPage({ returnTo, errorCode = '', desktopMod
     ].filter(Boolean) as Array<'google' | 'apple'>;
     if (socialProviders.length !== 1) return;
     const provider = socialProviders[0];
-    const params = new URLSearchParams({ returnTo });
-    if (desktopMode) {
-      params.set('desktop', '1');
-    }
-    const target = provider === 'google'
-      ? `/api/control-plane/auth/google/start?${params.toString()}`
-      : `/api/control-plane/auth/apple/start?${params.toString()}`;
+    const target = provider === 'google' ? googleStartPath : appleStartPath;
     window.location.replace(target);
-  }, [desktopMode, error, inDesktopWindow, loadingProviders, providers.apple.enabled, providers.email.enabled, providers.google.enabled, returnTo]);
+  }, [appleStartPath, error, googleStartPath, inDesktopWindow, loadingProviders, providers.apple.enabled, providers.email.enabled, providers.google.enabled]);
 
   useEffect(() => {
     if (loadingProviders) return;
@@ -180,11 +177,7 @@ export default function BrowserSignInPage({ returnTo, errorCode = '', desktopMod
   };
 
   const continueWithGoogle = () => {
-    const params = new URLSearchParams({ returnTo });
-    if (desktopMode) {
-      params.set('desktop', '1');
-    }
-    const target = `/api/control-plane/auth/google/start?${params.toString()}`;
+    const target = googleStartPath;
     if (!inDesktopWindow) {
       window.location.assign(target);
       return;
@@ -213,11 +206,7 @@ export default function BrowserSignInPage({ returnTo, errorCode = '', desktopMod
   };
 
   const continueWithApple = () => {
-    const params = new URLSearchParams({ returnTo });
-    if (desktopMode) {
-      params.set('desktop', '1');
-    }
-    const target = `/api/control-plane/auth/apple/start?${params.toString()}`;
+    const target = appleStartPath;
     if (!inDesktopWindow) {
       window.location.assign(target);
       return;

@@ -5,16 +5,15 @@ import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from
 import type { NextRequest } from 'next/server';
 import { NextResponse } from 'next/server';
 import { API_BASE } from '@/lib/config';
+import { resolveControlPlaneBackendUrl } from '@/lib/server/controlPlaneAuthRouting';
 import { readServerRuntimeKey } from '@/lib/server/runtimeControlPlane';
 
 const CONTROL_PLANE_ADMIN_COOKIE = 'orion_cp_admin';
 const CONTROL_PLANE_SESSION_COOKIE = 'orion_cp_session';
 const CONTROL_PLANE_OAUTH_COOKIE = 'orion_cp_oauth';
 const CONTROL_PLANE_SESSION_TTL_SECONDS = 60 * 30;
-const CONTROL_PLANE_AUTH_URL =
+const CONTROL_PLANE_RUNTIME_URL =
   process.env.ORION_API_URL || process.env.NEXT_PUBLIC_ORION_API_URL || API_BASE;
-const CONTROL_PLANE_BACKEND_URL =
-  process.env.NEXT_PUBLIC_API_URL || API_BASE;
 const CONTROL_PLANE_ROLE_ORDER = { viewer: 0, member: 1, owner: 2 } as const;
 
 export type ControlPlaneRole = keyof typeof CONTROL_PLANE_ROLE_ORDER;
@@ -209,7 +208,7 @@ function trustedDesktopRuntimeUrl(): URL | null {
   const enabled = String(process.env.EMPYRALIS_TAURI_DESKTOP || '').trim() === '1';
   if (!enabled) return null;
   try {
-    const parsed = new URL(CONTROL_PLANE_AUTH_URL);
+    const parsed = new URL(CONTROL_PLANE_RUNTIME_URL);
     if (!isLoopbackHost(parsed.hostname)) return null;
     return parsed;
   } catch {
@@ -407,7 +406,7 @@ async function verifyBearerSignature(token: string): Promise<Response | null> {
 
 async function fetchRuntimeRole(token: string): Promise<Pick<ControlPlaneIdentity, 'email' | 'role' | 'admin' | 'workspaceAccess'> | null> {
   try {
-    const response = await fetch(`${CONTROL_PLANE_BACKEND_URL}/auth/me`, {
+    const response = await fetch(`${resolveControlPlaneBackendUrl()}/auth/me`, {
       method: 'GET',
       headers: {
         Authorization: `Bearer ${token}`,
@@ -791,7 +790,7 @@ export function controlPlaneAuthProviders(): ControlPlaneAuthProviders {
 
 export async function fetchControlPlaneAuthProviders(): Promise<ControlPlaneAuthProviders> {
   try {
-    const response = await fetch(`${CONTROL_PLANE_BACKEND_URL}/auth/providers`, {
+    const response = await fetch(`${resolveControlPlaneBackendUrl()}/auth/providers`, {
       method: 'GET',
       cache: 'no-store',
     });

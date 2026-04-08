@@ -6,6 +6,7 @@ import {
   issueAdminBrowserIdentityResponse,
   readPendingControlPlaneOauth,
 } from '@/lib/server/controlPlaneSession';
+import { buildDesktopSignInCompletionPath, buildSignInErrorPath } from '@/lib/server/controlPlaneAuthRouting';
 
 export const dynamic = 'force-dynamic';
 
@@ -15,13 +16,15 @@ export async function GET(request: NextRequest) {
   const pending = await readPendingControlPlaneOauth(request, state);
 
   if (!pending || !state || pending.state !== state) {
-    const response = NextResponse.redirect(new URL('/sign-in?error=oauth_state', request.nextUrl.origin));
+    const response = NextResponse.redirect(new URL(buildSignInErrorPath('oauth_state'), request.nextUrl.origin));
     await clearPendingControlPlaneOauth(response, request, state);
     return response;
   }
 
   if (!token) {
-    const failure = NextResponse.redirect(new URL(`/sign-in?error=oauth_missing_token&returnTo=${encodeURIComponent(pending.returnTo)}`, request.nextUrl.origin));
+    const failure = NextResponse.redirect(
+      new URL(buildSignInErrorPath('oauth_missing_token', pending.returnTo), request.nextUrl.origin),
+    );
     await clearPendingControlPlaneOauth(failure, request, state);
     return failure;
   }
@@ -35,7 +38,7 @@ export async function GET(request: NextRequest) {
     response = await issueAdminBrowserIdentityResponse(
       request,
       token,
-      `/sign-in/complete?mode=desktop&returnTo=${encodeURIComponent(pending.returnTo)}`,
+      buildDesktopSignInCompletionPath(pending.returnTo),
     );
   } else {
     response = await issueAdminBrowserIdentityResponse(request, token, pending.returnTo);

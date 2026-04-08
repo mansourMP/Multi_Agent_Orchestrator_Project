@@ -38,6 +38,7 @@ jobs:
           path: artifacts/empyralis-repo.cdx.json
 
       - name: Attest SBOM provenance
+        if: ${{ !github.event.repository.private }}
         uses: actions/attest-build-provenance@v2
         with:
           subject-path: artifacts/empyralis-repo.cdx.json

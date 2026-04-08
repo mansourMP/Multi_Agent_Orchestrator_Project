@@ -1,7 +1,8 @@
-fastapi
+fastapi==0.135.3
 sentry-sdk>=2.57.0
-uvicorn[standard]
-sse-starlette
+uvicorn[standard]==0.42.0
+sse-starlette==3.0.3
+starlette==0.49.1
 openai
 httpx>=0.27.0
 python-dotenv

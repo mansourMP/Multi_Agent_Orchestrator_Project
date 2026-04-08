@@ -619,6 +619,18 @@ def run_full_stack_crash_rehearsal(
                 manual_gate_response = {}
                 final_metadata = ((final_run.get("context") or {}).get("metadata") or {}) if isinstance((final_run.get("context") or {}).get("metadata"), dict) else {}
                 if bool(final_metadata.get("local_worker_recovery_manual_confirmation_required")):
+                    final_run = _wait_for_condition(
+                        lambda: (
+                            run
+                            if isinstance((run := shared.runs.get(run_id)), dict)
+                            and str(run.get("status") or "").strip().lower() == "waiting_for_input"
+                            and bool(((run.get("context") or {}).get("metadata") or {}).get("local_worker_recovery_manual_confirmation_required"))
+                            else None
+                        ),
+                        timeout_seconds=20.0,
+                        sleep_seconds=0.2,
+                        failure_message="Run never stabilized into the manual confirmation gate.",
+                    )
                     manual_gate_response = _json_request(runtime_url, api_key, "POST", f"/runs/{run_id}/resume", {})
 
                 return {

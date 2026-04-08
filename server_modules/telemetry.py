@@ -130,7 +130,8 @@ def _initialize_tracing() -> None:
             return
         try:
             provider = _TracerProvider()
-            processor = _BatchSpanProcessor(_ConsoleSpanExporter(out=sys.stdout))
+            console_stream = getattr(sys, "__stderr__", None) or sys.stderr
+            processor = _BatchSpanProcessor(_ConsoleSpanExporter(out=console_stream))
             provider.add_span_processor(processor)
             _otel_trace.set_tracer_provider(provider)
         except Exception:

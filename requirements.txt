@@ -1,8 +1,8 @@
-fastapi==0.109.0
+fastapi==0.135.3
 sentry-sdk[fastapi]>=2.57.0
 SQLAlchemy>=2.0.0
-uvicorn[standard]==0.27.0
-sse-starlette==2.0.0
+uvicorn[standard]==0.42.0
+sse-starlette==3.0.3
 openai
 python-dotenv>=1.0.0
 certifi
@@ -20,7 +20,8 @@ opencv-python>=4.8.0
 av>=12.0.0
 transformers>=4.48.0
 torch>=2.2.0
-mcp[cli]
+mcp[cli]==1.26.0
+starlette==0.49.1
 croniter>=2.0.0
 sentence-transformers>=3.0.0
 dropbox>=11.36.0

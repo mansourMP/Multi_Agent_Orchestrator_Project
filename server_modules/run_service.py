@@ -142,6 +142,23 @@ class RunExecutionServices:
 
 
 @dataclass(slots=True)
+class DurableTurnExecutionRequest:
+    engine: str = "orion"
+    workflow_id: Optional[str] = None
+    workspace_id: str = "default"
+    user_goal: str = ""
+    business_plan: Optional[str] = None
+    max_iterations: Optional[int] = None
+    agent_role: Optional[str] = None
+    parent_run_id: Optional[str] = None
+    provider: Optional[str] = None
+    model: Optional[str] = None
+    credential_id: Optional[str] = None
+    agents: List[dict] = field(default_factory=list)
+    metadata: Dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(slots=True)
 class RunRoutingPreviewServices:
     prepare_run_start_request: Any
     compute_tool_policy_precheck: Any
@@ -3349,8 +3366,57 @@ def _hint_list(value: Any) -> Optional[List[dict]]:
     return list(value) if isinstance(value, list) else None
 
 
+def build_turn_seed_from_request(
+    turn_request: AgentTurnRequest,
+    *,
+    base_request: Optional[Any] = None,
+) -> Dict[str, Any]:
+    base_metadata = _metadata_dict(getattr(base_request, "metadata", None))
+    hint_metadata = _metadata_dict(turn_request.context_hints.get("metadata"))
+    metadata = {**hint_metadata, **base_metadata}
+    metadata = bind_agent_turn_metadata(metadata, turn_request, source="runs/start")
+    if turn_request.policy_context:
+        metadata["policy_context"] = dict(turn_request.policy_context)
+    if turn_request.machine_target and not _hint_text(metadata.get("machine_target")):
+        metadata["machine_target"] = str(turn_request.machine_target).strip()
+    if not _hint_text(metadata.get("channel")):
+        metadata["channel"] = str(turn_request.channel or "").strip() or "web"
+    if not _hint_text(metadata.get("session_id")):
+        metadata["session_id"] = str(turn_request.session_id or "").strip()
+
+    return {
+        "engine": _hint_text(getattr(base_request, "engine", None)) or _hint_text(turn_request.context_hints.get("engine")) or "orion",
+        "workflow_id": _hint_text(getattr(base_request, "workflow_id", None)) or _hint_text(turn_request.context_hints.get("workflow_id")),
+        "workspace_id": str(turn_request.workspace_id or getattr(base_request, "workspace_id", None) or "default").strip() or "default",
+        "user_goal": _hint_text(turn_request.message) or _hint_text(getattr(base_request, "user_goal", None)) or "",
+        "business_plan": _hint_text(getattr(base_request, "business_plan", None)) or _hint_text(turn_request.context_hints.get("business_plan")),
+        "max_iterations": (
+            getattr(base_request, "max_iterations", None)
+            if getattr(base_request, "max_iterations", None) is not None
+            else turn_request.context_hints.get("max_iterations")
+        ),
+        "agent_role": _hint_text(getattr(base_request, "agent_role", None)) or _hint_text(turn_request.context_hints.get("agent_role")),
+        "parent_run_id": _hint_text(getattr(base_request, "parent_run_id", None)) or _hint_text(metadata.get("parent_run_id")),
+        "provider": _hint_text(getattr(base_request, "provider", None)) or _hint_text(turn_request.context_hints.get("provider")),
+        "model": _hint_text(getattr(base_request, "model", None)) or _hint_text(turn_request.context_hints.get("model")),
+        "credential_id": _hint_text(getattr(base_request, "credential_id", None)) or _hint_text(turn_request.context_hints.get("credential_id")),
+        "agents": _hint_list(getattr(base_request, "agents", None)) or _hint_list(turn_request.context_hints.get("agents")) or [],
+        "metadata": metadata,
+    }
+
+
+def build_durable_turn_execution_request(
+    turn_request: AgentTurnRequest,
+    *,
+    base_request: Optional[Any] = None,
+) -> DurableTurnExecutionRequest:
+    return DurableTurnExecutionRequest(
+        **build_turn_seed_from_request(turn_request, base_request=base_request),
+    )
+
+
 def build_run_preview_context(
-    req: RunStartRequest,
+    req: Any,
     *,
     metadata: Dict[str, Any],
     workflow_snapshot: Optional[Dict[str, Any]] = None,
@@ -3562,43 +3628,13 @@ def build_run_start_request_from_turn(
     *,
     base_request: Optional[Any] = None,
 ) -> RunStartRequest:
-    base = base_request if isinstance(base_request, RunStartRequest) else RunStartRequest()
-    base_metadata = _metadata_dict(getattr(base, "metadata", None))
-    hint_metadata = _metadata_dict(turn_request.context_hints.get("metadata"))
-    metadata = {**hint_metadata, **base_metadata}
-    metadata = bind_agent_turn_metadata(metadata, turn_request, source="runs/start")
-    if turn_request.policy_context:
-        metadata["policy_context"] = dict(turn_request.policy_context)
-    if turn_request.machine_target and not _hint_text(metadata.get("machine_target")):
-        metadata["machine_target"] = str(turn_request.machine_target).strip()
-    if not _hint_text(metadata.get("channel")):
-        metadata["channel"] = str(turn_request.channel or "").strip() or "web"
-    if not _hint_text(metadata.get("session_id")):
-        metadata["session_id"] = str(turn_request.session_id or "").strip()
-
     return RunStartRequest(
-        engine=_hint_text(getattr(base, "engine", None)) or _hint_text(turn_request.context_hints.get("engine")) or "orion",
-        workflow_id=_hint_text(getattr(base, "workflow_id", None)) or _hint_text(turn_request.context_hints.get("workflow_id")),
-        workspace_id=str(turn_request.workspace_id or getattr(base, "workspace_id", None) or "default").strip() or "default",
-        user_goal=_hint_text(turn_request.message) or _hint_text(getattr(base, "user_goal", None)),
-        business_plan=_hint_text(getattr(base, "business_plan", None)) or _hint_text(turn_request.context_hints.get("business_plan")),
-        max_iterations=(
-            getattr(base, "max_iterations", None)
-            if getattr(base, "max_iterations", None) is not None
-            else turn_request.context_hints.get("max_iterations")
-        ),
-        agent_role=_hint_text(getattr(base, "agent_role", None)) or _hint_text(turn_request.context_hints.get("agent_role")),
-        parent_run_id=_hint_text(getattr(base, "parent_run_id", None)) or _hint_text(metadata.get("parent_run_id")),
-        provider=_hint_text(getattr(base, "provider", None)) or _hint_text(turn_request.context_hints.get("provider")),
-        model=_hint_text(getattr(base, "model", None)) or _hint_text(turn_request.context_hints.get("model")),
-        credential_id=_hint_text(getattr(base, "credential_id", None)) or _hint_text(turn_request.context_hints.get("credential_id")),
-        agents=_hint_list(getattr(base, "agents", None)) or _hint_list(turn_request.context_hints.get("agents")),
-        metadata=metadata,
+        **build_turn_seed_from_request(turn_request, base_request=base_request),
     )
 
 
 def prepare_run_start_request(
-    req: RunStartRequest,
+    req: Any,
     *,
     services: RunPreparationServices,
 ) -> Dict[str, Any]:
@@ -4710,7 +4746,7 @@ def refresh_parent_delegation_state(
 
 
 def create_run_from_prepared_request(
-    req: RunStartRequest,
+    req: Any,
     *,
     prepared: Dict[str, Any],
     services: PreparedRunCreationServices,
@@ -4833,7 +4869,9 @@ async def execute_durable_turn_request(
     services: RunExecutionServices,
     base_request: Optional[Any] = None,
 ) -> Dict[str, Any]:
-    req = build_run_start_request_from_turn(turn_request, base_request=base_request)
+    # Canonical durable execution should run from AgentTurnRequest-derived state directly.
+    # RunStartRequest remains a compatibility input at the edges, not the primary internal shape here.
+    req = build_durable_turn_execution_request(turn_request, base_request=base_request)
     req = services.stamp_request_owner(req, current_user)
     prepared = services.prepare_run_start_request(req)
     metadata = dict(prepared["metadata"])

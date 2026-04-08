@@ -4,11 +4,13 @@ import Link from 'next/link';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { AlertCircle, Cpu, Laptop, PauseCircle, Play, RefreshCw, ShieldCheck } from 'lucide-react';
 import DoctorPreflightNotice from '@/components/orion/DoctorPreflightNotice';
+import { PageDialog } from '@/components/orion/page/PageDialog';
 import { PageHero } from '@/components/orion/page/PageHero';
 import { PageHeroCard } from '@/components/orion/page/PageHeroCard';
 import { PageSection } from '@/components/orion/page/PageSection';
 import { PageStatePanel } from '@/components/orion/page/PageStatePanel';
-import { ApiError, fetchRuntimeMachines } from '@/lib/api';
+import { Button } from '@/components/ui/button';
+import { ApiError, fetchRuntimeMachines, hardKillMachine } from '@/lib/api';
 import { fetchDoctorRunGate, type DoctorRunGateDecision } from '@/lib/doctorPreflight';
 
 type RuntimeMachine = {
@@ -214,7 +216,10 @@ export default function MachinesPage() {
   const [enrolling, setEnrolling] = useState(false);
   const [revokingMachineId, setRevokingMachineId] = useState<string | null>(null);
   const [controllingMachineId, setControllingMachineId] = useState<string | null>(null);
+  const [hardKillingMachineId, setHardKillingMachineId] = useState<string | null>(null);
+  const [hardKillTarget, setHardKillTarget] = useState<RuntimeMachine | null>(null);
   const [enrollMessage, setEnrollMessage] = useState('');
+  const modalPortalTarget = typeof document !== 'undefined' ? document.body : null;
 
   const loadMachines = useCallback(async () => {
     setLoading(true);
@@ -339,6 +344,24 @@ export default function MachinesPage() {
     }
   }, [loadMachines]);
 
+  const handleHardKillMachine = useCallback(async () => {
+    const machineId = String(hardKillTarget?.runtime_id || '').trim();
+    if (!machineId) return;
+    setHardKillingMachineId(machineId);
+    setError('');
+    setEnrollMessage('');
+    try {
+      await hardKillMachine(machineId, 'Hard interrupt requested from fleet controls.');
+      setEnrollMessage('Hard interrupt requested. Active work on this machine is being terminated immediately.');
+      setHardKillTarget(null);
+      await loadMachines();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Unable to hard kill this machine.');
+    } finally {
+      setHardKillingMachineId(null);
+    }
+  }, [hardKillTarget?.runtime_id, loadMachines]);
+
   const machines = useMemo(() => payload?.items ?? [], [payload]);
   const summary = payload?.summary ?? {};
   const capabilityQueue = payload?.capability_queue ?? {};
@@ -359,6 +382,19 @@ export default function MachinesPage() {
   const capabilityWaitingItems = capabilityQueue.items ?? [];
   const capabilityWaitingCount = capabilityQueue.waiting_count ?? 0;
   const onlineCapabilities = capabilityQueue.online_capabilities ?? [];
+
+  useEffect(() => {
+    if (!hardKillTarget) return;
+    const matchingMachine = machines.find((machine) => machine.runtime_id === hardKillTarget.runtime_id) || null;
+    if (!matchingMachine) {
+      setHardKillTarget(null);
+      return;
+    }
+    const controlState = String(matchingMachine.control_state || '').trim().toLowerCase();
+    if (controlState === 'interrupting' || controlState === 'revoked' || !matchingMachine.online) {
+      setHardKillTarget(null);
+    }
+  }, [hardKillTarget, machines]);
 
   return (
     <div className="orion-page-shell orion-animate-in">
@@ -811,6 +847,16 @@ export default function MachinesPage() {
                     {controllingMachineId === machine.runtime_id ? 'Suspending...' : 'Suspend'}
                   </button>
                 ) : null}
+                {machine.online && !['interrupting', 'revoked'].includes(String(machine.control_state || '').trim().toLowerCase()) ? (
+                  <Button
+                    type="button"
+                    variant="destructive"
+                    onClick={() => setHardKillTarget(machine)}
+                    disabled={hardKillingMachineId === machine.runtime_id}
+                  >
+                    {hardKillingMachineId === machine.runtime_id ? 'Interrupting...' : 'Kill Machine'}
+                  </Button>
+                ) : null}
                 <button
                   type="button"
                   className="orion-btn orion-btn-ghost"
@@ -824,6 +870,36 @@ export default function MachinesPage() {
           ))}
         </section>
       )}
+      <PageDialog
+        open={Boolean(hardKillTarget)}
+        portalTarget={modalPortalTarget}
+        title="Kill Machine"
+        onClose={() => {
+          if (!hardKillingMachineId) setHardKillTarget(null);
+        }}
+        footer={(
+          <>
+            <Button type="button" variant="secondary" onClick={() => setHardKillTarget(null)} disabled={Boolean(hardKillingMachineId)}>
+              Cancel
+            </Button>
+            <Button type="button" variant="destructive" onClick={() => void handleHardKillMachine()} disabled={Boolean(hardKillingMachineId)}>
+              {hardKillingMachineId ? 'Interrupting...' : 'Confirm Kill Machine'}
+            </Button>
+          </>
+        )}
+      >
+        <div style={{ display: 'grid', gap: 10 }}>
+          <div>
+            This sends an immediate hard interrupt to <strong>{hardKillTarget?.display_name || hardKillTarget?.runtime_id || 'this machine'}</strong> and terminates any active work as quickly as the runtime can enforce it.
+          </div>
+          <div>
+            Runtime: <strong>{hardKillTarget?.runtime_id || 'Unknown'}</strong>
+          </div>
+          <div>
+            Status: <strong>{hardKillTarget ? enrollmentLabel(hardKillTarget) : 'Unknown'}</strong>
+          </div>
+        </div>
+      </PageDialog>
       {enrollMessage && !error ? <div className="orion-page-state-detail">{enrollMessage}</div> : null}
     </div>
   );

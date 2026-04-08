@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useRef, useState, type CSSProperties, type RefObject } from 'react';
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode, type RefObject } from 'react';
 import { Activity } from 'lucide-react';
 import {
   AUTH_STREAM_CLOSED,
@@ -27,6 +27,7 @@ export function RunLiveCockpitPanel({
   sectionRef,
   focusedStyle,
   active = false,
+  headerAccessory,
   onLiveEventsChange,
   onStreamMetaChange,
   onRefreshRunState,
@@ -38,6 +39,7 @@ export function RunLiveCockpitPanel({
   sectionRef?: RefObject<HTMLElement | null>;
   focusedStyle?: CSSProperties;
   active?: boolean;
+  headerAccessory?: ReactNode;
   onLiveEventsChange?: (events: RunLiveReplayEvent[]) => void;
   onStreamMetaChange?: (state: RunLiveStreamState, error: string | null) => void;
   onRefreshRunState?: () => void | Promise<void>;
@@ -175,11 +177,14 @@ export function RunLiveCockpitPanel({
         ...(active && focusedStyle ? focusedStyle : null),
       }}
     >
-      <div style={{ display: 'inline-flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
-        <Activity size={14} />
-        <span style={{ fontSize: 11, fontWeight: 800, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-          Live cockpit
-        </span>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, marginBottom: 10, flexWrap: 'wrap' }}>
+        <div style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+          <Activity size={14} />
+          <span style={{ fontSize: 11, fontWeight: 800, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+            Live cockpit
+          </span>
+        </div>
+        {headerAccessory}
       </div>
       <RunLiveEventFeed
         mode={mode}

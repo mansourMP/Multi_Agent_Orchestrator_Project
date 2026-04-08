@@ -22,10 +22,12 @@ import { OsPageHeader } from '@/components/ui/OsPageHeader';
 import { Button } from '@/components/ui/button';
 import { ensureControlPlaneSession } from '@/lib/controlPlaneSession';
 import { formatExecutionTargetLabel } from '@/lib/executionTargets';
+import { hardKillRun } from '@/lib/api';
 import { fetchRuntimeArtifactBlob } from '@/lib/runtimeArtifacts';
 import { resolveSkillsByIds } from '@/lib/skills';
 import { SINGLE_AGENT_MODE } from '@/lib/appFlags';
 import { getLocalExecutionCapabilityTitle } from '@/lib/localExecutionCapabilities';
+import { PageDialog } from '@/components/orion/page/PageDialog';
 import { LocalCompanionRunPanel } from '@/components/orion/runs/LocalCompanionRunPanel';
 import { RunLiveCockpitPanel } from '@/components/orion/runs/RunLiveCockpitPanel';
 import { RunRemediationGuide, shouldShowRunRemediationGuide } from '@/components/orion/runs/RunRemediationGuide';
@@ -1360,12 +1362,16 @@ export default function RunInspectPage() {
   const [approvalBusy, setApprovalBusy] = useState<'Proceed' | 'Hold' | null>(null);
   const [resumeBusy, setResumeBusy] = useState(false);
   const [takeoverBusy, setTakeoverBusy] = useState(false);
+  const [hardKillBusy, setHardKillBusy] = useState(false);
+  const [hardKillPending, setHardKillPending] = useState(false);
+  const [hardKillDialogOpen, setHardKillDialogOpen] = useState(false);
   const [delegating, setDelegating] = useState(false);
   const [autoDelegating, setAutoDelegating] = useState(false);
   const [retryingDelegation, setRetryingDelegation] = useState(false);
   const [delegateError, setDelegateError] = useState<string | null>(null);
   const [delegateNotice, setDelegateNotice] = useState<string | null>(null);
   const [selectedReplayStepId, setSelectedReplayStepId] = useState<string | null>(null);
+  const modalPortalTarget = typeof document !== 'undefined' ? document.body : null;
   const workflowSectionRef = useRef<HTMLElement | null>(null);
   const timelineSectionRef = useRef<HTMLElement | null>(null);
   const approvalsSectionRef = useRef<HTMLElement | null>(null);
@@ -1695,6 +1701,25 @@ export default function RunInspectPage() {
     }
   }, [load, runId]);
 
+  const handleHardKillRun = useCallback(async () => {
+    if (!runId) return;
+    setHardKillBusy(true);
+    setHardKillPending(true);
+    setHardKillDialogOpen(false);
+    setDelegateError(null);
+    setDelegateNotice(null);
+    try {
+      await hardKillRun(runId, 'Hard interrupt requested from the run cockpit.');
+      setDelegateNotice('Hard interrupt requested. The run is being stopped immediately.');
+      await refreshRunState();
+    } catch (nextError: unknown) {
+      setHardKillPending(false);
+      setDelegateError(nextError instanceof Error ? nextError.message : 'Failed to hard kill this run.');
+    } finally {
+      setHardKillBusy(false);
+    }
+  }, [refreshRunState, runId]);
+
   const timelineEvents = useMemo(
     () => buildRunLiveTimelineEvents(replayItem?.events, liveEvents),
     [liveEvents, replayItem?.events],
@@ -1978,6 +2003,7 @@ export default function RunInspectPage() {
     || localExecutionCheckpoint
     || (runDetail?.result_data && typeof runDetail.result_data === 'object' && Boolean((runDetail.result_data as Record<string, unknown>).resume_available)),
   );
+  const interruptRequested = Boolean(runDetail?.interrupt_requested || hardKillPending);
   const canResumeRun = effectiveRunStatus === 'waiting_for_input'
     && !pendingConfirmation?.approval_id
     && Boolean(runDiagnostics?.browser_resume_supported || localExecutionResumeSupported);
@@ -1990,6 +2016,8 @@ export default function RunInspectPage() {
       || String(historyItem?.execution_target_selected || '').trim().toLowerCase() === 'local_companion'
       || String(historyItem?.execution_target_selected || '').trim().toLowerCase() === 'local'
     );
+  const showHardKillRun = !TERMINAL_RUN_STATUSES.has(effectiveRunStatus) && (!runDetail?.interrupt_requested || hardKillPending || hardKillBusy);
+  const hardKillRunDisabled = hardKillBusy || hardKillPending || approvalBusy !== null || resumeBusy || takeoverBusy;
   const needsLocalMachineAttention = ['local_runtime_wait', 'local_capacity_wait', 'local_queue', 'local_running'].includes(String(runDiagnostics?.category || ''));
   const showRemediationGuide = shouldShowRunRemediationGuide({
     diagnostics: runDiagnostics,
@@ -2171,6 +2199,13 @@ export default function RunInspectPage() {
     && (!TERMINAL_RUN_STATUSES.has(effectiveRunStatus) || liveComputerMode === 'paused' || liveComputerMode === 'takeover');
 
   useEffect(() => {
+    if (TERMINAL_RUN_STATUSES.has(effectiveRunStatus) || runDetail?.interrupt_requested) {
+      setHardKillPending(false);
+      setHardKillDialogOpen(false);
+    }
+  }, [effectiveRunStatus, runDetail?.interrupt_requested]);
+
+  useEffect(() => {
     if (loading || !focusTarget) return;
     const timer = window.setTimeout(() => {
       focusSection(focusTarget);
@@ -2330,7 +2365,7 @@ export default function RunInspectPage() {
               <button
                 style={buttonStyle({ tone: 'primary', size: 'md' })}
                 onClick={() => void handleTakeOverRun()}
-                disabled={takeoverBusy || approvalBusy !== null || resumeBusy}
+                disabled={takeoverBusy || approvalBusy !== null || resumeBusy || interruptRequested}
               >
                 {takeoverBusy ? 'Pausing…' : 'Pause AI'}
               </button>
@@ -2339,10 +2374,19 @@ export default function RunInspectPage() {
               <button
                 style={buttonStyle({ tone: 'primary', size: 'md' })}
                 onClick={() => void handleResumeRun()}
-                disabled={resumeBusy || approvalBusy !== null || takeoverBusy}
+                disabled={resumeBusy || approvalBusy !== null || takeoverBusy || interruptRequested}
               >
                 {resumeBusy ? 'Resuming…' : 'Resume AI'}
               </button>
+            ) : null}
+            {showHardKillRun ? (
+              <Button
+                variant="destructive"
+                onClick={() => setHardKillDialogOpen(true)}
+                disabled={hardKillRunDisabled}
+              >
+                {hardKillBusy || hardKillPending ? 'Interrupting…' : 'Hard Kill Run'}
+              </Button>
             ) : null}
             <button
               style={buttonStyle({ tone: 'secondary', size: 'md' })}
@@ -2558,10 +2602,20 @@ export default function RunInspectPage() {
                           className="orion-btn orion-btn-primary"
                           style={{ minHeight: 44, paddingInline: 12 }}
                           onClick={() => void handleResumeRun()}
-                          disabled={resumeBusy || approvalBusy !== null || retryingDelegation || autoDelegating || delegating}
+                          disabled={resumeBusy || approvalBusy !== null || retryingDelegation || autoDelegating || delegating || interruptRequested}
                         >
                           {resumeBusy ? 'Resuming...' : 'Resume run'}
                         </button>
+                      ) : null}
+                      {showHardKillRun ? (
+                        <Button
+                          variant="destructive"
+                          onClick={() => setHardKillDialogOpen(true)}
+                          disabled={hardKillRunDisabled || retryingDelegation || autoDelegating || delegating}
+                          style={{ minHeight: 44, paddingInline: 12 }}
+                        >
+                          {hardKillBusy || hardKillPending ? 'Interrupting…' : 'Hard Kill Run'}
+                        </Button>
                       ) : null}
                       {(delegationSummary?.retryable_failed_children || 0) > 0 ? (
                         <button
@@ -2660,7 +2714,7 @@ export default function RunInspectPage() {
                     className="orion-btn orion-btn-primary"
                     style={{ minHeight: 44, paddingInline: 12 }}
                     onClick={() => void handleTakeOverRun()}
-                    disabled={takeoverBusy || approvalBusy !== null || resumeBusy}
+                    disabled={takeoverBusy || approvalBusy !== null || resumeBusy || interruptRequested}
                   >
                     {takeoverBusy ? 'Pausing…' : 'Pause AI'}
                   </button>
@@ -2670,10 +2724,20 @@ export default function RunInspectPage() {
                     className="orion-btn orion-btn-primary"
                     style={{ minHeight: 44, paddingInline: 12 }}
                     onClick={() => void handleResumeRun()}
-                    disabled={resumeBusy || approvalBusy !== null || takeoverBusy}
+                    disabled={resumeBusy || approvalBusy !== null || takeoverBusy || interruptRequested}
                   >
                     {resumeBusy ? 'Resuming…' : 'Resume AI'}
                   </button>
+                ) : null}
+                {showHardKillRun ? (
+                  <Button
+                    variant="destructive"
+                    onClick={() => setHardKillDialogOpen(true)}
+                    disabled={hardKillRunDisabled}
+                    style={{ minHeight: 44, paddingInline: 12 }}
+                  >
+                    {hardKillBusy || hardKillPending ? 'Interrupting…' : 'Hard Kill Run'}
+                  </Button>
                 ) : null}
                 <button
                   className="orion-btn orion-btn-ghost"
@@ -3501,6 +3565,11 @@ export default function RunInspectPage() {
               sectionRef={timelineSectionRef}
               focusedStyle={focusedSectionStyle}
               active={activeSection === 'timeline' || activeSection === 'logs'}
+              headerAccessory={showHardKillRun || interruptRequested ? (
+                <span style={badgeStyle(interruptRequested ? 'warning' : 'neutral')}>
+                  {hardKillBusy || hardKillPending ? 'Interrupting…' : interruptRequested ? 'Interrupt requested' : 'Live control'}
+                </span>
+              ) : null}
               onLiveEventsChange={setLiveEvents}
               onStreamMetaChange={(state, errorMessage) => {
                 setStreamState(state);
@@ -4182,6 +4251,36 @@ export default function RunInspectPage() {
           </section>
         </>
       )}
+      <PageDialog
+        open={hardKillDialogOpen}
+        portalTarget={modalPortalTarget}
+        title="Hard Kill Run"
+        onClose={() => {
+          if (!hardKillBusy) setHardKillDialogOpen(false);
+        }}
+        footer={(
+          <>
+            <Button type="button" variant="secondary" onClick={() => setHardKillDialogOpen(false)} disabled={hardKillBusy}>
+              Cancel
+            </Button>
+            <Button type="button" variant="destructive" onClick={() => void handleHardKillRun()} disabled={hardKillBusy}>
+              {hardKillBusy ? 'Interrupting…' : 'Confirm Hard Kill'}
+            </Button>
+          </>
+        )}
+      >
+        <div style={{ display: 'grid', gap: 10 }}>
+          <div>
+            This sends an immediate hard interrupt to <strong>{runId.slice(0, 8)}</strong> and stops any active local execution as fast as the runtime can enforce it.
+          </div>
+          <div>
+            Machine: <strong>{String(runDetail?.machine_id || runDetail?.runtime_id || 'Not assigned').trim() || 'Not assigned'}</strong>
+          </div>
+          <div>
+            Current state: <strong>{interruptRequested ? 'Interrupt already requested' : effectiveRunStatus || 'unknown'}</strong>
+          </div>
+        </div>
+      </PageDialog>
     </div>
   );
 }

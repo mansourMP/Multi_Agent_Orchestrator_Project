@@ -137,15 +137,233 @@ CREATE TABLE IF NOT EXISTS agent_turns (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+CREATE TABLE IF NOT EXISTS workflow_definitions (
+    id TEXT PRIMARY KEY,
+    tenant_id TEXT NOT NULL,
+    workspace_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'draft',
+    current_version_id TEXT NULL,
+    published_version_id TEXT NULL,
+    created_by_user_id TEXT NULL,
+    last_run_at TIMESTAMPTZ NULL,
+    metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS workflow_versions (
+    id TEXT PRIMARY KEY,
+    tenant_id TEXT NOT NULL,
+    workspace_id TEXT NOT NULL,
+    workflow_id TEXT NOT NULL REFERENCES workflow_definitions(id) ON DELETE CASCADE,
+    version_number INTEGER NOT NULL,
+    status TEXT NOT NULL DEFAULT 'draft',
+    definition JSONB NOT NULL DEFAULT '{}'::jsonb,
+    validation JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_by_user_id TEXT NULL,
+    metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE(workflow_id, version_number)
+);
+
+CREATE TABLE IF NOT EXISTS runtime_profiles (
+    id TEXT PRIMARY KEY,
+    tenant_id TEXT NOT NULL,
+    workspace_id TEXT NOT NULL,
+    slug TEXT NOT NULL,
+    label TEXT NOT NULL,
+    runtime_class TEXT NOT NULL DEFAULT 'cloud_worker',
+    placement_mode TEXT NOT NULL DEFAULT 'auto',
+    runtime_id TEXT NULL,
+    machine_id TEXT NULL,
+    default_execution_target TEXT NOT NULL DEFAULT 'auto',
+    supported_capabilities JSONB NOT NULL DEFAULT '[]'::jsonb,
+    root_folder_uri TEXT NULL,
+    allowed_connector_scopes JSONB NOT NULL DEFAULT '[]'::jsonb,
+    status TEXT NOT NULL DEFAULT 'active',
+    last_seen_at TIMESTAMPTZ NULL,
+    metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE(tenant_id, workspace_id, slug)
+);
+
+CREATE TABLE IF NOT EXISTS agent_definitions (
+    id TEXT PRIMARY KEY,
+    tenant_id TEXT NOT NULL,
+    workspace_id TEXT NOT NULL,
+    slug TEXT NOT NULL,
+    name TEXT NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    agent_kind TEXT NOT NULL DEFAULT 'specialist',
+    visibility TEXT NOT NULL DEFAULT 'workspace',
+    status TEXT NOT NULL DEFAULT 'draft',
+    category TEXT NULL,
+    icon TEXT NULL,
+    created_by_user_id TEXT NULL,
+    current_version_id TEXT NULL,
+    published_version_id TEXT NULL,
+    source_workflow_definition_id TEXT NULL REFERENCES workflow_definitions(id) ON DELETE SET NULL,
+    metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE(tenant_id, workspace_id, slug)
+);
+
+CREATE TABLE IF NOT EXISTS agent_definition_versions (
+    id TEXT PRIMARY KEY,
+    tenant_id TEXT NOT NULL,
+    workspace_id TEXT NOT NULL,
+    agent_definition_id TEXT NOT NULL REFERENCES agent_definitions(id) ON DELETE CASCADE,
+    version_number INTEGER NOT NULL,
+    status TEXT NOT NULL DEFAULT 'draft',
+    manifest JSONB NOT NULL DEFAULT '{}'::jsonb,
+    compiled_workflow_version_id TEXT NULL REFERENCES workflow_versions(id) ON DELETE SET NULL,
+    capability_manifest JSONB NOT NULL DEFAULT '{}'::jsonb,
+    memory_scope_manifest JSONB NOT NULL DEFAULT '{}'::jsonb,
+    policy_manifest JSONB NOT NULL DEFAULT '{}'::jsonb,
+    placement_manifest JSONB NOT NULL DEFAULT '{}'::jsonb,
+    template_inputs_schema JSONB NOT NULL DEFAULT '{}'::jsonb,
+    metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_by_user_id TEXT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE(agent_definition_id, version_number)
+);
+
+CREATE TABLE IF NOT EXISTS workspace_agent_installs (
+    id TEXT PRIMARY KEY,
+    tenant_id TEXT NOT NULL,
+    workspace_id TEXT NOT NULL,
+    agent_definition_id TEXT NOT NULL REFERENCES agent_definitions(id) ON DELETE CASCADE,
+    agent_definition_version_id TEXT NOT NULL REFERENCES agent_definition_versions(id) ON DELETE RESTRICT,
+    installed_by_user_id TEXT NULL,
+    install_scope TEXT NOT NULL DEFAULT 'workspace',
+    owner_user_id TEXT NULL,
+    thread_id TEXT NULL REFERENCES agent_threads(id) ON DELETE SET NULL,
+    label TEXT NULL,
+    status TEXT NOT NULL DEFAULT 'active',
+    enabled BOOLEAN NOT NULL DEFAULT TRUE,
+    runtime_profile_id TEXT NULL REFERENCES runtime_profiles(id) ON DELETE SET NULL,
+    root_folder_uri TEXT NULL,
+    tool_toggles JSONB NOT NULL DEFAULT '{}'::jsonb,
+    folder_grants JSONB NOT NULL DEFAULT '[]'::jsonb,
+    connector_bindings JSONB NOT NULL DEFAULT '{}'::jsonb,
+    memory_scope_overrides JSONB NOT NULL DEFAULT '{}'::jsonb,
+    policy_context_overrides JSONB NOT NULL DEFAULT '{}'::jsonb,
+    metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+ALTER TABLE agent_threads
+    ADD COLUMN IF NOT EXISTS master_agent_install_id TEXT NULL;
+
+ALTER TABLE agent_sessions
+    ADD COLUMN IF NOT EXISTS master_agent_install_id TEXT NULL,
+    ADD COLUMN IF NOT EXISTS runtime_profile_id TEXT NULL;
+
+ALTER TABLE agent_turns
+    ADD COLUMN IF NOT EXISTS active_agent_install_id TEXT NULL,
+    ADD COLUMN IF NOT EXISTS runtime_profile_id TEXT NULL;
+
 CREATE INDEX IF NOT EXISTS idx_users_workspace ON users(tenant_id, workspace_id);
 CREATE INDEX IF NOT EXISTS idx_workspace_memberships_user ON workspace_memberships(user_id, tenant_id, workspace_id);
 CREATE INDEX IF NOT EXISTS idx_workspaces_tenant ON workspaces(tenant_id, workspace_id);
 CREATE INDEX IF NOT EXISTS idx_threads_workspace_updated ON agent_threads(tenant_id, workspace_id, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_agent_threads_master_install ON agent_threads(tenant_id, workspace_id, master_agent_install_id);
 CREATE INDEX IF NOT EXISTS idx_agent_sessions_thread ON agent_sessions(tenant_id, workspace_id, thread_id, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_agent_sessions_master_install ON agent_sessions(tenant_id, workspace_id, master_agent_install_id);
+CREATE INDEX IF NOT EXISTS idx_agent_sessions_runtime_profile ON agent_sessions(tenant_id, workspace_id, runtime_profile_id);
 CREATE INDEX IF NOT EXISTS idx_agent_turns_thread_created ON agent_turns(tenant_id, workspace_id, thread_id, created_at ASC);
+CREATE INDEX IF NOT EXISTS idx_agent_turns_active_install ON agent_turns(tenant_id, workspace_id, active_agent_install_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_agent_turns_runtime_profile ON agent_turns(tenant_id, workspace_id, runtime_profile_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_workflow_definitions_workspace_updated ON workflow_definitions(tenant_id, workspace_id, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_workflow_definitions_published ON workflow_definitions(tenant_id, workspace_id, published_version_id);
+CREATE INDEX IF NOT EXISTS idx_workflow_versions_workflow_number ON workflow_versions(tenant_id, workspace_id, workflow_id, version_number DESC);
+CREATE INDEX IF NOT EXISTS idx_runtime_profiles_workspace_status ON runtime_profiles(tenant_id, workspace_id, status, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_runtime_profiles_runtime_machine ON runtime_profiles(tenant_id, workspace_id, runtime_id, machine_id);
+CREATE INDEX IF NOT EXISTS idx_agent_definitions_workspace_updated ON agent_definitions(tenant_id, workspace_id, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_agent_definitions_kind_status ON agent_definitions(tenant_id, workspace_id, agent_kind, status);
+CREATE INDEX IF NOT EXISTS idx_agent_definition_versions_agent_number ON agent_definition_versions(tenant_id, workspace_id, agent_definition_id, version_number DESC);
+CREATE INDEX IF NOT EXISTS idx_agent_definition_versions_workflow_version ON agent_definition_versions(tenant_id, workspace_id, compiled_workflow_version_id);
+CREATE INDEX IF NOT EXISTS idx_workspace_agent_installs_status_enabled ON workspace_agent_installs(tenant_id, workspace_id, status, enabled);
+CREATE INDEX IF NOT EXISTS idx_workspace_agent_installs_thread ON workspace_agent_installs(tenant_id, workspace_id, thread_id);
+CREATE INDEX IF NOT EXISTS idx_workspace_agent_installs_runtime_profile ON workspace_agent_installs(tenant_id, workspace_id, runtime_profile_id);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_turns_request_role
     ON agent_turns(tenant_id, workspace_id, thread_id, role, request_id)
     WHERE request_id IS NOT NULL;
+
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1
+        FROM pg_constraint
+        WHERE conname = 'fk_agent_threads_master_agent_install'
+    ) THEN
+        ALTER TABLE agent_threads
+            ADD CONSTRAINT fk_agent_threads_master_agent_install
+            FOREIGN KEY (master_agent_install_id) REFERENCES workspace_agent_installs(id) ON DELETE SET NULL;
+    END IF;
+END
+$$;
+
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1
+        FROM pg_constraint
+        WHERE conname = 'fk_agent_sessions_master_agent_install'
+    ) THEN
+        ALTER TABLE agent_sessions
+            ADD CONSTRAINT fk_agent_sessions_master_agent_install
+            FOREIGN KEY (master_agent_install_id) REFERENCES workspace_agent_installs(id) ON DELETE SET NULL;
+    END IF;
+END
+$$;
+
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1
+        FROM pg_constraint
+        WHERE conname = 'fk_agent_sessions_runtime_profile'
+    ) THEN
+        ALTER TABLE agent_sessions
+            ADD CONSTRAINT fk_agent_sessions_runtime_profile
+            FOREIGN KEY (runtime_profile_id) REFERENCES runtime_profiles(id) ON DELETE SET NULL;
+    END IF;
+END
+$$;
+
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1
+        FROM pg_constraint
+        WHERE conname = 'fk_agent_turns_active_agent_install'
+    ) THEN
+        ALTER TABLE agent_turns
+            ADD CONSTRAINT fk_agent_turns_active_agent_install
+            FOREIGN KEY (active_agent_install_id) REFERENCES workspace_agent_installs(id) ON DELETE SET NULL;
+    END IF;
+END
+$$;
+
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1
+        FROM pg_constraint
+        WHERE conname = 'fk_agent_turns_runtime_profile'
+    ) THEN
+        ALTER TABLE agent_turns
+            ADD CONSTRAINT fk_agent_turns_runtime_profile
+            FOREIGN KEY (runtime_profile_id) REFERENCES runtime_profiles(id) ON DELETE SET NULL;
+    END IF;
+END
+$$;
 """
 
 
@@ -229,6 +447,7 @@ class AgentThreadRecord:
     tenant_id: str
     workspace_id: str
     owner_user_id: Optional[str]
+    master_agent_install_id: Optional[str]
     channel: str
     title: str
     status: str = "active"
@@ -661,6 +880,7 @@ async def ensure_agent_thread(
     tenant_id: str,
     workspace_id: str,
     owner_user_id: Optional[str],
+    master_agent_install_id: Optional[str] = None,
     channel: str,
     title: Optional[str] = None,
     metadata: Optional[Dict[str, Any]] = None,
@@ -676,12 +896,13 @@ async def ensure_agent_thread(
     await pool.execute(
         """
         INSERT INTO agent_threads (
-            id, tenant_id, workspace_id, owner_user_id, channel, title, status, metadata, created_at, updated_at, last_turn_at
-        ) VALUES ($1, $2, $3, $4, $5, $6, 'active', $7::jsonb, $8::timestamptz, $8::timestamptz, NULL)
+            id, tenant_id, workspace_id, owner_user_id, master_agent_install_id, channel, title, status, metadata, created_at, updated_at, last_turn_at
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, 'active', $8::jsonb, $9::timestamptz, $9::timestamptz, NULL)
         ON CONFLICT (id) DO UPDATE SET
             tenant_id = EXCLUDED.tenant_id,
             workspace_id = EXCLUDED.workspace_id,
             owner_user_id = COALESCE(EXCLUDED.owner_user_id, agent_threads.owner_user_id),
+            master_agent_install_id = COALESCE(EXCLUDED.master_agent_install_id, agent_threads.master_agent_install_id),
             channel = EXCLUDED.channel,
             title = CASE WHEN agent_threads.title = 'New chat' THEN EXCLUDED.title ELSE agent_threads.title END,
             metadata = agent_threads.metadata || EXCLUDED.metadata,
@@ -691,6 +912,7 @@ async def ensure_agent_thread(
         str(tenant_id or "").strip() or "default",
         str(workspace_id or "").strip() or "default",
         str(owner_user_id or "").strip() or None,
+        str(master_agent_install_id or "").strip() or None,
         str(channel or "web").strip() or "web",
         payload_title,
         _to_json(metadata, default={}),
@@ -707,6 +929,8 @@ async def upsert_agent_session(
     thread_id: str,
     channel: str,
     actor: Dict[str, Any],
+    master_agent_install_id: Optional[str] = None,
+    runtime_profile_id: Optional[str] = None,
     metadata: Optional[Dict[str, Any]] = None,
     expires_at: Optional[str] = None,
     status: str = "active",
@@ -718,14 +942,16 @@ async def upsert_agent_session(
     await pool.execute(
         """
         INSERT INTO agent_sessions (
-            id, tenant_id, workspace_id, thread_id, channel, actor, status, metadata, created_at, updated_at, expires_at
-        ) VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8::jsonb, $9::timestamptz, $9::timestamptz, $10::timestamptz)
+            id, tenant_id, workspace_id, thread_id, channel, actor, master_agent_install_id, runtime_profile_id, status, metadata, created_at, updated_at, expires_at
+        ) VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9, $10::jsonb, $11::timestamptz, $11::timestamptz, $12::timestamptz)
         ON CONFLICT (id) DO UPDATE SET
             tenant_id = EXCLUDED.tenant_id,
             workspace_id = EXCLUDED.workspace_id,
             thread_id = EXCLUDED.thread_id,
             channel = EXCLUDED.channel,
             actor = EXCLUDED.actor,
+            master_agent_install_id = COALESCE(EXCLUDED.master_agent_install_id, agent_sessions.master_agent_install_id),
+            runtime_profile_id = COALESCE(EXCLUDED.runtime_profile_id, agent_sessions.runtime_profile_id),
             status = EXCLUDED.status,
             metadata = EXCLUDED.metadata,
             updated_at = EXCLUDED.updated_at,
@@ -737,6 +963,8 @@ async def upsert_agent_session(
         str(thread_id or "").strip() or "direct-chat",
         str(channel or "web").strip() or "web",
         _to_json(actor, default={}),
+        str(master_agent_install_id or "").strip() or None,
+        str(runtime_profile_id or "").strip() or None,
         str(status or "active").strip() or "active",
         _to_json(metadata, default={}),
         now_iso,
@@ -772,6 +1000,8 @@ async def upsert_agent_turn(
     role: str,
     content: str,
     actor: Optional[Dict[str, Any]] = None,
+    active_agent_install_id: Optional[str] = None,
+    runtime_profile_id: Optional[str] = None,
     status: str = "completed",
     run_id: Optional[str] = None,
     approvals: Optional[List[Dict[str, Any]]] = None,
@@ -789,9 +1019,9 @@ async def upsert_agent_turn(
     await pool.execute(
         """
         INSERT INTO agent_turns (
-            id, tenant_id, workspace_id, thread_id, session_id, request_id, role, status, content, run_id, actor, approvals, interventions, metadata, created_at, updated_at
+            id, tenant_id, workspace_id, thread_id, session_id, request_id, role, status, content, run_id, actor, active_agent_install_id, runtime_profile_id, approvals, interventions, metadata, created_at, updated_at
         ) VALUES (
-            $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, $12::jsonb, $13::jsonb, $14::jsonb, $15::timestamptz, $15::timestamptz
+            $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, $12, $13, $14::jsonb, $15::jsonb, $16::jsonb, $17::timestamptz, $17::timestamptz
         )
         ON CONFLICT (tenant_id, workspace_id, thread_id, role, request_id)
         WHERE request_id IS NOT NULL
@@ -800,6 +1030,8 @@ async def upsert_agent_turn(
             content = EXCLUDED.content,
             run_id = COALESCE(EXCLUDED.run_id, agent_turns.run_id),
             actor = EXCLUDED.actor,
+            active_agent_install_id = COALESCE(EXCLUDED.active_agent_install_id, agent_turns.active_agent_install_id),
+            runtime_profile_id = COALESCE(EXCLUDED.runtime_profile_id, agent_turns.runtime_profile_id),
             approvals = EXCLUDED.approvals,
             interventions = EXCLUDED.interventions,
             metadata = agent_turns.metadata || EXCLUDED.metadata,
@@ -816,6 +1048,8 @@ async def upsert_agent_turn(
         str(content or ""),
         str(run_id or "").strip() or None,
         _to_json(actor, default={}),
+        str(active_agent_install_id or "").strip() or None,
+        str(runtime_profile_id or "").strip() or None,
         _to_json(approvals, default=[]),
         _to_json(interventions, default=[]),
         _to_json(metadata, default={}),
@@ -869,7 +1103,7 @@ async def get_agent_thread(thread_id: str, *, include_turns: bool = True) -> Opt
         return None
     row = await pool.fetchrow(
         """
-        SELECT id, tenant_id, workspace_id, owner_user_id, channel, title, status, metadata, created_at, updated_at, last_turn_at
+        SELECT id, tenant_id, workspace_id, owner_user_id, master_agent_install_id, channel, title, status, metadata, created_at, updated_at, last_turn_at
         FROM agent_threads
         WHERE id = $1
         LIMIT 1
@@ -909,7 +1143,7 @@ async def list_agent_threads(
     params.append(max(1, int(limit or 50)))
     rows = await pool.fetch(
         f"""
-        SELECT id, tenant_id, workspace_id, owner_user_id, channel, title, status, metadata, created_at, updated_at, last_turn_at
+        SELECT id, tenant_id, workspace_id, owner_user_id, master_agent_install_id, channel, title, status, metadata, created_at, updated_at, last_turn_at
         FROM agent_threads
         WHERE {' AND '.join(conditions)}
         ORDER BY COALESCE(last_turn_at, updated_at, created_at) DESC

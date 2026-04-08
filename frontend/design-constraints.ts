@@ -1,37 +1,87 @@
 import type { CSSProperties } from 'react';
 
+export const DESIGN_LANGUAGE = {
+  name: 'quiet-operator',
+  posture: ['restrained', 'precise', 'dense', 'high-trust'],
+  avoid: ['gradients', 'gloss', 'oversized radii', 'heavy shadows', 'bright playful accents'],
+  emphasize: ['muted surfaces', 'disciplined spacing', 'sharp hierarchy', 'calm status colors'],
+} as const;
+
+const COLOR_SCALE = {
+  graphite950: '#101319',
+  graphite900: '#151a22',
+  graphite800: '#202733',
+  graphite700: '#2f3948',
+  graphite600: '#4b5668',
+  graphite500: '#697487',
+  graphite400: '#8a94a3',
+  graphite300: '#b8c0cb',
+  graphite200: '#d4dae2',
+  graphite100: '#e7ebf0',
+  graphite50: '#f4f6f8',
+  paper: '#fbfcfd',
+  blue700: '#274b73',
+  blue600: '#315a86',
+  blue500: '#3b678f',
+  blue50: '#eef3f8',
+  green700: '#2f5f47',
+  green50: '#edf4ef',
+  amber700: '#7d631d',
+  amber50: '#faf4e7',
+  rose700: '#9b4752',
+  rose50: '#f9eff1',
+  slateBlue700: '#48657e',
+  slateBlue50: '#edf2f5',
+} as const;
+
+const BORDER_WIDTH = {
+  subtle: 1,
+  strong: 1,
+  emphasis: 1,
+} as const;
+
+const TRANSITION_CURVE = {
+  fast: '120ms ease',
+  base: '160ms ease',
+} as const;
+
+const SHADOW_SCALE = {
+  subtle: '0 1px 2px rgba(16, 19, 25, 0.03)',
+  focus: '0 0 0 3px rgba(49, 90, 134, 0.12)',
+} as const;
+
 export const DESIGN_TOKENS = {
   color: {
-    canvas: '#f6f7f9',
-    surface: '#ffffff',
-    surfaceMuted: '#fafbfc',
-    surfaceSubtle: '#f2f4f7',
-    surfaceInteractive: '#f8fafc',
-    overlay: 'rgba(15, 23, 42, 0.16)',
-    textPrimary: '#14171f',
-    textSecondary: '#5c6473',
-    textTertiary: '#838b99',
-    textInverse: '#ffffff',
-    borderSubtle: '#e6e9ef',
-    borderStrong: '#d6dbe4',
-    accent: '#5e6ad2',
-    accentStrong: '#4b57c5',
-    accentSoft: '#eef1ff',
-    accentText: '#2d3690',
-    success: '#197a52',
-    successSoft: '#edf8f2',
-    warning: '#9a6700',
-    warningSoft: '#fff7e6',
-    danger: '#c2415d',
-    dangerSoft: '#fff1f4',
-    info: '#3b82f6',
-    infoSoft: '#eef5ff',
+    canvas: COLOR_SCALE.graphite50,
+    surface: COLOR_SCALE.paper,
+    surfaceMuted: '#f7f8fa',
+    surfaceSubtle: '#f1f3f6',
+    surfaceInteractive: '#f6f8fa',
+    overlay: 'rgba(10, 12, 16, 0.34)',
+    textPrimary: COLOR_SCALE.graphite950,
+    textSecondary: COLOR_SCALE.graphite600,
+    textTertiary: COLOR_SCALE.graphite500,
+    textInverse: '#f8fafc',
+    borderSubtle: COLOR_SCALE.graphite100,
+    borderStrong: COLOR_SCALE.graphite200,
+    accent: COLOR_SCALE.blue600,
+    accentStrong: COLOR_SCALE.blue700,
+    accentSoft: COLOR_SCALE.blue50,
+    accentText: COLOR_SCALE.blue700,
+    success: COLOR_SCALE.green700,
+    successSoft: COLOR_SCALE.green50,
+    warning: COLOR_SCALE.amber700,
+    warningSoft: COLOR_SCALE.amber50,
+    danger: COLOR_SCALE.rose700,
+    dangerSoft: COLOR_SCALE.rose50,
+    info: COLOR_SCALE.slateBlue700,
+    infoSoft: COLOR_SCALE.slateBlue50,
   },
   radius: {
-    sm: 8,
-    md: 10,
-    lg: 14,
-    xl: 18,
+    sm: 6,
+    md: 8,
+    lg: 10,
+    xl: 12,
     pill: 999,
   },
   space: {
@@ -45,16 +95,17 @@ export const DESIGN_TOKENS = {
     8: 40,
   },
   type: {
-    family: 'Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
-    mono: '"SF Mono", "JetBrains Mono", ui-monospace, monospace',
+    family:
+      '"SF Pro Text", "SF Pro Display", "Segoe UI Variable", "Helvetica Neue", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, sans-serif',
+    mono: '"SF Mono", "JetBrains Mono", "IBM Plex Mono", ui-monospace, monospace',
     size: {
-      caption: 12,
-      label: 13,
+      caption: 11,
+      label: 12,
       body: 14,
-      bodyLg: 16,
-      titleSm: 18,
-      title: 24,
-      hero: 32,
+      bodyLg: 15,
+      titleSm: 17,
+      title: 22,
+      hero: 30,
     },
     weight: {
       regular: 400,
@@ -63,31 +114,32 @@ export const DESIGN_TOKENS = {
       bold: 700,
     },
     lineHeight: {
-      tight: 1.15,
-      snug: 1.3,
-      normal: 1.5,
-      relaxed: 1.65,
+      tight: 1.1,
+      snug: 1.25,
+      normal: 1.45,
+      relaxed: 1.6,
     },
     tracking: {
-      tight: '-0.02em',
-      normal: '-0.01em',
+      tight: '-0.03em',
+      normal: '-0.015em',
       wide: '0.08em',
     },
   },
   control: {
-    heightSm: 36,
-    heightMd: 40,
-    heightLg: 44,
-    iconSm: 32,
-    iconMd: 36,
+    heightSm: 32,
+    heightMd: 36,
+    heightLg: 40,
+    iconSm: 30,
+    iconMd: 34,
   },
-  shadow: {
-    subtle: '0 1px 2px rgba(16, 24, 40, 0.04)',
-    focus: '0 0 0 3px rgba(94, 106, 210, 0.18)',
-  },
-  motion: {
-    fast: '140ms ease',
-    base: '180ms ease',
+  border: BORDER_WIDTH,
+  shadow: SHADOW_SCALE,
+  motion: TRANSITION_CURVE,
+  interaction: {
+    hoverSurface: '#f5f7f9',
+    hoverBorder: COLOR_SCALE.graphite300,
+    activeSurface: '#eef2f6',
+    disabledOpacity: 0.45,
   },
 } as const;
 
@@ -102,9 +154,9 @@ export function mergeStyles(...styles: Array<CSSProperties | undefined>): CSSPro
 export function pageShellStyle(options?: { narrow?: boolean }): CSSProperties {
   return {
     width: '100%',
-    maxWidth: options?.narrow ? 960 : 1280,
+    maxWidth: options?.narrow ? 920 : 1240,
     margin: '0 auto',
-    padding: `${DESIGN_TOKENS.space[7]}px ${DESIGN_TOKENS.space[6]}px ${DESIGN_TOKENS.space[8]}px`,
+    padding: `${DESIGN_TOKENS.space[7]}px ${DESIGN_TOKENS.space[5]}px ${DESIGN_TOKENS.space[8]}px`,
     display: 'grid',
     gap: DESIGN_TOKENS.space[6],
   };
@@ -117,11 +169,15 @@ export function panelStyle(options?: {
 }): CSSProperties {
   return {
     background: options?.muted ? DESIGN_TOKENS.color.surfaceMuted : DESIGN_TOKENS.color.surface,
-    border: `1px solid ${DESIGN_TOKENS.color.borderSubtle}`,
+    border: `${DESIGN_TOKENS.border.subtle}px solid ${DESIGN_TOKENS.color.borderSubtle}`,
     borderRadius: DESIGN_TOKENS.radius.xl,
-    padding: options?.padding ?? DESIGN_TOKENS.space[6],
+    padding: options?.padding ?? DESIGN_TOKENS.space[5],
     boxShadow: DESIGN_TOKENS.shadow.subtle,
-    transition: `border-color ${DESIGN_TOKENS.motion.fast}, background ${DESIGN_TOKENS.motion.fast}`,
+    transition: [
+      `border-color ${DESIGN_TOKENS.motion.fast}`,
+      `background ${DESIGN_TOKENS.motion.fast}`,
+      `box-shadow ${DESIGN_TOKENS.motion.fast}`,
+    ].join(', '),
     ...(options?.interactive
       ? {
           cursor: 'pointer',
@@ -137,7 +193,7 @@ export function sectionTitleStyle(): CSSProperties {
     fontSize: DESIGN_TOKENS.type.size.titleSm,
     fontWeight: DESIGN_TOKENS.type.weight.semibold,
     lineHeight: DESIGN_TOKENS.type.lineHeight.snug,
-    letterSpacing: DESIGN_TOKENS.type.tracking.normal,
+    letterSpacing: DESIGN_TOKENS.type.tracking.tight,
   };
 }
 
@@ -152,18 +208,22 @@ export function eyebrowStyle(): CSSProperties {
   };
 }
 
-export function bodyTextStyle(emphasis: 'primary' | 'secondary' | 'tertiary' = 'secondary'): CSSProperties {
+export function bodyTextStyle(
+  emphasis: 'primary' | 'secondary' | 'tertiary' = 'secondary',
+): CSSProperties {
   const color =
     emphasis === 'primary'
       ? DESIGN_TOKENS.color.textPrimary
       : emphasis === 'tertiary'
         ? DESIGN_TOKENS.color.textTertiary
         : DESIGN_TOKENS.color.textSecondary;
+
   return {
     margin: 0,
     color,
     fontSize: DESIGN_TOKENS.type.size.body,
     lineHeight: DESIGN_TOKENS.type.lineHeight.relaxed,
+    letterSpacing: DESIGN_TOKENS.type.tracking.normal,
   };
 }
 
@@ -173,6 +233,7 @@ export function metaTextStyle(): CSSProperties {
     color: DESIGN_TOKENS.color.textTertiary,
     fontSize: DESIGN_TOKENS.type.size.caption,
     lineHeight: DESIGN_TOKENS.type.lineHeight.normal,
+    letterSpacing: '0.01em',
   };
 }
 
@@ -184,35 +245,68 @@ export function buttonStyle(options?: {
   const tone = options?.tone || 'secondary';
   const size = options?.size || 'md';
   const disabled = Boolean(options?.disabled);
-  const sizeMap: Record<ButtonSize, { height: number; paddingX: number; fontSize: number; radius: number; minWidth?: number }> = {
-    sm: { height: DESIGN_TOKENS.control.heightSm, paddingX: 12, fontSize: DESIGN_TOKENS.type.size.label, radius: DESIGN_TOKENS.radius.md },
-    md: { height: DESIGN_TOKENS.control.heightMd, paddingX: 14, fontSize: DESIGN_TOKENS.type.size.label, radius: DESIGN_TOKENS.radius.md },
-    lg: { height: DESIGN_TOKENS.control.heightLg, paddingX: 16, fontSize: DESIGN_TOKENS.type.size.body, radius: DESIGN_TOKENS.radius.lg },
-    'icon-sm': { height: DESIGN_TOKENS.control.iconSm, paddingX: 0, fontSize: DESIGN_TOKENS.type.size.label, radius: DESIGN_TOKENS.radius.md, minWidth: DESIGN_TOKENS.control.iconSm },
-    'icon-md': { height: DESIGN_TOKENS.control.iconMd, paddingX: 0, fontSize: DESIGN_TOKENS.type.size.label, radius: DESIGN_TOKENS.radius.md, minWidth: DESIGN_TOKENS.control.iconMd },
+
+  const sizeMap: Record<
+    ButtonSize,
+    { height: number; paddingX: number; fontSize: number; radius: number; minWidth?: number }
+  > = {
+    sm: {
+      height: DESIGN_TOKENS.control.heightSm,
+      paddingX: 12,
+      fontSize: DESIGN_TOKENS.type.size.label,
+      radius: DESIGN_TOKENS.radius.md,
+    },
+    md: {
+      height: DESIGN_TOKENS.control.heightMd,
+      paddingX: 14,
+      fontSize: DESIGN_TOKENS.type.size.label,
+      radius: DESIGN_TOKENS.radius.md,
+    },
+    lg: {
+      height: DESIGN_TOKENS.control.heightLg,
+      paddingX: 16,
+      fontSize: DESIGN_TOKENS.type.size.body,
+      radius: DESIGN_TOKENS.radius.lg,
+    },
+    'icon-sm': {
+      height: DESIGN_TOKENS.control.iconSm,
+      paddingX: 0,
+      fontSize: DESIGN_TOKENS.type.size.label,
+      radius: DESIGN_TOKENS.radius.md,
+      minWidth: DESIGN_TOKENS.control.iconSm,
+    },
+    'icon-md': {
+      height: DESIGN_TOKENS.control.iconMd,
+      paddingX: 0,
+      fontSize: DESIGN_TOKENS.type.size.label,
+      radius: DESIGN_TOKENS.radius.md,
+      minWidth: DESIGN_TOKENS.control.iconMd,
+    },
   };
+
   const visualMap: Record<ButtonTone, CSSProperties> = {
     primary: {
-      background: DESIGN_TOKENS.color.accent,
+      background: DESIGN_TOKENS.color.accentStrong,
       color: DESIGN_TOKENS.color.textInverse,
-      border: `1px solid ${DESIGN_TOKENS.color.accent}`,
+      border: `${DESIGN_TOKENS.border.strong}px solid ${DESIGN_TOKENS.color.accentStrong}`,
     },
     secondary: {
       background: DESIGN_TOKENS.color.surface,
       color: DESIGN_TOKENS.color.textPrimary,
-      border: `1px solid ${DESIGN_TOKENS.color.borderStrong}`,
+      border: `${DESIGN_TOKENS.border.strong}px solid ${DESIGN_TOKENS.color.borderStrong}`,
     },
     ghost: {
       background: 'transparent',
       color: DESIGN_TOKENS.color.textSecondary,
-      border: `1px solid transparent`,
+      border: `${DESIGN_TOKENS.border.strong}px solid transparent`,
     },
     danger: {
       background: DESIGN_TOKENS.color.dangerSoft,
       color: DESIGN_TOKENS.color.danger,
-      border: `1px solid ${DESIGN_TOKENS.color.dangerSoft}`,
+      border: `${DESIGN_TOKENS.border.strong}px solid ${DESIGN_TOKENS.color.dangerSoft}`,
     },
   };
+
   return {
     height: sizeMap[size].height,
     minWidth: sizeMap[size].minWidth,
@@ -224,11 +318,16 @@ export function buttonStyle(options?: {
     lineHeight: 1,
     letterSpacing: DESIGN_TOKENS.type.tracking.normal,
     boxShadow: 'none',
-    transition: `background ${DESIGN_TOKENS.motion.fast}, border-color ${DESIGN_TOKENS.motion.fast}, color ${DESIGN_TOKENS.motion.fast}, opacity ${DESIGN_TOKENS.motion.fast}`,
+    transition: [
+      `background ${DESIGN_TOKENS.motion.fast}`,
+      `border-color ${DESIGN_TOKENS.motion.fast}`,
+      `color ${DESIGN_TOKENS.motion.fast}`,
+      `opacity ${DESIGN_TOKENS.motion.fast}`,
+    ].join(', '),
     ...visualMap[tone],
     ...(disabled
       ? {
-          opacity: 0.5,
+          opacity: DESIGN_TOKENS.interaction.disabledOpacity,
           cursor: 'not-allowed',
         }
       : {}),
@@ -243,15 +342,16 @@ export function inputStyle(options?: {
   return {
     width: '100%',
     minWidth: 0,
-    minHeight: options?.multiline ? 96 : DESIGN_TOKENS.control.heightMd,
+    minHeight: options?.multiline ? 88 : DESIGN_TOKENS.control.heightMd,
     padding: options?.multiline ? `${DESIGN_TOKENS.space[4]}px` : `0 ${DESIGN_TOKENS.space[4]}px`,
     borderRadius: DESIGN_TOKENS.radius.md,
-    border: `1px solid ${options?.invalid ? DESIGN_TOKENS.color.danger : DESIGN_TOKENS.color.borderStrong}`,
+    border: `${DESIGN_TOKENS.border.strong}px solid ${options?.invalid ? DESIGN_TOKENS.color.danger : DESIGN_TOKENS.color.borderStrong}`,
     background: options?.disabled ? DESIGN_TOKENS.color.surfaceSubtle : DESIGN_TOKENS.color.surface,
     color: DESIGN_TOKENS.color.textPrimary,
     fontFamily: DESIGN_TOKENS.type.family,
     fontSize: DESIGN_TOKENS.type.size.body,
     lineHeight: DESIGN_TOKENS.type.lineHeight.normal,
+    letterSpacing: DESIGN_TOKENS.type.tracking.normal,
     outline: 'none',
     boxShadow: 'none',
   };
@@ -262,40 +362,42 @@ export function badgeStyle(tone: BadgeTone = 'neutral'): CSSProperties {
     neutral: {
       background: DESIGN_TOKENS.color.surfaceSubtle,
       color: DESIGN_TOKENS.color.textSecondary,
-      border: `1px solid ${DESIGN_TOKENS.color.borderSubtle}`,
+      border: `${DESIGN_TOKENS.border.subtle}px solid ${DESIGN_TOKENS.color.borderSubtle}`,
     },
     accent: {
       background: DESIGN_TOKENS.color.accentSoft,
       color: DESIGN_TOKENS.color.accentText,
-      border: `1px solid ${DESIGN_TOKENS.color.accentSoft}`,
+      border: `${DESIGN_TOKENS.border.subtle}px solid ${DESIGN_TOKENS.color.accentSoft}`,
     },
     success: {
       background: DESIGN_TOKENS.color.successSoft,
       color: DESIGN_TOKENS.color.success,
-      border: `1px solid ${DESIGN_TOKENS.color.successSoft}`,
+      border: `${DESIGN_TOKENS.border.subtle}px solid ${DESIGN_TOKENS.color.successSoft}`,
     },
     warning: {
       background: DESIGN_TOKENS.color.warningSoft,
       color: DESIGN_TOKENS.color.warning,
-      border: `1px solid ${DESIGN_TOKENS.color.warningSoft}`,
+      border: `${DESIGN_TOKENS.border.subtle}px solid ${DESIGN_TOKENS.color.warningSoft}`,
     },
     danger: {
       background: DESIGN_TOKENS.color.dangerSoft,
       color: DESIGN_TOKENS.color.danger,
-      border: `1px solid ${DESIGN_TOKENS.color.dangerSoft}`,
+      border: `${DESIGN_TOKENS.border.subtle}px solid ${DESIGN_TOKENS.color.dangerSoft}`,
     },
   };
+
   return {
     display: 'inline-flex',
     alignItems: 'center',
     justifyContent: 'center',
     gap: DESIGN_TOKENS.space[2],
-    minHeight: 24,
+    minHeight: 22,
     paddingInline: DESIGN_TOKENS.space[3],
     borderRadius: DESIGN_TOKENS.radius.pill,
     fontSize: DESIGN_TOKENS.type.size.caption,
     fontWeight: DESIGN_TOKENS.type.weight.medium,
     lineHeight: 1,
+    letterSpacing: '0.01em',
     ...mapping[tone],
   };
 }
@@ -324,8 +426,8 @@ export function listRowStyle(options?: { interactive?: boolean }): CSSProperties
     alignItems: 'flex-start',
     justifyContent: 'space-between',
     gap: DESIGN_TOKENS.space[4],
-    padding: `${DESIGN_TOKENS.space[5]}px ${DESIGN_TOKENS.space[6]}px`,
-    borderBottom: `1px solid ${DESIGN_TOKENS.color.borderSubtle}`,
+    padding: `${DESIGN_TOKENS.space[4]}px ${DESIGN_TOKENS.space[5]}px`,
+    borderBottom: `${DESIGN_TOKENS.border.subtle}px solid ${DESIGN_TOKENS.color.borderSubtle}`,
     background: DESIGN_TOKENS.color.surface,
     transition: `background ${DESIGN_TOKENS.motion.fast}, border-color ${DESIGN_TOKENS.motion.fast}`,
     ...(options?.interactive
@@ -336,9 +438,13 @@ export function listRowStyle(options?: { interactive?: boolean }): CSSProperties
   };
 }
 
-export function iconButtonStyle(options?: { tone?: 'neutral' | 'danger'; disabled?: boolean }): CSSProperties {
+export function iconButtonStyle(options?: {
+  tone?: 'neutral' | 'danger';
+  disabled?: boolean;
+}): CSSProperties {
   const tone = options?.tone || 'neutral';
   const disabled = Boolean(options?.disabled);
+
   return {
     width: DESIGN_TOKENS.control.iconMd,
     minWidth: DESIGN_TOKENS.control.iconMd,
@@ -347,13 +453,18 @@ export function iconButtonStyle(options?: { tone?: 'neutral' | 'danger'; disable
     alignItems: 'center',
     justifyContent: 'center',
     borderRadius: DESIGN_TOKENS.radius.md,
-    border: `1px solid ${tone === 'danger' ? DESIGN_TOKENS.color.dangerSoft : DESIGN_TOKENS.color.borderSubtle}`,
+    border: `${DESIGN_TOKENS.border.subtle}px solid ${tone === 'danger' ? DESIGN_TOKENS.color.dangerSoft : DESIGN_TOKENS.color.borderSubtle}`,
     background: tone === 'danger' ? DESIGN_TOKENS.color.dangerSoft : DESIGN_TOKENS.color.surface,
     color: tone === 'danger' ? DESIGN_TOKENS.color.danger : DESIGN_TOKENS.color.textSecondary,
-    transition: `background ${DESIGN_TOKENS.motion.fast}, border-color ${DESIGN_TOKENS.motion.fast}, color ${DESIGN_TOKENS.motion.fast}, opacity ${DESIGN_TOKENS.motion.fast}`,
+    transition: [
+      `background ${DESIGN_TOKENS.motion.fast}`,
+      `border-color ${DESIGN_TOKENS.motion.fast}`,
+      `color ${DESIGN_TOKENS.motion.fast}`,
+      `opacity ${DESIGN_TOKENS.motion.fast}`,
+    ].join(', '),
     ...(disabled
       ? {
-          opacity: 0.5,
+          opacity: DESIGN_TOKENS.interaction.disabledOpacity,
           cursor: 'not-allowed',
         }
       : {}),
@@ -362,11 +473,11 @@ export function iconButtonStyle(options?: { tone?: 'neutral' | 'danger'; disable
 
 export function statCardStyle(): CSSProperties {
   return {
-    ...panelStyle({ padding: DESIGN_TOKENS.space[5] }),
+    ...panelStyle({ padding: DESIGN_TOKENS.space[4] }),
     display: 'grid',
     gap: DESIGN_TOKENS.space[2],
     alignContent: 'start',
-    minHeight: 132,
+    minHeight: 112,
   };
 }
 

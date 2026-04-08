@@ -152,6 +152,8 @@ export type ChatSessionRecord = {
   title: string;
   createdAt: string;
   updatedAt: string;
+  masterAgentInstallId?: string | null;
+  metadata?: Record<string, unknown> | null;
   messages: ChatMessageRecord[];
 };
 
@@ -247,12 +249,17 @@ export function buildChatSessionTitle(messages: ChatMessageRecord[]): string {
   return singleLine.length > 48 ? `${singleLine.slice(0, 45).trimEnd()}...` : singleLine;
 }
 
-export function createEmptyChatSession(now = new Date().toISOString()): ChatSessionRecord {
+export function createEmptyChatSession(
+  now = new Date().toISOString(),
+  overrides?: Partial<Pick<ChatSessionRecord, 'id' | 'title' | 'masterAgentInstallId' | 'metadata'>>,
+): ChatSessionRecord {
   return {
-    id: createChatId('session'),
-    title: EMPTY_CHAT_SESSION_TITLE,
+    id: String(overrides?.id || '').trim() || createChatId('session'),
+    title: String(overrides?.title || '').trim() || EMPTY_CHAT_SESSION_TITLE,
     createdAt: now,
     updatedAt: now,
+    masterAgentInstallId: typeof overrides?.masterAgentInstallId === 'string' ? overrides.masterAgentInstallId : null,
+    metadata: overrides?.metadata && typeof overrides.metadata === 'object' ? { ...overrides.metadata } : null,
     messages: [],
   };
 }
@@ -345,6 +352,8 @@ export function threadRecordToChatSession(thread: ThreadRecord): ChatSessionReco
     title: String(thread.title || '').trim() || buildChatSessionTitle(turns),
     createdAt: String(thread.created_at || thread.updated_at || new Date().toISOString()).trim() || new Date().toISOString(),
     updatedAt: String(thread.updated_at || thread.last_turn_at || thread.created_at || new Date().toISOString()).trim() || new Date().toISOString(),
+    masterAgentInstallId: typeof thread.master_agent_install_id === 'string' ? thread.master_agent_install_id : null,
+    metadata: thread.metadata && typeof thread.metadata === 'object' ? { ...thread.metadata } : null,
     messages: dedupeChatMessages(turns),
   };
 }

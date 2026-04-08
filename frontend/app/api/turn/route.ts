@@ -8,7 +8,7 @@ import {
   requireControlPlaneSession,
   requireControlPlaneWorkspaceAccess,
 } from '@/lib/server/controlPlaneSession';
-import { runtimeAuthorizedFetch } from '@/lib/server/runtimeControlPlane';
+import { runtimeAuthorizedFetch, runtimeJsonRequest } from '@/lib/server/runtimeControlPlane';
 
 export const dynamic = 'force-dynamic';
 
@@ -36,14 +36,39 @@ async function stampTurnOwnerBody(request: NextRequest, rawBody: string): Promis
   if (!ownerUserId) return rawBody;
 
   const identity = await getAdminBrowserIdentity(request);
+  const workspaceId = String(parsed.workspace_id || 'default').trim() || 'default';
+  let masterAgentInstallId = String((parsed.context_hints?.metadata as { master_agent_install_id?: unknown } | undefined)?.master_agent_install_id || '').trim();
+  let threadId = String(parsed.thread_id || '').trim();
+  if (!masterAgentInstallId || !threadId) {
+    try {
+      const { payload } = await runtimeJsonRequest(
+        `/agent-registry/chat-context?workspace_id=${encodeURIComponent(workspaceId)}`,
+        { method: 'GET' },
+      );
+      const context = payload && typeof payload === 'object' ? payload as Record<string, unknown> : {};
+      const masterInstall = context.master_install && typeof context.master_install === 'object'
+        ? context.master_install as Record<string, unknown>
+        : {};
+      if (!masterAgentInstallId) {
+        masterAgentInstallId = String(masterInstall.id || '').trim();
+      }
+      if (!threadId) {
+        threadId = String(context.thread_id || '').trim();
+      }
+    } catch {
+      // Leave the request intact when Sage context is unavailable.
+    }
+  }
   const metadata = {
     ...asRecord(parsed.context_hints?.metadata),
     owner_user_id: ownerUserId,
     ...(identity?.email ? { owner_email: identity.email } : {}),
+    ...(masterAgentInstallId ? { master_agent_install_id: masterAgentInstallId } : {}),
   };
 
   return JSON.stringify({
     ...parsed,
+    ...(threadId ? { thread_id: threadId } : {}),
     context_hints: {
       ...(parsed.context_hints || {}),
       metadata,
@@ -60,15 +85,15 @@ export async function POST(request: NextRequest) {
   if (roleFailure) return roleFailure;
 
   const rawBody = await request.text();
-  const stampedBody = await stampTurnOwnerBody(request, rawBody);
-  const turn = parseTurnPayload(stampedBody);
+  const rawTurn = parseTurnPayload(rawBody);
   const workspaceFailure = await requireControlPlaneWorkspaceAccess(
     request,
-    String(turn?.workspace_id || 'default').trim() || 'default',
+    String(rawTurn?.workspace_id || 'default').trim() || 'default',
     'member',
     'turn.execute',
   );
   if (workspaceFailure) return workspaceFailure;
+  const stampedBody = await stampTurnOwnerBody(request, rawBody);
 
   try {
     const forwardedHeaders: Record<string, string> = {};

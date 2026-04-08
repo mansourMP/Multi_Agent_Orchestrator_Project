@@ -99,14 +99,19 @@ function normalizeRememberedGrants(value: unknown): {
 }
 
 type WorkflowExecutionShape = {
-    id?: string;
+    id: string;
     name?: string;
     description?: string;
+    tenantId?: string;
     workspaceId?: string;
+    currentVersionId?: string;
+    publishedVersionId?: string;
+    workflowVersionId?: string;
+    versionNumber?: number;
     definition?: {
         version?: string;
-        nodes?: unknown[];
-        edges?: unknown[];
+        nodes?: Record<string, unknown>[];
+        edges?: Record<string, unknown>[];
         defaults?: Record<string, unknown>;
         resources?: Record<string, unknown>;
         policy?: Record<string, unknown>;
@@ -134,13 +139,37 @@ export interface WorkflowValidationSummary {
 }
 
 export interface WorkflowRecordShape {
-    id?: string;
+    id: string;
     name?: string;
     description?: string;
+    tenantId?: string;
     workspaceId?: string;
     status?: string;
+    currentVersionId?: string;
+    publishedVersionId?: string;
+    workflowVersionId?: string;
+    versionNumber?: number;
     definition?: WorkflowExecutionShape['definition'];
     validation?: WorkflowValidationSummary;
+}
+
+function workflowCollectionPath(workspaceId?: string | null): string {
+    const token = String(workspaceId || '').trim();
+    return token
+        ? `/api/workflows?workspaceId=${encodeURIComponent(token)}`
+        : '/api/workflows';
+}
+
+function normalizeWorkflowList(payload: unknown): WorkflowRecordShape[] {
+    const normalizeItems = (items: unknown[]): WorkflowRecordShape[] =>
+        items.filter((item): item is WorkflowRecordShape => isRecord(item) && typeof item.id === 'string' && item.id.trim().length > 0);
+    if (Array.isArray(payload)) {
+        return normalizeItems(payload);
+    }
+    const items = Array.isArray((payload as { items?: unknown[] } | null | undefined)?.items)
+        ? (payload as { items: unknown[] }).items
+        : [];
+    return normalizeItems(items);
 }
 
 function extractWorkflowRunConfig(workflow: WorkflowExecutionShape, workflowId: string) {
@@ -200,7 +229,8 @@ function extractWorkflowRunConfig(workflow: WorkflowExecutionShape, workflowId: 
     ].filter(Boolean).join('\n');
 
     return {
-        workspaceId: String(workflow.workspaceId || meta.workspace_id || 'default').trim() || 'default',
+        workspaceId: String(workflow.workspaceId || meta.workspace_id || '').trim(),
+        workflowVersionId: String(workflow.currentVersionId || workflow.workflowVersionId || '').trim(),
         provider,
         model,
         userGoal,
@@ -223,8 +253,9 @@ function extractWorkflowRunConfig(workflow: WorkflowExecutionShape, workflowId: 
     };
 }
 
-export async function fetchWorkflows(workspaceId: string = 'default') {
-    return internalApiFetch(`/api/workflows?workspaceId=${encodeURIComponent(workspaceId)}`);
+export async function fetchWorkflows(workspaceId?: string | null): Promise<WorkflowRecordShape[]> {
+    const payload = await internalApiFetch(workflowCollectionPath(workspaceId));
+    return normalizeWorkflowList(payload);
 }
 
 export interface BuilderConnectorManifestItem {
@@ -264,10 +295,10 @@ export async function fetchBuilderConnectorManifests(): Promise<BuilderConnector
 export async function createWorkflow(
     name: string,
     description: string,
-    workspaceId: string = 'default',
+    workspaceId?: string | null,
     definition: unknown = { nodes: [], edges: [] }
 ) : Promise<WorkflowRecordShape> {
-    return internalApiFetch(`/api/workflows?workspaceId=${encodeURIComponent(workspaceId)}`, {
+    return internalApiFetch(workflowCollectionPath(workspaceId), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -305,7 +336,8 @@ export async function runWorkflow(id: string, credentials: unknown[] = [], varia
         body: JSON.stringify({
             engine: 'orion',
             workflow_id: id,
-            workspace_id: config.workspaceId,
+            workflow_version_id: config.workflowVersionId || undefined,
+            workspace_id: config.workspaceId || undefined,
             user_goal: config.userGoal,
             business_plan: config.businessPlan,
             agent_role: config.agentRole,
@@ -314,7 +346,8 @@ export async function runWorkflow(id: string, credentials: unknown[] = [], varia
             credential_id: config.credentialId || undefined,
             agents: config.agents,
             metadata: {
-                workspace_id: config.workspaceId,
+                workspace_id: config.workspaceId || undefined,
+                workflow_version_id: config.workflowVersionId || undefined,
                 origin: 'workflow_library',
                 agent_role: config.agentRole,
                 provider: config.provider,
@@ -390,8 +423,211 @@ export async function fetchExecution(id: string) {
     return internalApiFetch(`/api/executions/${encodeURIComponent(id)}`);
 }
 
-export async function fetchAgents() {
-    return internalApiFetch('/api/agents');
+export type AgentCapabilityToggle = {
+    id: string;
+    label: string;
+    description?: string;
+    default_enabled?: boolean;
+};
+
+export type AgentDefinitionRecord = {
+    id: string;
+    tenant_id?: string | null;
+    workspace_id?: string | null;
+    slug?: string | null;
+    name: string;
+    description?: string;
+    agent_kind?: string;
+    visibility?: string;
+    status?: string;
+    category?: string | null;
+    icon?: string | null;
+    current_version?: {
+        id?: string | null;
+        version_number?: number;
+        status?: string;
+        manifest?: Record<string, unknown>;
+        capability_manifest?: {
+            toggles?: AgentCapabilityToggle[];
+        } | Record<string, unknown>;
+        policy_manifest?: Record<string, unknown>;
+        placement_manifest?: Record<string, unknown>;
+    } | null;
+};
+
+export type RuntimeProfileRecord = {
+    id: string;
+    tenant_id?: string | null;
+    workspace_id?: string | null;
+    slug?: string | null;
+    label?: string | null;
+    runtime_class?: string;
+    placement_mode?: string;
+    runtime_id?: string | null;
+    machine_id?: string | null;
+    default_execution_target?: string;
+    supported_capabilities?: string[];
+    root_folder_uri?: string | null;
+    allowed_connector_scopes?: string[];
+    status?: string;
+};
+
+export type WorkspaceAgentInstallRecord = {
+    id: string;
+    tenant_id?: string | null;
+    workspace_id?: string | null;
+    agent_definition_id?: string | null;
+    agent_definition_version_id?: string | null;
+    label?: string | null;
+    status?: string;
+    enabled?: boolean;
+    runtime_profile_id?: string | null;
+    compiled_workflow_version_id?: string | null;
+    root_folder_uri?: string | null;
+    tool_toggles?: Record<string, boolean>;
+    folder_grants?: string[];
+    connector_bindings?: Record<string, unknown>;
+    memory_scope_overrides?: Record<string, unknown>;
+    policy_context_overrides?: Record<string, unknown>;
+    metadata?: Record<string, unknown>;
+    thread_id?: string | null;
+    agent_definition?: {
+        id?: string | null;
+        slug?: string | null;
+        name?: string;
+        description?: string;
+        category?: string | null;
+        icon?: string | null;
+        agent_kind?: string;
+    } | null;
+    agent_definition_version?: {
+        id?: string | null;
+        version_number?: number;
+        manifest?: Record<string, unknown>;
+        capability_manifest?: {
+            toggles?: AgentCapabilityToggle[];
+        } | Record<string, unknown>;
+        policy_manifest?: Record<string, unknown>;
+        placement_manifest?: Record<string, unknown>;
+    } | null;
+    runtime_profile?: RuntimeProfileRecord | null;
+};
+
+export type MasterChatContextRecord = {
+    workspace_id: string;
+    tenant_id?: string | null;
+    thread_id: string;
+    master_install: WorkspaceAgentInstallRecord | null;
+    specialist_installs: WorkspaceAgentInstallRecord[];
+    thread?: Record<string, unknown> | null;
+};
+
+function normalizeDefinitionList(payload: unknown): AgentDefinitionRecord[] {
+    const items = Array.isArray((payload as { items?: unknown[] } | null | undefined)?.items)
+        ? (payload as { items: unknown[] }).items
+        : [];
+    return items.filter((item): item is AgentDefinitionRecord => isRecord(item) && typeof item.id === 'string' && typeof item.name === 'string');
+}
+
+function normalizeInstallList(payload: unknown): WorkspaceAgentInstallRecord[] {
+    const items = Array.isArray((payload as { items?: unknown[] } | null | undefined)?.items)
+        ? (payload as { items: unknown[] }).items
+        : [];
+    return items.filter((item): item is WorkspaceAgentInstallRecord => isRecord(item) && typeof item.id === 'string');
+}
+
+function normalizeRuntimeProfileList(payload: unknown): RuntimeProfileRecord[] {
+    const items = Array.isArray((payload as { items?: unknown[] } | null | undefined)?.items)
+        ? (payload as { items: unknown[] }).items
+        : [];
+    return items.filter((item): item is RuntimeProfileRecord => isRecord(item) && typeof item.id === 'string');
+}
+
+function normalizeMasterChatContext(payload: unknown): MasterChatContextRecord {
+    const record = isRecord(payload) ? payload : {};
+    return {
+        workspace_id: String(record.workspace_id || 'default').trim() || 'default',
+        tenant_id: typeof record.tenant_id === 'string' ? record.tenant_id : null,
+        thread_id: String(record.thread_id || '').trim(),
+        master_install: isRecord(record.master_install) ? record.master_install as WorkspaceAgentInstallRecord : null,
+        specialist_installs: normalizeInstallList({ items: Array.isArray(record.specialist_installs) ? record.specialist_installs : [] }),
+        thread: isRecord(record.thread) ? record.thread : null,
+    };
+}
+
+export async function fetchAgentStore(workspaceId: string): Promise<AgentDefinitionRecord[]> {
+    const query = new URLSearchParams({ workspace_id: workspaceId });
+    const payload = await internalApiFetch(`/api/store/agents?${query.toString()}`);
+    return normalizeDefinitionList(payload);
+}
+
+export async function fetchAgentDefinition(id: string, workspaceId: string): Promise<AgentDefinitionRecord> {
+    const query = new URLSearchParams({ workspace_id: workspaceId });
+    return internalApiFetch(`/api/store/agents/${encodeURIComponent(id)}?${query.toString()}`);
+}
+
+export async function fetchRuntimeProfiles(workspaceId: string): Promise<RuntimeProfileRecord[]> {
+    const query = new URLSearchParams({ workspace_id: workspaceId });
+    const payload = await internalApiFetch(`/api/runtime-profiles?${query.toString()}`);
+    return normalizeRuntimeProfileList(payload);
+}
+
+export async function fetchAgents(workspaceId: string): Promise<WorkspaceAgentInstallRecord[]> {
+    const query = new URLSearchParams({ workspace_id: workspaceId });
+    const payload = await internalApiFetch(`/api/agents?${query.toString()}`);
+    return normalizeInstallList(payload);
+}
+
+export async function fetchAgentInstall(id: string, workspaceId: string): Promise<WorkspaceAgentInstallRecord> {
+    const query = new URLSearchParams({ workspace_id: workspaceId });
+    return internalApiFetch(`/api/agents/${encodeURIComponent(id)}?${query.toString()}`);
+}
+
+export async function fetchMasterChatContext(workspaceId: string): Promise<MasterChatContextRecord> {
+    const query = new URLSearchParams({ workspace_id: workspaceId });
+    const payload = await internalApiFetch(`/api/chat/master-context?${query.toString()}`);
+    return normalizeMasterChatContext(payload);
+}
+
+export type AgentInstallUpsertPayload = {
+    workspace_id: string;
+    agent_definition_id?: string;
+    agent_definition_version_id?: string;
+    label?: string;
+    runtime_profile_id?: string;
+    root_folder_uri?: string;
+    tool_toggles?: Record<string, boolean>;
+    folder_grants?: string[];
+    connector_bindings?: Record<string, unknown>;
+    memory_scope_overrides?: Record<string, unknown>;
+    policy_context_overrides?: Record<string, unknown>;
+    enabled?: boolean;
+    status?: string;
+    metadata?: Record<string, unknown>;
+};
+
+export async function createAgentInstall(payload: AgentInstallUpsertPayload): Promise<WorkspaceAgentInstallRecord> {
+    return internalApiFetch('/api/agents', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+    });
+}
+
+export async function updateAgentInstall(id: string, payload: AgentInstallUpsertPayload): Promise<WorkspaceAgentInstallRecord> {
+    return internalApiFetch(`/api/agents/${encodeURIComponent(id)}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+    });
+}
+
+export async function runInstalledAgent(installId: string, payload: Record<string, unknown> = {}) {
+    return internalApiFetch(`/api/agents/${encodeURIComponent(installId)}/run`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+    });
 }
 
 export async function hardKillRun(runId: string, reason?: string) {

@@ -2170,6 +2170,8 @@ export function usePlatformApi(
     options?: {
       reasoningEffort?: string | null;
       threadId?: string | null;
+      masterAgentInstallId?: string | null;
+      runtimeProfileId?: string | null;
       priorMessages?: OperatorChatPriorMessagePayload[];
       onChunk?: (delta: string) => void;
       onSteps?: (steps: OperatorChatStepPayload[]) => void;
@@ -2191,6 +2193,12 @@ export function usePlatformApi(
       metadata: {
         source: 'direct_chat',
         thread_id: clientSessionKey,
+        ...(String(options?.masterAgentInstallId || '').trim()
+          ? { master_agent_install_id: String(options?.masterAgentInstallId || '').trim() }
+          : {}),
+        ...(String(options?.runtimeProfileId || '').trim()
+          ? { runtime_profile_id: String(options?.runtimeProfileId || '').trim() }
+          : {}),
       },
     });
     let streamedReply = '';
@@ -2273,6 +2281,14 @@ export function usePlatformApi(
             reasoning_effort: options?.reasoningEffort || undefined,
             prior_messages: priorMessages.length > 0 ? priorMessages : undefined,
             approved_action: options?.approvedAction || undefined,
+            metadata: {
+              ...(String(options?.masterAgentInstallId || '').trim()
+                ? { master_agent_install_id: String(options?.masterAgentInstallId || '').trim() }
+                : {}),
+              ...(String(options?.runtimeProfileId || '').trim()
+                ? { runtime_profile_id: String(options?.runtimeProfileId || '').trim() }
+                : {}),
+            },
           },
           policy_context: policyContext,
         };

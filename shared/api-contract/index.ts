@@ -128,6 +128,7 @@ export type ThreadRecord = {
   tenant_id?: string;
   workspace_id?: string;
   owner_user_id?: string | null;
+  master_agent_install_id?: string | null;
   channel?: string | null;
   title: string;
   status?: string | null;

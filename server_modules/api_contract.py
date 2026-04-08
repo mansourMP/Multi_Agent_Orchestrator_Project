@@ -200,6 +200,7 @@ class ApiThreadRecord(BaseModel):
     tenant_id: Optional[str] = None
     workspace_id: Optional[str] = None
     owner_user_id: Optional[str] = None
+    master_agent_install_id: Optional[str] = None
     channel: Optional[str] = None
     title: str
     status: Optional[str] = None

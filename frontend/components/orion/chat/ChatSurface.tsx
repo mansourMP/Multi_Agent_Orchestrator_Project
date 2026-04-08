@@ -84,6 +84,7 @@ type ChatSurfaceProps = {
   selectedSessionId: string | null;
   onSelectSession: (sessionId: string) => void;
   onNewChat: () => void;
+  historyEnabled?: boolean;
   goal: string;
   setGoal: (value: string) => void;
   primaryGoalRef: RefObject<HTMLTextAreaElement | null>;
@@ -681,6 +682,7 @@ export function ChatSurface({
   selectedSessionId,
   onSelectSession,
   onNewChat,
+  historyEnabled = true,
   goal,
   setGoal,
   primaryGoalRef,
@@ -1356,10 +1358,16 @@ export function ChatSurface({
   }, [identityDrawerOpen, onCloseIdentityDrawer]);
 
   useEffect(() => {
+    if (!historyEnabled) return;
     const handler = () => setHistoryDrawerOpen(true);
     window.addEventListener('orion:open-history', handler);
     return () => window.removeEventListener('orion:open-history', handler);
-  }, []);
+  }, [historyEnabled]);
+
+  useEffect(() => {
+    if (historyEnabled) return;
+    setHistoryDrawerOpen(false);
+  }, [historyEnabled]);
 
   const handleToggleArtifacts = useCallback(() => {
     if (artifacts.length === 0) return;
@@ -1435,7 +1443,7 @@ export function ChatSurface({
       suppressHydrationWarning
     >
       <div className="orion-chat-v2-workspace" ref={workspaceRef}>
-        {historyDrawerOpen ? (
+        {historyEnabled && historyDrawerOpen ? (
           <>
             <button
               type="button"
@@ -1501,7 +1509,7 @@ export function ChatSurface({
           <div className="orion-chat-v2-thread-shell" ref={threadRef}>
             {!hasMessages ? (
               <div className="orion-chat-v2-compact-empty">
-                <h1 className="orion-chat-v2-compact-title">Start a new chat</h1>
+                <h1 className="orion-chat-v2-compact-title">{historyEnabled ? 'Start a new chat' : `Talk to ${targetLabel}`}</h1>
                 <p className="orion-chat-v2-compact-copy">
                   Ask a question, describe a task, or tell {targetLabel} what to do next.
                 </p>

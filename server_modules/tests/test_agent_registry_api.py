@@ -21,6 +21,12 @@ class _FakeApp:
     def post(self, path, **kwargs):
         return self._register("POST", path, **kwargs)
 
+    def get(self, path, **kwargs):
+        return self._register("GET", path, **kwargs)
+
+    def patch(self, path, **kwargs):
+        return self._register("PATCH", path, **kwargs)
+
 
 class AgentRegistryApiRouteTests(unittest.TestCase):
     def test_register_agent_registry_routes_adds_install_run_endpoint(self):
@@ -32,6 +38,14 @@ class AgentRegistryApiRouteTests(unittest.TestCase):
         try:
             app = _FakeApp()
             agent_registry_api.register_agent_registry_routes(app)
+            self.assertIn(("GET", "/agent-registry/definitions"), app.routes)
+            self.assertIn(("GET", "/agent-registry/definitions/{definition_id}"), app.routes)
+            self.assertIn(("GET", "/agent-registry/runtime-profiles"), app.routes)
+            self.assertIn(("GET", "/agent-registry/chat-context"), app.routes)
+            self.assertIn(("GET", "/agent-registry/installs"), app.routes)
+            self.assertIn(("POST", "/agent-registry/installs"), app.routes)
+            self.assertIn(("GET", "/agent-registry/installs/{install_id}"), app.routes)
+            self.assertIn(("PATCH", "/agent-registry/installs/{install_id}"), app.routes)
             self.assertIn(("POST", "/agents/{install_id}/run"), app.routes)
         finally:
             if previous_server is None:
@@ -107,6 +121,91 @@ class AgentRegistryApiRouteTests(unittest.TestCase):
             self.assertEqual(metadata["runtime_profile_id"], "profile-1")
             self.assertEqual(metadata["workflow_definition"]["version"], "empyralist.workflow.v2")
             self.assertEqual(turn_request.thread_id, "thread-1")
+        finally:
+            if previous_server is None:
+                sys.modules.pop("server", None)
+            else:
+                sys.modules["server"] = previous_server
+
+    def test_create_install_compiles_before_return(self):
+        fake_server = types.ModuleType("server")
+        fake_server.require_api_key = object()
+
+        previous_server = sys.modules.get("server")
+        sys.modules["server"] = fake_server
+        try:
+            app = _FakeApp()
+            agent_registry_api.register_agent_registry_routes(app)
+            route = app.routes[("POST", "/agent-registry/installs")]
+            install_record = {
+                "id": "install-1",
+                "tenant_id": "tenant-1",
+                "workspace_id": "workspace-1",
+                "label": "Executive Assistant",
+            }
+            with (
+                patch("server_modules.agent_registry_api.enforce_workspace_access", return_value="workspace-1"),
+                patch("server_modules.agent_registry_api.agent_registry_repository.create_workspace_agent_install", new=AsyncMock(return_value=install_record)) as create_mock,
+                patch("server_modules.agent_registry_api.template_compiler_service.ensure_install_compiled_artifact", new=AsyncMock(return_value={"install": install_record})) as compile_mock,
+            ):
+                result = asyncio.run(
+                    route(
+                        agent_registry_api.AgentInstallUpsertRequest(
+                            workspace_id="workspace-1",
+                            agent_definition_id="agentdef-1",
+                            label="Executive Assistant",
+                        ),
+                        current_user={"user_id": "user-1", "tenant_id": "tenant-1", "role": "owner", "is_admin": True},
+                    )
+                )
+            self.assertEqual(result["id"], "install-1")
+            create_mock.assert_awaited_once()
+            compile_mock.assert_awaited_once()
+        finally:
+            if previous_server is None:
+                sys.modules.pop("server", None)
+            else:
+                sys.modules["server"] = previous_server
+
+    def test_master_chat_context_returns_sage_and_specialists(self):
+        fake_server = types.ModuleType("server")
+        fake_server.require_api_key = object()
+
+        previous_server = sys.modules.get("server")
+        sys.modules["server"] = fake_server
+        try:
+            app = _FakeApp()
+            agent_registry_api.register_agent_registry_routes(app)
+            route = app.routes[("GET", "/agent-registry/chat-context")]
+            master_install = {
+                "id": "install-sage",
+                "label": "Sage",
+                "workspace_id": "workspace-1",
+                "tenant_id": "tenant-1",
+            }
+            specialists = [
+                {"id": "install-research", "label": "Web Researcher", "enabled": True, "status": "active"},
+                {"id": "install-desktop", "label": "Desktop Operator", "enabled": False, "status": "active"},
+            ]
+            thread_record = {"id": "thread-sage", "title": "Sage", "turns": []}
+            with (
+                patch("server_modules.agent_registry_api.enforce_workspace_access", return_value="workspace-1"),
+                patch("server_modules.agent_registry_api.agent_registry_repository.get_workspace_master_agent_install", new=AsyncMock(return_value=master_install)),
+                patch("server_modules.agent_registry_api.agent_registry_repository.list_workspace_agent_installs", new=AsyncMock(return_value=specialists)),
+                patch("server_modules.agent_registry_api.agent_registry_repository.build_master_thread_id", return_value="thread-sage"),
+                patch("server_modules.agent_registry_api.thread_service.ensure_master_thread", new=AsyncMock(return_value=thread_record)),
+                patch("server_modules.agent_registry_api.thread_service.get_thread", new=AsyncMock(return_value=thread_record)),
+            ):
+                result = asyncio.run(
+                    route(
+                        workspace_id="workspace-1",
+                        current_user={"user_id": "user-1", "tenant_id": "tenant-1", "role": "owner", "is_admin": True},
+                    )
+                )
+            self.assertEqual(result["thread_id"], "thread-sage")
+            self.assertEqual(result["master_install"]["id"], "install-sage")
+            self.assertEqual(len(result["specialist_installs"]), 1)
+            self.assertEqual(result["specialist_installs"][0]["id"], "install-research")
         finally:
             if previous_server is None:
                 sys.modules.pop("server", None)

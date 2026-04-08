@@ -164,6 +164,7 @@ def normalize_thread_record(record: Dict[str, Any]) -> Dict[str, Any]:
         "tenant_id": str(payload.get("tenant_id") or "").strip() or None,
         "workspace_id": str(payload.get("workspace_id") or "").strip() or None,
         "owner_user_id": str(payload.get("owner_user_id") or "").strip() or None,
+        "master_agent_install_id": str(payload.get("master_agent_install_id") or "").strip() or None,
         "channel": str(payload.get("channel") or "").strip() or None,
         "title": str(payload.get("title") or "").strip() or "New chat",
         "status": str(payload.get("status") or "").strip() or None,

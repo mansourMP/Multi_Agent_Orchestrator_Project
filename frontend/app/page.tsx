@@ -29,8 +29,7 @@ import {
   dedupeChatMessages,
   isDeprecatedSystemChatMessage,
   normalizeChatContent,
-  sanitizeChatStore,
-  threadRecordsToChatStore,
+  threadRecordToChatSession,
   upsertSessionMessages,
   type ChatContextUsedRecord,
   type ChatMessageActionRecord,
@@ -40,7 +39,8 @@ import {
   type ChatSessionSelectDetail,
   type ChatStoreRecord,
 } from '@/components/orion/chat/chatSchema';
-import { apiClient } from '@/lib/api-client';
+import { fetchMasterChatContext, type WorkspaceAgentInstallRecord } from '@/lib/api';
+import type { ThreadRecord } from '@shared/api-contract';
 import { WorkbenchShell } from '../components/orion/workbench/WorkbenchShell';
 import { type AuthenticatedEventStreamConnection } from '@/lib/authenticatedEventStream';
 import {
@@ -76,8 +76,6 @@ const DEFAULT_AGENT_PROFILE_STORAGE_KEY = 'empyralis.agents.default-profile.v1';
 const WORKBENCH_PRELOAD_QUERY_KEYS = ['pack', 'goal', 'primary', 'secondary', 'tertiary', 'deck', 'agent', 'chat'] as const;
 const LOCAL_EXECUTION_DEFAULT_GOAL =
   OUTCOME_PACKS.find((item) => item.id === 'local-execution-v1')?.defaultGoal?.trim().toLowerCase() || '';
-const CHAT_SESSION_LIMIT = 24;
-
 type StoredAgentProfileConfig = {
   name?: string;
   subtitle?: string;
@@ -1284,20 +1282,6 @@ function buildRunCardFromPayload(args: {
   };
 }
 
-function migrateLegacyWorkbenchChats(
-  legacyChats: Record<string, WorkbenchAgentChatMessage[]>,
-): ChatStoreRecord {
-  const preferredAgentRole = legacyChats.orchestrator ? 'orchestrator' : Object.keys(legacyChats)[0] || 'orchestrator';
-  const seedMessages = sanitizePersistedWorkbenchChats(legacyChats)[preferredAgentRole] || [];
-  const emptySession = createEmptyChatSession();
-  const session = upsertSessionMessages(emptySession, seedMessages, new Date().toISOString());
-  return {
-    version: 1,
-    selectedSessionId: seedMessages.length > 0 ? session.id : emptySession.id,
-    sessions: seedMessages.length > 0 ? [session] : [emptySession],
-  };
-}
-
 export function AutopilotWorkspace() {
   const streamRef = useRef<AuthenticatedEventStreamConnection | null>(null);
   const primaryGoalRef = useRef<HTMLTextAreaElement | null>(null);
@@ -1396,6 +1380,9 @@ export function AutopilotWorkspace() {
   const [chatNoProviderStatus, setChatNoProviderStatus] = useState(false);
   const [chatAuthRequiredMessage, setChatAuthRequiredMessage] = useState<string | null>(null);
   const [simpleChatDepth, setSimpleChatDepth] = useState<ChatDepthValue>('medium');
+  const [sageInstall, setSageInstall] = useState<WorkspaceAgentInstallRecord | null>(null);
+  const [activeSpecialistAgents, setActiveSpecialistAgents] = useState<WorkspaceAgentInstallRecord[]>([]);
+  const [masterThreadId, setMasterThreadId] = useState<string | null>(null);
   const preloadQuerySignatureRef = useRef('');
   const hydratedWorkspaceRef = useRef<string>('');
 
@@ -1420,29 +1407,6 @@ export function AutopilotWorkspace() {
 
   useEffect(() => {
     try {
-      const raw = window.localStorage.getItem(CHAT_STORE_STORAGE_KEY);
-      if (raw) {
-        const parsed = sanitizeChatStore(JSON.parse(raw));
-        if (parsed) {
-          setChatStore(parsed);
-          return;
-        }
-      }
-
-      const legacyRaw = window.localStorage.getItem(WORKBENCH_AGENT_CHAT_STORAGE_KEY);
-      if (legacyRaw) {
-        const legacyParsed = JSON.parse(legacyRaw) as Record<string, WorkbenchAgentChatMessage[]>;
-        if (legacyParsed && typeof legacyParsed === 'object') {
-          setChatStore(migrateLegacyWorkbenchChats(legacyParsed));
-        }
-      }
-    } catch {
-      // ignore storage read failures
-    }
-  }, []);
-
-  useEffect(() => {
-    try {
       window.localStorage.setItem(CHAT_STORE_STORAGE_KEY, JSON.stringify(chatStore));
       window.dispatchEvent(new Event(CHAT_STORE_UPDATED_EVENT));
     } catch {
@@ -1457,40 +1421,53 @@ export function AutopilotWorkspace() {
 
     let alive = true;
 
-    const hydrateThreads = async () => {
+    const hydrateMasterThread = async () => {
       try {
-        const payload = await apiClient.listThreads({
-          workspace_id: workspaceId,
-          include_turns: true,
-          limit: CHAT_SESSION_LIMIT,
-        });
+        const payload = await fetchMasterChatContext(workspaceId);
         if (!alive) return;
-        const items = Array.isArray(payload.items) ? payload.items : [];
+        const threadId = String(payload.thread_id || '').trim() || `thread_sage_${workspaceId}`;
+        const nextSageInstall = payload.master_install && typeof payload.master_install === 'object'
+          ? payload.master_install
+          : null;
+        const nextThread = payload.thread && typeof payload.thread === 'object' && typeof (payload.thread as { id?: unknown }).id === 'string'
+          ? payload.thread as ThreadRecord
+          : null;
         const isFirstWorkspaceHydration = hydratedWorkspaceRef.current !== workspaceId;
         hydratedWorkspaceRef.current = workspaceId;
+        setSageInstall(nextSageInstall);
+        setActiveSpecialistAgents(Array.isArray(payload.specialist_installs) ? payload.specialist_installs : []);
+        setMasterThreadId(threadId);
         setChatStore((current) => {
-          const nextStore = threadRecordsToChatStore(items, current.selectedSessionId);
-          if (!nextStore) {
-            if (!isFirstWorkspaceHydration && current.sessions.length > 0) {
-              return current;
-            }
-            const emptySession = createEmptyChatSession();
-            return {
-              version: 1,
-              selectedSessionId: emptySession.id,
-              sessions: [emptySession],
-            };
+          const nextSession = nextThread
+            ? threadRecordToChatSession(nextThread)
+            : createEmptyChatSession(new Date().toISOString(), {
+                id: threadId,
+                title: nextSageInstall?.label?.trim() || 'Sage',
+                masterAgentInstallId: nextSageInstall?.id || null,
+                metadata: { source: 'master_thread', system_agent: true },
+              });
+          if (
+            !isFirstWorkspaceHydration
+            && current.sessions.length === 1
+            && current.sessions[0]?.id === nextSession.id
+            && current.sessions[0]?.updatedAt === nextSession.updatedAt
+          ) {
+            return current;
           }
-          return nextStore;
+          return {
+            version: 1,
+            selectedSessionId: nextSession.id,
+            sessions: [nextSession],
+          };
         });
       } catch {
         if (hydratedWorkspaceRef.current === workspaceId) return;
       }
     };
 
-    void hydrateThreads();
+    void hydrateMasterThread();
     const handleFocus = () => {
-      void hydrateThreads();
+      void hydrateMasterThread();
     };
     window.addEventListener('focus', handleFocus);
     return () => {
@@ -1547,35 +1524,18 @@ export function AutopilotWorkspace() {
     const clearChatThread = () => {
       closeStream();
       setGoal('');
-      setSelectedPackId(DEFAULT_OUTCOME_PACK_ID);
       setTopError(null);
       setChatIdentityDrawerOpen(false);
       setPendingWorkbenchChat(null);
       setPendingSimpleChat(null);
       setPendingSimpleRun(null);
-      setSelectedWorkbenchRunId(null);
-      setWorkbenchAgentChats({});
-      setChatStore((current) => {
-        const nextSession = createEmptyChatSession();
-        const preservedSessions = current.sessions.filter((session) => session.messages.length > 0).slice(0, CHAT_SESSION_LIMIT - 1);
-        return {
-          version: 1,
-          selectedSessionId: nextSession.id,
-          sessions: [nextSession, ...preservedSessions],
-        };
-      });
-      try {
-        window.localStorage.removeItem(WORKBENCH_AGENT_CHAT_STORAGE_KEY);
-      } catch {
-        // ignore storage removal errors
-      }
     };
 
     window.addEventListener(EMPYRALIS_NEW_CHAT_EVENT, clearChatThread);
     return () => {
       window.removeEventListener(EMPYRALIS_NEW_CHAT_EVENT, clearChatThread);
     };
-  }, [closeStream, setGoal, setSelectedPackId, setTopError]);
+  }, [closeStream, setGoal, setTopError]);
 
   const refreshControlCenter = useCallback(async () => {
     try {
@@ -2001,24 +1961,20 @@ export function AutopilotWorkspace() {
 
   const selectedAgent = workbenchAgentRoleOptions.find((option) => option.id === selectedAgentRole) || workbenchAgentRoleOptions[0] || AGENT_ROLE_OPTIONS[0];
   const selectedChatSession = useMemo(() => {
-    return chatStore.sessions.find((session) => session.id === chatStore.selectedSessionId) || chatStore.sessions[0] || null;
+    return chatStore.sessions[0] || null;
   }, [chatStore]);
   const selectedChatMessages = useMemo(() => selectedChatSession?.messages || [], [selectedChatSession]);
   const handleSelectChatSession = useCallback((sessionId: string) => {
-    setChatStore((current) => {
-      if (!current.sessions.some((session) => session.id === sessionId)) return current;
-      return {
-        ...current,
-        selectedSessionId: sessionId,
-      };
-    });
+    if (!selectedChatSession || sessionId !== selectedChatSession.id) return;
+    setGoal('');
+    setTopError(null);
+    setChatIdentityDrawerOpen(false);
+  }, [selectedChatSession, setGoal, setTopError]);
+  const handleStartNewChat = useCallback(() => {
     setGoal('');
     setTopError(null);
     setChatIdentityDrawerOpen(false);
   }, [setGoal, setTopError]);
-  const handleStartNewChat = useCallback(() => {
-    window.dispatchEvent(new Event(EMPYRALIS_NEW_CHAT_EVENT));
-  }, []);
   const latestSessionRunCard = useMemo(() => {
     return [...selectedChatMessages].reverse().find((message) => message.runCard)?.runCard || null;
   }, [selectedChatMessages]);
@@ -2091,7 +2047,51 @@ export function AutopilotWorkspace() {
     setupReady,
   ]);
   const sessionIdentitySections = useMemo<ChatIdentitySection[]>(() => {
-    if (!latestDirectChatContext) return [];
+    const sections: ChatIdentitySection[] = [];
+    if (sageInstall) {
+      const sageRuntimeLabel = String(
+        sageInstall.runtime_profile?.label
+        || sageInstall.runtime_profile_id
+        || 'Empyralis Cloud',
+      ).trim() || 'Empyralis Cloud';
+      sections.push({
+        title: 'Sage',
+        note: 'Sage is your primary relationship in this workspace. It holds context here and delegates to specialists when appropriate.',
+        items: [
+          { label: 'Workspace', value: activeWorkspaceId || 'Unknown' },
+          {
+            label: 'Orchestrator',
+            value: String(sageInstall.label || sageInstall.agent_definition?.name || 'Sage').trim() || 'Sage',
+            tone: 'success',
+            priority: 'high',
+          },
+          { label: 'Execution placement', value: sageRuntimeLabel },
+          { label: 'Master thread', value: masterThreadId || selectedChatSession?.id || 'Preparing' },
+          {
+            label: 'Trust mode',
+            value: String(sageInstall.policy_context_overrides?.trust_mode || 'guarded').trim() || 'guarded',
+            tone: String(sageInstall.policy_context_overrides?.trust_mode || 'guarded').trim() === 'auto' ? 'warning' : 'neutral',
+          },
+        ],
+      });
+    }
+    if (activeSpecialistAgents.length > 0) {
+      sections.push({
+        title: 'Specialist Agents',
+        note: 'These installed specialists are active and available for Sage to delegate to.',
+        items: activeSpecialistAgents.slice(0, 8).map((install) => {
+          const trustMode = String(install.policy_context_overrides?.trust_mode || 'guarded').trim() || 'guarded';
+          const runtimeLabel = String(install.runtime_profile?.label || install.runtime_profile_id || 'Unassigned').trim() || 'Unassigned';
+          const label = String(install.label || install.agent_definition?.name || 'Specialist').trim() || 'Specialist';
+          return {
+            label,
+            value: `${runtimeLabel} · ${trustMode === 'auto' ? 'Autonomous' : 'Approval required'}`,
+            tone: trustMode === 'auto' ? 'warning' : 'success',
+          } satisfies ChatIdentityItem;
+        }),
+      });
+    }
+    if (!latestDirectChatContext) return sections;
     const connectedSystems = summarizeCapabilitySystems(latestDirectChatContext.tool_capabilities, 'connected');
     const usableSystems = summarizeCapabilitySystems(latestDirectChatContext.tool_capabilities, 'usable');
     const unavailableSystems = summarizeCapabilitySystems(latestDirectChatContext.tool_capabilities, 'unavailable');
@@ -2102,7 +2102,7 @@ export function AutopilotWorkspace() {
     const note = latestDirectChatContext.prior_messages_used
       ? 'This reply uses: current message, workspace, requested model, connected systems, prior thread messages.'
       : 'This reply uses: current message, workspace, requested model, connected systems. This reply does not yet use prior thread messages.';
-    return [{
+    sections.push({
       title: 'Direct chat',
       note,
       items: [
@@ -2136,9 +2136,15 @@ export function AutopilotWorkspace() {
         { label: 'History mode', value: latestDirectChatContext.history_mode },
         { label: 'Run created', value: latestDirectChatContext.run_created ? 'Yes' : 'No' },
       ],
-    }];
+    });
+    return sections;
   }, [
+    activeSpecialistAgents,
+    activeWorkspaceId,
     latestDirectChatContext,
+    masterThreadId,
+    sageInstall,
+    selectedChatSession?.id,
   ]);
   const sessionIdentityActions = useMemo<ChatIdentityAction[]>(
     () => {
@@ -2163,9 +2169,13 @@ export function AutopilotWorkspace() {
       if (latestSessionRunCard?.runId) {
         return [createAction('Open Runs', '/executions', 'primary')];
       }
+      if (activeSpecialistAgents.length > 0) {
+        return [createAction('Open Installed Agents', '/agents', 'primary')];
+      }
       return [];
     },
     [
+      activeSpecialistAgents.length,
       controlCenter.pendingApprovals.length,
       latestSessionRunCard?.runId,
       router,
@@ -2398,6 +2408,8 @@ export function AutopilotWorkspace() {
         const payload = await sendOperatorChat('__approval_confirmed__', {
           reasoningEffort: simpleChatDepth,
           threadId: sessionId,
+          masterAgentInstallId: sageInstall?.id || selectedChatSession?.masterAgentInstallId || null,
+          runtimeProfileId: sageInstall?.runtime_profile?.id || sageInstall?.runtime_profile_id || null,
           approvedAction: {
             connector,
             action: actionId,
@@ -2532,9 +2544,13 @@ export function AutopilotWorkspace() {
     patchSimpleChatMessage,
     replaceSimpleChatMessage,
     router,
+    sageInstall?.id,
+    sageInstall?.runtime_profile?.id,
+    sageInstall?.runtime_profile_id,
     sendOperatorChat,
     selectedChatMessages,
     selectedChatSession?.id,
+    selectedChatSession?.masterAgentInstallId,
     setChatNoProviderStatus,
     setPendingSimpleChat,
     simpleChatDepth,
@@ -2941,7 +2957,9 @@ export function AutopilotWorkspace() {
       let streamedReply = '';
       const payload = await sendOperatorChat(text, {
         reasoningEffort: simpleChatDepth,
-        threadId: sessionId,
+        threadId: masterThreadId || sessionId,
+        masterAgentInstallId: sageInstall?.id || selectedChatSession?.masterAgentInstallId || null,
+        runtimeProfileId: sageInstall?.runtime_profile?.id || sageInstall?.runtime_profile_id || null,
         priorMessages,
         onSteps: (steps) => {
           streamedSteps = steps;
@@ -3001,11 +3019,16 @@ export function AutopilotWorkspace() {
     appendLog,
     appendSimpleChatMessage,
     goal,
+    masterThreadId,
     patchSimpleChatMessage,
     removeSimpleChatMessage,
     selectedChatMessages,
     selectedChatSession?.id,
+    selectedChatSession?.masterAgentInstallId,
     sendOperatorChat,
+    sageInstall?.id,
+    sageInstall?.runtime_profile?.id,
+    sageInstall?.runtime_profile_id,
     setChatNoProviderStatus,
     setGoal,
     setTopError,
@@ -3058,7 +3081,7 @@ export function AutopilotWorkspace() {
       <div className="orion-workbench-grid" suppressHydrationWarning>
         <ChatSurface
           isMobile={isMobile}
-          sessions={chatStore.sessions}
+          sessions={selectedChatSession ? [selectedChatSession] : []}
           selectedSessionId={selectedChatSession?.id || null}
           onSelectSession={handleSelectChatSession}
           onNewChat={handleStartNewChat}
@@ -3077,7 +3100,7 @@ export function AutopilotWorkspace() {
           chatBusy={Boolean(pendingSimpleChat)}
           messages={selectedChatMessages}
           providerBanner={selectedChatMessages.length === 0 ? simpleChatProviderBanner : null}
-          targetLabel={defaultAssistantProfile.label}
+          targetLabel={String(sageInstall?.label || sageInstall?.agent_definition?.name || 'Sage').trim() || 'Sage'}
           targetHref="/agents"
           selectedModel={model}
           modelOptions={modelOptions}
@@ -3096,6 +3119,7 @@ export function AutopilotWorkspace() {
           identitySections={sessionIdentitySections}
           identityActions={sessionIdentityActions}
           shellNotice={shellTopNotice}
+          historyEnabled={false}
         />
       </div>
     </WorkbenchShell>

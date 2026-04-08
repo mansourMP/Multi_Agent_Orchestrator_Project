@@ -13,7 +13,7 @@ type ApprovalRequestCardProps = {
 function toneLabel(approval: ChatApprovalRequestRecord): string {
   if (approval.resolution === 'approved') return 'Approved';
   if (approval.resolution === 'rejected') return 'Held';
-  return 'Approval required';
+  return 'Explicit approval required';
 }
 
 function chipList(values: string[]): string[] {
@@ -48,21 +48,30 @@ export function ApprovalRequestCard({ approval, onDecision }: ApprovalRequestCar
   const labels = chipList(approval.labels);
   const capabilities = chipList(approval.capabilities);
   const actions = chipList(approval.actions);
+  const scopeLabel = approval.reusable ? 'Reusable approval' : approval.scope === 'once' ? 'One-time approval' : 'Approval';
 
   return (
     <section
       style={{
-        border: '1px solid var(--border-default)',
-        background: 'linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0.01))',
-        borderRadius: 14,
-        padding: 14,
-        marginTop: 10,
+        border: approval.resolution === 'rejected' ? '1px solid rgba(214, 75, 75, 0.3)' : '1px solid var(--border-default)',
+        background:
+          approval.resolution === 'approved'
+            ? 'linear-gradient(180deg, rgba(95, 193, 126, 0.12), rgba(255,255,255,0.02))'
+            : approval.resolution === 'rejected'
+              ? 'linear-gradient(180deg, rgba(122, 27, 27, 0.14), rgba(255,255,255,0.01))'
+              : 'linear-gradient(180deg, rgba(255,194,61,0.12), rgba(255,255,255,0.01))',
+        borderRadius: 16,
+        padding: 16,
+        marginTop: 12,
       }}
     >
       <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'flex-start' }}>
         <div>
           <div style={{ fontSize: 11, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--text-muted)' }}>
             {toneLabel(approval)}
+          </div>
+          <div style={{ marginTop: 6, fontSize: 12, color: 'var(--text-secondary)' }}>
+            {scopeLabel}
           </div>
           <div style={{ fontSize: 14, lineHeight: 1.5, color: 'var(--text-primary)', marginTop: 6 }}>
             {approval.prompt}
@@ -109,6 +118,22 @@ export function ApprovalRequestCard({ approval, onDecision }: ApprovalRequestCar
         </div>
       ) : null}
 
+      {approval.consequence ? (
+        <div
+          style={{
+            marginTop: 12,
+            padding: '10px 12px',
+            borderRadius: 12,
+            background: 'rgba(255,255,255,0.03)',
+            border: '1px solid var(--border-muted)',
+            fontSize: 12,
+            color: 'var(--text-secondary)',
+          }}
+        >
+          <span style={{ color: 'var(--text-muted)' }}>Consequence:</span> {approval.consequence}
+        </div>
+      ) : null}
+
       {localError ? (
         <div style={{ marginTop: 10, fontSize: 12, color: 'var(--status-danger-text)' }}>
           {localError}
@@ -125,7 +150,7 @@ export function ApprovalRequestCard({ approval, onDecision }: ApprovalRequestCar
             void handleDecision('proceed');
           }}
         >
-          {pendingDecision === 'proceed' ? 'Confirming…' : approval.resolution === 'approved' ? 'Confirmed' : 'Proceed'}
+          {pendingDecision === 'proceed' ? 'Approving…' : approval.resolution === 'approved' ? 'Approved' : 'Approve execution'}
         </button>
         <button
           type="button"
@@ -143,7 +168,7 @@ export function ApprovalRequestCard({ approval, onDecision }: ApprovalRequestCar
             void handleDecision('hold');
           }}
         >
-          {pendingDecision === 'hold' ? 'Holding…' : approval.resolution === 'rejected' ? 'Held' : 'Hold'}
+          {pendingDecision === 'hold' ? 'Denying…' : approval.resolution === 'rejected' ? 'Denied' : 'Deny for now'}
         </button>
       </div>
     </section>

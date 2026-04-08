@@ -31,6 +31,8 @@ import { PageDialog } from '@/components/orion/page/PageDialog';
 import { LocalCompanionRunPanel } from '@/components/orion/runs/LocalCompanionRunPanel';
 import { RunLiveCockpitPanel } from '@/components/orion/runs/RunLiveCockpitPanel';
 import { RunRemediationGuide, shouldShowRunRemediationGuide } from '@/components/orion/runs/RunRemediationGuide';
+import { ApprovalRequestCard } from '@/components/orion/chat/ApprovalRequestCard';
+import type { ChatApprovalRequestRecord } from '@/components/orion/chat/chatSchema';
 import {
   buildRunLiveLogRows,
   buildRunLiveTimelineEvents,
@@ -2004,6 +2006,65 @@ function RunInspectPageContent() {
     || (runDetail?.result_data && typeof runDetail.result_data === 'object' && Boolean((runDetail.result_data as Record<string, unknown>).resume_available)),
   );
   const interruptRequested = Boolean(runDetail?.interrupt_requested || hardKillPending);
+  const targetMachineLabel = useMemo(() => {
+    const machineId = String(runDetail?.machine_id || '').trim();
+    const runtimeId = String(runDetail?.runtime_id || '').trim();
+    if (machineId && runtimeId) return `${machineId} · ${runtimeId}`;
+    return machineId || runtimeId || 'Awaiting runtime assignment';
+  }, [runDetail?.machine_id, runDetail?.runtime_id]);
+  const executionPlacementLabel = useMemo(() => {
+    const selected = String(historyItem?.execution_target_selected || runDiagnostics?.selected_target || '').trim();
+    const requested = String(historyItem?.execution_target_requested || '').trim();
+    if (selected) return formatExecutionTargetLabel(selected);
+    if (requested) return `${formatExecutionTargetLabel(requested)} requested`;
+    return 'Automatic placement';
+  }, [historyItem?.execution_target_requested, historyItem?.execution_target_selected, runDiagnostics?.selected_target]);
+  const childLineageSummary = useMemo(() => {
+    if (delegationSummary) {
+      const active = Number(delegationSummary.active_children || 0);
+      const waiting = Number(delegationSummary.waiting_children || 0);
+      const failed = Number(delegationSummary.failed_children || 0);
+      const total = Number(delegationSummary.total_children || 0);
+      return {
+        headline: `${total} child ${total === 1 ? 'agent' : 'agents'}`,
+        detail:
+          [
+            active > 0 ? `${active} active` : null,
+            waiting > 0 ? `${waiting} waiting` : null,
+            failed > 0 ? `${failed} failed` : null,
+          ].filter(Boolean).join(' · ') || 'No delegated branches are running.',
+      };
+    }
+    if (childRuns.length > 0) {
+      return {
+        headline: `${childRuns.length} child ${childRuns.length === 1 ? 'agent' : 'agents'}`,
+        detail: 'Delegated branches are attached to this orchestration.',
+      };
+    }
+    return {
+      headline: 'No child agents',
+      detail: 'Sage has not delegated this run to any specialist yet.',
+    };
+  }, [childRuns.length, delegationSummary]);
+  const pendingApprovalRecord = useMemo<ChatApprovalRequestRecord | null>(() => {
+    if (!pendingConfirmation?.approval_id) return null;
+    return {
+      id: pendingConfirmation.approval_id,
+      approvalId: pendingConfirmation.approval_id,
+      runId,
+      prompt: pendingConfirmation.prompt || 'Approval required to continue this run.',
+      labels: Array.isArray(pendingConfirmation.metadata?.approval_labels) ? pendingConfirmation.metadata.approval_labels : [],
+      capabilities: Array.isArray(pendingConfirmation.metadata?.approval_capabilities) ? pendingConfirmation.metadata.approval_capabilities : [],
+      actions: Array.isArray(pendingConfirmation.actions)
+        ? pendingConfirmation.actions.filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+        : [],
+      target: pendingConfirmation.target || null,
+      scope: 'once',
+      reusable: Boolean(pendingConfirmation.reusable),
+      consequence: pendingConfirmation.consequence || 'The run will remain blocked until an explicit decision is recorded.',
+      resolution: 'waiting',
+    };
+  }, [pendingConfirmation, runId]);
   const canResumeRun = effectiveRunStatus === 'waiting_for_input'
     && !pendingConfirmation?.approval_id
     && Boolean(runDiagnostics?.browser_resume_supported || localExecutionResumeSupported);
@@ -3556,6 +3617,50 @@ function RunInspectPageContent() {
             </section>
           ) : null}
 
+          <section
+            style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
+              gap: DESIGN_TOKENS.space[4],
+              marginBottom: DESIGN_TOKENS.space[4],
+            }}
+          >
+            <article style={panelStyle({ muted: true })}>
+              <div style={metaTextStyle()}>Target machine</div>
+              <div style={{ ...bodyTextStyle('primary'), marginTop: 8, fontWeight: 700 }}>{targetMachineLabel}</div>
+              <div style={{ ...metaTextStyle(), marginTop: 6 }}>Placement {executionPlacementLabel}</div>
+            </article>
+            <article style={panelStyle({ muted: true })}>
+              <div style={metaTextStyle()}>Specialist lineage</div>
+              <div style={{ ...bodyTextStyle('primary'), marginTop: 8, fontWeight: 700 }}>{childLineageSummary.headline}</div>
+              <div style={{ ...metaTextStyle(), marginTop: 6 }}>{childLineageSummary.detail}</div>
+            </article>
+            <article style={panelStyle({ muted: true })}>
+              <div style={metaTextStyle()}>Interventions</div>
+              <div
+                style={{
+                  ...bodyTextStyle('primary'),
+                  marginTop: 8,
+                  fontWeight: 700,
+                  color: pendingConfirmation
+                    ? DESIGN_TOKENS.color.warning
+                    : interruptRequested
+                      ? DESIGN_TOKENS.color.danger
+                      : DESIGN_TOKENS.color.textPrimary,
+                }}
+              >
+                {pendingConfirmation ? 'Approval required' : interruptRequested ? 'Interrupt requested' : 'No active interventions'}
+              </div>
+              <div style={{ ...metaTextStyle(), marginTop: 6 }}>
+                {pendingConfirmation
+                  ? 'This run is paused until a human decision is recorded.'
+                  : interruptRequested
+                    ? 'A hard stop has been sent to the execution runtime.'
+                    : 'Sage is operating within the current policy envelope.'}
+              </div>
+            </article>
+          </section>
+
           <section className="orion-grid-2">
             <RunLiveCockpitPanel
               runId={runId}
@@ -3565,11 +3670,31 @@ function RunInspectPageContent() {
               sectionRef={timelineSectionRef}
               focusedStyle={focusedSectionStyle}
               active={activeSection === 'timeline' || activeSection === 'logs'}
-              headerAccessory={showHardKillRun || interruptRequested ? (
-                <span style={badgeStyle(interruptRequested ? 'warning' : 'neutral')}>
-                  {hardKillBusy || hardKillPending ? 'Interrupting…' : interruptRequested ? 'Interrupt requested' : 'Live control'}
-                </span>
-              ) : null}
+              headerAccessory={(
+                <div style={{ display: 'inline-flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                  <span style={badgeStyle('neutral')}>{executionPlacementLabel}</span>
+                  <span style={badgeStyle(runDetail?.machine_id || runDetail?.runtime_id ? 'success' : 'neutral')}>
+                    {String(runDetail?.machine_id || runDetail?.runtime_id || 'Machine pending').trim() || 'Machine pending'}
+                  </span>
+                  {childRuns.length > 0 || Number(delegationSummary?.total_children || 0) > 0 ? (
+                    <span style={badgeStyle('neutral')}>
+                      {Number(delegationSummary?.active_children || childRuns.length || 0)} child agent{Number(delegationSummary?.active_children || childRuns.length || 0) === 1 ? '' : 's'}
+                    </span>
+                  ) : null}
+                  <span style={badgeStyle(interruptRequested ? 'warning' : 'neutral')}>
+                    {hardKillBusy || hardKillPending ? 'Interrupting…' : interruptRequested ? 'Interrupt requested' : 'Live control'}
+                  </span>
+                  {showHardKillRun ? (
+                    <Button
+                      variant="destructive"
+                      onClick={() => setHardKillDialogOpen(true)}
+                      disabled={hardKillRunDisabled}
+                    >
+                      {hardKillBusy || hardKillPending ? 'Interrupting…' : 'Kill Run'}
+                    </Button>
+                  ) : null}
+                </div>
+              )}
               onLiveEventsChange={setLiveEvents}
               onStreamMetaChange={(state, errorMessage) => {
                 setStreamState(state);
@@ -3591,35 +3716,20 @@ function RunInspectPageContent() {
                 <ClipboardCheck size={14} />
                 Confirmations
               </div>
-              {pendingConfirmation ? (
+              {pendingApprovalRecord ? (
                 <div
                   style={{
                     marginTop: 10,
                     display: 'grid',
-                    gap: 8,
-                    border: '1px solid var(--warning-border)',
-                    background: 'var(--warning-bg)',
-                    borderRadius: 12,
-                    padding: '12px 14px',
+                    gap: 10,
                   }}
                 >
-                  <div style={{ fontSize: 11, fontWeight: 800, color: 'var(--warning-fg)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-                    Confirmation required
-                  </div>
-                  <div style={{ fontSize: 13, color: 'var(--text-primary)', lineHeight: 1.55 }}>
-                    {approvalDisplayText(
-                      pendingConfirmation.prompt,
-                      pendingConfirmation.metadata?.approval_labels,
-                      pendingConfirmation.metadata?.approval_capabilities,
-                      'Confirmation required.',
-                    )}
-                  </div>
-                  <div style={{ display: 'grid', gap: 6, fontSize: 12, color: 'var(--text-secondary)' }}>
-                    <div>Action: {Array.isArray(pendingConfirmation.actions) && pendingConfirmation.actions.length > 0 ? pendingConfirmation.actions.join(', ') : 'Not recorded'}</div>
-                    <div>Target: {pendingConfirmation.target || 'Not recorded'}</div>
-                    <div>Scope: {String(pendingConfirmation.scope || 'once').trim().toLowerCase() === 'once' ? 'One-time for this pending step' : String(pendingConfirmation.scope || 'Unknown')}</div>
-                    <div>{pendingConfirmation.consequence || 'This confirmation applies only to this pending step in this run. Later runs or later confirmation points will ask again.'}</div>
-                  </div>
+                  <ApprovalRequestCard
+                    approval={pendingApprovalRecord}
+                    onDecision={async (decision) => {
+                      await handleResolveApproval(decision === 'proceed' ? 'Proceed' : 'Hold');
+                    }}
+                  />
                   <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                     <Link className="orion-btn orion-btn-ghost" style={{ minHeight: 44, paddingInline: 12 }} href="/approvals">
                       Open confirmation queue

@@ -79,7 +79,7 @@ export function RunLiveEventFeed({
             style={{
               minWidth: 700,
               display: 'grid',
-              gridTemplateColumns: '150px 92px 180px minmax(220px, 1fr) 160px',
+              gridTemplateColumns: '150px 92px 180px minmax(220px, 1fr) 180px',
               gap: 8,
               padding: '8px 10px',
               borderBottom: '1px solid var(--border-default)',
@@ -94,7 +94,7 @@ export function RunLiveEventFeed({
             <span>Level</span>
             <span>Event</span>
             <span>Message</span>
-            <span>Tool</span>
+            <span>Context</span>
           </div>
           {timelineEvents.map((item) => {
             const levelColor =
@@ -110,7 +110,7 @@ export function RunLiveEventFeed({
                 style={{
                   minWidth: 700,
                   display: 'grid',
-                  gridTemplateColumns: '150px 92px 180px minmax(220px, 1fr) 160px',
+                  gridTemplateColumns: '150px 92px 180px minmax(220px, 1fr) 180px',
                   gap: 8,
                   padding: '9px 10px',
                   borderBottom: '1px solid var(--border-default)',

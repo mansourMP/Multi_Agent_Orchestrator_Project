@@ -33,9 +33,18 @@ export type RunLiveLogRow = {
 
 function summarizeToolHint(data: unknown, event: string): string | null {
   const lower = String(event || '').trim().toLowerCase();
+  if (lower.includes('approval')) return 'human approval';
+  if (lower.includes('delegat')) return 'child agent';
   if (lower.includes('tool')) return 'tool event';
   if (!data || typeof data !== 'object') return null;
   const record = data as Record<string, unknown>;
+  const childRunId = String(record.child_run_id || record.childRunId || '').trim();
+  if (childRunId) return `child ${childRunId.slice(0, 8)}`;
+  const machineId = String(record.machine_id || '').trim();
+  const runtimeId = String(record.runtime_id || '').trim();
+  if (machineId || runtimeId) return machineId || runtimeId;
+  const agentRole = String(record.agent_role || record.role || '').trim();
+  if (agentRole) return agentRole.replace(/_/g, ' ');
   const candidates = [
     record.tool,
     record.tool_name,

@@ -393,3 +393,19 @@ export async function fetchExecution(id: string) {
 export async function fetchAgents() {
     return internalApiFetch('/api/agents');
 }
+
+export async function hardKillRun(runId: string, reason?: string) {
+    return internalApiFetch(`/api/runs/${encodeURIComponent(runId)}/hard-kill`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(reason ? { reason } : {}),
+    });
+}
+
+export async function hardKillMachine(machineId: string, reason?: string) {
+    return internalApiFetch(`/api/machines/${encodeURIComponent(machineId)}/hard-kill`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(reason ? { reason } : {}),
+    });
+}

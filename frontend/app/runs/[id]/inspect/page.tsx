@@ -16,11 +16,6 @@ import {
   Route,
 } from 'lucide-react';
 import { AGENT_ROLE_OPTIONS, isAgentRoleId } from '@/app/page.catalog';
-import {
-  AUTH_STREAM_CLOSED,
-  openAuthenticatedEventStream,
-  type AuthenticatedEventStreamConnection,
-} from '@/lib/authenticatedEventStream';
 import { apiClient } from '@/lib/api-client';
 import type { ComputerActionEventPayload, RunListItem } from '@shared/api-contract';
 import { OsPageHeader } from '@/components/ui/OsPageHeader';
@@ -32,7 +27,14 @@ import { resolveSkillsByIds } from '@/lib/skills';
 import { SINGLE_AGENT_MODE } from '@/lib/appFlags';
 import { getLocalExecutionCapabilityTitle } from '@/lib/localExecutionCapabilities';
 import { LocalCompanionRunPanel } from '@/components/orion/runs/LocalCompanionRunPanel';
+import { RunLiveCockpitPanel } from '@/components/orion/runs/RunLiveCockpitPanel';
 import { RunRemediationGuide, shouldShowRunRemediationGuide } from '@/components/orion/runs/RunRemediationGuide';
+import {
+  buildRunLiveLogRows,
+  buildRunLiveTimelineEvents,
+  type RunLiveReplayEvent,
+  type RunLiveStreamState,
+} from '@/components/orion/runs/runLiveCockpitModel';
 import { DESIGN_TOKENS, badgeStyle, bodyTextStyle, buttonStyle, mergeStyles, metaTextStyle, pageShellStyle, panelStyle, sectionTitleStyle } from '@/design-constraints';
 
 type HistoryItem = {
@@ -92,16 +94,7 @@ type RelatedRunSummary = {
   retry_sequence?: number | null;
 };
 
-type ReplayEvent = {
-  event_id?: string;
-  seq?: number;
-  run_id?: string;
-  ts?: string;
-  level?: string;
-  event?: string;
-  message?: string;
-  data?: unknown;
-};
+type ReplayEvent = RunLiveReplayEvent;
 
 type ReplayPayload = {
   item?: {
@@ -170,6 +163,12 @@ type RunDiagnostics = {
 type RunDetailPayload = {
   run_id?: string;
   status?: string;
+  machine_id?: string | null;
+  runtime_id?: string | null;
+  interrupt_requested?: boolean;
+  interrupt_requested_at?: string | null;
+  interrupt_reason?: string | null;
+  interrupt_scope?: string | null;
   execution_target_required_capabilities?: string[] | null;
   execution_target_missing_capabilities?: string[] | null;
   execution_target_busy_runtime_labels?: string[] | null;
@@ -332,17 +331,6 @@ type ApprovalAuditItem = {
   capabilities: string[];
 };
 
-type TimelineEvent = {
-  id: string;
-  ts: string;
-  seq: number | null;
-  level: string;
-  event: string;
-  message: string;
-  toolHint: string | null;
-  rawData: Record<string, unknown> | null;
-};
-
 type ComputerActionView = {
   id: string;
   ts: string;
@@ -420,7 +408,7 @@ type LocalExecutionStepView = {
   browser_security_profile?: string;
 };
 
-type StreamState = 'idle' | 'connecting' | 'connected' | 'disconnected' | 'closed';
+type StreamState = RunLiveStreamState;
 const TERMINAL_RUN_STATUSES = new Set(['completed', 'failed', 'error', 'stopped', 'timeout', 'cancelled']);
 type InspectFocusTarget = 'workflow' | 'timeline' | 'logs' | 'approvals' | 'replay' | 'screenshots' | 'artifacts' | null;
 type InspectSectionTarget = Exclude<InspectFocusTarget, null>;
@@ -1020,26 +1008,6 @@ function extractSkillSummary(metadata: Record<string, unknown> | null): { scope:
   };
 }
 
-function summarizeToolHint(data: unknown, event: string): string | null {
-  const lower = event.toLowerCase();
-  if (lower.includes('tool')) return 'tool event';
-  if (!data || typeof data !== 'object') return null;
-  const record = data as Record<string, unknown>;
-  const candidates = [
-    record.tool,
-    record.tool_name,
-    record.toolId,
-    record.action,
-    record.node_id,
-    record.nodeId,
-  ];
-  for (const value of candidates) {
-    const text = String(value || '').trim();
-    if (text) return text;
-  }
-  return null;
-}
-
 function compactComputerActionDetail(record: Record<string, unknown>): string | null {
   const candidates = [
     record.detail,
@@ -1369,33 +1337,6 @@ function extractLocalExecutionActions(...sources: unknown[]): ComputerActionView
   return [];
 }
 
-function parseEventJson(value: string): ReplayEvent | null {
-  try {
-    const parsed = JSON.parse(value);
-    if (!parsed || typeof parsed !== 'object') return null;
-    return parsed as ReplayEvent;
-  } catch {
-    return null;
-  }
-}
-
-function toTimelineEvent(input: ReplayEvent, index: number, source: 'replay' | 'live'): TimelineEvent {
-  const event = String(input?.event || 'event');
-  const message = String(input?.message || '').trim();
-  const eventId = String(input?.event_id || '').trim();
-  const seq = typeof input?.seq === 'number' && Number.isFinite(input.seq) ? input.seq : null;
-  return {
-    id: eventId || `${source}:${event}:${index}`,
-    ts: String(input?.ts || ''),
-    seq,
-    level: String(input?.level || 'info').toLowerCase(),
-    event,
-    message: message || event,
-    toolHint: summarizeToolHint(input?.data, event),
-    rawData: input?.data && typeof input.data === 'object' ? (input.data as Record<string, unknown>) : null,
-  };
-}
-
 export default function RunInspectPage() {
   const singleAgentMode = SINGLE_AGENT_MODE;
   const params = useParams<{ id: string }>();
@@ -1412,7 +1353,6 @@ export default function RunInspectPage() {
   const [approvalAudit, setApprovalAudit] = useState<ApprovalAuditItem[]>([]);
   const [streamState, setStreamState] = useState<StreamState>('idle');
   const [streamError, setStreamError] = useState<string | null>(null);
-  const [inspectMode, setInspectMode] = useState<'timeline' | 'logs'>('timeline');
   const [activeSection, setActiveSection] = useState<InspectSectionTarget>('timeline');
   const [delegateRole, setDelegateRole] = useState<string>('support');
   const [delegateGoal, setDelegateGoal] = useState('');
@@ -1426,7 +1366,6 @@ export default function RunInspectPage() {
   const [delegateError, setDelegateError] = useState<string | null>(null);
   const [delegateNotice, setDelegateNotice] = useState<string | null>(null);
   const [selectedReplayStepId, setSelectedReplayStepId] = useState<string | null>(null);
-  const streamRef = useRef<AuthenticatedEventStreamConnection | null>(null);
   const workflowSectionRef = useRef<HTMLElement | null>(null);
   const timelineSectionRef = useRef<HTMLElement | null>(null);
   const approvalsSectionRef = useRef<HTMLElement | null>(null);
@@ -1532,99 +1471,6 @@ export default function RunInspectPage() {
   }, [load]);
 
   useEffect(() => {
-    const knownStatus = String(historyItem?.status || runDetail?.status || '').toLowerCase();
-    if (!runId || loading) return;
-    if (TERMINAL_RUN_STATUSES.has(knownStatus)) {
-      if (streamRef.current) {
-        streamRef.current.close();
-        streamRef.current = null;
-      }
-      setStreamState('closed');
-      setStreamError(null);
-      return;
-    }
-    setStreamState('connecting');
-    setStreamError(null);
-    let active = true;
-    let source: AuthenticatedEventStreamConnection | null = null;
-
-    void (async () => {
-      await ensureControlPlaneSession();
-      if (!active) return;
-      const streamUrl = `/api/runs/${encodeURIComponent(runId)}/stream`;
-      source = openAuthenticatedEventStream({
-        url: streamUrl,
-        onOpen: () => {
-          setStreamState('connected');
-          setStreamError(null);
-        },
-        onEvent: (event) => {
-          if (event.event === 'pause') {
-            void refreshRunState();
-            return;
-          }
-          if (event.event !== 'log') return;
-          const parsed = parseEventJson(String(event.data || ''));
-          if (!parsed) return;
-          setLiveEvents((prev) => {
-            const eventId = String(parsed.event_id || '').trim();
-            if (eventId && prev.some((item) => String(item.event_id || '').trim() === eventId)) return prev;
-            const next = [...prev, parsed];
-            if (next.length > 800) return next.slice(next.length - 800);
-            return next;
-          });
-          const eventName = String(parsed.event || '').toLowerCase();
-          if (
-            eventName === 'run_complete' ||
-            eventName === 'run_error' ||
-            eventName === 'run_stopped' ||
-            eventName === 'timeout' ||
-            eventName.startsWith('approval_')
-          ) {
-            if (
-              eventName === 'run_complete' ||
-              eventName === 'run_error' ||
-              eventName === 'run_stopped' ||
-              eventName === 'timeout'
-            ) {
-              source?.close();
-              if (streamRef.current === source) streamRef.current = null;
-              setStreamState('closed');
-              setStreamError(null);
-            }
-            void refreshRunState();
-          }
-        },
-        onError: () => {
-          const latestStatus = String(historyItem?.status || runDetail?.status || '').toLowerCase();
-          if (TERMINAL_RUN_STATUSES.has(latestStatus) || source?.readyState === AUTH_STREAM_CLOSED) {
-            source?.close();
-            if (streamRef.current === source) streamRef.current = null;
-            setStreamState('closed');
-            setStreamError(null);
-            void refreshRunState();
-            return;
-          }
-          void refreshRunState();
-          setStreamState('disconnected');
-          setStreamError('Live stream disconnected. Waiting for reconnect...');
-        },
-        onClose: () => {
-          if (streamRef.current === source) streamRef.current = null;
-        },
-      });
-      streamRef.current = source;
-    })();
-
-    return () => {
-      active = false;
-      source?.close();
-      if (streamRef.current === source) streamRef.current = null;
-      setStreamState('idle');
-    };
-  }, [historyItem?.status, loading, refreshRunState, runDetail?.status, runId]);
-
-  useEffect(() => {
     const status = String(historyItem?.status || runDetail?.status || '').toLowerCase();
     const shouldPoll = ['queued', 'queued_local', 'starting', 'running', 'waiting', 'waiting_for_input'].includes(status);
     if (!shouldPoll) return;
@@ -1636,20 +1482,10 @@ export default function RunInspectPage() {
 
   useEffect(() => {
     if (!focusTarget) return;
-    if (focusTarget === 'logs') {
-      setInspectMode('logs');
-    } else if (focusTarget === 'timeline') {
-      setInspectMode('timeline');
-    }
     setActiveSection(focusTarget);
   }, [focusTarget]);
 
   const focusSection = useCallback((target: InspectSectionTarget) => {
-    if (target === 'logs') {
-      setInspectMode('logs');
-    } else if (target === 'timeline') {
-      setInspectMode('timeline');
-    }
     setActiveSection(target);
     const targetRef =
       target === 'workflow'
@@ -1859,24 +1695,10 @@ export default function RunInspectPage() {
     }
   }, [load, runId]);
 
-  const timelineEvents = useMemo((): TimelineEvent[] => {
-    const replayEvents = Array.isArray(replayItem?.events) ? replayItem.events : [];
-    const combined: TimelineEvent[] = [];
-    const seen = new Set<string>();
-    const pushUnique = (entry: TimelineEvent) => {
-      const identity = entry.id || `${entry.ts}|${entry.event}|${entry.message}|${entry.seq ?? ''}`;
-      if (seen.has(identity)) return;
-      seen.add(identity);
-      combined.push(entry);
-    };
-    replayEvents.forEach((item, index) => {
-      pushUnique(toTimelineEvent(item, index, 'replay'));
-    });
-    liveEvents.forEach((item, index) => {
-      pushUnique(toTimelineEvent(item, index, 'live'));
-    });
-    return combined;
-  }, [liveEvents, replayItem?.events]);
+  const timelineEvents = useMemo(
+    () => buildRunLiveTimelineEvents(replayItem?.events, liveEvents),
+    [liveEvents, replayItem?.events],
+  );
 
   const artifacts = useMemo(() => {
     const out = new Set<string>();
@@ -2257,16 +2079,7 @@ export default function RunInspectPage() {
     || latestComputerAction?.label
     || workflowNodeStates.finalNode?.label
     || 'Waiting for the next execution step.';
-  const logRows = useMemo(
-    () =>
-      timelineEvents.map((item) => ({
-        id: item.id,
-        ts: item.ts,
-        level: item.level,
-        text: item.message,
-      })),
-    [timelineEvents],
-  );
+  const logRows = useMemo(() => buildRunLiveLogRows(timelineEvents), [timelineEvents]);
   const streamColor =
     TERMINAL_RUN_STATUSES.has(effectiveRunStatus)
       ? 'var(--text-secondary)'
@@ -3680,181 +3493,21 @@ export default function RunInspectPage() {
           ) : null}
 
           <section className="orion-grid-2">
-            <article
-              ref={timelineSectionRef}
-              className="orion-panel"
-              style={{
-                minHeight: 280,
-                scrollMarginTop: 92,
-                ...(activeSection === 'timeline' || activeSection === 'logs' ? focusedSectionStyle : null),
+            <RunLiveCockpitPanel
+              runId={runId}
+              loading={loading}
+              runStatus={historyItem?.status || runDetail?.status}
+              replayEvents={replayItem?.events}
+              sectionRef={timelineSectionRef}
+              focusedStyle={focusedSectionStyle}
+              active={activeSection === 'timeline' || activeSection === 'logs'}
+              onLiveEventsChange={setLiveEvents}
+              onStreamMetaChange={(state, errorMessage) => {
+                setStreamState(state);
+                setStreamError(errorMessage);
               }}
-            >
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-                <div className="orion-panel-title" style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
-                  <Activity size={14} />
-                  Timeline ({timelineEvents.length})
-                </div>
-                <div style={{ display: 'inline-flex', gap: 6 }}>
-                  <button
-                    className="orion-btn orion-btn-ghost"
-                    onClick={() => setInspectMode('timeline')}
-                    style={{
-                      minHeight: 44,
-                      fontSize: 11,
-                      padding: '0 12px',
-                      background: inspectMode === 'timeline' ? 'var(--primary-soft)' : 'var(--bg-element)',
-                      borderColor: inspectMode === 'timeline' ? 'var(--primary-border-soft)' : 'var(--border-default)',
-                      color: inspectMode === 'timeline' ? 'var(--primary-base)' : 'var(--text-secondary)',
-                    }}
-                  >
-                    Timeline
-                  </button>
-                  <button
-                    className="orion-btn orion-btn-ghost"
-                    onClick={() => setInspectMode('logs')}
-                    style={{
-                      minHeight: 44,
-                      fontSize: 11,
-                      padding: '0 12px',
-                      background: inspectMode === 'logs' ? 'var(--primary-soft)' : 'var(--bg-element)',
-                      borderColor: inspectMode === 'logs' ? 'var(--primary-border-soft)' : 'var(--border-default)',
-                      color: inspectMode === 'logs' ? 'var(--primary-base)' : 'var(--text-secondary)',
-                    }}
-                  >
-                    Logs
-                  </button>
-                </div>
-              </div>
-              {inspectMode === 'timeline' && timelineEvents.length === 0 ? (
-                <div className="orion-panel-copy" style={{ marginTop: 10 }}>No timeline events.</div>
-              ) : inspectMode === 'timeline' ? (
-                <div
-                  style={{
-                    marginTop: 10,
-                    borderTop: '1px solid var(--border-default)',
-                    borderBottom: '1px solid var(--border-default)',
-                    overflowX: 'auto',
-                    maxHeight: 420,
-                    overflowY: 'auto',
-                  }}
-                >
-                  <div
-                    style={{
-                      minWidth: 700,
-                      display: 'grid',
-                      gridTemplateColumns: '150px 92px 180px minmax(220px, 1fr) 160px',
-                      gap: 8,
-                      padding: '8px 10px',
-                      borderBottom: '1px solid var(--border-default)',
-                      fontSize: 10,
-                      color: 'var(--text-tertiary)',
-                      textTransform: 'uppercase',
-                      letterSpacing: '0.05em',
-                      fontWeight: 800,
-                    }}
-                  >
-                    <span>Time</span>
-                    <span>Level</span>
-                    <span>Event</span>
-                    <span>Message</span>
-                    <span>Tool</span>
-                  </div>
-                  {timelineEvents.map((item) => {
-                    const levelColor =
-                      item.level === 'error'
-                        ? 'var(--error-fg)'
-                        : item.level === 'warn'
-                        ? 'var(--warning-fg)'
-                        : 'var(--text-secondary)';
-                    return (
-                      <div
-                        key={item.id}
-                        className="orion-log-entry"
-                        style={{
-                          minWidth: 700,
-                          display: 'grid',
-                          gridTemplateColumns: '150px 92px 180px minmax(220px, 1fr) 160px',
-                          gap: 8,
-                          padding: '9px 10px',
-                          borderBottom: '1px solid var(--border-default)',
-                          alignItems: 'start',
-                        }}
-                      >
-                        <span style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>{fmtTime(item.ts)}</span>
-                        <span style={{ fontSize: 11, color: levelColor, fontWeight: 700 }}>
-                          {item.seq != null ? `${item.level} #${item.seq}` : item.level}
-                        </span>
-                        <span style={{ fontSize: 12, color: 'var(--text-primary)', fontWeight: 700 }}>{item.event}</span>
-                        <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>{item.message}</span>
-                        <span style={{ fontSize: 12, color: 'var(--primary-base)' }}>{item.toolHint || '--'}</span>
-                      </div>
-                    );
-                  })}
-                </div>
-              ) : logRows.length === 0 ? (
-                <div className="orion-panel-copy" style={{ marginTop: 10 }}>No logs captured.</div>
-              ) : (
-                <div
-                  style={{
-                    marginTop: 10,
-                    borderTop: '1px solid var(--border-default)',
-                    borderBottom: '1px solid var(--border-default)',
-                    overflowX: 'auto',
-                    maxHeight: 420,
-                    overflowY: 'auto',
-                  }}
-                >
-                  <div
-                    style={{
-                      minWidth: 580,
-                      display: 'grid',
-                      gridTemplateColumns: '84px 160px minmax(300px, 1fr)',
-                      gap: 8,
-                      padding: '8px 10px',
-                      borderBottom: '1px solid var(--border-default)',
-                      fontSize: 10,
-                      color: 'var(--text-tertiary)',
-                      textTransform: 'uppercase',
-                      letterSpacing: '0.05em',
-                      fontWeight: 800,
-                    }}
-                  >
-                    <span>Level</span>
-                    <span>Time</span>
-                    <span>Message</span>
-                  </div>
-                  {logRows.map((item) => {
-                    const levelColor =
-                      item.level === 'error'
-                        ? 'var(--error-fg)'
-                        : item.level === 'warn'
-                        ? 'var(--warning-fg)'
-                        : 'var(--text-secondary)';
-                    return (
-                      <div
-                        key={`log:${item.id}`}
-                        className="orion-log-entry"
-                        style={{
-                          minWidth: 580,
-                          display: 'grid',
-                          gridTemplateColumns: '84px 160px minmax(300px, 1fr)',
-                          gap: 8,
-                          padding: '9px 10px',
-                          borderBottom: '1px solid var(--border-default)',
-                          alignItems: 'start',
-                        }}
-                      >
-                        <span style={{ fontSize: 11, color: levelColor, fontWeight: 700 }}>
-                          {String(item.level || 'info').toUpperCase()}
-                        </span>
-                        <span style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>{fmtTime(item.ts)}</span>
-                        <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>{item.text}</span>
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-            </article>
+              onRefreshRunState={() => void refreshRunState()}
+            />
 
             <article
               ref={approvalsSectionRef}

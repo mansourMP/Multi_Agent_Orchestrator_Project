@@ -104,6 +104,12 @@ type DelegationSummary = {
 type RunDetailPayload = {
   run_id?: string;
   status?: string;
+  machine_id?: string | null;
+  runtime_id?: string | null;
+  interrupt_requested?: boolean;
+  interrupt_requested_at?: string | null;
+  interrupt_reason?: string | null;
+  interrupt_scope?: string | null;
   result?: string | null;
   active_profile_provider?: string | null;
   active_profile_model?: string | null;

@@ -59,12 +59,17 @@ class RuntimeRunDetailServiceTests(unittest.TestCase):
             run_id="run-1",
             run={
                 "status": "running",
+                "machine_id": "machine-7",
                 "result_data": {"secret": True},
                 "memory_trace": {"raw": True},
+                "interrupt_requested": True,
+                "interrupt_reason": "Operator stop",
+                "interrupt_scope": "machine",
+                "interrupt_requested_at": "2026-04-08T12:00:00Z",
                 "tool_policy_audit": [{"event": "audit"}],
             },
             snapshot={},
-            metadata={"owner_user_id": "user-1", "execution_target_requested": "local"},
+            metadata={"owner_user_id": "user-1", "execution_target_requested": "local", "runtime_id": "runtime-7"},
             include_sensitive=True,
             safe_context={"workspace_id": "default"},
             parent_run=None,
@@ -80,6 +85,12 @@ class RuntimeRunDetailServiceTests(unittest.TestCase):
         self.assertFalse(payload["archived"])
         self.assertEqual(payload["memory_trace"], {"trimmed": True})
         self.assertEqual(payload["pending_confirmation"]["approval_id"], "approval-1")
+        self.assertEqual(payload["machine_id"], "machine-7")
+        self.assertEqual(payload["runtime_id"], "runtime-7")
+        self.assertTrue(payload["interrupt_requested"])
+        self.assertEqual(payload["interrupt_reason"], "Operator stop")
+        self.assertEqual(payload["interrupt_scope"], "machine")
+        self.assertEqual(payload["interrupt_requested_at"], "2026-04-08T12:00:00Z")
         self.assertEqual(payload["diagnostics"]["category"], "approval_wait")
 
     def test_build_live_run_detail_response_sets_local_waiting_diagnostics(self):
@@ -150,6 +161,39 @@ class RuntimeRunDetailServiceTests(unittest.TestCase):
         self.assertEqual(payload["diagnostics"]["failure_event"], "run_error")
         self.assertEqual(payload["diagnostics"]["failure_message"], "Provider authentication failed.")
         self.assertTrue(payload["diagnostics"]["scheduled"])
+
+    def test_build_archived_run_detail_response_surfaces_machine_interrupt_fields(self):
+        payload = runtime_run_detail_service.build_archived_run_detail_response(
+            run_id="run-archived-1",
+            snapshot={
+                "status": "failed",
+                "context": {
+                    "metadata": {
+                        "runtime_id": "runtime-archived-1",
+                        "machine_id": "machine-archived-1",
+                        "interrupt_requested": True,
+                        "interrupt_reason": "Machine kill",
+                        "interrupt_scope": "machine",
+                    }
+                },
+                "events": [],
+            },
+            metadata={"agent_role": "builder"},
+            include_sensitive=False,
+            safe_context={"workspace_id": "default"},
+            parent_run=None,
+            child_runs=[],
+            delegation_summary={},
+            connector_binding={},
+            limited_result_data_view_fn=lambda value: {"summary": "trimmed"},
+            limited_node_states_view_fn=lambda value: {"trimmed": True},
+        )
+
+        self.assertEqual(payload["machine_id"], "machine-archived-1")
+        self.assertEqual(payload["runtime_id"], "runtime-archived-1")
+        self.assertTrue(payload["interrupt_requested"])
+        self.assertEqual(payload["interrupt_reason"], "Machine kill")
+        self.assertEqual(payload["interrupt_scope"], "machine")
 
 
 if __name__ == "__main__":

@@ -94,6 +94,12 @@ export type RunDetailResponse = Record<string, unknown> & {
   status?: string | null;
   result?: string | null;
   result_data?: unknown;
+  machine_id?: string | null;
+  runtime_id?: string | null;
+  interrupt_requested?: boolean;
+  interrupt_requested_at?: string | null;
+  interrupt_reason?: string | null;
+  interrupt_scope?: string | null;
   pending_confirmation?: Record<string, unknown> | null;
   pending_approval?: Record<string, unknown> | null;
   route?: Record<string, unknown> | null;

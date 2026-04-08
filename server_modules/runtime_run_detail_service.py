@@ -73,9 +73,21 @@ def build_run_diagnostics(
     route_reason = _text(source.get("execution_target_reason") or metadata.get("execution_target_reason")) or None
     route_fallback = _text(source.get("execution_target_fallback") or metadata.get("execution_target_fallback")) or None
     local_last_heartbeat_at = source.get("local_last_heartbeat_at")
+    result_data = source.get("result_data") if isinstance(source.get("result_data"), dict) else {}
     browser_resume_supported = bool(
         source.get("browser_resume_supported")
         or metadata.get("browser_resume_supported")
+    )
+    local_execution_resume_supported = bool(
+        source.get("local_execution_checkpoint")
+        or result_data.get("local_execution_checkpoint")
+        or metadata.get("local_execution_checkpoint")
+        or metadata.get("local_execution_resume_supported")
+    )
+    manual_takeover_active = bool(
+        source.get("manual_takeover")
+        or result_data.get("manual_takeover")
+        or metadata.get("manual_takeover")
     )
     resumed_after_restart = bool(source.get("resume_after_confirmation_scheduled"))
     retry_of_run_id = _text(source.get("retry_of_run_id") or metadata.get("retry_of_run_id")) or None
@@ -110,6 +122,17 @@ def build_run_diagnostics(
         summary = _text(pending_confirmation.get("prompt")) or "This run is paused until a decision is made."
         next_step = "Approve or decline the pending action so the run can continue."
         blocked_on = "approval"
+    elif manual_takeover_active and status == "waiting_for_input":
+        category = "manual_takeover"
+        headline = "Manual takeover active"
+        summary = "AI execution is paused. You currently have control of the machine."
+        next_step = (
+            "Resume the run when you want the AI to continue from its saved checkpoint."
+            if browser_resume_supported or local_execution_resume_supported
+            else "Resume is not available until the run records a resumable checkpoint."
+        )
+        blocked_on = "manual_takeover"
+        local_status = "paused_for_takeover"
     elif waiting_for_capacity:
         category = "local_capacity_wait"
         headline = "Waiting for local machine capacity"
@@ -186,6 +209,8 @@ def build_run_diagnostics(
         "local_status": local_status,
         "local_last_heartbeat_at": local_last_heartbeat_at,
         "browser_resume_supported": browser_resume_supported,
+        "local_execution_resume_supported": local_execution_resume_supported,
+        "manual_takeover_active": manual_takeover_active,
         "resumed_after_restart": resumed_after_restart,
         "retry_of_run_id": retry_of_run_id,
         "retry_root_run_id": retry_root_run_id,
@@ -252,6 +277,69 @@ def _route_payload(source: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _context_metadata(source: dict[str, Any]) -> dict[str, Any]:
+    context = source.get("context") if isinstance(source.get("context"), dict) else {}
+    metadata = context.get("metadata") if isinstance(context.get("metadata"), dict) else {}
+    return metadata
+
+
+def _machine_interrupt_payload(source: dict[str, Any], metadata: dict[str, Any]) -> dict[str, Any]:
+    context_metadata = _context_metadata(source)
+    runtime_id = (
+        _text(
+            source.get("runtime_id")
+            or source.get("local_worker_id")
+            or context_metadata.get("runtime_id")
+            or metadata.get("runtime_id")
+        )
+        or None
+    )
+    machine_id = (
+        _text(
+            source.get("machine_id")
+            or context_metadata.get("machine_id")
+            or metadata.get("machine_id")
+            or runtime_id
+        )
+        or None
+    )
+    interrupt_requested = bool(
+        source.get("interrupt_requested")
+        or context_metadata.get("interrupt_requested")
+        or metadata.get("interrupt_requested")
+    )
+    interrupt_reason = (
+        _text(
+            source.get("interrupt_reason")
+            or context_metadata.get("interrupt_reason")
+            or metadata.get("interrupt_reason")
+        )
+        or None
+    )
+    interrupt_scope = (
+        _normalized_status(
+            source.get("interrupt_scope")
+            or context_metadata.get("interrupt_scope")
+            or metadata.get("interrupt_scope")
+        )
+        or None
+    )
+    interrupt_requested_at = (
+        source.get("interrupt_requested_at")
+        or context_metadata.get("interrupt_requested_at")
+        or metadata.get("interrupt_requested_at")
+        or None
+    )
+    return {
+        "machine_id": machine_id,
+        "runtime_id": runtime_id,
+        "interrupt_requested": interrupt_requested,
+        "interrupt_reason": interrupt_reason,
+        "interrupt_scope": interrupt_scope,
+        "interrupt_requested_at": interrupt_requested_at,
+    }
+
+
 def build_archived_run_detail_response(
     *,
     run_id: str,
@@ -266,6 +354,7 @@ def build_archived_run_detail_response(
     limited_result_data_view_fn: Callable[[Any], Optional[dict]],
     limited_node_states_view_fn: Callable[[Any], Any],
 ) -> dict[str, Any]:
+    machine_interrupt = _machine_interrupt_payload(snapshot, metadata)
     response = {
         "run_id": run_id,
         "engine": snapshot.get("engine", "orion"),
@@ -333,6 +422,7 @@ def build_archived_run_detail_response(
         "execution_target_preferred_runtime_id": snapshot.get("execution_target_preferred_runtime_id"),
         "execution_target_preferred_runtime_label": snapshot.get("execution_target_preferred_runtime_label"),
         "execution_target_preferred_runtime_reason": snapshot.get("execution_target_preferred_runtime_reason"),
+        **machine_interrupt,
         "route": _route_payload(snapshot),
         "diagnostics": build_run_diagnostics(
             source=snapshot,
@@ -365,6 +455,7 @@ def build_live_run_detail_response(
     get_pending_confirmation_fn: Callable[[dict[str, Any]], Any],
 ) -> dict[str, Any]:
     pending_confirmation = get_pending_confirmation_fn(run) or None
+    machine_interrupt = _machine_interrupt_payload(run, metadata)
     response = {
         "run_id": run_id,
         "engine": run.get("engine", "orion"),
@@ -434,6 +525,7 @@ def build_live_run_detail_response(
         "execution_target_preferred_runtime_id": metadata.get("execution_target_preferred_runtime_id"),
         "execution_target_preferred_runtime_label": metadata.get("execution_target_preferred_runtime_label"),
         "execution_target_preferred_runtime_reason": metadata.get("execution_target_preferred_runtime_reason"),
+        **machine_interrupt,
         "route": _route_payload(metadata),
         "diagnostics": build_run_diagnostics(
             source={

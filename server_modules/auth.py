@@ -361,6 +361,40 @@ def _connect_auth_db() -> sqlite3.Connection:
         )
         """
     )
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS user_auth_methods (
+            id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            method_type TEXT NOT NULL,
+            provider TEXT NOT NULL,
+            subject TEXT,
+            label TEXT,
+            status TEXT NOT NULL,
+            is_primary INTEGER NOT NULL DEFAULT 0,
+            can_recover INTEGER NOT NULL DEFAULT 1,
+            metadata_json TEXT NOT NULL,
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL
+        )
+        """
+    )
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS user_provider_connections (
+            id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            provider TEXT NOT NULL,
+            workspace_id TEXT,
+            status TEXT NOT NULL,
+            label TEXT,
+            external_account_id TEXT,
+            metadata_json TEXT NOT NULL,
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL
+        )
+        """
+    )
     existing_columns = {
         str(row[1]).strip().lower()
         for row in connection.execute("PRAGMA table_info(users)").fetchall()
@@ -439,6 +473,12 @@ def _connect_auth_db() -> sqlite3.Connection:
         connection.execute("ALTER TABLE user_enterprise_security ADD COLUMN external_id TEXT")
     if "last_provisioned_at" not in user_enterprise_columns:
         connection.execute("ALTER TABLE user_enterprise_security ADD COLUMN last_provisioned_at INTEGER")
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS idx_user_auth_methods_user ON user_auth_methods(user_id, is_primary DESC, created_at ASC)"
+    )
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS idx_user_provider_connections_user ON user_provider_connections(user_id, provider, workspace_id)"
+    )
     connection.commit()
     return connection
 
@@ -1206,6 +1246,504 @@ def upsert_user_enterprise_security(
     return load_user_enterprise_security(clean_user_id)
 
 
+def _normalize_auth_method_type(value: Any, *, default: str = "password") -> str:
+    token = str(value or "").strip().lower()
+    if token in {"password", "oauth", "sso", "magic_link", "api_key"}:
+        return token
+    fallback = str(default or "password").strip().lower()
+    return fallback if fallback in {"password", "oauth", "sso", "magic_link", "api_key"} else "password"
+
+
+def _normalize_auth_method_status(value: Any, *, default: str = "active") -> str:
+    token = str(value or "").strip().lower()
+    if token in {"active", "disabled", "pending", "revoked"}:
+        return token
+    fallback = str(default or "active").strip().lower()
+    return fallback if fallback in {"active", "disabled", "pending", "revoked"} else "active"
+
+
+def _normalize_provider_connection_status(value: Any, *, default: str = "active") -> str:
+    token = str(value or "").strip().lower()
+    if token in {"active", "pending", "disconnected", "revoked", "error"}:
+        return token
+    fallback = str(default or "active").strip().lower()
+    return fallback if fallback in {"active", "pending", "disconnected", "revoked", "error"} else "active"
+
+
+def _stable_identity_row_id(*parts: Any) -> str:
+    normalized = "::".join(str(part or "").strip().lower() for part in parts if str(part or "").strip())
+    digest = hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+    return digest
+
+
+def _auth_method_from_row(row: Any) -> dict[str, Any]:
+    if row is None:
+        return {}
+    metadata: dict[str, Any] = {}
+    raw_metadata = row["metadata_json"] if "metadata_json" in row.keys() else "{}"
+    if isinstance(raw_metadata, str) and raw_metadata.strip():
+        try:
+            parsed = json.loads(raw_metadata)
+        except Exception:
+            parsed = {}
+        if isinstance(parsed, dict):
+            metadata = parsed
+    return {
+        "id": str(row["id"] or "").strip(),
+        "user_id": str(row["user_id"] or "").strip(),
+        "method_type": _normalize_auth_method_type(row["method_type"]),
+        "provider": str(row["provider"] or "").strip().lower(),
+        "subject": str(row["subject"] or "").strip() or None,
+        "label": str(row["label"] or "").strip() or None,
+        "status": _normalize_auth_method_status(row["status"]),
+        "is_primary": bool(row["is_primary"]),
+        "can_recover": bool(row["can_recover"]),
+        "metadata": metadata,
+        "created_at": int(row["created_at"]) if row["created_at"] is not None else None,
+        "updated_at": int(row["updated_at"]) if row["updated_at"] is not None else None,
+    }
+
+
+def _provider_connection_from_row(row: Any) -> dict[str, Any]:
+    if row is None:
+        return {}
+    metadata: dict[str, Any] = {}
+    raw_metadata = row["metadata_json"] if "metadata_json" in row.keys() else "{}"
+    if isinstance(raw_metadata, str) and raw_metadata.strip():
+        try:
+            parsed = json.loads(raw_metadata)
+        except Exception:
+            parsed = {}
+        if isinstance(parsed, dict):
+            metadata = parsed
+    return {
+        "id": str(row["id"] or "").strip(),
+        "user_id": str(row["user_id"] or "").strip(),
+        "provider": str(row["provider"] or "").strip().lower(),
+        "workspace_id": _normalize_workspace_token(row["workspace_id"], default="") if str(row["workspace_id"] or "").strip() else None,
+        "status": _normalize_provider_connection_status(row["status"]),
+        "label": str(row["label"] or "").strip() or None,
+        "external_account_id": str(row["external_account_id"] or "").strip() or None,
+        "metadata": metadata,
+        "created_at": int(row["created_at"]) if row["created_at"] is not None else None,
+        "updated_at": int(row["updated_at"]) if row["updated_at"] is not None else None,
+    }
+
+
+def _upsert_user_auth_method_locked(
+    connection: sqlite3.Connection,
+    *,
+    user_id: str,
+    method_type: str,
+    provider: str,
+    subject: Optional[str] = None,
+    label: Optional[str] = None,
+    status: str = "active",
+    is_primary: bool = False,
+    can_recover: bool = True,
+    metadata: Optional[dict[str, Any]] = None,
+    now_ts: Optional[int] = None,
+) -> dict[str, Any]:
+    clean_user_id = str(user_id or "").strip()
+    clean_provider = str(provider or "").strip().lower() or "unknown"
+    clean_subject = str(subject or "").strip() or None
+    clean_label = str(label or "").strip() or None
+    method_id = _stable_identity_row_id("auth_method", clean_user_id, method_type, clean_provider, clean_subject or clean_label or "")
+    ts = int(now_ts or time.time())
+    existing = connection.execute(
+        """
+        SELECT created_at
+        FROM user_auth_methods
+        WHERE id = ?
+        LIMIT 1
+        """,
+        (method_id,),
+    ).fetchone()
+    created_at = int(existing["created_at"]) if existing is not None and existing["created_at"] is not None else ts
+    if is_primary:
+        connection.execute(
+            "UPDATE user_auth_methods SET is_primary = 0, updated_at = ? WHERE user_id = ?",
+            (ts, clean_user_id),
+        )
+    connection.execute(
+        """
+        INSERT OR REPLACE INTO user_auth_methods (
+            id,
+            user_id,
+            method_type,
+            provider,
+            subject,
+            label,
+            status,
+            is_primary,
+            can_recover,
+            metadata_json,
+            created_at,
+            updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            method_id,
+            clean_user_id,
+            _normalize_auth_method_type(method_type),
+            clean_provider,
+            clean_subject,
+            clean_label,
+            _normalize_auth_method_status(status),
+            1 if is_primary else 0,
+            1 if can_recover else 0,
+            json.dumps(metadata or {}),
+            created_at,
+            ts,
+        ),
+    )
+    row = connection.execute(
+        "SELECT * FROM user_auth_methods WHERE id = ? LIMIT 1",
+        (method_id,),
+    ).fetchone()
+    return _auth_method_from_row(row)
+
+
+def _upsert_user_provider_connection_locked(
+    connection: sqlite3.Connection,
+    *,
+    user_id: str,
+    provider: str,
+    workspace_id: Optional[str] = None,
+    status: str = "active",
+    label: Optional[str] = None,
+    external_account_id: Optional[str] = None,
+    metadata: Optional[dict[str, Any]] = None,
+    now_ts: Optional[int] = None,
+) -> dict[str, Any]:
+    clean_user_id = str(user_id or "").strip()
+    clean_provider = str(provider or "").strip().lower() or "unknown"
+    clean_workspace_id = _normalize_workspace_token(workspace_id, default="") if str(workspace_id or "").strip() else None
+    clean_external_account_id = str(external_account_id or "").strip() or None
+    connection_id = _stable_identity_row_id(
+        "provider_connection",
+        clean_user_id,
+        clean_provider,
+        clean_workspace_id or "global",
+        clean_external_account_id or "",
+    )
+    ts = int(now_ts or time.time())
+    existing = connection.execute(
+        """
+        SELECT created_at
+        FROM user_provider_connections
+        WHERE id = ?
+        LIMIT 1
+        """,
+        (connection_id,),
+    ).fetchone()
+    created_at = int(existing["created_at"]) if existing is not None and existing["created_at"] is not None else ts
+    connection.execute(
+        """
+        INSERT OR REPLACE INTO user_provider_connections (
+            id,
+            user_id,
+            provider,
+            workspace_id,
+            status,
+            label,
+            external_account_id,
+            metadata_json,
+            created_at,
+            updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            connection_id,
+            clean_user_id,
+            clean_provider,
+            clean_workspace_id,
+            _normalize_provider_connection_status(status),
+            str(label or "").strip() or None,
+            clean_external_account_id,
+            json.dumps(metadata or {}),
+            created_at,
+            ts,
+        ),
+    )
+    row = connection.execute(
+        "SELECT * FROM user_provider_connections WHERE id = ? LIMIT 1",
+        (connection_id,),
+    ).fetchone()
+    return _provider_connection_from_row(row)
+
+
+def _ensure_user_identity_boundary_records(user_id: str) -> None:
+    clean_user_id = str(user_id or "").strip()
+    if not clean_user_id:
+        return
+    ts = int(time.time())
+    with AUTH_LOCK:
+        with _connect_auth_db() as connection:
+            user_row = connection.execute(
+                """
+                SELECT id, email, password_hash
+                FROM users
+                WHERE id = ?
+                LIMIT 1
+                """,
+                (clean_user_id,),
+            ).fetchone()
+            if user_row is None:
+                return
+            any_method = connection.execute(
+                "SELECT COUNT(1) AS count FROM user_auth_methods WHERE user_id = ?",
+                (clean_user_id,),
+            ).fetchone()
+            has_auth_methods = int(any_method["count"]) > 0 if any_method is not None else False
+            password_hash = str(user_row["password_hash"] or "").strip()
+            email = str(user_row["email"] or "").strip().lower() or None
+            security_row = connection.execute(
+                """
+                SELECT auth_provider, sso_subject, external_id, provisioning_source
+                FROM user_enterprise_security
+                WHERE user_id = ?
+                LIMIT 1
+                """,
+                (clean_user_id,),
+            ).fetchone()
+            if security_row is not None:
+                auth_provider = str(security_row["auth_provider"] or "").strip().lower()
+                sso_subject = str(security_row["sso_subject"] or "").strip() or None
+                external_id = str(security_row["external_id"] or "").strip() or None
+                provisioning_source = str(security_row["provisioning_source"] or "").strip() or None
+                has_external_identity = bool(auth_provider or sso_subject or external_id)
+                password_sources = {"", "local_password", "password", "email_password"}
+                existing_password_method = connection.execute(
+                    """
+                    SELECT id
+                    FROM user_auth_methods
+                    WHERE user_id = ? AND method_type = 'password' AND provider = 'empyralis_password'
+                    LIMIT 1
+                    """,
+                    (clean_user_id,),
+                ).fetchone()
+                if password_hash and (
+                    not has_external_identity or str(provisioning_source or "").strip().lower() in password_sources
+                ) and existing_password_method is None:
+                    _upsert_user_auth_method_locked(
+                        connection,
+                        user_id=clean_user_id,
+                        method_type="password",
+                        provider="empyralis_password",
+                        subject=email,
+                        label="Email and password",
+                        is_primary=not has_auth_methods,
+                        can_recover=True,
+                        metadata={"email": email, "identity_role": "account_access"},
+                        now_ts=ts,
+                    )
+                    has_auth_methods = True
+                if auth_provider or sso_subject or external_id:
+                    existing_sso_method = connection.execute(
+                        """
+                        SELECT id
+                        FROM user_auth_methods
+                        WHERE user_id = ? AND method_type = 'sso' AND provider = ? AND subject = ?
+                        LIMIT 1
+                        """,
+                        (clean_user_id, auth_provider or "external_identity", sso_subject or external_id or email),
+                    ).fetchone()
+                    if existing_sso_method is None:
+                        _upsert_user_auth_method_locked(
+                            connection,
+                            user_id=clean_user_id,
+                            method_type="sso",
+                            provider=auth_provider or "external_identity",
+                            subject=sso_subject or external_id or email,
+                            label=f"{(auth_provider or 'External').replace('_', ' ').title()} sign-in",
+                            is_primary=not has_auth_methods,
+                            can_recover=False,
+                            metadata={
+                                "email": email,
+                                "external_id": external_id,
+                                "provisioning_source": provisioning_source,
+                                "identity_role": "account_access",
+                            },
+                            now_ts=ts,
+                        )
+            elif password_hash:
+                _upsert_user_auth_method_locked(
+                    connection,
+                    user_id=clean_user_id,
+                    method_type="password",
+                    provider="empyralis_password",
+                    subject=email,
+                    label="Email and password",
+                    is_primary=not has_auth_methods,
+                    can_recover=True,
+                    metadata={"email": email, "identity_role": "account_access"},
+                    now_ts=ts,
+                )
+            connection.commit()
+
+
+def _auth_payload_for_user(
+    user: dict[str, Any],
+    *,
+    role: str,
+    token: Optional[str] = None,
+    workspace_access: Optional[list[dict[str, Any]]] = None,
+    tenant_access: Optional[list[dict[str, Any]]] = None,
+    enterprise_security: Optional[dict[str, Any]] = None,
+) -> dict[str, Any]:
+    user_id = str(user.get("id") or "").strip()
+    payload: dict[str, Any] = {
+        "ok": True,
+        "user": _public_user_payload(user, role=role),
+        "identity_boundary": user_identity_boundary(user_id),
+    }
+    if token is not None:
+        payload["token"] = token
+    if workspace_access is not None:
+        payload["workspace_access"] = workspace_access
+    if tenant_access is not None:
+        payload["tenant_access"] = tenant_access
+    if enterprise_security is not None:
+        payload["enterprise_security"] = enterprise_security
+    return payload
+
+
+def list_user_auth_methods(user_id: str) -> list[dict[str, Any]]:
+    clean_user_id = str(user_id or "").strip()
+    if not clean_user_id:
+        return []
+    _ensure_user_identity_boundary_records(clean_user_id)
+    with AUTH_LOCK:
+        with _connect_auth_db() as connection:
+            rows = connection.execute(
+                """
+                SELECT *
+                FROM user_auth_methods
+                WHERE user_id = ?
+                ORDER BY is_primary DESC, created_at ASC, provider ASC
+                """,
+                (clean_user_id,),
+            ).fetchall()
+    return [_auth_method_from_row(row) for row in rows]
+
+
+def upsert_user_auth_method(
+    user_id: str,
+    *,
+    method_type: str,
+    provider: str,
+    subject: Optional[str] = None,
+    label: Optional[str] = None,
+    status: str = "active",
+    is_primary: bool = False,
+    can_recover: bool = True,
+    metadata: Optional[dict[str, Any]] = None,
+) -> dict[str, Any]:
+    clean_user_id = str(user_id or "").strip()
+    if not clean_user_id:
+        raise HTTPException(status_code=400, detail="user_id is required.")
+    with AUTH_LOCK:
+        with _connect_auth_db() as connection:
+            record = _upsert_user_auth_method_locked(
+                connection,
+                user_id=clean_user_id,
+                method_type=method_type,
+                provider=provider,
+                subject=subject,
+                label=label,
+                status=status,
+                is_primary=is_primary,
+                can_recover=can_recover,
+                metadata=metadata,
+            )
+            connection.commit()
+            return record
+
+
+def list_user_provider_connections(user_id: str) -> list[dict[str, Any]]:
+    clean_user_id = str(user_id or "").strip()
+    if not clean_user_id:
+        return []
+    with AUTH_LOCK:
+        with _connect_auth_db() as connection:
+            rows = connection.execute(
+                """
+                SELECT *
+                FROM user_provider_connections
+                WHERE user_id = ?
+                ORDER BY provider ASC, workspace_id ASC, created_at ASC
+                """,
+                (clean_user_id,),
+            ).fetchall()
+    return [_provider_connection_from_row(row) for row in rows]
+
+
+def upsert_user_provider_connection(
+    user_id: str,
+    *,
+    provider: str,
+    workspace_id: Optional[str] = None,
+    status: str = "active",
+    label: Optional[str] = None,
+    external_account_id: Optional[str] = None,
+    metadata: Optional[dict[str, Any]] = None,
+) -> dict[str, Any]:
+    clean_user_id = str(user_id or "").strip()
+    if not clean_user_id:
+        raise HTTPException(status_code=400, detail="user_id is required.")
+    with AUTH_LOCK:
+        with _connect_auth_db() as connection:
+            record = _upsert_user_provider_connection_locked(
+                connection,
+                user_id=clean_user_id,
+                provider=provider,
+                workspace_id=workspace_id,
+                status=status,
+                label=label,
+                external_account_id=external_account_id,
+                metadata=metadata,
+            )
+            connection.commit()
+            return record
+
+
+def user_identity_boundary(user_id: str) -> dict[str, Any]:
+    clean_user_id = str(user_id or "").strip()
+    auth_methods = list_user_auth_methods(clean_user_id)
+    provider_connections = list_user_provider_connections(clean_user_id)
+    primary_auth_method = next((item for item in auth_methods if item.get("is_primary")), auth_methods[0] if auth_methods else None)
+    active_provider_connections = [
+        item for item in provider_connections if _normalize_provider_connection_status(item.get("status")) == "active"
+    ]
+    return {
+        "account_owner": "empyralis",
+        "account_id": clean_user_id,
+        "auth_methods": auth_methods,
+        "provider_connections": provider_connections,
+        "machine_enrollment": {
+            "separate_from_account_identity": True,
+            "managed_via": "machines_and_runtime_enrollment",
+        },
+        "summary": {
+            "primary_auth_method": primary_auth_method,
+            "auth_method_count": len(auth_methods),
+            "linked_provider_count": len(active_provider_connections),
+            "has_recovery_method": any(
+                bool(item.get("can_recover"))
+                and _normalize_auth_method_status(item.get("status")) == "active"
+                for item in auth_methods
+            ),
+        },
+        "boundaries": {
+            "identity": "Empyralis owns the user account, workspaces, runs, artifacts, notifications, and billing.",
+            "auth_methods": "Account access methods are separate from AI provider capabilities.",
+            "provider_connections": "Linked providers add capability only and can be revoked without deleting the Empyralis account.",
+            "machine_enrollment": "Machine enrollment is a separate execution boundary and does not define account ownership.",
+        },
+    }
+
+
 def enterprise_status_for_user(current_user: Optional[Dict[str, Any]]) -> dict[str, Any]:
     user_id = _current_bearer_user_id(current_user)
     user_security = load_user_enterprise_security(user_id)
@@ -1333,6 +1871,33 @@ def provision_user_account(
                     created_at,
                 ),
             )
+            if auth_provider or sso_subject or external_id:
+                existing_auth_methods_row = connection.execute(
+                    "SELECT COUNT(1) AS count FROM user_auth_methods WHERE user_id = ?",
+                    (user_id,),
+                ).fetchone()
+                has_auth_methods = (
+                    int(existing_auth_methods_row["count"]) > 0
+                    if existing_auth_methods_row is not None
+                    else False
+                )
+                _upsert_user_auth_method_locked(
+                    connection,
+                    user_id=user_id,
+                    method_type="sso",
+                    provider=str(auth_provider or "external_identity").strip().lower(),
+                    subject=str(sso_subject or external_id or email_token).strip() or email_token,
+                    label=f"{str(auth_provider or 'External').replace('_', ' ').title()} sign-in",
+                    is_primary=not has_auth_methods,
+                    can_recover=False,
+                    metadata={
+                        "email": email_token,
+                        "external_id": str(external_id or "").strip() or None,
+                        "provisioning_source": str(provisioning_source or "admin_api").strip() or "admin_api",
+                        "identity_role": "account_access",
+                    },
+                    now_ts=created_at,
+                )
             connection.commit()
     user = _find_user_by_id(user_id)
     if user is None:
@@ -1345,13 +1910,13 @@ def provision_user_account(
         is_admin=False,
         workspace_ids=list(normalized_workspace_roles.keys()),
     )
-    return {
-        "ok": True,
-        "user": _public_user_payload(user, role="member"),
-        "workspace_access": list(workspace_access.values()),
-        "tenant_access": list(tenant_access_map({"workspace_access": workspace_access}).values()),
-        "enterprise_security": load_user_enterprise_security(user_id),
-    }
+    return _auth_payload_for_user(
+        user,
+        role="member",
+        workspace_access=list(workspace_access.values()),
+        tenant_access=list(tenant_access_map({"workspace_access": workspace_access}).values()),
+        enterprise_security=load_user_enterprise_security(user_id),
+    )
 
 
 def _effective_workspace_access(
@@ -2002,6 +2567,21 @@ def register_user(email: str, password: str, *, name: Optional[str] = None) -> D
                 """,
                 (user_id, 0, None, None, None, None, None, "local_password", None, None, created_at),
             )
+            _upsert_user_auth_method_locked(
+                connection,
+                user_id=user_id,
+                method_type="password",
+                provider="empyralis_password",
+                subject=email_token,
+                label="Email and password",
+                is_primary=True,
+                can_recover=True,
+                metadata={
+                    "email": email_token,
+                    "identity_role": "account_access",
+                },
+                now_ts=created_at,
+            )
             for workspace_id in ORION_DEFAULT_WORKSPACE_IDS:
                 _write_workspace_registry(
                     connection,
@@ -2017,11 +2597,16 @@ def register_user(email: str, password: str, *, name: Optional[str] = None) -> D
                     now_ts=created_at,
                 )
             connection.commit()
-    return {
-        "ok": True,
-        "user": {"id": user_id, "email": email_token, "name": user_name, "avatar_url": None, "role": "member", "is_admin": False},
-        "token": issue_token(user_id, email=email_token, role="member"),
-    }
+    return _auth_payload_for_user(
+        {
+            "id": user_id,
+            "email": email_token,
+            "name": user_name,
+            "avatar_url": None,
+        },
+        role="member",
+        token=issue_token(user_id, email=email_token, role="member"),
+    )
 
 
 def login_user(email: str, password: str) -> Dict[str, Any]:
@@ -2031,11 +2616,11 @@ def login_user(email: str, password: str) -> Dict[str, Any]:
     user_id = str(user.get("id") or "").strip()
     if not user_id:
         raise HTTPException(status_code=401, detail="Invalid user record.")
-    return {
-        "ok": True,
-        "user": _public_user_payload(user, role="member"),
-        "token": issue_token(user_id, email=str(user.get("email") or ""), role="member"),
-    }
+    return _auth_payload_for_user(
+        user,
+        role="member",
+        token=issue_token(user_id, email=str(user.get("email") or ""), role="member"),
+    )
 
 
 def _current_bearer_user_id(current_user: Optional[Dict[str, Any]]) -> str:
@@ -2054,13 +2639,13 @@ def get_authenticated_user_profile(current_user: Optional[Dict[str, Any]]) -> Di
     if user is None:
         raise HTTPException(status_code=404, detail="User not found.")
     role = current_user_role(current_user)
-    return {
-        "ok": True,
-        "user": _public_user_payload(user, role=role),
-        "workspace_access": list(workspace_access_map(current_user).values()),
-        "tenant_access": list(tenant_access_map(current_user).values()),
-        "enterprise_security": enterprise_status_for_user(current_user),
-    }
+    return _auth_payload_for_user(
+        user,
+        role=role,
+        workspace_access=list(workspace_access_map(current_user).values()),
+        tenant_access=list(tenant_access_map(current_user).values()),
+        enterprise_security=enterprise_status_for_user(current_user),
+    )
 
 
 def update_authenticated_user_profile(

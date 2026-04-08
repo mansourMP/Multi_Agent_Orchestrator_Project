@@ -58,10 +58,13 @@ export default function BrowserSignInPage({ returnTo, errorCode = '', desktopMod
   const socialProvidersEnabled = providers.google.enabled || providers.apple.enabled;
   const headline = authMode === 'signup' ? 'Create your account' : 'Welcome back';
   const subheadline = inDesktopWindow
-    ? 'Sign in here — Google and Apple will open in your browser and return automatically'
+    ? 'Sign in to your Empyralis account here. Google and Apple open in your browser and return automatically.'
     : authMode === 'signup'
-      ? 'Start turning intent into execution'
-      : 'Sign in to continue to Empyralis';
+      ? 'Create your Empyralis account. AI providers connect separately after sign-in.'
+      : 'Sign in to your Empyralis account to continue.';
+  const accountBoundaryNote = authMode === 'signup'
+    ? 'Your Empyralis account owns your runs, artifacts, workspaces, and recovery path.'
+    : 'Your Empyralis account remains separate from any AI provider you connect later.';
 
   useEffect(() => {
     setInDesktopWindow(Boolean(desktopMode && getDesktopBridge()?.desktop));
@@ -249,6 +252,7 @@ export default function BrowserSignInPage({ returnTo, errorCode = '', desktopMod
           <div className="orion-auth-wordmark">Empyralis</div>
           <h1 className="orion-auth-card__title">{headline}</h1>
           <p className="orion-auth-card__copy">{subheadline}</p>
+          <p className="orion-auth-card__copy">{accountBoundaryNote}</p>
         </div>
 
         {!loadingProviders && socialProvidersEnabled ? (
@@ -276,8 +280,8 @@ export default function BrowserSignInPage({ returnTo, errorCode = '', desktopMod
         {!loadingProviders && !providers.google.enabled && !providers.apple.enabled ? (
           <div className="orion-auth-note">
             {inDesktopWindow
-              ? 'Google or Apple sign-in is not configured in this build yet. Create an account here, or sign in with your existing account.'
-              : 'This local build is not configured for Google or Apple sign-in yet. Create a local account here, or sign in with an existing local account.'}
+              ? 'Google or Apple sign-in is not configured in this build yet. Use your Empyralis account here, then connect providers separately later.'
+              : 'This local build is not configured for Google or Apple sign-in yet. Use your Empyralis account here, then connect providers separately later.'}
           </div>
         ) : null}
 
@@ -344,7 +348,7 @@ export default function BrowserSignInPage({ returnTo, errorCode = '', desktopMod
               <div className="orion-auth-mode-switch">
                 {authMode === 'signup' ? (
                   <>
-                    <span>Already have an account?</span>
+                    <span>Already have an Empyralis account?</span>
                     <button
                       type="button"
                       className="orion-auth-mode-link"
@@ -358,7 +362,7 @@ export default function BrowserSignInPage({ returnTo, errorCode = '', desktopMod
                   </>
                 ) : (
                   <>
-                    <span>Don&apos;t have an account?</span>
+                    <span>Don&apos;t have an Empyralis account?</span>
                     <button
                       type="button"
                       className="orion-auth-mode-link"

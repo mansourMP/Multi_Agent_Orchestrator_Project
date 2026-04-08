@@ -89,6 +89,25 @@ def test_session_persistence(monkeypatch: pytest.MonkeyPatch, tmp_path):
     assert logged_in["user"]["id"] == created["user"]["id"]
 
 
+def test_register_user_exposes_empyralis_identity_boundary(monkeypatch: pytest.MonkeyPatch, tmp_path):
+    auth, _, _ = _reload_auth(monkeypatch, tmp_path)
+    created = auth.register_user("identity@example.com", "password-123", name="Identity User")
+
+    boundary = created["identity_boundary"]
+    auth_methods = boundary["auth_methods"]
+
+    assert boundary["account_owner"] == "empyralis"
+    assert boundary["account_id"] == created["user"]["id"]
+    assert len(auth_methods) == 1
+    assert auth_methods[0]["method_type"] == "password"
+    assert auth_methods[0]["provider"] == "empyralis_password"
+    assert auth_methods[0]["is_primary"] is True
+    assert auth_methods[0]["can_recover"] is True
+    assert boundary["provider_connections"] == []
+    assert boundary["summary"]["linked_provider_count"] == 0
+    assert boundary["summary"]["has_recovery_method"] is True
+
+
 def test_expired_token_rejected(monkeypatch: pytest.MonkeyPatch, tmp_path):
     auth, _, _ = _reload_auth(monkeypatch, tmp_path)
 
@@ -210,12 +229,68 @@ def test_enterprise_settings_and_admin_provisioning_hooks(monkeypatch: pytest.Mo
 
     security = auth.load_user_enterprise_security(provisioned["user"]["id"])
     workspace_ids = {item["workspace_id"] for item in provisioned["workspace_access"]}
+    boundary = provisioned["identity_boundary"]
+    auth_methods = boundary["auth_methods"]
 
     assert workspace_ids == {"finance", "ops"}
     assert security["auth_provider"] == "oidc"
     assert security["provisioning_source"] == "scim_bridge"
     assert security["external_id"] == "scim-user-123"
     assert security["sso_subject"] == "oidc|user-123"
+    assert len(auth_methods) == 1
+    assert auth_methods[0]["method_type"] == "sso"
+    assert auth_methods[0]["provider"] == "oidc"
+    assert auth_methods[0]["can_recover"] is False
+    assert boundary["provider_connections"] == []
+    assert boundary["summary"]["linked_provider_count"] == 0
+
+
+def test_provider_connections_are_capabilities_not_identity(monkeypatch: pytest.MonkeyPatch, tmp_path):
+    auth, _, _ = _reload_auth(monkeypatch, tmp_path)
+    created = auth.register_user("providers@example.com", "password-123", name="Provider User")
+    user_id = created["user"]["id"]
+
+    active_connection = auth.upsert_user_provider_connection(
+        user_id,
+        provider="openai",
+        status="active",
+        external_account_id="acct-openai-1",
+        metadata={"capability_role": "ai_provider"},
+    )
+    active_boundary = auth.user_identity_boundary(user_id)
+
+    assert active_connection["provider"] == "openai"
+    assert active_boundary["summary"]["linked_provider_count"] == 1
+    assert active_boundary["summary"]["has_recovery_method"] is True
+
+    disconnected_connection = auth.upsert_user_provider_connection(
+        user_id,
+        provider="openai",
+        status="disconnected",
+        external_account_id="acct-openai-1",
+        metadata={"capability_role": "ai_provider"},
+    )
+    disconnected_boundary = auth.user_identity_boundary(user_id)
+    logged_in = auth.login_user("providers@example.com", "password-123")
+
+    assert disconnected_connection["status"] == "disconnected"
+    assert disconnected_boundary["summary"]["linked_provider_count"] == 0
+    assert disconnected_boundary["provider_connections"][0]["status"] == "disconnected"
+    assert logged_in["user"]["id"] == user_id
+    assert logged_in["identity_boundary"]["account_owner"] == "empyralis"
+
+
+def test_authenticated_profile_includes_identity_boundary(monkeypatch: pytest.MonkeyPatch, tmp_path):
+    auth, _, _ = _reload_auth(monkeypatch, tmp_path)
+    created = auth.register_user("profile.identity@example.com", "password-123", name="Profile User")
+    current_user = auth.get_current_user(_Request(), authorization=f"Bearer {created['token']}")
+
+    profile = auth.get_authenticated_user_profile(current_user)
+
+    assert profile["identity_boundary"]["account_owner"] == "empyralis"
+    assert profile["identity_boundary"]["account_id"] == created["user"]["id"]
+    assert profile["identity_boundary"]["auth_methods"][0]["provider"] == "empyralis_password"
+
 
 
 def _build_auth_test_app() -> FastAPI:

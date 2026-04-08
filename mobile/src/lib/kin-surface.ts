@@ -6,41 +6,51 @@ export type KinCapability = {
   appId?: string;
 };
 
+const FINANCE_CAPABILITY: KinCapability = {
+  id: "finance",
+  label: "Finance",
+  icon: "wallet",
+  color: "#111827",
+  appId: "finance",
+};
+
+const HEALTH_CAPABILITY: KinCapability = {
+  id: "health",
+  label: "Health",
+  icon: "fitness",
+  color: "#EF4444",
+  appId: "health",
+};
+
+const STUDY_CAPABILITY: KinCapability = {
+  id: "study",
+  label: "Study",
+  icon: "book",
+  color: "#2563EB",
+  appId: "study",
+};
+
+const TRAVEL_CAPABILITY: KinCapability = {
+  id: "travel",
+  label: "Travel",
+  icon: "airplane",
+  color: "#06B6D4",
+  appId: "travel",
+};
+
+const RESEARCH_CAPABILITY: KinCapability = {
+  id: "research",
+  label: "Research",
+  icon: "search",
+  color: "#F97316",
+};
+
 const CAPABILITIES: KinCapability[] = [
-  {
-    id: "finance",
-    label: "Finance",
-    icon: "wallet",
-    color: "#111827",
-    appId: "finance",
-  },
-  {
-    id: "health",
-    label: "Health",
-    icon: "fitness",
-    color: "#EF4444",
-    appId: "health",
-  },
-  {
-    id: "study",
-    label: "Study",
-    icon: "book",
-    color: "#2563EB",
-    appId: "study",
-  },
-  {
-    id: "travel",
-    label: "Travel",
-    icon: "airplane",
-    color: "#06B6D4",
-    appId: "travel",
-  },
-  {
-    id: "research",
-    label: "Research",
-    icon: "search",
-    color: "#F97316",
-  },
+  FINANCE_CAPABILITY,
+  HEALTH_CAPABILITY,
+  STUDY_CAPABILITY,
+  TRAVEL_CAPABILITY,
+  RESEARCH_CAPABILITY,
 ];
 
 const GENERAL_CAPABILITY: KinCapability = {
@@ -65,23 +75,23 @@ export function inferKinCapability(...sources: (string | undefined | null)[]) {
   }
 
   if (hasAnyMatch(haystack, ["finance", "budget", "expense", "wallet", "spend", "money", "invoice"])) {
-    return CAPABILITIES[0];
+    return FINANCE_CAPABILITY;
   }
 
   if (hasAnyMatch(haystack, ["health", "nutrition", "sleep", "habit", "fitness", "wellness", "calorie"])) {
-    return CAPABILITIES[1];
+    return HEALTH_CAPABILITY;
   }
 
   if (hasAnyMatch(haystack, ["study", "language", "reading", "learning", "flashcard", "lesson", "quiz"])) {
-    return CAPABILITIES[2];
+    return STUDY_CAPABILITY;
   }
 
   if (hasAnyMatch(haystack, ["travel", "trip", "flight", "hotel", "itinerary", "airline"])) {
-    return CAPABILITIES[3];
+    return TRAVEL_CAPABILITY;
   }
 
   if (hasAnyMatch(haystack, ["research", "builder", "compare", "source", "analysis", "web"])) {
-    return CAPABILITIES[4];
+    return RESEARCH_CAPABILITY;
   }
 
   return GENERAL_CAPABILITY;

@@ -474,7 +474,7 @@ def run_full_stack_crash_rehearsal(
                 return _simulate_full_stack_crash_rehearsal(cycles=cycles, worker_id=worker_id)
             pause_worker: Optional[subprocess.Popen[str]] = None
             try:
-                _wait_for_http_ready(runtime_url, api_key)
+                _wait_for_http_ready(runtime_url, api_key, timeout_seconds=90.0)
                 pause_worker = _start_worker(
                     runtime_url=runtime_url,
                     api_key=api_key,

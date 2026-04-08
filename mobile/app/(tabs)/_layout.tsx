@@ -5,10 +5,13 @@ import { useAppTheme } from "@/src/theme/useAppTheme";
 export default function TabsLayout() {
   const theme = useAppTheme();
   const segments = useSegments();
+  const rootSegment = segments.at(0);
+  const sectionSegment = segments.at(1);
+  const leafSegment = segments.at(2);
   const isChatThread =
-    segments[0] === "(tabs)" &&
-    (segments[1] === "kin" || segments[1] === "chats") &&
-    segments[2] === "[id]";
+    rootSegment === "(tabs)" &&
+    (sectionSegment === "kin" || sectionSegment === "chats") &&
+    leafSegment === "[id]";
 
   return (
     <Tabs

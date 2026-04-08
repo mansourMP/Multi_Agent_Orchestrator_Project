@@ -141,8 +141,8 @@ export default function AppStoreScreen() {
       const isLoopback = loopbackTarget.includes("127.0.0.1") || loopbackTarget.toLowerCase().includes("localhost");
       const message = err instanceof Error ? err.message : "";
       const statusMatch = message.match(/API request failed: (\\d{3})/);
-      if (statusMatch?.[1]) {
-        const status = statusMatch[1];
+      const status = statusMatch?.at(1);
+      if (status) {
         if (status === "401" || status === "403") {
           setError(hasPlatform ? "Invalid platform key. Open Settings → Configure Session." : "Invalid runtime key. Open Settings → Configure Session.");
         } else {

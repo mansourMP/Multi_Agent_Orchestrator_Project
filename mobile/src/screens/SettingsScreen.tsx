@@ -52,7 +52,7 @@ export default function SettingsScreen() {
   const insets = useSafeAreaInsets();
   const { session, clearSession } = useSessionState();
   const { preferences, ready, updatePreferences } = useKinPreferences();
-  const isProfile = segments[1] === "profile";
+  const isProfile = segments.at(1) === "profile";
   const connected = Boolean(session?.runtimeUrl && session?.runtimeKey);
   const activeApps = APP_CATALOG.filter((app) => PROFILE_APP_IDS.includes(app.id));
   const selectedAppIds = preferences.activeAppIds.length ? preferences.activeAppIds : DEFAULT_ACTIVE_APP_IDS;

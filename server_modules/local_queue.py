@@ -38,6 +38,11 @@ _LOCAL_RUNTIME_WATCHDOG_STATE: Dict[str, Any] = {
     "last_resumed_count": 0,
     "last_resumed_run_ids": [],
 }
+_RUNTIME_CONTROL_STREAM_BACKLOG_LIMIT = 32
+_RUNTIME_CONTROL_STREAM_LOCK = threading.Lock()
+_RUNTIME_CONTROL_STREAM_CONDITION = threading.Condition(_RUNTIME_CONTROL_STREAM_LOCK)
+_RUNTIME_CONTROL_STREAM_SEQUENCE = 0
+_RUNTIME_CONTROL_STREAM_EVENTS: Dict[str, List[Dict[str, Any]]] = {}
 
 
 def _init():
@@ -231,6 +236,103 @@ def _capability_digest(capabilities: Optional[List[str]]) -> Optional[str]:
     return hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:16]
 
 
+def _safe_utc_now_iso() -> str:
+    _init()
+    utc_now_iso_fn = getattr(_server, "_utc_now_iso", None)
+    if callable(utc_now_iso_fn):
+        return str(utc_now_iso_fn())
+    return datetime.utcnow().isoformat() + "Z"
+
+
+def _append_runtime_control_event(runtime_id: str, event_type: str, payload: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    runtime_token = str(runtime_id or "").strip()
+    if not runtime_token:
+        raise HTTPException(status_code=400, detail="runtime_id is required.")
+    event_type_token = str(event_type or "runtime_control").strip().lower() or "runtime_control"
+    event_payload = dict(payload or {})
+    global _RUNTIME_CONTROL_STREAM_SEQUENCE
+    with _RUNTIME_CONTROL_STREAM_CONDITION:
+        _RUNTIME_CONTROL_STREAM_SEQUENCE += 1
+        event_record = {
+            "sequence": _RUNTIME_CONTROL_STREAM_SEQUENCE,
+            "event": event_type_token,
+            "runtime_id": runtime_token,
+            "requested_at": str(event_payload.get("requested_at") or _safe_utc_now_iso()),
+            **event_payload,
+        }
+        backlog = list(_RUNTIME_CONTROL_STREAM_EVENTS.get(runtime_token) or [])
+        backlog.append(event_record)
+        if len(backlog) > _RUNTIME_CONTROL_STREAM_BACKLOG_LIMIT:
+            backlog = backlog[-_RUNTIME_CONTROL_STREAM_BACKLOG_LIMIT :]
+        _RUNTIME_CONTROL_STREAM_EVENTS[runtime_token] = backlog
+        _RUNTIME_CONTROL_STREAM_CONDITION.notify_all()
+    return dict(event_record)
+
+
+def _list_runtime_control_events(runtime_id: str, *, since_sequence: int = 0) -> List[Dict[str, Any]]:
+    runtime_token = str(runtime_id or "").strip()
+    if not runtime_token:
+        return []
+    with _RUNTIME_CONTROL_STREAM_LOCK:
+        backlog = list(_RUNTIME_CONTROL_STREAM_EVENTS.get(runtime_token) or [])
+    return [
+        dict(item)
+        for item in backlog
+        if isinstance(item, dict) and int(item.get("sequence") or 0) > int(since_sequence or 0)
+    ]
+
+
+def iter_runtime_control_stream(
+    runtime_id: str,
+    *,
+    since_sequence: int = 0,
+    include_backlog: bool = True,
+    heartbeat_seconds: float = 5.0,
+    timeout_seconds: float = 30.0,
+):
+    runtime_token = str(runtime_id or "").strip()
+    if not runtime_token:
+        return
+    last_sequence = max(0, int(since_sequence or 0))
+    start = time.monotonic()
+    last_heartbeat = start
+    while True:
+        pending = _list_runtime_control_events(runtime_token, since_sequence=last_sequence) if include_backlog or last_sequence else _list_runtime_control_events(runtime_token, since_sequence=last_sequence)
+        for event_record in pending:
+            last_sequence = max(last_sequence, int(event_record.get("sequence") or 0))
+            yield {
+                "event": str(event_record.get("event") or "runtime_control").strip().lower() or "runtime_control",
+                "id": str(event_record.get("sequence") or ""),
+                "data": dict(event_record),
+            }
+        now = time.monotonic()
+        if (now - start) >= max(1.0, float(timeout_seconds or 30.0)):
+            break
+        if (now - last_heartbeat) >= max(1.0, float(heartbeat_seconds or 5.0)):
+            last_heartbeat = now
+            yield {
+                "event": "heartbeat",
+                "id": str(last_sequence),
+                "data": {
+                    "event": "heartbeat",
+                    "runtime_id": runtime_token,
+                    "sequence": last_sequence,
+                    "requested_at": _safe_utc_now_iso(),
+                },
+            }
+        wait_seconds = min(max(0.1, float(heartbeat_seconds or 5.0)), max(0.1, float(timeout_seconds or 30.0)))
+        with _RUNTIME_CONTROL_STREAM_CONDITION:
+            _RUNTIME_CONTROL_STREAM_CONDITION.wait(timeout=wait_seconds)
+
+
+def reset_runtime_control_stream_state_for_tests() -> None:
+    global _RUNTIME_CONTROL_STREAM_SEQUENCE
+    with _RUNTIME_CONTROL_STREAM_CONDITION:
+        _RUNTIME_CONTROL_STREAM_EVENTS.clear()
+        _RUNTIME_CONTROL_STREAM_SEQUENCE = 0
+        _RUNTIME_CONTROL_STREAM_CONDITION.notify_all()
+
+
 def _normalize_capability_ids(raw_items: Any) -> List[str]:
     seen = set()
     normalized: List[str] = []
@@ -333,8 +435,10 @@ def _set_enrollment_state(
 
 def _machine_control_state(record: Dict[str, Any]) -> str:
     state = str(record.get("control_state") or "").strip().lower()
-    if state in {"suspended", "revoked"}:
+    if state in {"interrupting", "suspended", "revoked"}:
         return state
+    if record.get("interrupt_requested_at"):
+        return "interrupting"
     if record.get("revoked_at"):
         return "revoked"
     if record.get("suspended_at"):
@@ -354,13 +458,18 @@ def _set_machine_control_state(
     normalized = str(state or "").strip().lower() or "active"
     record["control_state"] = normalized
     record["control_state_updated_at"] = timestamp
-    if normalized == "suspended":
+    if normalized == "interrupting":
+        record["interrupt_requested_at"] = timestamp
+        record["interrupt_reason"] = str(reason or record.get("interrupt_reason") or "Hard kill requested by operator.")[:280]
+    elif normalized == "suspended":
         record["suspended_at"] = timestamp
         record["suspended_reason"] = str(reason or record.get("suspended_reason") or "Suspended by operator.")[:280]
     elif normalized == "revoked":
         record["revoked_at"] = timestamp
         record["revoked_reason"] = str(reason or record.get("revoked_reason") or "Revoked by operator.")[:280]
     elif normalized == "active":
+        record["interrupt_requested_at"] = None
+        record["interrupt_reason"] = None
         record["suspended_at"] = None
         record["suspended_reason"] = None
     return record
@@ -1496,6 +1605,8 @@ def handle_get_local_workers_status() -> Dict[str, Any]:
                     "permission_probe_updated_at": record.get("permission_probe_updated_at"),
                     "control_state": control_state,
                     "control_state_updated_at": record.get("control_state_updated_at"),
+                    "interrupt_requested_at": record.get("interrupt_requested_at"),
+                    "interrupt_reason": record.get("interrupt_reason"),
                     "suspended_at": record.get("suspended_at"),
                     "suspended_reason": record.get("suspended_reason"),
                     "revoked_at": record.get("revoked_at"),
@@ -1518,6 +1629,7 @@ def handle_get_local_workers_status() -> Dict[str, Any]:
     busy = len([item for item in items if item.get("online") and item.get("current_run_id")])
     idle = max(0, online - busy)
     offline = max(0, known - online)
+    interrupting = len([item for item in items if str(item.get("control_state") or "").strip().lower() == "interrupting"])
     suspended = len([item for item in items if str(item.get("control_state") or "").strip().lower() == "suspended"])
     revoked = len([item for item in items if str(item.get("control_state") or "").strip().lower() == "revoked"])
 
@@ -1536,6 +1648,7 @@ def handle_get_local_workers_status() -> Dict[str, Any]:
             "busy": busy,
             "idle": idle,
             "offline": offline,
+            "interrupting": interrupting,
             "suspended": suspended,
             "revoked": revoked,
             "pending_runs": pending_runs,
@@ -1614,6 +1727,194 @@ def handle_delete_local_runtime(machine_id: str) -> Dict[str, Any]:
     }
 
 
+def _mark_run_interrupt_requested(
+    run_id: str,
+    run: Dict[str, Any],
+    *,
+    reason: Optional[str],
+    worker_id: Optional[str],
+    machine_id: Optional[str],
+    scope: str,
+    requested_by: Optional[str] = None,
+) -> Dict[str, Any]:
+    _init()
+    now_iso = _safe_utc_now_iso()
+    summary = str(reason or "").strip() or "Hard kill requested by operator."
+    run["interrupt_requested"] = True
+    run["interrupt_requested_at"] = now_iso
+    run["interrupt_reason"] = summary
+    run["interrupt_scope"] = str(scope or "run").strip().lower() or "run"
+    if machine_id:
+        run["interrupt_machine_id"] = str(machine_id).strip()
+    if worker_id:
+        run["interrupt_runtime_id"] = str(worker_id).strip()
+    if requested_by:
+        run["interrupt_requested_by"] = str(requested_by).strip()
+    context = run.get("context") if isinstance(run.get("context"), dict) else {}
+    metadata = context.get("metadata") if isinstance(context.get("metadata"), dict) else {}
+    metadata["interrupt_requested"] = True
+    metadata["interrupt_requested_at"] = now_iso
+    metadata["interrupt_reason"] = summary
+    metadata["interrupt_scope"] = run["interrupt_scope"]
+    if worker_id:
+        metadata["interrupt_runtime_id"] = str(worker_id).strip()
+    if machine_id:
+        metadata["interrupt_machine_id"] = str(machine_id).strip()
+    context["metadata"] = metadata
+    run["context"] = context
+    log_queue = run.get("logs")
+    if log_queue is not None:
+        _server.emit_log(
+            log_queue,
+            "error",
+            summary[:400],
+            event="run_interrupt_requested",
+            data={
+                "run_id": run_id,
+                "worker_id": str(worker_id or "").strip() or None,
+                "machine_id": str(machine_id or "").strip() or None,
+                "scope": run["interrupt_scope"],
+                "requested_by": str(requested_by or "").strip() or None,
+            },
+        )
+    return {
+        "interrupt_requested": True,
+        "interrupt_requested_at": now_iso,
+        "interrupt_reason": summary,
+        "interrupt_scope": run["interrupt_scope"],
+    }
+
+
+def handle_request_local_run_hard_kill(
+    run_id: str,
+    *,
+    reason: Optional[str] = None,
+    requested_by: Optional[str] = None,
+) -> Dict[str, Any]:
+    _init()
+    run_token = str(run_id or "").strip()
+    if not run_token:
+        raise HTTPException(status_code=400, detail="run_id is required.")
+    run = _server.runs.get(run_token)
+    if not isinstance(run, dict):
+        raise HTTPException(status_code=404, detail="Run ID not found")
+    status = str(run.get("status") or "").strip().lower()
+    if status in {"completed", "failed", "timeout", "stopped", "cancelled"}:
+        return {"ok": True, "run_id": run_token, "already_terminal": True, "status": status}
+    with _server.LOCAL_QUEUE_LOCK:
+        claim = _server.LOCAL_CLAIMED_RUNS.get(run_token) if isinstance(_server.LOCAL_CLAIMED_RUNS.get(run_token), dict) else {}
+    worker_id = str((claim or {}).get("worker_id") or run.get("local_worker_id") or "").strip() or None
+    machine_id = str((claim or {}).get("machine_id") or run.get("machine_id") or worker_id or "").strip() or None
+    interrupt_state = _mark_run_interrupt_requested(
+        run_token,
+        run,
+        reason=reason,
+        worker_id=worker_id,
+        machine_id=machine_id,
+        scope="run",
+        requested_by=requested_by,
+    )
+    if worker_id:
+        event = _append_runtime_control_event(
+            worker_id,
+            "run_interrupt",
+            {
+                "run_id": run_token,
+                "machine_id": machine_id,
+                "reason": interrupt_state["interrupt_reason"],
+                "scope": "run",
+            },
+        )
+        _persist_local_runtime_state()
+        return {
+            "ok": True,
+            "run_id": run_token,
+            "worker_id": worker_id,
+            "machine_id": machine_id,
+            "broadcasted": True,
+            "event": event,
+            **interrupt_state,
+        }
+    run["result"] = interrupt_state["interrupt_reason"]
+    _server.set_run_status(run_token, "failed")
+    _persist_local_runtime_state()
+    return {
+        "ok": True,
+        "run_id": run_token,
+        "worker_id": None,
+        "machine_id": machine_id,
+        "broadcasted": False,
+        "failed_immediately": True,
+        **interrupt_state,
+    }
+
+
+def handle_request_local_runtime_hard_kill(
+    machine_id: str,
+    *,
+    reason: Optional[str] = None,
+    requested_by: Optional[str] = None,
+) -> Dict[str, Any]:
+    _init()
+    runtime_id = str(machine_id or "").strip()
+    if not runtime_id:
+        raise HTTPException(status_code=400, detail="machine_id is required.")
+    with _server.LOCAL_QUEUE_LOCK:
+        record = _server.LOCAL_WORKER_REGISTRY.get(runtime_id) if isinstance(_server.LOCAL_WORKER_REGISTRY.get(runtime_id), dict) else None
+        if not isinstance(record, dict):
+            raise HTTPException(status_code=404, detail="Machine not found.")
+        _set_machine_control_state(record, "interrupting", reason=reason or "Hard kill requested by operator.")
+        record["note"] = "machine_interrupting"
+        _server.LOCAL_WORKER_REGISTRY[runtime_id] = record
+        active_run_ids = [
+            run_id
+            for run_id, claim in _server.LOCAL_CLAIMED_RUNS.items()
+            if isinstance(claim, dict) and str(claim.get("worker_id") or claim.get("machine_id") or "").strip() == runtime_id
+        ]
+    requested_runs: List[Dict[str, Any]] = []
+    for active_run_id in active_run_ids:
+        try:
+            requested_runs.append(
+                handle_request_local_run_hard_kill(
+                    active_run_id,
+                    reason=reason or "Hard kill requested by operator.",
+                    requested_by=requested_by,
+                )
+            )
+        except HTTPException:
+            continue
+    machine_event = _append_runtime_control_event(
+        runtime_id,
+        "hard_kill",
+        {
+            "machine_id": runtime_id,
+            "reason": str(reason or "Hard kill requested by operator.").strip() or "Hard kill requested by operator.",
+            "scope": "machine",
+            "requested_by": str(requested_by or "").strip() or None,
+        },
+    )
+    _persist_local_runtime_state()
+    _emit_machine_outbox_event("hard_kill_requested", record)
+    status_payload = handle_get_local_workers_status()
+    items = status_payload.get("items") if isinstance(status_payload.get("items"), list) else []
+    machine = next(
+        (
+            item
+            for item in items
+            if isinstance(item, dict)
+            and str(item.get("machine_id") or item.get("runtime_id") or "").strip() == runtime_id
+        ),
+        None,
+    )
+    return {
+        "ok": True,
+        "machine_id": runtime_id,
+        "machine": machine or dict(record),
+        "event": machine_event,
+        "requested_run_ids": [item.get("run_id") for item in requested_runs if isinstance(item, dict)],
+    }
+
+
 def handle_set_local_runtime_control(machine_id: str, *, action: str, reason: Optional[str] = None) -> Dict[str, Any]:
     _init()
     runtime_id = str(machine_id or "").strip()
@@ -1644,6 +1945,16 @@ def handle_set_local_runtime_control(machine_id: str, *, action: str, reason: Op
 
     _persist_local_runtime_state()
     _emit_machine_outbox_event(outbox_action, record)
+    if control_action == "resume":
+        _append_runtime_control_event(
+            runtime_id,
+            "machine_resume",
+            {
+                "machine_id": runtime_id,
+                "reason": str(reason or "Machine resumed by operator.").strip() or "Machine resumed by operator.",
+                "scope": "machine",
+            },
+        )
     status_payload = handle_get_local_workers_status()
     items = status_payload.get("items") if isinstance(status_payload.get("items"), list) else []
     machine = next(
@@ -1803,11 +2114,19 @@ def handle_get_local_run_control_state(
     ).strip()
     machine_control_state = "active"
     machine_wait_reason: Optional[str] = None
+    machine_interrupt_requested = False
+    machine_interrupt_reason: Optional[str] = None
+    machine_interrupt_requested_at: Optional[str] = None
     with _server.LOCAL_QUEUE_LOCK:
         record = _server.LOCAL_WORKER_REGISTRY.get(machine_id) if isinstance(_server.LOCAL_WORKER_REGISTRY.get(machine_id), dict) else None
         if isinstance(record, dict):
             machine_control_state = _machine_control_state(record)
-            if machine_control_state == "revoked":
+            if machine_control_state == "interrupting":
+                machine_wait_reason = "machine_interrupt_requested"
+                machine_interrupt_requested = True
+                machine_interrupt_reason = str(record.get("interrupt_reason") or "").strip() or None
+                machine_interrupt_requested_at = str(record.get("interrupt_requested_at") or "").strip() or None
+            elif machine_control_state == "revoked":
                 machine_wait_reason = "machine_revoked"
             elif machine_control_state == "suspended":
                 machine_wait_reason = "machine_suspended"
@@ -1818,6 +2137,23 @@ def handle_get_local_run_control_state(
         or ((run.get("result_data") if isinstance(run.get("result_data"), dict) else {}).get("pause_reason"))
         or ""
     ).strip() or None
+    run_interrupt_requested = bool(run.get("interrupt_requested"))
+    interrupt_requested = machine_interrupt_requested or run_interrupt_requested
+    interrupt_reason = (
+        machine_interrupt_reason
+        or str(run.get("interrupt_reason") or "").strip()
+        or None
+    )
+    interrupt_scope = (
+        "machine"
+        if machine_interrupt_requested
+        else str(run.get("interrupt_scope") or "").strip().lower() or None
+    )
+    interrupt_requested_at = (
+        machine_interrupt_requested_at
+        or str(run.get("interrupt_requested_at") or "").strip()
+        or None
+    )
     manual_takeover = _manual_takeover_active(run)
     if machine_wait_reason == "machine_revoked":
         observed_at = _server._utc_now_iso() if callable(getattr(_server, "_utc_now_iso", None)) else None
@@ -1828,13 +2164,20 @@ def handle_get_local_run_control_state(
         )
     return {
         "status": status,
-        "pause_requested": status == "waiting_for_input" or bool(machine_wait_reason),
+        "pause_requested": status == "waiting_for_input" or bool(machine_wait_reason) or interrupt_requested,
         "manual_takeover": manual_takeover,
-        "wait_reason": machine_wait_reason or wait_reason,
+        "wait_reason": machine_wait_reason or ("run_interrupt_requested" if run_interrupt_requested else wait_reason),
         "browser_checkpoint": dict(browser_checkpoint) if isinstance(browser_checkpoint, dict) else None,
         "local_execution_checkpoint": local_execution_checkpoint,
         "machine_control_state": machine_control_state,
         "resume_available": bool(browser_checkpoint or local_execution_checkpoint),
+        "interrupt_requested": interrupt_requested,
+        "interrupt_reason": interrupt_reason,
+        "interrupt_requested_at": interrupt_requested_at,
+        "scope": interrupt_scope,
+        "run_id": run_id_str,
+        "machine_id": machine_id or None,
+        "event_type": "hard_kill" if interrupt_scope == "machine" else "run_interrupt" if interrupt_requested else None,
     }
 
 

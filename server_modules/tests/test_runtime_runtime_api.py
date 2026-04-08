@@ -25,6 +25,12 @@ class _FakeApp:
         return self._register("DELETE", path, **kwargs)
 
 
+class _FakeEventSourceResponse:
+    def __init__(self, iterator, ping):
+        self.iterator = iterator
+        self.ping = ping
+
+
 class RuntimeRuntimeApiTests(unittest.TestCase):
     @patch("server_modules.outbox_service.get_outbox_delivery_status")
     @patch("server_modules.local_queue.handle_get_local_workers_status")
@@ -284,6 +290,97 @@ class RuntimeRuntimeApiTests(unittest.TestCase):
 
         self.assertEqual(result["action"], "resume")
         mock_control.assert_called_once_with("machine-1", action="resume", reason="Recovered")
+
+    @patch("server_modules.local_queue.handle_request_local_runtime_hard_kill")
+    @patch("server_modules.runtime_runtime_api.local_queue.handle_get_local_workers_status")
+    def test_register_runtime_routes_exposes_machine_hard_kill(self, mock_status, mock_hard_kill):
+        app = _FakeApp()
+        runtime_runtime_api.register_runtime_routes(app)
+        mock_hard_kill.return_value = {"ok": True, "machine_id": "machine-1", "event": {"event": "hard_kill"}}
+        mock_status.return_value = {
+            "items": [{"machine_id": "machine-1", "tenant_id": "default", "workspace_id": "default"}],
+            "summary": {},
+        }
+        handler = app.routes[("POST", "/machines/{machine_id}/hard-kill")]
+
+        result = self._run_async(
+            handler(
+                "machine-1",
+                runtime_runtime_api.MachineControlPayload(reason="Operator stop"),
+                current_user={"role": "owner", "is_admin": True, "user_id": "owner-1"},
+            )
+        )
+
+        self.assertEqual(result["machine_id"], "machine-1")
+        mock_hard_kill.assert_called_once_with("machine-1", reason="Operator stop", requested_by="owner-1")
+
+    @patch("server_modules.local_queue.handle_request_local_run_hard_kill")
+    def test_register_runtime_routes_exposes_run_hard_kill(self, mock_hard_kill):
+        app = _FakeApp()
+        runtime_runtime_api.register_runtime_routes(app)
+        mock_hard_kill.return_value = {"ok": True, "run_id": "00000000-0000-0000-0000-000000000001"}
+        original_server = getattr(runtime_runtime_api.local_queue, "_server", None)
+        try:
+            runtime_runtime_api.local_queue._server = type(
+                "_FakeServer",
+                (),
+                {
+                    "runs": {
+                        "00000000-0000-0000-0000-000000000001": {
+                            "context": {"workspace_id": "default", "tenant_id": "default", "metadata": {}}
+                        }
+                    }
+                },
+            )()
+            with patch.object(runtime_runtime_api.local_queue, "_init", return_value=None):
+                handler = app.routes[("POST", "/runs/{run_id}/hard-kill")]
+                result = self._run_async(
+                    handler(
+                        runtime_runtime_api.uuid.UUID("00000000-0000-0000-0000-000000000001"),
+                        runtime_runtime_api.MachineControlPayload(reason="Operator stop"),
+                        current_user={"role": "owner", "is_admin": True, "user_id": "owner-1"},
+                    )
+                )
+        finally:
+            runtime_runtime_api.local_queue._server = original_server
+
+        self.assertEqual(result["run_id"], "00000000-0000-0000-0000-000000000001")
+        mock_hard_kill.assert_called_once_with(
+            "00000000-0000-0000-0000-000000000001",
+            reason="Operator stop",
+            requested_by="owner-1",
+        )
+
+    @patch("server_modules.runtime_runtime_api.EventSourceResponse", side_effect=lambda iterator, ping: _FakeEventSourceResponse(iterator, ping))
+    @patch("server_modules.local_queue.iter_runtime_control_stream")
+    @patch("server_modules.local_queue._assert_runtime_session")
+    def test_runtime_control_stream_route_forwards_runtime_session(self, mock_assert_session, mock_iter_stream, _mock_event_source):
+        app = _FakeApp()
+        runtime_runtime_api.register_runtime_routes(app)
+        stream_marker = iter([{"event": "hard_kill"}])
+        mock_iter_stream.return_value = stream_marker
+        handler = app.routes[("GET", "/runtime/runtimes/{runtime_id}/control/stream")]
+
+        result = self._run_async(
+            handler(
+                "worker-1",
+                session_token="sess",
+                instance_id="inst",
+                since_sequence=4,
+                include_backlog=True,
+                heartbeat_seconds=4.0,
+                timeout_seconds=12.0,
+            )
+        )
+
+        self.assertIsInstance(result, _FakeEventSourceResponse)
+        self.assertEqual(result.iterator, stream_marker)
+        self.assertEqual(result.ping, 4)
+        mock_assert_session.assert_called_once_with("worker-1", "sess", instance_id="inst")
+        mock_iter_stream.assert_called_once()
+        kwargs = mock_iter_stream.call_args.kwargs
+        self.assertEqual(kwargs["since_sequence"], 4)
+        self.assertTrue(kwargs["include_backlog"])
 
     def _run_async(self, coroutine):
         import asyncio

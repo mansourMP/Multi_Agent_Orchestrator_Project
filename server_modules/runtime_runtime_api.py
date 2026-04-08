@@ -11,6 +11,7 @@ import httpx
 from fastapi import Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
+from sse_starlette.sse import EventSourceResponse
 
 from server_modules.auth import (
     allowed_workspace_ids,
@@ -755,6 +756,66 @@ def register_runtime_routes(app) -> None:
         body = payload or MachineControlPayload()
         return local_queue.handle_set_local_runtime_control(machine_id, action="resume", reason=body.reason)
 
+    @app.post("/machines/{machine_id}/hard-kill", dependencies=[Depends(require_api_key)])
+    async def hard_kill_machine(
+        machine_id: str,
+        payload: Optional[MachineControlPayload] = None,
+        current_user=Depends(require_api_key),
+    ):
+        status_payload = local_queue.handle_get_local_workers_status()
+        items = status_payload.get("items") if isinstance(status_payload.get("items"), list) else []
+        machine = next(
+            (
+                item
+                for item in items
+                if isinstance(item, dict)
+                and str(item.get("machine_id") or item.get("runtime_id") or "").strip() == str(machine_id or "").strip()
+            ),
+            None,
+        )
+        enforce_workspace_access(
+            current_user,
+            (machine or {}).get("workspace_id") or "default",
+            tenant_id=(machine or {}).get("tenant_id"),
+            minimum_role="member",
+            capability_id="machines.manage",
+        )
+        body = payload or MachineControlPayload()
+        requested_by = str((current_user or {}).get("user_id") or (current_user or {}).get("auth_type") or "operator").strip() or "operator"
+        return local_queue.handle_request_local_runtime_hard_kill(
+            machine_id,
+            reason=body.reason,
+            requested_by=requested_by,
+        )
+
+    @app.post("/runs/{run_id}/hard-kill", dependencies=[Depends(require_api_key)])
+    async def hard_kill_run(
+        run_id: uuid.UUID,
+        payload: Optional[MachineControlPayload] = None,
+        current_user=Depends(require_api_key),
+    ):
+        local_queue._init()
+        run = local_queue._server.runs.get(str(run_id))
+        if not isinstance(run, dict):
+            raise HTTPException(status_code=404, detail="Run ID not found")
+        context = run.get("context") if isinstance(run.get("context"), dict) else {}
+        metadata = context.get("metadata") if isinstance(context.get("metadata"), dict) else {}
+        workspace_id = enforce_workspace_access(
+            current_user,
+            context.get("workspace_id") or metadata.get("workspace_id") or "default",
+            tenant_id=context.get("tenant_id") or metadata.get("tenant_id"),
+            minimum_role="member",
+        )
+        body = payload or MachineControlPayload()
+        requested_by = str((current_user or {}).get("user_id") or (current_user or {}).get("auth_type") or "operator").strip() or "operator"
+        result = local_queue.handle_request_local_run_hard_kill(
+            str(run_id),
+            reason=body.reason,
+            requested_by=requested_by,
+        )
+        result["workspace_id"] = workspace_id
+        return result
+
     @app.get("/local/workers/status", dependencies=[Depends(require_api_key)])
     async def get_legacy_local_workers_status():
         return legacy_local_workers_status_payload()
@@ -823,6 +884,32 @@ def register_runtime_routes(app) -> None:
             "current_task_id": result.get("current_run_id"),
             "last_seen_at": result.get("last_seen_at"),
         }
+
+    @app.get("/runtime/runtimes/{runtime_id}/control/stream", dependencies=[Depends(require_api_key)])
+    async def stream_runtime_control(
+        runtime_id: str,
+        session_token: Optional[str] = None,
+        instance_id: Optional[str] = None,
+        since_sequence: int = 0,
+        include_backlog: bool = True,
+        heartbeat_seconds: float = 5.0,
+        timeout_seconds: float = 30.0,
+    ):
+        runtime_token = str(runtime_id or "").strip()
+        if not runtime_token:
+            raise HTTPException(status_code=400, detail="runtime_id is required.")
+        local_queue._assert_runtime_session(runtime_token, session_token, instance_id=instance_id)
+        safe_heartbeat = max(1.0, min(float(heartbeat_seconds), 60.0))
+        return EventSourceResponse(
+            local_queue.iter_runtime_control_stream(
+                runtime_token,
+                since_sequence=max(0, int(since_sequence or 0)),
+                include_backlog=bool(include_backlog),
+                heartbeat_seconds=safe_heartbeat,
+                timeout_seconds=max(safe_heartbeat, min(float(timeout_seconds or 30.0), 300.0)),
+            ),
+            ping=max(3, int(safe_heartbeat)),
+        )
 
     @app.post("/runtime/tasks/claim", dependencies=[Depends(require_api_key)])
     async def claim_runtime_task(body: Optional[RuntimeTaskClaimRequest] = None):

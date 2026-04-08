@@ -4,9 +4,12 @@ import json
 import os
 import re
 import shutil
+import signal
 import subprocess
 import sentry_sdk
 import sys
+import threading
+import time
 import uuid
 from html import unescape
 from html.parser import HTMLParser
@@ -197,6 +200,65 @@ class LocalExecutionPauseRequired(RuntimeError):
         self.summary = summary
         self.result_data = result_data
         self.browser_checkpoint = browser_checkpoint if isinstance(browser_checkpoint, dict) else {}
+
+
+class HardInterruptRequested(RuntimeError):
+    def __init__(self, summary: str, *, state: Optional[Dict[str, Any]] = None) -> None:
+        super().__init__(summary)
+        self.summary = summary
+        self.state = dict(state) if isinstance(state, dict) else {}
+
+
+def _interrupt_summary(state: Optional[Dict[str, Any]] = None) -> str:
+    payload = dict(state) if isinstance(state, dict) else {}
+    reason = str(payload.get("interrupt_reason") or payload.get("reason") or "").strip()
+    if reason:
+        return f"Hard kill requested by operator. {reason}"
+    event_type = str(payload.get("event_type") or "").strip().lower()
+    if event_type == "run_interrupt":
+        return "Run interrupt requested by operator. Local execution halted."
+    return "Hard kill requested by operator. Local execution halted."
+
+
+def _raise_if_interrupt_requested(state: Optional[Dict[str, Any]] = None) -> None:
+    payload = dict(state) if isinstance(state, dict) else {}
+    if bool(payload.get("interrupt_requested")):
+        raise HardInterruptRequested(_interrupt_summary(payload), state=payload)
+
+
+def _terminate_subprocess_tree(process: Optional[subprocess.Popen[str]]) -> None:
+    if process is None:
+        return
+    try:
+        if process.poll() is not None:
+            return
+    except Exception:
+        return
+    try:
+        if hasattr(os, "killpg"):
+            os.killpg(process.pid, signal.SIGKILL)
+        else:
+            process.kill()
+    except ProcessLookupError:
+        return
+    except Exception:
+        try:
+            process.kill()
+        except Exception:
+            return
+
+
+def _capture_shell_output(stream, chunks: List[str]) -> None:
+    if stream is None:
+        return
+    try:
+        for line in iter(stream.readline, ""):
+            chunks.append(line)
+    finally:
+        try:
+            stream.close()
+        except Exception:
+            pass
 
 
 def _local_execution_resume_checkpoint(run: Dict[str, Any], metadata: Dict[str, Any], operations: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -1495,7 +1557,16 @@ def _operation_summary(operation: Dict[str, Any], fallback_index: int) -> str:
     return f"Read {target}" if target else f"Read file {fallback_index + 1}"
 
 
-def _run_shell_operation(run_id: str, op_index: int, operation: Dict[str, Any], root: Path, artifacts_root: Path) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+def _run_shell_operation(
+    run_id: str,
+    op_index: int,
+    operation: Dict[str, Any],
+    root: Path,
+    artifacts_root: Path,
+    *,
+    interrupt_state_provider: Optional[Callable[[], Dict[str, Any]]] = None,
+    interrupt_controller: Optional[Any] = None,
+) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     tokens, matched_prefix, display_command = _match_allowed_operation_command(operation)
     assert_file_mount_access(
         operation.get("cwd") or ".",
@@ -1506,14 +1577,59 @@ def _run_shell_operation(run_id: str, op_index: int, operation: Dict[str, Any], 
     cwd = _resolve_local_dir(operation.get("cwd") or ".", root)
     timeout_seconds = int(operation.get("timeout_seconds") or 20)
     timeout_seconds = max(1, min(timeout_seconds, 120))
-    completed = subprocess.run(
+    stdout_chunks: List[str] = []
+    stderr_chunks: List[str] = []
+    interrupted_state: Dict[str, Any] = {}
+    started_at = time.monotonic()
+    completed = subprocess.Popen(
         tokens,
         cwd=str(cwd),
-        capture_output=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
         text=True,
-        timeout=timeout_seconds,
-        check=False,
+        start_new_session=hasattr(os, "killpg"),
     )
+    stdout_thread = threading.Thread(target=_capture_shell_output, args=(completed.stdout, stdout_chunks), daemon=True)
+    stderr_thread = threading.Thread(target=_capture_shell_output, args=(completed.stderr, stderr_chunks), daemon=True)
+    stdout_thread.start()
+    stderr_thread.start()
+    if interrupt_controller is not None and hasattr(interrupt_controller, "register_process"):
+        interrupt_controller.register_process(run_id, completed)
+    try:
+        while completed.poll() is None:
+            if callable(interrupt_state_provider):
+                current_state = interrupt_state_provider() or {}
+                if bool(current_state.get("interrupt_requested")):
+                    interrupted_state = dict(current_state)
+                    if interrupt_controller is not None and hasattr(interrupt_controller, "request_interrupt"):
+                        interrupt_controller.request_interrupt(
+                            scope=str(current_state.get("scope") or "run").strip().lower() or "run",
+                            event_type=str(current_state.get("event_type") or "hard_kill").strip().lower() or "hard_kill",
+                            reason=str(current_state.get("interrupt_reason") or current_state.get("reason") or "").strip() or None,
+                            run_id=str(current_state.get("run_id") or run_id).strip() or run_id,
+                            machine_id=str(current_state.get("machine_id") or "").strip() or None,
+                            requested_at=str(current_state.get("requested_at") or "").strip() or None,
+                            sequence=current_state.get("sequence"),
+                        )
+                    else:
+                        _terminate_subprocess_tree(completed)
+                    break
+            if (time.monotonic() - started_at) >= timeout_seconds:
+                _terminate_subprocess_tree(completed)
+                raise RuntimeError(f"Command timed out after {timeout_seconds}s: {display_command}")
+            time.sleep(0.1)
+        try:
+            completed.wait(timeout=2)
+        except subprocess.TimeoutExpired:
+            _terminate_subprocess_tree(completed)
+            completed.wait(timeout=2)
+    finally:
+        if interrupt_controller is not None and hasattr(interrupt_controller, "clear_process"):
+            interrupt_controller.clear_process(completed)
+        stdout_thread.join(timeout=1.0)
+        stderr_thread.join(timeout=1.0)
+    stdout_text = "".join(stdout_chunks)
+    stderr_text = "".join(stderr_chunks)
     command_dir = artifacts_root / "commands"
     command_dir.mkdir(parents=True, exist_ok=True)
     log_path = command_dir / f"{run_id}-command-{op_index + 1}.log"
@@ -1527,10 +1643,10 @@ def _run_shell_operation(run_id: str, op_index: int, operation: Dict[str, Any], 
                 f"exit_code: {completed.returncode}",
                 "",
                 "[stdout]",
-                str(completed.stdout or ""),
+                stdout_text,
                 "",
                 "[stderr]",
-                str(completed.stderr or ""),
+                stderr_text,
             ]
         ),
         encoding="utf-8",
@@ -1548,8 +1664,8 @@ def _run_shell_operation(run_id: str, op_index: int, operation: Dict[str, Any], 
         "allowed_prefix": matched_prefix,
         "timeout_seconds": timeout_seconds,
         "exit_code": int(completed.returncode),
-        "stdout_preview": _bounded_text(completed.stdout),
-        "stderr_preview": _bounded_text(completed.stderr),
+        "stdout_preview": _bounded_text(stdout_text),
+        "stderr_preview": _bounded_text(stderr_text),
         "file_path": _relative_to_root(log_path, root),
     }
     capability = str(operation.get("capability") or "").strip()
@@ -1563,6 +1679,9 @@ def _run_shell_operation(run_id: str, op_index: int, operation: Dict[str, Any], 
         "file_path": _relative_to_root(log_path, root),
         "label": log_path.name,
     }
+    if not interrupted_state and callable(interrupt_state_provider):
+        interrupted_state = dict(interrupt_state_provider() or {})
+    _raise_if_interrupt_requested(interrupted_state)
     if completed.returncode != 0:
         raise RuntimeError(f"Command failed with exit code {completed.returncode}: {display_command}")
     return action, artifact
@@ -1929,6 +2048,7 @@ def build_local_execution_pack_result(
     *,
     progress_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
     control_state_provider: Optional[Callable[[str], Dict[str, Any]]] = None,
+    interrupt_controller: Optional[Any] = None,
 ) -> Tuple[str, Dict[str, Any]]:
     run_id = str(run.get("run_id") or uuid.uuid4()).strip()
     root = _local_execution_root()
@@ -1948,6 +2068,7 @@ def build_local_execution_pack_result(
 
     def _continue_allowed(next_operation_index: int, summary_label: str, *, browser_checkpoint: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         state = _control_state()
+        _raise_if_interrupt_requested(state)
         if not bool(state.get("pause_requested")):
             return state
         checkpoint: Dict[str, Any] = dict(resume_checkpoint) if isinstance(resume_checkpoint, dict) and resume_checkpoint else {}
@@ -2049,7 +2170,15 @@ def build_local_execution_pack_result(
                     },
                 )
                 if tool_id == "shell.execute":
-                    action, artifact = _run_shell_operation(run_id, index, operation_row, root, artifacts_root)
+                    action, artifact = _run_shell_operation(
+                        run_id,
+                        index,
+                        operation_row,
+                        root,
+                        artifacts_root,
+                        interrupt_state_provider=lambda: _control_state(),
+                        interrupt_controller=interrupt_controller,
+                    )
                 elif tool_id == "filesystem.read_write":
                     action, artifact = _run_file_operation(operation_row, root, metadata)
                 elif tool_id == "screenshot.capture":

@@ -2,10 +2,15 @@ import json
 import hashlib
 import os
 import re
+import signal
+import subprocess
+import threading
+import time
 import urllib.error
 import urllib.request
 from pathlib import Path
 from typing import Any, Dict, Optional
+from urllib.parse import urlencode
 
 
 def ensure_trailing_slashless(url: str) -> str:
@@ -22,6 +27,122 @@ class ApiRequestError(RuntimeError):
     def __init__(self, message: str, status_code: Optional[int] = None):
         super().__init__(message)
         self.status_code = status_code
+
+
+class RuntimeInterruptController:
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._snapshot: Optional[Dict[str, Any]] = None
+        self._active_process: Optional[subprocess.Popen[str]] = None
+        self._active_process_run_id: Optional[str] = None
+
+    def _applies_to_run(self, snapshot: Optional[Dict[str, Any]], run_id: Optional[str]) -> bool:
+        if not isinstance(snapshot, dict):
+            return False
+        scope = str(snapshot.get("scope") or "run").strip().lower() or "run"
+        if scope == "machine":
+            return True
+        target_run_id = str(snapshot.get("run_id") or "").strip()
+        current_run_id = str(run_id or "").strip()
+        return bool(target_run_id) and bool(current_run_id) and target_run_id == current_run_id
+
+    def _terminate_process(self, process: Optional[subprocess.Popen[str]]) -> None:
+        if process is None:
+            return
+        try:
+            if process.poll() is not None:
+                return
+        except Exception:
+            return
+        try:
+            if hasattr(os, "killpg"):
+                os.killpg(process.pid, signal.SIGKILL)
+            else:
+                process.kill()
+        except ProcessLookupError:
+            return
+        except Exception:
+            try:
+                process.kill()
+            except Exception:
+                return
+
+    def request_interrupt(
+        self,
+        *,
+        scope: str,
+        event_type: str,
+        reason: Optional[str] = None,
+        run_id: Optional[str] = None,
+        machine_id: Optional[str] = None,
+        requested_at: Optional[str] = None,
+        sequence: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        snapshot = {
+            "interrupt_requested": True,
+            "scope": str(scope or "run").strip().lower() or "run",
+            "event_type": str(event_type or "hard_kill").strip().lower() or "hard_kill",
+            "reason": str(reason or "").strip() or None,
+            "run_id": str(run_id or "").strip() or None,
+            "machine_id": str(machine_id or "").strip() or None,
+            "requested_at": str(requested_at or "").strip() or None,
+            "sequence": int(sequence) if isinstance(sequence, (int, float)) else None,
+        }
+        process: Optional[subprocess.Popen[str]] = None
+        with self._lock:
+            self._snapshot = snapshot
+            if self._applies_to_run(snapshot, self._active_process_run_id):
+                process = self._active_process
+        self._terminate_process(process)
+        return dict(snapshot)
+
+    def interrupt_snapshot(self, *, run_id: Optional[str] = None) -> Dict[str, Any]:
+        with self._lock:
+            snapshot = dict(self._snapshot) if self._applies_to_run(self._snapshot, run_id) else {}
+        return snapshot
+
+    def register_process(self, run_id: str, process: subprocess.Popen[str]) -> None:
+        snapshot: Dict[str, Any] = {}
+        with self._lock:
+            self._active_process = process
+            self._active_process_run_id = str(run_id or "").strip() or None
+            if self._applies_to_run(self._snapshot, self._active_process_run_id):
+                snapshot = dict(self._snapshot or {})
+        if snapshot:
+            self._terminate_process(process)
+
+    def clear_process(self, process: Optional[subprocess.Popen[str]]) -> None:
+        if process is None:
+            return
+        with self._lock:
+            if self._active_process is process:
+                self._active_process = None
+                self._active_process_run_id = None
+
+    def clear_run_interrupt(self, run_id: Optional[str]) -> None:
+        target_run_id = str(run_id or "").strip()
+        if not target_run_id:
+            return
+        with self._lock:
+            if self._applies_to_run(self._snapshot, target_run_id):
+                scope = str((self._snapshot or {}).get("scope") or "run").strip().lower() or "run"
+                if scope == "run":
+                    self._snapshot = None
+
+    def clear_machine_interrupt(self, machine_id: Optional[str] = None) -> None:
+        target_machine_id = str(machine_id or "").strip()
+        with self._lock:
+            scope = str((self._snapshot or {}).get("scope") or "").strip().lower()
+            if scope != "machine":
+                return
+            snapshot_machine_id = str((self._snapshot or {}).get("machine_id") or "").strip()
+            if target_machine_id and snapshot_machine_id and snapshot_machine_id != target_machine_id:
+                return
+            self._snapshot = None
+
+    def has_active_process(self) -> bool:
+        with self._lock:
+            return self._active_process is not None
 
 
 class RuntimeClient:
@@ -226,6 +347,36 @@ class RuntimeClient:
         except urllib.error.URLError as exc:
             raise RuntimeError(f"{method} {path} failed: {exc}") from exc
 
+    def _open_stream(self, path: str, query: Optional[Dict[str, Any]] = None):
+        url = f"{self.base_url}{path}"
+        if isinstance(query, dict):
+            normalized_query = {
+                key: value
+                for key, value in query.items()
+                if value is not None and str(value).strip() != ""
+            }
+            if normalized_query:
+                url = f"{url}?{urlencode(normalized_query, doseq=True)}"
+        request = urllib.request.Request(
+            url=url,
+            method="GET",
+            headers={
+                "X-API-Key": self.api_key,
+                "Accept": "text/event-stream",
+                "Cache-Control": "no-cache",
+            },
+        )
+        try:
+            return urllib.request.urlopen(request, timeout=max(65, int(self.timeout_seconds or 20)))
+        except urllib.error.HTTPError as exc:
+            try:
+                raw = exc.read().decode("utf-8")
+            except Exception:
+                raw = ""
+            raise ApiRequestError(raw or str(exc), status_code=exc.code) from exc
+        except urllib.error.URLError as exc:
+            raise RuntimeError(f"GET {path} failed: {exc}") from exc
+
     def _request_with_fallback(
         self,
         method: str,
@@ -398,6 +549,104 @@ class RuntimeClient:
                 },
             ),
         )
+
+    def iter_control_events(self, runtime_id: str, *, since_sequence: int = 0):
+        runtime_token = str(runtime_id or "").strip()
+        if not runtime_token:
+            raise RuntimeError("runtime_id is required for the control stream.")
+        stream = self._open_stream(
+            f"/runtime/runtimes/{runtime_token}/control/stream",
+            query={
+                "session_token": self.runtime_session_token,
+                "instance_id": self.runtime_instance_id,
+                "since_sequence": max(0, int(since_sequence or 0)),
+            },
+        )
+        event_name = "message"
+        event_id: Optional[str] = None
+        data_lines: list[str] = []
+        with stream as response:
+            while True:
+                raw_line = response.readline()
+                if not raw_line:
+                    if data_lines:
+                        payload = "\n".join(data_lines)
+                        try:
+                            parsed = json.loads(payload) if payload else {}
+                        except Exception:
+                            parsed = {"raw": payload}
+                        yield {
+                            "event": event_name,
+                            "id": event_id,
+                            "data": parsed if isinstance(parsed, dict) else {"raw": payload},
+                        }
+                    break
+                line = raw_line.decode("utf-8", errors="replace").rstrip("\r\n")
+                if not line:
+                    if data_lines:
+                        payload = "\n".join(data_lines)
+                        try:
+                            parsed = json.loads(payload) if payload else {}
+                        except Exception:
+                            parsed = {"raw": payload}
+                        yield {
+                            "event": event_name,
+                            "id": event_id,
+                            "data": parsed if isinstance(parsed, dict) else {"raw": payload},
+                        }
+                    event_name = "message"
+                    event_id = None
+                    data_lines = []
+                    continue
+                if line.startswith(":"):
+                    continue
+                field, _, value = line.partition(":")
+                if value.startswith(" "):
+                    value = value[1:]
+                if field == "event":
+                    event_name = value.strip() or "message"
+                elif field == "id":
+                    event_id = value.strip() or None
+                elif field == "data":
+                    data_lines.append(value)
+
+    def start_control_stream_listener(
+        self,
+        runtime_id: str,
+        *,
+        on_event,
+        stop_event: threading.Event,
+        reconnect_delay_seconds: float = 1.0,
+    ) -> threading.Thread:
+        runtime_token = str(runtime_id or "").strip()
+
+        def _run() -> None:
+            since_sequence = 0
+            while not stop_event.is_set():
+                try:
+                    for event in self.iter_control_events(runtime_token, since_sequence=since_sequence):
+                        if stop_event.is_set():
+                            break
+                        payload = event.get("data") if isinstance(event.get("data"), dict) else {}
+                        sequence_value = payload.get("sequence")
+                        if isinstance(sequence_value, (int, float)):
+                            since_sequence = max(since_sequence, int(sequence_value))
+                        on_event(event)
+                except ApiRequestError as exc:
+                    if exc.status_code not in {401, 404, 409}:
+                        time.sleep(max(0.25, reconnect_delay_seconds))
+                    else:
+                        time.sleep(max(0.25, reconnect_delay_seconds))
+                except Exception:
+                    time.sleep(max(0.25, reconnect_delay_seconds))
+
+        thread = threading.Thread(
+            target=_run,
+            name=f"runtime-control-listener-{runtime_token}",
+            daemon=True,
+        )
+        thread.start()
+        return thread
 
     def complete_run(
         self,

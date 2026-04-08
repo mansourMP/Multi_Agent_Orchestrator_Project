@@ -319,7 +319,7 @@ def claim_local_machine_lease(
             or (worker_state.get("runtime_id") if isinstance(worker_state, dict) else None)
             or worker_id
         ).strip() or str(worker_id or "").strip()
-        if worker_control_state in {"suspended", "revoked"}:
+        if worker_control_state in {"interrupting", "suspended", "revoked"}:
             mark_local_worker_seen_fn(
                 worker_id,
                 None,

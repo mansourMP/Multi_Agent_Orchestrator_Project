@@ -6,6 +6,7 @@ import queue
 import re
 import socket
 import sys
+import threading
 import time
 import uuid
 from datetime import datetime, timezone
@@ -21,6 +22,7 @@ from server_modules.agent_turn import build_local_worker_turn_request
 
 from orion_local_worker_content import normalize_content_plan_items
 from orion_local_worker_execution import (
+    HardInterruptRequested,
     LocalExecutionPauseRequired,
     build_local_execution_pack_result,
     registered_local_worker_tool_names,
@@ -30,7 +32,7 @@ from orion_local_worker_llm import (
     generate_chat_reply_with_provider_fallback,
     generate_pack_with_provider_fallback,
 )
-from orion_local_worker_runtime import RateLimitError, RuntimeClient
+from orion_local_worker_runtime import RateLimitError, RuntimeClient, RuntimeInterruptController
 from orion_local_worker_spreadsheets import build_spreadsheet_pack_result
 from orion_local_worker_utils import (
     build_operator_system_prompt,
@@ -174,6 +176,7 @@ def build_pack_result(
     *,
     progress_callback=None,
     control_state_provider=None,
+    interrupt_controller=None,
 ) -> Tuple[str, Optional[Dict[str, Any]], Optional[Dict[str, Any]]]:
     context = run.get("context") if isinstance(run.get("context"), dict) else {}
     metadata = context.get("metadata") if isinstance(context.get("metadata"), dict) else {}
@@ -424,6 +427,7 @@ def build_pack_result(
             pack_inputs,
             progress_callback=progress_callback,
             control_state_provider=control_state_provider,
+            interrupt_controller=interrupt_controller,
         )
         return summary, data, None
 
@@ -503,6 +507,22 @@ def process_run(client: RuntimeClient, worker_id: str, run: Dict[str, Any], step
     if not run_id:
         raise RuntimeError("Claimed run payload missing run_id.")
 
+    interrupt_controller = run.get("__interrupt_controller__")
+
+    def _interrupt_snapshot() -> Dict[str, Any]:
+        if interrupt_controller is None or not hasattr(interrupt_controller, "interrupt_snapshot"):
+            return {}
+        return interrupt_controller.interrupt_snapshot(run_id=run_id)
+
+    def _raise_if_hard_interrupted() -> None:
+        snapshot = _interrupt_snapshot()
+        if bool(snapshot.get("interrupt_requested")):
+            raise HardInterruptRequested(
+                str(snapshot.get("reason") or "Hard kill requested by operator. Local execution halted.").strip()
+                or "Hard kill requested by operator. Local execution halted.",
+                state=snapshot,
+            )
+
     phases = [
         "Local worker accepted task.",
         "Preparing local output.",
@@ -514,12 +534,14 @@ def process_run(client: RuntimeClient, worker_id: str, run: Dict[str, Any], step
         execution_targets=["local"],
     )
     for phase in phases:
+        _raise_if_hard_interrupted()
         if verbose:
             print(f"[{run_id[:8]}] {phase}")
         client.heartbeat_worker(worker_id, run_id, phase, permission_probe=permission_probe)
         client.heartbeat_run(run_id, worker_id, phase)
         if step_delay_seconds > 0:
             time.sleep(step_delay_seconds)
+        _raise_if_hard_interrupted()
 
     try:
         def _progress_callback(event: Dict[str, Any]) -> None:
@@ -532,13 +554,52 @@ def process_run(client: RuntimeClient, worker_id: str, run: Dict[str, Any], step
                 return
 
         def _control_state_provider(active_run_id: str) -> Dict[str, Any]:
-            return client.get_task_control_state(active_run_id, worker_id)
+            snapshot = _interrupt_snapshot()
+            if snapshot:
+                return {
+                    "status": "interrupt_requested",
+                    "pause_requested": True,
+                    "interrupt_requested": True,
+                    "interrupt_reason": str(snapshot.get("reason") or "").strip() or None,
+                    "machine_id": snapshot.get("machine_id"),
+                    "machine_control_state": "interrupting" if str(snapshot.get("scope") or "").strip().lower() == "machine" else "active",
+                    "run_id": snapshot.get("run_id"),
+                    "event_type": snapshot.get("event_type"),
+                    "requested_at": snapshot.get("requested_at"),
+                    "sequence": snapshot.get("sequence"),
+                    "scope": snapshot.get("scope"),
+                    "wait_reason": "hard_kill_requested",
+                }
+            remote_state = client.get_task_control_state(active_run_id, worker_id)
+            if bool(remote_state.get("interrupt_requested")) and interrupt_controller is not None and hasattr(interrupt_controller, "request_interrupt"):
+                interrupt_controller.request_interrupt(
+                    scope=str(remote_state.get("scope") or "run").strip().lower() or "run",
+                    event_type=str(remote_state.get("event_type") or "run_interrupt").strip().lower() or "run_interrupt",
+                    reason=str(remote_state.get("interrupt_reason") or remote_state.get("reason") or "").strip() or None,
+                    run_id=str(remote_state.get("run_id") or active_run_id).strip() or active_run_id,
+                    machine_id=str(remote_state.get("machine_id") or worker_id).strip() or worker_id,
+                    requested_at=str(remote_state.get("requested_at") or "").strip() or None,
+                    sequence=remote_state.get("sequence"),
+                )
+                snapshot = _interrupt_snapshot()
+                if snapshot:
+                    return {
+                        **remote_state,
+                        "interrupt_requested": True,
+                        "interrupt_reason": str(snapshot.get("reason") or "").strip() or remote_state.get("interrupt_reason"),
+                        "event_type": snapshot.get("event_type"),
+                        "requested_at": snapshot.get("requested_at"),
+                        "sequence": snapshot.get("sequence"),
+                        "scope": snapshot.get("scope"),
+                    }
+            return remote_state
 
         summary, result_data, usage_override = build_pack_result(
             run,
             worker_id,
             progress_callback=_progress_callback,
             control_state_provider=_control_state_provider,
+            interrupt_controller=interrupt_controller,
         )
     except LocalExecutionPauseRequired as pause:
         client.pause_run(
@@ -552,6 +613,14 @@ def process_run(client: RuntimeClient, worker_id: str, run: Dict[str, Any], step
         if verbose:
             print(f"[{run_id[:8]}] Paused for human unblock.")
         return
+    except HardInterruptRequested as interrupt:
+        client.fail_run(run_id, worker_id, interrupt.summary)
+        if verbose:
+            print(f"[{run_id[:8]}] Hard kill acknowledged.")
+        return
+    finally:
+        if interrupt_controller is not None and hasattr(interrupt_controller, "clear_run_interrupt"):
+            interrupt_controller.clear_run_interrupt(run_id)
     usage_timestamp = utc_now_iso()
     usage = build_usage_record(
         "local_companion",
@@ -643,79 +712,113 @@ def main() -> int:
     next_idle_heartbeat_at = 0.0
     processed_runs = 0
     consecutive_errors = 0
+    interrupt_controller = RuntimeInterruptController()
+    control_listener_stop = threading.Event()
+    control_listener_thread: Optional[threading.Thread] = None
 
-    while True:
-        now = time.time()
-        if now >= next_idle_heartbeat_at:
-            try:
-                client.heartbeat_worker(
-                    worker_id,
-                    None,
-                    "idle",
-                    permission_probe=build_runtime_permission_probe(
-                        runtime_type="local",
-                        capabilities=build_runtime_capabilities(),
-                        execution_targets=["local"],
-                    ),
-                )
-                consecutive_errors = 0
-            except RateLimitError as exc:
-                if verbose:
-                    print(f"[warn] Worker heartbeat rate-limited, retry in {exc.retry_after_seconds}s")
-                next_idle_heartbeat_at = time.time() + exc.retry_after_seconds
-                time.sleep(exc.retry_after_seconds)
-                continue
-            except Exception as exc:
-                if verbose:
-                    print(f"[warn] Worker heartbeat failed: {exc}")
-            next_idle_heartbeat_at = now + max(2.0, args.idle_heartbeat_seconds)
+    def _handle_control_event(event: Dict[str, Any]) -> None:
+        payload = event.get("data") if isinstance(event.get("data"), dict) else {}
+        event_type = str(payload.get("event") or event.get("event") or "").strip().lower() or "message"
+        if event_type == "machine_resume":
+            interrupt_controller.clear_machine_interrupt(str(payload.get("machine_id") or worker_id).strip() or worker_id)
+            return
+        if event_type not in {"hard_kill", "run_interrupt"}:
+            return
+        interrupt_controller.request_interrupt(
+            scope="machine" if event_type == "hard_kill" else "run",
+            event_type=event_type,
+            reason=str(payload.get("reason") or "").strip() or None,
+            run_id=str(payload.get("run_id") or "").strip() or None,
+            machine_id=str(payload.get("machine_id") or worker_id).strip() or worker_id,
+            requested_at=str(payload.get("requested_at") or "").strip() or None,
+            sequence=payload.get("sequence"),
+        )
 
-        try:
-            claimed = client.claim_run(worker_id)
-            run = claimed.get("run") if isinstance(claimed, dict) else None
-            if isinstance(run, dict):
-                run_id = str(run.get("run_id") or "").strip()
+    if not bool(registration.get("legacy")) and str(client.runtime_session_token or "").strip():
+        control_listener_thread = client.start_control_stream_listener(
+            worker_id,
+            on_event=_handle_control_event,
+            stop_event=control_listener_stop,
+        )
+
+    try:
+        while True:
+            now = time.time()
+            if now >= next_idle_heartbeat_at:
                 try:
-                    process_run(client, worker_id, run, max(0.0, args.step_delay_seconds), verbose=verbose)
-                    processed_runs += 1
+                    client.heartbeat_worker(
+                        worker_id,
+                        None,
+                        "idle",
+                        permission_probe=build_runtime_permission_probe(
+                            runtime_type="local",
+                            capabilities=build_runtime_capabilities(),
+                            execution_targets=["local"],
+                        ),
+                    )
                     consecutive_errors = 0
-                    if args.once:
-                        break
-                except Exception as run_exc:
-                    message = str(run_exc)[:1000] or "Local worker execution failed."
+                except RateLimitError as exc:
                     if verbose:
-                        print(f"[error] Run failed ({run_id[:8] if run_id else 'unknown'}): {message}")
-                    if run_id:
-                        try:
-                            client.fail_run(run_id, worker_id, message)
-                        except Exception as fail_exc:
-                            if verbose:
-                                print(f"[warn] Could not mark run as failed ({run_id[:8]}): {fail_exc}")
-                    consecutive_errors += 1
-                    if args.once:
-                        return 4
-            else:
-                if args.once and time.time() > deadline:
+                        print(f"[warn] Worker heartbeat rate-limited, retry in {exc.retry_after_seconds}s")
+                    next_idle_heartbeat_at = time.time() + exc.retry_after_seconds
+                    time.sleep(exc.retry_after_seconds)
+                    continue
+                except Exception as exc:
                     if verbose:
-                        print("No local run was queued before timeout.")
-                    return 3
-                time.sleep(max(0.2, args.poll_seconds))
-        except KeyboardInterrupt:
-            if verbose:
-                print("Interrupted, shutting down worker.")
-            break
-        except RateLimitError as exc:
-            consecutive_errors += 1
-            delay = max(float(exc.retry_after_seconds), max(0.5, args.poll_seconds))
-            if verbose:
-                print(f"[warn] Worker rate-limited, sleeping {delay:.1f}s before retry.")
-            time.sleep(delay)
-        except Exception as exc:
-            consecutive_errors += 1
-            if verbose:
-                print(f"[error] Worker loop error: {exc}")
-            delay = min(15.0, max(1.0, args.poll_seconds) * (1.0 + (consecutive_errors * 0.35)))
-            time.sleep(delay)
+                        print(f"[warn] Worker heartbeat failed: {exc}")
+                next_idle_heartbeat_at = now + max(2.0, args.idle_heartbeat_seconds)
+
+            try:
+                claimed = client.claim_run(worker_id)
+                run = claimed.get("run") if isinstance(claimed, dict) else None
+                if isinstance(run, dict):
+                    run["__interrupt_controller__"] = interrupt_controller
+                    run_id = str(run.get("run_id") or "").strip()
+                    try:
+                        process_run(client, worker_id, run, max(0.0, args.step_delay_seconds), verbose=verbose)
+                        processed_runs += 1
+                        consecutive_errors = 0
+                        if args.once:
+                            break
+                    except Exception as run_exc:
+                        message = str(run_exc)[:1000] or "Local worker execution failed."
+                        if verbose:
+                            print(f"[error] Run failed ({run_id[:8] if run_id else 'unknown'}): {message}")
+                        if run_id:
+                            try:
+                                client.fail_run(run_id, worker_id, message)
+                            except Exception as fail_exc:
+                                if verbose:
+                                    print(f"[warn] Could not mark run as failed ({run_id[:8]}): {fail_exc}")
+                        consecutive_errors += 1
+                        if args.once:
+                            return 4
+                else:
+                    if args.once and time.time() > deadline:
+                        if verbose:
+                            print("No local run was queued before timeout.")
+                        return 3
+                    time.sleep(max(0.2, args.poll_seconds))
+            except KeyboardInterrupt:
+                if verbose:
+                    print("Interrupted, shutting down worker.")
+                break
+            except RateLimitError as exc:
+                consecutive_errors += 1
+                delay = max(float(exc.retry_after_seconds), max(0.5, args.poll_seconds))
+                if verbose:
+                    print(f"[warn] Worker rate-limited, sleeping {delay:.1f}s before retry.")
+                time.sleep(delay)
+            except Exception as exc:
+                consecutive_errors += 1
+                if verbose:
+                    print(f"[error] Worker loop error: {exc}")
+                delay = min(15.0, max(1.0, args.poll_seconds) * (1.0 + (consecutive_errors * 0.35)))
+                time.sleep(delay)
+    finally:
+        control_listener_stop.set()
+        if control_listener_thread is not None:
+            control_listener_thread.join(timeout=1.5)
 
     if verbose:
         print(f"Processed runs: {processed_runs}")

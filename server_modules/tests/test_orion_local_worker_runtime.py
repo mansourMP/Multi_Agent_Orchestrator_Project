@@ -1,5 +1,8 @@
 import importlib.util
 from pathlib import Path
+import threading
+import time
+import sys
 from unittest import TestCase
 from unittest.mock import patch
 
@@ -183,3 +186,58 @@ class LocalWorkerRuntimeClientTests(TestCase):
             )
 
         self.assertEqual(captured["payload"]["permission_probe"]["accessibility"]["status"], "denied")
+
+    def test_iter_control_events_parses_sse_payload(self):
+        client = self._client()
+
+        class _FakeStream:
+            def __init__(self):
+                self._lines = iter(
+                    [
+                        b"id: 7\n",
+                        b"event: hard_kill\n",
+                        b'data: {"event":"hard_kill","sequence":7,"machine_id":"worker-1"}\n',
+                        b"\n",
+                    ]
+                )
+
+            def readline(self):
+                return next(self._lines, b"")
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+        with patch.object(client, "_open_stream", return_value=_FakeStream()):
+            event = next(client.iter_control_events("worker-1", since_sequence=0))
+
+        self.assertEqual(event["event"], "hard_kill")
+        self.assertEqual(event["id"], "7")
+        self.assertEqual(event["data"]["machine_id"], "worker-1")
+
+    def test_runtime_interrupt_controller_kills_registered_process(self):
+        controller = worker_runtime.RuntimeInterruptController()
+        process = worker_runtime.subprocess.Popen(
+            [sys.executable, "-c", "import time; time.sleep(30)"],
+            start_new_session=hasattr(worker_runtime.os, "killpg"),
+        )
+        try:
+            controller.register_process("run-1", process)
+            controller.request_interrupt(
+                scope="run",
+                event_type="run_interrupt",
+                reason="Operator stop",
+                run_id="run-1",
+                machine_id="worker-1",
+            )
+            deadline = time.time() + 5.0
+            while process.poll() is None and time.time() < deadline:
+                time.sleep(0.05)
+            self.assertIsNotNone(process.poll())
+            snapshot = controller.interrupt_snapshot(run_id="run-1")
+            self.assertTrue(snapshot["interrupt_requested"])
+        finally:
+            if process.poll() is None:
+                process.kill()

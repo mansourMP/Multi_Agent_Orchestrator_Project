@@ -9,6 +9,8 @@ import { PageHeroCard } from '@/components/orion/page/PageHeroCard';
 import { PageSection } from '@/components/orion/page/PageSection';
 import { PageStatePanel } from '@/components/orion/page/PageStatePanel';
 import { fetchWorkflows } from '@/lib/api';
+import { fetchDesktopSetupStatus } from '@/lib/desktopFirstRun';
+import { getDesktopBridge } from '@/lib/desktopBridge';
 import { fetchRuntimeConnectionStatus } from '@/lib/runtimeConnection';
 import { buildSetupRoute, fetchSetupReadiness } from '@/lib/setupReadiness';
 
@@ -63,6 +65,14 @@ export default function HomePage() {
         if (!active) return;
         if (!runtimeStatus.configured || !runtimeStatus.healthy) {
           router.replace('/onboarding');
+          return;
+        }
+        if (getDesktopBridge()?.desktop) {
+          const desktopStatus = await fetchDesktopSetupStatus();
+          if (!active) return;
+          if (!desktopStatus.desktop_setup_completed) {
+            router.replace(buildSetupRoute('/home'));
+          }
           return;
         }
         const readiness = await fetchSetupReadiness();

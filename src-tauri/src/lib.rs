@@ -88,6 +88,65 @@ fn open_external(target: String) -> Result<bool, String> {
     Ok(true)
 }
 
+#[tauri::command]
+fn open_permission_settings(permission: String) -> Result<bool, String> {
+    let normalized = permission.trim().to_lowercase();
+    if normalized.is_empty() {
+        return Err("Missing permission target.".into());
+    }
+
+    #[cfg(target_os = "macos")]
+    let mut command = match normalized.as_str() {
+        "screen_recording" => {
+            let mut cmd = Command::new("open");
+            cmd.arg("x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture");
+            cmd
+        }
+        "accessibility" => {
+            let mut cmd = Command::new("open");
+            cmd.arg("x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility");
+            cmd
+        }
+        "filesystem" => {
+            let mut cmd = Command::new("open");
+            cmd.arg("x-apple.systempreferences:com.apple.preference.security?Privacy_FilesAndFolders");
+            cmd
+        }
+        _ => return Err(format!("Unsupported permission target: {normalized}")),
+    };
+
+    #[cfg(target_os = "windows")]
+    let mut command = match normalized.as_str() {
+        "filesystem" => {
+            let mut cmd = Command::new("cmd");
+            cmd.arg("/C").arg("start").arg("").arg("ms-settings:privacy-broadfilesystemaccess");
+            cmd
+        }
+        "screen_recording" | "accessibility" => {
+            let mut cmd = Command::new("cmd");
+            cmd.arg("/C").arg("start").arg("").arg("ms-settings:privacy-general");
+            cmd
+        }
+        _ => return Err(format!("Unsupported permission target: {normalized}")),
+    };
+
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let mut command = {
+        let _ = normalized;
+        return Err("Permission settings shortcuts are not implemented on this platform.".into());
+    };
+
+    let status = command
+        .status()
+        .map_err(|error| format!("Failed to open permission settings: {error}"))?;
+
+    if !status.success() {
+        return Err(format!("Permission settings handler exited with status {status}."));
+    }
+
+    Ok(true)
+}
+
 #[derive(Serialize)]
 struct OpenAiCodexOauthResult {
     access_token: String,
@@ -1243,6 +1302,12 @@ fn desktop_bridge_script() -> String {
       }}
       return false;
     }},
+    openPermissionSettings: async (permission) => {{
+      if (window.__TAURI_INTERNALS__ && typeof window.__TAURI_INTERNALS__.invoke === "function") {{
+        return await window.__TAURI_INTERNALS__.invoke("open_permission_settings", {{ permission }});
+      }}
+      throw new Error("Permission settings are only available in the Empyralis desktop app.");
+    }},
     bootstrapMachineEnrollment: async (intent) => {{
       if (window.__TAURI_INTERNALS__ && typeof window.__TAURI_INTERNALS__.invoke === "function") {{
         return await window.__TAURI_INTERNALS__.invoke("bootstrap_machine_enrollment", {{ intent }});
@@ -1549,6 +1614,7 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .invoke_handler(tauri::generate_handler![
             open_external,
+            open_permission_settings,
             openai_codex_oauth_login,
             bootstrap_machine_enrollment
         ])

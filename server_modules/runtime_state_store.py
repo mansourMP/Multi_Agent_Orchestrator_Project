@@ -265,6 +265,16 @@ def init_runtime_state_db(db_path: Path) -> None:
             """
         )
         conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS local_app_state (
+                state_key TEXT PRIMARY KEY,
+                value_json TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                persisted_at TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_live_runs_sort_ts ON live_runs(sort_ts DESC)"
         )
         conn.execute(
@@ -1800,3 +1810,68 @@ def list_notification_delivery_statuses(
             "last_error": str(row["last_error"] or "").strip() or None,
         }
     return out
+
+
+def get_local_app_state(db_path: Path, state_key: str) -> Optional[Dict[str, Any]]:
+    token = str(state_key or "").strip()
+    if not token:
+        return None
+    with _connect(db_path) as conn:
+        row = conn.execute(
+            """
+            SELECT state_key, value_json, updated_at
+            FROM local_app_state
+            WHERE state_key = ?
+            """,
+            (token,),
+        ).fetchone()
+    if row is None:
+        return None
+    try:
+        value = json.loads(str(row["value_json"] or "null"))
+    except Exception:
+        value = None
+    return {
+        "state_key": token,
+        "value": value,
+        "updated_at": str(row["updated_at"] or "").strip() or None,
+    }
+
+
+def put_local_app_state(
+    db_path: Path,
+    state_key: str,
+    value: Any,
+    *,
+    updated_at: Optional[str] = None,
+) -> Dict[str, Any]:
+    token = str(state_key or "").strip()
+    if not token:
+        raise ValueError("state_key is required.")
+    timestamp = str(updated_at or "").strip() or _utc_now_iso()
+    serialized = json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+    with _connect(db_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO local_app_state (
+                state_key, value_json, updated_at, persisted_at
+            )
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(state_key) DO UPDATE SET
+                value_json = excluded.value_json,
+                updated_at = excluded.updated_at,
+                persisted_at = excluded.persisted_at
+            """,
+            (
+                token,
+                serialized,
+                timestamp,
+                _utc_now_iso(),
+            ),
+        )
+        conn.commit()
+    return {
+        "state_key": token,
+        "value": value,
+        "updated_at": timestamp,
+    }

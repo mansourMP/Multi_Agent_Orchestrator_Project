@@ -22,7 +22,7 @@ from server_modules.auth import (
     workspace_tenant_id,
 )
 from server_modules.runtime_common import require_api_key
-from server_modules import local_queue
+from server_modules import demo_workflows, local_queue, machine_capability_check
 from server_modules import outbox_service
 from server_modules import run_state_repository, runs_output, shared, telemetry
 
@@ -90,6 +90,10 @@ class MachineBootstrapCompletePayload(BaseModel):
 
 class MachineControlPayload(BaseModel):
     reason: Optional[str] = None
+
+
+class DesktopSetupPayload(BaseModel):
+    workspace_id: Optional[str] = None
 
 
 class RuntimeTaskClaimRequest(BaseModel):
@@ -472,6 +476,78 @@ def register_runtime_routes(app) -> None:
     @app.get("/runtime/runtimes/reliability", dependencies=[Depends(require_api_key)])
     async def get_runtime_reliability():
         return runtime_reliability_payload()
+
+    @app.get("/desktop/setup/status", dependencies=[Depends(require_api_key)])
+    async def get_desktop_setup_status(
+        workspace_id: Optional[str] = None,
+        current_user=Depends(require_api_key),
+    ):
+        requested_workspace_id = enforce_workspace_access(
+            current_user,
+            workspace_id or "default",
+            minimum_role="viewer",
+        )
+        return machine_capability_check.desktop_setup_status(workspace_id=requested_workspace_id)
+
+    @app.post("/desktop/setup/complete", dependencies=[Depends(require_api_key)])
+    async def complete_desktop_setup(
+        payload: Optional[DesktopSetupPayload] = None,
+        current_user=Depends(require_api_key),
+    ):
+        body = payload or DesktopSetupPayload()
+        requested_workspace_id = enforce_workspace_access(
+            current_user,
+            body.workspace_id or "default",
+            minimum_role="member",
+        )
+        status_payload = machine_capability_check.desktop_setup_status(workspace_id=requested_workspace_id)
+        if not bool(status_payload.get("can_continue")):
+            raise HTTPException(status_code=409, detail="Desktop setup cannot be completed until all required checks pass.")
+        record = machine_capability_check.mark_desktop_setup_completed(
+            metadata={
+                "workspace_id": requested_workspace_id,
+                "actor_type": str((current_user or {}).get("auth_type") or "").strip() or "api_key",
+                "user_id": str((current_user or {}).get("user_id") or "").strip() or None,
+            }
+        )
+        return {
+            "ok": True,
+            "workspace_id": requested_workspace_id,
+            "desktop_setup_completed": True,
+            "updated_at": record.get("updated_at"),
+        }
+
+    @app.post("/desktop/demo/screenshot-description", dependencies=[Depends(require_api_key)])
+    async def start_desktop_demo(
+        payload: Optional[DesktopSetupPayload] = None,
+        current_user=Depends(require_api_key),
+    ):
+        body = payload or DesktopSetupPayload()
+        requested_workspace_id = enforce_workspace_access(
+            current_user,
+            body.workspace_id or "default",
+            minimum_role="member",
+        )
+        return await demo_workflows.start_first_run_demo(
+            workspace_id=requested_workspace_id,
+            current_user=current_user,
+        )
+
+    @app.get("/desktop/demo/{run_id}", dependencies=[Depends(require_api_key)])
+    async def get_desktop_demo_status(
+        run_id: str,
+        workspace_id: Optional[str] = None,
+        current_user=Depends(require_api_key),
+    ):
+        requested_workspace_id = enforce_workspace_access(
+            current_user,
+            workspace_id or "default",
+            minimum_role="viewer",
+        )
+        payload = demo_workflows.first_run_demo_status(run_id)
+        if str(payload.get("workspace_id") or "default").strip() != requested_workspace_id:
+            raise HTTPException(status_code=404, detail="Demo run not found in this workspace.")
+        return payload
 
     @app.get("/machines", dependencies=[Depends(require_api_key)])
     async def get_machines(

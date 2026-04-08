@@ -56,6 +56,8 @@ import {
   type PlatformGlobalCommandEventDetail,
 } from '@/lib/commandRegistry';
 import { BRAND } from '@/lib/brand';
+import { fetchDesktopSetupStatus } from '@/lib/desktopFirstRun';
+import { getDesktopBridge } from '@/lib/desktopBridge';
 import { SINGLE_AGENT_MODE } from '@/lib/appFlags';
 import { controlPlaneSignInUrl, ensureControlPlaneSession } from '@/lib/controlPlaneSession';
 import { fetchRuntimeConnectionStatus } from '@/lib/runtimeConnection';
@@ -1885,6 +1887,15 @@ export function AutopilotWorkspace() {
         if (!active) return;
         if (!runtimeStatus.configured || !runtimeStatus.healthy) {
           router.replace('/onboarding');
+          return;
+        }
+        if (getDesktopBridge()?.desktop) {
+          const desktopStatus = await fetchDesktopSetupStatus();
+          if (!active) return;
+          if (!desktopStatus.desktop_setup_completed) {
+            const returnTo = `${window.location.pathname || '/'}${window.location.search || ''}`;
+            router.replace(buildSetupRoute(returnTo || '/'));
+          }
           return;
         }
         const readiness = await fetchSetupReadiness();

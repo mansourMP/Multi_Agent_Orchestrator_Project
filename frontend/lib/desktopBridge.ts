@@ -15,6 +15,8 @@ export type DesktopBridge = {
   desktop?: boolean;
   platform?: string;
   openExternal?: (target: string) => Promise<boolean | string>;
+  openPermissionSettings?: (permission: string) => Promise<boolean | string>;
+  bootstrapMachineEnrollment?: (intent: unknown) => Promise<unknown>;
   openaiCodexOauthLogin?: () => Promise<OpenAiCodexOauthResult>;
 };
 

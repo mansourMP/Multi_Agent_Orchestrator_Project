@@ -9,7 +9,7 @@ import time
 import urllib.error
 import urllib.request
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Callable, Dict, Optional
 from urllib.parse import urlencode
 
 
@@ -35,6 +35,9 @@ class RuntimeInterruptController:
         self._snapshot: Optional[Dict[str, Any]] = None
         self._active_process: Optional[subprocess.Popen[str]] = None
         self._active_process_run_id: Optional[str] = None
+        self._active_supervisor_interrupt_fn: Optional[Callable[[], Any]] = None
+        self._active_supervisor_run_id: Optional[str] = None
+        self._active_supervisor_request_id: Optional[str] = None
 
     def _applies_to_run(self, snapshot: Optional[Dict[str, Any]], run_id: Optional[str]) -> bool:
         if not isinstance(snapshot, dict):
@@ -89,11 +92,19 @@ class RuntimeInterruptController:
             "sequence": int(sequence) if isinstance(sequence, (int, float)) else None,
         }
         process: Optional[subprocess.Popen[str]] = None
+        supervisor_interrupt_fn: Optional[Callable[[], Any]] = None
         with self._lock:
             self._snapshot = snapshot
             if self._applies_to_run(snapshot, self._active_process_run_id):
                 process = self._active_process
+            if self._applies_to_run(snapshot, self._active_supervisor_run_id):
+                supervisor_interrupt_fn = self._active_supervisor_interrupt_fn
         self._terminate_process(process)
+        if callable(supervisor_interrupt_fn):
+            try:
+                supervisor_interrupt_fn()
+            except Exception:
+                pass
         return dict(snapshot)
 
     def interrupt_snapshot(self, *, run_id: Optional[str] = None) -> Dict[str, Any]:
@@ -119,6 +130,36 @@ class RuntimeInterruptController:
                 self._active_process = None
                 self._active_process_run_id = None
 
+    def register_supervisor_execution(
+        self,
+        *,
+        run_id: str,
+        request_id: str,
+        interrupt_fn: Callable[[], Any],
+    ) -> None:
+        snapshot: Dict[str, Any] = {}
+        with self._lock:
+            self._active_supervisor_run_id = str(run_id or "").strip() or None
+            self._active_supervisor_request_id = str(request_id or "").strip() or None
+            self._active_supervisor_interrupt_fn = interrupt_fn
+            if self._applies_to_run(self._snapshot, self._active_supervisor_run_id):
+                snapshot = dict(self._snapshot or {})
+        if snapshot:
+            try:
+                interrupt_fn()
+            except Exception:
+                pass
+
+    def clear_supervisor_execution(self, *, request_id: Optional[str] = None) -> None:
+        target_request_id = str(request_id or "").strip()
+        with self._lock:
+            active_request_id = str(self._active_supervisor_request_id or "").strip()
+            if target_request_id and active_request_id and target_request_id != active_request_id:
+                return
+            self._active_supervisor_interrupt_fn = None
+            self._active_supervisor_run_id = None
+            self._active_supervisor_request_id = None
+
     def clear_run_interrupt(self, run_id: Optional[str]) -> None:
         target_run_id = str(run_id or "").strip()
         if not target_run_id:
@@ -143,6 +184,10 @@ class RuntimeInterruptController:
     def has_active_process(self) -> bool:
         with self._lock:
             return self._active_process is not None
+
+    def has_active_supervisor_execution(self) -> bool:
+        with self._lock:
+            return self._active_supervisor_interrupt_fn is not None
 
 
 class RuntimeClient:

@@ -1,9 +1,11 @@
 mod capabilities;
+mod execution;
 
+use std::collections::HashMap;
 use std::env;
 use std::net::SocketAddr;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result};
 use axum::extract::State;
@@ -19,6 +21,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::Sha256;
 use tokio::net::TcpListener;
+use tokio_util::sync::CancellationToken;
 use tower_http::trace::TraceLayer;
 use tracing::{error, info, warn};
 
@@ -31,6 +34,7 @@ const AUDIT_DB_FILENAME: &str = "empyralis_audit.db";
 struct AppState {
     secret: Arc<Vec<u8>>,
     audit_db_path: Arc<PathBuf>,
+    active_executions: Arc<Mutex<HashMap<String, execution::ExecutionContext>>>,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -46,11 +50,36 @@ struct ExecuteRequest {
     signature: String,
 }
 
+#[derive(Debug, Deserialize, Serialize, Clone)]
+struct InterruptRequest {
+    request_id: String,
+    run_id: String,
+    target_request_id: Option<String>,
+    trace_id: String,
+    workspace_id: String,
+    reason: Option<String>,
+    nonce: String,
+    expires_at: String,
+    signature: String,
+}
+
 #[derive(Debug, Serialize)]
 struct ExecuteResponse {
     success: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     result: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct InterruptResponse {
+    success: bool,
+    interrupted: bool,
+    interrupt_count: usize,
+    run_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    target_request_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     error: Option<String>,
 }
@@ -78,11 +107,13 @@ async fn main() -> Result<()> {
     let state = AppState {
         secret: Arc::new(secret.into_bytes()),
         audit_db_path: Arc::new(audit_db_path),
+        active_executions: Arc::new(Mutex::new(HashMap::new())),
     };
 
     let app = Router::new()
         .route("/health", get(health))
         .route("/execute", post(execute))
+        .route("/interrupt", post(interrupt))
         .layer(TraceLayer::new_for_http())
         .with_state(state);
 
@@ -111,7 +142,7 @@ async fn execute(
     State(state): State<AppState>,
     Json(request): Json<ExecuteRequest>,
 ) -> impl IntoResponse {
-    if let Err(message) = verify_request(&state, &request) {
+    if let Err(message) = verify_execute_request(&state, &request) {
         warn!(request_id = %request.request_id, capability_id = %request.capability_id, error = %message, "rejecting signed request");
         let _ = write_audit_log(&state, &request, false, Some(message.clone()));
         return (
@@ -124,7 +155,18 @@ async fn execute(
         );
     }
 
-    let execution = execute_capability(&request).await;
+    let execution_context = execution::ExecutionContext {
+        request_id: request.request_id.clone(),
+        run_id: request.run_id.clone(),
+        trace_id: request.trace_id.clone(),
+        workspace_id: request.workspace_id.clone(),
+        capability_id: request.capability_id.clone(),
+        cancellation: CancellationToken::new(),
+    };
+    register_active_execution(&state, execution_context.clone());
+
+    let execution = execute_capability(&request, &execution_context).await;
+    unregister_active_execution(&state, &request.request_id);
     match execution {
         Ok(result) => {
             let _ = write_audit_log(&state, &request, true, None);
@@ -153,13 +195,56 @@ async fn execute(
     }
 }
 
-async fn execute_capability(request: &ExecuteRequest) -> Result<Value> {
+async fn interrupt(
+    State(state): State<AppState>,
+    Json(request): Json<InterruptRequest>,
+) -> impl IntoResponse {
+    if let Err(message) = verify_interrupt_request(&state, &request) {
+        warn!(request_id = %request.request_id, run_id = %request.run_id, error = %message, "rejecting interrupt request");
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(InterruptResponse {
+                success: false,
+                interrupted: false,
+                interrupt_count: 0,
+                run_id: request.run_id,
+                target_request_id: request.target_request_id,
+                error: Some(message),
+            }),
+        );
+    }
+
+    let cancelled = cancel_active_executions(
+        &state,
+        &request.run_id,
+        request.target_request_id.as_deref(),
+    );
+    (
+        StatusCode::OK,
+        Json(InterruptResponse {
+            success: true,
+            interrupted: cancelled > 0,
+            interrupt_count: cancelled,
+            run_id: request.run_id,
+            target_request_id: request.target_request_id,
+            error: None,
+        }),
+    )
+}
+
+async fn execute_capability(
+    request: &ExecuteRequest,
+    context: &execution::ExecutionContext,
+) -> Result<Value> {
     match request.capability_id.as_str() {
         "screenshot.capture" => capabilities::screenshot::capture(&request.arguments),
         "computer_control.ocr" => capabilities::ocr::read_screen_text(&request.arguments),
-        "computer_control.click" => capabilities::control::click(&request.arguments),
-        "computer_control.type" => capabilities::control::type_text(&request.arguments).await,
-        "computer_control.key" => capabilities::control::press_key(&request.arguments),
+        "computer_control.move" => capabilities::control::move_mouse(&request.arguments, context),
+        "computer_control.click" => capabilities::control::click(&request.arguments, context),
+        "computer_control.type" => {
+            capabilities::control::type_text(&request.arguments, context).await
+        }
+        "computer_control.key" => capabilities::control::press_key(&request.arguments, context),
         "computer_control.clipboard_read" => capabilities::clipboard::read_clipboard(),
         "computer_control.clipboard_write" => {
             capabilities::clipboard::write_clipboard(&request.arguments)
@@ -175,31 +260,95 @@ async fn execute_capability(request: &ExecuteRequest) -> Result<Value> {
     }
 }
 
-fn verify_request(state: &AppState, request: &ExecuteRequest) -> Result<(), String> {
-    let expires_at = DateTime::parse_from_rfc3339(&request.expires_at)
+fn verify_execute_request(state: &AppState, request: &ExecuteRequest) -> Result<(), String> {
+    verify_expiry(&request.expires_at)?;
+    let sign_str = format!(
+        "execute:{}:{}:{}:{}:{}:{}",
+        request.request_id,
+        request.capability_id,
+        request.run_id,
+        request.workspace_id,
+        request.nonce,
+        request.expires_at,
+    );
+    verify_signature(&state, sign_str, &request.signature)
+}
+
+fn verify_interrupt_request(state: &AppState, request: &InterruptRequest) -> Result<(), String> {
+    verify_expiry(&request.expires_at)?;
+    let sign_str = format!(
+        "interrupt:{}:{}:{}:{}:{}:{}",
+        request.request_id,
+        request.run_id,
+        request.target_request_id.as_deref().unwrap_or_default(),
+        request.workspace_id,
+        request.nonce,
+        request.expires_at,
+    );
+    verify_signature(&state, sign_str, &request.signature)
+}
+
+fn verify_expiry(expires_at: &str) -> Result<(), String> {
+    let expires_at = DateTime::parse_from_rfc3339(expires_at)
         .map_err(|_| "invalid expires_at".to_string())?
         .with_timezone(&Utc);
 
     if Utc::now().signed_duration_since(expires_at).num_seconds() > 30 {
         return Err("request expired".to_string());
     }
+    Ok(())
+}
 
-    let sign_str = format!(
-        "{}:{}:{}:{}",
-        request.request_id, request.capability_id, request.nonce, request.expires_at
-    );
-
+fn verify_signature(state: &AppState, sign_str: String, signature: &str) -> Result<(), String> {
     let mut mac = HmacSha256::new_from_slice(state.secret.as_slice())
         .map_err(|_| "invalid secret".to_string())?;
     mac.update(sign_str.as_bytes());
     let expected = mac.finalize().into_bytes();
-    let provided =
-        hex::decode(&request.signature).map_err(|_| "invalid signature encoding".to_string())?;
+    let provided = hex::decode(signature).map_err(|_| "invalid signature encoding".to_string())?;
     if expected.as_slice() != provided.as_slice() {
         return Err("signature mismatch".to_string());
     }
-
     Ok(())
+}
+
+fn register_active_execution(state: &AppState, execution_context: execution::ExecutionContext) {
+    if let Ok(mut registry) = state.active_executions.lock() {
+        registry.insert(execution_context.request_id.clone(), execution_context);
+    }
+}
+
+fn unregister_active_execution(state: &AppState, request_id: &str) {
+    if let Ok(mut registry) = state.active_executions.lock() {
+        registry.remove(request_id);
+    }
+}
+
+fn cancel_active_executions(
+    state: &AppState,
+    run_id: &str,
+    target_request_id: Option<&str>,
+) -> usize {
+    let matching = {
+        let Ok(registry) = state.active_executions.lock() else {
+            return 0;
+        };
+        registry
+            .values()
+            .filter(|entry| {
+                if let Some(target_id) = target_request_id {
+                    if !target_id.trim().is_empty() {
+                        return entry.request_id == target_id && entry.run_id == run_id;
+                    }
+                }
+                entry.run_id == run_id
+            })
+            .cloned()
+            .collect::<Vec<_>>()
+    };
+    for entry in &matching {
+        entry.cancellation.cancel();
+    }
+    matching.len()
 }
 
 fn initialize_audit_db(path: &PathBuf) -> Result<()> {
@@ -257,4 +406,89 @@ async fn shutdown_signal() {
 
 pub(crate) fn encode_png_base64(bytes: &[u8]) -> String {
     base64::engine::general_purpose::STANDARD.encode(bytes)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_state(secret: &str) -> AppState {
+        AppState {
+            secret: Arc::new(secret.as_bytes().to_vec()),
+            audit_db_path: Arc::new(PathBuf::from("/tmp/empyralis-supervisor-test.db")),
+            active_executions: Arc::new(Mutex::new(HashMap::new())),
+        }
+    }
+
+    fn sign(secret: &str, payload: &str) -> String {
+        let mut mac = HmacSha256::new_from_slice(secret.as_bytes()).expect("valid secret");
+        mac.update(payload.as_bytes());
+        hex::encode(mac.finalize().into_bytes())
+    }
+
+    #[test]
+    fn execute_signature_verification_includes_run_id_and_workspace() {
+        let secret = "test-secret";
+        let state = test_state(secret);
+        let expires_at = (Utc::now() + chrono::Duration::seconds(30)).to_rfc3339();
+        let signature = sign(
+            secret,
+            &format!(
+                "execute:{}:{}:{}:{}:{}:{}",
+                "req-1", "computer_control.click", "run-1", "ws-1", "nonce-1", expires_at
+            ),
+        );
+        let request = ExecuteRequest {
+            request_id: "req-1".to_string(),
+            capability_id: "computer_control.click".to_string(),
+            run_id: "run-1".to_string(),
+            trace_id: "trace-1".to_string(),
+            workspace_id: "ws-1".to_string(),
+            arguments: serde_json::json!({}),
+            nonce: "nonce-1".to_string(),
+            expires_at: expires_at.clone(),
+            signature,
+        };
+        assert!(verify_execute_request(&state, &request).is_ok());
+
+        let tampered = ExecuteRequest {
+            run_id: "run-2".to_string(),
+            ..request
+        };
+        assert!(verify_execute_request(&state, &tampered).is_err());
+    }
+
+    #[test]
+    fn cancel_active_executions_targets_matching_run() {
+        let state = test_state("test-secret");
+        let token_a = CancellationToken::new();
+        let token_b = CancellationToken::new();
+        register_active_execution(
+            &state,
+            execution::ExecutionContext {
+                request_id: "req-a".to_string(),
+                run_id: "run-1".to_string(),
+                trace_id: "trace-a".to_string(),
+                workspace_id: "ws-1".to_string(),
+                capability_id: "computer_control.type".to_string(),
+                cancellation: token_a.clone(),
+            },
+        );
+        register_active_execution(
+            &state,
+            execution::ExecutionContext {
+                request_id: "req-b".to_string(),
+                run_id: "run-2".to_string(),
+                trace_id: "trace-b".to_string(),
+                workspace_id: "ws-1".to_string(),
+                capability_id: "computer_control.click".to_string(),
+                cancellation: token_b.clone(),
+            },
+        );
+
+        let cancelled = cancel_active_executions(&state, "run-1", None);
+        assert_eq!(cancelled, 1);
+        assert!(token_a.is_cancelled());
+        assert!(!token_b.is_cancelled());
+    }
 }

@@ -197,6 +197,46 @@ class WorkerDispatchServiceTests(unittest.TestCase):
         self.assertEqual(seen, [("worker-1", None, "idle", "completed_run")])
         self.assertEqual(events[1][2]["event"], "run_complete")
 
+    def test_fail_local_run_preserves_interrupt_reason_and_clears_binding(self) -> None:
+        events = []
+        statuses = []
+        seen = []
+        run = {
+            "status": "running_local",
+            "logs": queue.Queue(),
+            "context": {"metadata": {}},
+            "machine_lease_id": "lease-1",
+            "local_worker_id": "worker-1",
+            "machine_id": "machine-1",
+            "interrupt_requested": True,
+            "interrupt_reason": "Operator stop",
+            "interrupt_scope": "run",
+            "interrupt_runtime_id": "worker-1",
+            "interrupt_machine_id": "machine-1",
+        }
+
+        result = worker_dispatch_service.fail_local_run(
+            "run-1",
+            worker_id="worker-1",
+            error=None,
+            runs_by_id={"run-1": run},
+            local_queue_lock=threading.Lock(),
+            claimed_runs={"run-1": {"worker_id": "worker-1", "machine_id": "machine-1", "lease_id": "lease-1"}},
+            emit_log_fn=lambda logs, level, message, **kwargs: events.append((level, message, kwargs)),
+            mark_local_worker_seen_fn=lambda worker_id, run_id, status, note=None: seen.append(
+                (worker_id, run_id, status, note)
+            ),
+            set_run_status_fn=lambda run_id, status: statuses.append((run_id, status)),
+        )
+
+        self.assertEqual(result["status"], "ok")
+        self.assertEqual(run["result"], "Operator stop")
+        self.assertIsNone(run["machine_lease_id"])
+        self.assertIsNone(run["local_worker_id"])
+        self.assertEqual(statuses, [("run-1", "failed")])
+        self.assertEqual(seen, [("worker-1", None, "idle", "failed_run")])
+        self.assertEqual(events[0][2]["event"], "run_interrupted")
+
 
 if __name__ == "__main__":
     unittest.main()

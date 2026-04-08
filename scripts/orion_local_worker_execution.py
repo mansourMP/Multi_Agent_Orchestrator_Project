@@ -95,6 +95,11 @@ except ImportError:
     )
 
 try:
+    import supervisor_client
+except ImportError:
+    from server_modules import supervisor_client  # type: ignore[no-redef]
+
+try:
     from scripts.platform_execution import (
         capability_command,
         capability_metadata,
@@ -224,6 +229,53 @@ def _raise_if_interrupt_requested(state: Optional[Dict[str, Any]] = None) -> Non
     payload = dict(state) if isinstance(state, dict) else {}
     if bool(payload.get("interrupt_requested")):
         raise HardInterruptRequested(_interrupt_summary(payload), state=payload)
+
+
+def _supervisor_interrupt_to_hard_kill(
+    *,
+    interrupt_state_provider: Optional[Callable[[], Dict[str, Any]]] = None,
+    fallback_message: Optional[str] = None,
+) -> None:
+    current_state = dict(interrupt_state_provider() or {}) if callable(interrupt_state_provider) else {}
+    if current_state:
+        _raise_if_interrupt_requested(current_state)
+    summary = str(fallback_message or supervisor_client.SUPERVISOR_INTERRUPTED_MESSAGE).strip()
+    raise HardInterruptRequested(summary or "Hard kill requested by operator. Local execution halted.")
+
+
+def _build_supervisor_execution_context(
+    run: Dict[str, Any],
+    metadata: Dict[str, Any],
+    *,
+    run_id: str,
+    interrupt_controller: Optional[Any],
+) -> supervisor_client.SupervisorExecutionContext:
+    context = run.get("context") if isinstance(run.get("context"), dict) else {}
+    trace_id = (
+        str(run.get("trace_id") or "").strip()
+        or str(metadata.get("trace_id") or "").strip()
+        or str(metadata.get("request_trace_id") or "").strip()
+        or str((context.get("metadata") if isinstance(context.get("metadata"), dict) else {}).get("trace_id") or "").strip()
+        or run_id
+    )
+    workspace_id = (
+        str(metadata.get("workspace_id") or "").strip()
+        or str(context.get("workspace_id") or "").strip()
+        or "default"
+    )
+    machine_id = (
+        str(metadata.get("machine_id") or "").strip()
+        or str(run.get("machine_id") or "").strip()
+        or str((context.get("metadata") if isinstance(context.get("metadata"), dict) else {}).get("machine_id") or "").strip()
+        or None
+    )
+    return supervisor_client.SupervisorExecutionContext(
+        run_id=run_id,
+        workspace_id=workspace_id,
+        trace_id=trace_id,
+        machine_id=machine_id,
+        interrupt_controller=interrupt_controller,
+    )
 
 
 def _terminate_subprocess_tree(process: Optional[subprocess.Popen[str]]) -> None:
@@ -1801,6 +1853,7 @@ def _run_screenshot_operation(
     artifacts_root: Path,
     *,
     continue_allowed: Optional[Callable[[], Dict[str, Any]]] = None,
+    interrupt_state_provider: Optional[Callable[[], Dict[str, Any]]] = None,
 ) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     capability = str(operation.get("capability") or "").strip()
     if capability:
@@ -1816,10 +1869,16 @@ def _run_screenshot_operation(
         target = (shot_dir / f"{run_id}-shot-{op_index + 1}.png").resolve()
     if callable(continue_allowed):
         continue_allowed()
-    capture_result = capture_screenshot(
-        monitor=str(operation.get("monitor") or "primary").strip() or "primary",
-        region=operation.get("region"),
-    )
+    try:
+        capture_result = capture_screenshot(
+            monitor=str(operation.get("monitor") or "primary").strip() or "primary",
+            region=operation.get("region"),
+        )
+    except supervisor_client.SupervisorInterruptedError as exc:
+        _supervisor_interrupt_to_hard_kill(
+            interrupt_state_provider=interrupt_state_provider,
+            fallback_message=str(exc or "").strip() or None,
+        )
     if not bool(capture_result.get("success")):
         raw_message = _bounded_text(str(capture_result.get("error") or "Screenshot capture failed.").strip())
         if sys.platform == "darwin":
@@ -1873,6 +1932,7 @@ def _run_computer_control_operation(
     operation: Dict[str, Any],
     *,
     continue_allowed: Optional[Callable[[], Dict[str, Any]]] = None,
+    interrupt_state_provider: Optional[Callable[[], Dict[str, Any]]] = None,
 ) -> Tuple[Dict[str, Any], Optional[Dict[str, Any]]]:
     action_name = _normalize_action_id(operation.get("action"))
     if not action_name:
@@ -1891,57 +1951,63 @@ def _run_computer_control_operation(
     if callable(continue_allowed):
         continue_allowed()
 
-    if action_name == "ocr":
-        text = screen_ocr(region=operation.get("region"))
-        action["text_preview"] = _bounded_text(text, 1200)
-        return action, None
-    if action_name == "click":
-        text_target = str(operation.get("text") or "").strip()
-        if text_target:
-            message = click_element_by_text(text_target)
-        else:
-            if operation.get("x") is None or operation.get("y") is None:
-                raise RuntimeError("Computer click requires x/y or text.")
-            message = mouse_click(operation.get("x"), operation.get("y"))
-        action["summary"] = message
-        return action, None
-    if action_name == "type":
-        text = str(operation.get("text") or "")
-        action["summary"] = keyboard_type(text)
-        return action, None
-    if action_name == "applescript":
-        script = str(operation.get("script") or "").strip()
-        output = run_applescript(script)
-        action["output_preview"] = _bounded_text(output, 1200)
-        return action, None
-    if action_name == "clipboard_read":
-        text = read_clipboard()
-        action["text_preview"] = _bounded_text(text, 1200)
-        return action, None
-    if action_name == "clipboard_write":
-        text = str(operation.get("text") or "")
-        action["summary"] = write_clipboard(text)
-        return action, None
-    if action_name == "notify":
-        title = str(operation.get("title") or "").strip()
-        message = str(operation.get("message") or "").strip()
-        action["summary"] = send_notification(title, message)
-        return action, None
-    if action_name == "list_apps":
-        apps = list_running_apps()
-        preview_items = [str(item.get("name") or item.get("exe") or item.get("pid") or "").strip() for item in apps[:20] if isinstance(item, dict)]
-        action["apps_preview"] = "\n".join(item for item in preview_items if item)
-        action["app_count"] = len(apps)
-        return action, None
-    if action_name == "launch_app":
-        name_or_path = str(operation.get("name_or_path") or "").strip()
-        action["summary"] = launch_app(name_or_path)
-        return action, None
-    if action_name == "speak":
-        text = str(operation.get("text") or "").strip()
-        voice = str(operation.get("voice") or "").strip() or None
-        action["summary"] = speak_text(text, voice=voice)
-        return action, None
+    try:
+        if action_name == "ocr":
+            text = screen_ocr(region=operation.get("region"))
+            action["text_preview"] = _bounded_text(text, 1200)
+            return action, None
+        if action_name == "click":
+            text_target = str(operation.get("text") or "").strip()
+            if text_target:
+                message = click_element_by_text(text_target)
+            else:
+                if operation.get("x") is None or operation.get("y") is None:
+                    raise RuntimeError("Computer click requires x/y or text.")
+                message = mouse_click(operation.get("x"), operation.get("y"))
+            action["summary"] = message
+            return action, None
+        if action_name == "type":
+            text = str(operation.get("text") or "")
+            action["summary"] = keyboard_type(text)
+            return action, None
+        if action_name == "applescript":
+            script = str(operation.get("script") or "").strip()
+            output = run_applescript(script)
+            action["output_preview"] = _bounded_text(output, 1200)
+            return action, None
+        if action_name == "clipboard_read":
+            text = read_clipboard()
+            action["text_preview"] = _bounded_text(text, 1200)
+            return action, None
+        if action_name == "clipboard_write":
+            text = str(operation.get("text") or "")
+            action["summary"] = write_clipboard(text)
+            return action, None
+        if action_name == "notify":
+            title = str(operation.get("title") or "").strip()
+            message = str(operation.get("message") or "").strip()
+            action["summary"] = send_notification(title, message)
+            return action, None
+        if action_name == "list_apps":
+            apps = list_running_apps()
+            preview_items = [str(item.get("name") or item.get("exe") or item.get("pid") or "").strip() for item in apps[:20] if isinstance(item, dict)]
+            action["apps_preview"] = "\n".join(item for item in preview_items if item)
+            action["app_count"] = len(apps)
+            return action, None
+        if action_name == "launch_app":
+            name_or_path = str(operation.get("name_or_path") or "").strip()
+            action["summary"] = launch_app(name_or_path)
+            return action, None
+        if action_name == "speak":
+            text = str(operation.get("text") or "").strip()
+            voice = str(operation.get("voice") or "").strip() or None
+            action["summary"] = speak_text(text, voice=voice)
+            return action, None
+    except supervisor_client.SupervisorInterruptedError as exc:
+        _supervisor_interrupt_to_hard_kill(
+            interrupt_state_provider=interrupt_state_provider,
+            fallback_message=str(exc or "").strip() or None,
+        )
     raise RuntimeError(f"Unsupported computer control action '{action_name}'.")
 
 
@@ -2182,14 +2248,23 @@ def build_local_execution_pack_result(
                 elif tool_id == "filesystem.read_write":
                     action, artifact = _run_file_operation(operation_row, root, metadata)
                 elif tool_id == "screenshot.capture":
-                    action, artifact = _run_screenshot_operation(
-                        run_id,
-                        index,
-                        operation_row,
-                        root,
-                        artifacts_root,
-                        continue_allowed=lambda: _continue_allowed(index, summary_label),
-                    )
+                    with supervisor_client.bind_execution_context(
+                        _build_supervisor_execution_context(
+                            run,
+                            metadata,
+                            run_id=run_id,
+                            interrupt_controller=interrupt_controller,
+                        )
+                    ):
+                        action, artifact = _run_screenshot_operation(
+                            run_id,
+                            index,
+                            operation_row,
+                            root,
+                            artifacts_root,
+                            continue_allowed=lambda: _continue_allowed(index, summary_label),
+                            interrupt_state_provider=lambda: _control_state(),
+                        )
                     artifacts = [artifact]
                 elif tool_id == "browser_automation.interactive":
                     action, artifacts = _run_browser_operation(
@@ -2201,11 +2276,20 @@ def build_local_execution_pack_result(
                         pause_requested_fn=_control_state,
                     )
                 elif tool_id == "computer_control":
-                    action, artifact = _run_computer_control_operation(
-                        index,
-                        operation_row,
-                        continue_allowed=lambda: _continue_allowed(index, summary_label),
-                    )
+                    with supervisor_client.bind_execution_context(
+                        _build_supervisor_execution_context(
+                            run,
+                            metadata,
+                            run_id=run_id,
+                            interrupt_controller=interrupt_controller,
+                        )
+                    ):
+                        action, artifact = _run_computer_control_operation(
+                            index,
+                            operation_row,
+                            continue_allowed=lambda: _continue_allowed(index, summary_label),
+                            interrupt_state_provider=lambda: _control_state(),
+                        )
                 else:
                     raise RuntimeError(f"Unsupported local execution tool '{tool_id or 'unknown'}'.")
                 transient_artifacts = artifacts if tool_id == "browser_automation.interactive" else ([artifact] if isinstance(artifact, dict) else [])

@@ -241,3 +241,41 @@ class LocalWorkerRuntimeClientTests(TestCase):
         finally:
             if process.poll() is None:
                 process.kill()
+
+    def test_runtime_interrupt_controller_calls_active_supervisor_interrupt(self):
+        controller = worker_runtime.RuntimeInterruptController()
+        calls = []
+
+        controller.register_supervisor_execution(
+            run_id="run-1",
+            request_id="req-1",
+            interrupt_fn=lambda: calls.append("interrupted"),
+        )
+        controller.request_interrupt(
+            scope="run",
+            event_type="run_interrupt",
+            reason="Operator stop",
+            run_id="run-1",
+            machine_id="worker-1",
+        )
+
+        self.assertEqual(calls, ["interrupted"])
+
+    def test_runtime_interrupt_controller_interrupts_supervisor_registered_after_snapshot(self):
+        controller = worker_runtime.RuntimeInterruptController()
+        calls = []
+
+        controller.request_interrupt(
+            scope="run",
+            event_type="run_interrupt",
+            reason="Operator stop",
+            run_id="run-1",
+            machine_id="worker-1",
+        )
+        controller.register_supervisor_execution(
+            run_id="run-1",
+            request_id="req-1",
+            interrupt_fn=lambda: calls.append("interrupted"),
+        )
+
+        self.assertEqual(calls, ["interrupted"])

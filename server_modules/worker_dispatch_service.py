@@ -361,8 +361,29 @@ def fail_local_run(
     if status in {"completed", "failed", "timeout"}:
         return {"status": "ok", "run_id": run_id, "already_terminal": True}
 
-    message = str(error or "").strip() or "Local companion run failed."
-    emit_log_fn(run["logs"], "error", message[:1200], event="run_error")
+    message = (
+        str(error or "").strip()
+        or str(run.get("interrupt_reason") or "").strip()
+        or "Local companion run failed."
+    )
+    run["result"] = message
+    run.pop("wait_reason", None)
+    machine_lease_service.clear_active_machine_lease_binding(run)
+    interrupt_requested = bool(run.get("interrupt_requested"))
+    emit_log_fn(
+        run["logs"],
+        "error",
+        message[:1200],
+        event="run_interrupted" if interrupt_requested else "run_error",
+        data={
+            "interrupt_requested": interrupt_requested,
+            "interrupt_scope": str(run.get("interrupt_scope") or "").strip().lower() or None,
+            "machine_id": str(run.get("interrupt_machine_id") or run.get("machine_id") or "").strip() or None,
+            "runtime_id": str(run.get("interrupt_runtime_id") or run.get("local_worker_id") or "").strip() or None,
+        }
+        if interrupt_requested
+        else None,
+    )
     if resolved_worker:
         mark_local_worker_seen_fn(resolved_worker, None, "idle", note="failed_run")
     set_run_status_fn(run_id, "failed")

@@ -74,6 +74,34 @@ class LocalWorkerExecutionInterruptTests(TestCase):
         self.assertIsInstance(result.get("error"), worker_execution.HardInterruptRequested)
         self.assertIn("Operator stop", str(result["error"]))
 
+    def test_computer_control_interrupt_becomes_hard_interrupt(self):
+        result = {}
+
+        def _run() -> None:
+            try:
+                worker_execution._run_computer_control_operation(
+                    0,
+                    {"action": "click", "x": 10, "y": 20},
+                    interrupt_state_provider=lambda: {
+                        "interrupt_requested": True,
+                        "event_type": "run_interrupt",
+                        "interrupt_reason": "Operator stop",
+                        "run_id": "run-1",
+                    },
+                )
+            except Exception as exc:
+                result["error"] = exc
+
+        with patch.object(
+            worker_execution,
+            "mouse_click",
+            side_effect=worker_execution.supervisor_client.SupervisorInterruptedError("execution interrupted by operator"),
+        ):
+            _run()
+
+        self.assertIsInstance(result.get("error"), worker_execution.HardInterruptRequested)
+        self.assertIn("Operator stop", str(result["error"]))
+
 
 if __name__ == "__main__":
     import unittest

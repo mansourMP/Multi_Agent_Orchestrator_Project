@@ -1,11 +1,7 @@
 from __future__ import annotations
 
 import logging
-import os
-import subprocess
-import sys
-from pathlib import Path
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, Optional
 
 import requests
 
@@ -34,6 +30,8 @@ def _check_supervisor_health() -> None:
 def _supervisor_call(func, *args, **kwargs) -> Dict[str, Any]:
     try:
         result = func(*args, **kwargs)
+    except supervisor_client.SupervisorInterruptedError:
+        raise
     except RuntimeError as exc:
         message = str(exc or "").strip()
         if message == supervisor_client.SUPERVISOR_UNREACHABLE_MESSAGE:
@@ -47,86 +45,6 @@ def _supervisor_call(func, *args, **kwargs) -> Dict[str, Any]:
 
 
 _check_supervisor_health()
-
-
-def _coerce_region(region: Any) -> Optional[Tuple[int, int, int, int]]:
-    if region is None:
-        return None
-    if isinstance(region, dict):
-        try:
-            x = int(region.get("x"))
-            y = int(region.get("y"))
-            width = int(region.get("width"))
-            height = int(region.get("height"))
-            return (x, y, width, height)
-        except Exception:
-            return None
-    if isinstance(region, (list, tuple)) and len(region) == 4:
-        try:
-            return tuple(int(value) for value in region)  # type: ignore[return-value]
-        except Exception:
-            return None
-    return None
-
-
-def _import_pyautogui():
-    import pyautogui  # type: ignore[import-not-found]
-
-    pyautogui.FAILSAFE = True
-    pyautogui.PAUSE = 0.05
-    return pyautogui
-
-
-def _import_pyperclip():
-    import pyperclip  # type: ignore[import-not-found]
-
-    return pyperclip
-
-
-def _import_psutil():
-    import psutil  # type: ignore[import-not-found]
-
-    return psutil
-
-
-def _capture_screenshot_image(region: Any = None):
-    pyautogui = _import_pyautogui()
-    normalized_region = _coerce_region(region)
-    return pyautogui.screenshot(region=normalized_region)
-
-
-def _applescript_string(value: Any) -> str:
-    raw = str(value or "")
-    return raw.replace("\\", "\\\\").replace('"', '\\"')
-
-
-def _clipboard_read_fallback() -> str:
-    if sys.platform == "darwin":
-        completed = subprocess.run(
-            ["pbpaste"],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        if completed.returncode != 0:
-            raise RuntimeError(str(completed.stderr or completed.stdout or "Clipboard read failed.").strip())
-        return str(completed.stdout or "")
-    raise RuntimeError("Clipboard read fallback is only implemented for macOS.")
-
-
-def _clipboard_write_fallback(text: str) -> None:
-    if sys.platform == "darwin":
-        completed = subprocess.run(
-            ["pbcopy"],
-            input=str(text or ""),
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        if completed.returncode != 0:
-            raise RuntimeError(str(completed.stderr or completed.stdout or "Clipboard write failed.").strip())
-        return
-    raise RuntimeError("Clipboard write fallback is only implemented for macOS.")
 
 
 def screen_ocr(region: Any = None) -> str:

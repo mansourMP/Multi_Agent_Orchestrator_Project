@@ -2220,7 +2220,8 @@ def handle_pause_local_run(run_id: uuid.UUID, payload: LocalRunPausePayload) -> 
 
 def handle_fail_local_run(run_id: uuid.UUID, payload: LocalRunFailPayload) -> Dict[str, Any]:
     _init()
-    return worker_dispatch_service.fail_local_run(
+    run = _server.runs.get(str(run_id))
+    result = worker_dispatch_service.fail_local_run(
         str(run_id),
         worker_id=payload.worker_id,
         error=payload.error,
@@ -2231,3 +2232,13 @@ def handle_fail_local_run(run_id: uuid.UUID, payload: LocalRunFailPayload) -> Di
         mark_local_worker_seen_fn=_mark_local_worker_seen,
         set_run_status_fn=_server.set_run_status,
     )
+    if isinstance(run, dict) and bool(run.get("interrupt_requested")):
+        machine_id = str(run.get("interrupt_machine_id") or run.get("machine_id") or payload.worker_id or "").strip()
+        if machine_id:
+            with _server.LOCAL_QUEUE_LOCK:
+                record = _server.LOCAL_WORKER_REGISTRY.get(machine_id) if isinstance(_server.LOCAL_WORKER_REGISTRY.get(machine_id), dict) else None
+            if isinstance(record, dict):
+                record = dict(record)
+                record["note"] = "machine_interrupt_acknowledged"
+                _emit_machine_outbox_event("interrupt_completed", record)
+    return result

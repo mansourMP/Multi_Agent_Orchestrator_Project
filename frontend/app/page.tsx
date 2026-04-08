@@ -22,6 +22,7 @@ import {
   CHAT_SESSION_SELECT_EVENT,
   CHAT_STORE_STORAGE_KEY,
   CHAT_STORE_UPDATED_EVENT,
+  type ChatApprovalRequestRecord,
   createChatId,
   createEmptyChatSession,
   dedupeChatMessages,
@@ -168,8 +169,6 @@ type PendingWorkbenchChat = {
   placeholderId: string;
   runId: string | null;
 };
-
-type SimpleChatPermissionScope = 'once';
 
 type SimpleChatPermissionPrompt = {
   runId: string;
@@ -860,8 +859,7 @@ function formatSimpleChatTrustLabel(trustMode: string, accessMode: string): stri
 function extractWorkbenchReplyText(lastRunPayload: Record<string, unknown> | null, latestRunSummary: string | null, topError: string | null, status: string): string {
   const pending = (lastRunPayload?.pending_confirmation || lastRunPayload?.pending_approval) as Record<string, unknown> | null | undefined;
   if (status === 'waiting' && pending && typeof pending === 'object') {
-    const prompt = String((pending as { prompt?: unknown }).prompt || '').trim();
-    return prompt ? `Confirmation required: ${prompt}` : 'This run is waiting for confirmation before continuing.';
+    return '';
   }
 
   const candidates: unknown[] = [
@@ -1009,6 +1007,63 @@ function readPendingApprovalRecord(payload: Record<string, unknown> | null): Sim
     reusable: typeof pendingRecord.reusable === 'boolean' ? pendingRecord.reusable : false,
     consequence: String(pendingRecord.consequence || '').trim() || null,
   };
+}
+
+function buildTranscriptApprovalRequest(
+  approval: SimpleChatPermissionPrompt,
+  actionId: string | null = null,
+  resolution: ChatApprovalRequestRecord['resolution'] = 'waiting',
+): ChatApprovalRequestRecord {
+  return {
+    id: approval.approvalId || createChatId('approval'),
+    approvalId: approval.approvalId || null,
+    runId: approval.runId || null,
+    actionId,
+    prompt: approval.prompt,
+    labels: approval.labels,
+    capabilities: approval.capabilities,
+    actions: approval.actions,
+    target: approval.target || null,
+    scope: 'once',
+    reusable: approval.reusable,
+    consequence: approval.consequence || null,
+    resolution,
+  };
+}
+
+function buildOperatorChatApprovalRequests(
+  payload: {
+    approvals?: Array<Record<string, unknown>> | null;
+    actions?: ChatMessageActionRecord[] | null;
+  },
+): ChatApprovalRequestRecord[] {
+  const approvalActions = (Array.isArray(payload.actions) ? payload.actions : []).filter((action) => action.kind === 'approval_required');
+  return (Array.isArray(payload.approvals) ? payload.approvals : [])
+    .map((entry, index): ChatApprovalRequestRecord | null => {
+      if (!entry || typeof entry !== 'object') return null;
+      const record = entry as Record<string, unknown>;
+      const prompt = String(record.prompt || '').trim();
+      if (!prompt) return null;
+      const approvalId = String(record.approval_id || '').trim();
+      const runId = String(record.run_id || '').trim();
+      const resolution = String(record.status || 'waiting').trim().toLowerCase();
+      return {
+        id: approvalId || approvalActions[index]?.id || createChatId('approval'),
+        approvalId: approvalId || null,
+        runId: runId || null,
+        actionId: approvalActions[index]?.id || null,
+        prompt,
+        labels: Array.isArray(record.labels) ? record.labels.map((item) => String(item || '').trim()).filter(Boolean) : [],
+        capabilities: Array.isArray(record.capabilities) ? record.capabilities.map((item) => String(item || '').trim()).filter(Boolean) : [],
+        actions: Array.isArray(record.actions) ? record.actions.map((item) => String(item || '').trim()).filter(Boolean) : [],
+        target: String(record.target || '').trim() || null,
+        scope: 'once',
+        reusable: typeof record.reusable === 'boolean' ? record.reusable : false,
+        consequence: String(record.consequence || '').trim() || null,
+        resolution: resolution === 'approved' || resolution === 'rejected' ? resolution : 'waiting',
+      };
+    })
+    .filter((entry): entry is ChatApprovalRequestRecord => Boolean(entry));
 }
 
 function summarizeCapabilitySystems(
@@ -1297,7 +1352,6 @@ export function AutopilotWorkspace() {
   const [chatNoProviderStatus, setChatNoProviderStatus] = useState(false);
   const [chatAuthRequiredMessage, setChatAuthRequiredMessage] = useState<string | null>(null);
   const [simpleChatDepth, setSimpleChatDepth] = useState<ChatDepthValue>('medium');
-  const [simplePermissionActionBusy, setSimplePermissionActionBusy] = useState<string | null>(null);
   const preloadQuerySignatureRef = useRef('');
 
   useEffect(() => {
@@ -2239,6 +2293,7 @@ export function AutopilotWorkspace() {
       patchSimpleChatMessage(sessionId, messageId, {
         status: 'running',
         actions: [],
+        approvalRequests: [],
         content: 'Working on it...',
         ts: now,
       });
@@ -2273,10 +2328,16 @@ export function AutopilotWorkspace() {
         });
         setChatAuthRequiredMessage(null);
         setChatNoProviderStatus(false);
+        const nextActions = Array.isArray(payload.actions) ? payload.actions : [];
+        const nextApprovalRequests = buildOperatorChatApprovalRequests({
+          approvals: (payload.approvals || []) as Array<Record<string, unknown>>,
+          actions: nextActions,
+        });
         patchSimpleChatMessage(sessionId, messageId, {
-          content: payload.reply || streamedReply || 'Action completed.',
-          status: 'completed',
-          actions: Array.isArray(payload.actions) ? payload.actions : [],
+          content: payload.reply || streamedReply || (nextApprovalRequests.length > 0 ? '' : 'Action completed.'),
+          status: nextApprovalRequests.length > 0 ? 'waiting' : 'completed',
+          actions: nextActions,
+          approvalRequests: nextApprovalRequests,
           contextUsed: payload.context_used || null,
           steps: Array.isArray(payload.steps) && payload.steps.length > 0 ? payload.steps : streamedSteps,
           ts: new Date().toISOString(),
@@ -2300,6 +2361,7 @@ export function AutopilotWorkspace() {
           content: error instanceof Error ? error.message : 'Failed to confirm and execute action.',
           status: 'error',
           actions: [],
+          approvalRequests: [],
           contextUsed: null,
           steps: streamedSteps,
           ts: new Date().toISOString(),
@@ -2521,6 +2583,7 @@ export function AutopilotWorkspace() {
       patchSimpleChatMessage(pendingSimpleRun.sessionId, pendingSimpleRun.messageId, {
         run_id: runId,
         status: status === 'waiting' ? 'waiting' : 'running',
+        approvalRequests: [],
         runCard: {
           title: truncateRunCardTitle(pendingSimpleRun.goal),
           summary: status === 'queued_local' ? 'Preparing execution on your machine.' : status === 'waiting' ? 'Waiting for confirmation to continue.' : 'Working on this now.',
@@ -2561,10 +2624,14 @@ export function AutopilotWorkspace() {
       latestRunSummary: matchingLatestRunSummary,
       topError,
     });
+    const nextApprovalRequests = status === 'waiting' && simpleChatPermissionPrompt
+      ? [buildTranscriptApprovalRequest(simpleChatPermissionPrompt)]
+      : [];
     patchSimpleChatMessage(pendingSimpleRun.sessionId, pendingSimpleRun.messageId, {
       status: nextRunCard.status === 'failed' ? 'error' : status === 'waiting' ? 'waiting' : 'completed',
       run_id: pendingSimpleRun.runId || runId,
       runCard: nextRunCard,
+      approvalRequests: nextApprovalRequests,
       actions: existingMessage?.actions || [],
       ts: new Date().toISOString(),
     });
@@ -2578,26 +2645,25 @@ export function AutopilotWorkspace() {
     patchSimpleChatMessage,
     pendingSimpleRun,
     runId,
+    simpleChatPermissionPrompt,
     status,
     topError,
   ]);
 
   const submitSimpleChatPermissionDecision = useCallback(async (
     decision: 'Proceed' | 'Hold',
-    scope: SimpleChatPermissionScope = 'once',
   ) => {
     const prompt = simpleChatPermissionPrompt;
     if (!prompt) return;
-    const busyKey = `${decision}:${scope}`;
-    setSimplePermissionActionBusy(busyKey);
     try {
       await ensureControlPlaneSession();
-      const res = await fetch(`/api/runs/${encodeURIComponent(prompt.runId)}/decision`, {
+      const res = await fetch('/api/approvals/resolve', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
+          runId: prompt.runId,
+          approvalId: prompt.approvalId,
           decision,
-          scope,
           note: `Resolved from ${BRAND.product} chat`,
         }),
       });
@@ -2608,6 +2674,7 @@ export function AutopilotWorkspace() {
       if (decision === 'Proceed' && pendingSimpleRun) {
         patchSimpleChatMessage(pendingSimpleRun.sessionId, pendingSimpleRun.messageId, {
           status: 'running',
+          approvalRequests: [],
           runCard: {
             title: truncateRunCardTitle(pendingSimpleRun.goal),
             summary: 'Continuing after your confirmation.',
@@ -2618,6 +2685,13 @@ export function AutopilotWorkspace() {
             evidence: [],
             approval: null,
           },
+          ts: new Date().toISOString(),
+        });
+      } else if (decision !== 'Proceed' && pendingSimpleRun) {
+        patchSimpleChatMessage(pendingSimpleRun.sessionId, pendingSimpleRun.messageId, {
+          approvalRequests: [
+            buildTranscriptApprovalRequest(prompt, null, 'rejected'),
+          ],
           ts: new Date().toISOString(),
         });
       }
@@ -2642,10 +2716,48 @@ export function AutopilotWorkspace() {
       }
     } catch (error) {
       appendLog(error instanceof Error ? error.message : 'Failed to send decision.', 'error');
-    } finally {
-      setSimplePermissionActionBusy(null);
+      throw error;
     }
   }, [appendLog, fetchRunResult, patchSimpleChatMessage, pendingSimpleRun, setStatus, simpleChatPermissionPrompt]);
+
+  const handleSimpleChatApprovalDecision = useCallback(async (
+    messageId: string,
+    approval: ChatApprovalRequestRecord,
+    decision: 'proceed' | 'hold',
+  ) => {
+    const sessionId = selectedChatSession?.id;
+    if (!sessionId) return;
+
+    if (approval.approvalId && approval.runId) {
+      await submitSimpleChatPermissionDecision(decision === 'proceed' ? 'Proceed' : 'Hold');
+      return;
+    }
+
+    const existingMessage = selectedChatMessages.find((message) => message.id === messageId) || null;
+    const approvalAction = existingMessage?.actions?.find(
+      (action) => action.kind === 'approval_required' && action.id === approval.actionId,
+    ) || existingMessage?.actions?.find((action) => action.kind === 'approval_required') || null;
+
+    if (decision === 'hold') {
+      patchSimpleChatMessage(sessionId, messageId, {
+        approvalRequests: [{ ...approval, resolution: 'rejected' }],
+        actions: [],
+        status: 'completed',
+        ts: new Date().toISOString(),
+      });
+      return;
+    }
+
+    if (approvalAction) {
+      await handleSimpleChatMessageAction(messageId, approvalAction);
+    }
+  }, [
+    handleSimpleChatMessageAction,
+    patchSimpleChatMessage,
+    selectedChatMessages,
+    selectedChatSession?.id,
+    submitSimpleChatPermissionDecision,
+  ]);
 
   useEffect(() => {
     if (!pendingWorkbenchChat) return;
@@ -2754,10 +2866,16 @@ export function AutopilotWorkspace() {
       setChatAuthRequiredMessage(null);
       setChatNoProviderStatus(false);
       setTopError(null);
+      const nextActions = Array.isArray(payload.actions) ? payload.actions : [];
+      const nextApprovalRequests = buildOperatorChatApprovalRequests({
+        approvals: (payload.approvals || []) as Array<Record<string, unknown>>,
+        actions: nextActions,
+      });
       patchSimpleChatMessage(sessionId, placeholderId, {
-        content: payload.reply || streamedReply || 'I couldn’t form a clean reply just now.',
-        status: 'completed',
-        actions: Array.isArray(payload.actions) ? payload.actions : [],
+        content: payload.reply || streamedReply || (nextApprovalRequests.length > 0 ? '' : 'I couldn’t form a clean reply just now.'),
+        status: nextApprovalRequests.length > 0 ? 'waiting' : 'completed',
+        actions: nextActions,
+        approvalRequests: nextApprovalRequests,
         contextUsed: payload.context_used || null,
         steps: Array.isArray(payload.steps) && payload.steps.length > 0 ? payload.steps : streamedSteps,
         ts: new Date().toISOString(),
@@ -2854,12 +2972,8 @@ export function AutopilotWorkspace() {
           onMessageAction={(messageId, action) => {
             void handleSimpleChatMessageAction(messageId, action);
           }}
-          onRunApprovalDecision={(scope) => {
-            if (scope === 'deny') {
-              void submitSimpleChatPermissionDecision('Hold', 'once');
-              return;
-            }
-            void submitSimpleChatPermissionDecision('Proceed', 'once');
+          onApprovalDecision={(messageId, approval, decision) => {
+            void handleSimpleChatApprovalDecision(messageId, approval, decision);
           }}
           chatBusy={Boolean(pendingSimpleChat)}
           messages={selectedChatMessages}
@@ -2877,24 +2991,6 @@ export function AutopilotWorkspace() {
           onSelectDepth={(value) => {
             if (value === 'low' || value === 'medium' || value === 'high') setSimpleChatDepth(value);
           }}
-          permissionPrompt={simpleChatPermissionPrompt ? {
-            title: 'Confirmation required',
-            prompt: simpleChatPermissionPrompt.prompt,
-            labels: simpleChatPermissionPrompt.labels,
-            capabilities: simpleChatPermissionPrompt.capabilities,
-            actions: simpleChatPermissionPrompt.actions,
-            target: simpleChatPermissionPrompt.target,
-            scope: 'once',
-            reusable: simpleChatPermissionPrompt.reusable,
-            consequence: simpleChatPermissionPrompt.consequence,
-            busyKey: simplePermissionActionBusy,
-            onAllowOnce: () => {
-              void submitSimpleChatPermissionDecision('Proceed', 'once');
-            },
-            onDeny: () => {
-              void submitSimpleChatPermissionDecision('Hold', 'once');
-            },
-          } : null}
           identityDrawerOpen={chatIdentityDrawerOpen}
           onToggleIdentityDrawer={() => setChatIdentityDrawerOpen((current) => !current)}
           onCloseIdentityDrawer={() => setChatIdentityDrawerOpen(false)}

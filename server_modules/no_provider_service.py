@@ -255,6 +255,18 @@ def _answer_payload(reply: str) -> Dict[str, Any]:
     }
 
 
+def _humanize_approval_token(value: str) -> str:
+    token = str(value or "").strip().replace("__", " ").replace("_", " ").replace("-", " ")
+    token = re.sub(r"\s+", " ", token).strip()
+    return " ".join(part.capitalize() for part in token.split(" ") if part)
+
+
+def _approval_prompt(connector_id: str, action_id: str) -> str:
+    connector_label = _humanize_approval_token(connector_id) or "Tool"
+    action_label = _humanize_approval_token(action_id) or "action"
+    return f"Approve {connector_label} to {action_label.lower()} before continuing."
+
+
 def build_direct_tool_approval_response(
     *,
     tool_calls: list[dict[str, Any]],
@@ -265,6 +277,7 @@ def build_direct_tool_approval_response(
     if services.agent_machine_full_trust_for_session(session_ctx):
         return None
     approval_actions: list[dict[str, Any]] = []
+    approvals: list[dict[str, Any]] = []
     for index, call in enumerate(tool_calls, start=1):
         connector_id, action_id = services.parse_tool_name(str(call.get("name") or ""))
         argument_payload = services.tool_arguments_payload(call.get("arguments"))
@@ -285,11 +298,25 @@ def build_direct_tool_approval_response(
                 "variant": "primary",
             }
         )
+        approvals.append(
+            {
+                "prompt": _approval_prompt(connector_id, action_id),
+                "labels": [f"{connector_id}.{action_id}"],
+                "capabilities": [connector_id] if connector_id else [],
+                "actions": [action_id] if action_id else [],
+                "target": None,
+                "scope": "once",
+                "reusable": False,
+                "consequence": None,
+                "status": "waiting",
+            }
+        )
     if not approval_actions:
         return None
     return {
-        "reply": "This action requires your approval before I send it. Confirm?",
+        "reply": "",
         "actions": approval_actions,
+        "approvals": approvals,
         "mode": "answer_with_action",
     }
 

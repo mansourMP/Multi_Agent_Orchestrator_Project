@@ -11,6 +11,28 @@ export type ApiTurnAttachment = {
   metadata?: Record<string, unknown>;
 };
 
+export type AgentTurnPolicyContext = {
+  trust_mode?: 'auto' | 'guarded' | 'strict' | 'cost_guard' | 'sensitive_guard';
+  session_mode?: 'copilot' | 'agent';
+  approval_ui?: 'card';
+  interactive_approvals?: boolean;
+  [key: string]: unknown;
+};
+
+export type AgentTurnApprovalRequest = {
+  approval_id?: string | null;
+  run_id?: string | null;
+  prompt: string;
+  labels?: string[];
+  capabilities?: string[];
+  actions?: string[];
+  target?: string | null;
+  scope?: 'once';
+  reusable?: boolean;
+  consequence?: string | null;
+  status?: 'waiting' | 'approved' | 'rejected';
+};
+
 export type AgentTurnRequest = {
   tenant_id?: string;
   workspace_id: string;
@@ -23,7 +45,7 @@ export type AgentTurnRequest = {
   execution_mode?: 'sync' | 'durable';
   response_mode?: 'stream' | 'artifact' | 'channel_reply';
   machine_target?: string | null;
-  policy_context?: Record<string, unknown>;
+  policy_context?: AgentTurnPolicyContext;
 };
 
 export type AgentTurnResponse = {
@@ -33,7 +55,7 @@ export type AgentTurnResponse = {
   run_id?: string | null;
   session_id?: string | null;
   artifacts?: Array<Record<string, unknown>>;
-  approvals?: Array<Record<string, unknown>>;
+  approvals?: AgentTurnApprovalRequest[];
   metadata?: Record<string, unknown>;
 };
 

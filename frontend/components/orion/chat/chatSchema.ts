@@ -53,6 +53,22 @@ export type ChatRunCardApprovalRecord = {
   consequence?: string | null;
 };
 
+export type ChatApprovalRequestRecord = {
+  id: string;
+  approvalId?: string | null;
+  runId?: string | null;
+  actionId?: string | null;
+  prompt: string;
+  labels: string[];
+  capabilities: string[];
+  actions: string[];
+  target?: string | null;
+  scope: 'once';
+  reusable: boolean;
+  consequence?: string | null;
+  resolution?: 'waiting' | 'approved' | 'rejected';
+};
+
 export type ChatRunCardRecord = {
   title: string;
   summary?: string;
@@ -104,6 +120,7 @@ export type ChatMessageRecord = {
   steps?: ChatStepRecord[];
   actions?: ChatMessageActionRecord[];
   runCard?: ChatRunCardRecord | null;
+  approvalRequests?: ChatApprovalRequestRecord[];
   contextUsed?: ChatContextUsedRecord | null;
 };
 
@@ -182,16 +199,17 @@ export function dedupeChatMessages(messages: ChatMessageRecord[]): ChatMessageRe
       String(previous.run_id || '').trim() === String(nextMessage.run_id || '').trim() &&
       normalizeChatContent(previous.content) === nextMessage.content
     ) {
-      normalized[normalized.length - 1] = {
-        ...previous,
-        ...nextMessage,
-        steps: nextMessage.steps ?? previous.steps,
-        actions: nextMessage.actions ?? previous.actions,
-        runCard: nextMessage.runCard ?? previous.runCard ?? null,
-        contextUsed: nextMessage.contextUsed ?? previous.contextUsed ?? null,
-      };
-      continue;
-    }
+        normalized[normalized.length - 1] = {
+          ...previous,
+          ...nextMessage,
+          steps: nextMessage.steps ?? previous.steps,
+          actions: nextMessage.actions ?? previous.actions,
+          runCard: nextMessage.runCard ?? previous.runCard ?? null,
+          approvalRequests: nextMessage.approvalRequests ?? previous.approvalRequests,
+          contextUsed: nextMessage.contextUsed ?? previous.contextUsed ?? null,
+        };
+        continue;
+      }
     normalized.push(nextMessage);
   }
   return normalized;
@@ -245,6 +263,8 @@ export function sanitizeChatStore(value: unknown): ChatStoreRecord | null {
               const id = String(item.id || '').trim() || createChatId('message');
               const ts = String(item.ts || entry.updatedAt || entry.createdAt || new Date().toISOString()).trim() || new Date().toISOString();
               const content = normalizeChatContent(String(item.content || ''));
+              const hasRunCard = Boolean(item.runCard && typeof item.runCard === 'object');
+              const hasApprovalRequests = Boolean(Array.isArray(item.approvalRequests) && item.approvalRequests.length > 0);
               const steps = Array.isArray(item.steps)
                 ? item.steps
                     .map((step): ChatStepRecord | null => {
@@ -266,7 +286,7 @@ export function sanitizeChatStore(value: unknown): ChatStoreRecord | null {
                     })
                     .filter((step): step is ChatStepRecord => Boolean(step))
                 : [];
-              if (!content && steps.length === 0) return null;
+              if (!content && steps.length === 0 && !hasRunCard && !hasApprovalRequests) return null;
               return {
                 id,
                 role: normalizeChatRole(String(item.role || 'assistant')),
@@ -357,6 +377,38 @@ export function sanitizeChatStore(value: unknown): ChatStoreRecord | null {
                       } satisfies ChatRunCardRecord;
                     })()
                   : null,
+                approvalRequests: Array.isArray(item.approvalRequests)
+                  ? item.approvalRequests
+                      .map((entry): ChatApprovalRequestRecord | null => {
+                        if (!entry || typeof entry !== 'object') return null;
+                        const record = entry as Record<string, unknown>;
+                        const prompt = String(record.prompt || '').trim();
+                        if (!prompt) return null;
+                        const resolution = String(record.resolution || 'waiting').trim().toLowerCase();
+                        return {
+                          id: String(record.id || '').trim() || createChatId('approval'),
+                          approvalId: typeof record.approvalId === 'string' ? record.approvalId : null,
+                          runId: typeof record.runId === 'string' ? record.runId : null,
+                          actionId: typeof record.actionId === 'string' ? record.actionId : null,
+                          prompt,
+                          labels: Array.isArray(record.labels)
+                            ? record.labels.map((entry) => String(entry || '').trim()).filter(Boolean)
+                            : [],
+                          capabilities: Array.isArray(record.capabilities)
+                            ? record.capabilities.map((entry) => String(entry || '').trim()).filter(Boolean)
+                            : [],
+                          actions: Array.isArray(record.actions)
+                            ? record.actions.map((entry) => String(entry || '').trim()).filter(Boolean)
+                            : [],
+                          target: typeof record.target === 'string' ? record.target : null,
+                          scope: 'once',
+                          reusable: typeof record.reusable === 'boolean' ? record.reusable : false,
+                          consequence: typeof record.consequence === 'string' ? record.consequence : null,
+                          resolution: resolution === 'approved' || resolution === 'rejected' ? resolution : 'waiting',
+                        } satisfies ChatApprovalRequestRecord;
+                      })
+                      .filter((entry): entry is ChatApprovalRequestRecord => Boolean(entry))
+                  : undefined,
                 contextUsed: item.contextUsed && typeof item.contextUsed === 'object'
                   ? (() => {
                       const contextUsed = item.contextUsed as Record<string, unknown>;

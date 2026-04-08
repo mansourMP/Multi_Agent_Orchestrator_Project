@@ -24,11 +24,13 @@ import {
   CHAT_STORE_STORAGE_KEY,
   CHAT_STORE_UPDATED_EVENT,
   sanitizeChatStore,
+  type ChatApprovalRequestRecord,
   type ChatMessageActionRecord,
   type ChatMessageRecord,
   type ChatSessionRecord,
   type ChatStepRecord,
 } from './chatSchema';
+import { ApprovalRequestCard } from './ApprovalRequestCard';
 import { normalizeAssistantDisplayText, normalizeInlineErrorMessage } from './displayText';
 import { resolveAssistantStreamState } from '@/lib/useStreamProcessor';
 import { normalizeAssembledAssistantText } from '@/lib/StreamAssembler';
@@ -86,6 +88,11 @@ type ChatSurfaceProps = {
   onSend: () => void;
   onMessageAction?: (messageId: string, action: ChatMessageActionRecord) => void;
   onRunApprovalDecision?: (scope: 'once' | 'deny') => void;
+  onApprovalDecision?: (
+    messageId: string,
+    approval: ChatApprovalRequestRecord,
+    decision: 'proceed' | 'hold',
+  ) => Promise<void> | void;
   chatBusy: boolean;
   messages: ChatMessageRecord[];
   providerBanner?: {
@@ -677,7 +684,7 @@ export function ChatSurface({
   primaryGoalRef,
   onSend,
   onMessageAction,
-  onRunApprovalDecision,
+  onApprovalDecision,
   chatBusy,
   messages,
   providerBanner = null,
@@ -844,52 +851,6 @@ export function ChatSurface({
       });
     }
 
-    if (permissionPrompt) {
-      notices.push({
-        id: 'permission',
-        tone: 'warn',
-        label: permissionPrompt.title,
-        detail: permissionPrompt.prompt,
-        actions: [
-          {
-            id: 'permission:allow',
-            label: permissionPrompt.busyKey === 'Proceed:once' ? 'Confirming…' : 'Confirm once',
-            tone: 'primary',
-            disabled: Boolean(permissionPrompt.busyKey),
-            onClick: permissionPrompt.onAllowOnce,
-          },
-          {
-            id: 'permission:deny',
-            label: permissionPrompt.busyKey === 'Hold:once' ? 'Declining…' : 'Decline',
-            tone: 'danger',
-            disabled: Boolean(permissionPrompt.busyKey),
-            onClick: permissionPrompt.onDeny,
-          },
-        ],
-      });
-    } else if (latestRunCard?.approval && onRunApprovalDecision) {
-      notices.push({
-        id: 'run-approval',
-        tone: 'warn',
-        label: 'Confirmation required',
-        detail: latestRunCard.approval.prompt,
-        actions: [
-          {
-            id: 'run-approval:allow',
-            label: 'Confirm once',
-            tone: 'primary',
-            onClick: () => onRunApprovalDecision('once'),
-          },
-          {
-            id: 'run-approval:deny',
-            label: 'Decline',
-            tone: 'danger',
-            onClick: () => onRunApprovalDecision('deny'),
-          },
-        ],
-      });
-    }
-
     if (latestAssistantSteps) {
       notices.push({
         id: 'steps',
@@ -940,7 +901,6 @@ export function ChatSurface({
     latestAssistantSteps,
     latestRunCard,
     onMessageAction,
-    onRunApprovalDecision,
     permissionPrompt,
     providerBanner,
     router,
@@ -1565,10 +1525,23 @@ export function ChatSurface({
               const isFirstAssistantEntry = !isUser && isFirstThread && index <= 1;
               const artifactsForMessage = !isUser ? messageArtifacts.byMessage.get(message.id) || [] : [];
               const codeArtifacts = artifactsForMessage.filter((artifact) => artifact.source === 'code');
-              if (!isUser && suppressBody && artifactsForMessage.length === 0) {
+              if (!isUser && suppressBody && artifactsForMessage.length === 0 && (!message.approvalRequests || message.approvalRequests.length === 0)) {
                 return null;
               }
               let codeArtifactIndex = 0;
+              const approvalRequests = Array.isArray(message.approvalRequests) ? message.approvalRequests : [];
+              const handleApprovalDecision = (approval: ChatApprovalRequestRecord, decision: 'proceed' | 'hold') => {
+                if (onApprovalDecision) {
+                  return onApprovalDecision(message.id, approval, decision);
+                }
+                const linkedAction = message.actions?.find(
+                  (action) => action.kind === 'approval_required' && action.id === approval.actionId,
+                ) || message.actions?.find((action) => action.kind === 'approval_required');
+                if (!linkedAction || !onMessageAction) return;
+                if (decision === 'proceed') {
+                  return onMessageAction(message.id, linkedAction);
+                }
+              };
               return (
                 <article
                   key={message.id}
@@ -1622,49 +1595,37 @@ export function ChatSurface({
                           </ReactMarkdown>
                         </div>
                       ) : null}
-                      <ChatMessageToolbar
-                        copied={copiedMessageId === message.id}
-                        onCopy={() => handleCopyMessage(message.id, displayContent)}
-                        onSpeak={() => { void handleSpeakMessage(message.id, displayContent); }}
-                        speaking={speakingMessageId === message.id}
-                        onOpenArtifacts={artifactsForMessage.length > 0 ? () => handleSelectArtifact(artifactsForMessage[0]!.id) : null}
-                        artifactCount={artifactsForMessage.length}
-                      />
-                      <div className="orion-chat-v2-meta">{fmtTime(message.ts)}</div>
+                      {approvalRequests.length > 0 ? (
+                        <div>
+                          {approvalRequests.map((approval) => (
+                            <ApprovalRequestCard
+                              key={approval.id}
+                              approval={approval}
+                              onDecision={(decision) => handleApprovalDecision(approval, decision)}
+                            />
+                          ))}
+                        </div>
+                      ) : null}
+                      {displayContent || artifactsForMessage.length > 0 ? (
+                        <>
+                          <ChatMessageToolbar
+                            copied={copiedMessageId === message.id}
+                            onCopy={() => handleCopyMessage(message.id, displayContent)}
+                            onSpeak={() => { void handleSpeakMessage(message.id, displayContent); }}
+                            speaking={speakingMessageId === message.id}
+                            onOpenArtifacts={artifactsForMessage.length > 0 ? () => handleSelectArtifact(artifactsForMessage[0]!.id) : null}
+                            artifactCount={artifactsForMessage.length}
+                          />
+                          <div className="orion-chat-v2-meta">{fmtTime(message.ts)}</div>
+                        </>
+                      ) : (
+                        <div className="orion-chat-v2-meta">{fmtTime(message.ts)}</div>
+                      )}
                     </div>
                   )}
                 </article>
               );
                 })}
-                {permissionPrompt ? (
-                  <article className="orion-chat-v2-turn is-assistant">
-                    <div className="orion-chat-v2-assistant">
-                      <div style={{ fontSize: 14, color: 'var(--text-primary)', marginBottom: 10 }}>
-                        {permissionPrompt.prompt}
-                      </div>
-                      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                        <button
-                          type="button"
-                          className="orion-btn orion-btn-primary"
-                          style={{ minHeight: 36, fontSize: 13, padding: '0 14px' }}
-                          disabled={Boolean(permissionPrompt.busyKey)}
-                          onClick={permissionPrompt.onAllowOnce}
-                        >
-                          Allow once
-                        </button>
-                        <button
-                          type="button"
-                          className="orion-btn"
-                          style={{ minHeight: 36, fontSize: 13, padding: '0 14px', border: '1px solid var(--border-default)' }}
-                          disabled={Boolean(permissionPrompt.busyKey)}
-                          onClick={permissionPrompt.onDeny}
-                        >
-                          Deny
-                        </button>
-                      </div>
-                    </div>
-                  </article>
-                ) : null}
                 {shouldShowPendingRow ? (
                   <article className="orion-chat-v2-turn is-assistant is-pending">
                     <div className="orion-chat-v2-assistant">

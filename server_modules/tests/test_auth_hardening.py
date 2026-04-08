@@ -54,9 +54,10 @@ class AuthHardeningTests(unittest.TestCase):
         self.assertEqual(runtime_common._extract_request_api_key(request), "")
 
     def test_public_registration_disabled_dependency_blocks_when_off(self):
-        with patch.object(auth, "ORION_PUBLIC_REGISTRATION_ENABLED", False):
-            with self.assertRaises(HTTPException) as ctx:
-                auth.ensure_public_registration_enabled()
+        with patch.dict(os.environ, {"ORION_PUBLIC_REGISTRATION_ENABLED": "0"}, clear=False):
+            with patch.object(auth, "ORION_PUBLIC_REGISTRATION_ENABLED", False):
+                with self.assertRaises(HTTPException) as ctx:
+                    auth.ensure_public_registration_enabled()
         self.assertEqual(ctx.exception.status_code, 404)
 
     def test_require_admin_access_allows_service_key_identity(self):

@@ -38,6 +38,13 @@ RBAC_ROLE_ORDER = {"viewer": 0, "member": 1, "owner": 2}
 WORKSPACE_CAPABILITY_ALL = "*"
 
 
+def public_registration_enabled() -> bool:
+    raw = os.getenv("ORION_PUBLIC_REGISTRATION_ENABLED")
+    if raw is None:
+        return bool(ORION_PUBLIC_REGISTRATION_ENABLED)
+    return str(raw).strip().lower() in {"1", "true", "yes", "on"}
+
+
 def normalize_rbac_role(value: Any, *, default: str = "member") -> str:
     token = str(value or "").strip().lower()
     if token in RBAC_ROLE_ORDER:
@@ -2758,7 +2765,7 @@ def get_current_user(
 
 
 def ensure_public_registration_enabled() -> bool:
-    if not ORION_PUBLIC_REGISTRATION_ENABLED:
+    if not public_registration_enabled():
         raise HTTPException(status_code=404, detail="Public registration is disabled.")
     return True
 

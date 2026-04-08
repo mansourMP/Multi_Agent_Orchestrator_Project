@@ -324,7 +324,8 @@ class OperatorChatDirectToolTests(unittest.TestCase):
         )
 
         self.assertEqual(payload["mode"], "answer_with_action")
-        self.assertEqual(payload["reply"], "This action requires your approval before I send it. Confirm?")
+        self.assertEqual(payload["reply"], "")
+        self.assertEqual(payload["approvals"][0]["prompt"], "Approve Telegram Bot to send message before continuing.")
         self.assertEqual(payload["actions"][0]["type"], "approval_required")
         self.assertEqual(payload["actions"][0]["kind"], "approval_required")
         self.assertEqual(payload["actions"][0]["connector"], "telegram_bot")

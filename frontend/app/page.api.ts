@@ -38,7 +38,7 @@ import {
 } from './page.catalog';
 import { type PageState } from './page.state';
 import { apiClient } from '@/lib/api-client';
-import type { AgentTurnRequest, AgentTurnResponse } from '@shared/api-contract';
+import type { AgentTurnApprovalRequest, AgentTurnRequest, AgentTurnResponse } from '@shared/api-contract';
 import { loadActiveSkills, resolveSkillsByIds } from '@/lib/skills';
 import { BRAND } from '@/lib/brand';
 import { API_BASE } from '@/lib/config';
@@ -343,6 +343,7 @@ type StartedRunPayload = {
 export type OperatorChatResponsePayload = {
   reply: string;
   actions?: OperatorChatActionPayload[];
+  approvals?: AgentTurnApprovalRequest[];
   suggestions?: string[];
   mode?: string;
   usage_masked?: Record<string, unknown> | null;
@@ -353,6 +354,26 @@ export type OperatorChatResponsePayload = {
   context_used?: OperatorChatContextUsedPayload | null;
   steps?: OperatorChatStepPayload[];
 };
+
+function normalizeOperatorChatApprovalPayload(payload: unknown): AgentTurnApprovalRequest | null {
+  const record = payload && typeof payload === 'object' ? payload as Record<string, unknown> : {};
+  const prompt = typeof record.prompt === 'string' ? record.prompt.trim() : '';
+  if (!prompt) return null;
+  const status = typeof record.status === 'string' ? record.status.trim().toLowerCase() : '';
+  return {
+    approval_id: typeof record.approval_id === 'string' ? record.approval_id : null,
+    run_id: typeof record.run_id === 'string' ? record.run_id : null,
+    prompt,
+    labels: Array.isArray(record.labels) ? record.labels.map((item) => String(item || '').trim()).filter(Boolean) : [],
+    capabilities: Array.isArray(record.capabilities) ? record.capabilities.map((item) => String(item || '').trim()).filter(Boolean) : [],
+    actions: Array.isArray(record.actions) ? record.actions.map((item) => String(item || '').trim()).filter(Boolean) : [],
+    target: typeof record.target === 'string' && record.target.trim() ? record.target.trim() : null,
+    scope: 'once',
+    reusable: typeof record.reusable === 'boolean' ? record.reusable : false,
+    consequence: typeof record.consequence === 'string' && record.consequence.trim() ? record.consequence.trim() : null,
+    status: status === 'approved' || status === 'rejected' || status === 'waiting' ? status : 'waiting',
+  };
+}
 
 function normalizeOperatorChatStepPayload(payload: unknown): OperatorChatStepPayload | null {
   const record = payload && typeof payload === 'object' ? payload as Record<string, unknown> : {};
@@ -388,6 +409,11 @@ function normalizeOperatorChatResponsePayload(payload: unknown): OperatorChatRes
   return {
     reply: typeof record.reply === 'string' ? record.reply : '',
     actions: Array.isArray(record.actions) ? record.actions as OperatorChatActionPayload[] : [],
+    approvals: Array.isArray(record.approvals)
+      ? record.approvals
+          .map((approval) => normalizeOperatorChatApprovalPayload(approval))
+          .filter((approval): approval is AgentTurnApprovalRequest => Boolean(approval))
+      : [],
     suggestions: Array.isArray(record.suggestions)
       ? record.suggestions.map((item) => String(item || '').trim()).filter(Boolean).slice(0, 3)
       : [],

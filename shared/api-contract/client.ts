@@ -18,6 +18,8 @@ import type {
   RunReplayResponse,
   SessionCreateRequest,
   SessionResponse,
+  ThreadListResponse,
+  ThreadRecord,
 } from "./index";
 
 export class ApiClientError extends Error {
@@ -148,6 +150,19 @@ export function createApiClient(init: ApiClientInit = {}) {
 
     getSession(sessionId: string): Promise<SessionResponse> {
       return jsonRequest<SessionResponse>(`/sessions/${encodeURIComponent(sessionId)}`);
+    },
+
+    listThreads(params: {
+      workspace_id?: string;
+      include_turns?: boolean;
+      limit?: number;
+    } = {}): Promise<ThreadListResponse> {
+      const query = buildQuery(params);
+      return jsonRequest<ThreadListResponse>(`/threads${query ? `?${query}` : ""}`);
+    },
+
+    getThread(threadId: string): Promise<ThreadRecord> {
+      return jsonRequest<ThreadRecord>(`/threads/${encodeURIComponent(threadId)}`);
     },
 
     turn(request: AgentTurnRequest): Promise<AgentTurnResponse> {

@@ -24,6 +24,8 @@ from server_modules.api_contract import (
     ApiRunListResponse,
     ApiSessionRequest,
     ApiSessionResponse,
+    ApiThreadListResponse,
+    ApiThreadRecord,
     build_turn_chat_body,
     model_to_dict,
     normalize_agent_turn_result,
@@ -31,6 +33,7 @@ from server_modules.api_contract import (
     request_body_to_turn_request,
 )
 from server_modules import session_service
+from server_modules import thread_service
 from server_modules import run_state_repository
 from server_modules.direct_chat_stream_response_service import (
     build_agent_turn_stream_response,
@@ -129,6 +132,47 @@ def _workspace_filtered_items(items: list[dict[str, Any]], current_user: Any) ->
         if workspace_id in allowed:
             filtered.append(item)
     return filtered
+
+
+def normalize_thread_turn_record(record: Dict[str, Any]) -> Dict[str, Any]:
+    payload = dict(record or {})
+    return {
+        "id": str(payload.get("id") or "").strip(),
+        "tenant_id": str(payload.get("tenant_id") or "").strip() or None,
+        "workspace_id": str(payload.get("workspace_id") or "").strip() or None,
+        "thread_id": str(payload.get("thread_id") or "").strip(),
+        "session_id": str(payload.get("session_id") or "").strip() or None,
+        "request_id": str(payload.get("request_id") or "").strip() or None,
+        "role": str(payload.get("role") or "").strip() or "assistant",
+        "status": str(payload.get("status") or "").strip() or None,
+        "content": str(payload.get("content") or ""),
+        "run_id": str(payload.get("run_id") or "").strip() or None,
+        "actor": dict(payload.get("actor") or {}),
+        "approvals": list(payload.get("approvals") or []),
+        "interventions": list(payload.get("interventions") or []),
+        "metadata": dict(payload.get("metadata") or {}),
+        "created_at": str(payload.get("created_at") or "").strip() or None,
+        "updated_at": str(payload.get("updated_at") or "").strip() or None,
+    }
+
+
+def normalize_thread_record(record: Dict[str, Any]) -> Dict[str, Any]:
+    payload = dict(record or {})
+    turns = payload.get("turns") if isinstance(payload.get("turns"), list) else []
+    return {
+        "id": str(payload.get("id") or "").strip(),
+        "tenant_id": str(payload.get("tenant_id") or "").strip() or None,
+        "workspace_id": str(payload.get("workspace_id") or "").strip() or None,
+        "owner_user_id": str(payload.get("owner_user_id") or "").strip() or None,
+        "channel": str(payload.get("channel") or "").strip() or None,
+        "title": str(payload.get("title") or "").strip() or "New chat",
+        "status": str(payload.get("status") or "").strip() or None,
+        "metadata": dict(payload.get("metadata") or {}),
+        "created_at": str(payload.get("created_at") or "").strip() or None,
+        "updated_at": str(payload.get("updated_at") or "").strip() or None,
+        "last_turn_at": str(payload.get("last_turn_at") or "").strip() or None,
+        "turns": [normalize_thread_turn_record(item) for item in turns if isinstance(item, dict)],
+    }
 
 
 def _workspace_id_from_turn_payload(payload: dict[str, Any]) -> str:
@@ -785,3 +829,55 @@ def register_run_routes(app) -> None:
             )
         await session_service.terminate_session(session_id)
         return {"ok": True, "session_id": str(session_id or "").strip()}
+
+    @app.get("/threads", dependencies=[Depends(viewer_dependency)], response_model=ApiThreadListResponse)
+    async def list_threads(
+        workspace_id: Optional[str] = None,
+        include_turns: bool = False,
+        limit: int = 50,
+        current_user=Depends(viewer_dependency),
+    ):
+        requested_workspace_id = enforce_workspace_access(
+            current_user,
+            workspace_id,
+            minimum_role="viewer",
+        )
+        tenant_id = workspace_tenant_id(current_user, requested_workspace_id)
+        owner_user_id = None if _current_user_is_privileged(current_user) else str(current_user.get("user_id") or "").strip() or None
+        records = await thread_service.list_threads(
+            workspace_id=requested_workspace_id,
+            tenant_id=tenant_id,
+            owner_user_id=owner_user_id,
+            include_turns=bool(include_turns),
+            limit=max(1, min(int(limit or 50), 200)),
+        )
+        items = [normalize_thread_record(item) for item in records if isinstance(item, dict)]
+        return {
+            "items": items,
+            "count": len(items),
+            "workspace_id": requested_workspace_id,
+            "tenant_id": tenant_id,
+        }
+
+    @app.get("/threads/{thread_id}", dependencies=[Depends(viewer_dependency)], response_model=ApiThreadRecord)
+    async def get_thread(
+        thread_id: str,
+        current_user=Depends(viewer_dependency),
+    ):
+        from fastapi import HTTPException
+
+        record = await thread_service.get_thread(thread_id, include_turns=True)
+        if not isinstance(record, dict):
+            raise HTTPException(status_code=404, detail="Thread not found.")
+        enforce_workspace_access(
+            current_user,
+            record.get("workspace_id"),
+            tenant_id=record.get("tenant_id"),
+            minimum_role="viewer",
+        )
+        if not _current_user_is_privileged(current_user):
+            request_user_id = str(current_user.get("user_id") or "").strip()
+            owner_user_id = str(record.get("owner_user_id") or "").strip()
+            if owner_user_id and request_user_id and owner_user_id != request_user_id:
+                raise HTTPException(status_code=404, detail="Thread not found.")
+        return normalize_thread_record(record)

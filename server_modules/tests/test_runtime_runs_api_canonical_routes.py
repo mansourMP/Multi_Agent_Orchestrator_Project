@@ -61,6 +61,8 @@ class RuntimeRunsApiCanonicalRouteTests(unittest.TestCase):
         original_extract_owner = runtime_runs_api._extract_run_owner_user_id
         original_list_live_runs = runtime_runs_api.run_state_repository.sync_list_live_runs
         original_resolve_run_start_turn_request = runtime_runs_api.resolve_run_start_turn_request
+        original_list_threads = runtime_runs_api.thread_service.list_threads
+        original_get_thread = runtime_runs_api.thread_service.get_thread
         try:
             runtime_runs_api.runtime_route_registration_service.register_runtime_run_routes_from_api = lambda *args, **kwargs: None
             runtime_runs_api._refresh_server_exports = lambda: fake_server
@@ -72,6 +74,8 @@ class RuntimeRunsApiCanonicalRouteTests(unittest.TestCase):
             runtime_runs_api._current_user_is_privileged = lambda current_user: False
             runtime_runs_api._extract_run_owner_user_id = lambda item: str(item.get("owner_user_id") or "")
             runtime_runs_api.resolve_run_start_turn_request = self._fake_resolve_run_start_turn_request
+            runtime_runs_api.thread_service.list_threads = self._fake_list_threads
+            runtime_runs_api.thread_service.get_thread = self._fake_get_thread
             runtime_runs_api.run_state_repository.sync_list_live_runs = lambda: [
                 {
                     "run_id": "run-live",
@@ -147,6 +151,8 @@ class RuntimeRunsApiCanonicalRouteTests(unittest.TestCase):
             self.assertIn(("POST", "/sessions"), app.routes)
             self.assertIn(("GET", "/sessions/{session_id}"), app.routes)
             self.assertIn(("DELETE", "/sessions/{session_id}"), app.routes)
+            self.assertIn(("GET", "/threads"), app.routes)
+            self.assertIn(("GET", "/threads/{thread_id}"), app.routes)
 
             turn_payload = self._run_async(
                 app.routes[("POST", "/turn")](
@@ -295,6 +301,27 @@ class RuntimeRunsApiCanonicalRouteTests(unittest.TestCase):
                     )
                 )
                 self.assertTrue(deleted_session["ok"])
+
+                thread_list = self._run_async(
+                    app.routes[("GET", "/threads")](
+                        workspace_id="default",
+                        include_turns=True,
+                        limit=25,
+                        current_user={"user_id": "user-1"},
+                    )
+                )
+                self.assertEqual(thread_list["count"], 1)
+                self.assertEqual(thread_list["items"][0]["id"], "thread-1")
+                self.assertEqual(thread_list["items"][0]["turns"][0]["role"], "user")
+
+                thread_detail = self._run_async(
+                    app.routes[("GET", "/threads/{thread_id}")](
+                        "thread-1",
+                        current_user={"user_id": "user-1"},
+                    )
+                )
+                self.assertEqual(thread_detail["id"], "thread-1")
+                self.assertEqual(thread_detail["turns"][1]["role"], "assistant")
             finally:
                 runtime_runs_api.session_service.create_session = original_create_session
                 runtime_runs_api.session_service.get_session = original_get_session
@@ -311,6 +338,8 @@ class RuntimeRunsApiCanonicalRouteTests(unittest.TestCase):
             runtime_runs_api._current_user_is_privileged = original_privileged
             runtime_runs_api._extract_run_owner_user_id = original_extract_owner
             runtime_runs_api.resolve_run_start_turn_request = original_resolve_run_start_turn_request
+            runtime_runs_api.thread_service.list_threads = original_list_threads
+            runtime_runs_api.thread_service.get_thread = original_get_thread
             runtime_runs_api.run_state_repository.sync_list_live_runs = original_list_live_runs
             if previous_server is None:
                 sys.modules.pop("server", None)
@@ -380,6 +409,49 @@ class RuntimeRunsApiCanonicalRouteTests(unittest.TestCase):
 
     async def _fake_terminate_session(self, session_id):
         return None
+
+    async def _fake_list_threads(self, *, workspace_id, tenant_id=None, owner_user_id=None, include_turns=False, limit=50):
+        return [
+            {
+                "id": "thread-1",
+                "tenant_id": tenant_id or "default",
+                "workspace_id": workspace_id,
+                "owner_user_id": owner_user_id or "user-1",
+                "channel": "web",
+                "title": "hello",
+                "status": "active",
+                "metadata": {},
+                "created_at": "2026-04-06T00:00:00Z",
+                "updated_at": "2026-04-06T00:05:00Z",
+                "last_turn_at": "2026-04-06T00:05:00Z",
+                "turns": [
+                    {
+                        "id": "turn-1",
+                        "tenant_id": tenant_id or "default",
+                        "workspace_id": workspace_id,
+                        "thread_id": "thread-1",
+                        "role": "user",
+                        "content": "hello",
+                        "created_at": "2026-04-06T00:00:00Z",
+                        "updated_at": "2026-04-06T00:00:00Z",
+                    },
+                    {
+                        "id": "turn-2",
+                        "tenant_id": tenant_id or "default",
+                        "workspace_id": workspace_id,
+                        "thread_id": "thread-1",
+                        "role": "assistant",
+                        "content": "hi",
+                        "created_at": "2026-04-06T00:05:00Z",
+                        "updated_at": "2026-04-06T00:05:00Z",
+                    },
+                ] if include_turns else [],
+            }
+        ]
+
+    async def _fake_get_thread(self, thread_id, *, include_turns=True):
+        items = await self._fake_list_threads(workspace_id="default", tenant_id="default", owner_user_id="user-1", include_turns=include_turns, limit=1)
+        return items[0] if thread_id == "thread-1" else None
 
     def _run_async(self, coroutine):
         import asyncio

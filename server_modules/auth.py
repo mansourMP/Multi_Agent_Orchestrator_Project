@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import asyncio
 import hashlib
 import hmac
 import json
@@ -14,6 +15,8 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from fastapi import Header, HTTPException, Request
+from server_modules import control_plane_repository
+from server_modules.direct_tool_config_service import run_async_tool_call
 from server_modules.jwt_secret import resolve_jwt_secret
 
 EMPYRALIS_STATE_HOME = Path(
@@ -36,6 +39,13 @@ ORION_DEFAULT_WORKSPACE_IDS = tuple(
 ORION_SERVICE_RATE_LIMIT_PER_MINUTE = int(os.getenv("ORION_SERVICE_RATE_LIMIT_PER_MINUTE", "600"))
 RBAC_ROLE_ORDER = {"viewer": 0, "member": 1, "owner": 2}
 WORKSPACE_CAPABILITY_ALL = "*"
+
+
+def _control_plane_call(coro: Any) -> Any:
+    try:
+        return run_async_tool_call(coro)
+    except Exception:
+        return None
 
 
 def public_registration_enabled() -> bool:
@@ -523,6 +533,9 @@ def _list_workspace_memberships(user_id: str) -> list[dict[str, Any]]:
     clean_user_id = str(user_id or "").strip()
     if not clean_user_id:
         return []
+    pg_rows = _control_plane_call(control_plane_repository.list_workspace_memberships_for_user(clean_user_id))
+    if isinstance(pg_rows, list) and pg_rows:
+        return [dict(row) for row in pg_rows if isinstance(row, dict)]
     with AUTH_LOCK:
         with _connect_auth_db() as connection:
             rows = connection.execute(
@@ -580,6 +593,9 @@ def ensure_workspace_tenant_binding(workspace_id: str, tenant_id: Optional[str] 
 
 def tenant_id_for_workspace(workspace_id: str) -> str:
     clean_workspace_id = _normalize_workspace_token(workspace_id)
+    pg_tenant_id = _control_plane_call(control_plane_repository.tenant_id_for_workspace(clean_workspace_id))
+    if isinstance(pg_tenant_id, str) and pg_tenant_id.strip():
+        return _normalize_tenant_token(pg_tenant_id)
     with AUTH_LOCK:
         with _connect_auth_db() as connection:
             row = connection.execute(
@@ -610,8 +626,15 @@ def upsert_workspace_membership(user_id: str, workspace_id: str, role: str) -> d
     clean_workspace_id = _normalize_workspace_token(workspace_id)
     clean_role = normalize_rbac_role(role, default="member")
     ts = int(time.time())
+    user_email = ""
+    user_name = None
+    resolved_tenant_id = ORION_DEFAULT_TENANT_ID
     with AUTH_LOCK:
         with _connect_auth_db() as connection:
+            user_row = connection.execute(
+                "SELECT email, name FROM users WHERE id = ? LIMIT 1",
+                (clean_user_id,),
+            ).fetchone()
             registry_row = connection.execute(
                 """
                 SELECT tenant_id
@@ -621,12 +644,13 @@ def upsert_workspace_membership(user_id: str, workspace_id: str, role: str) -> d
                 """,
                 (clean_workspace_id,),
             ).fetchone()
+            resolved_tenant_id = _normalize_tenant_token(
+                registry_row["tenant_id"] if registry_row is not None else ORION_DEFAULT_TENANT_ID
+            )
             _write_workspace_registry(
                 connection,
                 workspace_id=clean_workspace_id,
-                tenant_id=_normalize_tenant_token(
-                    registry_row["tenant_id"] if registry_row is not None else ORION_DEFAULT_TENANT_ID
-                ),
+                tenant_id=resolved_tenant_id,
                 now_ts=ts,
             )
             _write_workspace_membership(
@@ -637,6 +661,20 @@ def upsert_workspace_membership(user_id: str, workspace_id: str, role: str) -> d
                 now_ts=ts,
             )
             connection.commit()
+            if user_row is not None:
+                user_email = str(user_row["email"] or "").strip().lower()
+                user_name = str(user_row["name"] or "").strip() or None
+    if user_email:
+        _control_plane_call(
+            control_plane_repository.ensure_workspace_membership(
+                user_id=clean_user_id,
+                email=user_email,
+                display_name=user_name,
+                tenant_id=resolved_tenant_id,
+                workspace_id=clean_workspace_id,
+                role=clean_role,
+            )
+        )
     return {"user_id": clean_user_id, "workspace_id": clean_workspace_id, "role": clean_role}
 
 
@@ -1794,6 +1832,7 @@ def provision_user_account(
     if not normalized_workspace_roles:
         normalized_workspace_roles = {"default": "member"}
     created_at = int(time.time())
+    _control_plane_workspace_roles = dict(normalized_workspace_roles)
     with AUTH_LOCK:
         with _connect_auth_db() as connection:
             existing = connection.execute(
@@ -1906,6 +1945,19 @@ def provision_user_account(
                     now_ts=created_at,
                 )
             connection.commit()
+    for workspace_id, role in _control_plane_workspace_roles.items():
+        _control_plane_call(
+            control_plane_repository.ensure_workspace_membership(
+                user_id=user_id,
+                email=email_token,
+                display_name=str(name or "").strip() or None,
+                tenant_id=resolved_tenant_id,
+                workspace_id=workspace_id,
+                role=role,
+                provider=str(auth_provider or "external_identity").strip().lower() or "external_identity",
+                subject=str(sso_subject or external_id or email_token).strip() or email_token,
+            )
+        )
     user = _find_user_by_id(user_id)
     if user is None:
         raise HTTPException(status_code=500, detail="Provisioned user was not persisted.")
@@ -1939,7 +1991,9 @@ def _effective_workspace_access(
     workspace_dangerous_claim: Any = None,
     workspace_trusted_machines_claim: Any = None,
 ) -> dict[str, dict[str, Any]]:
-    if is_admin or auth_type in {"api_key", "disabled"}:
+    if auth_type in {"api_key", "disabled"}:
+        return {}
+    if is_admin and auth_type not in {"bearer"}:
         return {}
     membership_roles = {
         _normalize_workspace_token(item.get("workspace_id")): normalize_rbac_role(item.get("role"), default="viewer")
@@ -2040,6 +2094,9 @@ def _verify_password(password: str, password_hash: str) -> bool:
 
 def _find_user_by_email(email: str) -> Optional[Dict[str, Any]]:
     email_token = str(email or "").strip().lower()
+    pg_user = _control_plane_call(control_plane_repository.get_user_by_email(email_token))
+    if isinstance(pg_user, dict):
+        return pg_user
     with AUTH_LOCK:
         with _connect_auth_db() as connection:
             row = connection.execute(
@@ -2055,6 +2112,9 @@ def _find_user_by_id(user_id: str) -> Optional[Dict[str, Any]]:
     user_token = str(user_id or "").strip()
     if not user_token:
         return None
+    pg_user = _control_plane_call(control_plane_repository.get_user_by_id(user_token))
+    if isinstance(pg_user, dict):
+        return pg_user
     with AUTH_LOCK:
         with _connect_auth_db() as connection:
             row = connection.execute(
@@ -2080,15 +2140,38 @@ def _public_user_payload(user: Dict[str, Any], *, role: Optional[str] = None) ->
     return payload
 
 
-def issue_token(user_id: str, *, email: Optional[str] = None, role: str = "member") -> str:
+def issue_token(
+    user_id: str,
+    *,
+    email: Optional[str] = None,
+    role: str = "member",
+    workspace_access: Optional[list[dict[str, Any]]] = None,
+) -> str:
     header = {"alg": "HS256", "typ": "JWT"}
     now = int(time.time())
+    normalized_workspace_access = [dict(item) for item in list(workspace_access or []) if isinstance(item, dict)]
+    workspace_ids = [
+        _normalize_workspace_token(item.get("workspace_id"))
+        for item in normalized_workspace_access
+        if str(item.get("workspace_id") or "").strip()
+    ] or list(ORION_DEFAULT_WORKSPACE_IDS)
+    tenant_ids = [
+        _normalize_tenant_token(item.get("tenant_id"))
+        for item in normalized_workspace_access
+        if str(item.get("tenant_id") or "").strip()
+    ] or [ORION_DEFAULT_TENANT_ID]
+    workspace_roles = {
+        _normalize_workspace_token(item.get("workspace_id")): normalize_rbac_role(item.get("role"), default=role)
+        for item in normalized_workspace_access
+        if str(item.get("workspace_id") or "").strip()
+    }
     payload = {
         "sub": str(user_id),
         "email": str(email or "").strip().lower() or None,
         "role": normalize_rbac_role(role),
-        "tenant_ids": [ORION_DEFAULT_TENANT_ID],
-        "workspace_ids": list(ORION_DEFAULT_WORKSPACE_IDS),
+        "tenant_ids": sorted({token for token in tenant_ids if token}),
+        "workspace_ids": sorted({token for token in workspace_ids if token}),
+        "workspace_roles": workspace_roles,
         "iat": now,
         "exp": now + JWT_EXP_SECONDS,
     }
@@ -2149,9 +2232,10 @@ def _normalize_workspace_ids_claim(value: Any) -> list[str]:
 def allowed_workspace_ids(user: Optional[Dict[str, Any]]) -> Optional[set[str]]:
     if not isinstance(user, dict):
         return None
-    if bool(user.get("is_admin")):
+    auth_type = str(user.get("auth_type") or "").strip().lower()
+    if auth_type == "api_key":
         return None
-    if str(user.get("auth_type") or "").strip() == "api_key":
+    if bool(user.get("is_admin")) and auth_type != "bearer":
         return None
     access = workspace_access_map(user)
     if access:
@@ -2164,9 +2248,10 @@ def allowed_workspace_ids(user: Optional[Dict[str, Any]]) -> Optional[set[str]]:
 def allowed_tenant_ids(user: Optional[Dict[str, Any]]) -> Optional[set[str]]:
     if not isinstance(user, dict):
         return None
-    if bool(user.get("is_admin")):
+    auth_type = str(user.get("auth_type") or "").strip().lower()
+    if auth_type == "api_key":
         return None
-    if str(user.get("auth_type") or "").strip() == "api_key":
+    if bool(user.get("is_admin")) and auth_type != "bearer":
         return None
     access = tenant_access_map(user)
     if access:
@@ -2271,10 +2356,10 @@ def tenant_access_map(current_user: Optional[Dict[str, Any]]) -> dict[str, dict[
 def workspace_role(current_user: Optional[Dict[str, Any]], workspace_id: Optional[str]) -> Optional[str]:
     if not isinstance(current_user, dict):
         return None
-    if bool(current_user.get("is_admin")):
-        return "owner"
     auth_type = str(current_user.get("auth_type") or "").strip().lower()
     if auth_type in {"api_key", "disabled"}:
+        return "owner"
+    if auth_type != "bearer" and bool(current_user.get("is_admin")):
         return "owner"
     token = _normalize_workspace_token(workspace_id)
     entry = workspace_access_map(current_user).get(token)
@@ -2294,10 +2379,10 @@ def workspace_tenant_id(current_user: Optional[Dict[str, Any]], workspace_id: Op
 def tenant_role(current_user: Optional[Dict[str, Any]], tenant_id: Optional[str]) -> Optional[str]:
     if not isinstance(current_user, dict):
         return None
-    if bool(current_user.get("is_admin")):
-        return "owner"
     auth_type = str(current_user.get("auth_type") or "").strip().lower()
     if auth_type in {"api_key", "disabled"}:
+        return "owner"
+    if auth_type != "bearer" and bool(current_user.get("is_admin")):
         return "owner"
     token = _normalize_tenant_token(tenant_id)
     entry = tenant_access_map(current_user).get(token)
@@ -2544,6 +2629,33 @@ def register_user(email: str, password: str, *, name: Optional[str] = None) -> D
     created_at = int(time.time())
     user_name = str(name or "").strip() or None
     password_hash = _hash_password(password)
+    control_plane_user = _control_plane_call(
+        control_plane_repository.create_local_password_account(
+            user_id=user_id,
+            email=email_token,
+            display_name=user_name,
+            password_hash=password_hash,
+            role="owner",
+        )
+    )
+    control_plane_user_payload = control_plane_user.get("user") if isinstance(control_plane_user, dict) else {}
+    control_plane_memberships = control_plane_user.get("memberships") if isinstance(control_plane_user, dict) else []
+    if isinstance(control_plane_user_payload, dict) and str(control_plane_user_payload.get("id") or "").strip():
+        user_id = str(control_plane_user_payload.get("id") or "").strip()
+    workspace_roles = {
+        _normalize_workspace_token(item.get("workspace_id")): normalize_rbac_role(item.get("role"), default="owner")
+        for item in list(control_plane_memberships or [])
+        if isinstance(item, dict) and str(item.get("workspace_id") or "").strip()
+    } or {
+        workspace_id: "owner"
+        for workspace_id in ORION_DEFAULT_WORKSPACE_IDS
+    }
+    workspace_ids = list(workspace_roles.keys())
+    tenant_ids = {
+        _normalize_tenant_token(item.get("tenant_id"))
+        for item in list(control_plane_memberships or [])
+        if isinstance(item, dict) and str(item.get("tenant_id") or "").strip()
+    }
     with AUTH_LOCK:
         with _connect_auth_db() as connection:
             existing = connection.execute(
@@ -2589,21 +2701,31 @@ def register_user(email: str, password: str, *, name: Optional[str] = None) -> D
                 },
                 now_ts=created_at,
             )
-            for workspace_id in ORION_DEFAULT_WORKSPACE_IDS:
+            for workspace_id, role in workspace_roles.items():
+                resolved_tenant_id = next(iter(tenant_ids), ORION_DEFAULT_TENANT_ID)
                 _write_workspace_registry(
                     connection,
                     workspace_id=workspace_id,
-                    tenant_id=ORION_DEFAULT_TENANT_ID,
+                    tenant_id=resolved_tenant_id,
                     now_ts=created_at,
                 )
                 _write_workspace_membership(
                     connection,
                     user_id=user_id,
                     workspace_id=workspace_id,
-                    role="member",
+                    role=role,
                     now_ts=created_at,
                 )
             connection.commit()
+    workspace_access = _effective_workspace_access(
+        user_id=user_id,
+        email=email_token,
+        role="owner",
+        auth_type="bearer",
+        is_admin=False,
+        workspace_ids=workspace_ids,
+    )
+    tenant_access = tenant_access_map({"workspace_access": workspace_access})
     return _auth_payload_for_user(
         {
             "id": user_id,
@@ -2611,22 +2733,68 @@ def register_user(email: str, password: str, *, name: Optional[str] = None) -> D
             "name": user_name,
             "avatar_url": None,
         },
-        role="member",
-        token=issue_token(user_id, email=email_token, role="member"),
+        role="owner",
+        token=issue_token(
+            user_id,
+            email=email_token,
+            role="owner",
+            workspace_access=list(workspace_access.values()),
+        ),
+        workspace_access=list(workspace_access.values()),
+        tenant_access=list(tenant_access.values()),
     )
 
 
 def login_user(email: str, password: str) -> Dict[str, Any]:
     user = _find_user_by_email(email)
-    if not user or not _verify_password(password, str(user.get("password_hash") or "")):
+    identity = _control_plane_call(control_plane_repository.get_local_auth_identity_by_email(email))
+    password_hash = str((user or {}).get("password_hash") or (identity or {}).get("password_hash") or "")
+    if not user and isinstance(identity, dict):
+        user = {
+            "id": str(identity.get("user_id") or "").strip(),
+            "email": str(identity.get("email") or "").strip().lower(),
+            "name": str(identity.get("display_name") or "").strip() or None,
+            "avatar_url": str(identity.get("avatar_url") or "").strip() or None,
+            "tenant_id": str(identity.get("tenant_id") or "").strip() or None,
+            "workspace_id": str(identity.get("workspace_id") or "").strip() or None,
+            "password_hash": password_hash,
+        }
+    if not user or not _verify_password(password, password_hash):
         raise HTTPException(status_code=401, detail="Invalid email or password.")
     user_id = str(user.get("id") or "").strip()
     if not user_id:
         raise HTTPException(status_code=401, detail="Invalid user record.")
+    membership_rows = _list_workspace_memberships(user_id)
+    workspace_ids = [
+        _normalize_workspace_token(item.get("workspace_id"))
+        for item in membership_rows
+        if isinstance(item, dict) and str(item.get("workspace_id") or "").strip()
+    ] or list(ORION_DEFAULT_WORKSPACE_IDS)
+    effective_role = "viewer"
+    for item in membership_rows:
+        candidate_role = normalize_rbac_role((item or {}).get("role"), default="viewer")
+        if RBAC_ROLE_ORDER[candidate_role] > RBAC_ROLE_ORDER[effective_role]:
+            effective_role = candidate_role
+    workspace_access = _effective_workspace_access(
+        user_id=user_id,
+        email=str(user.get("email") or "").strip().lower() or None,
+        role=effective_role,
+        auth_type="bearer",
+        is_admin=effective_role == "owner",
+        workspace_ids=workspace_ids,
+    )
+    tenant_access = tenant_access_map({"workspace_access": workspace_access})
     return _auth_payload_for_user(
         user,
-        role="member",
-        token=issue_token(user_id, email=str(user.get("email") or ""), role="member"),
+        role=effective_role,
+        token=issue_token(
+            user_id,
+            email=str(user.get("email") or ""),
+            role=effective_role,
+            workspace_access=list(workspace_access.values()),
+        ),
+        workspace_access=list(workspace_access.values()),
+        tenant_access=list(tenant_access.values()),
     )
 
 

@@ -6,6 +6,13 @@ import { fetchSetupReadiness } from '@/lib/setupReadiness';
 
 export type PlatformAccessMode = 'default' | 'full';
 
+export type PlatformWorkspaceAccess = {
+  workspaceId: string;
+  tenantId: string;
+  role: 'viewer' | 'member' | 'owner';
+  label: string;
+};
+
 export type PlatformRunDetailContract = {
   provider_model?: {
     requested_provider?: string | null;
@@ -88,6 +95,10 @@ type PlatformShellContextValue = {
   accessMode: PlatformAccessMode;
   setAccessMode: (mode: PlatformAccessMode) => void;
   status: PlatformShellStatus;
+  activeWorkspaceId: string;
+  activeTenantId: string;
+  workspaceAccess: PlatformWorkspaceAccess[];
+  workspaceLoading: boolean;
   inspectPanelOpen: boolean;
   setInspectPanelOpen: (open: boolean) => void;
   inspectState: PlatformInspectState;
@@ -97,6 +108,8 @@ type PlatformShellContextValue = {
 };
 
 const ACCESS_MODE_STORAGE_KEY = 'orion.platform.access.mode.v1';
+const DEFAULT_WORKSPACE_ID = 'default';
+const DEFAULT_TENANT_ID = 'default';
 const PlatformShellContext = createContext<PlatformShellContextValue | null>(null);
 
 const INITIAL_STATUS: PlatformShellStatus = {
@@ -174,13 +187,17 @@ function isAuthRequiredError(message: string): boolean {
 export function PlatformShellProvider({ children }: { children: React.ReactNode }) {
   const [accessMode, setAccessMode] = useState<PlatformAccessMode>('default');
   const [status, setStatus] = useState<PlatformShellStatus>(INITIAL_STATUS);
+  const [workspaceAccess, setWorkspaceAccess] = useState<PlatformWorkspaceAccess[]>([]);
+  const [activeWorkspaceId, setActiveWorkspaceId] = useState(DEFAULT_WORKSPACE_ID);
+  const [activeTenantId, setActiveTenantId] = useState(DEFAULT_TENANT_ID);
+  const [workspaceLoading, setWorkspaceLoading] = useState(true);
   const [inspectPanelOpen, setInspectPanelOpen] = useState(false);
   const [inspectState, setInspectState] = useState<PlatformInspectState>(null);
   const [chatTopControls, setRawChatTopControls] = useState<PlatformChatTopControls>(null);
 
   const setChatTopControls = useCallback((next: PlatformChatTopControls) => {
     setRawChatTopControls((current) => (areChatTopControlsEqual(current, next) ? current : next));
-  }, []);
+  }, [activeWorkspaceId]);
 
   useEffect(() => {
     try {
@@ -267,17 +284,59 @@ export function PlatformShellProvider({ children }: { children: React.ReactNode 
     const refreshRemote = async () => {
       try {
         await ensureControlPlaneSession();
-        const res = await fetch('/api/platform/shell-status', { cache: 'no-store' });
-        const payload = await res.json().catch(() => null);
-        if (!res.ok) {
+        const [shellRes, profileRes] = await Promise.all([
+          fetch('/api/platform/shell-status', { cache: 'no-store' }),
+          fetch('/api/control-plane/auth/me', { cache: 'no-store' }),
+        ]);
+        const payload = await shellRes.json().catch(() => null);
+        const profilePayload = await profileRes.json().catch(() => null);
+        const accessItems = Array.isArray(profilePayload?.workspace_access)
+          ? profilePayload.workspace_access
+              .map((item: unknown): PlatformWorkspaceAccess | null => {
+                if (!item || typeof item !== 'object') return null;
+                const workspaceId = String((item as { workspace_id?: unknown }).workspace_id || '').trim();
+                if (!workspaceId) return null;
+                const tenantId = String((item as { tenant_id?: unknown }).tenant_id || '').trim() || DEFAULT_TENANT_ID;
+                const role = String((item as { role?: unknown }).role || 'viewer').trim().toLowerCase();
+                return {
+                  workspaceId,
+                  tenantId,
+                  role: role === 'owner' || role === 'member' ? role : 'viewer',
+                  label: String((item as { workspace_label?: unknown }).workspace_label || workspaceId).trim() || workspaceId,
+                };
+              })
+              .filter((item: PlatformWorkspaceAccess | null): item is PlatformWorkspaceAccess => Boolean(item))
+          : [];
+        const nextActiveWorkspaceId = accessItems[0]?.workspaceId || DEFAULT_WORKSPACE_ID;
+        const nextActiveTenantId = accessItems.find((item: PlatformWorkspaceAccess) => item.workspaceId === nextActiveWorkspaceId)?.tenantId
+          || accessItems[0]?.tenantId
+          || DEFAULT_TENANT_ID;
+        if (!shellRes.ok) {
           throw new Error(
             payload && typeof payload.detail === 'string' && payload.detail.trim()
               ? payload.detail.trim()
               : 'Platform shell status is unavailable.',
           );
         }
+        if (!profileRes.ok) {
+          throw new Error(
+            profilePayload && typeof profilePayload.detail === 'string' && profilePayload.detail.trim()
+              ? profilePayload.detail.trim()
+              : 'Control-plane profile is unavailable.',
+          );
+        }
 
         if (alive) {
+          const nextSelectedWorkspaceId = accessItems.some((item: PlatformWorkspaceAccess) => item.workspaceId === activeWorkspaceId)
+            ? activeWorkspaceId
+            : nextActiveWorkspaceId;
+          setWorkspaceAccess(accessItems);
+          setActiveWorkspaceId(nextSelectedWorkspaceId);
+          setActiveTenantId(
+            accessItems.find((item: PlatformWorkspaceAccess) => item.workspaceId === nextSelectedWorkspaceId)?.tenantId
+              || nextActiveTenantId,
+          );
+          setWorkspaceLoading(false);
           setStatus((current) => {
             const next = {
               ...current,
@@ -314,6 +373,7 @@ export function PlatformShellProvider({ children }: { children: React.ReactNode 
             };
             return areShellStatusEqual(current, next) ? current : next;
           });
+          setWorkspaceLoading(false);
         }
       }
     };
@@ -333,6 +393,10 @@ export function PlatformShellProvider({ children }: { children: React.ReactNode 
       accessMode,
       setAccessMode,
       status,
+      activeWorkspaceId,
+      activeTenantId,
+      workspaceAccess,
+      workspaceLoading,
       inspectPanelOpen,
       setInspectPanelOpen,
       inspectState,
@@ -340,7 +404,7 @@ export function PlatformShellProvider({ children }: { children: React.ReactNode 
       chatTopControls,
       setChatTopControls,
     }),
-    [accessMode, chatTopControls, inspectPanelOpen, inspectState, status],
+    [accessMode, activeTenantId, activeWorkspaceId, chatTopControls, inspectPanelOpen, inspectState, status, workspaceAccess, workspaceLoading],
   );
 
   return <PlatformShellContext.Provider value={value}>{children}</PlatformShellContext.Provider>;

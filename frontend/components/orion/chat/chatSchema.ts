@@ -1,5 +1,7 @@
 'use client';
 
+import type { ThreadRecord, ThreadTurnRecord } from '@shared/api-contract';
+
 export type ChatMessageRole = 'user' | 'assistant';
 export type ChatMessageStatus = 'sending' | 'running' | 'completed' | 'waiting' | 'error';
 export type ChatStepStatus = 'active' | 'done' | 'error';
@@ -252,6 +254,117 @@ export function createEmptyChatSession(now = new Date().toISOString()): ChatSess
     createdAt: now,
     updatedAt: now,
     messages: [],
+  };
+}
+
+function normalizeThreadTurnStatus(status: string | null | undefined): ChatMessageStatus | undefined {
+  const token = String(status || '').trim().toLowerCase();
+  if (!token) return undefined;
+  if (token === 'waiting' || token === 'waiting_for_input') return 'waiting';
+  if (token === 'failed' || token === 'error' || token === 'timeout') return 'error';
+  if (token === 'running' || token === 'starting' || token === 'queued_local') return 'running';
+  return 'completed';
+}
+
+export function threadTurnToChatMessage(turn: ThreadTurnRecord): ChatMessageRecord | null {
+  const role = normalizeChatRole(turn.role);
+  const content = normalizeChatContent(turn.content || '');
+  const approvalRequests = Array.isArray(turn.approvals)
+    ? turn.approvals
+        .map((approval): ChatApprovalRequestRecord | null => {
+          const prompt = String(approval?.prompt || '').trim();
+          if (!prompt) return null;
+          return {
+            id: String(approval?.approval_id || '').trim() || createChatId('approval'),
+            approvalId: String(approval?.approval_id || '').trim() || null,
+            runId: typeof turn.run_id === 'string' ? turn.run_id : null,
+            actionId: null,
+            prompt,
+            labels: Array.isArray(approval?.labels)
+              ? approval.labels.map((item) => String(item || '').trim()).filter(Boolean)
+              : [],
+            capabilities: Array.isArray(approval?.capabilities)
+              ? approval.capabilities.map((item) => String(item || '').trim()).filter(Boolean)
+              : [],
+            actions: Array.isArray(approval?.actions)
+              ? approval.actions.map((item) => String(item || '').trim()).filter(Boolean)
+              : [],
+            target: typeof approval?.target === 'string' ? approval.target : null,
+            scope: 'once',
+            reusable: Boolean(approval?.reusable),
+            consequence: typeof approval?.consequence === 'string' ? approval.consequence : null,
+            resolution: 'waiting',
+          };
+        })
+        .filter((item): item is ChatApprovalRequestRecord => Boolean(item))
+    : [];
+  const interventions = Array.isArray(turn.interventions)
+    ? turn.interventions
+        .map((intervention): ChatInterventionRecord | null => {
+          const kind = String(intervention?.kind || '').trim() as ChatInterventionKind;
+          if (!kind) return null;
+          return {
+            id: createChatId('intervention'),
+            kind,
+            title: String(intervention?.title || kind.replace(/_/g, ' ')).trim() || kind,
+            detail: typeof intervention?.detail === 'string' ? intervention.detail : null,
+            severity: intervention?.severity === 'warning' || intervention?.severity === 'error' ? intervention.severity : 'info',
+            status: intervention?.status === 'waiting' || intervention?.status === 'active' || intervention?.status === 'completed' || intervention?.status === 'failed'
+              ? intervention.status
+              : 'ready',
+            code: typeof intervention?.code === 'string' ? intervention.code : null,
+            runId: typeof intervention?.run_id === 'string' ? intervention.run_id : (typeof turn.run_id === 'string' ? turn.run_id : null),
+            metadata: intervention?.metadata && typeof intervention.metadata === 'object'
+              ? intervention.metadata as Record<string, unknown>
+              : null,
+          };
+        })
+        .filter((item): item is ChatInterventionRecord => Boolean(item))
+    : [];
+  if (!content && approvalRequests.length === 0 && interventions.length === 0) {
+    return null;
+  }
+  return {
+    id: String(turn.id || '').trim() || createChatId('message'),
+    role,
+    content,
+    ts: String(turn.created_at || turn.updated_at || new Date().toISOString()).trim() || new Date().toISOString(),
+    status: normalizeThreadTurnStatus(turn.status),
+    run_id: typeof turn.run_id === 'string' ? turn.run_id : null,
+    approvalRequests: approvalRequests.length > 0 ? approvalRequests : undefined,
+    interventions: interventions.length > 0 ? interventions : undefined,
+  };
+}
+
+export function threadRecordToChatSession(thread: ThreadRecord): ChatSessionRecord {
+  const turns = Array.isArray(thread.turns)
+    ? thread.turns.map((turn) => threadTurnToChatMessage(turn)).filter((item): item is ChatMessageRecord => Boolean(item))
+    : [];
+  return {
+    id: String(thread.id || '').trim() || createChatId('session'),
+    title: String(thread.title || '').trim() || buildChatSessionTitle(turns),
+    createdAt: String(thread.created_at || thread.updated_at || new Date().toISOString()).trim() || new Date().toISOString(),
+    updatedAt: String(thread.updated_at || thread.last_turn_at || thread.created_at || new Date().toISOString()).trim() || new Date().toISOString(),
+    messages: dedupeChatMessages(turns),
+  };
+}
+
+export function threadRecordsToChatStore(
+  threads: ThreadRecord[],
+  selectedSessionId?: string | null,
+): ChatStoreRecord | null {
+  const sessions = threads
+    .map((thread) => threadRecordToChatSession(thread))
+    .filter((session) => session.id);
+  if (sessions.length === 0) return null;
+  const preferredId = String(selectedSessionId || '').trim();
+  const selectedId = sessions.some((session) => session.id === preferredId)
+    ? preferredId
+    : sessions[0]?.id || null;
+  return {
+    version: 1,
+    selectedSessionId: selectedId,
+    sessions,
   };
 }
 

@@ -23,6 +23,7 @@ from server_modules import shared as shared
 from server_modules import runtime_common as runtime_common
 from server_modules import runs_core as runs_core
 from server_modules import runs_history as runs_history
+from server_modules import control_plane_repository as control_plane_repository
 from server_modules import runs_execution as runs_execution
 from server_modules import runs_output as runs_output
 from server_modules import runs_delegation as runs_delegation
@@ -126,6 +127,7 @@ openapi_url = "/openapi.json" if os.getenv("ENV") == "development" else None
 
 @asynccontextmanager
 async def runtime_app_lifespan(app_instance: FastAPI):
+    await control_plane_repository.ensure_control_plane_schema()
     runs_core.initialize_runtime_services()
     async with shared.app_lifespan(app_instance):
         yield

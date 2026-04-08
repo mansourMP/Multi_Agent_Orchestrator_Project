@@ -30,6 +30,7 @@ import {
   isDeprecatedSystemChatMessage,
   normalizeChatContent,
   sanitizeChatStore,
+  threadRecordsToChatStore,
   upsertSessionMessages,
   type ChatContextUsedRecord,
   type ChatMessageActionRecord,
@@ -39,6 +40,7 @@ import {
   type ChatSessionSelectDetail,
   type ChatStoreRecord,
 } from '@/components/orion/chat/chatSchema';
+import { apiClient } from '@/lib/api-client';
 import { WorkbenchShell } from '../components/orion/workbench/WorkbenchShell';
 import { type AuthenticatedEventStreamConnection } from '@/lib/authenticatedEventStream';
 import {
@@ -1300,7 +1302,14 @@ export function AutopilotWorkspace() {
   const streamRef = useRef<AuthenticatedEventStreamConnection | null>(null);
   const primaryGoalRef = useRef<HTMLTextAreaElement | null>(null);
   const router = useRouter();
-  const { accessMode, setInspectState, status: shellStatus } = usePlatformShell();
+  const {
+    accessMode,
+    setInspectState,
+    status: shellStatus,
+    activeWorkspaceId,
+    activeTenantId,
+    workspaceLoading,
+  } = usePlatformShell();
   const singleAgentMode = SINGLE_AGENT_MODE;
 
   const pageState = usePageState();
@@ -1351,7 +1360,10 @@ export function AutopilotWorkspace() {
     setupStatus?.runtimeReady && setupStatus?.accountConnected && setupStatus?.connectionTested,
   );
 
-  const api = usePlatformApi(pageState, streamRef);
+  const api = usePlatformApi(pageState, streamRef, {
+    activeWorkspaceId,
+    activeTenantId,
+  });
 
   const {
     appendLog,
@@ -1385,6 +1397,7 @@ export function AutopilotWorkspace() {
   const [chatAuthRequiredMessage, setChatAuthRequiredMessage] = useState<string | null>(null);
   const [simpleChatDepth, setSimpleChatDepth] = useState<ChatDepthValue>('medium');
   const preloadQuerySignatureRef = useRef('');
+  const hydratedWorkspaceRef = useRef<string>('');
 
   useEffect(() => {
     try {
@@ -1436,6 +1449,55 @@ export function AutopilotWorkspace() {
       // ignore storage write failures
     }
   }, [chatStore]);
+
+  useEffect(() => {
+    if (workspaceLoading || shellStatus.authRequired) return;
+    const workspaceId = String(activeWorkspaceId || '').trim();
+    if (!workspaceId) return;
+
+    let alive = true;
+
+    const hydrateThreads = async () => {
+      try {
+        const payload = await apiClient.listThreads({
+          workspace_id: workspaceId,
+          include_turns: true,
+          limit: CHAT_SESSION_LIMIT,
+        });
+        if (!alive) return;
+        const items = Array.isArray(payload.items) ? payload.items : [];
+        const isFirstWorkspaceHydration = hydratedWorkspaceRef.current !== workspaceId;
+        hydratedWorkspaceRef.current = workspaceId;
+        setChatStore((current) => {
+          const nextStore = threadRecordsToChatStore(items, current.selectedSessionId);
+          if (!nextStore) {
+            if (!isFirstWorkspaceHydration && current.sessions.length > 0) {
+              return current;
+            }
+            const emptySession = createEmptyChatSession();
+            return {
+              version: 1,
+              selectedSessionId: emptySession.id,
+              sessions: [emptySession],
+            };
+          }
+          return nextStore;
+        });
+      } catch {
+        if (hydratedWorkspaceRef.current === workspaceId) return;
+      }
+    };
+
+    void hydrateThreads();
+    const handleFocus = () => {
+      void hydrateThreads();
+    };
+    window.addEventListener('focus', handleFocus);
+    return () => {
+      alive = false;
+      window.removeEventListener('focus', handleFocus);
+    };
+  }, [activeWorkspaceId, shellStatus.authRequired, workspaceLoading]);
 
   useEffect(() => {
     try {

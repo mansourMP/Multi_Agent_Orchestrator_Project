@@ -5,6 +5,7 @@ import logging
 from typing import Any, Dict, List, Literal, Optional, Protocol
 
 from server_modules import session_service
+from server_modules import thread_service
 from server_modules.telemetry import get_tracer, set_span_attributes
 
 
@@ -35,6 +36,7 @@ class TurnAttachment:
 class AgentTurnRequest:
     tenant_id: str
     workspace_id: str
+    thread_id: str
     session_id: str
     channel: str
     actor: TurnActor
@@ -52,6 +54,7 @@ class AgentTurnResponse:
     status: str
     reply: str = ""
     run_id: Optional[str] = None
+    thread_id: Optional[str] = None
     session_id: Optional[str] = None
     artifacts: List[Dict[str, Any]] = field(default_factory=list)
     approvals: List[Dict[str, Any]] = field(default_factory=list)
@@ -241,6 +244,7 @@ def serialize_agent_turn_request(request: AgentTurnRequest) -> Dict[str, Any]:
     return {
         "tenant_id": str(request.tenant_id or "").strip(),
         "workspace_id": str(request.workspace_id or "").strip() or "default",
+        "thread_id": str(request.thread_id or "").strip() or str(request.session_id or "").strip(),
         "session_id": str(request.session_id or "").strip(),
         "channel": normalize_channel(request.channel),
         "actor": serialize_turn_actor(request.actor),
@@ -290,6 +294,10 @@ def build_agent_turn_request(payload: Dict[str, Any]) -> AgentTurnRequest:
     return AgentTurnRequest(
         tenant_id=str(payload.get("tenant_id") or "").strip(),
         workspace_id=str(payload.get("workspace_id") or "").strip(),
+        thread_id=(
+            str(payload.get("thread_id") or "").strip()
+            or str(payload.get("session_id") or "").strip()
+        ),
         session_id=str(payload.get("session_id") or "").strip(),
         channel=normalize_channel(payload.get("channel")),
         actor=TurnActor(
@@ -331,6 +339,7 @@ def build_inbound_agent_turn_request(
     return AgentTurnRequest(
         tenant_id=str(tenant_id or actor_id or "default").strip() or "default",
         workspace_id=str(workspace_id or "default").strip() or "default",
+        thread_id=str(session_id or "agent-turn").strip() or "agent-turn",
         session_id=str(session_id or "agent-turn").strip() or "agent-turn",
         channel=normalize_channel(channel),
         actor=TurnActor(
@@ -373,7 +382,12 @@ def build_direct_chat_turn_request(
     return AgentTurnRequest(
         tenant_id=str(body.get("tenant_id") or actor_id or "default").strip() or "default",
         workspace_id=str(workspace_id or "default").strip() or "default",
-        session_id=str(thread_id or client_request_id or "direct-chat").strip() or "direct-chat",
+        thread_id=str(thread_id or client_request_id or "direct-chat").strip() or "direct-chat",
+        session_id=(
+            str(body.get("session_id") or "").strip()
+            or str(thread_id or client_request_id or "direct-chat").strip()
+            or "direct-chat"
+        ),
         channel=normalize_channel(body.get("channel") or "web"),
         actor=TurnActor(
             type="user",
@@ -688,6 +702,7 @@ def build_run_start_turn_request(req: Any) -> AgentTurnRequest:
     return AgentTurnRequest(
         tenant_id=str(metadata.get("tenant_id") or actor_id or "default").strip() or "default",
         workspace_id=workspace_id,
+        thread_id=session_id,
         session_id=session_id,
         channel=normalize_channel(metadata.get("channel") or "web"),
         actor=TurnActor(
@@ -721,6 +736,8 @@ def bind_agent_turn_metadata(
     bound["agent_turn_contract_version"] = 1
     if source and not str(bound.get("source") or "").strip():
         bound["source"] = str(source).strip()
+    if request.thread_id and not str(bound.get("thread_id") or "").strip():
+        bound["thread_id"] = str(request.thread_id).strip()
     if request.session_id and not str(bound.get("session_id") or "").strip():
         bound["session_id"] = str(request.session_id).strip()
     if request.channel and not str(bound.get("channel") or "").strip():
@@ -798,6 +815,10 @@ async def agent_turn(
         session_id=resolved_turn_request.session_id,
     )
     preferred_session_id = str(turn_request.session_id or "").strip()
+    resolved_thread_id = str(turn_request.thread_id or preferred_session_id or "").strip()
+    if not resolved_thread_id:
+        raise ValueError("AgentTurnRequest.thread_id is required.")
+    resolved_turn_request.thread_id = resolved_thread_id
     session_record = None
     if preferred_session_id:
         session_record = await session_service.get_session(preferred_session_id)
@@ -811,6 +832,7 @@ async def agent_turn(
                 channel=turn_request.channel,
                 metadata={
                     "source": "agent_turn",
+                    "thread_id": resolved_thread_id,
                     "machine_target": turn_request.machine_target,
                 },
                 session_id=preferred_session_id,
@@ -824,6 +846,7 @@ async def agent_turn(
             channel=turn_request.channel,
             metadata={
                 "source": "agent_turn",
+                "thread_id": resolved_thread_id,
                 "machine_target": turn_request.machine_target,
             },
         )
@@ -832,12 +855,38 @@ async def agent_turn(
         context_hints = dict(resolved_turn_request.context_hints or {})
         if not isinstance(context_hints.get("session"), dict):
             context_hints["session"] = dict(session_record)
+        context_hints.setdefault("thread_id", resolved_thread_id)
         resolved_turn_request.context_hints = context_hints
+    await thread_service.ensure_master_thread(
+        thread_id=resolved_thread_id,
+        tenant_id=resolved_turn_request.tenant_id,
+        workspace_id=resolved_turn_request.workspace_id,
+        owner_user_id=str((current_user or {}).get("user_id") or resolved_turn_request.actor.id or "").strip() or None,
+        channel=resolved_turn_request.channel,
+        title=thread_service.build_default_thread_title(resolved_turn_request.message),
+        metadata={
+            "source": "agent_turn",
+            "session_id": resolved_turn_request.session_id,
+        },
+    )
+    await thread_service.record_user_turn(
+        thread_id=resolved_thread_id,
+        tenant_id=resolved_turn_request.tenant_id,
+        workspace_id=resolved_turn_request.workspace_id,
+        session_id=resolved_turn_request.session_id,
+        actor=serialize_turn_actor(resolved_turn_request.actor),
+        content=resolved_turn_request.message,
+        metadata={
+            **_metadata_dict(resolved_turn_request.context_hints),
+            "request_id": str(resolved_turn_request.context_hints.get("request_id") or "").strip() or None,
+        },
+    )
     with tracer.start_as_current_span("agent_turn.handle") as span:
         set_span_attributes(
             span,
             {
                 "workspace_id": str(resolved_turn_request.workspace_id or "").strip() or "default",
+                "thread_id": resolved_thread_id,
                 "session_id": str(resolved_turn_request.session_id or "").strip() or "agent-turn",
                 "channel": normalize_channel(resolved_turn_request.channel),
                 "tenant_id": str(resolved_turn_request.tenant_id or "").strip() or "default",
@@ -870,6 +919,26 @@ async def agent_turn(
                 run_request=run_request,
             )
             if isinstance(result, dict):
+                await thread_service.record_assistant_turn(
+                    thread_id=resolved_thread_id,
+                    tenant_id=resolved_turn_request.tenant_id,
+                    workspace_id=resolved_turn_request.workspace_id,
+                    session_id=resolved_turn_request.session_id,
+                    actor={
+                        "type": "assistant",
+                        "id": str((result.get("metadata") or {}).get("agent_role") or "master-agent").strip() or "master-agent",
+                        "display_name": "Empyralis",
+                    },
+                    reply=str(result.get("reply") or ""),
+                    status=str(result.get("status") or "completed").strip() or "completed",
+                    run_id=str(result.get("run_id") or "").strip() or None,
+                    approvals=list(result.get("approvals") or []) if isinstance(result.get("approvals"), list) else [],
+                    interventions=list(result.get("interventions") or []) if isinstance(result.get("interventions"), list) else [],
+                    metadata={
+                        "request_id": str(resolved_turn_request.context_hints.get("request_id") or "").strip() or None,
+                        "result_metadata": _metadata_dict(result.get("metadata")),
+                    },
+                )
                 set_span_attributes(
                     span,
                     {
@@ -897,8 +966,8 @@ def bind_agent_turn_request_meta(
     bound["agent_turn_request"] = serialize_agent_turn_request(resolved)
     if resolved.workspace_id and not str(bound.get("workspace_id") or "").strip():
         bound["workspace_id"] = str(resolved.workspace_id).strip()
-    if resolved.session_id and not str(bound.get("thread_id") or "").strip():
-        bound["thread_id"] = str(resolved.session_id).strip()
+    if resolved.thread_id and not str(bound.get("thread_id") or "").strip():
+        bound["thread_id"] = str(resolved.thread_id).strip()
     return bound
 
 
@@ -918,7 +987,7 @@ def resolve_agent_turn_session_identity(
         }
     return {
         "workspace_id": str(resolved.workspace_id or workspace_id or "default").strip() or "default",
-        "thread_id": str(resolved.session_id or session_id or "direct-chat").strip() or "direct-chat",
+        "thread_id": str(resolved.thread_id or resolved.session_id or session_id or "direct-chat").strip() or "direct-chat",
         "user_id": str(user_id or resolved.actor.id or "").strip(),
     }
 

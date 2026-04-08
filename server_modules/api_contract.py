@@ -30,6 +30,7 @@ class ApiTurnAttachment(BaseModel):
 class ApiAgentTurnRequest(BaseModel):
     tenant_id: str = "default"
     workspace_id: str = "default"
+    thread_id: Optional[str] = None
     session_id: str
     channel: str = "web"
     actor: ApiTurnActor
@@ -47,6 +48,7 @@ class ApiAgentTurnResponse(BaseModel):
     status: str
     reply: str = ""
     run_id: Optional[str] = None
+    thread_id: Optional[str] = None
     session_id: Optional[str] = None
     artifacts: List[Dict[str, Any]] = Field(default_factory=list)
     approvals: List[Dict[str, Any]] = Field(default_factory=list)
@@ -174,6 +176,47 @@ class ApiSessionResponse(BaseModel):
     status: str = "active"
 
 
+class ApiThreadTurnRecord(BaseModel):
+    id: str
+    tenant_id: Optional[str] = None
+    workspace_id: Optional[str] = None
+    thread_id: str
+    session_id: Optional[str] = None
+    request_id: Optional[str] = None
+    role: str
+    status: Optional[str] = None
+    content: str = ""
+    run_id: Optional[str] = None
+    actor: Dict[str, Any] = Field(default_factory=dict)
+    approvals: List[Dict[str, Any]] = Field(default_factory=list)
+    interventions: List[Dict[str, Any]] = Field(default_factory=list)
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+
+
+class ApiThreadRecord(BaseModel):
+    id: str
+    tenant_id: Optional[str] = None
+    workspace_id: Optional[str] = None
+    owner_user_id: Optional[str] = None
+    channel: Optional[str] = None
+    title: str
+    status: Optional[str] = None
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+    last_turn_at: Optional[str] = None
+    turns: List[Dict[str, Any]] = Field(default_factory=list)
+
+
+class ApiThreadListResponse(BaseModel):
+    items: List[Dict[str, Any]] = Field(default_factory=list)
+    count: int = 0
+    workspace_id: str = "default"
+    tenant_id: Optional[str] = None
+
+
 class ApiApprovalResolveRequest(BaseModel):
     approval_id: Optional[str] = None
     resolution: Literal["approved", "rejected"]
@@ -274,6 +317,12 @@ CANONICAL_API_ENDPOINTS: Dict[str, Dict[str, Any]] = {
         "response_model": "ApiSessionResponse",
         "notes": "Canonical runtime session bootstrap and lookup surface.",
     },
+    "threads": {
+        "method": "GET",
+        "path": "/threads and /threads/{thread_id}",
+        "response_model": "ApiThreadListResponse / ApiThreadRecord",
+        "notes": "Canonical durable master-thread history surface.",
+    },
     "machines": {
         "method": "GET",
         "path": "/machines",
@@ -319,7 +368,8 @@ def build_turn_chat_body(turn_request: AgentTurnRequest) -> Dict[str, Any]:
     hints = dict(turn_request.context_hints or {})
     return {
         "workspace_id": turn_request.workspace_id,
-        "thread_id": turn_request.session_id,
+        "thread_id": turn_request.thread_id or turn_request.session_id,
+        "session_id": turn_request.session_id,
         "channel": turn_request.channel,
         "message": turn_request.message,
         "attachments": [serialize_turn_attachment(item) for item in turn_request.attachments],
@@ -346,6 +396,7 @@ def normalize_agent_turn_result(
         return ApiAgentTurnResponse(
             status=str(durable.get("status") or "accepted"),
             run_id=str(durable.get("run_id") or "").strip() or None,
+            thread_id=turn_request.thread_id,
             session_id=turn_request.session_id,
             metadata={
                 "kind": "durable_run",
@@ -359,7 +410,8 @@ def normalize_agent_turn_result(
     if kind == "direct_chat_stream":
         return ApiAgentTurnResponse(
             status="stream_ready",
-            session_id=str(result.get("thread_id") or turn_request.session_id or "").strip() or None,
+            thread_id=str(result.get("thread_id") or turn_request.thread_id or turn_request.session_id or "").strip() or None,
+            session_id=str(result.get("session_id") or turn_request.session_id or "").strip() or None,
             metadata={
                 "kind": "direct_chat_stream",
                 "workspace_id": result.get("workspace_id"),
@@ -373,6 +425,7 @@ def normalize_agent_turn_result(
         status=str(result.get("status") or "ok"),
         reply=str(result.get("reply") or ""),
         run_id=str(result.get("run_id") or "").strip() or None,
+        thread_id=str(result.get("thread_id") or turn_request.thread_id or turn_request.session_id or "").strip() or None,
         session_id=str(result.get("session_id") or turn_request.session_id or "").strip() or None,
         artifacts=list(result.get("artifacts") or []),
         approvals=list(result.get("approvals") or []),

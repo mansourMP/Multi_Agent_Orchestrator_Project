@@ -56,6 +56,7 @@ export type AgentTurnIntervention = {
 export type AgentTurnRequest = {
   tenant_id?: string;
   workspace_id: string;
+  thread_id?: string;
   session_id: string;
   channel?: string;
   actor: ApiTurnActor;
@@ -73,6 +74,7 @@ export type AgentTurnResponse = {
   status: string;
   reply?: string;
   run_id?: string | null;
+  thread_id?: string | null;
   session_id?: string | null;
   artifacts?: Array<Record<string, unknown>>;
   approvals?: AgentTurnApprovalRequest[];
@@ -100,6 +102,47 @@ export type SessionResponse = {
   expires_at?: string | null;
   metadata?: Record<string, unknown>;
   status?: string;
+};
+
+export type ThreadTurnRecord = {
+  id: string;
+  tenant_id?: string;
+  workspace_id?: string;
+  thread_id: string;
+  session_id?: string | null;
+  request_id?: string | null;
+  role: 'user' | 'assistant';
+  status?: string | null;
+  content: string;
+  run_id?: string | null;
+  actor?: Record<string, unknown>;
+  approvals?: AgentTurnApprovalRequest[];
+  interventions?: AgentTurnIntervention[];
+  metadata?: Record<string, unknown>;
+  created_at?: string | null;
+  updated_at?: string | null;
+};
+
+export type ThreadRecord = {
+  id: string;
+  tenant_id?: string;
+  workspace_id?: string;
+  owner_user_id?: string | null;
+  channel?: string | null;
+  title: string;
+  status?: string | null;
+  metadata?: Record<string, unknown>;
+  created_at?: string | null;
+  updated_at?: string | null;
+  last_turn_at?: string | null;
+  turns?: ThreadTurnRecord[];
+};
+
+export type ThreadListResponse = {
+  items: ThreadRecord[];
+  count: number;
+  workspace_id?: string;
+  tenant_id?: string | null;
 };
 
 export type RunListItem = {

@@ -10,6 +10,7 @@ from typing import Any, Dict, Optional
 import uuid
 
 from server_modules import db as runtime_db
+from server_modules import control_plane_repository
 from server_modules.runtime_state_store import (
     delete_runtime_session,
     get_runtime_session as get_sqlite_runtime_session,
@@ -253,6 +254,24 @@ async def create_session(
         except Exception as exc:
             LOGGER.warning("Postgres create_session failed for %s: %s", token, exc)
     _persist_sqlite_session(record)
+    try:
+        thread_id = (
+            str(record.get("metadata", {}).get("thread_id") or "").strip()
+            or str(record.get("session_id") or "").strip()
+        )
+        await control_plane_repository.upsert_agent_session(
+            session_id=record["session_id"],
+            tenant_id=record["tenant_id"],
+            workspace_id=record["workspace_id"],
+            thread_id=thread_id,
+            channel=record["channel"],
+            actor=record["actor"],
+            metadata=record.get("metadata") if isinstance(record.get("metadata"), dict) else {},
+            expires_at=record["expires_at"],
+            status=str(record.get("status") or "active").strip() or "active",
+        )
+    except Exception as exc:
+        LOGGER.warning("Control-plane create_session mirror failed for %s: %s", token, exc)
     return token
 
 
@@ -312,6 +331,24 @@ async def extend_session(session_id: str) -> Optional[Dict[str, Any]]:
         except Exception as exc:
             LOGGER.warning("Postgres extend_session failed for %s: %s", session_id, exc)
     _persist_sqlite_session(existing)
+    try:
+        thread_id = (
+            str(existing.get("metadata", {}).get("thread_id") or "").strip()
+            or str(existing.get("session_id") or "").strip()
+        )
+        await control_plane_repository.upsert_agent_session(
+            session_id=existing["session_id"],
+            tenant_id=existing["tenant_id"],
+            workspace_id=existing["workspace_id"],
+            thread_id=thread_id,
+            channel=existing["channel"],
+            actor=existing["actor"],
+            metadata=existing.get("metadata") if isinstance(existing.get("metadata"), dict) else {},
+            expires_at=existing["expires_at"],
+            status="active",
+        )
+    except Exception as exc:
+        LOGGER.warning("Control-plane extend_session mirror failed for %s: %s", session_id, exc)
     return existing
 
 
@@ -326,4 +363,8 @@ async def terminate_session(session_id: str) -> None:
         except Exception as exc:
             LOGGER.warning("Postgres terminate_session failed for %s: %s", token, exc)
     _delete_sqlite_session(token)
+    try:
+        await control_plane_repository.terminate_agent_session(token)
+    except Exception as exc:
+        LOGGER.warning("Control-plane terminate_session mirror failed for %s: %s", token, exc)
     return None

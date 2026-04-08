@@ -8,7 +8,6 @@ import {
   DEFAULT_CONNECTOR_OPTIONS,
   DEFAULT_PROVIDER_MODELS,
   DEFAULT_PROVIDER_OPTIONS,
-  WORKSPACE_ID,
   BUSINESS_PRESETS,
   OUTCOME_PACKS,
   getProviderAuthModes,
@@ -157,6 +156,8 @@ async function ensureRuntimeSessionId(input: {
   clientSessionKey?: string | null;
   channel?: string;
   actorLabel?: string;
+  tenantId?: string | null;
+  workspaceId?: string | null;
   metadata?: Record<string, unknown>;
 }): Promise<string> {
   const clientSessionKey = String(input.clientSessionKey || '').trim();
@@ -165,8 +166,8 @@ async function ensureRuntimeSessionId(input: {
 
   const actorId = clientSessionKey || createStreamRequestId();
   const session = await apiClient.createSession({
-    tenant_id: 'default',
-    workspace_id: WORKSPACE_ID,
+    tenant_id: String(input.tenantId || '').trim() || 'default',
+    workspace_id: String(input.workspaceId || '').trim() || 'default',
     channel: String(input.channel || 'web').trim() || 'web',
     actor: {
       ...buildWebActor(actorId),
@@ -553,7 +554,14 @@ function normalizeOperatorChatPriorMessages(
   return bounded;
 }
 
-export function usePlatformApi(state: PageState, streamRef: MutableRefObject<AuthenticatedEventStreamConnection | null>) {
+export function usePlatformApi(
+  state: PageState,
+  streamRef: MutableRefObject<AuthenticatedEventStreamConnection | null>,
+  options?: {
+    activeWorkspaceId?: string | null;
+    activeTenantId?: string | null;
+  },
+) {
   const {
     setLogs,
     setSetupSession,
@@ -652,6 +660,8 @@ export function usePlatformApi(state: PageState, streamRef: MutableRefObject<Aut
     setOpenaiKeyInput,
     setShowSetupWizard,
   } = state;
+  const activeWorkspaceId = String(options?.activeWorkspaceId || '').trim() || 'default';
+  const activeTenantId = String(options?.activeTenantId || '').trim() || 'default';
 
   const controlPlaneFetch = useCallback(async (input: string, init?: RequestInit) => {
     await ensureControlPlaneSession();
@@ -688,7 +698,7 @@ export function usePlatformApi(state: PageState, streamRef: MutableRefObject<Aut
   const createSetupSession = useCallback(async () => {
     const res = await controlPlaneFetch('/api/control-plane/setup/sessions', {
       method: 'POST',
-      body: JSON.stringify({ workspace_id: WORKSPACE_ID, provider }),
+      body: JSON.stringify({ workspace_id: activeWorkspaceId, provider }),
     });
     if (!res.ok) {
       throw new Error(await readResponseMessage(res, 'Failed to create setup session.'));
@@ -701,7 +711,7 @@ export function usePlatformApi(state: PageState, streamRef: MutableRefObject<Aut
       return session;
     }
     throw new Error('Setup session response is invalid.');
-  }, [controlPlaneFetch, provider, setSetupSession, setSetupSessionId]);
+  }, [activeWorkspaceId, controlPlaneFetch, provider, setSetupSession, setSetupSessionId]);
 
   const setupAction = useCallback(
     async (
@@ -1017,7 +1027,7 @@ export function usePlatformApi(state: PageState, streamRef: MutableRefObject<Aut
           PROVIDER_POLL_MIN_INTERVAL_MS,
           PROVIDER_MODELS_DEBOUNCE_MS,
           async () => {
-            const search = new URLSearchParams({ workspace_id: WORKSPACE_ID });
+            const search = new URLSearchParams({ workspace_id: activeWorkspaceId });
             if (credentialForProvider) {
               search.set('credential_id', credentialForProvider);
             }
@@ -1045,11 +1055,11 @@ export function usePlatformApi(state: PageState, streamRef: MutableRefObject<Aut
         setModelsLoading(false);
       }
     },
-    [connectionMode, controlPlaneFetch, refreshModelAliasCatalog, setModelsLoading, setModelOptions, setModel],
+    [activeWorkspaceId, connectionMode, controlPlaneFetch, refreshModelAliasCatalog, setModelsLoading, setModelOptions, setModel],
   );
 
   const hasRuntimeProviderAccount = useCallback(async (providerId: ProviderId) => {
-    const res = await controlPlaneFetch(`/api/control-plane/providers/runtime-availability?workspace_id=${encodeURIComponent(WORKSPACE_ID)}`);
+    const res = await controlPlaneFetch(`/api/control-plane/providers/runtime-availability?workspace_id=${encodeURIComponent(activeWorkspaceId)}`);
     if (!res.ok) throw new Error('Unable to load runtime accounts.');
     const payload = await res.json().catch(() => ({ items: [] }));
     const items = Array.isArray(payload?.items) ? payload.items : [];
@@ -1059,7 +1069,7 @@ export function usePlatformApi(state: PageState, streamRef: MutableRefObject<Aut
       const normalizedProvider = normalizeProviderId(typeof record.provider === 'string' ? record.provider.trim().toLowerCase() : '');
       return normalizedProvider === providerId && record.ready === true;
     });
-  }, [controlPlaneFetch]);
+  }, [activeWorkspaceId, controlPlaneFetch]);
 
   const buildScheduledRunRequest = useCallback(async () => {
     const selectedPack = OUTCOME_PACKS.find((pack) => pack.id === selectedPackId) || OUTCOME_PACKS[0];
@@ -1097,7 +1107,7 @@ export function usePlatformApi(state: PageState, streamRef: MutableRefObject<Aut
     return {
       engine: 'orion',
       workflow_id: undefined,
-      workspace_id: WORKSPACE_ID,
+      workspace_id: activeWorkspaceId,
       user_goal: goal.trim() || selectedPreset.goal,
       business_plan: undefined,
       agent_role: selectedAgentRole,
@@ -1139,6 +1149,7 @@ export function usePlatformApi(state: PageState, streamRef: MutableRefObject<Aut
     selectedPackId,
     selectedPresetId,
     trustMode,
+    activeWorkspaceId,
     inboxInput,
     leadsInput,
     slotsInput,
@@ -1147,7 +1158,7 @@ export function usePlatformApi(state: PageState, streamRef: MutableRefObject<Aut
   const loadWeeklySchedule = useCallback(async () => {
     setWeeklyScheduleBusy('load');
     try {
-      const res = await controlPlaneFetch(`/api/control-plane/schedules/weekly?workspace_id=${encodeURIComponent(WORKSPACE_ID)}`);
+      const res = await controlPlaneFetch(`/api/control-plane/schedules/weekly?workspace_id=${encodeURIComponent(activeWorkspaceId)}`);
       if (!res.ok) return;
       const payload = await res.json();
       const items = Array.isArray(payload?.items) ? payload.items : [];
@@ -1168,7 +1179,7 @@ export function usePlatformApi(state: PageState, streamRef: MutableRefObject<Aut
     } finally {
       setWeeklyScheduleBusy(null);
     }
-  }, [controlPlaneFetch, setWeeklyScheduleBusy, setWeeklyScheduleId, setWeeklyScheduleStatusText, setWeeklyAutopilotEnabled, setWeeklyAutopilotDay, setWeeklyAutopilotTime, setWeeklyAutopilotTimezone]);
+  }, [activeWorkspaceId, controlPlaneFetch, setWeeklyScheduleBusy, setWeeklyScheduleId, setWeeklyScheduleStatusText, setWeeklyAutopilotEnabled, setWeeklyAutopilotDay, setWeeklyAutopilotTime, setWeeklyAutopilotTimezone]);
 
   const saveWeeklySchedule = useCallback(async () => {
     setWeeklyScheduleBusy('save');
@@ -1209,7 +1220,7 @@ export function usePlatformApi(state: PageState, streamRef: MutableRefObject<Aut
           method: 'POST',
           body: JSON.stringify({
             name: 'Autopilot Weekly Schedule',
-            workspace_id: WORKSPACE_ID,
+            workspace_id: activeWorkspaceId,
             enabled: true,
             day_of_week: weeklyAutopilotDay,
             time_hhmm: weeklyAutopilotTime,
@@ -2175,8 +2186,11 @@ export function usePlatformApi(state: PageState, streamRef: MutableRefObject<Aut
       clientSessionKey,
       channel: 'web',
       actorLabel: 'Web user',
+      tenantId: activeTenantId,
+      workspaceId: activeWorkspaceId,
       metadata: {
         source: 'direct_chat',
+        thread_id: clientSessionKey,
       },
     });
     let streamedReply = '';
@@ -2244,8 +2258,9 @@ export function usePlatformApi(state: PageState, streamRef: MutableRefObject<Aut
 
       try {
         const turnRequest: AgentTurnRequest = {
-          tenant_id: 'default',
-          workspace_id: WORKSPACE_ID,
+          tenant_id: activeTenantId,
+          workspace_id: activeWorkspaceId,
+          thread_id: clientSessionKey,
           session_id: runtimeSessionId,
           channel: 'web',
           actor: buildWebActor(runtimeSessionId),
@@ -2412,7 +2427,7 @@ export function usePlatformApi(state: PageState, streamRef: MutableRefObject<Aut
     }
 
     return normalizeOperatorChatResponsePayload({ reply: streamedReply, steps: streamedSteps });
-  }, [guidedDefaultsEnabled, model, provider, trustMode]);
+  }, [activeTenantId, activeWorkspaceId, guidedDefaultsEnabled, model, provider, trustMode]);
 
   const buildLocalExecutionGoal = useCallback((draft: LocalExecutionDraft): string => {
     const operations = Array.isArray(draft.operations) ? draft.operations : [];
@@ -2468,14 +2483,17 @@ export function usePlatformApi(state: PageState, streamRef: MutableRefObject<Aut
       const runtimeSessionId = await ensureRuntimeSessionId({
         channel: 'web',
         actorLabel: 'Operator run',
+        tenantId: activeTenantId,
+        workspaceId: activeWorkspaceId,
         metadata: {
           source: 'operator_run',
         },
       });
 
       const turnResponse = await apiClient.turn({
-        tenant_id: 'default',
-        workspace_id: WORKSPACE_ID,
+        tenant_id: activeTenantId,
+        workspace_id: activeWorkspaceId,
+        thread_id: runtimeSessionId,
         session_id: runtimeSessionId,
         channel: 'web',
         actor: buildWebActor(runtimeSessionId),
@@ -2606,7 +2624,7 @@ export function usePlatformApi(state: PageState, streamRef: MutableRefObject<Aut
       state.setIsChecking(false);
       state.setIsStarting(false);
     }
-  }, [appendLog, closeStream, fetchDoctorChecks, fetchLocalWorkerStatus, fetchRunResult, fetchRuntimeMetrics, hasRuntimeProviderAccount, state, streamRef]);
+  }, [activeTenantId, activeWorkspaceId, appendLog, closeStream, fetchDoctorChecks, fetchLocalWorkerStatus, fetchRunResult, fetchRuntimeMetrics, hasRuntimeProviderAccount, state, streamRef]);
 
   const startAutopilot = useCallback(async (overrides?: { goal?: string; agentRole?: AgentRoleId; metadata?: Record<string, unknown> }) => {
     if (state.status === 'running' || state.status === 'queued_local') return;
@@ -2664,6 +2682,8 @@ export function usePlatformApi(state: PageState, streamRef: MutableRefObject<Aut
       const runtimeSessionId = await ensureRuntimeSessionId({
         channel: 'web',
         actorLabel: 'Pack run',
+        tenantId: activeTenantId,
+        workspaceId: activeWorkspaceId,
         metadata: {
           source: 'pack_run',
           outcome_pack: selectedPack.id,
@@ -2794,8 +2814,9 @@ export function usePlatformApi(state: PageState, streamRef: MutableRefObject<Aut
       }
 
       const turnResponse = await apiClient.turn({
-        tenant_id: 'default',
-        workspace_id: WORKSPACE_ID,
+        tenant_id: activeTenantId,
+        workspace_id: activeWorkspaceId,
+        thread_id: runtimeSessionId,
         session_id: runtimeSessionId,
         channel: 'web',
         actor: buildWebActor(runtimeSessionId),
@@ -2957,7 +2978,7 @@ export function usePlatformApi(state: PageState, streamRef: MutableRefObject<Aut
     } finally {
       state.setIsChecking(false); state.setIsStarting(false);
     }
-  }, [appendLog, buildLocalExecutionGoal, closeStream, fetchDoctorChecks, fetchLocalWorkerStatus, fetchRunResult, fetchRuntimeMetrics, hasRuntimeProviderAccount, localExecutionDraft, state, streamRef]);
+  }, [activeTenantId, activeWorkspaceId, appendLog, buildLocalExecutionGoal, closeStream, fetchDoctorChecks, fetchLocalWorkerStatus, fetchRunResult, fetchRuntimeMetrics, hasRuntimeProviderAccount, localExecutionDraft, state, streamRef]);
 
   return {
     appendLog,

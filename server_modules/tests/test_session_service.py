@@ -45,7 +45,7 @@ class SessionServiceTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(session_id, "thread-1")
         self.assertGreaterEqual(len(pool.execute_calls), 2)
-        self.assertIn("runtime_sessions", pool.execute_calls[-1][0])
+        self.assertTrue(any("runtime_sessions" in query for query, _ in pool.execute_calls))
 
     async def test_get_session_prefers_postgres(self):
         pool = _FakePool(

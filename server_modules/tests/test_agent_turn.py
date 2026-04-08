@@ -1,4 +1,5 @@
 import unittest
+import asyncio
 from unittest.mock import AsyncMock, patch
 
 from server_modules.agent_turn import (
@@ -30,6 +31,55 @@ from server_modules.runtime_models import RunStartRequest
 
 
 class AgentTurnTests(unittest.TestCase):
+    def test_agent_turn_persists_master_thread_and_turns(self):
+        turn_request = AgentTurnRequest(
+            tenant_id="tenant-1",
+            workspace_id="workspace-1",
+            thread_id="thread-1",
+            session_id="session-1",
+            channel="web",
+            actor=TurnActor(type="user", id="user-1", display_name="Alice"),
+            message="hello world",
+            execution_mode="sync",
+            response_mode="stream",
+            context_hints={"request_id": "req-1"},
+        )
+
+        with patch("server_modules.agent_turn.session_service.get_session", new=AsyncMock(return_value={
+            "session_id": "session-1",
+            "workspace_id": "workspace-1",
+            "tenant_id": "tenant-1",
+            "channel": "web",
+            "actor": {"type": "user", "id": "user-1"},
+            "created_at": "2026-04-08T00:00:00Z",
+            "expires_at": "2099-01-01T00:00:00Z",
+            "metadata": {"thread_id": "thread-1"},
+            "status": "active",
+        })), patch("server_modules.agent_turn.session_service.extend_session", new=AsyncMock(return_value=None)), patch("server_modules.agent_turn.thread_service.ensure_master_thread", new=AsyncMock(return_value={"id": "thread-1"})) as ensure_thread_mock, patch("server_modules.agent_turn.thread_service.record_user_turn", new=AsyncMock(return_value={"id": "turn-user"})) as record_user_mock, patch("server_modules.agent_turn.thread_service.record_assistant_turn", new=AsyncMock(return_value={"id": "turn-assistant"})) as record_assistant_mock, patch("server_modules.turn_runtime.build_turn_execution_services", return_value={"services": "ok"}), patch("server_modules.turn_runtime.execute_agent_turn_request", new=AsyncMock(return_value={
+            "status": "completed",
+            "reply": "done",
+            "run_id": "run-1",
+            "approvals": [],
+            "interventions": [],
+            "metadata": {"agent_role": "master-agent"},
+        })):
+            result = asyncio.run(
+                agent_turn(
+                    turn_request=turn_request,
+                    current_user={"user_id": "user-1", "role": "owner", "is_admin": True},
+                    run_execution_services={"run": "services"},
+                    direct_chat_services={"direct_chat": "services"},
+                )
+            )
+
+        self.assertEqual(result["reply"], "done")
+        ensure_thread_mock.assert_awaited_once()
+        self.assertEqual(ensure_thread_mock.await_args.kwargs["thread_id"], "thread-1")
+        record_user_mock.assert_awaited_once()
+        self.assertEqual(record_user_mock.await_args.kwargs["content"], "hello world")
+        record_assistant_mock.assert_awaited_once()
+        self.assertEqual(record_assistant_mock.await_args.kwargs["run_id"], "run-1")
+
     def test_build_inbound_agent_turn_request_normalizes_generic_inputs(self):
         request = build_inbound_agent_turn_request(
             tenant_id="tenant-1",
@@ -328,6 +378,7 @@ class AgentTurnTests(unittest.TestCase):
         request = AgentTurnRequest(
             tenant_id="default",
             workspace_id="workspace-1",
+            thread_id="thread-1",
             session_id="",
             channel="web",
             actor=TurnActor(type="user", id="user-1", display_name="user-1"),

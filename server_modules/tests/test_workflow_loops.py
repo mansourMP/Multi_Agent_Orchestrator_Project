@@ -9,6 +9,16 @@ from server_modules.runtime_state_store import init_runtime_state_db
 
 
 class WorkflowLoopTests(unittest.TestCase):
+    def _mock_agent_generation_state(self):
+        execution_context = {"metadata": {}, "provider": "openai", "model": "gpt-4o-mini"}
+        agent_state = {
+            "provider": "openai",
+            "selected_model": "gpt-4o-mini",
+            "credential_candidates": [{"credentials": {"api_key": "test-key"}}],
+            "credentials": {"api_key": "test-key"},
+        }
+        return execution_context, agent_state
+
     def setUp(self) -> None:
         self.tmpdir = tempfile.TemporaryDirectory()
         self.db_path = Path(self.tmpdir.name) / "runtime-state.sqlite3"
@@ -87,7 +97,10 @@ class WorkflowLoopTests(unittest.TestCase):
             "edges": [{"id": "e1", "source": "trigger_1", "target": "loop_1"}],
         }
 
-        with patch("server_modules.runs_execution.generate_with_candidate_failover", side_effect=["first", "second", "third"]):
+        with (
+            patch("server_modules.runs_execution._resolve_agent_generation_state", side_effect=lambda context, config: self._mock_agent_generation_state()),
+            patch("server_modules.runs_execution.generate_with_candidate_failover", side_effect=["first", "second", "third"]),
+        ):
             result = runs_execution._execute_workflow_graph(
                 "run-foreach",
                 {"workflow_id": "wf_foreach", "user_goal": "Loop through items", "metadata": {}},
@@ -134,7 +147,10 @@ class WorkflowLoopTests(unittest.TestCase):
             "edges": [{"id": "e1", "source": "trigger_1", "target": "loop_1"}],
         }
 
-        with patch("server_modules.runs_execution.generate_with_candidate_failover", side_effect=["continue", "stop"]):
+        with (
+            patch("server_modules.runs_execution._resolve_agent_generation_state", side_effect=lambda context, config: self._mock_agent_generation_state()),
+            patch("server_modules.runs_execution.generate_with_candidate_failover", side_effect=["continue", "stop"]),
+        ):
             result = runs_execution._execute_workflow_graph(
                 "run-while",
                 {"workflow_id": "wf_while", "user_goal": "Loop while condition holds", "metadata": {}},

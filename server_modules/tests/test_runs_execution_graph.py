@@ -9,6 +9,16 @@ from server_modules.runtime_state_store import init_runtime_state_db
 
 
 class RunsExecutionGraphTests(unittest.TestCase):
+    def _mock_agent_generation_state(self):
+        execution_context = {"metadata": {}, "provider": "openai", "model": "gpt-4o-mini"}
+        agent_state = {
+            "provider": "openai",
+            "selected_model": "gpt-4o-mini",
+            "credential_candidates": [{"credentials": {"api_key": "test-key"}}],
+            "credentials": {"api_key": "test-key"},
+        }
+        return execution_context, agent_state
+
     def setUp(self) -> None:
         self.tmpdir = tempfile.TemporaryDirectory()
         self.db_path = Path(self.tmpdir.name) / "runtime-state.sqlite3"
@@ -1272,7 +1282,9 @@ class RunsExecutionGraphTests(unittest.TestCase):
         "server_modules.runs_execution.generate_with_candidate_failover",
         return_value="Thanks, your request has been triaged and assigned.",
     )
-    def test_launch_gate_connector_triage_workflow(self, _generate_mock, _approval_mock, _telegram_mock, _secret_mock):
+    @patch("server_modules.runs_execution._resolve_agent_generation_state")
+    def test_launch_gate_connector_triage_workflow(self, resolve_state_mock, _generate_mock, _approval_mock, _telegram_mock, _secret_mock):
+        resolve_state_mock.side_effect = lambda context, config: self._mock_agent_generation_state()
         definition = {
             "version": "empyralist.workflow.v2",
             "nodes": [

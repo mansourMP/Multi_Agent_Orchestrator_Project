@@ -11,6 +11,7 @@ from server_modules.agent_turn import (
     resolve_agent_turn_session_identity,
     ensure_direct_chat_turn_request,
 )
+from server_modules.api_contract import build_turn_chat_body
 from server_modules import direct_chat_transport_service
 
 
@@ -192,10 +193,17 @@ async def execute_direct_chat_turn_request(
     services: DirectChatExecutionServices,
     chat_body: Optional[dict[str, Any]] = None,
 ) -> dict[str, Any]:
-    body = dict(chat_body or {})
-    body.setdefault("workspace_id", turn_request.workspace_id)
-    body.setdefault("thread_id", turn_request.session_id)
-    body.setdefault("message", turn_request.message)
+    body = build_turn_chat_body(turn_request)
+    if isinstance(chat_body, dict):
+        for key, value in chat_body.items():
+            if value is not None:
+                body[key] = value
+    body["workspace_id"] = str(body.get("workspace_id") or turn_request.workspace_id or "default").strip() or "default"
+    body["thread_id"] = str(body.get("thread_id") or turn_request.session_id or "direct-chat").strip() or "direct-chat"
+    body["message"] = str(body.get("message") or turn_request.message or "")
+    request_id = str(body.get("client_request_id") or turn_request.context_hints.get("request_id") or "").strip()
+    if request_id:
+        body["client_request_id"] = request_id
     workspace_id = str(turn_request.workspace_id or body.get("workspace_id") or "default").strip() or "default"
     session_key, thread_id, client_request_id = services.chat_stream_key(current_user, body)
 

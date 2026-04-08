@@ -16,6 +16,8 @@ class RuntimeRouteRegistrationServiceTests(unittest.TestCase):
         scheduler_holder = {}
         deps = types.SimpleNamespace(
             run_start_request_class=type("RunStartRequest", (), {}),
+            build_inbound_agent_turn_request=lambda **kwargs: kwargs,
+            execute_system_agent_turn=lambda **kwargs: {},
             trigger_pending_heartbeat_schedules=lambda: {},
             handle_telegram_send_message=lambda *args, **kwargs: None,
             workspace_memory_snapshot=lambda workspace_id: {},

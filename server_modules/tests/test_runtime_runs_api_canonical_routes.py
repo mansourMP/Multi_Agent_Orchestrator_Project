@@ -54,7 +54,7 @@ class RuntimeRunsApiCanonicalRouteTests(unittest.TestCase):
         original_turn = runtime_runs_api.execute_canonical_agent_turn
         original_run_services = runtime_runs_api._run_execution_services
         original_direct_chat_services = runtime_runs_api._direct_chat_execution_services
-        original_stream_response = runtime_runs_api.build_direct_chat_stream_response
+        original_stream_response = runtime_runs_api.build_agent_turn_stream_response
         original_stream_services = runtime_runs_api._direct_chat_stream_response_services
         original_late_export = runtime_runs_api._late_server_export
         original_privileged = runtime_runs_api._current_user_is_privileged
@@ -67,7 +67,7 @@ class RuntimeRunsApiCanonicalRouteTests(unittest.TestCase):
             runtime_runs_api.execute_canonical_agent_turn = self._fake_agent_turn
             runtime_runs_api._run_execution_services = lambda: "run-services"
             runtime_runs_api._direct_chat_execution_services = lambda: "chat-services"
-            runtime_runs_api.build_direct_chat_stream_response = self._fake_stream_response
+            runtime_runs_api.build_agent_turn_stream_response = self._fake_stream_response
             runtime_runs_api._direct_chat_stream_response_services = lambda: "stream-services"
             runtime_runs_api._current_user_is_privileged = lambda current_user: False
             runtime_runs_api._extract_run_owner_user_id = lambda item: str(item.get("owner_user_id") or "")
@@ -201,8 +201,8 @@ class RuntimeRunsApiCanonicalRouteTests(unittest.TestCase):
             self.assertEqual(stream_payload["kind"], "stream")
             self.assertEqual(stream_payload["last_event_id"], "evt-7")
             self.assertEqual(stream_payload["services"], "stream-services")
-            self.assertEqual(stream_payload["body"]["thread_id"], "thread-2")
-            self.assertEqual(stream_payload["body"]["message"], "stream hello")
+            self.assertEqual(stream_payload["turn_request"].session_id, "thread-2")
+            self.assertEqual(stream_payload["turn_request"].message, "stream hello")
 
             legacy_stream_payload = self._run_async(
                 app.routes[("POST", "/turn")](
@@ -228,8 +228,8 @@ class RuntimeRunsApiCanonicalRouteTests(unittest.TestCase):
             )
             self.assertEqual(legacy_stream_payload["kind"], "stream")
             self.assertEqual(legacy_stream_payload["last_event_id"], "evt-8")
-            self.assertEqual(legacy_stream_payload["body"]["thread_id"], "legacy-thread")
-            self.assertEqual(legacy_stream_payload["body"]["provider"], "anthropic")
+            self.assertEqual(legacy_stream_payload["turn_request"].session_id, "legacy-thread")
+            self.assertEqual(legacy_stream_payload["chat_body"]["provider"], "anthropic")
 
             legacy_run_payload = self._run_async(
                 app.routes[("POST", "/turn")](
@@ -305,7 +305,7 @@ class RuntimeRunsApiCanonicalRouteTests(unittest.TestCase):
             runtime_runs_api.execute_canonical_agent_turn = original_turn
             runtime_runs_api._run_execution_services = original_run_services
             runtime_runs_api._direct_chat_execution_services = original_direct_chat_services
-            runtime_runs_api.build_direct_chat_stream_response = original_stream_response
+            runtime_runs_api.build_agent_turn_stream_response = original_stream_response
             runtime_runs_api._direct_chat_stream_response_services = original_stream_services
             runtime_runs_api._late_server_export = original_late_export
             runtime_runs_api._current_user_is_privileged = original_privileged
@@ -336,7 +336,8 @@ class RuntimeRunsApiCanonicalRouteTests(unittest.TestCase):
     async def _fake_stream_response(self, **kwargs):
         return {
             "kind": "stream",
-            "body": kwargs["body"],
+            "turn_request": kwargs["turn_request"],
+            "chat_body": kwargs.get("chat_body"),
             "last_event_id": kwargs["last_event_id"],
             "services": kwargs["services"],
         }

@@ -53,10 +53,9 @@ class RuntimeHeartbeatServiceTests(unittest.TestCase):
 
     def test_build_heartbeat_run_callback_returns_noop_summary_without_tasks_or_pending(self):
         callback = runtime_heartbeat_service.build_heartbeat_run_callback(
-            run_start_request_class=lambda **kwargs: kwargs,
+            build_inbound_agent_turn_request=lambda **kwargs: kwargs,
             trigger_pending_heartbeat_schedules=lambda: {"started": []},
-            execute_system_run_start_request_via_turn_runtime=lambda request, **kwargs: {"run_id": "run-1"},
-            stamp_request_owner_fn=lambda payload, current_user=None: payload,
+            execute_system_agent_turn=lambda **kwargs: {"run_id": "run-1"},
             run_execution_services=lambda: object(),
         )
 
@@ -67,10 +66,9 @@ class RuntimeHeartbeatServiceTests(unittest.TestCase):
     def test_build_heartbeat_run_callback_starts_run_for_tasks(self):
         captured = {}
         callback = runtime_heartbeat_service.build_heartbeat_run_callback(
-            run_start_request_class=lambda **kwargs: captured.setdefault("request", kwargs) or kwargs,
+            build_inbound_agent_turn_request=lambda **kwargs: captured.setdefault("request", kwargs) or kwargs,
             trigger_pending_heartbeat_schedules=lambda: {"started": [{"run_id": "pending-1"}]},
-            execute_system_run_start_request_via_turn_runtime=lambda request, **kwargs: {"run_id": "run-1"},
-            stamp_request_owner_fn=lambda payload, current_user=None: payload,
+            execute_system_agent_turn=lambda **kwargs: {"run_id": "run-1"},
             run_execution_services=lambda: object(),
         )
 
@@ -78,8 +76,35 @@ class RuntimeHeartbeatServiceTests(unittest.TestCase):
 
         self.assertTrue(payload["acted"])
         self.assertEqual(payload["run_id"], "run-1")
-        self.assertIn("Check inbox", captured["request"]["user_goal"])
-        self.assertEqual(captured["request"]["metadata"]["heartbeat_trigger"], "manual")
+        self.assertEqual(captured["request"]["execution_mode"], "durable")
+        self.assertEqual(captured["request"]["response_mode"], "artifact")
+        self.assertIn("Check inbox", captured["request"]["message"])
+        self.assertEqual(captured["request"]["context_hints"]["metadata"]["heartbeat_trigger"], "manual")
+
+    def test_build_heartbeat_turn_request_shapes_canonical_durable_turn(self):
+        turn_request = runtime_heartbeat_service.build_heartbeat_turn_request(
+            build_inbound_agent_turn_request=lambda **kwargs: kwargs,
+            tasks=["Check inbox"],
+            metadata={
+                "workspace_id": "default",
+                "tenant_id": "tenant-1",
+                "owner_user_id": "user-1",
+                "owner_email": "user@example.com",
+                "trigger": "scheduled",
+                "execution_target": "local_companion",
+                "trust_mode": "guarded",
+            },
+            pending_started=[{"run_id": "pending-1"}],
+        )
+
+        self.assertEqual(turn_request["tenant_id"], "tenant-1")
+        self.assertEqual(turn_request["workspace_id"], "default")
+        self.assertEqual(turn_request["execution_mode"], "durable")
+        self.assertEqual(turn_request["response_mode"], "artifact")
+        self.assertEqual(turn_request["actor_id"], "user-1")
+        self.assertEqual(turn_request["policy_context"]["execution_target"], "local_companion")
+        self.assertEqual(turn_request["policy_context"]["trust_mode"], "guarded")
+        self.assertEqual(turn_request["context_hints"]["metadata"]["source"], "heartbeat")
 
     def test_build_heartbeat_notify_callback_uses_telegram_sender(self):
         seen = []

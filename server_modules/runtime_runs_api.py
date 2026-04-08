@@ -32,7 +32,10 @@ from server_modules.api_contract import (
 )
 from server_modules import session_service
 from server_modules import run_state_repository
-from server_modules.direct_chat_stream_response_service import build_direct_chat_stream_response
+from server_modules.direct_chat_stream_response_service import (
+    build_agent_turn_stream_response,
+    build_direct_chat_stream_response,
+)
 from server_modules.direct_chat_service import (
     build_direct_chat_execution_services,
     build_direct_chat_event_producer as _service_build_direct_chat_event_producer,
@@ -532,44 +535,48 @@ def register_run_routes(app) -> None:
             current_user=current_user,
             minimum_role="member",
         )
+        legacy_direct_resolution = None
+        run_request = None
+        chat_body = None
 
+        # Freeze legacy growth here: compatibility payloads are normalized to AgentTurnRequest
+        # at the runtime boundary and do not execute through alternate ingress contracts.
         if _looks_like_legacy_direct_chat_body(payload):
-            return await build_direct_chat_stream_response(
+            legacy_direct_resolution = resolve_direct_chat_turn_request(
                 current_user=current_user,
                 body=payload,
-                last_event_id=request.headers.get("last-event-id") or payload.get("last_event_id"),
-                services=_direct_chat_stream_response_services(),
+                request_signature_fn=_chat_stream_request_signature,
             )
-
-        if _looks_like_legacy_run_start_body(payload):
+            turn_request = legacy_direct_resolution.turn_request
+            chat_body = dict(payload)
+        elif _looks_like_legacy_run_start_body(payload):
             from server_modules.runtime_models import RunStartRequest
 
-            run_request = RunStartRequest(**payload)
+            raw_run_request = RunStartRequest(**payload)
             resolution = resolve_run_start_turn_request(
                 current_user=current_user,
-                body=run_request,
+                body=raw_run_request,
                 stamp_request_owner_fn=_stamp_request_owner,
             )
-            result = await execute_canonical_agent_turn(
-                turn_request=resolution.turn_request,
-                current_user=current_user,
-                run_execution_services=_run_execution_services(),
-                direct_chat_services=_direct_chat_execution_services(),
-                chat_body=build_turn_chat_body(resolution.turn_request),
-                run_request=resolution.request,
-            )
-            return normalize_agent_turn_result(result, turn_request=resolution.turn_request)
+            turn_request = resolution.turn_request
+            run_request = resolution.request
+        else:
+            turn_request = request_body_to_turn_request(payload)
 
-        turn_request = request_body_to_turn_request(payload)
         if (
             str(turn_request.execution_mode or "").strip().lower() == "sync"
             and str(turn_request.response_mode or "").strip().lower() == "stream"
         ):
-            return await build_direct_chat_stream_response(
+            turn_context_hints = model_to_dict(turn_request.context_hints)
+            return await build_agent_turn_stream_response(
                 current_user=current_user,
-                body=build_turn_chat_body(turn_request),
-                last_event_id=request.headers.get("last-event-id") or model_to_dict(turn_request.context_hints).get("last_event_id"),
+                turn_request=turn_request,
+                last_event_id=request.headers.get("last-event-id") or turn_context_hints.get("last_event_id"),
                 services=_direct_chat_stream_response_services(),
+                chat_body=chat_body,
+                fallback_workspace_id=legacy_direct_resolution.workspace_id if legacy_direct_resolution else None,
+                fallback_thread_id=legacy_direct_resolution.thread_id if legacy_direct_resolution else None,
+                fallback_client_request_id=legacy_direct_resolution.client_request_id if legacy_direct_resolution else None,
             )
 
         result = await execute_canonical_agent_turn(
@@ -577,7 +584,8 @@ def register_run_routes(app) -> None:
             current_user=current_user,
             run_execution_services=_run_execution_services(),
             direct_chat_services=_direct_chat_execution_services(),
-            chat_body=build_turn_chat_body(turn_request),
+            chat_body=chat_body,
+            run_request=run_request,
         )
         return normalize_agent_turn_result(result, turn_request=turn_request)
 

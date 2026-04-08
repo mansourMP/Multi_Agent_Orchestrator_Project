@@ -142,8 +142,10 @@ def register_runtime_run_routes_from_api(
 
     bootstrap_callbacks = runtime_route_bootstrap_service.build_runtime_run_route_bootstrap_callbacks(
         run_start_request_class=deps.run_start_request_class,
+        build_inbound_agent_turn_request=deps.build_inbound_agent_turn_request,
         trigger_pending_heartbeat_schedules=deps.trigger_pending_heartbeat_schedules,
         execute_system_run_start_request_via_turn_runtime=execute_system_run_start_request_via_turn_runtime,
+        execute_system_agent_turn=deps.execute_system_agent_turn,
         stamp_request_owner_fn=stamp_request_owner_fn,
         run_execution_services=run_execution_services,
         handle_telegram_send_message=deps.handle_telegram_send_message,

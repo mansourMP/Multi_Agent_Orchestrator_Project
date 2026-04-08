@@ -6,6 +6,8 @@ from typing import Any, Callable, Optional
 from fastapi import HTTPException
 from fastapi.responses import JSONResponse, StreamingResponse
 
+from server_modules.agent_turn import AgentTurnRequest
+
 
 @dataclass(slots=True)
 class DirectChatStreamResponseServices:
@@ -23,49 +25,62 @@ class DirectChatStreamResponseServices:
     iter_chat_stream_events: Callable[[dict[str, Any], Any], Any]
 
 
-async def build_direct_chat_stream_response(
+def _turn_request_request_id(turn_request: AgentTurnRequest) -> str:
+    context_hints = turn_request.context_hints if isinstance(turn_request.context_hints, dict) else {}
+    return str(context_hints.get("request_id") or "").strip()
+
+
+async def build_agent_turn_stream_response(
     *,
     current_user: dict[str, Any],
-    body: dict[str, Any],
+    turn_request: AgentTurnRequest,
     last_event_id: Any,
     services: DirectChatStreamResponseServices,
+    chat_body: Optional[dict[str, Any]] = None,
+    fallback_workspace_id: Optional[str] = None,
+    fallback_thread_id: Optional[str] = None,
+    fallback_client_request_id: Optional[str] = None,
 ) -> JSONResponse | StreamingResponse:
-    try:
-        direct_resolution = services.resolve_direct_chat_turn_request(
-            current_user=current_user,
-            body=body,
-            request_signature_fn=services.chat_stream_request_signature,
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-    direct_turn_request = direct_resolution.turn_request
     run_execution_services = services.run_execution_services()
     direct_chat_execution_services = services.direct_chat_execution_services()
     try:
         execution = await services.execute_agent_turn_request(
-            turn_request=direct_turn_request,
+            turn_request=turn_request,
             current_user=current_user,
             run_execution_services=run_execution_services,
             direct_chat_services=direct_chat_execution_services,
-            chat_body=body,
+            chat_body=chat_body,
         )
     except TypeError as exc:
         if "unexpected keyword argument 'run_execution_services'" not in str(exc):
             raise
         execution = await services.execute_agent_turn_request(
-            turn_request=direct_turn_request,
+            turn_request=turn_request,
             current_user=current_user,
             services=services.build_turn_execution_services(
                 run_execution=run_execution_services,
                 direct_chat=direct_chat_execution_services,
             ),
-            chat_body=body,
+            chat_body=chat_body,
         )
-    workspace_id = str(execution.get("workspace_id") or direct_resolution.workspace_id or "default").strip() or "default"
+    workspace_id = (
+        str(execution.get("workspace_id") or "").strip()
+        or str(fallback_workspace_id or "").strip()
+        or str(turn_request.workspace_id or "").strip()
+        or "default"
+    )
     session_key = str(execution.get("session_key") or "").strip()
-    thread_id = str(execution.get("thread_id") or direct_resolution.thread_id or "direct-chat").strip() or "direct-chat"
-    client_request_id = str(execution.get("client_request_id") or direct_resolution.client_request_id or "").strip()
+    thread_id = (
+        str(execution.get("thread_id") or "").strip()
+        or str(fallback_thread_id or "").strip()
+        or str(turn_request.session_id or "").strip()
+        or "direct-chat"
+    )
+    client_request_id = (
+        str(execution.get("client_request_id") or "").strip()
+        or str(fallback_client_request_id or "").strip()
+        or _turn_request_request_id(turn_request)
+    )
     producer = execution["producer"]
 
     existing_state = services.get_chat_stream_state(services.chat_stream_state_db_path(), session_key)
@@ -105,4 +120,32 @@ async def build_direct_chat_stream_response(
             "Connection": "keep-alive",
             "X-Accel-Buffering": "no",
         },
+    )
+
+
+async def build_direct_chat_stream_response(
+    *,
+    current_user: dict[str, Any],
+    body: dict[str, Any],
+    last_event_id: Any,
+    services: DirectChatStreamResponseServices,
+) -> JSONResponse | StreamingResponse:
+    try:
+        direct_resolution = services.resolve_direct_chat_turn_request(
+            current_user=current_user,
+            body=body,
+            request_signature_fn=services.chat_stream_request_signature,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    return await build_agent_turn_stream_response(
+        current_user=current_user,
+        turn_request=direct_resolution.turn_request,
+        last_event_id=last_event_id,
+        services=services,
+        chat_body=body,
+        fallback_workspace_id=direct_resolution.workspace_id,
+        fallback_thread_id=direct_resolution.thread_id,
+        fallback_client_request_id=direct_resolution.client_request_id,
     )

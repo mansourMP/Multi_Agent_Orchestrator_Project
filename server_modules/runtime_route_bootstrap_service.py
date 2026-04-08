@@ -7,6 +7,8 @@ from typing import Any, Callable
 @dataclass(frozen=True)
 class RuntimeRunRouteDependencies:
     run_start_request_class: Any
+    build_inbound_agent_turn_request: Callable[..., Any]
+    execute_system_agent_turn: Callable[..., Any]
     handle_telegram_send_message: Callable[..., Any]
     delete_memory: Callable[..., Any]
     workspace_memory_snapshot: Callable[..., Any]
@@ -43,6 +45,10 @@ def import_runtime_run_route_dependencies(
         "server_modules.runtime_models",
         fromlist=["RunStartRequest"],
     )
+    agent_turn = import_module(
+        "server_modules.agent_turn",
+        fromlist=["build_inbound_agent_turn_request", "execute_system_agent_turn"],
+    )
     workspace_context = import_module(
         "server_modules.workspace_context",
         fromlist=["read_workspace_context_files", "write_workspace_context_file"],
@@ -53,6 +59,8 @@ def import_runtime_run_route_dependencies(
     )
     return RuntimeRunRouteDependencies(
         run_start_request_class=runtime_models.RunStartRequest,
+        build_inbound_agent_turn_request=agent_turn.build_inbound_agent_turn_request,
+        execute_system_agent_turn=agent_turn.execute_system_agent_turn,
         handle_telegram_send_message=connectors.handle_telegram_send_message,
         delete_memory=memory_service.delete_memory,
         workspace_memory_snapshot=memory_service.workspace_memory_snapshot,
@@ -65,8 +73,10 @@ def import_runtime_run_route_dependencies(
 def build_runtime_run_route_bootstrap_callbacks(
     *,
     run_start_request_class: Any,
+    build_inbound_agent_turn_request: Callable[..., Any],
     trigger_pending_heartbeat_schedules: Callable[[], Any],
     execute_system_run_start_request_via_turn_runtime: Callable[..., Any],
+    execute_system_agent_turn: Callable[..., Any],
     stamp_request_owner_fn: Callable[..., Any],
     run_execution_services: Callable[[], Any],
     build_heartbeat_run_callback: Callable[..., Any],
@@ -75,10 +85,9 @@ def build_runtime_run_route_bootstrap_callbacks(
 ) -> RuntimeRunRouteBootstrapCallbacks:
     return RuntimeRunRouteBootstrapCallbacks(
         heartbeat_run_callback=build_heartbeat_run_callback(
-            run_start_request_class=run_start_request_class,
+            build_inbound_agent_turn_request=build_inbound_agent_turn_request,
             trigger_pending_heartbeat_schedules=trigger_pending_heartbeat_schedules,
-            execute_system_run_start_request_via_turn_runtime=execute_system_run_start_request_via_turn_runtime,
-            stamp_request_owner_fn=stamp_request_owner_fn,
+            execute_system_agent_turn=execute_system_agent_turn,
             run_execution_services=run_execution_services,
         ),
         heartbeat_notify_callback=build_heartbeat_notify_callback(

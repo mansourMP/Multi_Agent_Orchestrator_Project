@@ -98,6 +98,18 @@ class AgentTurnTests(unittest.TestCase):
         self.assertEqual(metadata["agent_turn_request"]["workspace_id"], "workspace-1")
         self.assertEqual(metadata["agent_turn_request"]["actor"]["id"], "user-1")
 
+    def test_build_direct_chat_turn_request_tracks_client_request_id_in_context_hints(self):
+        request = build_direct_chat_turn_request(
+            current_user={"user_id": "user-1", "email": "user@example.com"},
+            body={},
+            workspace_id="workspace-1",
+            thread_id="thread-1",
+            client_request_id="req-123",
+            message="hello world",
+        )
+
+        self.assertEqual(request.context_hints["request_id"], "req-123")
+
     def test_build_telegram_turn_request_shapes_channel_identity(self):
         request = build_telegram_turn_request(
             workspace_id="workspace-1",

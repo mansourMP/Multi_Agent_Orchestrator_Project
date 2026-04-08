@@ -34,6 +34,14 @@ class RuntimeRouteBootstrapServiceTests(unittest.TestCase):
                 (),
                 {"RunStartRequest": type("RunStartRequest", (), {})},
             )(),
+            "server_modules.agent_turn": type(
+                "AgentTurnModule",
+                (),
+                {
+                    "build_inbound_agent_turn_request": staticmethod(lambda **kwargs: kwargs),
+                    "execute_system_agent_turn": staticmethod(lambda **kwargs: {}),
+                },
+            )(),
             "server_modules.workspace_context": type(
                 "WorkspaceContext",
                 (),
@@ -65,8 +73,10 @@ class RuntimeRouteBootstrapServiceTests(unittest.TestCase):
     def test_build_runtime_run_route_bootstrap_callbacks_builds_both_callbacks(self):
         bootstrap_callbacks = runtime_route_bootstrap_service.build_runtime_run_route_bootstrap_callbacks(
             run_start_request_class=object(),
+            build_inbound_agent_turn_request=lambda **kwargs: kwargs,
             trigger_pending_heartbeat_schedules=lambda: {"started": []},
             execute_system_run_start_request_via_turn_runtime=lambda *args, **kwargs: {},
+            execute_system_agent_turn=lambda **kwargs: {},
             stamp_request_owner_fn=lambda *args, **kwargs: None,
             run_execution_services=lambda: "services",
             build_heartbeat_run_callback=lambda **kwargs: ("run", kwargs),

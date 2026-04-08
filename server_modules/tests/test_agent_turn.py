@@ -16,6 +16,7 @@ from server_modules.agent_turn import (
     resolve_agent_turn_session_identity,
     build_run_start_turn_request,
     ensure_direct_chat_turn_request,
+    normalize_turn_policy_context,
     resolve_direct_chat_turn_request,
     resolve_agent_turn_request,
     resolve_agent_turn_request_from_runtime_context,
@@ -234,6 +235,51 @@ class AgentTurnTests(unittest.TestCase):
         self.assertEqual(converted.metadata["agent_turn_request"]["workspace_id"], "workspace-1")
         self.assertEqual(converted.metadata["agent_turn_request"]["message"], "Original goal")
 
+    def test_normalize_turn_policy_context_downgrades_non_owner_agent_mode_and_logs(self):
+        with self.assertLogs("server_modules.agent_turn", level="WARNING") as captured:
+            normalized = normalize_turn_policy_context(
+                {"session_mode": "agent", "trust_mode": "auto"},
+                current_user={"user_id": "user-2", "role": "member", "is_admin": False},
+                workspace_id="workspace-1",
+                session_id="thread-1",
+            )
+
+        self.assertEqual(normalized["requested_session_mode"], "agent")
+        self.assertEqual(normalized["session_mode"], "copilot")
+        self.assertEqual(normalized["effective_session_mode"], "copilot")
+        self.assertEqual(normalized["trust_mode"], "guarded")
+        self.assertTrue(normalized["interactive_approvals"])
+        self.assertTrue(normalized["session_mode_downgraded"])
+        self.assertIn("Downgraded requested agent session mode to copilot.", captured.output[0])
+
+    def test_normalize_turn_policy_context_allows_owner_agent_mode(self):
+        with patch("server_modules.runtime_config.agent_machine_full_trust_enabled", return_value=True):
+            normalized = normalize_turn_policy_context(
+                {"session_mode": "agent", "trust_mode": "guarded"},
+                current_user={"user_id": "user-1", "role": "owner", "is_admin": True},
+                workspace_id="workspace-1",
+                session_id="thread-1",
+            )
+
+        self.assertEqual(normalized["session_mode"], "agent")
+        self.assertEqual(normalized["effective_session_mode"], "agent")
+        self.assertEqual(normalized["trust_mode"], "auto")
+        self.assertFalse(normalized["interactive_approvals"])
+
+    def test_normalize_turn_policy_context_downgrades_owner_when_full_trust_is_disabled(self):
+        with patch("server_modules.runtime_config.agent_machine_full_trust_enabled", return_value=False), self.assertLogs("server_modules.agent_turn", level="WARNING") as captured:
+            normalized = normalize_turn_policy_context(
+                {"session_mode": "agent", "trust_mode": "auto"},
+                current_user={"user_id": "user-1", "role": "owner", "is_admin": True},
+                workspace_id="workspace-1",
+                session_id="thread-1",
+            )
+
+        self.assertEqual(normalized["session_mode"], "copilot")
+        self.assertEqual(normalized["trust_mode"], "guarded")
+        self.assertEqual(normalized["session_mode_downgrade_reason"], "full_trust_disabled")
+        self.assertIn("Downgraded requested agent session mode to copilot.", captured.output[0])
+
     def test_agent_turn_validates_existing_session_before_dispatch(self):
         request = build_inbound_agent_turn_request(
             workspace_id="workspace-1",
@@ -354,6 +400,7 @@ class AgentTurnTests(unittest.TestCase):
         self.assertEqual(context["workspace_id"], "workspace-1")
         self.assertEqual(context["thread_id"], "thread-1")
         self.assertEqual(context["agent_turn_request"]["message"], "hello")
+        self.assertIsNone(context["effective_session_mode"])
 
     def test_resolve_agent_turn_session_identity_prefers_request_fields(self):
         request = build_direct_chat_turn_request(

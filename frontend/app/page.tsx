@@ -851,9 +851,9 @@ function resolveChatNextRecommendation(args: {
 }
 
 function formatSimpleChatTrustLabel(trustMode: string, accessMode: string): string {
-  if (accessMode === 'full' || trustMode === 'auto') return 'Elevated access';
-  if (trustMode === 'strict' || trustMode === 'sensitive_guard' || trustMode === 'cost_guard') return 'Restricted access';
-  return 'Standard access';
+  if (accessMode === 'full' || trustMode === 'auto') return 'Agent Mode · Full-trust requested';
+  if (trustMode === 'strict' || trustMode === 'sensitive_guard' || trustMode === 'cost_guard') return 'Co-Pilot Mode · Restricted guardrails';
+  return 'Co-Pilot Mode · Approval cards enabled';
 }
 
 function extractWorkbenchReplyText(lastRunPayload: Record<string, unknown> | null, latestRunSummary: string | null, topError: string | null, status: string): string {

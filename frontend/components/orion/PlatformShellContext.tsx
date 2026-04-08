@@ -184,6 +184,17 @@ export function PlatformShellProvider({ children }: { children: React.ReactNode 
 
   useEffect(() => {
     try {
+      const stored = window.localStorage.getItem(ACCESS_MODE_STORAGE_KEY);
+      if (stored === 'default' || stored === 'full') {
+        setAccessMode(stored);
+      }
+    } catch {
+      // ignore local storage read issues
+    }
+  }, []);
+
+  useEffect(() => {
+    try {
       window.localStorage.setItem(ACCESS_MODE_STORAGE_KEY, accessMode);
     } catch {
       // ignore local storage write issues

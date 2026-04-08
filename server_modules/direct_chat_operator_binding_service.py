@@ -1342,6 +1342,10 @@ def build_direct_chat_state_bindings(
     system_prefix: str,
 ) -> DirectChatOperatorStateBindings:
     def agent_machine_full_trust_for_session(session_ctx):
+        effective_session_mode = direct_chat_context_service.session_mode_effective(session_ctx)
+        if effective_session_mode:
+            if effective_session_mode != "agent":
+                return False
         return agent_machine_full_trust_enabled_fn(
             direct_chat_context_service.agent_machine_owner_user_id(session_ctx),
         )

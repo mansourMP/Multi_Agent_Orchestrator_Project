@@ -195,10 +195,26 @@ def _agent_machine_owner_user_id_from_metadata(metadata: Optional[Dict[str, Any]
     return str(payload.get("owner_user_id") or "").strip()
 
 
+def _session_mode_from_metadata(metadata: Optional[Dict[str, Any]]) -> str:
+    payload = metadata if isinstance(metadata, dict) else {}
+    policy_context = payload.get("policy_context") if isinstance(payload.get("policy_context"), dict) else {}
+    return str(
+        payload.get("effective_session_mode")
+        or payload.get("session_mode")
+        or policy_context.get("effective_session_mode")
+        or policy_context.get("session_mode")
+        or ""
+    ).strip().lower()
+
+
 def _agent_machine_full_trust_for_context(context: Optional[Dict[str, Any]]) -> bool:
     if not isinstance(context, dict):
         return False
     metadata = context.get("metadata") if isinstance(context.get("metadata"), dict) else {}
+    effective_session_mode = _session_mode_from_metadata(metadata)
+    if effective_session_mode:
+        if effective_session_mode != "agent":
+            return False
     return agent_machine_full_trust_enabled(_agent_machine_owner_user_id_from_metadata(metadata))
 
 
@@ -780,6 +796,8 @@ def _append_run_tool_policy_audit(
         "target": str(evaluation.get("target") or "").strip().lower(),
         "is_sensitive": bool(evaluation.get("is_sensitive")),
         "is_critical": bool(evaluation.get("is_critical")),
+        "approval_label": str(evaluation.get("approval_label") or "").strip() or None,
+        "classification": _json_safe(evaluation.get("classification") if isinstance(evaluation.get("classification"), dict) else {}),
         "metadata": _json_safe(metadata if isinstance(metadata, dict) else {}),
     }
     items = run.setdefault("tool_policy_audit", [])

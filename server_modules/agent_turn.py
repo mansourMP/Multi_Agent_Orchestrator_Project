@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import logging
 from typing import Any, Dict, List, Literal, Optional, Protocol
 
 from server_modules import session_service
@@ -9,6 +10,10 @@ from server_modules.telemetry import get_tracer, set_span_attributes
 
 ExecutionMode = Literal["sync", "durable"]
 ResponseMode = Literal["stream", "artifact", "channel_reply"]
+SessionMode = Literal["copilot", "agent"]
+
+LOGGER = logging.getLogger(__name__)
+VALID_SESSION_MODES = {"copilot", "agent"}
 
 
 @dataclass(slots=True)
@@ -77,8 +82,101 @@ def normalize_channel(value: Any) -> str:
     return text or "web"
 
 
+def normalize_session_mode(value: Any) -> SessionMode:
+    text = str(value or "").strip().lower()
+    return text if text in VALID_SESSION_MODES else "copilot"
+
+
 def _metadata_dict(value: Any) -> Dict[str, Any]:
     return dict(value) if isinstance(value, dict) else {}
+
+
+def _current_user_is_owner(current_user: Any) -> bool:
+    if not isinstance(current_user, dict):
+        return False
+    if bool(current_user.get("is_admin")):
+        return True
+    auth_type = str(current_user.get("auth_type") or "").strip().lower()
+    if auth_type in {"api_key", "disabled"}:
+        return True
+    return str(current_user.get("role") or "").strip().lower() == "owner"
+
+
+def normalize_turn_policy_context(
+    policy_context: Optional[Dict[str, Any]],
+    *,
+    current_user: Any,
+    workspace_id: str = "",
+    session_id: str = "",
+    logger: Optional[logging.Logger] = None,
+) -> Dict[str, Any]:
+    normalized = _metadata_dict(policy_context)
+    if "session_mode" not in normalized:
+        return {key: value for key, value in normalized.items() if value not in (None, "", [], {})}
+
+    requested_session_mode = normalize_session_mode(normalized.get("session_mode"))
+    user_is_owner = _current_user_is_owner(current_user)
+    current_user_id = str((current_user or {}).get("user_id") or "").strip()
+    effective_session_mode = requested_session_mode
+    downgrade_reason = ""
+
+    full_trust_allowed = False
+    if user_is_owner:
+        try:
+            from server_modules.runtime_config import agent_machine_full_trust_enabled
+
+            full_trust_allowed = bool(agent_machine_full_trust_enabled(current_user_id))
+        except Exception:
+            full_trust_allowed = False
+
+    if requested_session_mode == "agent":
+        if not user_is_owner:
+            effective_session_mode = "copilot"
+            downgrade_reason = "owner_required"
+        elif not full_trust_allowed:
+            effective_session_mode = "copilot"
+            downgrade_reason = "full_trust_disabled"
+
+    if downgrade_reason:
+        audit_logger = logger or LOGGER
+        audit_logger.warning(
+            "Downgraded requested agent session mode to copilot.",
+            extra={
+                "workspace_id": str(workspace_id or "").strip() or "default",
+                "session_id": str(session_id or "").strip() or "agent-turn",
+                "user_id": current_user_id,
+                "email": str((current_user or {}).get("email") or "").strip().lower(),
+                "requested_session_mode": requested_session_mode,
+                "effective_session_mode": effective_session_mode,
+                "reason": downgrade_reason,
+            },
+        )
+
+    requested_trust_mode = str(normalized.get("trust_mode") or "").strip().lower()
+    if effective_session_mode == "agent":
+        effective_trust_mode = "auto"
+    elif requested_trust_mode == "auto":
+        effective_trust_mode = "guarded"
+    else:
+        effective_trust_mode = requested_trust_mode or None
+
+    normalized["requested_session_mode"] = requested_session_mode
+    normalized["session_mode"] = effective_session_mode
+    normalized["effective_session_mode"] = effective_session_mode
+    normalized["interactive_approvals"] = effective_session_mode != "agent"
+    normalized["approval_ui"] = str(normalized.get("approval_ui") or "card").strip() or "card"
+    if effective_trust_mode:
+        normalized["trust_mode"] = effective_trust_mode
+    elif "trust_mode" in normalized:
+        normalized.pop("trust_mode", None)
+    if downgrade_reason:
+        normalized["session_mode_downgraded"] = True
+        normalized["session_mode_downgrade_reason"] = downgrade_reason
+    else:
+        normalized.pop("session_mode_downgraded", None)
+        normalized.pop("session_mode_downgrade_reason", None)
+
+    return {key: value for key, value in normalized.items() if value not in (None, "", [], {})}
 
 
 def _attachments_from_payload(items: Any) -> List[TurnAttachment]:
@@ -692,6 +790,12 @@ async def agent_turn(
 
     tracer = get_tracer("server_modules.agent_turn")
     resolved_turn_request = turn_request
+    resolved_turn_request.policy_context = normalize_turn_policy_context(
+        resolved_turn_request.policy_context,
+        current_user=current_user,
+        workspace_id=resolved_turn_request.workspace_id,
+        session_id=resolved_turn_request.session_id,
+    )
     preferred_session_id = str(turn_request.session_id or "").strip()
     session_record = None
     if preferred_session_id:
@@ -744,6 +848,12 @@ async def agent_turn(
                 ),
                 "execution_mode": str(resolved_turn_request.execution_mode or "").strip() or "sync",
                 "response_mode": str(resolved_turn_request.response_mode or "").strip() or "stream",
+                "requested_session_mode": str(resolved_turn_request.policy_context.get("requested_session_mode") or "").strip() or None,
+                "effective_session_mode": (
+                    str(resolved_turn_request.policy_context.get("effective_session_mode") or "").strip()
+                    or str(resolved_turn_request.policy_context.get("session_mode") or "").strip()
+                    or None
+                ),
             },
         )
         try:
@@ -828,7 +938,15 @@ def build_agent_turn_session_context(
     )
     if not isinstance(resolved, AgentTurnRequest):
         return identity
+    policy_context = dict(resolved.policy_context or {})
     return {
         **identity,
+        "session_mode": str(policy_context.get("session_mode") or "").strip() or None,
+        "effective_session_mode": str(policy_context.get("effective_session_mode") or "").strip() or None,
+        "interactive_approvals": (
+            policy_context.get("interactive_approvals")
+            if isinstance(policy_context.get("interactive_approvals"), bool)
+            else None
+        ),
         "agent_turn_request": serialize_agent_turn_request(resolved),
     }

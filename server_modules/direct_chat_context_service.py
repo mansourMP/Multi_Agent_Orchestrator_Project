@@ -6,6 +6,13 @@ from typing import Any, Dict, List, Optional, Set
 from server_modules import skills_service
 
 
+def _agent_turn_policy_context(session_ctx: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    context = session_ctx if isinstance(session_ctx, dict) else {}
+    request = context.get("agent_turn_request") if isinstance(context.get("agent_turn_request"), dict) else {}
+    policy_context = request.get("policy_context") if isinstance(request.get("policy_context"), dict) else {}
+    return dict(policy_context)
+
+
 def agent_machine_owner_user_id(session_ctx: Optional[Dict[str, Any]]) -> str:
     context = session_ctx if isinstance(session_ctx, dict) else {}
     meta = context.get("meta") if isinstance(context.get("meta"), dict) else {}
@@ -14,6 +21,27 @@ def agent_machine_owner_user_id(session_ctx: Optional[Dict[str, Any]]) -> str:
         or str(meta.get("owner_user_id") or "").strip()
         or str(meta.get("user_id") or "").strip()
     )
+
+
+def session_mode_requested(session_ctx: Optional[Dict[str, Any]]) -> Optional[str]:
+    policy_context = _agent_turn_policy_context(session_ctx)
+    requested = str(
+        policy_context.get("requested_session_mode")
+        or policy_context.get("effective_session_mode")
+        or policy_context.get("session_mode")
+        or ""
+    ).strip().lower()
+    return requested or None
+
+
+def session_mode_effective(session_ctx: Optional[Dict[str, Any]]) -> Optional[str]:
+    policy_context = _agent_turn_policy_context(session_ctx)
+    effective = str(
+        policy_context.get("effective_session_mode")
+        or policy_context.get("session_mode")
+        or ""
+    ).strip().lower()
+    return effective or None
 
 
 def availability_lines(

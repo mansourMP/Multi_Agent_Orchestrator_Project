@@ -38,7 +38,12 @@ import {
 } from './page.catalog';
 import { type PageState } from './page.state';
 import { apiClient } from '@/lib/api-client';
-import type { AgentTurnApprovalRequest, AgentTurnRequest, AgentTurnResponse } from '@shared/api-contract';
+import type {
+  AgentTurnApprovalRequest,
+  AgentTurnPolicyContext,
+  AgentTurnRequest,
+  AgentTurnResponse,
+} from '@shared/api-contract';
 import { loadActiveSkills, resolveSkillsByIds } from '@/lib/skills';
 import { BRAND } from '@/lib/brand';
 import { API_BASE } from '@/lib/config';
@@ -354,6 +359,17 @@ export type OperatorChatResponsePayload = {
   context_used?: OperatorChatContextUsedPayload | null;
   steps?: OperatorChatStepPayload[];
 };
+
+function buildOperatorChatPolicyContext(trustMode: TrustMode): AgentTurnPolicyContext {
+  const effectiveTrustMode: TrustMode = trustMode === 'auto' ? 'auto' : trustMode;
+  const sessionMode = effectiveTrustMode === 'auto' ? 'agent' : 'copilot';
+  return {
+    trust_mode: effectiveTrustMode,
+    session_mode: sessionMode,
+    approval_ui: 'card',
+    interactive_approvals: sessionMode !== 'agent',
+  };
+}
 
 function normalizeOperatorChatApprovalPayload(payload: unknown): AgentTurnApprovalRequest | null {
   const record = payload && typeof payload === 'object' ? payload as Record<string, unknown> : {};
@@ -2116,6 +2132,8 @@ export function usePlatformApi(state: PageState, streamRef: MutableRefObject<Aut
     },
   ): Promise<OperatorChatResponsePayload> => {
     const priorMessages = normalizeOperatorChatPriorMessages(options?.priorMessages);
+    const effectiveTrustMode: TrustMode = guidedDefaultsEnabled ? 'guarded' : trustMode;
+    const policyContext = buildOperatorChatPolicyContext(effectiveTrustMode);
     await ensureControlPlaneSession();
     const clientSessionKey = String(options?.threadId || '').trim() || `direct-chat:${createStreamRequestId()}`;
     const runtimeSessionId = await ensureRuntimeSessionId({
@@ -2206,6 +2224,7 @@ export function usePlatformApi(state: PageState, streamRef: MutableRefObject<Aut
             prior_messages: priorMessages.length > 0 ? priorMessages : undefined,
             approved_action: options?.approvedAction || undefined,
           },
+          policy_context: policyContext,
         };
         const res = await apiClient.openTurnStreamResponse(turnRequest, {
           clientRequestId,
@@ -2350,7 +2369,7 @@ export function usePlatformApi(state: PageState, streamRef: MutableRefObject<Aut
     }
 
     return normalizeOperatorChatResponsePayload({ reply: streamedReply, steps: streamedSteps });
-  }, [model, provider]);
+  }, [guidedDefaultsEnabled, model, provider, trustMode]);
 
   const buildLocalExecutionGoal = useCallback((draft: LocalExecutionDraft): string => {
     const operations = Array.isArray(draft.operations) ? draft.operations : [];

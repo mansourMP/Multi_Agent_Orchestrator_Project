@@ -107,6 +107,31 @@ class AgentMachineModeTests(unittest.TestCase):
 
         self.assertIsNotNone(payload)
 
+    def test_direct_tool_approval_payload_requires_prompt_when_session_mode_is_copilot(self):
+        with patch.object(runtime_config, "AGENT_MACHINE_MODE", "agent"):
+            with patch.object(runtime_config, "AGENT_MACHINE_OWNER", "user-123"):
+                payload = operator_chat._build_direct_tool_approval_response(
+                    tool_calls=[
+                        {
+                            "name": "shell__exec",
+                            "arguments": {"command": "rm -rf /tmp/demo"},
+                        }
+                    ],
+                    tool_capabilities=[],
+                    session_ctx={
+                        "user_id": "user-123",
+                        "agent_turn_request": {
+                            "policy_context": {
+                                "requested_session_mode": "agent",
+                                "effective_session_mode": "copilot",
+                                "session_mode": "copilot",
+                            }
+                        },
+                    },
+                )
+
+        self.assertIsNotNone(payload)
+
     def test_runtime_runs_api_threads_user_id_into_direct_chat_session_context(self):
         captured: dict[str, object] = {}
 

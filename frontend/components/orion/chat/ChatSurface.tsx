@@ -708,7 +708,7 @@ export function ChatSurface({
   shellNotice = null,
 }: ChatSurfaceProps) {
   const router = useRouter();
-  const { setChatTopControls } = usePlatformShell();
+  const { accessMode, setAccessMode, setChatTopControls } = usePlatformShell();
   const sendDisabled = chatBusy || goal.trim().length === 0;
   const threadRef = useRef<HTMLDivElement>(null);
   const workspaceRef = useRef<HTMLDivElement>(null);
@@ -1645,6 +1645,82 @@ export function ChatSurface({
               </div>
             ) : null}
             <div className={`orion-chat-v2-composer-shell${hasMessages ? ' is-docked' : ' is-empty'}`}>
+              <div
+                style={{
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  alignItems: 'center',
+                  gap: 12,
+                  flexWrap: 'wrap',
+                  marginBottom: 12,
+                }}
+              >
+                <div
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: 4,
+                    padding: 4,
+                    borderRadius: 999,
+                    border: '1px solid var(--border-default)',
+                    background: 'var(--bg-surface)',
+                  }}
+                >
+                  <button
+                    type="button"
+                    className="orion-btn"
+                    onClick={() => setAccessMode('default')}
+                    style={{
+                      minHeight: 34,
+                      borderRadius: 999,
+                      padding: '0 12px',
+                      fontSize: 12,
+                      border: accessMode === 'default' ? '1px solid var(--primary-border-soft)' : '1px solid transparent',
+                      background: accessMode === 'default' ? 'var(--primary-soft)' : 'transparent',
+                      color: accessMode === 'default' ? 'var(--text-primary)' : 'var(--text-secondary)',
+                    }}
+                    aria-pressed={accessMode === 'default'}
+                  >
+                    Co-Pilot Mode
+                  </button>
+                  <button
+                    type="button"
+                    className="orion-btn"
+                    onClick={() => setAccessMode('full')}
+                    style={{
+                      minHeight: 34,
+                      borderRadius: 999,
+                      padding: '0 12px',
+                      fontSize: 12,
+                      border: accessMode === 'full' ? '1px solid rgba(214, 75, 75, 0.35)' : '1px solid transparent',
+                      background: accessMode === 'full' ? 'rgba(122, 27, 27, 0.16)' : 'transparent',
+                      color: accessMode === 'full' ? '#f3b3b3' : 'var(--text-secondary)',
+                    }}
+                    aria-pressed={accessMode === 'full'}
+                  >
+                    Agent Mode
+                  </button>
+                </div>
+                <div
+                  style={{
+                    fontSize: 12,
+                    lineHeight: 1.4,
+                    padding: '8px 12px',
+                    borderRadius: 999,
+                    border: accessMode === 'full'
+                      ? '1px solid rgba(214, 75, 75, 0.28)'
+                      : '1px solid var(--border-default)',
+                    background: accessMode === 'full'
+                      ? 'rgba(122, 27, 27, 0.1)'
+                      : 'rgba(255,255,255,0.03)',
+                    color: accessMode === 'full' ? '#f3b3b3' : 'var(--text-secondary)',
+                  }}
+                >
+                  {accessMode === 'full'
+                    ? `Agent Mode active. Full-trust owner requests can run autonomously.`
+                    : `Co-Pilot Mode active. Sensitive actions stay behind approval cards.`}
+                </div>
+              </div>
               {inlineComposerNotice ? (
                 <div
                   style={{
@@ -1765,6 +1841,17 @@ export function ChatSurface({
                         ))}
                       </div>
                     ) : null}
+                  </div>
+                  <div
+                    style={{
+                      fontSize: 11,
+                      color: accessMode === 'full' ? '#f3b3b3' : 'var(--text-muted)',
+                      padding: '0 2px',
+                      whiteSpace: 'nowrap',
+                    }}
+                    aria-live="polite"
+                  >
+                    {trustLabel}
                   </div>
 
                   <button

@@ -3373,10 +3373,25 @@ def build_turn_seed_from_request(
 ) -> Dict[str, Any]:
     base_metadata = _metadata_dict(getattr(base_request, "metadata", None))
     hint_metadata = _metadata_dict(turn_request.context_hints.get("metadata"))
+    policy_context = _metadata_dict(turn_request.policy_context)
     metadata = {**hint_metadata, **base_metadata}
     metadata = bind_agent_turn_metadata(metadata, turn_request, source="runs/start")
-    if turn_request.policy_context:
-        metadata["policy_context"] = dict(turn_request.policy_context)
+    if policy_context:
+        metadata["policy_context"] = dict(policy_context)
+        session_mode = _hint_text(policy_context.get("session_mode"))
+        if session_mode and not _hint_text(metadata.get("session_mode")):
+            metadata["session_mode"] = session_mode
+        effective_session_mode = _hint_text(policy_context.get("effective_session_mode"))
+        if effective_session_mode and not _hint_text(metadata.get("effective_session_mode")):
+            metadata["effective_session_mode"] = effective_session_mode
+        requested_session_mode = _hint_text(policy_context.get("requested_session_mode"))
+        if requested_session_mode and not _hint_text(metadata.get("requested_session_mode")):
+            metadata["requested_session_mode"] = requested_session_mode
+        policy_trust_mode = _hint_text(policy_context.get("trust_mode"))
+        if policy_trust_mode and not _hint_text(metadata.get("trust_mode")):
+            metadata["trust_mode"] = policy_trust_mode
+        if "interactive_approvals" not in metadata and isinstance(policy_context.get("interactive_approvals"), bool):
+            metadata["interactive_approvals"] = bool(policy_context.get("interactive_approvals"))
     if turn_request.machine_target and not _hint_text(metadata.get("machine_target")):
         metadata["machine_target"] = str(turn_request.machine_target).strip()
     if not _hint_text(metadata.get("channel")):

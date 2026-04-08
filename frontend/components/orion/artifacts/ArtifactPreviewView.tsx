@@ -1,5 +1,6 @@
 'use client';
 
+import { AlertTriangle, EyeOff, Loader2 } from 'lucide-react';
 import type { ArtifactItem, ArtifactPreviewMode } from '@/lib/artifactsPresentation';
 import { artifactExtension, artifactSurfaceLabel } from '@/lib/artifactsPresentation';
 import { ArtifactHtmlPreview } from './ArtifactHtmlPreview';
@@ -54,6 +55,30 @@ function parseDelimitedPreview(raw: string, delimiter: string): string[][] {
   });
 }
 
+function PreviewState({
+  title,
+  copy,
+  tone = 'default',
+  loading = false,
+}: {
+  title: string;
+  copy: string;
+  tone?: 'default' | 'warning';
+  loading?: boolean;
+}) {
+  return (
+    <div className={`orion-artifact-state-card${tone === 'warning' ? ' is-warning' : ''}`}>
+      <div className="orion-artifact-state-icon">
+        {loading ? <Loader2 size={18} className="orion-artifact-state-spinner" /> : tone === 'warning' ? <AlertTriangle size={18} /> : <EyeOff size={18} />}
+      </div>
+      <div className="orion-artifact-state-copy">
+        <div className="orion-artifact-state-title">{title}</div>
+        <p>{copy}</p>
+      </div>
+    </div>
+  );
+}
+
 export function ArtifactPreviewView({
   item,
   previewTarget,
@@ -71,14 +96,35 @@ export function ArtifactPreviewView({
     : ',';
 
   if (loading) {
-    return <div className="orion-artifact-detail-fallback">Loading preview…</div>;
+    return (
+      <PreviewState
+        title="Preparing preview"
+        copy="Empyralis is loading the in-app view for this artifact."
+        loading
+      />
+    );
   }
 
   if (error) {
-    return <div className="orion-artifact-detail-fallback">{error}</div>;
+    return (
+      <PreviewState
+        title="Preview unavailable"
+        copy={`${error} You can still inspect the raw file in Code or provenance in Meta.`}
+        tone="warning"
+      />
+    );
   }
 
   if (previewMode === 'html') {
+    if (!contentHref) {
+      return (
+        <PreviewState
+          title="Rendered page is unavailable"
+          copy="This HTML artifact does not currently have a previewable source path. Use Code or Meta instead."
+          tone="warning"
+        />
+      );
+    }
     return (
       <div className="orion-artifact-detail-body-frame">
         <div className="orion-artifact-detail-inline-note">Sandboxed HTML preview. Scripts, forms, popups, and parent-page access are disabled.</div>
@@ -92,24 +138,46 @@ export function ArtifactPreviewView({
   }
 
   if (previewMode === 'image') {
+    if (!contentHref) {
+      return (
+        <PreviewState
+          title="Image preview is unavailable"
+          copy="This artifact does not currently have a previewable image source. Use Meta or open it externally."
+          tone="warning"
+        />
+      );
+    }
     return (
       <div className="orion-artifact-preview is-media">
-        <img
-          className="orion-artifact-media-image"
-          src={contentHref || ''}
-          alt={artifactSurfaceLabel(item)}
-        />
+        <div className="orion-artifact-detail-inline-note">Scaled to fit the workspace for quick inspection without losing the original file.</div>
+        <div className="orion-artifact-media-stage">
+          <img
+            className="orion-artifact-media-image"
+            src={contentHref}
+            alt={artifactSurfaceLabel(item)}
+          />
+        </div>
       </div>
     );
   }
 
   if (previewMode === 'pdf') {
+    if (!contentHref) {
+      return (
+        <PreviewState
+          title="PDF preview is unavailable"
+          copy="This PDF does not currently expose a previewable source path. Use Meta or open it externally."
+          tone="warning"
+        />
+      );
+    }
     return (
       <div className="orion-artifact-detail-body-frame">
+        <div className="orion-artifact-detail-inline-note">Embedded PDF preview for quick review. Download or open externally if you need full viewer controls.</div>
         <iframe
           title={`Preview ${artifactSurfaceLabel(item)}`}
           className="orion-artifact-pdf-frame"
-          src={contentHref || ''}
+          src={contentHref}
         />
       </div>
     );
@@ -118,7 +186,12 @@ export function ArtifactPreviewView({
   if (previewMode === 'csv') {
     const rows = spreadsheetDelimiter === ',' ? parseCsvPreview(textContent) : parseDelimitedPreview(textContent, spreadsheetDelimiter);
     if (rows.length === 0) {
-      return <div className="orion-artifact-detail-fallback">No previewable rows found in this spreadsheet text file.</div>;
+      return (
+        <PreviewState
+          title="No previewable rows found"
+          copy="This spreadsheet-like text file is empty or does not contain rows Empyralis can render in the quick table preview."
+        />
+      );
     }
     const [header, ...body] = rows;
     return (
@@ -149,20 +222,30 @@ export function ArtifactPreviewView({
   }
 
   if (previewMode === 'text') {
+    if (!String(textContent || '').trim()) {
+      return (
+        <PreviewState
+          title="This file is empty"
+          copy="The artifact exists, but it does not contain any previewable text content."
+        />
+      );
+    }
     return <pre className="orion-artifact-preview is-text">{textContent}</pre>;
   }
 
   if (previewTarget.content_type || previewTarget.byte_size != null) {
     return (
-      <div className="orion-artifact-detail-fallback">
-        This file type does not have an in-app rendered preview yet. Use Meta, Download, or Open externally.
-      </div>
+      <PreviewState
+        title="No rendered preview yet"
+        copy="This file type does not currently have an in-app rendered view. Use Code when available, or fall back to Meta, Download, or Open externally."
+      />
     );
   }
 
   return (
-    <div className="orion-artifact-detail-fallback">
-      Preview is unavailable for this artifact.
-    </div>
+    <PreviewState
+      title="Preview unavailable"
+      copy="Empyralis could not determine a safe in-app preview for this artifact."
+    />
   );
 }

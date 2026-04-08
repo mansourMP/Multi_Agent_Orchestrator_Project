@@ -17,6 +17,7 @@ import {
   useArtifactsBrowser,
 } from '@/hooks/pages/useArtifactsBrowser';
 import {
+  artifactSurfaceLabel,
   artifactViewLabel,
   isLocalFileTarget,
   toDateLabel,
@@ -248,6 +249,18 @@ export default function ArtifactsPage() {
         />
       ) : (
         <PageCollection className="orion-home-list-panel" bodyClassName="orion-asset-collection-body">
+          <div className="orion-artifact-workspace-statusbar">
+            <div className="orion-artifact-workspace-status">
+              {selectedArtifact
+                ? `Inspecting ${artifactSurfaceLabel(selectedArtifact)}`
+                : 'Select an artifact to inspect'}
+            </div>
+            <div className="orion-artifact-workspace-hint">
+              {isNarrowViewport
+                ? 'Tap an asset to open the detail pane. Use Back or Esc to return to the list.'
+                : 'The right pane keeps preview, code, and provenance together so you can inspect files without leaving Empyralis.'}
+            </div>
+          </div>
           <div className={`orion-artifact-workspace${mobileDetailOpen ? ' is-mobile-detail-open' : ''}`}>
             <section className="orion-artifact-list-pane">
               {filteredItems.length === 0 ? (

@@ -8280,6 +8280,14 @@ body.orion-modal-open .orion-page-shell {
   text-align: left;
 }
 
+.orion-artifact-detail-empty-kicker {
+  font-size: 11px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--text-tertiary);
+  font-weight: 700;
+}
+
 .orion-artifact-detail-empty p {
   margin: 0;
   color: var(--text-secondary);
@@ -8299,12 +8307,35 @@ body.orion-modal-open .orion-page-shell {
   gap: 10px;
 }
 
+.orion-artifact-detail-kicker-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
 .orion-artifact-detail-kicker {
   font-size: 11px;
   letter-spacing: 0.12em;
   text-transform: uppercase;
   color: var(--text-tertiary);
   font-weight: 700;
+}
+
+.orion-artifact-detail-path-chip {
+  max-width: min(100%, 320px);
+  padding: 6px 10px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--border-default) 82%, transparent 18%);
+  background: color-mix(in srgb, var(--bg-element) 75%, white 25%);
+  color: var(--text-secondary);
+  font-size: 11px;
+  line-height: 1.3;
+  font-family: var(--font-mono, "SFMono-Regular", Consolas, monospace);
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
 
 .orion-artifact-detail-title-row {
@@ -8330,17 +8361,35 @@ body.orion-modal-open .orion-page-shell {
 }
 
 .orion-artifact-detail-meta {
-  display: flex;
-  flex-wrap: wrap;
+  display: grid;
   gap: 10px;
   font-size: 11.5px;
   color: var(--text-tertiary);
+  line-height: 1.55;
 }
 
+.orion-artifact-detail-meta > span:first-child {
+  font-family: var(--font-mono, "SFMono-Regular", Consolas, monospace);
+  word-break: break-all;
+}
+
+.orion-artifact-detail-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: flex-start;
+  justify-content: space-between;
+}
+
+.orion-artifact-detail-nav,
 .orion-artifact-detail-actions {
   display: flex;
   gap: 8px;
   flex-wrap: wrap;
+}
+
+.orion-artifact-detail-nav {
+  align-items: center;
 }
 
 .orion-artifact-detail-actions .orion-btn {
@@ -8350,13 +8399,15 @@ body.orion-modal-open .orion-page-shell {
 
 .orion-artifact-provenance-card {
   margin: 0 20px;
-  padding: 16px;
+  padding: 18px;
   border-radius: 16px;
-  border: 1px solid color-mix(in srgb, var(--border-subtle) 88%, transparent 12%);
+  border: 1px solid color-mix(in srgb, var(--primary-base) 12%, var(--border-subtle) 88%);
   background:
+    radial-gradient(circle at top right, color-mix(in srgb, var(--primary-soft) 34%, white 66%) 0%, transparent 36%),
     linear-gradient(180deg, color-mix(in srgb, var(--bg-element) 76%, white 24%) 0%, color-mix(in srgb, var(--bg-surface) 90%, white 10%) 100%);
   display: grid;
   gap: 14px;
+  box-shadow: 0 10px 28px rgba(15, 23, 42, 0.04);
 }
 
 .orion-artifact-provenance-head {
@@ -8415,12 +8466,13 @@ body.orion-modal-open .orion-page-shell {
 .orion-artifact-detail-tabs {
   display: flex;
   gap: 8px;
-  padding: 14px 20px 0;
+  padding: 16px 20px 0;
+  align-items: center;
 }
 
 .orion-artifact-detail-tab {
-  min-height: 31px;
-  padding: 0 12px;
+  min-height: 34px;
+  padding: 0 13px;
   border-radius: 999px;
   border: 1px solid color-mix(in srgb, var(--border-default) 84%, transparent 16%);
   background: var(--bg-surface);
@@ -8438,18 +8490,20 @@ body.orion-modal-open .orion-page-shell {
   color: var(--text-primary);
   border-color: color-mix(in srgb, var(--primary-base) 34%, var(--border-default) 66%);
   background: color-mix(in srgb, var(--primary-soft) 42%, var(--bg-surface) 58%);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--primary-base) 10%, transparent 90%);
 }
 
 .orion-artifact-detail-body {
   min-height: 0;
-  padding: 14px 20px 20px;
+  padding: 16px 20px 20px;
 }
 
 .orion-artifact-detail-body-frame,
 .orion-artifact-detail-code,
-.orion-artifact-meta-grid,
+.orion-artifact-meta-panel,
 .orion-artifact-preview,
-.orion-artifact-detail-fallback {
+.orion-artifact-detail-fallback,
+.orion-artifact-state-card {
   min-height: 100%;
   border-radius: 16px;
   border: 1px solid color-mix(in srgb, var(--border-subtle) 90%, transparent 10%);
@@ -8480,11 +8534,16 @@ body.orion-modal-open .orion-page-shell {
 
 .orion-artifact-preview.is-media {
   display: grid;
-  place-items: center;
-  padding: 20px;
+  grid-template-rows: auto minmax(0, 1fr);
   background:
     radial-gradient(circle at top left, color-mix(in srgb, var(--primary-soft) 40%, white 60%) 0%, transparent 42%),
     linear-gradient(180deg, color-mix(in srgb, var(--bg-element) 82%, white 18%) 0%, var(--bg-surface) 100%);
+}
+
+.orion-artifact-media-stage {
+  display: grid;
+  place-items: center;
+  padding: 20px;
 }
 
 .orion-artifact-media-image {
@@ -8586,7 +8645,43 @@ body.orion-modal-open .orion-page-shell {
   display: grid;
   grid-template-columns: minmax(120px, 156px) minmax(0, 1fr);
   gap: 0;
-  padding: 8px 0;
+  padding: 8px 0 0;
+}
+
+.orion-artifact-meta-panel {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+}
+
+.orion-artifact-meta-intro {
+  padding: 18px 18px 14px;
+  display: grid;
+  gap: 6px;
+  border-bottom: 1px solid color-mix(in srgb, var(--border-subtle) 88%, transparent 12%);
+  background:
+    radial-gradient(circle at top right, color-mix(in srgb, var(--primary-soft) 22%, white 78%) 0%, transparent 32%),
+    color-mix(in srgb, var(--bg-element) 60%, white 40%);
+}
+
+.orion-artifact-meta-kicker {
+  font-size: 11px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--text-tertiary);
+  font-weight: 700;
+}
+
+.orion-artifact-meta-title {
+  font-size: 14px;
+  color: var(--text-primary);
+  font-weight: 800;
+}
+
+.orion-artifact-meta-intro p {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 12.5px;
+  line-height: 1.6;
 }
 
 .orion-artifact-meta-label,
@@ -8608,6 +8703,11 @@ body.orion-modal-open .orion-page-shell {
   word-break: break-word;
 }
 
+.orion-artifact-meta-value.is-monospace {
+  font-family: var(--font-mono, "SFMono-Regular", Consolas, monospace);
+  font-size: 12px;
+}
+
 .orion-artifact-detail-fallback {
   padding: 18px 20px;
   display: grid;
@@ -8615,6 +8715,64 @@ body.orion-modal-open .orion-page-shell {
   text-align: center;
   color: var(--text-secondary);
   font-size: 13px;
+  line-height: 1.65;
+}
+
+.orion-artifact-state-card {
+  padding: 24px 22px;
+  display: grid;
+  gap: 14px;
+  place-items: center;
+  text-align: center;
+  color: var(--text-secondary);
+}
+
+.orion-artifact-state-card.is-warning {
+  background:
+    radial-gradient(circle at top, color-mix(in srgb, #f59e0b 14%, white 86%) 0%, transparent 34%),
+    color-mix(in srgb, var(--bg-surface) 88%, white 12%);
+}
+
+.orion-artifact-state-icon {
+  width: 42px;
+  height: 42px;
+  border-radius: 14px;
+  border: 1px solid color-mix(in srgb, var(--border-default) 84%, transparent 16%);
+  background: color-mix(in srgb, var(--bg-element) 72%, white 28%);
+  color: var(--text-secondary);
+  display: grid;
+  place-items: center;
+}
+
+.orion-artifact-state-spinner {
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  from {
+    transform: rotate(0deg);
+  }
+
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.orion-artifact-state-copy {
+  display: grid;
+  gap: 6px;
+  max-width: 420px;
+}
+
+.orion-artifact-state-title {
+  font-size: 14px;
+  color: var(--text-primary);
+  font-weight: 800;
+}
+
+.orion-artifact-state-copy p {
+  margin: 0;
+  font-size: 12.75px;
   line-height: 1.65;
 }
 
@@ -8739,6 +8897,28 @@ body.orion-modal-open .orion-page-shell {
   color: var(--text-tertiary);
 }
 
+.orion-artifact-workspace-statusbar {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  align-items: center;
+  padding: 0 2px 14px;
+}
+
+.orion-artifact-workspace-status {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.orion-artifact-workspace-hint {
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--text-secondary);
+  max-width: 680px;
+}
+
 @media (max-width: 980px) {
   .orion-artifact-workspace {
     grid-template-columns: 1fr;
@@ -8762,6 +8942,29 @@ body.orion-modal-open .orion-page-shell {
   .orion-artifact-detail-pane {
     border-left: none;
     border-top: 1px solid var(--border-subtle);
+  }
+
+  .orion-artifact-detail-head,
+  .orion-artifact-detail-tabs,
+  .orion-artifact-detail-body {
+    padding-left: 16px;
+    padding-right: 16px;
+  }
+
+  .orion-artifact-provenance-card {
+    margin-left: 16px;
+    margin-right: 16px;
+  }
+
+  .orion-artifact-detail-kicker-row,
+  .orion-artifact-detail-toolbar,
+  .orion-artifact-workspace-statusbar {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .orion-artifact-detail-path-chip {
+    max-width: 100%;
   }
 
   .orion-artifact-html-frame,

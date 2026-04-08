@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { useEffect, useMemo, useState } from 'react';
-import { ArrowUpRight, ChevronLeft, ChevronRight, Download, ExternalLink, FolderOpen } from 'lucide-react';
+import { ArrowUpRight, Check, ChevronLeft, ChevronRight, Copy, Download, ExternalLink, FolderOpen } from 'lucide-react';
 import { apiClient } from '@/lib/api-client';
 import {
   artifactActionHint,
@@ -44,6 +44,35 @@ type ArtifactDetailPaneProps = {
 };
 
 type ViewTab = 'view' | 'code' | 'meta';
+const ARTIFACT_VIEWER_TAB_PREFS_KEY = 'hekor.artifact-viewer.tab-prefs.v1';
+
+function preferredTabKey(previewMode: string, codeLanguage: string): string {
+  if (previewMode === 'text') return `text:${codeLanguage}`;
+  return previewMode;
+}
+
+function readPreferredTabs(): Partial<Record<string, ViewTab>> {
+  if (typeof window === 'undefined') return {};
+  try {
+    const raw = window.sessionStorage.getItem(ARTIFACT_VIEWER_TAB_PREFS_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as Partial<Record<string, ViewTab>>;
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function writePreferredTab(key: string, value: ViewTab) {
+  if (typeof window === 'undefined') return;
+  try {
+    const next = readPreferredTabs();
+    next[key] = value;
+    window.sessionStorage.setItem(ARTIFACT_VIEWER_TAB_PREFS_KEY, JSON.stringify(next));
+  } catch {
+    // Ignore tab preference persistence failures.
+  }
+}
 
 function formatRunStatusLabel(value?: string | null): string {
   const normalized = String(value || '').trim().toLowerCase();
@@ -76,17 +105,34 @@ export function ArtifactDetailPane({
   const [textContent, setTextContent] = useState<string>('');
   const [contentLoading, setContentLoading] = useState(false);
   const [contentError, setContentError] = useState<string>('');
+  const [copyState, setCopyState] = useState<'idle' | 'copied' | 'failed'>('idle');
 
   const canRenderView = Boolean(previewTarget && artifactSupportsRenderedView(previewTarget));
   const canShowCode = Boolean(previewTarget && artifactSupportsCodeView(previewTarget));
+  const codeLanguage = previewTarget ? artifactCodeLanguage(previewTarget) : 'text';
+  const previewPreferenceKey = previewTarget ? preferredTabKey(previewMode, codeLanguage) : null;
 
   useEffect(() => {
     if (!previewTarget) {
       setActiveTab('meta');
       return;
     }
-    setActiveTab(artifactDefaultViewerTab(previewTarget));
-  }, [previewTarget]);
+    const fallback = artifactDefaultViewerTab(previewTarget);
+    const preferred = previewPreferenceKey ? readPreferredTabs()[previewPreferenceKey] : null;
+    if (preferred === 'view' && canRenderView) {
+      setActiveTab('view');
+      return;
+    }
+    if (preferred === 'code' && canShowCode) {
+      setActiveTab('code');
+      return;
+    }
+    if (preferred === 'meta') {
+      setActiveTab('meta');
+      return;
+    }
+    setActiveTab(fallback);
+  }, [canRenderView, canShowCode, previewPreferenceKey, previewTarget]);
 
   useEffect(() => {
     if (!previewTarget || (!canShowCode && previewMode !== 'csv' && previewMode !== 'markdown' && previewMode !== 'text' && previewMode !== 'html')) {
@@ -129,12 +175,24 @@ export function ArtifactDetailPane({
     }
   }, [activeTab, canRenderView, canShowCode]);
 
+  useEffect(() => {
+    if (copyState === 'idle') return undefined;
+    const timer = window.setTimeout(() => setCopyState('idle'), 1800);
+    return () => window.clearTimeout(timer);
+  }, [copyState]);
+
+  const handleTabChange = (tab: ViewTab) => {
+    setActiveTab(tab);
+    if (previewPreferenceKey) writePreferredTab(previewPreferenceKey, tab);
+  };
+
   if (!item || !previewTarget) {
     return (
       <aside className="orion-artifact-detail-pane is-empty">
         <div className="orion-artifact-detail-empty">
+          <div className="orion-artifact-detail-empty-kicker">Artifacts workspace</div>
           <div className="orion-panel-title">Select an artifact</div>
-          <p>Choose an output, screenshot, page, or support file to inspect it inside Empyralis.</p>
+          <p>Choose an output, screenshot, page, or support file to inspect it inside Empyralis with preview, code, and provenance in one place.</p>
         </div>
       </aside>
     );
@@ -144,7 +202,6 @@ export function ArtifactDetailPane({
   const inspectHref = item.run_id
     ? `/runs/${encodeURIComponent(item.run_id)}/inspect?focus=${encodeURIComponent(item.focus_target || 'artifacts')}`
     : null;
-  const codeLanguage = artifactCodeLanguage(previewTarget);
   const resolvedLocation = String(previewTarget.uri_or_path || '').trim();
   const connectorContext = connectorBindingText(item.connector_binding);
   const sourceRunContextVisible = Boolean(
@@ -166,6 +223,20 @@ export function ArtifactDetailPane({
           : previewMode === 'csv'
             ? 'Table preview'
             : 'Formatted text preview';
+  const copyActionLabel = copyState === 'copied' ? 'Copied' : copyState === 'failed' ? 'Copy failed' : 'Copy path';
+
+  const handleCopyPath = async () => {
+    if (!resolvedLocation || typeof navigator === 'undefined' || !navigator.clipboard) {
+      setCopyState('failed');
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(resolvedLocation);
+      setCopyState('copied');
+    } catch {
+      setCopyState('failed');
+    }
+  };
 
   let body: React.ReactNode;
   if (activeTab === 'view') {
@@ -202,7 +273,10 @@ export function ArtifactDetailPane({
     <aside className="orion-artifact-detail-pane">
       <div className="orion-artifact-detail-head">
         <div className="orion-artifact-detail-heading">
-          <div className="orion-artifact-detail-kicker">Artifact viewer</div>
+          <div className="orion-artifact-detail-kicker-row">
+            <div className="orion-artifact-detail-kicker">Artifact viewer</div>
+            <div className="orion-artifact-detail-path-chip">{artifactPathTail(resolvedLocation) || 'Saved artifact'}</div>
+          </div>
           <div className="orion-artifact-detail-title-row">
             <h3 className="orion-artifact-detail-title">{artifactSurfaceLabel(item)}</h3>
             <span className="orion-chip" style={formatTone}>{artifactFormatLabel(previewTarget)}</span>
@@ -212,54 +286,62 @@ export function ArtifactDetailPane({
             {compactText(artifactSummary(item), artifactActionHint(item), 220)}
           </p>
           <div className="orion-artifact-detail-meta">
-            <span>{artifactPathTail(resolvedLocation) || 'Saved artifact'}</span>
+            <span>{resolvedLocation || 'Saved artifact'}</span>
             {item.run_id ? <span>Run {item.run_id.slice(0, 8)}</span> : null}
             {item.agent_label ? <span>{item.agent_label}</span> : null}
             {connectorContext ? <span>{connectorContext}</span> : null}
           </div>
         </div>
 
-        <div className="orion-artifact-detail-actions">
-          {showBackButton ? (
-            <button className="orion-btn orion-btn-ghost" onClick={onBack} title="Back to list (Esc)">
+        <div className="orion-artifact-detail-toolbar">
+          <div className="orion-artifact-detail-nav">
+            {showBackButton ? (
+              <button className="orion-btn orion-btn-ghost" onClick={onBack} title="Back to list (Esc)">
+                <ChevronLeft size={13} />
+                Back
+              </button>
+            ) : null}
+            <button
+              className="orion-btn orion-btn-ghost"
+              onClick={onPreviousArtifact}
+              disabled={!hasPreviousArtifact}
+              title="Previous artifact (Left arrow)"
+            >
               <ChevronLeft size={13} />
-              Back
+              Previous
             </button>
-          ) : null}
-          <button
-            className="orion-btn orion-btn-ghost"
-            onClick={onPreviousArtifact}
-            disabled={!hasPreviousArtifact}
-            title="Previous artifact (Left arrow)"
-          >
-            <ChevronLeft size={13} />
-            Previous
-          </button>
-          <button
-            className="orion-btn orion-btn-ghost"
-            onClick={onNextArtifact}
-            disabled={!hasNextArtifact}
-            title="Next artifact (Right arrow)"
-          >
-            Next
-            <ChevronRight size={13} />
-          </button>
-          <button className="orion-btn orion-btn-ghost" onClick={onOpenExternal}>
-            <ExternalLink size={13} />
-            Open externally
-          </button>
-          {downloadHref ? (
-            <a className="orion-btn orion-btn-ghost" href={downloadHref} download={artifactPathTail(resolvedLocation) || undefined}>
-              <Download size={13} />
-              Download
-            </a>
-          ) : null}
-          {showReveal ? (
-            <button className="orion-btn orion-btn-ghost" onClick={onReveal}>
-              <FolderOpen size={13} />
-              {revealLabel}
+            <button
+              className="orion-btn orion-btn-ghost"
+              onClick={onNextArtifact}
+              disabled={!hasNextArtifact}
+              title="Next artifact (Right arrow)"
+            >
+              Next
+              <ChevronRight size={13} />
             </button>
-          ) : null}
+          </div>
+          <div className="orion-artifact-detail-actions">
+            <button className="orion-btn orion-btn-ghost" onClick={() => void handleCopyPath()}>
+              {copyState === 'copied' ? <Check size={13} /> : <Copy size={13} />}
+              {copyActionLabel}
+            </button>
+            <button className="orion-btn orion-btn-ghost" onClick={onOpenExternal}>
+              <ExternalLink size={13} />
+              Open externally
+            </button>
+            {downloadHref ? (
+              <a className="orion-btn orion-btn-ghost" href={downloadHref} download={artifactPathTail(resolvedLocation) || undefined}>
+                <Download size={13} />
+                Download
+              </a>
+            ) : null}
+            {showReveal ? (
+              <button className="orion-btn orion-btn-ghost" onClick={onReveal}>
+                <FolderOpen size={13} />
+                {revealLabel}
+              </button>
+            ) : null}
+          </div>
         </div>
       </div>
 
@@ -308,7 +390,7 @@ export function ArtifactDetailPane({
         <button
           type="button"
           className={`orion-artifact-detail-tab${activeTab === 'view' ? ' is-active' : ''}`}
-          onClick={() => setActiveTab('view')}
+          onClick={() => handleTabChange('view')}
           disabled={!canRenderView}
           title={canRenderView ? viewLabel : 'Rendered view is unavailable for this file type.'}
         >
@@ -317,7 +399,7 @@ export function ArtifactDetailPane({
         <button
           type="button"
           className={`orion-artifact-detail-tab${activeTab === 'code' ? ' is-active' : ''}`}
-          onClick={() => setActiveTab('code')}
+          onClick={() => handleTabChange('code')}
           disabled={!canShowCode}
           title={canShowCode ? 'Raw source view' : 'Code view is unavailable for this file type.'}
         >
@@ -326,7 +408,7 @@ export function ArtifactDetailPane({
         <button
           type="button"
           className={`orion-artifact-detail-tab${activeTab === 'meta' ? ' is-active' : ''}`}
-          onClick={() => setActiveTab('meta')}
+          onClick={() => handleTabChange('meta')}
           title="Artifact metadata and provenance"
         >
           Meta

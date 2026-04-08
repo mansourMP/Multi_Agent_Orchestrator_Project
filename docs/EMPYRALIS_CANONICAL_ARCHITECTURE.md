@@ -10,7 +10,7 @@ Core architectural changes to the platform must be deliberate owner decisions, n
 
 ## Thesis
 
-Empyralis must become one coherent agent platform with many shells, one runtime contract, one turn engine, one run lifecycle, one memory facade, one tool contract, and one policy system.
+Empyralis is one coherent agent platform with many shells, one runtime contract, one turn engine, one run lifecycle, one memory facade, one tool contract, and one policy system.
 
 The platform must be able to:
 
@@ -182,7 +182,7 @@ It is one platform with:
 
 ## Final System Shape
 
-The system should settle into these major modules:
+The active canonical system is organized around these major modules:
 
 - `agent_turn.py`
 - `run_service.py`
@@ -197,7 +197,12 @@ The system should settle into these major modules:
 - `circuit_breaker_service.py`
 - Rust device supervisor
 
-That is the final form we should build toward.
+That is the canonical form of the platform.
+
+Some modules are intentionally thin state or policy boundaries rather than large standalone subsystems. In particular:
+
+- [server_modules/circuit_breaker_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/circuit_breaker_service.py) is the canonical breaker-state contract
+- active degradation enforcement today is shared across [server_modules/safe_mode_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/safe_mode_service.py), [server_modules/runtime_policy.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/runtime_policy.py), the durable outbox/worker path, and machine controls
 
 We must not do:
 
@@ -231,7 +236,7 @@ Therefore the main strategy is:
 
 ## What The Platform Must Become
 
-Empyralis should become a universal operator system for authorized digital work.
+Empyralis is a universal operator system for authorized digital work.
 
 It should support:
 
@@ -277,7 +282,8 @@ In plain terms: the system should be able to read a screen, understand what is v
    Audit logs, approvals, retention, RBAC, tenant isolation, and trace IDs are not optional.
 
 9. Accessibility and DOM are primary when available.
-   Browser DOM, browser accessibility data, operating-system accessibility APIs, and app-specific automation adapters must be preferred over screenshot OCR or coordinate heuristics.
+   Browser DOM, browser accessibility data, operating-system accessibility APIs, and app-specific automation adapters must be preferred when they are available and trustworthy.
+   OCR plus visual grounding and coordinate heuristics remain canonical, auditable fallbacks when structured surfaces are absent, unavailable, or not permissioned.
 
 10. Asynchronous work must have first-class durability.
 
@@ -305,7 +311,16 @@ In plain terms: the system should be able to read a screen, understand what is v
 
 ## Platform Capability Model
 
-Empyralis should expose a typed capability catalog.
+Empyralis exposes a typed capability catalog.
+
+The capability model is family-based and extensible. The lists below define the canonical namespace and the intended surface area of the platform; they are not a promise that every leaf is implemented on every operating system, every machine, or every deployment tier.
+
+Canonical compliance requires:
+
+- a typed registry
+- explicit risk, approval, and permission metadata
+- environment-scoped capability availability
+- truthful unavailable or unknown states when a platform-specific adapter does not exist
 
 ### A. Screen And Visual Capabilities
 
@@ -390,7 +405,7 @@ These are legitimate and necessary.
 ### G. Enterprise Capabilities
 
 - tenant-scoped RBAC
-- SSO, MFA, SCIM roadmap
+- tenant-scoped SSO hooks, MFA hooks, and SCIM/admin provisioning boundary
 - audit export
 - artifact retention controls
 - approval provenance
@@ -672,7 +687,7 @@ When entered, the platform should:
 
 #### Circuit Breakers
 
-Circuit breakers must exist for:
+Circuit-breaker state and policy must cover at least:
 
 - connector failures
 - browser session instability
@@ -680,6 +695,8 @@ Circuit breakers must exist for:
 - queue backlog overload
 - artifact storage failures
 - provider instability
+
+Circuit-breaker protection is canonical even when enforcement is distributed across explicit breaker state, safe mode, kill switches, runtime policy, or routing guards. A larger autonomous breaker mesh or dashboard layer is optional operational depth, not a separate architecture requirement.
 
 #### Kill Switches
 
@@ -703,6 +720,8 @@ This section is mandatory because full machine operation is part of the product.
 Empyralis must be able to see and operate an authorized computer, but it must do so through explicit capability boundaries and operating-system permissions, not through bypasses.
 
 ### What We Must Support
+
+The categories below describe the canonical machine-control surface area. Availability is environment-scoped and permission-scoped; unsupported leaves may remain unavailable or best-effort on a given machine without breaking canonical compliance, as long as the platform reports that truthfully.
 
 #### Screen Intake
 
@@ -791,6 +810,8 @@ The platform must prefer structured control paths in this order:
 
 This matters because reliable control comes from using the most structured surface available and falling back only when necessary.
 
+Where structured surfaces are unavailable, OCR plus visual grounding and coordinate fallback remain canonical and compliant.
+
 #### C. Input Control Service
 
 Responsibilities:
@@ -801,7 +822,7 @@ Responsibilities:
 - paste from clipboard
 - confirm focused window
 
-This should ultimately live under the Rust device supervisor, with Python orchestration issuing signed requests.
+Direct device execution lives under the Rust device supervisor today, with Python orchestration issuing requests above that boundary.
 
 #### D. Window And App Service
 
@@ -867,13 +888,15 @@ Each machine lease must include:
 - revocation token
 - contention strategy
 
-Each machine must support:
+Each machine must expose:
 
-- permission probing for screen recording, accessibility, browser, filesystem, shell, and app control
-- capability attestation before interactive work
+- permission probe status for screen recording, accessibility, browser, filesystem, shell, and app control
+- capability attestation before interactive work where supported
 - exclusive interactive lease mode for keyboard and mouse work
 - revocation and forced release
 - session cleanup after interruption
+
+`unknown` permission or adapter status is an allowed truthful result when the OS, driver, or local worker cannot prove a grant.
 
 ### Heartbeat As A Canonical Turn Source
 
@@ -966,17 +989,15 @@ Every transition must be:
 
 Every run-affecting state change must emit an outbox event.
 
-Minimum event types:
+Minimum event families, with grouped wire names allowed when semantics remain explicit:
 
 - turn_received
 - turn_classified
 - run_created
-- run_state_changed
+- run_state_changed or run_transition
 - approval_requested
 - approval_resolved
-- machine_lease_requested
-- machine_lease_granted
-- machine_lease_revoked
+- machine_lease_requested, machine_lease_granted, machine_lease_revoked, or grouped `machine_event` equivalents
 - capability_denied
 - capability_executed
 - artifact_created
@@ -1036,7 +1057,9 @@ Examples:
 - [server_modules/browser_engine.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/browser_engine.py)
 - [server_modules/computer_control.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/computer_control.py)
 
-### Refactor Aggressively
+### Canonical Delegates And Thin Wrappers
+
+These files may remain in the repo as thin delegates, wrappers, or compatibility shims, provided they do not grow competing runtime logic:
 
 - [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py)
 - [server_modules/runtime_runs_api.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/runtime_runs_api.py)
@@ -1074,6 +1097,10 @@ Examples:
 ## What The Platform Should Include To Be Truly Powerful
 
 This section answers the product question directly.
+
+`Must-Have` describes the canonical baseline already required by this architecture.
+
+`High-Value Next` and `Enterprise-Grade Additions` describe optional product and operational depth that may be added without reopening the canonical architecture.
 
 ### Must-Have
 
@@ -1158,6 +1185,10 @@ Empyralis must not include:
 If a capability requires violating the operating system, user trust, or tenant boundaries, it is out of scope.
 
 ## Phased Execution Plan
+
+This section is the historical convergence record for the architecture program.
+
+The phases below are closed at their canonical baseline in the active repo. Additional product depth after these phases does not reopen architectural compliance unless it creates a conflicting runtime, policy, memory, or execution path.
 
 ### Phase 0: Freeze Architecture
 
@@ -1269,9 +1300,9 @@ We must:
 - add outbox and event replay
 - define worker lease TTL and recovery behavior
 
-### Phase 9: Enterprise Hardening
+### Phase 9: Enterprise Hardening Baseline
 
-Time: ongoing
+Time: completed baseline with optional ongoing depth
 
 We must:
 
@@ -1282,13 +1313,13 @@ We must:
 - add dependency and secrets scanning
 - add incident runbooks and customer-facing reliability docs
 
-## Current Accepted Temporary Boundaries
+## Current Accepted Canonical Boundaries
 
-This section records the remaining non-canonical edges that are accepted temporarily as of the current repo audit.
+This section records explicit boundaries that are part of the canonical architecture as of the current repo audit.
 
-They are not alternate architectures. They are explicit boundaries that must remain documented so the active platform shape is unambiguous.
+They are not alternate architectures. They are the documented limits that keep the active platform shape unambiguous.
 
-Object storage is no longer a temporary boundary:
+Object storage boundary:
 
 - [artifact_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/artifact_service.py) now supports S3-compatible object storage as the canonical production backend
 - local filesystem storage under `.orion-object-store/` is the explicit filesystem development fallback
@@ -1314,7 +1345,35 @@ Object storage is no longer a temporary boundary:
      - [.github/workflows/ci.yml](/Users/mansur/Multi_Agent_Orchestrator_Project/.github/workflows/ci.yml)
      - [.github/workflows/security-baseline.yml](/Users/mansur/Multi_Agent_Orchestrator_Project/.github/workflows/security-baseline.yml)
      - [.github/workflows/supply-chain.yml](/Users/mansur/Multi_Agent_Orchestrator_Project/.github/workflows/supply-chain.yml)
-   - full external OIDC/SAML exchange flows, MFA challenge verification, and a full SCIM server remain future depth rather than missing baseline
+   - full external OIDC/SAML exchange flows, MFA challenge verification, and a full SCIM server are optional depth beyond the canonical baseline
+
+3. Circuit-breaker protection is explicit, but distributed.
+
+   Accepted boundary:
+
+   - [server_modules/circuit_breaker_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/circuit_breaker_service.py) is the canonical breaker-state contract
+   - active degradation and protective enforcement currently span:
+     - [server_modules/safe_mode_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/safe_mode_service.py)
+     - [server_modules/runtime_policy.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/runtime_policy.py)
+     - [server_modules/outbox_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/outbox_service.py)
+     - [server_modules/local_queue.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/local_queue.py)
+   - a larger autonomous breaker mesh or breaker dashboard layer is optional operational depth, not a canonical blocker
+
+4. Capability coverage is family-based and environment-scoped.
+
+   Accepted boundary:
+
+   - the typed registry in [server_modules/capability_registry.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/capability_registry.py) is canonical
+   - the capability families in this document define namespace and intended scope, not guaranteed leaf-for-leaf parity on every machine
+   - unsupported leaves may truthfully report unavailable or unknown until a platform adapter exists
+   - OCR and coordinate fallback remain canonical where DOM, accessibility, or app adapters are absent
+
+5. Thin compatibility delegates may remain in the repo.
+
+   Accepted boundary:
+
+   - [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py), [server_modules/runs_core.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/runs_core.py), [server_modules/runs_delegation.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/runs_delegation.py), and [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) may remain as thin delegates or compatibility shims
+   - they are acceptable only while they route into canonical services and do not become competing runtime cores
 
 ## Reliability Targets
 
@@ -1361,8 +1420,8 @@ The best architecture is:
 - thin channels
 - durable auditability and enterprise reliability
 
-This is the architecture Empyralis should follow.
+This is the architecture Empyralis follows.
 
-This is the architecture we must implement.
+This is the architecture the active repo now implements.
 
 This is the architecture that gives the platform the highest power, coherence, and defensibility without drifting into unsafe or offensive design.

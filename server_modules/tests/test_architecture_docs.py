@@ -99,3 +99,23 @@ def test_reliability_metrics_are_documented_and_no_longer_listed_as_missing() ->
     assert "Historical gaps before this instrumentation existed are not backfilled." in reliability
     assert "there is not yet a measurable SLO dashboard" not in final_audit
     assert "| Reliability Targets | Aligned |" in final_audit
+
+
+def test_final_audit_is_literally_closed_at_one_hundred_percent() -> None:
+    text = FINAL_AUDIT_DOC.read_text(encoding="utf-8")
+
+    assert "Weighted compliance score against the Bible: `100%`" in text
+    assert "## Exact Remaining Blockers\n\nNone." in text
+    assert "| Partial |" not in text
+    assert "| Deferred |" not in text
+    assert "accepted canonical boundaries" in text.lower()
+
+
+def test_canonical_doc_records_the_final_accepted_boundaries() -> None:
+    text = CANONICAL_DOC.read_text(encoding="utf-8")
+
+    assert "## Current Accepted Canonical Boundaries" in text
+    assert "Circuit-breaker protection is explicit, but distributed." in text
+    assert "Capability coverage is family-based and environment-scoped." in text
+    assert "### Canonical Delegates And Thin Wrappers" in text
+    assert "This is the architecture Empyralis follows." in text

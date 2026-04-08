@@ -707,21 +707,17 @@ body.orion-chat-home .orion-page-shell.is-chat-home {
 
 .orion-shellbar-theme-btn:hover {
   color: var(--text-primary);
-  border-color: color-mix(in srgb, var(--border-default) 58%, var(--primary-base) 42%);
-  background: linear-gradient(180deg, color-mix(in srgb, var(--bg-hover) 74%, var(--primary-base) 6%) 0%, color-mix(in srgb, var(--bg-element) 84%, var(--primary-base) 8%) 100%);
-  transform: translateY(-1px);
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.05),
-    0 8px 16px rgba(0, 0, 0, 0.14);
+  border-color: color-mix(in srgb, var(--border-default) 66%, var(--primary-base) 34%);
+  background: color-mix(in srgb, var(--bg-surface) 92%, var(--primary-soft) 8%);
+  transform: none;
+  box-shadow: none;
 }
 
 .orion-shellbar-theme-btn.is-active {
   border-color: var(--primary-border-soft);
-  background: linear-gradient(180deg, color-mix(in srgb, var(--primary-soft) 84%, #ffffff 16%) 0%, var(--primary-soft) 100%);
+  background: color-mix(in srgb, var(--primary-soft) 90%, var(--bg-surface) 10%);
   color: var(--primary-base);
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.08),
-    0 8px 16px color-mix(in srgb, var(--primary-base) 16%, transparent 84%);
+  box-shadow: none;
 }
 
 .orion-shellbar-theme-btn.is-active:hover {
@@ -761,11 +757,13 @@ body.orion-chat-home .orion-page-shell.is-chat-home {
   font-size: var(--btn-font-size);
   font-weight: 600;
   line-height: 1;
+  letter-spacing: -0.01em;
   cursor: pointer;
   transition:
     background var(--motion-fast) var(--easing-standard),
     border-color var(--motion-fast) var(--easing-standard),
-    color var(--motion-fast) var(--easing-standard);
+    color var(--motion-fast) var(--easing-standard),
+    opacity var(--motion-fast) var(--easing-standard);
   box-shadow: none;
   white-space: nowrap;
   text-align: center;
@@ -794,52 +792,52 @@ a.orion-btn-danger {
 .btn-primary,
 .orion-btn-primary,
 .orion-btn.primary {
-  background: var(--btn-primary-bg);
-  color: var(--btn-primary-text);
-  border: 1px solid color-mix(in srgb, var(--btn-primary-bg) 82%, transparent);
+  background: color-mix(in srgb, var(--primary-base) 94%, #0f172a 6%);
+  color: #f8fafc;
+  border: 1px solid color-mix(in srgb, var(--primary-base) 78%, #0f172a 22%);
   box-shadow: none;
 }
 
 .btn-primary:hover,
 .orion-btn-primary:hover,
 .orion-btn.primary:hover {
-  background: var(--primary-hover);
-  border-color: var(--primary-hover);
+  background: color-mix(in srgb, var(--primary-base) 88%, #0f172a 12%);
+  border-color: color-mix(in srgb, var(--primary-base) 72%, #0f172a 28%);
 }
 
 .btn-primary:active,
 .orion-btn-primary:active,
 .orion-btn.primary:active {
-  background: color-mix(in srgb, var(--primary-base) 92%, #000000 8%);
-  border-color: color-mix(in srgb, var(--primary-base) 92%, #000000 8%);
+  background: color-mix(in srgb, var(--primary-base) 82%, #0f172a 18%);
+  border-color: color-mix(in srgb, var(--primary-base) 68%, #0f172a 32%);
 }
 
 .orion-btn-success,
 .orion-btn.success {
-  background: color-mix(in srgb, var(--success-bg) 72%, var(--bg-surface) 28%);
-  color: color-mix(in srgb, var(--success-fg) 84%, var(--text-primary) 16%);
-  border-color: color-mix(in srgb, var(--success-border) 88%, transparent 12%);
+  background: color-mix(in srgb, var(--success-bg) 86%, var(--bg-surface) 14%);
+  color: color-mix(in srgb, var(--success-fg) 92%, var(--text-primary) 8%);
+  border-color: color-mix(in srgb, var(--success-border) 72%, transparent 28%);
   box-shadow: none;
 }
 
 .orion-btn-success:hover,
 .orion-btn.success:hover {
-  background: color-mix(in srgb, var(--success-bg) 92%, var(--surface) 8%);
-  border-color: color-mix(in srgb, var(--success-border) 100%, transparent 0%);
+  background: color-mix(in srgb, var(--success-bg) 92%, var(--bg-surface) 8%);
+  border-color: color-mix(in srgb, var(--success-border) 84%, transparent 16%);
 }
 
 .orion-btn-danger,
 .orion-btn.danger {
-  background: color-mix(in srgb, var(--error-bg) 72%, var(--bg-surface) 28%);
-  color: color-mix(in srgb, var(--error-fg) 88%, var(--text-primary) 12%);
-  border-color: color-mix(in srgb, var(--error-border) 88%, transparent 12%);
+  background: color-mix(in srgb, var(--error-bg) 88%, var(--bg-surface) 12%);
+  color: color-mix(in srgb, var(--error-fg) 92%, var(--text-primary) 8%);
+  border-color: color-mix(in srgb, var(--error-border) 74%, transparent 26%);
   box-shadow: none;
 }
 
 .orion-btn-danger:hover,
 .orion-btn.danger:hover {
-  background: color-mix(in srgb, var(--error-bg) 92%, var(--surface) 8%);
-  border-color: color-mix(in srgb, var(--error-border) 100%, transparent 0%);
+  background: color-mix(in srgb, var(--error-bg) 94%, var(--bg-surface) 6%);
+  border-color: color-mix(in srgb, var(--error-border) 84%, transparent 16%);
 }
 
 .btn-secondary,
@@ -847,9 +845,9 @@ a.orion-btn-danger {
 .orion-btn,
 .orion-btn-secondary,
 .orion-btn.secondary {
-  background: var(--btn-secondary-bg);
+  background: color-mix(in srgb, var(--bg-surface) 96%, var(--bg-element) 4%);
   color: var(--text-primary);
-  border: 1px solid var(--btn-secondary-border);
+  border: 1px solid var(--border-default);
   box-shadow: none;
 }
 
@@ -858,7 +856,7 @@ a.orion-btn-danger {
 .orion-btn:hover,
 .orion-btn-secondary:hover,
 .orion-btn.secondary:hover {
-  background: var(--btn-secondary-hover-bg);
+  background: color-mix(in srgb, var(--bg-hover) 88%, var(--bg-surface) 12%);
   border-color: var(--border-default);
 }
 
@@ -874,8 +872,8 @@ a.orion-btn-danger {
 .btn-ghost:hover,
 .orion-btn-ghost:hover,
 .orion-btn.ghost:hover {
-  background: var(--btn-ghost-hover-bg);
-  border-color: var(--border-subtle);
+  background: color-mix(in srgb, var(--bg-hover) 76%, transparent 24%);
+  border-color: transparent;
   color: var(--text-primary);
 }
 
@@ -889,11 +887,13 @@ a.orion-btn-danger {
 .input {
   width: 100%;
   padding: var(--space-3) var(--space-4);
-  background: var(--bg-element);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
+  background: var(--bg-surface);
+  border: 1px solid var(--border-default);
+  border-radius: 8px;
   color: var(--text-primary);
-  font-size: var(--text-base);
+  font-size: 14px;
+  line-height: 1.45;
+  letter-spacing: -0.01em;
   transition:
     border-color var(--motion-fast) var(--easing-standard),
     background var(--motion-fast) var(--easing-standard),
@@ -913,13 +913,14 @@ a.orion-btn-danger {
   width: 100%;
   min-height: var(--control-height-input);
   padding: 0 var(--space-4);
-  border-radius: var(--radius-md);
-  border: 1px solid var(--border);
-  background: color-mix(in srgb, var(--bg-element) 90%, var(--bg-surface) 10%);
+  border-radius: 8px;
+  border: 1px solid var(--border-default);
+  background: var(--bg-surface);
   color: var(--text-primary);
-  font-size: var(--text-base);
+  font-size: 14px;
   font-weight: 500;
-  line-height: 1.3;
+  line-height: 1.45;
+  letter-spacing: -0.01em;
   outline: none;
   box-sizing: border-box;
   transition:
@@ -960,7 +961,7 @@ select.orion-input {
 }
 
 .orion-input:hover {
-  border-color: var(--border);
+  border-color: var(--border-default);
 }
 
 .orion-input:focus,
@@ -1062,40 +1063,41 @@ input:focus-visible {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-height: 20px;
-  border-radius: 6px;
+  min-height: 22px;
+  border-radius: 999px;
   gap: 6px;
-  padding: 2px 8px;
+  padding: 0 10px;
   font-size: 11px;
   font-weight: 500;
   line-height: 1.1;
   border: 1px solid var(--border-subtle);
-  background: var(--bg-element);
-  color: #6b6b6b;
+  background: color-mix(in srgb, var(--bg-element) 72%, var(--bg-surface) 28%);
+  color: var(--text-secondary);
 }
 
 .orion-chip[data-status-tone='green'] {
-  background: #f0fdf4;
-  border-color: #bbf7d0;
-  color: #16a34a;
+  background: color-mix(in srgb, var(--success-bg) 88%, var(--bg-surface) 12%);
+  border-color: color-mix(in srgb, var(--success-border) 70%, transparent 30%);
+  color: var(--success-fg);
 }
 
+.orion-chip[data-status-tone='amber'],
 .orion-chip[data-status-tone='yellow'] {
-  border-color: color-mix(in srgb, var(--status-yellow) 36%, var(--border-default) 64%);
-  background: color-mix(in srgb, var(--status-yellow) 14%, var(--bg-surface) 86%);
-  color: var(--status-yellow);
+  border-color: color-mix(in srgb, var(--warning-border) 70%, transparent 30%);
+  background: color-mix(in srgb, var(--warning-bg) 90%, var(--bg-surface) 10%);
+  color: var(--warning-fg);
 }
 
 .orion-chip[data-status-tone='red'] {
-  background: #fef2f2;
-  border-color: #fecaca;
-  color: #dc2626;
+  background: color-mix(in srgb, var(--error-bg) 90%, var(--bg-surface) 10%);
+  border-color: color-mix(in srgb, var(--error-border) 72%, transparent 28%);
+  color: var(--error-fg);
 }
 
 .orion-chip[data-status-tone='grey'] {
   border-color: var(--border-default);
-  background: color-mix(in srgb, var(--bg-element) 88%, var(--bg-surface) 12%);
-  color: var(--status-grey);
+  background: color-mix(in srgb, var(--bg-element) 72%, var(--bg-surface) 28%);
+  color: var(--text-secondary);
 }
 
 .orion-chip-action {
@@ -1257,8 +1259,8 @@ input:focus-visible {
   padding: 8px 12px;
   border-radius: 12px;
   border: 1px solid var(--border-default);
-  background: color-mix(in srgb, var(--bg-panel) 92%, white 8%);
-  box-shadow: var(--shadow-sm);
+  background: color-mix(in srgb, var(--bg-panel) 90%, var(--bg-surface) 10%);
+  box-shadow: none;
   overflow-x: auto;
   overflow-y: hidden;
   scrollbar-width: none;
@@ -1381,8 +1383,8 @@ input:focus-visible {
 .orion-builder-drawer {
   border: 1px solid var(--border-default);
   border-radius: var(--radius-lg);
-  background: linear-gradient(180deg, color-mix(in srgb, var(--bg-panel) 92%, white 8%) 0%, var(--bg-panel) 100%);
-  box-shadow: var(--shadow-md);
+  background: color-mix(in srgb, var(--bg-panel) 88%, var(--bg-surface) 12%);
+  box-shadow: none;
   width: 320px;
   flex-shrink: 0;
   padding: 16px;
@@ -6426,7 +6428,7 @@ input:focus-visible {
 }
 
 .orion-panel.muted {
-  background: color-mix(in srgb, var(--bg-surface) 92%, var(--bg-element) 8%);
+  background: color-mix(in srgb, var(--bg-surface) 84%, var(--bg-element) 16%);
   border-color: var(--border-subtle);
 }
 
@@ -6439,16 +6441,17 @@ input:focus-visible {
 }
 
 .orion-panel-title {
-  font-size: 14px;
+  font-size: 15px;
   font-weight: 600;
-  line-height: 1.3;
+  line-height: 1.25;
+  letter-spacing: -0.02em;
   color: var(--text-primary);
 }
 
 .orion-panel-copy {
-  font-size: var(--font-body);
+  font-size: 14px;
   color: var(--text-secondary);
-  line-height: 1.5;
+  line-height: 1.55;
   font-weight: 400;
 }
 
@@ -6534,19 +6537,19 @@ input:focus-visible {
 }
 
 .orion-control-link {
-  min-height: 40px;
+  min-height: 32px;
   display: inline-flex;
   align-items: center;
   gap: 8px;
   padding: 0 12px;
   width: fit-content;
   border-radius: 8px;
-  border: 1px solid var(--border-default);
-  background: color-mix(in srgb, var(--bg-element) 88%, var(--bg-surface) 12%);
-  color: var(--text-secondary);
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-surface);
+  color: var(--text-primary);
   text-decoration: none;
-  font-size: var(--font-meta);
-  font-weight: 700;
+  font-size: 12px;
+  font-weight: 600;
   transition:
     border-color var(--motion-fast) var(--easing-standard),
     background var(--motion-fast) var(--easing-standard),
@@ -6554,8 +6557,8 @@ input:focus-visible {
 }
 
 .orion-control-link:hover {
-  border-color: color-mix(in srgb, var(--border-default) 52%, var(--primary-base) 48%);
-  background: color-mix(in srgb, var(--bg-element) 72%, var(--primary-base) 28%);
+  border-color: var(--border-default);
+  background: var(--bg-hover);
   color: var(--text-primary);
 }
 
@@ -6576,17 +6579,17 @@ input:focus-visible {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 8px;
+  gap: 10px;
   flex-wrap: wrap;
-  min-height: var(--toolbar-height);
-  padding: 2px 0;
+  min-height: 38px;
+  padding: 0;
 }
 
 
 .orion-toolbar-group {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
   flex-wrap: wrap;
 }
 
@@ -10420,37 +10423,6 @@ body.orion-inspect-open .orion-inspect-panel-backdrop {
   background: var(--btn-secondary-hover-bg);
 }
 
-.orion-runtime-recovery-card {
-  display: grid;
-  gap: 14px;
-}
-
-.orion-runtime-recovery-head {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
-  gap: 12px;
-  align-items: flex-start;
-}
-
-.orion-runtime-recovery-actions {
-  display: flex;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-
-.orion-runtime-recovery-report {
-  margin: 0;
-  padding: 12px 14px;
-  border-radius: 8px;
-  border: 1px solid var(--border-subtle);
-  background: var(--bg-surface);
-  color: var(--text-secondary);
-  font-size: 12px;
-  line-height: 1.55;
-  white-space: pre-wrap;
-  word-break: break-word;
-}
-
 .orion-pwa-modal {
   width: min(420px, 100%);
 }
@@ -11623,66 +11595,6 @@ body.orion-setup-focus .orion-main-stage {
   color: var(--warning-fg, #9a6700);
 }
 
-.orion-doctor-preflight-notice {
-  margin-top: 12px;
-  display: grid;
-  gap: 12px;
-}
-
-.orion-doctor-preflight-notice.is-warn {
-  border-color: color-mix(in srgb, var(--warning-border) 82%, transparent 18%);
-  background: color-mix(in srgb, var(--warning-bg) 72%, #ffffff 28%);
-}
-
-.orion-doctor-preflight-notice.is-fail {
-  border-color: color-mix(in srgb, var(--error-border) 82%, transparent 18%);
-  background: color-mix(in srgb, var(--error-bg) 74%, #ffffff 26%);
-}
-
-.orion-doctor-preflight-notice.is-ok {
-  border-color: color-mix(in srgb, var(--success-border) 80%, transparent 20%);
-  background: color-mix(in srgb, var(--success-bg) 72%, #ffffff 28%);
-}
-
-.orion-doctor-preflight-head {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
-  gap: 12px;
-  align-items: start;
-}
-
-.orion-doctor-preflight-copy {
-  display: grid;
-  gap: 6px;
-  min-width: 0;
-}
-
-.orion-doctor-preflight-topline {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-
-.orion-doctor-preflight-title {
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--text-primary);
-}
-
-.orion-doctor-preflight-detail,
-.orion-doctor-preflight-recommendation {
-  font-size: 12px;
-  line-height: 1.55;
-  color: var(--text-secondary);
-}
-
-.orion-doctor-preflight-actions {
-  display: flex;
-  justify-content: flex-start;
-  gap: 10px;
-}
-
 .hekor-approval-section {
   display: grid;
   gap: 12px;
@@ -12064,9 +11976,9 @@ select:focus-visible {
 .orion-toolbar-input-wrap .orion-input {
   min-height: 38px;
   height: 38px;
-  border-color: transparent;
-  background: var(--bg-hover);
-  border-radius: 6px;
+  border-color: var(--border-subtle);
+  background: color-mix(in srgb, var(--bg-surface) 92%, var(--bg-element) 8%);
+  border-radius: 8px;
 }
 
 .orion-toolbar-input-wrap .input:focus,
@@ -12084,23 +11996,21 @@ select:focus-visible {
 }
 
 .orion-list-row {
-  border-bottom: 1px solid var(--border-subtle);
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 10px;
+  gap: 14px;
   transition:
     border-color var(--motion-fast) var(--easing-standard),
-    transform var(--motion-fast) var(--easing-standard),
     background var(--motion-fast) var(--easing-standard);
-  padding: 14px 18px;
+  padding: 14px 16px;
   border: 1px solid var(--border-subtle);
   border-radius: 12px;
   background: var(--bg-surface);
 }
 
 .orion-list-row:hover {
-  background: var(--btn-secondary-hover-bg);
+  background: color-mix(in srgb, var(--bg-hover) 88%, var(--bg-surface) 12%);
   border-color: var(--border-default);
 }
 
@@ -12129,14 +12039,14 @@ select:focus-visible {
 .orion-empty {
   color: var(--text-secondary);
   border: 1px solid var(--border-subtle);
-  border-radius: 8px;
-  background: var(--bg-surface);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--bg-surface) 82%, var(--bg-element) 18%);
   min-height: 196px;
-  padding: 44px 24px;
+  padding: 48px 28px;
   display: grid;
   justify-items: center;
   align-content: center;
-  gap: 8px;
+  gap: 10px;
   text-align: center;
 }
 
@@ -12254,13 +12164,13 @@ select:focus-visible {
 }
 
 .orion-state-icon {
-  width: 46px;
-  height: 46px;
-  border-radius: 8px;
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  background: color-mix(in srgb, var(--bg-surface) 90%, var(--bg-element) 10%);
+  background: var(--bg-surface);
   border: 1px solid var(--border-subtle);
   color: var(--text-secondary);
 }
@@ -14357,7 +14267,6 @@ body.orion-inspect-open .orion-toast-stack {
 .orion-demo-success__copy p,
 .orion-demo-success__insight p,
 .orion-demo-next__card p,
-.orion-demo-artifact-card__body p,
 .orion-demo-preflight li {
   margin: 0;
   font-size: 13px;
@@ -14367,17 +14276,16 @@ body.orion-inspect-open .orion-toast-stack {
 
 .orion-desktop-setup-note {
   padding: 14px 16px;
-  border-radius: 14px;
-  border: 1px solid color-mix(in srgb, var(--primary-base) 18%, var(--border-subtle));
-  background: color-mix(in srgb, var(--primary-base) 8%, var(--bg-surface));
+  border-radius: 12px;
+  border: 1px solid color-mix(in srgb, var(--primary-base) 12%, var(--border-subtle));
+  background: color-mix(in srgb, var(--bg-surface) 86%, var(--bg-element) 14%);
   color: var(--text-secondary);
   font-size: 13px;
   line-height: 1.7;
 }
 
 .orion-desktop-setup-actions,
-.orion-demo-runner__actions,
-.orion-demo-artifact-card__actions {
+.orion-demo-runner__actions {
   display: flex;
   gap: 10px;
   flex-wrap: wrap;
@@ -14388,9 +14296,9 @@ body.orion-inspect-open .orion-toast-stack {
   align-items: center;
   gap: 10px;
   padding: 14px 16px;
-  border-radius: 14px;
-  border: 1px solid var(--success-border);
-  background: color-mix(in srgb, var(--success-bg) 72%, var(--bg-surface) 28%);
+  border-radius: 12px;
+  border: 1px solid color-mix(in srgb, var(--success-border) 72%, transparent 28%);
+  background: color-mix(in srgb, var(--success-bg) 84%, var(--bg-surface) 16%);
   color: var(--text-primary);
   font-size: 13px;
   line-height: 1.6;
@@ -14403,8 +14311,7 @@ body.orion-inspect-open .orion-toast-stack {
   gap: 12px;
 }
 
-.orion-demo-runner__meta,
-.orion-demo-artifact-card__meta {
+.orion-demo-runner__meta {
   display: flex;
   gap: 10px;
   flex-wrap: wrap;
@@ -14423,7 +14330,7 @@ body.orion-inspect-open .orion-toast-stack {
   gap: 14px;
   padding: 22px;
   border: 1px solid var(--border-subtle);
-  border-radius: 18px;
+  border-radius: 12px;
   background: var(--bg-surface);
 }
 
@@ -14436,17 +14343,16 @@ body.orion-inspect-open .orion-toast-stack {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 62px;
-  height: 62px;
-  border-radius: 999px;
-  color: white;
-  background: linear-gradient(135deg, color-mix(in srgb, var(--success-fg) 92%, white 8%), color-mix(in srgb, var(--success-fg) 74%, black 26%));
-  box-shadow: 0 12px 36px color-mix(in srgb, var(--success-fg) 26%, transparent);
-  animation: orionDemoPop 480ms ease-out;
+  width: 56px;
+  height: 56px;
+  border-radius: 12px;
+  color: var(--success-fg);
+  background: color-mix(in srgb, var(--success-bg) 90%, var(--bg-surface) 10%);
+  border: 1px solid color-mix(in srgb, var(--success-border) 72%, transparent 28%);
+  animation: orionDemoPop 360ms ease-out;
 }
 
-.orion-demo-success__eyebrow,
-.orion-demo-artifact-card__eyebrow {
+.orion-demo-success__eyebrow {
   font-size: 11px;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -14470,58 +14376,6 @@ body.orion-inspect-open .orion-toast-stack {
   color: var(--text-primary);
 }
 
-.orion-demo-artifact-card {
-  display: grid;
-  grid-template-columns: minmax(220px, 280px) minmax(0, 1fr);
-  gap: 18px;
-  padding: 18px;
-  border: 1px solid var(--border-subtle);
-  border-radius: 18px;
-  background: var(--bg-surface);
-}
-
-.orion-demo-artifact-card.is-empty {
-  grid-template-columns: auto minmax(0, 1fr);
-}
-
-.orion-demo-artifact-card__media {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  min-height: 210px;
-  overflow: hidden;
-  border-radius: 16px;
-  border: 1px solid var(--border-subtle);
-  background:
-    radial-gradient(circle at top right, color-mix(in srgb, var(--primary-base) 12%, transparent) 0%, transparent 45%),
-    color-mix(in srgb, var(--bg-element) 78%, var(--bg-surface) 22%);
-}
-
-.orion-demo-artifact-card__media img {
-  width: 100%;
-  height: 100%;
-  object-fit: contain;
-}
-
-.orion-demo-artifact-card__placeholder,
-.orion-demo-artifact-card__icon {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 48px;
-  height: 48px;
-  border-radius: 14px;
-  color: var(--text-primary);
-  background: color-mix(in srgb, var(--primary-base) 16%, transparent);
-}
-
-.orion-demo-artifact-card__body {
-  display: grid;
-  align-content: start;
-  gap: 10px;
-}
-
-.orion-demo-artifact-card__title,
 .orion-demo-next__label {
   font-size: 17px;
   font-weight: 700;
@@ -14546,17 +14400,16 @@ body.orion-inspect-open .orion-toast-stack {
   align-items: start;
   padding: 16px;
   border: 1px solid var(--border-subtle);
-  border-radius: 16px;
+  border-radius: 12px;
   background: var(--bg-surface);
   text-decoration: none;
   color: inherit;
-  transition: border-color 140ms ease, transform 140ms ease, background 140ms ease;
+  transition: border-color 140ms ease, background 140ms ease;
 }
 
 .orion-demo-next__card:hover {
-  border-color: color-mix(in srgb, var(--primary-base) 42%, var(--border-subtle));
-  background: color-mix(in srgb, var(--bg-surface) 86%, white 14%);
-  transform: translateY(-1px);
+  border-color: var(--border-default);
+  background: color-mix(in srgb, var(--bg-surface) 84%, var(--bg-element) 16%);
 }
 
 .orion-demo-next__card.is-static:hover {
@@ -14604,7 +14457,6 @@ body.orion-inspect-open .orion-toast-stack {
 @media (max-width: 980px) {
   .orion-desktop-setup-panel__summary,
   .orion-demo-next__grid,
-  .orion-demo-artifact-card,
   .orion-demo-success__hero {
     grid-template-columns: 1fr;
   }

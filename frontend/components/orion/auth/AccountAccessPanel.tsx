@@ -2,6 +2,17 @@
 
 import { FormEvent, useMemo, useState } from 'react';
 import { AlertTriangle, KeyRound, Link2, ShieldCheck, Unplug } from 'lucide-react';
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import {
+  DESIGN_TOKENS,
+  bodyTextStyle,
+  eyebrowStyle,
+  mergeStyles,
+  panelStyle,
+  sectionTitleStyle,
+} from '@/design-constraints';
 
 type AuthProviders = {
   email: { enabled: boolean };
@@ -63,6 +74,23 @@ type AccountAccessPanelProps = {
   onAddPassword: (password: string) => Promise<void>;
 };
 
+const sectionStyle = mergeStyles(panelStyle({ muted: true, padding: DESIGN_TOKENS.space[5] }), {
+  display: 'grid',
+  gap: DESIGN_TOKENS.space[4],
+  margin: 0,
+});
+
+const rowStyle = mergeStyles(panelStyle({ padding: DESIGN_TOKENS.space[4] }), {
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'space-between',
+  gap: DESIGN_TOKENS.space[4],
+});
+
+const labelStyle = mergeStyles(eyebrowStyle(), {
+  marginBottom: DESIGN_TOKENS.space[1],
+});
+
 function providerLabel(provider: string): string {
   const normalized = String(provider || '').trim().toLowerCase();
   switch (normalized) {
@@ -87,6 +115,12 @@ function providerLabel(provider: string): string {
   }
 }
 
+function badgeVariantForStatus(status: string): 'default' | 'secondary' | 'destructive' {
+  if (status === 'healthy' || status === 'active') return 'default';
+  if (status === 'disconnected' || status === 'error') return 'destructive';
+  return 'secondary';
+}
+
 export default function AccountAccessPanel({
   access,
   authProviders,
@@ -108,15 +142,15 @@ export default function AccountAccessPanel({
   );
 
   if (loading) {
-    return <div className="orion-panel-copy">Loading account access…</div>;
+    return <div style={bodyTextStyle()}>Loading account access…</div>;
   }
 
   if (error) {
-    return <div className="orion-panel-copy" style={{ color: 'var(--error-fg)' }}>{error}</div>;
+    return <div style={mergeStyles(bodyTextStyle(), { color: DESIGN_TOKENS.color.danger })}>{error}</div>;
   }
 
   if (!access) {
-    return <div className="orion-panel-copy">No account access data is available.</div>;
+    return <div style={bodyTextStyle()}>No account access data is available.</div>;
   }
 
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
@@ -136,66 +170,80 @@ export default function AccountAccessPanel({
   };
 
   return (
-    <div style={{ display: 'grid', gap: 16 }}>
-      <div className="orion-panel muted" style={{ display: 'grid', gap: 10, margin: 0 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+    <div style={{ display: 'grid', gap: DESIGN_TOKENS.space[4] }}>
+      <div style={sectionStyle}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: DESIGN_TOKENS.space[2] }}>
           <ShieldCheck size={15} />
-          <div className="orion-panel-title" style={{ fontSize: 14 }}>Empyralis account ownership</div>
+          <div style={mergeStyles(sectionTitleStyle(), { fontSize: DESIGN_TOKENS.type.size.bodyLg })}>
+            Empyralis account ownership
+          </div>
         </div>
-        <div className="orion-panel-copy" style={{ margin: 0 }}>
-          {access.messaging.account_owner}
-        </div>
-        <div className="orion-panel-copy" style={{ margin: 0 }}>
-          {access.messaging.provider_boundary}
-        </div>
-        <div style={{ display: 'inline-flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-          <span className="orion-chip">{access.summary.active_sign_in_method_count} active sign-in method{access.summary.active_sign_in_method_count === 1 ? '' : 's'}</span>
-          <span className="orion-chip" data-status-tone={access.summary.has_backup_sign_in_method ? 'green' : 'amber'}>
+        <div style={bodyTextStyle()}>{access.messaging.account_owner}</div>
+        <div style={bodyTextStyle()}>{access.messaging.provider_boundary}</div>
+        <div style={{ display: 'inline-flex', alignItems: 'center', gap: DESIGN_TOKENS.space[2], flexWrap: 'wrap' }}>
+          <Badge variant="secondary">
+            {access.summary.active_sign_in_method_count} active sign-in method{access.summary.active_sign_in_method_count === 1 ? '' : 's'}
+          </Badge>
+          <Badge variant={access.summary.has_backup_sign_in_method ? 'default' : 'secondary'}>
             {access.summary.has_backup_sign_in_method ? 'Recovery protected' : 'Recovery needs attention'}
-          </span>
-          {access.summary.has_password ? <span className="orion-chip">Password backup active</span> : null}
+          </Badge>
+          {access.summary.has_password ? <Badge variant="secondary">Password backup active</Badge> : null}
         </div>
       </div>
 
       {access.recovery.warnings.length > 0 ? (
         <div
-          className="orion-panel muted"
-          style={{
-            display: 'grid',
-            gap: 10,
-            margin: 0,
-            borderColor: 'var(--warning-border)',
-            background: 'color-mix(in srgb, var(--warning-bg) 84%, var(--bg-surface) 16%)',
-          }}
+          style={mergeStyles(sectionStyle, {
+            borderColor: DESIGN_TOKENS.color.warningSoft,
+            background: DESIGN_TOKENS.color.warningSoft,
+          })}
         >
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: 'var(--warning-fg)' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: DESIGN_TOKENS.space[2], color: DESIGN_TOKENS.color.warning }}>
             <AlertTriangle size={15} />
-            <div className="orion-panel-title" style={{ fontSize: 14 }}>Recovery guidance</div>
+            <div style={mergeStyles(sectionTitleStyle(), { fontSize: DESIGN_TOKENS.type.size.bodyLg })}>Recovery guidance</div>
           </div>
-          <div style={{ display: 'grid', gap: 6 }}>
+          <div style={{ display: 'grid', gap: DESIGN_TOKENS.space[2] }}>
             {access.recovery.warnings.map((warning) => (
-              <div key={warning} className="orion-panel-copy" style={{ margin: 0, color: 'var(--warning-fg)' }}>
+              <div key={warning} style={mergeStyles(bodyTextStyle(), { color: DESIGN_TOKENS.color.warning })}>
                 {warning}
               </div>
             ))}
           </div>
+          {access.recovery.recommended_actions.length > 0 ? (
+            <div style={{ display: 'grid', gap: DESIGN_TOKENS.space[2] }}>
+              {access.recovery.recommended_actions.map((action) => (
+                <div key={action} style={bodyTextStyle()}>
+                  {action}
+                </div>
+              ))}
+            </div>
+          ) : null}
           {openAiConnected ? (
-            <div className="orion-panel-copy" style={{ margin: 0, color: 'var(--warning-fg)' }}>
+            <div style={mergeStyles(bodyTextStyle(), { color: DESIGN_TOKENS.color.warning })}>
               OpenAI is connected here for capability, but it should not be the only way back into this account.
             </div>
           ) : null}
         </div>
       ) : null}
 
-      <div style={{ display: 'grid', gap: 10 }}>
+      <div style={{ display: 'grid', gap: DESIGN_TOKENS.space[3] }}>
         {access.sign_in_methods.map((method) => (
-          <div key={method.id} className="orion-list-row">
-            <div className="orion-list-row-main">
-              <div className="orion-list-row-title" style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+          <div key={method.id} style={rowStyle}>
+            <div style={{ display: 'grid', gap: DESIGN_TOKENS.space[1], minWidth: 0 }}>
+              <div
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: DESIGN_TOKENS.space[2],
+                  color: DESIGN_TOKENS.color.textPrimary,
+                  fontSize: DESIGN_TOKENS.type.size.body,
+                  fontWeight: DESIGN_TOKENS.type.weight.semibold,
+                }}
+              >
                 <KeyRound size={14} />
                 {method.label}
               </div>
-              <div className="orion-list-row-subtitle">
+              <div style={bodyTextStyle()}>
                 {method.status === 'active'
                   ? method.is_primary
                     ? 'Primary sign-in method'
@@ -203,23 +251,21 @@ export default function AccountAccessPanel({
                   : 'Disconnected from account sign-in'}
               </div>
             </div>
-            <div style={{ display: 'inline-flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
-              <span className="orion-chip">{method.kind}</span>
-              <span className="orion-chip" data-status-tone={method.status === 'active' ? 'green' : 'grey'}>
-                {method.status}
-              </span>
+            <div style={{ display: 'inline-flex', alignItems: 'center', gap: DESIGN_TOKENS.space[2], flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+              <Badge variant="secondary">{method.kind}</Badge>
+              <Badge variant={badgeVariantForStatus(method.status)}>{method.status}</Badge>
               {method.status === 'active' ? (
-                <button
+                <Button
                   type="button"
-                  className="orion-btn orion-btn-secondary"
+                  variant="secondary"
+                  size="sm"
                   disabled={!method.can_disconnect || actionBusy === method.method}
                   onClick={() => void onDisconnectMethod(method.method)}
                   title={method.disconnect_reason || 'Disconnect this sign-in method'}
-                  style={{ minHeight: 40, paddingInline: 12 }}
                 >
                   <Unplug size={14} />
                   {actionBusy === method.method ? 'Updating…' : 'Disconnect'}
-                </button>
+                </Button>
               ) : null}
             </div>
           </div>
@@ -227,43 +273,43 @@ export default function AccountAccessPanel({
       </div>
 
       {!access.summary.has_password ? (
-        <form onSubmit={handleSubmit} className="orion-panel muted" style={{ display: 'grid', gap: 12, margin: 0 }}>
-          <div style={{ display: 'grid', gap: 4 }}>
-            <div className="orion-panel-title" style={{ fontSize: 14 }}>Add email + password backup</div>
-            <div className="orion-panel-copy" style={{ margin: 0 }}>
+        <form onSubmit={handleSubmit} style={sectionStyle}>
+          <div style={{ display: 'grid', gap: DESIGN_TOKENS.space[1] }}>
+            <div style={mergeStyles(sectionTitleStyle(), { fontSize: DESIGN_TOKENS.type.size.bodyLg })}>Add email + password backup</div>
+            <div style={bodyTextStyle()}>
               Add a recovery-safe sign-in method that stays with your Empyralis account even if a provider session changes.
             </div>
           </div>
-          <div className="orion-field">
-            <label className="orion-field-label" htmlFor="account-backup-password">New password</label>
-            <input
+          <div style={{ display: 'grid', gap: DESIGN_TOKENS.space[1] }}>
+            <label style={labelStyle} htmlFor="account-backup-password">New password</label>
+            <Input
               id="account-backup-password"
               type="password"
-              className="input"
               value={password}
               onChange={(event) => setPassword(event.target.value)}
               placeholder="At least 8 characters"
-              style={{ height: 44 }}
+              aria-invalid={Boolean(formError)}
+              style={{ minHeight: DESIGN_TOKENS.control.heightLg }}
             />
           </div>
-          <div className="orion-field">
-            <label className="orion-field-label" htmlFor="account-backup-password-confirm">Confirm password</label>
-            <input
+          <div style={{ display: 'grid', gap: DESIGN_TOKENS.space[1] }}>
+            <label style={labelStyle} htmlFor="account-backup-password-confirm">Confirm password</label>
+            <Input
               id="account-backup-password-confirm"
               type="password"
-              className="input"
               value={confirmPassword}
               onChange={(event) => setConfirmPassword(event.target.value)}
               placeholder="Repeat the password"
-              style={{ height: 44 }}
+              aria-invalid={Boolean(formError)}
+              style={{ minHeight: DESIGN_TOKENS.control.heightLg }}
             />
           </div>
-          {formError ? <div className="orion-panel-copy" style={{ margin: 0, color: 'var(--error-fg)' }}>{formError}</div> : null}
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-            <button type="submit" className="orion-btn orion-btn-primary" disabled={passwordBusy}>
+          {formError ? <div style={mergeStyles(bodyTextStyle(), { color: DESIGN_TOKENS.color.danger })}>{formError}</div> : null}
+          <div style={{ display: 'flex', alignItems: 'center', gap: DESIGN_TOKENS.space[3], flexWrap: 'wrap' }}>
+            <Button type="submit" disabled={passwordBusy}>
               {passwordBusy ? 'Saving backup…' : 'Add password backup'}
-            </button>
-            <div className="orion-panel-copy" style={{ margin: 0 }}>
+            </Button>
+            <div style={bodyTextStyle()}>
               {authProviders.google.enabled || authProviders.apple.enabled
                 ? 'Google and Apple can stay available as additional sign-in methods, but the password backup gives you a provider-independent recovery path.'
                 : 'A password backup gives you a provider-independent recovery path.'}
@@ -272,33 +318,37 @@ export default function AccountAccessPanel({
         </form>
       ) : null}
 
-      <div className="orion-panel muted" style={{ display: 'grid', gap: 12, margin: 0 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+      <div style={sectionStyle}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: DESIGN_TOKENS.space[2] }}>
           <Link2 size={15} />
-          <div className="orion-panel-title" style={{ fontSize: 14 }}>Connected AI providers</div>
+          <div style={mergeStyles(sectionTitleStyle(), { fontSize: DESIGN_TOKENS.type.size.bodyLg })}>Connected AI providers</div>
         </div>
-        <div className="orion-panel-copy" style={{ margin: 0 }}>
+        <div style={bodyTextStyle()}>
           Provider connections add model capability only. Disconnecting a provider should never be confused with deleting your Empyralis account.
         </div>
         {providerConnections.length === 0 ? (
-          <div className="orion-panel-copy" style={{ margin: 0 }}>
-            No AI providers are connected yet.
-          </div>
+          <div style={bodyTextStyle()}>No AI providers are connected yet.</div>
         ) : (
-          <div style={{ display: 'grid', gap: 10 }}>
+          <div style={{ display: 'grid', gap: DESIGN_TOKENS.space[3] }}>
             {providerConnections.map((provider) => (
-              <div key={provider.id} className="orion-list-row">
-                <div className="orion-list-row-main">
-                  <div className="orion-list-row-title">{provider.label || providerLabel(provider.provider)}</div>
-                  <div className="orion-list-row-subtitle">
+              <div key={provider.id} style={rowStyle}>
+                <div style={{ display: 'grid', gap: DESIGN_TOKENS.space[1], minWidth: 0 }}>
+                  <div
+                    style={{
+                      color: DESIGN_TOKENS.color.textPrimary,
+                      fontSize: DESIGN_TOKENS.type.size.body,
+                      fontWeight: DESIGN_TOKENS.type.weight.semibold,
+                    }}
+                  >
+                    {provider.label || providerLabel(provider.provider)}
+                  </div>
+                  <div style={bodyTextStyle()}>
                     {provider.model ? `${providerLabel(provider.provider)} · ${provider.model}` : providerLabel(provider.provider)}
                   </div>
                 </div>
-                <div style={{ display: 'inline-flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
-                  <span className="orion-chip">{providerLabel(provider.provider)}</span>
-                  <span className="orion-chip" data-status-tone={provider.health === 'healthy' ? 'green' : provider.health === 'cooldown' ? 'amber' : 'grey'}>
-                    {provider.health.replace(/_/g, ' ')}
-                  </span>
+                <div style={{ display: 'inline-flex', alignItems: 'center', gap: DESIGN_TOKENS.space[2], flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                  <Badge variant="secondary">{providerLabel(provider.provider)}</Badge>
+                  <Badge variant={badgeVariantForStatus(provider.health)}>{provider.health.replace(/_/g, ' ')}</Badge>
                 </div>
               </div>
             ))}

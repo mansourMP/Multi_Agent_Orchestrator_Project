@@ -3,6 +3,15 @@
 import Link from 'next/link';
 import { useCallback, useState } from 'react';
 import { Laptop, LoaderCircle, RefreshCw } from 'lucide-react';
+import {
+  DESIGN_TOKENS,
+  bodyTextStyle,
+  buttonStyle,
+  mergeStyles,
+  panelStyle,
+  sectionTitleStyle,
+} from '@/design-constraints';
+import { Button } from '@/components/ui/button';
 import { ensureControlPlaneSession } from '@/lib/controlPlaneSession';
 
 type RecoveryAction = 'start_services' | 'readiness';
@@ -61,42 +70,87 @@ export default function LocalRuntimeRecoveryCard({
   }, [onStatusRefresh]);
 
   return (
-    <section className="orion-panel muted orion-runtime-recovery-card">
-      <div className="orion-runtime-recovery-head">
-        <div className="orion-state-icon" aria-hidden="true">
+    <section
+      style={mergeStyles(panelStyle({ muted: true, padding: DESIGN_TOKENS.space[5] }), {
+        display: 'grid',
+        gap: DESIGN_TOKENS.space[4],
+      })}
+    >
+      <div
+        style={{
+          display: 'grid',
+          gridTemplateColumns: 'auto minmax(0, 1fr)',
+          gap: DESIGN_TOKENS.space[4],
+          alignItems: 'start',
+        }}
+      >
+        <div
+          aria-hidden="true"
+          style={{
+            width: 40,
+            height: 40,
+            display: 'grid',
+            placeItems: 'center',
+            flexShrink: 0,
+            borderRadius: DESIGN_TOKENS.radius.lg,
+            border: `1px solid ${DESIGN_TOKENS.color.borderSubtle}`,
+            background: DESIGN_TOKENS.color.surface,
+            color: DESIGN_TOKENS.color.textSecondary,
+          }}
+        >
           <Laptop size={18} />
         </div>
-        <div>
-          <div className="orion-panel-title">{title}</div>
-          <div className="orion-panel-copy">{copy}</div>
+        <div style={{ display: 'grid', gap: DESIGN_TOKENS.space[2] }}>
+          <div style={sectionTitleStyle()}>{title}</div>
+          <div style={bodyTextStyle()}>{copy}</div>
         </div>
       </div>
 
-      <div className="orion-runtime-recovery-actions">
-        <button
-          type="button"
-          className="btn-primary"
+      <div style={{ display: 'flex', gap: DESIGN_TOKENS.space[3], flexWrap: 'wrap' }}>
+        <Button
           onClick={() => void runAction('start_services')}
           disabled={Boolean(busyAction)}
         >
           {busyAction === 'start_services' ? <LoaderCircle size={14} className="spin" /> : null}
           {busyAction === 'start_services' ? 'Starting...' : 'Start local runtime'}
-        </button>
-        <button
-          type="button"
-          className="btn-secondary"
+        </Button>
+        <Button
+          variant="secondary"
           onClick={() => void runAction('readiness')}
           disabled={Boolean(busyAction)}
         >
           {busyAction === 'readiness' ? <LoaderCircle size={14} className="spin" /> : <RefreshCw size={14} />}
           {busyAction === 'readiness' ? 'Checking...' : 'Check readiness'}
-        </button>
-        <Link href="/machines" className="btn-secondary">
+        </Button>
+        <Link
+          href="/machines"
+          style={mergeStyles(buttonStyle({ tone: 'secondary' }), {
+            display: 'inline-flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            gap: DESIGN_TOKENS.space[2],
+            textDecoration: 'none',
+            fontFamily: DESIGN_TOKENS.type.family,
+          })}
+        >
           Open Machines
         </Link>
       </div>
 
-      {report ? <div className="orion-runtime-recovery-report">{report}</div> : null}
+      {report ? (
+        <div
+          style={mergeStyles(panelStyle({ padding: DESIGN_TOKENS.space[4] }), {
+            color: DESIGN_TOKENS.color.textSecondary,
+            fontFamily: DESIGN_TOKENS.type.mono,
+            fontSize: DESIGN_TOKENS.type.size.caption,
+            lineHeight: 1.6,
+            whiteSpace: 'pre-wrap',
+            wordBreak: 'break-word',
+          })}
+        >
+          {report}
+        </div>
+      ) : null}
     </section>
   );
 }

@@ -43,3 +43,12 @@ def test_memory_convergence_is_no_longer_listed_as_a_current_blocker() -> None:
     assert "runtime_memory.py" not in canonical
     assert "runtime_memory.py" not in final_audit
     assert "memory has one public facade, but the internals are still split" not in final_audit.lower()
+
+
+def test_object_storage_is_documented_as_s3_production_with_filesystem_dev_fallback() -> None:
+    canonical = CANONICAL_DOC.read_text(encoding="utf-8")
+    final_audit = FINAL_AUDIT_DOC.read_text(encoding="utf-8")
+
+    assert "Artifact store: S3-compatible object storage" in canonical
+    assert "filesystem development fallback" in canonical.lower()
+    assert "active development backend is still filesystem-backed" not in final_audit.lower()

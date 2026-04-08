@@ -1288,6 +1288,12 @@ This section records the remaining non-canonical edges that are accepted tempora
 
 They are not alternate architectures. They are explicit boundaries that must remain documented so the active platform shape is unambiguous.
 
+Object storage is no longer a temporary boundary:
+
+- [artifact_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/artifact_service.py) now supports S3-compatible object storage as the canonical production backend
+- local filesystem storage under `.orion-object-store/` is the explicit filesystem development fallback
+- configuration details live in [docs/EMPYRALIS_OBJECT_STORAGE.md](/Users/mansur/Multi_Agent_Orchestrator_Project/docs/EMPYRALIS_OBJECT_STORAGE.md)
+
 1. Browser/session automation is intentionally Python-owned.
 
    Permanent boundary:
@@ -1297,15 +1303,7 @@ They are not alternate architectures. They are explicit boundaries that must rem
    - Rust remains the owner of direct device control
    - moving browser automation to Rust is optional future redesign work, not a requirement for canonical compliance
 
-2. Object storage is canonical at the interface level, but development storage is still filesystem-backed.
-
-   Accepted boundary:
-
-   - [artifact_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/artifact_service.py) exposes canonical artifact records and object-store-shaped URIs
-   - the current development backend stores objects under `.orion-object-store/`
-   - external S3-compatible backing remains a deployment follow-through item
-
-3. Enterprise hardening is still incomplete.
+2. Enterprise hardening is still incomplete.
 
    Accepted boundary:
 

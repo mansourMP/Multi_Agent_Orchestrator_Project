@@ -46,6 +46,9 @@ class AgentWorkspaceApiTests(unittest.TestCase):
                             "step_number": 1,
                             "machine_id": "machine-1",
                             "storage_backend": "filesystem_object_store",
+                            "storage_bucket": "empyralis-artifacts",
+                            "storage_region": "us-east-1",
+                            "storage_endpoint": "https://storage.example.test",
                         }
                     ]
                 }
@@ -70,6 +73,9 @@ class AgentWorkspaceApiTests(unittest.TestCase):
         self.assertEqual(artifacts[0]["content_type"], "image/png")
         self.assertEqual(artifacts[0]["byte_size"], 123)
         self.assertEqual(artifacts[0]["machine_id"], "machine-1")
+        self.assertEqual(artifacts[0]["storage_bucket"], "empyralis-artifacts")
+        self.assertEqual(artifacts[0]["storage_region"], "us-east-1")
+        self.assertEqual(artifacts[0]["storage_endpoint"], "https://storage.example.test")
 
     def test_resolve_workspace_material_target_supports_canonical_artifact_uri(self):
         with tempfile.TemporaryDirectory() as tempdir:

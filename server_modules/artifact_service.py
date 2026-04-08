@@ -12,9 +12,21 @@ from typing import Any, Dict, Mapping, Optional
 from urllib.parse import urlparse
 import uuid
 
+try:
+    import boto3 as _boto3
+except Exception:  # pragma: no cover - optional dependency at runtime
+    _boto3 = None
+
+try:
+    from botocore.config import Config as _BotocoreConfig
+except Exception:  # pragma: no cover - optional dependency at runtime
+    _BotocoreConfig = None
+
 
 ARTIFACT_URI_SCHEME = "artifact"
-ARTIFACT_STORAGE_BACKEND = "filesystem_object_store"
+FILESYSTEM_ARTIFACT_STORAGE_BACKEND = "filesystem_object_store"
+S3_ARTIFACT_STORAGE_BACKEND = "s3_compatible_object_store"
+ARTIFACT_STORAGE_BACKEND = FILESYSTEM_ARTIFACT_STORAGE_BACKEND
 DEFAULT_RETENTION_POLICY = {
     "mode": "default",
     "retention_days": None,
@@ -29,6 +41,19 @@ def _utc_now_iso() -> str:
 
 def _project_root() -> Path:
     return Path(__file__).resolve().parents[1]
+
+
+def _env_first(*names: str) -> str:
+    for name in names:
+        value = str(os.getenv(name) or "").strip()
+        if value:
+            return value
+    return ""
+
+
+def _env_flag(*names: str) -> bool:
+    value = _env_first(*names).strip().lower()
+    return value in {"1", "true", "yes", "on"}
 
 
 def _safe_filename(value: str) -> str:
@@ -50,13 +75,25 @@ def _json_safe(value: Any) -> Any:
     return str(value)
 
 
+def configured_artifact_storage_backend() -> str:
+    configured = _env_first("EMPYRALIS_OBJECT_STORAGE_BACKEND", "ORION_OBJECT_STORAGE_BACKEND").lower()
+    if configured in {"s3", "s3-compatible", "s3_compatible", S3_ARTIFACT_STORAGE_BACKEND}:
+        return S3_ARTIFACT_STORAGE_BACKEND
+    return FILESYSTEM_ARTIFACT_STORAGE_BACKEND
+
+
 def _artifact_store_root() -> Path:
     configured = (
-        str(os.getenv("EMPYRALIS_OBJECT_STORAGE_ROOT") or "").strip()
-        or str(os.getenv("ORION_OBJECT_STORAGE_ROOT") or "").strip()
+        _env_first("EMPYRALIS_OBJECT_STORAGE_ROOT", "ORION_OBJECT_STORAGE_ROOT")
         or str((_project_root() / ".orion-object-store").resolve())
     )
     target = Path(configured).expanduser().resolve()
+    target.mkdir(parents=True, exist_ok=True)
+    return target
+
+
+def _artifact_records_root() -> Path:
+    target = _artifact_store_root() / "records"
     target.mkdir(parents=True, exist_ok=True)
     return target
 
@@ -67,8 +104,12 @@ def _artifact_objects_root() -> Path:
     return target
 
 
-def _artifact_records_root() -> Path:
-    target = _artifact_store_root() / "records"
+def _artifact_cache_root() -> Path:
+    configured = (
+        _env_first("EMPYRALIS_OBJECT_STORAGE_CACHE_ROOT", "ORION_OBJECT_STORAGE_CACHE_ROOT")
+        or str((_artifact_store_root() / "cache").resolve())
+    )
+    target = Path(configured).expanduser().resolve()
     target.mkdir(parents=True, exist_ok=True)
     return target
 
@@ -125,17 +166,128 @@ def _guess_content_type(file_name: str, explicit: Optional[str] = None) -> str:
     return guessed or "application/octet-stream"
 
 
-def _artifact_object_path(run_id: str, artifact_id: str, file_name: str) -> tuple[str, Path]:
+def _object_key_prefix() -> str:
+    return _env_first("EMPYRALIS_OBJECT_STORAGE_PREFIX", "ORION_OBJECT_STORAGE_PREFIX").strip().strip("/")
+
+
+def _artifact_object_key(run_id: str, artifact_id: str, file_name: str) -> str:
     run_token = _safe_filename(str(run_id or "").strip() or "run")
     stored_name = _safe_filename(file_name)
     object_key = f"runs/{run_token}/{artifact_id}/{stored_name}"
-    target = (_artifact_objects_root() / object_key).resolve()
-    target.parent.mkdir(parents=True, exist_ok=True)
-    return object_key, target
+    prefix = _object_key_prefix()
+    return f"{prefix}/{object_key}" if prefix else object_key
+
+
+def _safe_relative_path(root: Path, relative_path: str, *, ensure_parent: bool = False) -> Path:
+    candidate = (root / str(relative_path or "").strip()).resolve()
+    try:
+        candidate.relative_to(root)
+    except Exception as exc:  # pragma: no cover - defensive guard
+        raise RuntimeError(f"Artifact object path escaped configured root: {relative_path}") from exc
+    if ensure_parent:
+        candidate.parent.mkdir(parents=True, exist_ok=True)
+    return candidate
+
+
+def _artifact_object_path_for_key(object_key: str, *, ensure_parent: bool = False) -> Path:
+    return _safe_relative_path(_artifact_objects_root(), object_key, ensure_parent=ensure_parent)
+
+
+def _artifact_cached_path(payload: Mapping[str, Any]) -> Path:
+    bucket = _safe_filename(str(payload.get("storage_bucket") or _configured_s3_bucket() or "artifact-bucket"))
+    object_key = str(payload.get("object_key") or "").strip()
+    if object_key:
+        relative = f"{bucket}/{object_key}"
+    else:
+        artifact_token = _safe_filename(str(payload.get("artifact_id") or "artifact"))
+        file_name = _safe_filename(str(payload.get("file_name") or payload.get("label") or "artifact.bin"))
+        relative = f"{bucket}/{artifact_token}/{file_name}"
+    return _safe_relative_path(_artifact_cache_root(), relative, ensure_parent=True)
 
 
 def _artifact_record_path(artifact_id: str) -> Path:
     return (_artifact_records_root() / f"{artifact_id}.json").resolve()
+
+
+def _configured_s3_bucket() -> str:
+    return _env_first("EMPYRALIS_OBJECT_STORAGE_BUCKET", "ORION_OBJECT_STORAGE_BUCKET")
+
+
+def _configured_s3_region() -> str:
+    return _env_first(
+        "EMPYRALIS_OBJECT_STORAGE_REGION",
+        "ORION_OBJECT_STORAGE_REGION",
+        "AWS_REGION",
+        "AWS_DEFAULT_REGION",
+    ) or "us-east-1"
+
+
+def _configured_s3_endpoint() -> Optional[str]:
+    value = _env_first("EMPYRALIS_OBJECT_STORAGE_ENDPOINT", "ORION_OBJECT_STORAGE_ENDPOINT")
+    return value or None
+
+
+def _build_s3_client():
+    if _boto3 is None:
+        raise RuntimeError("boto3 is not installed. Add the 'boto3' package to use the S3-compatible artifact backend.")
+    kwargs: Dict[str, Any] = {
+        "service_name": "s3",
+        "region_name": _configured_s3_region(),
+    }
+    endpoint = _configured_s3_endpoint()
+    if endpoint:
+        kwargs["endpoint_url"] = endpoint
+    access_key_id = _env_first("EMPYRALIS_OBJECT_STORAGE_ACCESS_KEY_ID", "ORION_OBJECT_STORAGE_ACCESS_KEY_ID", "AWS_ACCESS_KEY_ID")
+    secret_access_key = _env_first(
+        "EMPYRALIS_OBJECT_STORAGE_SECRET_ACCESS_KEY",
+        "ORION_OBJECT_STORAGE_SECRET_ACCESS_KEY",
+        "AWS_SECRET_ACCESS_KEY",
+    )
+    session_token = _env_first("EMPYRALIS_OBJECT_STORAGE_SESSION_TOKEN", "ORION_OBJECT_STORAGE_SESSION_TOKEN", "AWS_SESSION_TOKEN")
+    if access_key_id:
+        kwargs["aws_access_key_id"] = access_key_id
+    if secret_access_key:
+        kwargs["aws_secret_access_key"] = secret_access_key
+    if session_token:
+        kwargs["aws_session_token"] = session_token
+    if _env_flag(
+        "EMPYRALIS_OBJECT_STORAGE_PATH_STYLE",
+        "ORION_OBJECT_STORAGE_PATH_STYLE",
+        "EMPYRALIS_OBJECT_STORAGE_FORCE_PATH_STYLE",
+        "S3_ENABLE_PATH_STYLE",
+    ) and _BotocoreConfig is not None:
+        kwargs["config"] = _BotocoreConfig(s3={"addressing_style": "path"})
+    return _boto3.client(**kwargs)
+
+
+def _upload_file_to_s3(source: Path, *, bucket: str, key: str, content_type: str) -> None:
+    client = _build_s3_client()
+    client.upload_file(
+        str(source),
+        str(bucket),
+        str(key),
+        ExtraArgs={"ContentType": content_type},
+    )
+
+
+def _upload_bytes_to_s3(content: bytes, *, bucket: str, key: str, content_type: str) -> None:
+    client = _build_s3_client()
+    client.put_object(Bucket=str(bucket), Key=str(key), Body=bytes(content), ContentType=content_type)
+
+
+def _download_s3_object_to_cache(payload: Mapping[str, Any], target: Path) -> None:
+    bucket = str(payload.get("storage_bucket") or _configured_s3_bucket() or "").strip()
+    key = str(payload.get("object_key") or "").strip()
+    if not bucket:
+        raise RuntimeError("S3-compatible artifact backend requires EMPYRALIS_OBJECT_STORAGE_BUCKET (or recorded storage_bucket metadata).")
+    if not key:
+        raise RuntimeError("Artifact record is missing object_key for S3-compatible storage.")
+    client = _build_s3_client()
+    temp_target = target.with_name(f"{target.name}.part")
+    if temp_target.exists():
+        temp_target.unlink()
+    client.download_file(str(bucket), str(key), str(temp_target))
+    temp_target.replace(target)
 
 
 @dataclass(slots=True)
@@ -156,6 +308,9 @@ class ArtifactRecord:
     step_index: Optional[int] = None
     step_number: Optional[int] = None
     storage_backend: str = ARTIFACT_STORAGE_BACKEND
+    storage_bucket: Optional[str] = None
+    storage_region: Optional[str] = None
+    storage_endpoint: Optional[str] = None
     object_key: str = ""
     file_name: str = ""
     retention: Dict[str, Any] = field(default_factory=lambda: dict(DEFAULT_RETENTION_POLICY))
@@ -182,6 +337,10 @@ class ArtifactRecord:
             "step_index": self.step_index,
             "step_number": self.step_number,
             "storage_backend": self.storage_backend,
+            "storage_bucket": self.storage_bucket,
+            "storage_region": self.storage_region,
+            "storage_endpoint": self.storage_endpoint,
+            "object_key": self.object_key,
             "file_name": self.file_name,
             "retention": dict(self.retention or DEFAULT_RETENTION_POLICY),
             "metadata": dict(self.metadata or {}),
@@ -189,14 +348,69 @@ class ArtifactRecord:
         return {key: value for key, value in payload.items() if value is not None}
 
 
-def _persist_record(record: ArtifactRecord, *, stored_path: Path, source_path: Optional[Path] = None) -> None:
+def _persist_record(
+    record: ArtifactRecord,
+    *,
+    stored_path: Optional[Path] = None,
+    source_path: Optional[Path] = None,
+) -> None:
     payload = record.as_payload()
-    payload["stored_path"] = str(stored_path.resolve())
+    if stored_path is not None:
+        payload["stored_path"] = str(stored_path.resolve())
     if source_path is not None:
         payload["source_path"] = str(source_path.resolve())
     _artifact_record_path(record.artifact_id).write_text(
         json.dumps(_json_safe(payload), ensure_ascii=False, indent=2, sort_keys=True),
         encoding="utf-8",
+    )
+
+
+def _build_artifact_record(
+    *,
+    artifact_id: str,
+    run_id: str,
+    kind: str,
+    resolved_label: str,
+    mime: str,
+    byte_size: int,
+    tenant_id: Optional[str],
+    workspace_id: Optional[str],
+    machine_id: Optional[str],
+    step_id: Optional[str],
+    step_index: Optional[int],
+    step_number: Optional[int],
+    retention_days: Optional[int],
+    retention_expires_at: Optional[str],
+    metadata: Optional[Mapping[str, Any]],
+    created_at: Optional[str],
+    storage_backend: str,
+    object_key: str,
+    file_name: str,
+) -> ArtifactRecord:
+    return ArtifactRecord(
+        artifact_id=artifact_id,
+        run_id=str(run_id or "").strip(),
+        tenant_id=str(tenant_id or "default").strip() or "default",
+        workspace_id=str(workspace_id or "default").strip() or "default",
+        kind=str(kind or "artifact").strip() or "artifact",
+        uri=artifact_uri(artifact_id, resolved_label),
+        label=resolved_label,
+        mime_type=mime,
+        content_type=mime,
+        byte_size=int(byte_size),
+        created_at=str(created_at or _utc_now_iso()).strip() or _utc_now_iso(),
+        machine_id=str(machine_id or "").strip() or None,
+        step_id=str(step_id or "").strip() or None,
+        step_index=int(step_index) if isinstance(step_index, int) else None,
+        step_number=int(step_number) if isinstance(step_number, int) else None,
+        storage_backend=storage_backend,
+        storage_bucket=_configured_s3_bucket() if storage_backend == S3_ARTIFACT_STORAGE_BACKEND else None,
+        storage_region=_configured_s3_region() if storage_backend == S3_ARTIFACT_STORAGE_BACKEND else None,
+        storage_endpoint=_configured_s3_endpoint() if storage_backend == S3_ARTIFACT_STORAGE_BACKEND else None,
+        object_key=object_key,
+        file_name=file_name,
+        retention=retention_placeholder(retention_days, retention_expires_at),
+        metadata=dict(_json_safe(dict(metadata or {})) or {}),
     )
 
 
@@ -224,31 +438,63 @@ def store_artifact_file(
         raise FileNotFoundError(source)
     resolved_label = str(label or source.name).strip() or source.name
     artifact_token = str(artifact_id or uuid.uuid4().hex).strip() or uuid.uuid4().hex
-    object_key, target = _artifact_object_path(str(run_id or "").strip(), artifact_token, resolved_label)
+    mime = _guess_content_type(source.name, explicit=content_type)
+    object_key = _artifact_object_key(str(run_id or "").strip(), artifact_token, resolved_label)
+    backend = configured_artifact_storage_backend()
+
+    if backend == S3_ARTIFACT_STORAGE_BACKEND:
+        bucket = _configured_s3_bucket()
+        if not bucket:
+            raise RuntimeError("S3-compatible artifact backend requires EMPYRALIS_OBJECT_STORAGE_BUCKET or ORION_OBJECT_STORAGE_BUCKET.")
+        _upload_file_to_s3(source, bucket=bucket, key=object_key, content_type=mime)
+        record = _build_artifact_record(
+            artifact_id=artifact_token,
+            run_id=run_id,
+            kind=kind,
+            resolved_label=resolved_label,
+            mime=mime,
+            byte_size=int(source.stat().st_size),
+            tenant_id=tenant_id,
+            workspace_id=workspace_id,
+            machine_id=machine_id,
+            step_id=step_id,
+            step_index=step_index,
+            step_number=step_number,
+            retention_days=retention_days,
+            retention_expires_at=retention_expires_at,
+            metadata=metadata,
+            created_at=created_at,
+            storage_backend=S3_ARTIFACT_STORAGE_BACKEND,
+            object_key=object_key,
+            file_name=_safe_filename(resolved_label),
+        )
+        _persist_record(record, source_path=source)
+        return record
+
+    target = _artifact_object_path_for_key(object_key, ensure_parent=True)
     if source != target:
         shutil.copy2(source, target)
     stat = target.stat()
-    mime = _guess_content_type(target.name, explicit=content_type)
-    record = ArtifactRecord(
+    record = _build_artifact_record(
         artifact_id=artifact_token,
-        run_id=str(run_id or "").strip(),
-        tenant_id=str(tenant_id or "default").strip() or "default",
-        workspace_id=str(workspace_id or "default").strip() or "default",
-        kind=str(kind or "artifact").strip() or "artifact",
-        uri=artifact_uri(artifact_token, resolved_label),
-        label=resolved_label,
-        mime_type=mime,
-        content_type=mime,
+        run_id=run_id,
+        kind=kind,
+        resolved_label=resolved_label,
+        mime=mime,
         byte_size=int(stat.st_size),
-        created_at=str(created_at or _utc_now_iso()).strip() or _utc_now_iso(),
-        machine_id=str(machine_id or "").strip() or None,
-        step_id=str(step_id or "").strip() or None,
-        step_index=int(step_index) if isinstance(step_index, int) else None,
-        step_number=int(step_number) if isinstance(step_number, int) else None,
+        tenant_id=tenant_id,
+        workspace_id=workspace_id,
+        machine_id=machine_id,
+        step_id=step_id,
+        step_index=step_index,
+        step_number=step_number,
+        retention_days=retention_days,
+        retention_expires_at=retention_expires_at,
+        metadata=metadata,
+        created_at=created_at,
+        storage_backend=FILESYSTEM_ARTIFACT_STORAGE_BACKEND,
         object_key=object_key,
         file_name=target.name,
-        retention=retention_placeholder(retention_days, retention_expires_at),
-        metadata=dict(_json_safe(dict(metadata or {})) or {}),
     )
     _persist_record(record, stored_path=target, source_path=source)
     return record
@@ -276,29 +522,61 @@ def store_artifact_bytes(
 ) -> ArtifactRecord:
     artifact_token = str(artifact_id or uuid.uuid4().hex).strip() or uuid.uuid4().hex
     resolved_name = str(label or file_name or "artifact.bin").strip() or "artifact.bin"
-    object_key, target = _artifact_object_path(str(run_id or "").strip(), artifact_token, resolved_name)
+    mime = _guess_content_type(resolved_name, explicit=content_type)
+    object_key = _artifact_object_key(str(run_id or "").strip(), artifact_token, resolved_name)
+    backend = configured_artifact_storage_backend()
+
+    if backend == S3_ARTIFACT_STORAGE_BACKEND:
+        bucket = _configured_s3_bucket()
+        if not bucket:
+            raise RuntimeError("S3-compatible artifact backend requires EMPYRALIS_OBJECT_STORAGE_BUCKET or ORION_OBJECT_STORAGE_BUCKET.")
+        _upload_bytes_to_s3(bytes(content), bucket=bucket, key=object_key, content_type=mime)
+        record = _build_artifact_record(
+            artifact_id=artifact_token,
+            run_id=run_id,
+            kind=kind,
+            resolved_label=resolved_name,
+            mime=mime,
+            byte_size=len(bytes(content)),
+            tenant_id=tenant_id,
+            workspace_id=workspace_id,
+            machine_id=machine_id,
+            step_id=step_id,
+            step_index=step_index,
+            step_number=step_number,
+            retention_days=retention_days,
+            retention_expires_at=retention_expires_at,
+            metadata=metadata,
+            created_at=created_at,
+            storage_backend=S3_ARTIFACT_STORAGE_BACKEND,
+            object_key=object_key,
+            file_name=_safe_filename(resolved_name),
+        )
+        _persist_record(record)
+        return record
+
+    target = _artifact_object_path_for_key(object_key, ensure_parent=True)
     target.write_bytes(bytes(content))
-    mime = _guess_content_type(target.name, explicit=content_type)
-    record = ArtifactRecord(
+    record = _build_artifact_record(
         artifact_id=artifact_token,
-        run_id=str(run_id or "").strip(),
-        tenant_id=str(tenant_id or "default").strip() or "default",
-        workspace_id=str(workspace_id or "default").strip() or "default",
-        kind=str(kind or "artifact").strip() or "artifact",
-        uri=artifact_uri(artifact_token, resolved_name),
-        label=resolved_name,
-        mime_type=mime,
-        content_type=mime,
+        run_id=run_id,
+        kind=kind,
+        resolved_label=resolved_name,
+        mime=mime,
         byte_size=int(target.stat().st_size),
-        created_at=str(created_at or _utc_now_iso()).strip() or _utc_now_iso(),
-        machine_id=str(machine_id or "").strip() or None,
-        step_id=str(step_id or "").strip() or None,
-        step_index=int(step_index) if isinstance(step_index, int) else None,
-        step_number=int(step_number) if isinstance(step_number, int) else None,
+        tenant_id=tenant_id,
+        workspace_id=workspace_id,
+        machine_id=machine_id,
+        step_id=step_id,
+        step_index=step_index,
+        step_number=step_number,
+        retention_days=retention_days,
+        retention_expires_at=retention_expires_at,
+        metadata=metadata,
+        created_at=created_at,
+        storage_backend=FILESYSTEM_ARTIFACT_STORAGE_BACKEND,
         object_key=object_key,
         file_name=target.name,
-        retention=retention_placeholder(retention_days, retention_expires_at),
-        metadata=dict(_json_safe(dict(metadata or {})) or {}),
     )
     _persist_record(record, stored_path=target)
     return record
@@ -322,12 +600,30 @@ def resolve_artifact_content_path(reference: str) -> Optional[Path]:
     payload = load_artifact_metadata(reference)
     if not isinstance(payload, dict):
         return None
-    stored_path = str(payload.get("stored_path") or "").strip()
-    if not stored_path:
-        object_key = str(payload.get("object_key") or "").strip()
-        if not object_key:
+    backend = str(payload.get("storage_backend") or FILESYSTEM_ARTIFACT_STORAGE_BACKEND).strip() or FILESYSTEM_ARTIFACT_STORAGE_BACKEND
+    if backend == S3_ARTIFACT_STORAGE_BACKEND:
+        try:
+            target = _artifact_cached_path(payload)
+            expected_size = int(payload.get("byte_size") or 0)
+            if target.exists() and target.is_file():
+                if expected_size <= 0 or target.stat().st_size == expected_size:
+                    return target
+            _download_s3_object_to_cache(payload, target)
+            if target.exists() and target.is_file():
+                return target
             return None
-        candidate = (_artifact_objects_root() / object_key).resolve()
+        except Exception:
+            return None
+
+    stored_path = str(payload.get("stored_path") or "").strip()
+    if stored_path:
+        candidate = Path(stored_path).expanduser().resolve()
         return candidate if candidate.exists() and candidate.is_file() else None
-    candidate = Path(stored_path).expanduser().resolve()
+    object_key = str(payload.get("object_key") or "").strip()
+    if not object_key:
+        return None
+    try:
+        candidate = _artifact_object_path_for_key(object_key)
+    except Exception:
+        return None
     return candidate if candidate.exists() and candidate.is_file() else None

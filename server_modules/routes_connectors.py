@@ -56,7 +56,6 @@ async def provider_profiles_health(
         request.query_params.get("workspace_id"),
         minimum_role="owner",
         capability_id="connectors.manage",
-        connector_id=connector_id,
     )
     return await core.provider_profiles_health(workspace_id=workspace_id)
 
@@ -70,7 +69,6 @@ async def providers_health_check(
         request.query_params.get("workspace_id"),
         minimum_role="owner",
         capability_id="connectors.manage",
-        connector_id=connector_id,
     )
     payload = await core.list_credentials_vault(workspace_id=workspace_id)
     items = payload.get("items") if isinstance(payload, dict) else []

@@ -1,4 +1,4 @@
-import { Controller, Post, Body, Get, UseGuards, Req, Res } from '@nestjs/common';
+import { Controller, Post, Body, Get, Patch, Param, UseGuards, Req, Res } from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
 import type { Request, Response } from 'express';
 import { createPublicKey, createSign, createVerify } from 'crypto';
@@ -146,12 +146,23 @@ function serializeAuthenticatedUser(user: any) {
         id: user.id,
         email: user.email,
         name: user.name,
+        avatar_url: user.avatarUrl || null,
+        created_at: user.createdAt || null,
         organizations: user.memberships.map((m: any) => ({
             id: m.organization.id,
             name: m.organization.name,
             role: m.role,
         })),
     };
+}
+
+class UpdateProfileDto {
+    name?: string;
+    avatar_url?: string;
+}
+
+class SetPasswordDto {
+    password?: string;
 }
 
 @Controller('auth')
@@ -321,7 +332,39 @@ export class AuthController {
     async getCurrentUser(@CurrentUser() user: any) {
         return {
             user: serializeAuthenticatedUser(user),
+            account_access: await this.authService.getAccountAccess(user.id, user.email),
         };
+    }
+
+    @Patch('me')
+    @UseGuards(JwtAuthGuard)
+    async patchCurrentUser(@CurrentUser() user: any, @Body() body: UpdateProfileDto) {
+        const updated = await this.authService.updateProfile(user.id, {
+            name: typeof body?.name === 'string' ? body.name : undefined,
+            avatarUrl: typeof body?.avatar_url === 'string' ? body.avatar_url : undefined,
+        });
+        return {
+            user: serializeAuthenticatedUser(updated.user),
+            account_access: updated.accountAccess,
+        };
+    }
+
+    @Get('access')
+    @UseGuards(JwtAuthGuard)
+    async getAccountAccess(@CurrentUser() user: any) {
+        return await this.authService.getAccountAccess(user.id, user.email);
+    }
+
+    @Post('access/password')
+    @UseGuards(JwtAuthGuard)
+    async addPasswordBackup(@CurrentUser() user: any, @Body() body: SetPasswordDto) {
+        return await this.authService.setPasswordForUser(user.id, String(body?.password || ''));
+    }
+
+    @Post('access/methods/:method/disconnect')
+    @UseGuards(JwtAuthGuard)
+    async disconnectSignInMethod(@CurrentUser() user: any, @Param('method') method: string) {
+        return await this.authService.disconnectSignInMethod(user.id, method);
     }
 
     @Get('status')

@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Cpu, KeyRound, LogOut, UserRound } from 'lucide-react';
+import AccountAccessPanel from '@/components/orion/auth/AccountAccessPanel';
 import { PageHero } from '@/components/orion/page/PageHero';
 import { PageHeroCard } from '@/components/orion/page/PageHeroCard';
 import { PageSection } from '@/components/orion/page/PageSection';
@@ -17,6 +18,52 @@ type ConnectorRow = {
   label: string;
   connector: string;
   metadata: Record<string, unknown>;
+};
+
+type AuthProviders = {
+  email: { enabled: boolean };
+  google: { enabled: boolean };
+  apple: { enabled: boolean };
+};
+
+type AccountAccess = {
+  account_owner: string;
+  email: string | null;
+  sign_in_methods: Array<{
+    id: string;
+    method: string;
+    provider: string;
+    kind: 'password' | 'oauth' | 'sso';
+    label: string;
+    status: 'active' | 'disconnected';
+    is_primary: boolean;
+    can_disconnect: boolean;
+    disconnect_reason: string | null;
+  }>;
+  summary: {
+    active_sign_in_method_count: number;
+    has_password: boolean;
+    has_backup_sign_in_method: boolean;
+  };
+  recovery: {
+    state: 'protected' | 'action_required';
+    warnings: string[];
+    recommended_actions: string[];
+  };
+  messaging: {
+    account_owner: string;
+    provider_boundary: string;
+    unlink_safety: string;
+  };
+};
+
+type ProviderProfileConnection = {
+  id: string;
+  provider: string;
+  label: string;
+  health: string;
+  enabled: boolean;
+  model?: string | null;
 };
 
 function connectorIdentity(metadata: Record<string, unknown>): string {
@@ -39,24 +86,48 @@ export default function SettingsPage() {
   const router = useRouter();
   const [connectors, setConnectors] = useState<ConnectorRow[]>([]);
   const [profileEmail, setProfileEmail] = useState('');
+  const [accountAccess, setAccountAccess] = useState<AccountAccess | null>(null);
+  const [authProviders, setAuthProviders] = useState<AuthProviders>({
+    email: { enabled: true },
+    google: { enabled: false },
+    apple: { enabled: false },
+  });
+  const [providerConnections, setProviderConnections] = useState<ProviderProfileConnection[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [signingOut, setSigningOut] = useState(false);
+  const [accessError, setAccessError] = useState('');
+  const [accessNotice, setAccessNotice] = useState('');
+  const [accessBusyMethod, setAccessBusyMethod] = useState<string | null>(null);
+  const [passwordBusy, setPasswordBusy] = useState(false);
   const profileName = useMemo(() => displayNameFromEmail(profileEmail), [profileEmail]);
 
   const loadConnectors = useCallback(async () => {
     setLoading(true);
     setError('');
+    setAccessError('');
     try {
       await ensureControlPlaneSession();
-      const [connectorsRes, authRes] = await Promise.all([
+      const [connectorsRes, authRes, accessRes, authProvidersRes, providerProfilesRes] = await Promise.all([
         fetch('/api/control-plane/connectors?workspace_id=default', { cache: 'no-store' }),
         fetch('/api/control-plane/auth/me', { cache: 'no-store' }),
+        fetch('/api/control-plane/auth/access', { cache: 'no-store' }),
+        fetch('/api/control-plane/auth/providers', { cache: 'no-store' }),
+        fetch('/api/control-plane/providers/profiles/health?workspace_id=default', { cache: 'no-store' }),
       ]);
       const connectorsBody = await connectorsRes.json().catch(() => ({}));
       const authBody = await authRes.json().catch(() => ({}));
+      const accessBody = await accessRes.json().catch(() => ({}));
+      const authProvidersBody = await authProvidersRes.json().catch(() => ({}));
+      const providerProfilesBody = await providerProfilesRes.json().catch(() => ({}));
       if (!connectorsRes.ok) {
         throw new Error(String(connectorsBody?.detail || connectorsBody?.message || 'Failed to load connectors.'));
+      }
+      if (!authRes.ok) {
+        throw new Error(String(authBody?.detail || authBody?.message || 'Failed to load account profile.'));
+      }
+      if (!accessRes.ok) {
+        throw new Error(String(accessBody?.detail || accessBody?.message || 'Failed to load account access.'));
       }
       const items: unknown[] = Array.isArray(connectorsBody?.items) ? connectorsBody.items : [];
       const next = items
@@ -70,8 +141,30 @@ export default function SettingsPage() {
         .filter((item) => item.id && item.connector);
       setConnectors(next);
       setProfileEmail(String(authBody?.user?.email || '').trim());
+      setAccountAccess(accessBody as AccountAccess);
+      setAuthProviders({
+        email: { enabled: Boolean(authProvidersBody?.email?.enabled ?? true) },
+        google: { enabled: Boolean(authProvidersBody?.google?.enabled) },
+        apple: { enabled: Boolean(authProvidersBody?.apple?.enabled) },
+      });
+      const providerItems: unknown[] = Array.isArray(providerProfilesBody?.items) ? providerProfilesBody.items : [];
+      setProviderConnections(
+        providerItems
+          .filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === 'object')
+          .map((item) => ({
+            id: String(item.id || ''),
+            provider: String(item.provider || '').trim().toLowerCase(),
+            label: String(item.label || '').trim() || 'Connected provider',
+            health: String(item.health || 'disabled').trim().toLowerCase() || 'disabled',
+            enabled: Boolean(item.enabled),
+            model: String(item.model || '').trim() || null,
+          }))
+          .filter((item) => item.id && item.provider),
+      );
     } catch (fetchError) {
-      setError(fetchError instanceof Error ? fetchError.message : 'Failed to load connectors.');
+      const message = fetchError instanceof Error ? fetchError.message : 'Failed to load connectors.';
+      setError(message);
+      setAccessError(message);
     } finally {
       setLoading(false);
     }
@@ -82,6 +175,56 @@ export default function SettingsPage() {
   }, [loadConnectors]);
 
   const connectedCount = connectors.filter((item) => item.metadata.paused !== true).length;
+  const activeSignInCount = accountAccess?.summary.active_sign_in_method_count || 0;
+  const connectedProviderCount = providerConnections.filter((item) => item.enabled).length;
+
+  const handleDisconnectMethod = useCallback(async (method: string) => {
+    setAccessBusyMethod(method);
+    setAccessError('');
+    setAccessNotice('');
+    try {
+      const response = await fetch(`/api/control-plane/auth/access/methods/${encodeURIComponent(method)}/disconnect`, {
+        method: 'POST',
+        cache: 'no-store',
+      });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(String(body?.detail || body?.message || 'Failed to disconnect sign-in method.'));
+      }
+      setAccountAccess(body as AccountAccess);
+      setAccessNotice('Sign-in method updated.');
+    } catch (actionError) {
+      setAccessError(actionError instanceof Error ? actionError.message : 'Failed to disconnect sign-in method.');
+    } finally {
+      setAccessBusyMethod(null);
+    }
+  }, []);
+
+  const handleAddPassword = useCallback(async (password: string) => {
+    setPasswordBusy(true);
+    setAccessError('');
+    setAccessNotice('');
+    try {
+      const response = await fetch('/api/control-plane/auth/access/password', {
+        method: 'POST',
+        cache: 'no-store',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ password }),
+      });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(String(body?.detail || body?.message || 'Failed to add password backup.'));
+      }
+      setAccountAccess(body as AccountAccess);
+      setAccessNotice('Password backup saved.');
+    } catch (actionError) {
+      setAccessError(actionError instanceof Error ? actionError.message : 'Failed to add password backup.');
+    } finally {
+      setPasswordBusy(false);
+    }
+  }, []);
 
   const handleSignOut = useCallback(() => {
     setSigningOut(true);
@@ -114,6 +257,14 @@ export default function SettingsPage() {
             <div>
               <div className="orion-home-side-value">{profileName}</div>
               <div className="orion-home-side-note">Profile</div>
+            </div>
+            <div>
+              <div className="orion-home-side-value">{activeSignInCount}</div>
+              <div className="orion-home-side-note">Sign-in methods</div>
+            </div>
+            <div>
+              <div className="orion-home-side-value">{connectedProviderCount}</div>
+              <div className="orion-home-side-note">AI providers</div>
             </div>
           </div>
         </PageHeroCard>
@@ -151,6 +302,24 @@ export default function SettingsPage() {
             Open machines
           </Link>
         </div>
+      </PageSection>
+
+      <PageSection
+        title="Account access"
+        description="Manage your sign-in methods, recovery path, and linked AI capabilities."
+      >
+        {accessNotice ? <div className="orion-panel-copy" style={{ marginBottom: 10 }}>{accessNotice}</div> : null}
+        <AccountAccessPanel
+          access={accountAccess}
+          authProviders={authProviders}
+          providerConnections={providerConnections}
+          loading={loading}
+          error={accessError}
+          actionBusy={accessBusyMethod}
+          passwordBusy={passwordBusy}
+          onDisconnectMethod={handleDisconnectMethod}
+          onAddPassword={handleAddPassword}
+        />
       </PageSection>
 
       <PageSection title="Connected tools" description="The accounts currently available to your agents and workflows.">

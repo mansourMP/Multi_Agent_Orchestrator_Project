@@ -1,7 +1,7 @@
 use std::fs;
 use std::io::{Read, Write};
 use std::net::TcpListener;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::mpsc;
 use std::sync::Mutex;
@@ -14,7 +14,7 @@ use rand::{rngs::OsRng, RngCore};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
-use tauri::{Manager, RunEvent, Runtime, WebviewUrl, WebviewWindowBuilder};
+use tauri::{LogicalSize, Manager, RunEvent, Runtime, Size, WebviewUrl, WebviewWindowBuilder};
 use url::Url;
 
 const RUNTIME_HOST: &str = "127.0.0.1";
@@ -566,6 +566,10 @@ fn pid_dir() -> PathBuf {
     state_dir().join("pids")
 }
 
+fn local_openai_api_key_path() -> PathBuf {
+    state_dir().join("openai_api_key")
+}
+
 fn start_meta_path() -> PathBuf {
     state_dir().join("start.meta.json")
 }
@@ -827,6 +831,18 @@ fn read_machine_enrollment_config() -> Option<LocalMachineEnrollmentConfig> {
     serde_json::from_str::<LocalMachineEnrollmentConfig>(&raw).ok()
 }
 
+fn resolved_openai_api_key() -> Option<String> {
+    let explicit = std::env::var("OPENAI_API_KEY").ok().map(|value| value.trim().to_string());
+    if let Some(value) = explicit.filter(|value| !value.is_empty()) {
+        return Some(value);
+    }
+
+    fs::read_to_string(local_openai_api_key_path())
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
 fn write_machine_enrollment_config(config: &LocalMachineEnrollmentConfig) -> Result<(), String> {
     ensure_state_dir()?;
     let path = machine_enrollment_config_path();
@@ -851,6 +867,139 @@ fn backend_dir() -> PathBuf {
     repo_root().join("backend")
 }
 
+fn runtime_binary_names() -> Vec<&'static str> {
+    let mut names = Vec::new();
+
+    #[cfg(target_os = "windows")]
+    {
+        names.push("empyralis-backend.exe");
+        names.push("empyralis-backend-x86_64-pc-windows-msvc.exe");
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        #[cfg(target_arch = "aarch64")]
+        names.push("empyralis-backend-aarch64-apple-darwin");
+        #[cfg(target_arch = "x86_64")]
+        names.push("empyralis-backend-x86_64-apple-darwin");
+        names.push("empyralis-backend");
+    }
+
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        #[cfg(target_arch = "x86_64")]
+        names.push("empyralis-backend-x86_64-unknown-linux-gnu");
+        #[cfg(target_arch = "aarch64")]
+        names.push("empyralis-backend-aarch64-unknown-linux-gnu");
+        names.push("empyralis-backend");
+    }
+
+    names
+}
+
+fn venv_executable(repo_root: &Path, env_dir: &str, executable: &str) -> PathBuf {
+    #[cfg(target_os = "windows")]
+    {
+        let executable = if executable.ends_with(".exe") {
+            executable.to_string()
+        } else {
+            format!("{executable}.exe")
+        };
+        return repo_root.join(env_dir).join("Scripts").join(executable);
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        repo_root.join(env_dir).join("bin").join(executable)
+    }
+}
+
+fn first_existing_path(candidates: impl IntoIterator<Item = PathBuf>) -> Option<PathBuf> {
+    candidates.into_iter().find(|candidate| candidate.exists())
+}
+
+fn executable_from_dirs(names: &[&str], dirs: &[PathBuf]) -> Option<PathBuf> {
+    for dir in dirs {
+        for name in names {
+            let candidate = dir.join(name);
+            if candidate.exists() {
+                return Some(candidate);
+            }
+        }
+    }
+    None
+}
+
+fn resolve_runtime_launcher_candidates(
+    prefer_bundled: bool,
+    resource_dir: Option<&Path>,
+    repo_root: &Path,
+    path_dirs: &[PathBuf],
+) -> Option<(PathBuf, Vec<String>)> {
+    if prefer_bundled {
+        if let Some(resource_dir) = resource_dir {
+            if let Some(path) = first_existing_path(
+                runtime_binary_names()
+                    .into_iter()
+                    .map(|name| resource_dir.join(name)),
+            ) {
+                return Some((path, Vec::new()));
+            }
+        }
+    }
+
+    let uvicorn_candidates = [
+        venv_executable(repo_root, "venv", "uvicorn"),
+        venv_executable(repo_root, ".venv", "uvicorn"),
+    ];
+    if let Some(path) = first_existing_path(uvicorn_candidates) {
+        return Some((path, Vec::new()));
+    }
+
+    #[cfg(target_os = "windows")]
+    let uvicorn_path_names = ["uvicorn.exe", "uvicorn"];
+    #[cfg(not(target_os = "windows"))]
+    let uvicorn_path_names = ["uvicorn"];
+    if let Some(path) = executable_from_dirs(&uvicorn_path_names, path_dirs) {
+        return Some((path, Vec::new()));
+    }
+
+    let python_candidates = [
+        venv_executable(repo_root, "venv", "python"),
+        venv_executable(repo_root, ".venv", "python"),
+    ];
+    if let Some(path) = first_existing_path(python_candidates) {
+        return Some((path, vec!["-m".into(), "uvicorn".into()]));
+    }
+
+    #[cfg(target_os = "windows")]
+    let python_path_names = ["python.exe", "py.exe", "python", "py"];
+    #[cfg(not(target_os = "windows"))]
+    let python_path_names = ["python3", "python"];
+    if let Some(path) = executable_from_dirs(&python_path_names, path_dirs) {
+        return Some((path, vec!["-m".into(), "uvicorn".into()]));
+    }
+
+    let dist_dir = repo_root.join("dist");
+    first_existing_path(
+        runtime_binary_names()
+            .into_iter()
+            .map(|name| dist_dir.join(name)),
+    )
+    .map(|path| (path, Vec::new()))
+}
+
+fn prefer_bundled_runtime_launcher() -> bool {
+    if cfg!(debug_assertions) {
+        return matches!(
+            std::env::var("EMPYRALIS_TAURI_USE_BUNDLED_RUNTIME"),
+            Ok(value) if matches!(value.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes")
+        );
+    }
+
+    true
+}
+
 fn next_cli_path() -> PathBuf {
     frontend_dir()
         .join("node_modules")
@@ -873,7 +1022,7 @@ fn backend_base_url() -> String {
 }
 
 fn backend_health_url() -> String {
-    format!("{}/health", backend_base_url())
+    format!("http://{BACKEND_HOST}:{BACKEND_PORT}/health")
 }
 
 fn next_url() -> String {
@@ -1101,41 +1250,14 @@ fn npm_binary() -> &'static str {
 fn bundled_runtime_launcher<Rt: Runtime, M: Manager<Rt>>(
     app: &M,
 ) -> Result<Option<(PathBuf, Vec<String>)>, String> {
-    let resource_dir = app
-        .path()
-        .resource_dir()
-        .map_err(|error| format!("Failed to resolve resource directory: {error}"))?;
-    let mut candidates = Vec::new();
-
-    #[cfg(target_os = "windows")]
-    {
-        candidates.push(resource_dir.join("empyralis-backend.exe"));
-        candidates.push(resource_dir.join("empyralis-backend-x86_64-pc-windows-msvc.exe"));
-    }
-
-    #[cfg(target_os = "macos")]
-    {
-        #[cfg(target_arch = "aarch64")]
-        candidates.push(resource_dir.join("empyralis-backend-aarch64-apple-darwin"));
-        #[cfg(target_arch = "x86_64")]
-        candidates.push(resource_dir.join("empyralis-backend-x86_64-apple-darwin"));
-        candidates.push(resource_dir.join("empyralis-backend"));
-    }
-
-    #[cfg(all(unix, not(target_os = "macos")))]
-    {
-        #[cfg(target_arch = "x86_64")]
-        candidates.push(resource_dir.join("empyralis-backend-x86_64-unknown-linux-gnu"));
-        #[cfg(target_arch = "aarch64")]
-        candidates.push(resource_dir.join("empyralis-backend-aarch64-unknown-linux-gnu"));
-        candidates.push(resource_dir.join("empyralis-backend"));
-    }
-
-    if let Some(path) = candidates.into_iter().find(|candidate| candidate.exists()) {
-        return Ok(Some((path, Vec::new())));
-    }
-
-    Ok(None)
+    Ok(resolve_runtime_launcher_candidates(
+        prefer_bundled_runtime_launcher(),
+        app.path().resource_dir().ok().as_deref(),
+        &repo_root(),
+        &std::env::var_os("PATH")
+            .map(|value| std::env::split_paths(&value).collect::<Vec<_>>())
+            .unwrap_or_default(),
+    ))
 }
 
 fn runtime_launcher<Rt: Runtime, M: Manager<Rt>>(app: &M) -> Result<(PathBuf, Vec<String>), String> {
@@ -1143,27 +1265,10 @@ fn runtime_launcher<Rt: Runtime, M: Manager<Rt>>(app: &M) -> Result<(PathBuf, Ve
         return Ok(bundled);
     }
 
-    let root = repo_root();
-    let candidates = [
-        root.join("venv").join("bin").join("uvicorn"),
-        root.join(".venv").join("bin").join("uvicorn"),
-    ];
-    if let Some(path) = candidates.into_iter().find(|candidate| candidate.exists()) {
-        return Ok((path, Vec::new()));
-    }
-
-    let python_candidates = [
-        root.join("venv").join("bin").join("python"),
-        root.join(".venv").join("bin").join("python"),
-    ];
-    if let Some(path) = python_candidates
-        .into_iter()
-        .find(|candidate| candidate.exists())
-    {
-        return Ok((path, vec!["-m".into(), "uvicorn".into()]));
-    }
-
-    Err("Could not find a bundled empyralis-backend binary or a uvicorn launcher in venv/ or .venv/.".into())
+    Err(
+        "Could not resolve an Empyralis runtime launcher. Checked bundled binaries, dist/ binaries, uvicorn, and python -m uvicorn."
+            .into(),
+    )
 }
 
 fn backend_mode() -> BackendMode {
@@ -1255,6 +1360,10 @@ fn spawn_backend(runtime_key: &str) -> Result<Child, String> {
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit());
 
+    if let Some(openai_api_key) = resolved_openai_api_key() {
+        command.env("OPENAI_API_KEY", openai_api_key);
+    }
+
     command
         .spawn()
         .map_err(|error| format!("Failed to start backend sidecar: {error}"))
@@ -1344,6 +1453,39 @@ fn desktop_bridge_script() -> String {
 "#,
         platform = std::env::consts::OS
     )
+}
+
+fn ensure_main_window<R: Runtime>(app: &tauri::App<R>) -> Result<(), String> {
+    if let Some(window) = app.get_webview_window(WINDOW_LABEL) {
+        window
+            .eval(&desktop_bridge_script())
+            .map_err(|error| format!("Failed to refresh desktop bridge on existing main window: {error}"))?;
+        let _ = window.set_title(WINDOW_TITLE);
+        let _ = window.set_size(Size::Logical(LogicalSize::new(WINDOW_WIDTH, WINDOW_HEIGHT)));
+        let _ = window.show();
+        let _ = window.set_focus();
+        return Ok(());
+    }
+
+    let url = next_url()
+        .parse()
+        .map_err(|error| format!("Invalid app URL: {error}"))?;
+
+    let mut window_builder = WebviewWindowBuilder::new(app, WINDOW_LABEL, WebviewUrl::External(url))
+        .initialization_script(&desktop_bridge_script())
+        .title(WINDOW_TITLE)
+        .inner_size(WINDOW_WIDTH, WINDOW_HEIGHT);
+
+    #[cfg(target_os = "macos")]
+    {
+        window_builder = window_builder.title_bar_style(tauri::TitleBarStyle::Overlay);
+    }
+
+    window_builder
+        .build()
+        .map_err(|error| format!("Failed to build main window: {error}"))?;
+
+    Ok(())
 }
 
 fn overlay_monitor_bounds<R: Runtime>(app: &tauri::App<R>) -> Result<(f64, f64, f64, f64), String> {
@@ -1912,29 +2054,11 @@ pub fn run() {
                 return Err(Box::new(std::io::Error::other(error)));
             }
 
-            let url = next_url().parse().map_err(|error| {
-                Box::new(std::io::Error::other(format!("Invalid app URL: {error}")))
-                    as Box<dyn std::error::Error>
-            })?;
-
-            let mut window_builder =
-                WebviewWindowBuilder::new(app, WINDOW_LABEL, WebviewUrl::External(url))
-                    .initialization_script(&desktop_bridge_script())
-                    .title(WINDOW_TITLE)
-                    .inner_size(WINDOW_WIDTH, WINDOW_HEIGHT);
-
-            #[cfg(target_os = "macos")]
-            {
-                window_builder = window_builder.title_bar_style(tauri::TitleBarStyle::Overlay);
-            }
-
-            if let Err(error) = window_builder.build() {
+            if let Err(error) = ensure_main_window(app) {
                 stop_sidecars(&state);
                 release_desktop_start_metadata(&start_meta_path);
                 release_desktop_shell_lock(&lock_path);
-                return Err(Box::new(std::io::Error::other(format!(
-                    "Failed to build main window: {error}"
-                ))));
+                return Err(Box::new(std::io::Error::other(error)));
             }
 
             if let Err(error) = create_overlay_window(app) {
@@ -1959,4 +2083,104 @@ pub fn run() {
                 release_desktop_shell_lock(&lock_state.lock_path);
             }
         });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    struct TempTree {
+        root: PathBuf,
+    }
+
+    impl TempTree {
+        fn new() -> Self {
+            let unique = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("clock should be after epoch")
+                .as_nanos();
+            let root = std::env::temp_dir().join(format!("empyralis-tauri-tests-{}-{unique}", std::process::id()));
+            fs::create_dir_all(&root).expect("temp tree should be created");
+            Self { root }
+        }
+    }
+
+    impl Drop for TempTree {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.root);
+        }
+    }
+
+    fn touch(path: &Path) {
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).expect("parent dirs should be created");
+        }
+        fs::write(path, b"ok").expect("file should be created");
+    }
+
+    #[test]
+    fn runtime_resolver_prefers_bundled_resource_binary() {
+        let tree = TempTree::new();
+        let repo_root = tree.root.join("repo");
+        let resource_dir = tree.root.join("resources");
+        fs::create_dir_all(&repo_root).expect("repo root should exist");
+        fs::create_dir_all(&resource_dir).expect("resource dir should exist");
+
+        let binary_name = runtime_binary_names()[0];
+        let bundled_binary = resource_dir.join(binary_name);
+        let dist_binary = repo_root.join("dist").join(binary_name);
+        touch(&bundled_binary);
+        touch(&dist_binary);
+
+        let resolved = resolve_runtime_launcher_candidates(true, Some(&resource_dir), &repo_root, &[])
+            .expect("bundled binary should resolve");
+
+        assert_eq!(resolved.0, bundled_binary);
+        assert!(resolved.1.is_empty());
+    }
+
+    #[test]
+    fn runtime_resolver_uses_venv_uvicorn_before_path_python() {
+        let tree = TempTree::new();
+        let repo_root = tree.root.join("repo");
+        fs::create_dir_all(&repo_root).expect("repo root should exist");
+
+        let venv_uvicorn = venv_executable(&repo_root, "venv", "uvicorn");
+        let path_python_dir = tree.root.join("path-bin");
+        let path_python = path_python_dir.join(if cfg!(target_os = "windows") {
+            "python.exe"
+        } else {
+            "python3"
+        });
+        touch(&venv_uvicorn);
+        touch(&path_python);
+
+        let resolved = resolve_runtime_launcher_candidates(false, None, &repo_root, &[path_python_dir])
+            .expect("venv uvicorn should resolve");
+
+        assert_eq!(resolved.0, venv_uvicorn);
+        assert!(resolved.1.is_empty());
+    }
+
+    #[test]
+    fn runtime_resolver_falls_back_to_python_module_launcher() {
+        let tree = TempTree::new();
+        let repo_root = tree.root.join("repo");
+        let path_python_dir = tree.root.join("path-bin");
+        fs::create_dir_all(&repo_root).expect("repo root should exist");
+
+        let path_python = path_python_dir.join(if cfg!(target_os = "windows") {
+            "python.exe"
+        } else {
+            "python3"
+        });
+        touch(&path_python);
+
+        let resolved = resolve_runtime_launcher_candidates(false, None, &repo_root, &[path_python_dir])
+            .expect("python -m uvicorn should resolve");
+
+        assert_eq!(resolved.0, path_python);
+        assert_eq!(resolved.1, vec!["-m".to_string(), "uvicorn".to_string()]);
+    }
 }

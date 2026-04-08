@@ -9,17 +9,8 @@
     "beforeBuildCommand": ""
   },
   "app": {
+    "macOSPrivateApi": true,
     "withGlobalTauri": false,
-    "windows": [
-      {
-        "title": "Empyralis",
-        "decorations": false,
-        "width": 1280,
-        "height": 800,
-        "minWidth": 1100,
-        "minHeight": 760
-      }
-    ],
     "security": {
       "csp": null
     }
@@ -36,5 +27,11 @@
     ],
     "externalBin": ["../dist/empyralis-backend"],
     "resources": ["../frontend/app/favicon.ico"]
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "",
+      "endpoints": []
+    }
   }
 }

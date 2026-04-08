@@ -1,9 +1,11 @@
+import argparse
 import os
 import logging
 import sentry_sdk
 from sentry_sdk.integrations.fastapi import FastApiIntegration
 from sentry_sdk.integrations.sqlalchemy import SqlalchemyIntegration
 from contextlib import asynccontextmanager
+import uvicorn
 
 sentry_sdk.init(
     dsn=os.environ.get("SENTRY_DSN", ""),
@@ -161,3 +163,40 @@ app.include_router(builder_router)
 app.include_router(runs_router, prefix="/api")
 app.include_router(health_router, prefix="/api")
 app.include_router(auth_router, prefix="/api/v1")
+
+
+def _runtime_cli_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Empyralis runtime API")
+    parser.add_argument(
+        "app_path",
+        nargs="?",
+        default="server:app",
+        help="Compatibility positional accepted from uvicorn-style launchers.",
+    )
+    parser.add_argument("--host", default=os.getenv("ORION_RUNTIME_HOST", "127.0.0.1"))
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=int(os.getenv("ORION_RUNTIME_PORT", "8001")),
+    )
+    parser.add_argument("--reload", action="store_true", help="Enable reload when launched as a script.")
+    args = parser.parse_args()
+    # Keep compatibility with the existing Tauri launcher, which passes `server:app`.
+    if str(args.app_path).strip() not in {"", "server:app"}:
+        parser.error(f"Unsupported app target: {args.app_path}")
+    return args
+
+
+def main() -> None:
+    args = _runtime_cli_args()
+    uvicorn.run(
+        "server:app",
+        host=args.host,
+        port=args.port,
+        reload=args.reload,
+        factory=False,
+    )
+
+
+if __name__ == "__main__":
+    main()

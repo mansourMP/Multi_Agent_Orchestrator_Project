@@ -82,7 +82,7 @@ export default function WorkflowsPage() {
         actions={
           <>
             <Link
-              href="/workflows/new"
+              href="/"
               style={mergeStyles(
                 {
                   display: 'inline-flex',
@@ -94,7 +94,7 @@ export default function WorkflowsPage() {
               )}
             >
               <Plus size={14} />
-              New Workflow
+              Start in chat
             </Link>
             <Link
               href="/setup"
@@ -216,7 +216,7 @@ export default function WorkflowsPage() {
                   <RetryActions onRetry={clearQuery} retryLabel="Clear search" />
                 ) : workflows.length === 0 ? (
                   <Link
-                    href="/workflows/new"
+                    href="/"
                     style={mergeStyles(
                       {
                         display: 'inline-flex',
@@ -228,7 +228,7 @@ export default function WorkflowsPage() {
                     )}
                   >
                     <Plus size={14} />
-                    New Workflow
+                    Start in chat
                   </Link>
                 ) : undefined
               }
@@ -243,7 +243,7 @@ export default function WorkflowsPage() {
                   <WorkflowListRow
                     key={workflow.id}
                     workflow={workflow}
-                    onEdit={() => router.push(`/workflows/${workflow.id}`)}
+                    onEdit={() => router.push('/agents')}
                     onRun={() => {
                       void handleRunWorkflow(workflow.id);
                     }}

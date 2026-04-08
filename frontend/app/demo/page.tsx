@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Suspense, useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { ArrowRight, Monitor, RefreshCw, Sparkles } from 'lucide-react';
@@ -24,7 +24,7 @@ function prettyStatus(value?: string): string {
     .join(' ');
 }
 
-export default function DemoPage() {
+function DemoPageContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const isDesktop = useDesktopShell();
@@ -244,5 +244,13 @@ export default function DemoPage() {
         </>
       )}
     </div>
+  );
+}
+
+export default function DemoPage() {
+  return (
+    <Suspense fallback={<div className="orion-page-shell narrow orion-animate-in" style={{ width: 'min(780px, 100%)', margin: '0 auto', gap: 18 }} />}>
+      <DemoPageContent />
+    </Suspense>
   );
 }

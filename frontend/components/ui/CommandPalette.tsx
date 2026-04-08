@@ -287,15 +287,6 @@ export default function CommandPaletteProvider({ children }: { children: React.R
           icon: <Workflow size={16} />,
         },
         {
-          id: 'builder',
-          name: 'Builder',
-          keywords: 'library create asset workflow template',
-          subtitle: 'Asset editing surface for reusable agents and workflows.',
-          section: 'Library',
-          perform: () => router.push('/builder'),
-          icon: <Workflow size={16} />,
-        },
-        {
           id: 'machines',
           name: 'Machines',
           keywords: 'integrations local runtime machine capability',

@@ -36,25 +36,11 @@ const SHELL_ROUTE_DEFS: ShellRouteDef[] = [
     match: (pathname: string) => pathname === '/builder',
   },
   {
-    id: 'builder-editor',
-    title: 'Agent Editor',
-    breadcrumb: 'Agents',
-    slotLabel: 'Design reusable agent systems visually',
-    match: (pathname: string) => pathname.startsWith('/builder/'),
-  },
-  {
     id: 'automations',
     title: 'Workflows',
     breadcrumb: 'Workflows',
     slotLabel: 'Reusable workflows and playbooks',
     match: (pathname: string) => pathname === '/workflows',
-  },
-  {
-    id: 'automation-editor',
-    title: 'Workflow Editor',
-    breadcrumb: 'Workflows',
-    slotLabel: 'Edit workflow graph',
-    match: (pathname: string) => pathname.startsWith('/workflows/'),
   },
   {
     id: 'agents',

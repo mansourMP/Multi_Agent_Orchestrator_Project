@@ -1,5 +1,6 @@
 'use client';
 
+import { Suspense } from 'react';
 import Link from 'next/link';
 import { RefreshCw, Search } from 'lucide-react';
 import { AGENT_ROLE_OPTIONS, type AgentRoleId } from '@/app/page.catalog';
@@ -36,7 +37,7 @@ import {
   panelStyle,
 } from '@/design-constraints';
 
-export default function ArtifactsPage() {
+function ArtifactsPageContent() {
   const {
     payload,
     loading,
@@ -437,5 +438,13 @@ export default function ArtifactsPage() {
         </PageCollection>
       )}
     </div>
+  );
+}
+
+export default function ArtifactsPage() {
+  return (
+    <Suspense fallback={<div style={pageShellStyle()} />}>
+      <ArtifactsPageContent />
+    </Suspense>
   );
 }

@@ -99,7 +99,7 @@ export function WorkflowListRow({ workflow, onEdit, onRun, onDelete, onDuplicate
             }}
           >
             <Pencil size={14} />
-            Edit
+            Open
           </Button>
           <Button
             type="button"

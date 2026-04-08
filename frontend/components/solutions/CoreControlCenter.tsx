@@ -164,7 +164,7 @@ export function CoreControlCenter() {
             <Link href="/workflows" className="btn-secondary">
               Workflows
             </Link>
-            <Link href="/workflows" className="btn-primary">
+            <Link href="/" className="btn-primary">
               Open Assistant
             </Link>
           </div>
@@ -312,7 +312,7 @@ export function CoreControlCenter() {
                 {workflows.slice(0, 4).map((workflow) => (
                   <Link
                     key={workflow.id}
-                    href={`/workflows/${encodeURIComponent(workflow.id)}`}
+                    href="/workflows"
                     className="orion-list-row"
                     style={{ textDecoration: 'none', color: 'inherit' }}
                   >

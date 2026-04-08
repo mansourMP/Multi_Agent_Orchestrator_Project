@@ -2473,7 +2473,7 @@ export function AutopilotWorkspace() {
       return;
     }
     if (action.kind === 'workflow') {
-      router.push(action.href || '/builder/new');
+      router.push(action.href || '/');
       return;
     }
     if (action.kind !== 'run') return;

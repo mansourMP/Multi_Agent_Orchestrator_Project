@@ -90,14 +90,6 @@ const BASE_COMMANDS: PlatformCommand[] = [
     action: { type: 'navigate', href: '/' },
   },
   {
-    id: 'nav.builder',
-    title: 'Go to Builder',
-    description: 'Open the workflow builder and design a new workflow visually.',
-    group: 'Navigate',
-    keywords: ['builder', 'workflow', 'canvas', 'editor', 'design'],
-    action: { type: 'navigate', href: '/builder' },
-  },
-  {
     id: 'nav.files',
     title: 'Go to Assets',
     description: 'Browse finished work, evidence, and generated files.',

@@ -169,7 +169,7 @@ export default function AgentsPage() {
       if (original.definition) {
         await updateWorkflow(createdId, original.definition);
       }
-      router.push(`/builder/${createdId}`);
+      router.push('/workflows');
     } catch (duplicateError) {
       setActionError(formatActionError(duplicateError, 'Failed to duplicate agent'));
     } finally {
@@ -184,9 +184,9 @@ export default function AgentsPage() {
         title="Create and manage reusable agents."
         copy="Use this page for reusable agent systems. Edit agents here. Use chat separately when you want live help from an assistant."
         actions={
-          <Link href="/builder/new" className="btn-primary">
+          <Link href="/" className="btn-primary">
             <Plus size={14} />
-            Create agent
+            Start in chat
           </Link>
         }
       />
@@ -245,9 +245,9 @@ export default function AgentsPage() {
               title="No agents yet"
               copy="Agents are specialized AI assistants you can assign to tasks. Create one or let Empyralis create one for you."
               actions={
-                <Link href="/builder/new" className="btn-primary">
+                <Link href="/" className="btn-primary">
                   <Plus size={14} />
-                  Create agent
+                  Start in chat
                 </Link>
               }
             />
@@ -270,8 +270,8 @@ export default function AgentsPage() {
                       <span>You</span>
                     </div>
                     <div className="orion-builder-hub-card-actions">
-                      <Link href={`/builder/${agent.id}`} className="btn-primary">
-                        Edit
+                      <Link href="/workflows" className="btn-primary">
+                        Open library
                       </Link>
                       <Link href={buildAgentChatHref(agent)} className="btn-secondary">
                         <MessageSquare size={14} />
@@ -310,8 +310,8 @@ export default function AgentsPage() {
                   <span>Start here</span>
                 </div>
                 <div className="orion-builder-hub-card-actions">
-                  <Link href="/builder/new" className="btn-primary">
-                    Create agent
+                  <Link href="/" className="btn-primary">
+                    Start in chat
                   </Link>
                 </div>
               </article>

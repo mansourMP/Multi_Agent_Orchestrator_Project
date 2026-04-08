@@ -8,7 +8,7 @@ type ShellChromeVisibility = {
 
 export function useShellChromeVisibility(pathname?: string | null): ShellChromeVisibility {
   const safePathname = pathname ?? '/';
-  const isBuilderEditorRoute = safePathname.startsWith('/builder/');
+  const isBuilderEditorRoute = false;
   const isSetupRoute = safePathname.startsWith('/setup');
 
   return {

@@ -12,8 +12,6 @@ import CommandPaletteProvider from "@/components/ui/CommandPalette";
 import { SidebarProvider } from "@/components/ui/sidebar";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { BRAND } from "@/lib/brand";
-import "@xyflow/react/dist/style.css";
-import "../components/reactflow-override.css";
 import "./globals.css";
 import "@fontsource/space-mono/400.css";
 import "@fontsource/space-mono/700.css";
@@ -143,11 +141,11 @@ a {
   bottom: 0 !important;
   height: calc(100vh - var(--desktop-titlebar-height));
 }
-html[data-sidebar-collapsed='0'] body:not(.orion-chat-home):not(.orion-builder-focus):not(.orion-setup-focus) .orion-main-stage {
+html[data-sidebar-collapsed='0'] body:not(.orion-chat-home):not(.orion-setup-focus) .orion-main-stage {
   transform: none;
   filter: none;
 }
-html[data-sidebar-collapsed='0'] body:not(.orion-chat-home):not(.orion-builder-focus):not(.orion-setup-focus) .orion-main-stage::after {
+html[data-sidebar-collapsed='0'] body:not(.orion-chat-home):not(.orion-setup-focus) .orion-main-stage::after {
   opacity: 0;
 }
 .input,
@@ -172,7 +170,7 @@ const THEME_BOOTSTRAP_SCRIPT = `
       ? (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')
       : theme;
     const pathname = String(window.location.pathname || '/');
-    const hideShellChrome = pathname.startsWith('/builder/') || pathname.startsWith('/setup');
+    const hideShellChrome = pathname.startsWith('/setup');
     const isTauriDesktop = '__TAURI_INTERNALS__' in window || navigator.userAgent.includes('Tauri');
     const isMacDesktop = isTauriDesktop && /Mac|iPhone|iPad|iPod/.test(navigator.platform || navigator.userAgent);
     const root = document.documentElement;

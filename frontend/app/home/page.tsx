@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { Suspense, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { ArrowRight, MessageSquare, PlayCircle } from 'lucide-react';
@@ -48,7 +48,7 @@ function runtimeProfileLabel(workflow: WorkflowRecord): string {
   return profileId ? `Profile ${profileId.slice(0, 8)}` : '';
 }
 
-export default function HomePage() {
+function HomePageContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const [workflows, setWorkflows] = useState<WorkflowRecord[]>([]);
@@ -185,7 +185,7 @@ export default function HomePage() {
           ) : error ? (
             <div className="orion-home-side-empty">Couldn&apos;t load workflows.</div>
           ) : featuredWorkflow ? (
-            <Link href={`/workflows/${featuredWorkflow.id}`} className="orion-home-featured-link">
+            <Link href="/workflows" className="orion-home-featured-link">
               <div className="orion-home-featured-title">{featuredWorkflow.name || 'Untitled Workflow'}</div>
               <div className="orion-home-featured-copy">{compactText(featuredWorkflow.description, 72)}</div>
               <div className="orion-home-featured-meta">
@@ -212,7 +212,7 @@ export default function HomePage() {
           {supportingWorkflows.length > 0 ? (
             <div className="orion-home-mini-list">
               {supportingWorkflows.map((workflow) => (
-                <Link key={workflow.id} href={`/workflows/${workflow.id}`} className="orion-home-mini-link">
+                <Link key={workflow.id} href="/workflows" className="orion-home-mini-link">
                   <span>{workflow.name || 'Untitled Workflow'}</span>
                   <ArrowRight size={13} />
                 </Link>
@@ -244,7 +244,7 @@ export default function HomePage() {
             {recentWorkflows.map((workflow) => (
               <Link
                 key={workflow.id}
-                href={`/workflows/${workflow.id}`}
+                href="/workflows"
                 className="orion-list-row orion-home-list-link"
               >
                 <div className="orion-item-leading">
@@ -265,5 +265,13 @@ export default function HomePage() {
         )}
       </PageSection>
     </div>
+  );
+}
+
+export default function HomePage() {
+  return (
+    <Suspense fallback={<div className="orion-page-shell orion-animate-in" />}>
+      <HomePageContent />
+    </Suspense>
   );
 }

@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Image from 'next/image';
 import Link from 'next/link';
 import { useParams, useSearchParams } from 'next/navigation';
@@ -1339,7 +1339,7 @@ function extractLocalExecutionActions(...sources: unknown[]): ComputerActionView
   return [];
 }
 
-export default function RunInspectPage() {
+function RunInspectPageContent() {
   const singleAgentMode = SINGLE_AGENT_MODE;
   const params = useParams<{ id: string }>();
   const searchParams = useSearchParams();
@@ -4282,5 +4282,13 @@ export default function RunInspectPage() {
         </div>
       </PageDialog>
     </div>
+  );
+}
+
+export default function RunInspectPage() {
+  return (
+    <Suspense fallback={<div className="orion-page-shell is-static-entry" />}>
+      <RunInspectPageContent />
+    </Suspense>
   );
 }

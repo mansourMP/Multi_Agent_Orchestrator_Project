@@ -16,11 +16,20 @@ import {
   User,
   type LucideIcon,
 } from 'lucide-react';
-
 import { useShellChromeVisibility } from '@/lib/shell/useShellChromeVisibility';
 import { forwardWheelToMainScroll } from '@/lib/shell/forwardWheelToMainScroll';
 import { useSidebarCollapsed } from '@/lib/useSidebarCollapsed';
 import { resolveProductSection, type ProductSectionId } from '@/lib/productArchitecture';
+import {
+  DESIGN_TOKENS,
+  SHELL_CHROME,
+  badgeStyle,
+  bodyTextStyle,
+  buttonStyle,
+  eyebrowStyle,
+  mergeStyles,
+  metaTextStyle,
+} from '@/design-constraints';
 
 type NavItem = {
   sectionId: ProductSectionId;
@@ -28,9 +37,6 @@ type NavItem = {
   href: string;
   icon: LucideIcon;
 };
-
-const EXPANDED_WIDTH = 220;
-const COLLAPSED_WIDTH = 56;
 
 const MAIN_NAV: NavItem[] = [
   { sectionId: 'home', label: 'Home', href: '/home', icon: House },
@@ -45,6 +51,32 @@ const BOTTOM_NAV: NavItem[] = [
   { sectionId: 'account', label: 'Account', href: '/account', icon: User },
   { sectionId: 'settings', label: 'Settings', href: '/settings', icon: Settings },
 ];
+
+function navLinkStyle(active: boolean, collapsed: boolean): React.CSSProperties {
+  return {
+    width: '100%',
+    minHeight: 40,
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: collapsed ? 'center' : 'space-between',
+    gap: DESIGN_TOKENS.space[3],
+    padding: collapsed ? '0' : `0 ${DESIGN_TOKENS.space[3]}px 0 ${DESIGN_TOKENS.space[3]}px`,
+    borderRadius: DESIGN_TOKENS.radius.lg,
+    border: `${DESIGN_TOKENS.border.subtle}px solid ${
+      active ? DESIGN_TOKENS.color.borderStrong : 'transparent'
+    }`,
+    background: active ? DESIGN_TOKENS.color.surface : 'transparent',
+    color: active ? DESIGN_TOKENS.color.textPrimary : DESIGN_TOKENS.color.textSecondary,
+    fontSize: DESIGN_TOKENS.type.size.body,
+    fontWeight: active ? DESIGN_TOKENS.type.weight.semibold : DESIGN_TOKENS.type.weight.medium,
+    letterSpacing: DESIGN_TOKENS.type.tracking.normal,
+    transition: [
+      `background ${DESIGN_TOKENS.motion.fast}`,
+      `border-color ${DESIGN_TOKENS.motion.fast}`,
+      `color ${DESIGN_TOKENS.motion.fast}`,
+    ].join(', '),
+  };
+}
 
 function SidebarLink({
   item,
@@ -62,27 +94,53 @@ function SidebarLink({
     <Link
       href={item.href}
       aria-current={active ? 'page' : undefined}
-      style={{
-        minHeight: 44,
-        width: '100%',
-        display: 'flex',
-        alignItems: 'center',
-        gap: 12,
-        padding: collapsed ? '0 0' : '0 14px',
-        justifyContent: collapsed ? 'center' : 'flex-start',
-        borderRadius: 12,
-        color: 'var(--sidebar-foreground)',
-        background: active ? 'var(--sidebar-accent)' : 'transparent',
-        boxShadow: active ? 'inset 0 0 0 1px var(--sidebar-border)' : 'none',
-        fontSize: 13,
-        fontWeight: active ? 600 : 500,
-        letterSpacing: '-0.01em',
-        transition: 'background 150ms ease, box-shadow 150ms ease',
-      }}
+      title={collapsed ? item.label : undefined}
+      style={navLinkStyle(active, collapsed)}
     >
-      <Icon size={18} strokeWidth={2.5} />
-      {!collapsed ? <span>{item.label}</span> : null}
+      <span style={{ display: 'flex', alignItems: 'center', gap: DESIGN_TOKENS.space[3], minWidth: 0 }}>
+        <span
+          style={{
+            width: 28,
+            height: 28,
+            minWidth: 28,
+            borderRadius: DESIGN_TOKENS.radius.md,
+            display: 'inline-flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            background: active ? DESIGN_TOKENS.color.accentSoft : 'transparent',
+            color: active ? DESIGN_TOKENS.color.accentText : DESIGN_TOKENS.color.textTertiary,
+            transition: `background ${DESIGN_TOKENS.motion.fast}, color ${DESIGN_TOKENS.motion.fast}`,
+          }}
+        >
+          <Icon size={16} strokeWidth={2.15} />
+        </span>
+        {!collapsed ? <span>{item.label}</span> : null}
+      </span>
+      {!collapsed && active ? <span style={badgeStyle('accent')}>Open</span> : null}
     </Link>
+  );
+}
+
+function NavGroup({
+  label,
+  items,
+  pathname,
+  collapsed,
+}: {
+  label: string;
+  items: NavItem[];
+  pathname: string;
+  collapsed: boolean;
+}) {
+  return (
+    <section style={{ display: 'grid', gap: DESIGN_TOKENS.space[2] }}>
+      {!collapsed ? <div style={eyebrowStyle()}>{label}</div> : null}
+      <div style={{ display: 'grid', gap: 6 }}>
+        {items.map((item) => (
+          <SidebarLink key={item.href} item={item} pathname={pathname} collapsed={collapsed} />
+        ))}
+      </div>
+    </section>
   );
 }
 
@@ -95,7 +153,10 @@ export default function AppSidebar() {
     if (typeof document === 'undefined') return;
     const root = document.documentElement;
     root.setAttribute('data-sidebar-collapsed', hideShellChrome ? '1' : collapsed ? '1' : '0');
-    root.style.setProperty('--shell-sidebar-width', hideShellChrome ? '0px' : `${collapsed ? COLLAPSED_WIDTH : EXPANDED_WIDTH}px`);
+    root.style.setProperty(
+      '--shell-sidebar-width',
+      hideShellChrome ? '0px' : `${collapsed ? SHELL_CHROME.sidebarCollapsed : SHELL_CHROME.sidebarExpanded}px`,
+    );
   }, [collapsed, hideShellChrome]);
 
   if (hideShellChrome) return null;
@@ -106,58 +167,127 @@ export default function AppSidebar() {
       style={{
         position: 'fixed',
         inset: '0 auto 0 0',
-        width: collapsed ? COLLAPSED_WIDTH : EXPANDED_WIDTH,
-        borderRight: '1px solid var(--sidebar-border)',
-        background: 'var(--sidebar)',
-        color: 'var(--sidebar-foreground)',
+        width: collapsed ? SHELL_CHROME.sidebarCollapsed : SHELL_CHROME.sidebarExpanded,
         display: 'flex',
         flexDirection: 'column',
+        gap: DESIGN_TOKENS.space[4],
+        padding: `${DESIGN_TOKENS.space[4]}px ${DESIGN_TOKENS.space[2]}px ${DESIGN_TOKENS.space[4]}px`,
+        borderRight: `${DESIGN_TOKENS.border.subtle}px solid ${DESIGN_TOKENS.color.borderSubtle}`,
+        background: DESIGN_TOKENS.color.surfaceMuted,
+        color: DESIGN_TOKENS.color.textPrimary,
         zIndex: 80,
         transition: 'width 150ms ease',
         overflow: 'hidden',
       }}
     >
-      <div style={{ padding: '12px 10px 10px' }}>
-        <button
-          type="button"
-          onClick={toggleCollapsed}
-          aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+      <header
+        style={{
+          display: 'grid',
+          gap: DESIGN_TOKENS.space[3],
+          paddingInline: collapsed ? 0 : DESIGN_TOKENS.space[2],
+        }}
+      >
+        <div
           style={{
-            width: 36,
-            height: 36,
-            borderRadius: 10,
-            border: '1px solid var(--sidebar-border)',
-            background: 'var(--sidebar-accent)',
-            color: 'var(--sidebar-foreground)',
-            display: 'grid',
-            placeItems: 'center',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: collapsed ? 'center' : 'space-between',
+            gap: DESIGN_TOKENS.space[2],
           }}
         >
-          {collapsed ? <ChevronRight size={18} strokeWidth={3} /> : <ChevronLeft size={18} strokeWidth={3} />}
-        </button>
-      </div>
+          {!collapsed ? (
+            <div style={{ display: 'grid', gap: 4 }}>
+              <div
+                style={{
+                  color: DESIGN_TOKENS.color.textPrimary,
+                  fontSize: DESIGN_TOKENS.type.size.titleSm,
+                  fontWeight: DESIGN_TOKENS.type.weight.semibold,
+                  lineHeight: DESIGN_TOKENS.type.lineHeight.snug,
+                  letterSpacing: DESIGN_TOKENS.type.tracking.tight,
+                }}
+              >
+                Empyralis
+              </div>
+              <p style={mergeStyles(metaTextStyle(), { color: DESIGN_TOKENS.color.textSecondary })}>
+                Operating system for agent work
+              </p>
+            </div>
+          ) : (
+            <div
+              aria-hidden="true"
+              style={{
+                width: 30,
+                height: 30,
+                borderRadius: DESIGN_TOKENS.radius.md,
+                border: `${DESIGN_TOKENS.border.subtle}px solid ${DESIGN_TOKENS.color.borderSubtle}`,
+                background: DESIGN_TOKENS.color.surface,
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                color: DESIGN_TOKENS.color.textPrimary,
+                fontSize: DESIGN_TOKENS.type.size.label,
+                fontWeight: DESIGN_TOKENS.type.weight.bold,
+                letterSpacing: DESIGN_TOKENS.type.tracking.tight,
+              }}
+            >
+              E
+            </div>
+          )}
 
-      <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', padding: '4px 8px 12px' }}>
-        <nav aria-label="Main navigation" style={{ display: 'grid', gap: 6 }}>
-          {MAIN_NAV.map((item) => (
-            <SidebarLink key={item.href} item={item} pathname={pathname} collapsed={collapsed} />
-          ))}
-        </nav>
+          <button
+            type="button"
+            onClick={toggleCollapsed}
+            aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+            style={mergeStyles(buttonStyle({ tone: 'secondary', size: 'icon-md' }), {
+              justifyContent: 'center',
+              display: 'inline-flex',
+              alignItems: 'center',
+            })}
+          >
+            {collapsed ? <ChevronRight size={16} strokeWidth={2.4} /> : <ChevronLeft size={16} strokeWidth={2.4} />}
+          </button>
+        </div>
+
+        {!collapsed ? (
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              gap: DESIGN_TOKENS.space[2],
+              padding: `${DESIGN_TOKENS.space[2]}px ${DESIGN_TOKENS.space[3]}px`,
+              borderRadius: DESIGN_TOKENS.radius.lg,
+              border: `${DESIGN_TOKENS.border.subtle}px solid ${DESIGN_TOKENS.color.borderSubtle}`,
+              background: DESIGN_TOKENS.color.surface,
+            }}
+          >
+            <p style={bodyTextStyle('tertiary')}>Navigation stays dense and task-first.</p>
+            <span style={badgeStyle('neutral')}>Core</span>
+          </div>
+        ) : null}
+      </header>
+
+      <div
+        style={{
+          flex: 1,
+          minHeight: 0,
+          display: 'flex',
+          flexDirection: 'column',
+          gap: DESIGN_TOKENS.space[4],
+          padding: `${DESIGN_TOKENS.space[1]}px ${DESIGN_TOKENS.space[1]}px ${DESIGN_TOKENS.space[2]}px`,
+        }}
+      >
+        <NavGroup label="Workspace" items={MAIN_NAV} pathname={pathname} collapsed={collapsed} />
 
         <div style={{ flex: 1 }} />
 
         <div
           style={{
-            borderTop: '1px solid var(--sidebar-border)',
-            marginTop: 12,
-            paddingTop: 12,
-            display: 'grid',
-            gap: 6,
+            borderTop: `${DESIGN_TOKENS.border.subtle}px solid ${DESIGN_TOKENS.color.borderSubtle}`,
+            paddingTop: DESIGN_TOKENS.space[4],
           }}
         >
-          {BOTTOM_NAV.map((item) => (
-            <SidebarLink key={item.href} item={item} pathname={pathname} collapsed={collapsed} />
-          ))}
+          <NavGroup label="Account" items={BOTTOM_NAV} pathname={pathname} collapsed={collapsed} />
         </div>
       </div>
     </aside>

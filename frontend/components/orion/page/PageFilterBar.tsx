@@ -21,9 +21,10 @@ export function PageFilterBar({
   return (
     <section
       className={className}
-      style={mergeStyles(panelStyle({ muted: true }), {
+      style={mergeStyles(panelStyle({ muted: true, padding: DESIGN_TOKENS.space[5] }), {
         display: 'grid',
         gap: DESIGN_TOKENS.space[4],
+        background: DESIGN_TOKENS.color.surfaceMuted,
       })}
     >
       {title || description || summary || actions ? (

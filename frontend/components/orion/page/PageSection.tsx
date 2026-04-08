@@ -23,7 +23,7 @@ export function PageSection({
   return (
     <section
       className={className}
-      style={mergeStyles(panelStyle({ muted }), {
+      style={mergeStyles(panelStyle({ muted, padding: DESIGN_TOKENS.space[5] }), {
         display: 'grid',
         gap: DESIGN_TOKENS.space[4],
       })}

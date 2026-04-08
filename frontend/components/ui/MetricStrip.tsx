@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useState, type CSSProperties, type ReactNode } from 'react';
-import { DESIGN_TOKENS, mergeStyles, metaTextStyle, statCardStyle } from '@/design-constraints';
+import { DESIGN_TOKENS, bodyTextStyle, mergeStyles, metaTextStyle, statCardStyle } from '@/design-constraints';
 
 type MetricStripItem = {
   label: string;
@@ -57,16 +57,18 @@ export function MetricStrip({ items, minWidth = 180 }: MetricStripProps) {
       style={{
         display: 'grid',
         gridTemplateColumns: `repeat(auto-fit, minmax(${minWidth}px, 1fr))`,
-        gap: DESIGN_TOKENS.space[4],
+        gap: DESIGN_TOKENS.space[3],
       } as CSSProperties}
     >
       {items.map((item) => (
         <section key={item.label} style={statCardStyle()}>
-          <div style={metaTextStyle()}>{item.label}</div>
+          <div style={mergeStyles(metaTextStyle(), { textTransform: 'uppercase', letterSpacing: DESIGN_TOKENS.type.tracking.wide })}>
+            {item.label}
+          </div>
           <div
             style={{
               color: DESIGN_TOKENS.color.textPrimary,
-              fontSize: DESIGN_TOKENS.type.size.title,
+              fontSize: DESIGN_TOKENS.type.size.titleSm,
               fontWeight: DESIGN_TOKENS.type.weight.semibold,
               lineHeight: DESIGN_TOKENS.type.lineHeight.tight,
               letterSpacing: DESIGN_TOKENS.type.tracking.tight,
@@ -75,11 +77,7 @@ export function MetricStrip({ items, minWidth = 180 }: MetricStripProps) {
             <AnimatedMetricValue value={item.value} />
           </div>
           {item.note ? (
-            <div
-              style={mergeStyles(metaTextStyle(), {
-                lineHeight: DESIGN_TOKENS.type.lineHeight.relaxed,
-              })}
-            >
+            <div style={mergeStyles(bodyTextStyle('tertiary'), { fontSize: DESIGN_TOKENS.type.size.label })}>
               {item.note}
             </div>
           ) : null}

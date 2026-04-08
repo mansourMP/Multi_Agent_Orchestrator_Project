@@ -143,6 +143,15 @@ export const DESIGN_TOKENS = {
   },
 } as const;
 
+export const SHELL_CHROME = {
+  sidebarExpanded: 208,
+  sidebarCollapsed: 60,
+  topbarHeight: 54,
+  desktopTitlebarHeight: 32,
+  pageInsetX: 24,
+  pageInsetBottom: 32,
+} as const;
+
 export type ButtonTone = 'primary' | 'secondary' | 'ghost' | 'danger';
 export type ButtonSize = 'sm' | 'md' | 'lg' | 'icon-sm' | 'icon-md';
 export type BadgeTone = 'neutral' | 'accent' | 'success' | 'warning' | 'danger';
@@ -412,11 +421,23 @@ export function dividerStyle(): CSSProperties {
 
 export function pageHeaderStyle(): CSSProperties {
   return {
-    display: 'flex',
-    alignItems: 'flex-start',
-    justifyContent: 'space-between',
+    display: 'grid',
+    gridTemplateColumns: 'minmax(0, 1fr) auto',
     gap: DESIGN_TOKENS.space[4],
-    flexWrap: 'wrap',
+    alignItems: 'start',
+    paddingBottom: DESIGN_TOKENS.space[4],
+    borderBottom: `${DESIGN_TOKENS.border.subtle}px solid ${DESIGN_TOKENS.color.borderSubtle}`,
+  };
+}
+
+export function pageTitleStyle(options?: { hero?: boolean }): CSSProperties {
+  return {
+    margin: 0,
+    color: DESIGN_TOKENS.color.textPrimary,
+    fontSize: options?.hero ? 28 : 24,
+    fontWeight: DESIGN_TOKENS.type.weight.semibold,
+    lineHeight: DESIGN_TOKENS.type.lineHeight.tight,
+    letterSpacing: DESIGN_TOKENS.type.tracking.tight,
   };
 }
 
@@ -473,11 +494,12 @@ export function iconButtonStyle(options?: {
 
 export function statCardStyle(): CSSProperties {
   return {
-    ...panelStyle({ padding: DESIGN_TOKENS.space[4] }),
+    ...panelStyle({ muted: true, padding: DESIGN_TOKENS.space[4] }),
     display: 'grid',
     gap: DESIGN_TOKENS.space[2],
     alignContent: 'start',
-    minHeight: 112,
+    minHeight: 104,
+    background: DESIGN_TOKENS.color.surfaceMuted,
   };
 }
 

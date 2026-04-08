@@ -21,7 +21,7 @@ export function PageCollection({
   return (
     <section
       className={className}
-      style={mergeStyles(panelStyle(), {
+      style={mergeStyles(panelStyle({ padding: DESIGN_TOKENS.space[5] }), {
         display: 'grid',
         gap: DESIGN_TOKENS.space[5],
       })}

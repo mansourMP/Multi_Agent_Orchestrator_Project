@@ -19,6 +19,7 @@ import "@fontsource/space-mono/400.css";
 import "@fontsource/space-mono/700.css";
 import { Inter } from "next/font/google";
 import { cn } from "@/lib/utils";
+import { DESIGN_TOKENS, SHELL_CHROME } from "@/design-constraints";
 
 const inter = Inter({ subsets: ['latin'], variable: '--font-inter', display: 'swap' });
 
@@ -34,31 +35,35 @@ export const metadata: Metadata = {
 };
 
 export const viewport: Viewport = {
-  themeColor: '#f5f5f4',
+  themeColor: DESIGN_TOKENS.color.canvas,
 };
 
 const CRITICAL_SHELL_CSS = `
 :root {
-  --shell-sidebar-width: 56px;
-  --topbar-height: 56px;
+  --shell-sidebar-width: ${SHELL_CHROME.sidebarCollapsed}px;
+  --topbar-height: ${SHELL_CHROME.topbarHeight}px;
   --desktop-titlebar-height: 0px;
   --desktop-drag-padding-left: 0px;
-  --critical-bg-shell: var(--bg-shell);
-  --critical-bg-app: var(--bg-app);
-  --critical-bg-surface: var(--bg-surface);
-  --critical-border: var(--border-subtle);
-  --critical-text: var(--text-primary);
-  --critical-text-secondary: var(--text-secondary);
-  --critical-primary: var(--primary-base);
-  --critical-primary-soft: var(--primary-soft);
-  --critical-success: var(--success-base);
-  --critical-danger: var(--error-base);
-  --critical-success-soft: var(--success-bg);
-  --critical-success-text: var(--success-fg);
-  --critical-danger-soft: var(--error-bg);
-  --critical-danger-text: var(--error-fg);
-  --critical-secondary-bg: var(--bg-surface);
-  --critical-overlay: var(--bg-hover);
+  --critical-bg-shell: ${DESIGN_TOKENS.color.surfaceMuted};
+  --critical-bg-app: ${DESIGN_TOKENS.color.canvas};
+  --critical-bg-surface: ${DESIGN_TOKENS.color.surface};
+  --critical-border: ${DESIGN_TOKENS.color.borderSubtle};
+  --critical-text: ${DESIGN_TOKENS.color.textPrimary};
+  --critical-text-secondary: ${DESIGN_TOKENS.color.textSecondary};
+  --critical-primary: ${DESIGN_TOKENS.color.accentStrong};
+  --critical-primary-soft: ${DESIGN_TOKENS.color.accentSoft};
+  --critical-success: ${DESIGN_TOKENS.color.success};
+  --critical-danger: ${DESIGN_TOKENS.color.danger};
+  --critical-success-soft: ${DESIGN_TOKENS.color.successSoft};
+  --critical-success-text: ${DESIGN_TOKENS.color.success};
+  --critical-danger-soft: ${DESIGN_TOKENS.color.dangerSoft};
+  --critical-danger-text: ${DESIGN_TOKENS.color.danger};
+  --critical-secondary-bg: ${DESIGN_TOKENS.color.surface};
+  --critical-overlay: ${DESIGN_TOKENS.color.overlay};
+  --critical-page-gap: ${DESIGN_TOKENS.space[5]}px;
+  --critical-page-inset-x: ${SHELL_CHROME.pageInsetX}px;
+  --critical-page-inset-bottom: ${SHELL_CHROME.pageInsetBottom}px;
+  --critical-page-narrow-max: 920px;
 }
 *,
 *::before,
@@ -128,9 +133,9 @@ a {
   justify-content: space-between;
   gap: 12px;
   align-items: center;
-  padding: 0 12px;
+  padding: 0 ${DESIGN_TOKENS.space[4]}px;
   background: var(--critical-bg-shell);
-  border-bottom: 0;
+  border-bottom: 1px solid var(--critical-border);
   transition: left 180ms ease;
 }
 .orion-app-shell > aside {
@@ -177,9 +182,9 @@ const THEME_BOOTSTRAP_SCRIPT = `
     root.style.colorScheme = resolved;
     const sidebarCollapsed = localStorage.getItem('empyralist:sidebar-collapsed') === '1';
     root.setAttribute('data-sidebar-collapsed', sidebarCollapsed ? '1' : '0');
-    root.style.setProperty('--shell-sidebar-width', hideShellChrome ? '0px' : sidebarCollapsed ? '56px' : '220px');
-    root.style.setProperty('--topbar-height', hideShellChrome ? '0px' : '56px');
-    root.style.setProperty('--desktop-titlebar-height', hideShellChrome || !isTauriDesktop ? '0px' : '32px');
+    root.style.setProperty('--shell-sidebar-width', hideShellChrome ? '0px' : sidebarCollapsed ? '${SHELL_CHROME.sidebarCollapsed}px' : '${SHELL_CHROME.sidebarExpanded}px');
+    root.style.setProperty('--topbar-height', hideShellChrome ? '0px' : '${SHELL_CHROME.topbarHeight}px');
+    root.style.setProperty('--desktop-titlebar-height', hideShellChrome || !isTauriDesktop ? '0px' : '${SHELL_CHROME.desktopTitlebarHeight}px');
     root.style.setProperty('--desktop-drag-padding-left', hideShellChrome || !isMacDesktop ? '0px' : '72px');
     document.body?.style?.setProperty('background', 'var(--critical-bg-app)');
   } catch {}
@@ -212,16 +217,16 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   const sidebarStyle = {
-    "--sidebar-width": "220px",
-    "--sidebar-width-icon": "56px",
-    "--sidebar": "var(--bg-sidebar)",
-    "--sidebar-foreground": "var(--text-primary)",
-    "--sidebar-primary": "var(--text-primary)",
-    "--sidebar-primary-foreground": "var(--bg-surface)",
-    "--sidebar-accent": "var(--bg-element)",
-    "--sidebar-accent-foreground": "var(--text-primary)",
-    "--sidebar-border": "var(--border-subtle)",
-    "--sidebar-ring": "var(--primary-border-soft)",
+    "--sidebar-width": `${SHELL_CHROME.sidebarExpanded}px`,
+    "--sidebar-width-icon": `${SHELL_CHROME.sidebarCollapsed}px`,
+    "--sidebar": DESIGN_TOKENS.color.surfaceMuted,
+    "--sidebar-foreground": DESIGN_TOKENS.color.textPrimary,
+    "--sidebar-primary": DESIGN_TOKENS.color.textPrimary,
+    "--sidebar-primary-foreground": DESIGN_TOKENS.color.surface,
+    "--sidebar-accent": DESIGN_TOKENS.color.surface,
+    "--sidebar-accent-foreground": DESIGN_TOKENS.color.textPrimary,
+    "--sidebar-border": DESIGN_TOKENS.color.borderSubtle,
+    "--sidebar-ring": DESIGN_TOKENS.color.accentSoft,
   } as CSSProperties;
 
   return (
@@ -243,7 +248,7 @@ export default function RootLayout({
                         data-tauri-drag-region
                         aria-hidden="true"
                         style={{
-                          height: '32px',
+                          height: `${SHELL_CHROME.desktopTitlebarHeight}px`,
                           width: '100%',
                           position: 'fixed',
                           top: 0,

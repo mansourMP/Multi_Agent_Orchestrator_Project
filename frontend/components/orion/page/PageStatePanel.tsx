@@ -1,5 +1,12 @@
 import type { ReactNode } from 'react';
-import { DESIGN_TOKENS, bodyTextStyle, mergeStyles, panelStyle, sectionTitleStyle } from '@/design-constraints';
+import {
+  DESIGN_TOKENS,
+  bodyTextStyle,
+  eyebrowStyle,
+  mergeStyles,
+  panelStyle,
+  sectionTitleStyle,
+} from '@/design-constraints';
 
 type PageStateVariant = 'loading' | 'error' | 'empty' | 'filtered-empty';
 
@@ -25,32 +32,36 @@ export function PageStatePanel({ variant, icon, title, copy, actions, className 
       className={className}
       style={mergeStyles(panelStyle({ muted: true, padding: DESIGN_TOKENS.space[7] }), {
         display: 'grid',
-        justifyItems: 'center',
-        textAlign: 'center',
-        gap: DESIGN_TOKENS.space[3],
+        gap: DESIGN_TOKENS.space[4],
         minHeight: 220,
       })}
     >
-      {icon ? (
-        <div
-          aria-hidden="true"
-          style={{
-            width: 44,
-            height: 44,
-            borderRadius: DESIGN_TOKENS.radius.lg,
-            display: 'grid',
-            placeItems: 'center',
-            background: DESIGN_TOKENS.color.surface,
-            border: `1px solid ${DESIGN_TOKENS.color.borderSubtle}`,
-            color: toneColor,
-          }}
-        >
-          {icon}
+      <div style={{ display: 'flex', alignItems: 'flex-start', gap: DESIGN_TOKENS.space[4] }}>
+        {icon ? (
+          <div
+            aria-hidden="true"
+            style={{
+              width: 40,
+              height: 40,
+              borderRadius: DESIGN_TOKENS.radius.lg,
+              display: 'grid',
+              placeItems: 'center',
+              background: DESIGN_TOKENS.color.surface,
+              border: `1px solid ${DESIGN_TOKENS.color.borderSubtle}`,
+              color: toneColor,
+              flexShrink: 0,
+            }}
+          >
+            {icon}
+          </div>
+        ) : null}
+        <div style={{ display: 'grid', gap: DESIGN_TOKENS.space[2], minWidth: 0 }}>
+          <div style={eyebrowStyle()}>{variant.replace('-', ' ')}</div>
+          <div style={sectionTitleStyle()}>{title}</div>
+          {copy ? <div style={mergeStyles(bodyTextStyle(), { maxWidth: 560 })}>{copy}</div> : null}
         </div>
-      ) : null}
-      <div style={sectionTitleStyle()}>{title}</div>
-      {copy ? <div style={mergeStyles(bodyTextStyle(), { maxWidth: 520 })}>{copy}</div> : null}
-      {actions ? <div style={{ display: 'flex', gap: DESIGN_TOKENS.space[3], flexWrap: 'wrap', justifyContent: 'center' }}>{actions}</div> : null}
+      </div>
+      {actions ? <div style={{ display: 'flex', gap: DESIGN_TOKENS.space[3], flexWrap: 'wrap' }}>{actions}</div> : null}
     </section>
   );
 }

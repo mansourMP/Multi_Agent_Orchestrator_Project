@@ -81,6 +81,7 @@ jobs:
             libxcb-randr0-dev \
             libxcb-shape0-dev \
             libxcb-xfixes0-dev \
+            libpipewire-0.3-dev \
             libxdo-dev
 
       - name: Build empyralis-supervisor

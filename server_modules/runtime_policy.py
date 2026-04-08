@@ -339,7 +339,7 @@ def local_operator_execution_binding_matches(expected: Optional[Dict[str, Any]],
 
 
 def build_browser_execution_binding(project_root: Path, browser_plan_hash: str, session_profile: str = "") -> Dict[str, Any]:
-    argv = [sys.executable, "-m", "server_modules.browser_engine"]
+    argv = [sys.executable, "-m", "server_modules.execution_router"]
     cwd = str(Path(project_root).resolve())
     return build_local_operator_execution_binding(
         argv=argv,

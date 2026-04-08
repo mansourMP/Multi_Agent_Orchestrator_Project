@@ -178,6 +178,15 @@ def complete_local_run(
 
     if isinstance(result_data, dict):
         run["result_data"] = result_data
+    run.pop("local_execution_checkpoint", None)
+    run.pop("wait_reason", None)
+    context = run.get("context") if isinstance(run.get("context"), dict) else {}
+    metadata = context.get("metadata") if isinstance(context.get("metadata"), dict) else {}
+    metadata.pop("local_execution_checkpoint", None)
+    metadata.pop("local_execution_resume_supported", None)
+    metadata.pop("manual_takeover", None)
+    context["metadata"] = metadata
+    run["context"] = context
     if isinstance(usage_masked, dict):
         run["usage_masked"] = usage_masked
 
@@ -233,20 +242,40 @@ def pause_local_run(
     )
     resolved_worker = str(release.get("resolved_worker") or "").strip()
 
-    if isinstance(result_data, dict):
-        run["result_data"] = result_data
+    pause_data = dict(result_data) if isinstance(result_data, dict) else {}
+    context = run.get("context") if isinstance(run.get("context"), dict) else {}
+    metadata = context.get("metadata") if isinstance(context.get("metadata"), dict) else {}
+    local_execution_checkpoint = run.get("local_execution_checkpoint") if isinstance(run.get("local_execution_checkpoint"), dict) else None
+    if not isinstance(local_execution_checkpoint, dict):
+        metadata_checkpoint = metadata.get("local_execution_checkpoint")
+        if isinstance(metadata_checkpoint, dict) and metadata_checkpoint:
+            local_execution_checkpoint = dict(metadata_checkpoint)
+    if not isinstance(local_execution_checkpoint, dict) or not local_execution_checkpoint:
+        pack_inputs = metadata.get("pack_inputs") if isinstance(metadata.get("pack_inputs"), dict) else {}
+        operations = pack_inputs.get("operations") if isinstance(pack_inputs.get("operations"), list) else []
+        if operations:
+            local_execution_checkpoint = {
+                "kind": "local_execution_v1",
+                "next_operation_index": 0,
+                "total_operations": len(operations),
+                "phase": "planned",
+                "mode": "observing",
+            }
+            run["local_execution_checkpoint"] = local_execution_checkpoint
+    if isinstance(local_execution_checkpoint, dict) and local_execution_checkpoint:
+        pause_data.setdefault("local_execution_checkpoint", dict(local_execution_checkpoint))
+        pause_data.setdefault("resume_available", True)
+        metadata["local_execution_checkpoint"] = dict(local_execution_checkpoint)
+        metadata["local_execution_resume_supported"] = True
     if isinstance(browser_checkpoint, dict):
         run["browser_checkpoint"] = browser_checkpoint
-        context = run.get("context") if isinstance(run.get("context"), dict) else {}
-        metadata = context.get("metadata") if isinstance(context.get("metadata"), dict) else {}
         metadata["browser_checkpoint"] = browser_checkpoint
         metadata["browser_resume_supported"] = True
-        context["metadata"] = metadata
-        run["context"] = context
+        pause_data.setdefault("resume_available", True)
 
     resolved_text = str(result_text or "").strip()
-    if not resolved_text and isinstance(result_data, dict):
-        resolved_text = str(result_data.get("summary") or "").strip()
+    if not resolved_text and pause_data:
+        resolved_text = str(pause_data.get("summary") or "").strip()
     if not resolved_text:
         resolved_text = "Local companion paused and is waiting for human input."
     run["result"] = resolved_text
@@ -254,6 +283,17 @@ def pause_local_run(
     run.pop("_resume_after_confirmation_scheduled", None)
 
     resolved_wait_reason = str(wait_reason or "").strip() or "human_unblock_required"
+    manual_takeover = bool(pause_data.get("manual_takeover")) or resolved_wait_reason == "manual_takeover_requested"
+    if manual_takeover:
+        pause_data["manual_takeover"] = True
+    if pause_data:
+        pause_data.setdefault("summary", resolved_text)
+        pause_data.setdefault("pause_reason", resolved_wait_reason)
+        run["result_data"] = pause_data
+    run["wait_reason"] = resolved_wait_reason
+    metadata["manual_takeover"] = manual_takeover
+    context["metadata"] = metadata
+    run["context"] = context
     emit_log_fn(
         run["logs"],
         "warn",
@@ -266,6 +306,28 @@ def pause_local_run(
             "next_action_index": browser_checkpoint.get("next_action_index") if isinstance(browser_checkpoint, dict) else None,
         },
     )
+    if manual_takeover:
+        checkpoint = pause_data.get("local_execution_checkpoint") if isinstance(pause_data.get("local_execution_checkpoint"), dict) else {}
+        emit_log_fn(
+            run["logs"],
+            "warn",
+            "Human now has control. AI execution is paused.",
+            event="computer_action",
+            data={
+                "schema": "empyralis.computer_action.v1",
+                "mode": "takeover",
+                "phase": "paused",
+                "tool": "computer_control",
+                "action_type": "manual_takeover",
+                "label": "Human now has control",
+                "reason": resolved_text,
+                "detail": "Pause requested by the operator. No further computer-control actions will execute until resume.",
+                "status": "waiting_for_input",
+                "success": True,
+                "step_number": (int(checkpoint.get("next_operation_index") or 0) + 1) if isinstance(checkpoint.get("next_operation_index"), int) else None,
+                "step_total": int(checkpoint.get("total_operations") or 0) or None,
+            },
+        )
     set_run_status_fn(run_id, "waiting_for_input")
     return {"status": "ok", "run_id": run_id, "waiting_for_input": True}
 

@@ -14,9 +14,23 @@ import {
 import { AGENT_ROLE_OPTIONS, isAgentRoleId } from '@/app/page.catalog';
 import { MetricStrip } from '@/components/ui/MetricStrip';
 import { OsPageHeader } from '@/components/ui/OsPageHeader';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
 import { API_BASE } from '@/lib/config';
 import { fetchExecutionHistory, fetchExecutions } from '@/lib/api';
 import { humanizeUiError, UI_ERROR_COPY } from '@/lib/uiError';
+import {
+  DESIGN_TOKENS,
+  badgeStyle,
+  bodyTextStyle,
+  buttonStyle,
+  inputStyle,
+  mergeStyles,
+  metaTextStyle,
+  pageShellStyle,
+  panelStyle,
+  sectionTitleStyle,
+} from '@/design-constraints';
 
 type ExecutionRecord = {
   id: string;
@@ -221,35 +235,35 @@ function statusMeta(status?: string): StatusMeta {
   if (status === 'success' || status === 'completed') {
     return {
       label: 'Success',
-      color: 'var(--success-fg)',
-      border: '1px solid var(--success-border)',
-      bg: 'var(--success-bg)',
+      color: DESIGN_TOKENS.color.success,
+      border: `1px solid ${DESIGN_TOKENS.color.success}`,
+      bg: DESIGN_TOKENS.color.successSoft,
     };
   }
 
   if (status === 'running') {
     return {
       label: 'Running',
-      color: 'var(--primary-base)',
-      border: '1px solid var(--primary-border-soft)',
-      bg: 'var(--primary-soft)',
+      color: DESIGN_TOKENS.color.accentStrong,
+      border: `1px solid ${DESIGN_TOKENS.color.accent}`,
+      bg: DESIGN_TOKENS.color.accentSoft,
     };
   }
 
   if (status === 'failed' || status === 'error') {
     return {
       label: 'Failed',
-      color: 'var(--error-fg)',
-      border: '1px solid var(--error-border)',
-      bg: 'var(--error-bg)',
+      color: DESIGN_TOKENS.color.danger,
+      border: `1px solid ${DESIGN_TOKENS.color.danger}`,
+      bg: DESIGN_TOKENS.color.dangerSoft,
     };
   }
 
   return {
     label: 'Unknown',
-    color: 'var(--text-secondary)',
-    border: '1px solid var(--border-default)',
-    bg: 'var(--bg-element)',
+    color: DESIGN_TOKENS.color.textSecondary,
+    border: `1px solid ${DESIGN_TOKENS.color.borderSubtle}`,
+    bg: DESIGN_TOKENS.color.surfaceMuted,
   };
 }
 
@@ -569,34 +583,65 @@ export default function ExecutionsPage() {
   };
 
   return (
-    <div className="orion-page-shell orion-animate-in">
+    <div style={pageShellStyle()}>
       <OsPageHeader
         icon={<Activity size={18} />}
-        title="History"
-        subtitle="Everything that has run and needs review"
+        title="Runs"
+        subtitle="Review outcomes, inspect routing decisions, and find the tasks that need intervention."
         actions={
-          <button className="orion-btn orion-btn-ghost" onClick={() => void loadExecutions()}>
+          <Button type="button" variant="secondary" onClick={() => void loadExecutions()}>
             <RefreshCw size={14} />
             Refresh
-          </button>
+          </Button>
         }
       />
 
-      <section className="orion-panel orion-runs-overview">
-          <div className="orion-runs-overview-main">
-          <div className="orion-home-overview-kicker">History overview</div>
-          <div className="orion-runs-overview-title">{activeSummary.title}</div>
-          <div className="orion-runs-overview-copy">{activeSummary.note}</div>
-          <div className="orion-home-overview-actions">
-            <Link href="/setup" className="btn-primary">
+      <section
+        style={{
+          display: 'grid',
+          gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))',
+          gap: DESIGN_TOKENS.space[4],
+        }}
+      >
+        <div
+          style={mergeStyles(panelStyle({ padding: DESIGN_TOKENS.space[6] }), {
+            display: 'grid',
+            gap: DESIGN_TOKENS.space[5],
+          })}
+        >
+          <div style={{ display: 'grid', gap: DESIGN_TOKENS.space[3] }}>
+            <div style={metaTextStyle()}>Run history</div>
+            <div style={{ ...sectionTitleStyle(), fontSize: DESIGN_TOKENS.type.size.hero }}>{activeSummary.title}</div>
+            <div style={bodyTextStyle()}>{activeSummary.note}</div>
+          </div>
+          <div style={{ display: 'flex', gap: DESIGN_TOKENS.space[3], flexWrap: 'wrap' }}>
+            <Link
+              href="/setup"
+              style={mergeStyles(
+                { display: 'inline-flex', alignItems: 'center', gap: DESIGN_TOKENS.space[2], textDecoration: 'none' },
+                buttonStyle({ tone: 'primary', size: 'md' }),
+              )}
+            >
               <PlayCircle size={14} />
               New Task
             </Link>
-            <Link href="/approvals" className="btn-secondary">
+            <Link
+              href="/approvals"
+              style={mergeStyles(
+                { display: 'inline-flex', alignItems: 'center', gap: DESIGN_TOKENS.space[2], textDecoration: 'none' },
+                buttonStyle({ tone: 'secondary', size: 'md' }),
+              )}
+            >
               <Eye size={14} />
               Approvals
             </Link>
-            <Link href="/workflows" className="btn-secondary">
+            <Link
+              href="/workflows"
+              style={mergeStyles(
+                { display: 'inline-flex', alignItems: 'center', textDecoration: 'none' },
+                buttonStyle({ tone: 'secondary', size: 'md' }),
+              )}
+            >
               Reusable workflows
             </Link>
           </div>
@@ -611,20 +656,29 @@ export default function ExecutionsPage() {
             ]}
           />
         </div>
-        <aside className="orion-runs-overview-side">
-          <div className="orion-home-side-card">
-            <div className="orion-home-side-label">At a glance</div>
-            <div className="orion-home-side-stats">
-              <div>
-                <div className="orion-home-side-value">{filteredExecutions.length}</div>
-                <div className="orion-home-side-note">Visible now</div>
+        <aside style={{ display: 'grid', gap: DESIGN_TOKENS.space[3] }}>
+          <div style={mergeStyles(panelStyle({ muted: true, padding: DESIGN_TOKENS.space[5] }), {
+            display: 'grid',
+            gap: DESIGN_TOKENS.space[3],
+            background: DESIGN_TOKENS.color.surfaceMuted,
+          })}
+          >
+            <div style={metaTextStyle()}>At a glance</div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: DESIGN_TOKENS.space[4] }}>
+              <div style={{ display: 'grid', gap: DESIGN_TOKENS.space[1] }}>
+                <div style={{ fontSize: DESIGN_TOKENS.type.size.title, fontWeight: DESIGN_TOKENS.type.weight.semibold, color: DESIGN_TOKENS.color.textPrimary }}>
+                  {filteredExecutions.length}
+                </div>
+                <div style={metaTextStyle()}>Visible now</div>
               </div>
-              <div>
-                <div className="orion-home-side-value">{channelOptions.length}</div>
-                <div className="orion-home-side-note">Tools in use</div>
+              <div style={{ display: 'grid', gap: DESIGN_TOKENS.space[1] }}>
+                <div style={{ fontSize: DESIGN_TOKENS.type.size.title, fontWeight: DESIGN_TOKENS.type.weight.semibold, color: DESIGN_TOKENS.color.textPrimary }}>
+                  {channelOptions.length}
+                </div>
+                <div style={metaTextStyle()}>Tools in use</div>
               </div>
             </div>
-            <div className="orion-runs-overview-side-note">
+            <div style={bodyTextStyle()}>
               {runSummary.failed > 0
                 ? 'Runs that need attention stay at the top so review starts where it matters.'
                 : 'Use the filters below to isolate one task, assistant, tool, or run state.'}
@@ -633,29 +687,35 @@ export default function ExecutionsPage() {
         </aside>
       </section>
 
-      <section className="orion-panel muted" style={{ display: 'grid', gap: 12 }}>
-          <div className="orion-panel-header" style={{ marginBottom: 0 }}>
-          <div>
-            <div className="orion-panel-title">Find in History</div>
-            <div className="orion-panel-copy">Search by task or run ID, then narrow by state, assistant, or tool.</div>
-          </div>
+      <section style={mergeStyles(panelStyle({ muted: true, padding: DESIGN_TOKENS.space[5] }), { display: 'grid', gap: DESIGN_TOKENS.space[4], background: DESIGN_TOKENS.color.surfaceMuted })}>
+        <div style={{ display: 'grid', gap: DESIGN_TOKENS.space[2] }}>
+          <div style={sectionTitleStyle()}>Find runs</div>
+          <div style={bodyTextStyle()}>Search by task or run ID, then narrow by state, assistant, or tool.</div>
         </div>
         <div className="orion-toolbar-grid">
-          <div className="orion-toolbar-input-wrap orion-toolbar-grid-search">
-            <Search size={14} className="icon" />
-            <input
+          <div style={{ position: 'relative' }}>
+            <Search
+              size={14}
+              style={{
+                position: 'absolute',
+                left: DESIGN_TOKENS.space[3],
+                top: '50%',
+                transform: 'translateY(-50%)',
+                color: DESIGN_TOKENS.color.textTertiary,
+                pointerEvents: 'none',
+              }}
+            />
+            <Input
               value={query}
               onChange={(event) => setQuery(event.target.value)}
-              className="input"
               placeholder="Search by task, workflow name, or run ID..."
               style={{ paddingLeft: 36 }}
             />
           </div>
           <select
-            className="input"
             value={statusFilter}
             onChange={(event) => setStatusFilter(event.target.value)}
-            style={{ minWidth: 0, width: '100%' }}
+            style={mergeStyles(inputStyle(), { minWidth: 0, width: '100%' })}
           >
             <option value="all">All statuses</option>
             <option value="success">Success</option>
@@ -666,10 +726,9 @@ export default function ExecutionsPage() {
           </select>
 
           <select
-            className="input"
             value={agentFilter}
             onChange={(event) => setAgentFilter(event.target.value)}
-            style={{ minWidth: 0, width: '100%' }}
+            style={mergeStyles(inputStyle(), { minWidth: 0, width: '100%' })}
           >
             <option value="all">All assistants</option>
             {AGENT_ROLE_OPTIONS.map((item) => (
@@ -680,10 +739,9 @@ export default function ExecutionsPage() {
           </select>
 
           <select
-            className="input"
             value={channelFilter}
             onChange={(event) => setChannelFilter(event.target.value)}
-            style={{ minWidth: 0, width: '100%' }}
+            style={mergeStyles(inputStyle(), { minWidth: 0, width: '100%' })}
           >
             <option value="all">All tools</option>
             {channelOptions.map((channel) => (
@@ -693,12 +751,12 @@ export default function ExecutionsPage() {
             ))}
           </select>
         </div>
-        <div className="orion-toolbar">
-          <div className="orion-toolbar-summary">
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: DESIGN_TOKENS.space[3], flexWrap: 'wrap' }}>
+          <div style={bodyTextStyle('tertiary')}>
             {filteredExecutions.length} of {executions.length} runs visible
           </div>
           {(query || statusFilter !== 'all' || agentFilter !== 'all' || channelFilter !== 'all') ? (
-            <button type="button" className="btn-secondary" onClick={clearFilters}>
+            <button type="button" style={buttonStyle({ tone: 'secondary', size: 'md' })} onClick={clearFilters}>
               Clear filters
             </button>
           ) : null}
@@ -750,12 +808,10 @@ export default function ExecutionsPage() {
           </div>
         </section>
       ) : (
-        <section className="orion-panel orion-panel-shell">
-          <div className="orion-panel-header orion-panel-shell-header">
-            <div>
-              <div className="orion-panel-title">Recent runs</div>
-              <div className="orion-panel-copy">Open any run to review the result and decide what to do next.</div>
-            </div>
+        <section style={mergeStyles(panelStyle({ padding: DESIGN_TOKENS.space[5] }), { display: 'grid', gap: DESIGN_TOKENS.space[4] })}>
+          <div style={{ display: 'grid', gap: DESIGN_TOKENS.space[2] }}>
+            <div style={sectionTitleStyle()}>Recent runs</div>
+            <div style={bodyTextStyle()}>Open any run to review the result, approvals, and execution path.</div>
           </div>
           {filteredExecutions.map((execution) => {
             const workflowName = execution.workflow?.name || execution.userGoal || 'Untitled Run';
@@ -782,32 +838,46 @@ export default function ExecutionsPage() {
             return (
               <article
                 key={execution.id}
-                className="orion-list-row orion-run-row"
+                style={mergeStyles(panelStyle({ muted: false, padding: DESIGN_TOKENS.space[4] }), {
+                  display: 'flex',
+                  flexWrap: 'wrap',
+                  gap: DESIGN_TOKENS.space[4],
+                  alignItems: 'start',
+                })}
               >
                 <button
-                  className="orion-btn orion-btn-ghost orion-run-row-trigger"
+                  type="button"
                   onClick={() => router.push(`/runs/${encodeURIComponent(execution.id)}`)}
+                  style={{
+                    border: 'none',
+                    padding: 0,
+                    background: 'transparent',
+                    textAlign: 'left',
+                    cursor: 'pointer',
+                    flex: '1 1 420px',
+                  }}
                 >
-                  <div className="orion-run-row-body">
-                    <div>
-                      <div className="orion-list-row-title">{workflowName}</div>
-                      <div className="orion-list-row-subtitle orion-run-id">
+                  <div style={{ display: 'grid', gap: DESIGN_TOKENS.space[3] }}>
+                    <div style={{ display: 'grid', gap: DESIGN_TOKENS.space[1] }}>
+                      <div style={{ color: DESIGN_TOKENS.color.textPrimary, fontSize: DESIGN_TOKENS.type.size.bodyLg, fontWeight: DESIGN_TOKENS.type.weight.semibold }}>
+                        {workflowName}
+                      </div>
+                      <div style={metaTextStyle()}>
                         {execution.id}
                       </div>
                     </div>
-                    <div className="orion-run-summary">{taskSummary}</div>
+                    <div style={bodyTextStyle()}>{taskSummary}</div>
                     {runChips.length > 0 ? (
-                      <div className="orion-run-chip-row">
+                      <div style={{ display: 'flex', gap: DESIGN_TOKENS.space[2], flexWrap: 'wrap' }}>
                         {runChips.map((chip) => (
                           <span
                             key={`${execution.id}:${chip}`}
-                            className="orion-chip"
                             style={
                               chip === 'Recent'
-                                ? { color: 'var(--success-fg)', border: '1px solid var(--success-border)', background: 'var(--success-bg)' }
+                                ? badgeStyle('success')
                                 : chip === 'Coordinated'
-                                  ? { color: 'var(--primary-base)', border: '1px solid var(--primary-border-soft)', background: 'var(--primary-soft)' }
-                                  : undefined
+                                  ? badgeStyle('accent')
+                                  : badgeStyle('neutral')
                             }
                           >
                             {chip}
@@ -815,43 +885,48 @@ export default function ExecutionsPage() {
                         ))}
                       </div>
                     ) : null}
-                    <div className="orion-run-meta">
+                    <div style={mergeStyles(metaTextStyle(), { display: 'flex', gap: DESIGN_TOKENS.space[3], flexWrap: 'wrap' })}>
                       <span>Assistant {executionAgentRoleLabel(execution)}</span>
                       {bindingText ? <span>Tool {bindingText}</span> : null}
                       {runtimeProfile ? <span>{runtimeProfile}</span> : null}
                       {parentRunId ? <span>Part of {parentRunId.slice(0, 8)}</span> : null}
                       {!parentRunId && childRunCount > 0 ? <span>{childRunCount} linked task{childRunCount === 1 ? '' : 's'}</span> : null}
                     </div>
-                    <div className="orion-run-note">{stateNote}</div>
+                    <div style={bodyTextStyle('secondary')}>{stateNote}</div>
                     {!parentRunId && delegationNextAction ? (
-                      <div className="orion-run-note">
+                      <div style={bodyTextStyle('secondary')}>
                         Next step: {titleCaseWords(delegationNextAction)}
                       </div>
                     ) : null}
                     {!parentRunId && retryableFailedChildren > 0 ? (
-                      <div className="orion-run-note">
+                      <div style={bodyTextStyle('secondary')}>
                         {retryableFailedChildren} linked task{retryableFailedChildren === 1 ? '' : 's'} need another try
                       </div>
                     ) : null}
                     {!parentRunId && readyForMerge ? (
-                      <div className="orion-run-note">
+                      <div style={bodyTextStyle('secondary')}>
                         Ready to wrap up
                       </div>
                     ) : null}
                     {workflowProgress ? (
-                      <div className="orion-run-note">
+                      <div style={bodyTextStyle('secondary')}>
                         Workflow: {workflowProgress}
                       </div>
                     ) : null}
                   </div>
                 </button>
 
-                <div className="orion-run-side">
-                  <div className="orion-run-side-top">
-                    <div className="orion-run-status-wrap">
+                <div style={{ display: 'grid', gap: DESIGN_TOKENS.space[4], flex: '0 0 240px', minWidth: 220 }}>
+                  <div style={mergeStyles(panelStyle({ muted: true, padding: DESIGN_TOKENS.space[4] }), {
+                    display: 'grid',
+                    gap: DESIGN_TOKENS.space[4],
+                    background: DESIGN_TOKENS.color.surfaceMuted,
+                  })}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: DESIGN_TOKENS.space[3] }}>
                       <span
-                        className="orion-run-status"
                         style={{
+                          ...badgeStyle('neutral'),
                           color: status.color,
                           border: status.border,
                           background: status.bg,
@@ -868,26 +943,29 @@ export default function ExecutionsPage() {
                         {status.label}
                       </span>
                     </div>
-                    <div className="orion-run-stat-grid">
-                      <div className="orion-run-stat">
-                        <div className="orion-run-stat-label">Started</div>
-                        <div className="orion-run-stat-value">{toDateLabel(execution.createdAt)}</div>
+                    <div style={{ display: 'grid', gap: DESIGN_TOKENS.space[3] }}>
+                      <div style={{ display: 'grid', gap: DESIGN_TOKENS.space[1] }}>
+                        <div style={metaTextStyle()}>Started</div>
+                        <div style={{ color: DESIGN_TOKENS.color.textPrimary }}>{toDateLabel(execution.createdAt)}</div>
                       </div>
-                      <div className="orion-run-stat">
-                        <div className="orion-run-stat-label">Duration</div>
-                        <div className="orion-run-stat-value">{toDurationLabel(execution.durationMs)}</div>
+                      <div style={{ display: 'grid', gap: DESIGN_TOKENS.space[1] }}>
+                        <div style={metaTextStyle()}>Duration</div>
+                        <div style={{ color: DESIGN_TOKENS.color.textPrimary }}>{toDurationLabel(execution.durationMs)}</div>
                       </div>
-                      <div className="orion-run-stat">
-                        <div className="orion-run-stat-label">Started from</div>
-                        <div className="orion-run-stat-value">{routeLabel}</div>
+                      <div style={{ display: 'grid', gap: DESIGN_TOKENS.space[1] }}>
+                        <div style={metaTextStyle()}>Started from</div>
+                        <div style={{ color: DESIGN_TOKENS.color.textPrimary }}>{routeLabel}</div>
                       </div>
                     </div>
                   </div>
 
-                  <div className="orion-run-actions">
+                  <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
                     <Link
-                      className="orion-btn orion-btn-secondary orion-run-action-btn"
                       href={`/runs/${encodeURIComponent(execution.id)}`}
+                      style={mergeStyles(
+                        { display: 'inline-flex', alignItems: 'center', textDecoration: 'none' },
+                        buttonStyle({ tone: 'secondary', size: 'md' }),
+                      )}
                     >
                       Open run
                     </Link>

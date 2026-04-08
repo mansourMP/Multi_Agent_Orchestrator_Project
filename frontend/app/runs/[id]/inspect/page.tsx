@@ -33,7 +33,7 @@ import { SINGLE_AGENT_MODE } from '@/lib/appFlags';
 import { getLocalExecutionCapabilityTitle } from '@/lib/localExecutionCapabilities';
 import { LocalCompanionRunPanel } from '@/components/orion/runs/LocalCompanionRunPanel';
 import { RunRemediationGuide, shouldShowRunRemediationGuide } from '@/components/orion/runs/RunRemediationGuide';
-import { DESIGN_TOKENS, buttonStyle, mergeStyles, pageShellStyle, panelStyle } from '@/design-constraints';
+import { DESIGN_TOKENS, badgeStyle, bodyTextStyle, buttonStyle, mergeStyles, metaTextStyle, pageShellStyle, panelStyle, sectionTitleStyle } from '@/design-constraints';
 
 type HistoryItem = {
   run_id: string;
@@ -2427,9 +2427,9 @@ export default function RunInspectPage() {
       {error ? (
         <section
           style={mergeStyles(panelStyle({ muted: true }), {
-            borderColor: 'rgba(239,68,68,0.35)',
-            background: 'var(--error-bg)',
-            color: 'var(--error-fg)',
+            borderColor: DESIGN_TOKENS.color.danger,
+            background: DESIGN_TOKENS.color.dangerSoft,
+            color: DESIGN_TOKENS.color.danger,
           })}
         >
           <div style={{ display: 'inline-flex', alignItems: 'center', gap: 8, fontSize: 13, fontWeight: 700 }}>
@@ -2442,9 +2442,9 @@ export default function RunInspectPage() {
       {!error && streamError && !TERMINAL_RUN_STATUSES.has(effectiveRunStatus) ? (
         <section
           style={mergeStyles(panelStyle({ muted: true }), {
-            borderColor: 'rgba(245,158,11,0.35)',
-            background: 'var(--warning-bg)',
-            color: 'var(--warning-fg)',
+            borderColor: DESIGN_TOKENS.color.warning,
+            background: DESIGN_TOKENS.color.warningSoft,
+            color: DESIGN_TOKENS.color.warning,
           })}
         >
           <div style={{ display: 'inline-flex', alignItems: 'center', gap: 8, fontSize: 13, fontWeight: 600 }}>
@@ -2456,62 +2456,66 @@ export default function RunInspectPage() {
 
       {showComputerBanner ? (
         <section
-          className="orion-panel"
           style={{
             position: 'fixed',
             top: 92,
             right: 20,
             zIndex: 60,
             width: 'min(420px, calc(100vw - 32px))',
+            borderRadius: DESIGN_TOKENS.radius.xl,
+            border: `1px solid ${
+              liveComputerMode === 'paused' || liveComputerMode === 'takeover'
+                ? DESIGN_TOKENS.color.warning
+                : DESIGN_TOKENS.color.accent
+            }`,
+            padding: DESIGN_TOKENS.space[4],
             borderColor:
               liveComputerMode === 'paused' || liveComputerMode === 'takeover'
-                ? 'var(--warning-border)'
-                : 'var(--primary-border-soft)',
+                ? DESIGN_TOKENS.color.warning
+                : DESIGN_TOKENS.color.accent,
             background:
               liveComputerMode === 'paused' || liveComputerMode === 'takeover'
-                ? 'color-mix(in srgb, var(--warning-bg) 90%, white 10%)'
-                : 'color-mix(in srgb, var(--primary-soft) 72%, var(--bg-surface) 28%)',
-            boxShadow: '0 18px 40px rgba(15,23,42,0.18)',
-            backdropFilter: 'blur(16px)',
+                ? DESIGN_TOKENS.color.warningSoft
+                : DESIGN_TOKENS.color.accentSoft,
+            boxShadow: '0 16px 36px rgba(16, 19, 25, 0.12)',
           }}
         >
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, justifyContent: 'space-between' }}>
             <div style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
               <Activity size={14} style={{ color: liveComputerMode === 'paused' || liveComputerMode === 'takeover' ? 'var(--warning-fg)' : 'var(--primary-base)' }} />
-              <span style={{ fontSize: 11, fontWeight: 800, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--text-tertiary)' }}>
+              <span style={{ fontSize: 11, fontWeight: 800, letterSpacing: '0.06em', textTransform: 'uppercase', color: DESIGN_TOKENS.color.textTertiary }}>
                 {liveComputerMode.replace(/_/g, ' ')}
               </span>
             </div>
-            <span className="orion-chip">
+            <span style={badgeStyle('neutral')}>
               Step {bannerStepNumber ?? '--'}{bannerStepTotal ? `/${bannerStepTotal}` : ''}
             </span>
           </div>
-          <div style={{ marginTop: 8, fontSize: 15, fontWeight: 800, color: 'var(--text-primary)' }}>
+          <div style={{ marginTop: 8, fontSize: 15, fontWeight: 800, color: DESIGN_TOKENS.color.textPrimary }}>
             {bannerLabel}
           </div>
-          <div style={{ marginTop: 6, fontSize: 12, color: 'var(--text-secondary)' }}>
+          <div style={{ marginTop: 6, fontSize: 12, color: DESIGN_TOKENS.color.textSecondary }}>
             {bannerDetail}
           </div>
           <div style={{ marginTop: 10, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-            {latestComputerAction ? <span className="orion-chip">{latestComputerAction.actionType.replace(/_/g, ' ')}</span> : null}
-            <span className="orion-chip">
+            {latestComputerAction ? <span style={badgeStyle('neutral')}>{latestComputerAction.actionType.replace(/_/g, ' ')}</span> : null}
+            <span style={badgeStyle('neutral')}>
               {latestComputerAction?.success === false ? 'Failed' : (latestComputerAction?.phase || liveComputerMode).replace(/_/g, ' ')}
             </span>
-            {bannerConfidenceLabel ? <span className="orion-chip">{bannerConfidenceLabel}</span> : null}
+            {bannerConfidenceLabel ? <span style={badgeStyle('neutral')}>{bannerConfidenceLabel}</span> : null}
             {latestComputerAction?.retryCount && latestComputerAction.retryCount > 1 ? (
-              <span className="orion-chip">retry {latestComputerAction.retryCount}</span>
+              <span style={badgeStyle('neutral')}>retry {latestComputerAction.retryCount}</span>
             ) : null}
-            {latestComputerAction?.replanned ? <span className="orion-chip">replanned</span> : null}
+            {latestComputerAction?.replanned ? <span style={badgeStyle('neutral')}>replanned</span> : null}
             {latestComputerAction?.readinessState ? (
-              <span className="orion-chip">{latestComputerAction.readinessState.replace(/_/g, ' ')}</span>
+              <span style={badgeStyle('neutral')}>{latestComputerAction.readinessState.replace(/_/g, ' ')}</span>
             ) : null}
-            <span className="orion-chip">{latestComputerAction ? fmtTime(latestComputerAction.ts) || '--' : 'live'}</span>
+            <span style={badgeStyle('neutral')}>{latestComputerAction ? fmtTime(latestComputerAction.ts) || '--' : 'live'}</span>
           </div>
           <div style={{ marginTop: 12, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
             {canTakeOverRun ? (
               <button
-                className="orion-btn orion-btn-primary"
-                style={{ minHeight: 44, paddingInline: 12 }}
+                style={buttonStyle({ tone: 'primary', size: 'md' })}
                 onClick={() => void handleTakeOverRun()}
                 disabled={takeoverBusy || approvalBusy !== null || resumeBusy}
               >
@@ -2520,8 +2524,7 @@ export default function RunInspectPage() {
             ) : null}
             {canResumeRun ? (
               <button
-                className="orion-btn orion-btn-primary"
-                style={{ minHeight: 44, paddingInline: 12 }}
+                style={buttonStyle({ tone: 'primary', size: 'md' })}
                 onClick={() => void handleResumeRun()}
                 disabled={resumeBusy || approvalBusy !== null || takeoverBusy}
               >
@@ -2529,8 +2532,7 @@ export default function RunInspectPage() {
               </button>
             ) : null}
             <button
-              className="orion-btn orion-btn-ghost"
-              style={{ minHeight: 44, paddingInline: 12 }}
+              style={buttonStyle({ tone: 'secondary', size: 'md' })}
               onClick={() => focusSection('screenshots')}
             >
               Open live view
@@ -2541,16 +2543,16 @@ export default function RunInspectPage() {
 
       {!loading ? (
         <section
-          className="orion-panel"
           style={{
-            padding: '10px 12px',
+            ...panelStyle({ muted: true, padding: DESIGN_TOKENS.space[3] }),
             display: 'flex',
             alignItems: 'center',
             gap: 8,
             flexWrap: 'wrap',
+            background: DESIGN_TOKENS.color.surfaceMuted,
           }}
         >
-          <span style={{ fontSize: 11, fontWeight: 800, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+          <span style={{ fontSize: 11, fontWeight: 800, color: DESIGN_TOKENS.color.textTertiary, textTransform: 'uppercase', letterSpacing: '0.06em' }}>
             Jump to
           </span>
           {([
@@ -2566,15 +2568,13 @@ export default function RunInspectPage() {
             return (
               <button
                 key={target}
-                className="orion-btn orion-btn-ghost"
                 onClick={() => focusSection(target)}
                 style={{
-                  minHeight: 44,
-                  padding: '0 12px',
+                  ...buttonStyle({ tone: isActive ? 'secondary' : 'ghost', size: 'md' }),
                   fontSize: 11,
-                  background: isActive ? 'var(--primary-soft)' : 'transparent',
-                  borderColor: isActive ? 'var(--primary-border-soft)' : 'var(--border-default)',
-                  color: isActive ? 'var(--primary-base)' : 'var(--text-secondary)',
+                  background: isActive ? DESIGN_TOKENS.color.accentSoft : DESIGN_TOKENS.color.surface,
+                  borderColor: isActive ? DESIGN_TOKENS.color.accent : DESIGN_TOKENS.color.borderSubtle,
+                  color: isActive ? DESIGN_TOKENS.color.accentStrong : DESIGN_TOKENS.color.textSecondary,
                 }}
               >
                 {label}
@@ -2596,36 +2596,36 @@ export default function RunInspectPage() {
           <section
             style={{
               display: 'grid',
-              gap: 14,
+              gap: DESIGN_TOKENS.space[4],
               gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))',
             }}
           >
-            <article className="orion-panel">
-              <div className="orion-panel-title">Outcome</div>
+            <article style={mergeStyles(panelStyle({ muted: false, padding: DESIGN_TOKENS.space[4] }), { display: 'grid', gap: DESIGN_TOKENS.space[3] })}>
+              <div style={sectionTitleStyle()}>Outcome</div>
               <div style={{ marginTop: 6, fontSize: 22, lineHeight: 1.2, fontWeight: 800, color: outcomeToneColor, textTransform: 'capitalize' }}>
                 {formatInspectStatusLabel(historyItem?.status || runDetail?.status || 'unknown')}
               </div>
-              <div style={{ marginTop: 10, fontSize: 14, lineHeight: 1.55, color: 'var(--text-primary)' }}>
+              <div style={bodyTextStyle('primary')}>
                 {primarySummary}
               </div>
               <div style={{ marginTop: 10, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                <span className="orion-chip">Run {runId.slice(0, 8)}</span>
-                <span className="orion-chip">Agent {formatAgentRoleLabel(historyItem?.agent_role || runDetail?.agent_role)}</span>
-                {connectorBinding ? <span className="orion-chip">Channel {formatConnectorBindingLabel(connectorBinding)}</span> : null}
+                <span style={badgeStyle('neutral')}>Run {runId.slice(0, 8)}</span>
+                <span style={badgeStyle('neutral')}>Agent {formatAgentRoleLabel(historyItem?.agent_role || runDetail?.agent_role)}</span>
+                {connectorBinding ? <span style={badgeStyle('neutral')}>Channel {formatConnectorBindingLabel(connectorBinding)}</span> : null}
               </div>
-              <div style={{ marginTop: 12, display: 'grid', gap: 6, fontSize: 12, color: 'var(--text-tertiary)' }}>
+              <div style={{ marginTop: 12, display: 'grid', gap: 6, fontSize: 12, color: DESIGN_TOKENS.color.textTertiary }}>
                 <div>Goal {runGoal}</div>
                 <div>Started {fmtTime(historyItem?.created_at)}</div>
                 <div>Completed {fmtTime(historyItem?.completed_at)}</div>
               </div>
             </article>
 
-            <article className="orion-panel">
-              <div className="orion-panel-title">Run Context</div>
-              <div style={{ marginTop: 6, fontSize: 17, fontWeight: 800, color: 'var(--text-primary)' }}>
+            <article style={mergeStyles(panelStyle({ muted: false, padding: DESIGN_TOKENS.space[4] }), { display: 'grid', gap: DESIGN_TOKENS.space[3] })}>
+              <div style={sectionTitleStyle()}>Run Context</div>
+              <div style={{ marginTop: 6, fontSize: 17, fontWeight: 800, color: DESIGN_TOKENS.color.textPrimary }}>
                 {formatAgentRoleLabel(historyItem?.agent_role || runDetail?.agent_role)}
               </div>
-              <div style={{ marginTop: 10, display: 'grid', gap: 6, fontSize: 12, color: 'var(--text-tertiary)' }}>
+              <div style={{ marginTop: 10, display: 'grid', gap: 6, fontSize: 12, color: DESIGN_TOKENS.color.textTertiary }}>
                 <div>Channel {formatConnectorBindingLabel(connectorBinding)}</div>
                 <div>Duration {fmtMs(historyItem?.duration_ms)}</div>
                 <div>Time-to-first-value {fmtMs(historyItem?.time_to_first_value_ms)}</div>
@@ -2643,12 +2643,12 @@ export default function RunInspectPage() {
               </div>
             </article>
 
-            <article className="orion-panel">
-              <div className="orion-panel-title">Confirmations</div>
-              <div style={{ marginTop: 6, fontSize: 17, fontWeight: 800, color: pendingConfirmation ? 'var(--warning-fg)' : 'var(--text-primary)' }}>
+            <article style={mergeStyles(panelStyle({ muted: false, padding: DESIGN_TOKENS.space[4] }), { display: 'grid', gap: DESIGN_TOKENS.space[3] })}>
+              <div style={sectionTitleStyle()}>Confirmations</div>
+              <div style={{ marginTop: 6, fontSize: 17, fontWeight: 800, color: pendingConfirmation ? DESIGN_TOKENS.color.warning : DESIGN_TOKENS.color.textPrimary }}>
                 {pendingConfirmation ? 'Confirmation required' : approvalAudit.length > 0 ? 'Decision history recorded' : 'No confirmations needed'}
               </div>
-              <div style={{ marginTop: 10, fontSize: 13, lineHeight: 1.55, color: 'var(--text-secondary)' }}>
+              <div style={bodyTextStyle()}>
                 {pendingConfirmation
                   ? approvalDisplayText(
                     pendingConfirmation.prompt,
@@ -2663,17 +2663,23 @@ export default function RunInspectPage() {
                   : 'This run finished without pausing for confirmation.'}
               </div>
               <div style={{ marginTop: 12, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                <button className="orion-btn orion-btn-ghost" style={{ minHeight: 44, paddingInline: 12 }} onClick={() => focusSection('approvals')}>
+                <button type="button" style={buttonStyle({ tone: 'secondary', size: 'md' })} onClick={() => focusSection('approvals')}>
                   Open confirmations
                 </button>
-                <Link className="orion-btn orion-btn-ghost" style={{ minHeight: 44, paddingInline: 12 }} href="/approvals">
+                <Link
+                  href="/approvals"
+                  style={mergeStyles(
+                    { display: 'inline-flex', alignItems: 'center', textDecoration: 'none' },
+                    buttonStyle({ tone: 'secondary', size: 'md' }),
+                  )}
+                >
                   Go to Confirmation Queue
                 </Link>
               </div>
             </article>
 
-            <article className="orion-panel">
-              <div className="orion-panel-title">Diagnosis</div>
+            <article style={mergeStyles(panelStyle({ muted: false, padding: DESIGN_TOKENS.space[4] }), { display: 'grid', gap: DESIGN_TOKENS.space[3] })}>
+              <div style={sectionTitleStyle()}>Diagnosis</div>
               <div style={{ marginTop: 6, fontSize: 17, fontWeight: 800, color: statusColor(runDetail?.status || historyItem?.status) }}>
                 {runDiagnostics?.headline || formatRunDiagnosisCategory(runDiagnostics?.category)}
               </div>

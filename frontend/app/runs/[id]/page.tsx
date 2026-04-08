@@ -22,7 +22,7 @@ import type { RunListItem } from '@shared/api-contract';
 import { ensureControlPlaneSession } from '@/lib/controlPlaneSession';
 import { LocalCompanionRunPanel } from '@/components/orion/runs/LocalCompanionRunPanel';
 import { RunRemediationGuide, shouldShowRunRemediationGuide } from '@/components/orion/runs/RunRemediationGuide';
-import { DESIGN_TOKENS, badgeStyle, buttonStyle, mergeStyles, pageShellStyle, panelStyle } from '@/design-constraints';
+import { DESIGN_TOKENS, badgeStyle, bodyTextStyle, buttonStyle, mergeStyles, metaTextStyle, pageShellStyle, panelStyle, sectionTitleStyle } from '@/design-constraints';
 const TERMINAL_RUN_STATUSES = new Set(['completed', 'failed', 'error', 'stopped', 'timeout', 'cancelled']);
 
 type HistoryItem = {
@@ -859,39 +859,73 @@ export default function RunDetailPage() {
             <div className="orion-empty-copy">{error}</div>
           </div>
         ) : (
-          <div className="hekor-run-layout">
-            <div className={`orion-panel hekor-run-hero${isFailureStatus(effectiveStatus) ? ' is-danger' : isSuccessStatus(effectiveStatus) ? ' is-success' : ''}`.trim()}>
-              <div className="hekor-run-hero-head">
-                <div className="hekor-run-status-icon">
+          <div style={{ display: 'grid', gap: DESIGN_TOKENS.space[5] }}>
+            <div
+              className={`hekor-run-hero${isFailureStatus(effectiveStatus) ? ' is-danger' : isSuccessStatus(effectiveStatus) ? ' is-success' : ''}`.trim()}
+              style={mergeStyles(panelStyle({ padding: DESIGN_TOKENS.space[5] }), {
+                display: 'grid',
+                gap: DESIGN_TOKENS.space[4],
+                background: isFailureStatus(effectiveStatus)
+                  ? DESIGN_TOKENS.color.dangerSoft
+                  : isSuccessStatus(effectiveStatus)
+                    ? DESIGN_TOKENS.color.successSoft
+                    : DESIGN_TOKENS.color.surface,
+                borderColor: isFailureStatus(effectiveStatus)
+                  ? DESIGN_TOKENS.color.danger
+                  : isSuccessStatus(effectiveStatus)
+                    ? DESIGN_TOKENS.color.success
+                    : DESIGN_TOKENS.color.borderSubtle,
+              })}
+            >
+              <div style={{ display: 'flex', alignItems: 'flex-start', gap: DESIGN_TOKENS.space[3] }}>
+                <div
+                  style={{
+                    width: 42,
+                    height: 42,
+                    borderRadius: DESIGN_TOKENS.radius.lg,
+                    display: 'grid',
+                    placeItems: 'center',
+                    background: DESIGN_TOKENS.color.surface,
+                    border: `1px solid ${DESIGN_TOKENS.color.borderSubtle}`,
+                    color: DESIGN_TOKENS.color.textPrimary,
+                  }}
+                >
                   <CurrentStatusIcon size={18} />
                 </div>
-                <div className="hekor-run-hero-topline">
-                  <span className="hekor-run-hero-kicker">{currentStatus.label}</span>
+                <div style={{ display: 'grid', gap: DESIGN_TOKENS.space[2] }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: DESIGN_TOKENS.space[2], flexWrap: 'wrap' }}>
+                    <span style={metaTextStyle()}>{currentStatus.label}</span>
                   {explicitRiskSignal ? (
-                    <span className="hekor-run-risk-badge">{explicitRiskSignal}</span>
+                    <span style={badgeStyle('warning')}>{explicitRiskSignal}</span>
                   ) : null}
+                  </div>
                 </div>
               </div>
 
-              <div className="hekor-run-hero-copy">
-                <div className="hekor-run-hero-title">{heroTitle}</div>
-                <div className="hekor-run-status-note">
+              <div style={{ display: 'grid', gap: DESIGN_TOKENS.space[2] }}>
+                <div style={mergeStyles(sectionTitleStyle(), { fontSize: DESIGN_TOKENS.type.size.title })}>{heroTitle}</div>
+                <div style={metaTextStyle()}>
                   {currentStatus.toolLabel || contractConnectorMutation?.system_label || contractConnectorBinding?.label || 'Platform'}
                 </div>
-                <div className="hekor-run-hero-summary">{plainLanguageSummary}</div>
+                <div style={bodyTextStyle('primary')}>{plainLanguageSummary}</div>
               </div>
 
               {previewText ? (
-                <div className="hekor-run-hero-result">
-                  <div className="hekor-run-hero-result-title">Result preview</div>
-                  <div className="hekor-run-output-copy">{previewText}</div>
+                <div style={mergeStyles(panelStyle({ muted: true, padding: DESIGN_TOKENS.space[4] }), {
+                  display: 'grid',
+                  gap: DESIGN_TOKENS.space[2],
+                  background: DESIGN_TOKENS.color.surface,
+                })}
+                >
+                  <div style={metaTextStyle()}>Result preview</div>
+                  <div style={bodyTextStyle('primary')}>{previewText}</div>
                 </div>
               ) : null}
 
               {noResultState ? (
-                <div className="orion-panel muted hekor-run-no-result">
-                  <div className="orion-panel-title">No result preview yet</div>
-                  <div className="orion-panel-copy">
+                <div style={mergeStyles(panelStyle({ muted: true, padding: DESIGN_TOKENS.space[4] }), { display: 'grid', gap: DESIGN_TOKENS.space[2] })}>
+                  <div style={sectionTitleStyle()}>No result preview yet</div>
+                  <div style={bodyTextStyle()}>
                     {isFailureStatus(effectiveStatus)
                       ? 'This run stopped before it produced a final preview.'
                       : 'This run finished, but the current payload does not include a previewable result.'}
@@ -900,7 +934,7 @@ export default function RunDetailPage() {
               ) : null}
 
               {showRemediationGuide ? (
-                <div className="orion-panel muted" style={{ marginTop: 14 }}>
+                <div style={mergeStyles(panelStyle({ muted: true, padding: DESIGN_TOKENS.space[4] }), { display: 'grid', gap: DESIGN_TOKENS.space[3] })}>
                   <RunRemediationGuide
                     diagnostics={runDiagnostics}
                     status={effectiveStatus}
@@ -1012,10 +1046,16 @@ export default function RunDetailPage() {
               ) : null}
             </div>
 
-              <div className="hekor-run-summary-grid">
-              <div className="orion-panel muted">
-                <div className="orion-panel-title">Diagnosis</div>
-                <div className="orion-panel-copy">
+              <div
+                style={{
+                  display: 'grid',
+                  gap: DESIGN_TOKENS.space[4],
+                  gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
+                }}
+              >
+              <div style={mergeStyles(panelStyle({ muted: true, padding: DESIGN_TOKENS.space[4] }), { display: 'grid', gap: DESIGN_TOKENS.space[2], background: DESIGN_TOKENS.color.surfaceMuted })}>
+                <div style={sectionTitleStyle()}>Diagnosis</div>
+                <div style={bodyTextStyle()}>
                   {compactText(
                     runDiagnostics?.headline || runDiagnostics?.summary,
                     'The platform has not recorded a diagnosis summary for this run yet.',
@@ -1040,9 +1080,9 @@ export default function RunDetailPage() {
                 ) : null}
               </div>
 
-              <div className="orion-panel muted">
-                <div className="orion-panel-title">What happened</div>
-                <div className="orion-panel-copy">{plainLanguageSummary}</div>
+              <div style={mergeStyles(panelStyle({ muted: true, padding: DESIGN_TOKENS.space[4] }), { display: 'grid', gap: DESIGN_TOKENS.space[2], background: DESIGN_TOKENS.color.surfaceMuted })}>
+                <div style={sectionTitleStyle()}>What happened</div>
+                <div style={bodyTextStyle()}>{plainLanguageSummary}</div>
                 {executionSummary?.next_action ? (
                   <div className="hekor-run-route-note">Next step: {executionSummary.next_action}</div>
                 ) : null}
@@ -1051,13 +1091,13 @@ export default function RunDetailPage() {
                 ) : null}
               </div>
 
-              <div className="orion-panel muted">
-                <div className="orion-panel-title">Task</div>
-                <div className="orion-panel-copy">{compactText(runDetail?.context?.user_goal, 'No task description available.', 180)}</div>
+              <div style={mergeStyles(panelStyle({ muted: true, padding: DESIGN_TOKENS.space[4] }), { display: 'grid', gap: DESIGN_TOKENS.space[2], background: DESIGN_TOKENS.color.surfaceMuted })}>
+                <div style={sectionTitleStyle()}>Task</div>
+                <div style={bodyTextStyle()}>{compactText(runDetail?.context?.user_goal, 'No task description available.', 180)}</div>
               </div>
 
-              <div className="orion-panel muted">
-                <div className="orion-panel-title">Tools and accounts</div>
+              <div style={mergeStyles(panelStyle({ muted: true, padding: DESIGN_TOKENS.space[4] }), { display: 'grid', gap: DESIGN_TOKENS.space[2], background: DESIGN_TOKENS.color.surfaceMuted })}>
+                <div style={sectionTitleStyle()}>Tools and accounts</div>
                 <div className="hekor-run-info-list">
                   {toolAccountRows.map((item) => (
                     <div key={item.label} className="hekor-run-info-row">
@@ -1068,8 +1108,8 @@ export default function RunDetailPage() {
                 </div>
               </div>
 
-              <div className="orion-panel muted">
-                <div className="orion-panel-title">Execution</div>
+              <div style={mergeStyles(panelStyle({ muted: true, padding: DESIGN_TOKENS.space[4] }), { display: 'grid', gap: DESIGN_TOKENS.space[2], background: DESIGN_TOKENS.color.surfaceMuted })}>
+                <div style={sectionTitleStyle()}>Execution</div>
                 <div className="hekor-run-info-list">
                   <div className="hekor-run-info-row">
                     <span>Requested</span>
@@ -1088,8 +1128,8 @@ export default function RunDetailPage() {
                 ) : null}
               </div>
 
-              <div className="orion-panel muted">
-                <div className="orion-panel-title">Evidence</div>
+              <div style={mergeStyles(panelStyle({ muted: true, padding: DESIGN_TOKENS.space[4] }), { display: 'grid', gap: DESIGN_TOKENS.space[2], background: DESIGN_TOKENS.color.surfaceMuted })}>
+                <div style={sectionTitleStyle()}>Evidence</div>
                 <div className="hekor-run-info-list">
                   {contractEvidenceItems.length > 0 ? contractEvidenceItems.map((item, index) => (
                     <div key={String(item.id || `${item.label || 'evidence'}:${index}`)} className="hekor-run-info-row">
@@ -1106,8 +1146,8 @@ export default function RunDetailPage() {
               </div>
 
               {workflowNodeStates.items.length > 0 ? (
-                <div className="orion-panel muted">
-                  <div className="orion-panel-title">Workflow progress</div>
+                <div style={mergeStyles(panelStyle({ muted: true, padding: DESIGN_TOKENS.space[4] }), { display: 'grid', gap: DESIGN_TOKENS.space[2], background: DESIGN_TOKENS.color.surfaceMuted })}>
+                  <div style={sectionTitleStyle()}>Workflow progress</div>
                   <div className="hekor-run-info-list">
                     <div className="hekor-run-info-row">
                       <span>Active node</span>

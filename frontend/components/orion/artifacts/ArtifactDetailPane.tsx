@@ -3,7 +3,19 @@
 import Link from 'next/link';
 import { useEffect, useMemo, useState } from 'react';
 import { ArrowUpRight, Check, ChevronLeft, ChevronRight, Copy, Download, ExternalLink, FolderOpen } from 'lucide-react';
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
 import { apiClient } from '@/lib/api-client';
+import {
+  DESIGN_TOKENS,
+  bodyTextStyle,
+  buttonStyle,
+  eyebrowStyle,
+  mergeStyles,
+  metaTextStyle,
+  panelStyle,
+  sectionTitleStyle,
+} from '@/design-constraints';
 import {
   artifactActionHint,
   artifactCodeLanguage,
@@ -186,13 +198,29 @@ export function ArtifactDetailPane({
     if (previewPreferenceKey) writePreferredTab(previewPreferenceKey, tab);
   };
 
+  const tabButtonStyle = (tab: ViewTab) => ({
+    ...buttonStyle({ tone: activeTab === tab ? 'secondary' : 'ghost', size: 'sm' as const }),
+    background: activeTab === tab ? DESIGN_TOKENS.color.surface : 'transparent',
+    color: activeTab === tab ? DESIGN_TOKENS.color.textPrimary : DESIGN_TOKENS.color.textSecondary,
+    borderColor: activeTab === tab ? DESIGN_TOKENS.color.borderStrong : 'transparent',
+  });
+
   if (!item || !previewTarget) {
     return (
-      <aside className="orion-artifact-detail-pane is-empty">
-        <div className="orion-artifact-detail-empty">
-          <div className="orion-artifact-detail-empty-kicker">Artifacts workspace</div>
-          <div className="orion-panel-title">Select an artifact</div>
-          <p>Choose an output, screenshot, page, or support file to inspect it inside Empyralis with preview, code, and provenance in one place.</p>
+      <aside
+        style={mergeStyles(panelStyle({ muted: true, padding: DESIGN_TOKENS.space[6] }), {
+          display: 'grid',
+          placeItems: 'center',
+          minHeight: 560,
+          background: DESIGN_TOKENS.color.surfaceMuted,
+        })}
+      >
+        <div style={{ display: 'grid', gap: DESIGN_TOKENS.space[3], maxWidth: 420 }}>
+          <div style={eyebrowStyle()}>Artifacts workspace</div>
+          <div style={sectionTitleStyle()}>Select an artifact</div>
+          <p style={bodyTextStyle()}>
+            Choose an output, screenshot, page, or support file to inspect it inside Empyralis with preview, code, and provenance in one place.
+          </p>
         </div>
       </aside>
     );
@@ -270,126 +298,222 @@ export function ArtifactDetailPane({
   }
 
   return (
-    <aside className="orion-artifact-detail-pane">
-      <div className="orion-artifact-detail-head">
-        <div className="orion-artifact-detail-heading">
-          <div className="orion-artifact-detail-kicker-row">
-            <div className="orion-artifact-detail-kicker">Artifact viewer</div>
-            <div className="orion-artifact-detail-path-chip">{artifactPathTail(resolvedLocation) || 'Saved artifact'}</div>
+    <aside
+      style={mergeStyles(panelStyle({ padding: 0 }), {
+        display: 'grid',
+        alignContent: 'start',
+        overflow: 'hidden',
+      })}
+    >
+      <div
+        style={{
+          display: 'grid',
+          gap: DESIGN_TOKENS.space[5],
+          padding: DESIGN_TOKENS.space[5],
+          borderBottom: `1px solid ${DESIGN_TOKENS.color.borderSubtle}`,
+        }}
+      >
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'flex-start',
+            justifyContent: 'space-between',
+            gap: DESIGN_TOKENS.space[4],
+            flexWrap: 'wrap',
+          }}
+        >
+          <div style={{ display: 'grid', gap: DESIGN_TOKENS.space[3], minWidth: 0, flex: 1 }}>
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                gap: DESIGN_TOKENS.space[3],
+                flexWrap: 'wrap',
+              }}
+            >
+              <div style={eyebrowStyle()}>Artifact viewer</div>
+              <span style={mergeStyles(metaTextStyle(), {
+                padding: `${DESIGN_TOKENS.space[2]}px ${DESIGN_TOKENS.space[3]}px`,
+                borderRadius: DESIGN_TOKENS.radius.pill,
+                border: `1px solid ${DESIGN_TOKENS.color.borderSubtle}`,
+                background: DESIGN_TOKENS.color.surfaceMuted,
+              })}
+              >
+                {artifactPathTail(resolvedLocation) || 'Saved artifact'}
+              </span>
+            </div>
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: DESIGN_TOKENS.space[2],
+                flexWrap: 'wrap',
+              }}
+            >
+              <h3 style={mergeStyles(sectionTitleStyle(), { fontSize: DESIGN_TOKENS.type.size.title, minWidth: 0 })}>
+                {artifactSurfaceLabel(item)}
+              </h3>
+              <Badge style={formatTone}>{artifactFormatLabel(previewTarget)}</Badge>
+              <Badge variant="secondary">{artifactKindLabel(item.kind)}</Badge>
+            </div>
+            <p style={mergeStyles(bodyTextStyle(), { maxWidth: 720 })}>
+              {compactText(artifactSummary(item), artifactActionHint(item), 220)}
+            </p>
+            <div style={mergeStyles(metaTextStyle(), { display: 'flex', gap: DESIGN_TOKENS.space[3], flexWrap: 'wrap' })}>
+              <span>{resolvedLocation || 'Saved artifact'}</span>
+              {item.run_id ? <span>Run {item.run_id.slice(0, 8)}</span> : null}
+              {item.agent_label ? <span>{item.agent_label}</span> : null}
+              {connectorContext ? <span>{connectorContext}</span> : null}
+            </div>
           </div>
-          <div className="orion-artifact-detail-title-row">
-            <h3 className="orion-artifact-detail-title">{artifactSurfaceLabel(item)}</h3>
-            <span className="orion-chip" style={formatTone}>{artifactFormatLabel(previewTarget)}</span>
-            <span className="orion-chip">{artifactKindLabel(item.kind)}</span>
-          </div>
-          <p className="orion-artifact-detail-summary">
-            {compactText(artifactSummary(item), artifactActionHint(item), 220)}
-          </p>
-          <div className="orion-artifact-detail-meta">
-            <span>{resolvedLocation || 'Saved artifact'}</span>
-            {item.run_id ? <span>Run {item.run_id.slice(0, 8)}</span> : null}
-            {item.agent_label ? <span>{item.agent_label}</span> : null}
-            {connectorContext ? <span>{connectorContext}</span> : null}
+
+          <div style={{ display: 'grid', gap: DESIGN_TOKENS.space[3], justifyItems: 'end' }}>
+            <div style={{ display: 'flex', gap: DESIGN_TOKENS.space[2], flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+              {showBackButton ? (
+                <Button type="button" variant="ghost" size="sm" onClick={onBack} title="Back to list (Esc)">
+                  <ChevronLeft size={13} />
+                  Back
+                </Button>
+              ) : null}
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                onClick={onPreviousArtifact}
+                disabled={!hasPreviousArtifact}
+                title="Previous artifact (Left arrow)"
+              >
+                <ChevronLeft size={13} />
+                Previous
+              </Button>
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                onClick={onNextArtifact}
+                disabled={!hasNextArtifact}
+                title="Next artifact (Right arrow)"
+              >
+                Next
+                <ChevronRight size={13} />
+              </Button>
+            </div>
+            <div style={{ display: 'flex', gap: DESIGN_TOKENS.space[2], flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+              <Button type="button" variant="ghost" size="sm" onClick={() => void handleCopyPath()}>
+                {copyState === 'copied' ? <Check size={13} /> : <Copy size={13} />}
+                {copyActionLabel}
+              </Button>
+              <Button type="button" variant="ghost" size="sm" onClick={onOpenExternal}>
+                <ExternalLink size={13} />
+                Open externally
+              </Button>
+              {downloadHref ? (
+                <a
+                  href={downloadHref}
+                  download={artifactPathTail(resolvedLocation) || undefined}
+                  style={mergeStyles(
+                    {
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: DESIGN_TOKENS.space[2],
+                      textDecoration: 'none',
+                    },
+                    buttonStyle({ tone: 'ghost', size: 'sm' }),
+                  )}
+                >
+                  <Download size={13} />
+                  Download
+                </a>
+              ) : null}
+              {showReveal ? (
+                <Button type="button" variant="ghost" size="sm" onClick={onReveal}>
+                  <FolderOpen size={13} />
+                  {revealLabel}
+                </Button>
+              ) : null}
+            </div>
           </div>
         </div>
 
-        <div className="orion-artifact-detail-toolbar">
-          <div className="orion-artifact-detail-nav">
-            {showBackButton ? (
-              <button className="orion-btn orion-btn-ghost" onClick={onBack} title="Back to list (Esc)">
-                <ChevronLeft size={13} />
-                Back
-              </button>
-            ) : null}
-            <button
-              className="orion-btn orion-btn-ghost"
-              onClick={onPreviousArtifact}
-              disabled={!hasPreviousArtifact}
-              title="Previous artifact (Left arrow)"
+        {sourceRunContextVisible ? (
+          <section
+            aria-label="Source run context"
+            style={mergeStyles(panelStyle({ muted: true, padding: DESIGN_TOKENS.space[4] }), {
+              display: 'grid',
+              gap: DESIGN_TOKENS.space[4],
+              background: DESIGN_TOKENS.color.surfaceMuted,
+            })}
+          >
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'flex-start',
+                justifyContent: 'space-between',
+                gap: DESIGN_TOKENS.space[3],
+                flexWrap: 'wrap',
+              }}
             >
-              <ChevronLeft size={13} />
-              Previous
-            </button>
-            <button
-              className="orion-btn orion-btn-ghost"
-              onClick={onNextArtifact}
-              disabled={!hasNextArtifact}
-              title="Next artifact (Right arrow)"
+              <div style={{ display: 'grid', gap: DESIGN_TOKENS.space[1] }}>
+                <div style={eyebrowStyle()}>Source run context</div>
+                <div style={sectionTitleStyle()}>
+                  {item.run_id ? `Run ${item.run_id.slice(0, 8)}` : 'Artifact provenance'}
+                </div>
+              </div>
+              {inspectHref ? (
+                <Link
+                  href={inspectHref}
+                  style={mergeStyles(
+                    {
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: DESIGN_TOKENS.space[2],
+                      textDecoration: 'none',
+                    },
+                    buttonStyle({ tone: 'ghost', size: 'sm' }),
+                  )}
+                >
+                  <ArrowUpRight size={13} />
+                  Open run inspection
+                </Link>
+              ) : null}
+            </div>
+            <div
+              style={{
+                display: 'grid',
+                gap: DESIGN_TOKENS.space[3],
+                gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))',
+              }}
             >
-              Next
-              <ChevronRight size={13} />
-            </button>
-          </div>
-          <div className="orion-artifact-detail-actions">
-            <button className="orion-btn orion-btn-ghost" onClick={() => void handleCopyPath()}>
-              {copyState === 'copied' ? <Check size={13} /> : <Copy size={13} />}
-              {copyActionLabel}
-            </button>
-            <button className="orion-btn orion-btn-ghost" onClick={onOpenExternal}>
-              <ExternalLink size={13} />
-              Open externally
-            </button>
-            {downloadHref ? (
-              <a className="orion-btn orion-btn-ghost" href={downloadHref} download={artifactPathTail(resolvedLocation) || undefined}>
-                <Download size={13} />
-                Download
-              </a>
-            ) : null}
-            {showReveal ? (
-              <button className="orion-btn orion-btn-ghost" onClick={onReveal}>
-                <FolderOpen size={13} />
-                {revealLabel}
-              </button>
-            ) : null}
-          </div>
-        </div>
+              {[
+                ['Run id', item.run_id || '—'],
+                ['Agent', item.agent_label || item.agent_role || '—'],
+                ['Status', formatRunStatusLabel(item.run_status)],
+                ['Created', toDateLabel(item.created_at)],
+                ['Channel', connectorContext || '—'],
+              ].map(([label, value]) => (
+                <div key={label} style={{ display: 'grid', gap: DESIGN_TOKENS.space[1] }}>
+                  <div style={mergeStyles(metaTextStyle(), { textTransform: 'uppercase', letterSpacing: DESIGN_TOKENS.type.tracking.wide })}>{label}</div>
+                  <div style={{ color: DESIGN_TOKENS.color.textPrimary, fontSize: DESIGN_TOKENS.type.size.body }}>{value}</div>
+                </div>
+              ))}
+            </div>
+          </section>
+        ) : null}
       </div>
 
-      {sourceRunContextVisible ? (
-        <section className="orion-artifact-provenance-card" aria-label="Source run context">
-          <div className="orion-artifact-provenance-head">
-            <div className="orion-artifact-provenance-heading">
-              <div className="orion-artifact-provenance-kicker">Source run context</div>
-              <div className="orion-artifact-provenance-title">
-                {item.run_id ? `Run ${item.run_id.slice(0, 8)}` : 'Artifact provenance'}
-              </div>
-            </div>
-            {inspectHref ? (
-              <Link href={inspectHref} className="orion-btn orion-btn-ghost">
-                <ArrowUpRight size={13} />
-                Open run inspection
-              </Link>
-            ) : null}
-          </div>
-          <div className="orion-artifact-provenance-grid">
-            <div className="orion-artifact-provenance-item">
-              <div className="orion-artifact-provenance-label">Run id</div>
-              <div className="orion-artifact-provenance-value">{item.run_id || '—'}</div>
-            </div>
-            <div className="orion-artifact-provenance-item">
-              <div className="orion-artifact-provenance-label">Agent</div>
-              <div className="orion-artifact-provenance-value">{item.agent_label || item.agent_role || '—'}</div>
-            </div>
-            <div className="orion-artifact-provenance-item">
-              <div className="orion-artifact-provenance-label">Status</div>
-              <div className="orion-artifact-provenance-value">{formatRunStatusLabel(item.run_status)}</div>
-            </div>
-            <div className="orion-artifact-provenance-item">
-              <div className="orion-artifact-provenance-label">Created</div>
-              <div className="orion-artifact-provenance-value">{toDateLabel(item.created_at)}</div>
-            </div>
-            <div className="orion-artifact-provenance-item">
-              <div className="orion-artifact-provenance-label">Channel</div>
-              <div className="orion-artifact-provenance-value">{connectorContext || '—'}</div>
-            </div>
-          </div>
-        </section>
-      ) : null}
-
-      <div className="orion-artifact-detail-tabs">
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: DESIGN_TOKENS.space[2],
+          flexWrap: 'wrap',
+          padding: `${DESIGN_TOKENS.space[4]}px ${DESIGN_TOKENS.space[5]}px 0`,
+        }}
+      >
         <button
           type="button"
-          className={`orion-artifact-detail-tab${activeTab === 'view' ? ' is-active' : ''}`}
+          style={tabButtonStyle('view')}
           onClick={() => handleTabChange('view')}
           disabled={!canRenderView}
           title={canRenderView ? viewLabel : 'Rendered view is unavailable for this file type.'}
@@ -398,7 +522,7 @@ export function ArtifactDetailPane({
         </button>
         <button
           type="button"
-          className={`orion-artifact-detail-tab${activeTab === 'code' ? ' is-active' : ''}`}
+          style={tabButtonStyle('code')}
           onClick={() => handleTabChange('code')}
           disabled={!canShowCode}
           title={canShowCode ? 'Raw source view' : 'Code view is unavailable for this file type.'}
@@ -407,7 +531,7 @@ export function ArtifactDetailPane({
         </button>
         <button
           type="button"
-          className={`orion-artifact-detail-tab${activeTab === 'meta' ? ' is-active' : ''}`}
+          style={tabButtonStyle('meta')}
           onClick={() => handleTabChange('meta')}
           title="Artifact metadata and provenance"
         >
@@ -415,7 +539,14 @@ export function ArtifactDetailPane({
         </button>
       </div>
 
-      <div className="orion-artifact-detail-body">
+      <div
+        style={{
+          padding: DESIGN_TOKENS.space[5],
+          display: 'grid',
+          gap: DESIGN_TOKENS.space[4],
+          background: DESIGN_TOKENS.color.surfaceInteractive,
+        }}
+      >
         {body}
       </div>
     </aside>

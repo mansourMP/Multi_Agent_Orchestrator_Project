@@ -10,7 +10,14 @@ export function ResourceActionGroup({ children, className }: ResourceActionGroup
   return (
     <div
       className={className}
-      style={{ display: 'flex', alignItems: 'center', gap: DESIGN_TOKENS.space[2], flexWrap: 'wrap', justifyContent: 'flex-end' }}
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: DESIGN_TOKENS.space[2],
+        flexWrap: 'wrap',
+        justifyContent: 'flex-end',
+        paddingLeft: DESIGN_TOKENS.space[2],
+      }}
     >
       {children}
     </div>

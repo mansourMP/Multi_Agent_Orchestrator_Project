@@ -3,6 +3,7 @@
 import Link from 'next/link';
 import { RefreshCw, Search } from 'lucide-react';
 import { AGENT_ROLE_OPTIONS, type AgentRoleId } from '@/app/page.catalog';
+import { Input } from '@/components/ui/input';
 import { PageCollection } from '@/components/orion/page/PageCollection';
 import { PageFilterBar } from '@/components/orion/page/PageFilterBar';
 import { PageHero } from '@/components/orion/page/PageHero';
@@ -24,6 +25,16 @@ import {
   type ArtifactView,
   type KindFilter,
 } from '@/lib/artifactsPresentation';
+import {
+  DESIGN_TOKENS,
+  bodyTextStyle,
+  buttonStyle,
+  inputStyle,
+  mergeStyles,
+  metaTextStyle,
+  pageShellStyle,
+  panelStyle,
+} from '@/design-constraints';
 
 export default function ArtifactsPage() {
   const {
@@ -69,18 +80,24 @@ export default function ArtifactsPage() {
   const mobileDetailOpen = Boolean(isNarrowViewport && selectedArtifact);
 
   return (
-    <div className="orion-page-shell is-static-entry">
+    <div style={pageShellStyle()}>
       <PageHero
         kicker="Assets"
-        title="Open deliverables, inspect proof, and trace what each run produced."
-        copy="Assets are the execution record. Use this page to review final deliverables, screenshots, and support files without digging through raw run logs first."
+        title="Inspect deliverables, evidence, and runtime outputs in one workspace."
+        copy="Review final files, screenshots, and supporting artifacts with preview, source, and provenance side by side instead of jumping between run logs and external apps."
         actions={
           <>
-            <button className="btn-secondary" onClick={() => void refresh()}>
+            <button type="button" style={buttonStyle({ tone: 'secondary', size: 'md' })} onClick={() => void refresh()}>
               <RefreshCw size={14} />
               Refresh
             </button>
-            <Link href="/executions" className="btn-secondary">
+            <Link
+              href="/executions"
+              style={mergeStyles(
+                { display: 'inline-flex', alignItems: 'center', textDecoration: 'none' },
+                buttonStyle({ tone: 'secondary', size: 'md' }),
+              )}
+            >
               Open Runs
             </Link>
           </>
@@ -88,33 +105,55 @@ export default function ArtifactsPage() {
         aside={
           <>
             <PageHeroCard label="Current totals">
-              <div className="orion-home-side-stats">
-                <div>
-                  <div className="orion-home-side-value">{viewSummary.deliverables}</div>
-                  <div className="orion-home-side-note">Deliverables</div>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: DESIGN_TOKENS.space[4] }}>
+                <div style={{ display: 'grid', gap: DESIGN_TOKENS.space[1] }}>
+                  <div style={{ fontSize: DESIGN_TOKENS.type.size.title, fontWeight: DESIGN_TOKENS.type.weight.semibold, color: DESIGN_TOKENS.color.textPrimary }}>
+                    {viewSummary.deliverables}
+                  </div>
+                  <div style={metaTextStyle()}>Deliverables</div>
                 </div>
-                <div>
-                  <div className="orion-home-side-value">{viewSummary.evidence}</div>
-                  <div className="orion-home-side-note">Evidence items</div>
+                <div style={{ display: 'grid', gap: DESIGN_TOKENS.space[1] }}>
+                  <div style={{ fontSize: DESIGN_TOKENS.type.size.title, fontWeight: DESIGN_TOKENS.type.weight.semibold, color: DESIGN_TOKENS.color.textPrimary }}>
+                    {viewSummary.evidence}
+                  </div>
+                  <div style={metaTextStyle()}>Evidence items</div>
                 </div>
               </div>
-              <div className="orion-runs-overview-side-note">
+              <div style={bodyTextStyle()}>
                 {latestArtifact
                   ? `Latest update ${toDateLabel(latestArtifact.updated_at)}`
                   : 'No saved outputs yet.'}
               </div>
             </PageHeroCard>
             <PageHeroCard label="Quick focus">
-              <div className="orion-home-mini-list">
-                <button type="button" className="orion-home-mini-link" onClick={() => setViewMode('deliverables')}>
+              <div style={{ display: 'grid', gap: DESIGN_TOKENS.space[2] }}>
+                <button
+                  type="button"
+                  onClick={() => setViewMode('deliverables')}
+                  style={mergeStyles(buttonStyle({ tone: viewMode === 'deliverables' ? 'secondary' : 'ghost', size: 'sm' }), {
+                    justifyContent: 'space-between',
+                  })}
+                >
                   <span>Deliverables</span>
                   <span>{viewSummary.deliverables}</span>
                 </button>
-                <button type="button" className="orion-home-mini-link" onClick={() => setViewMode('evidence')}>
+                <button
+                  type="button"
+                  onClick={() => setViewMode('evidence')}
+                  style={mergeStyles(buttonStyle({ tone: viewMode === 'evidence' ? 'secondary' : 'ghost', size: 'sm' }), {
+                    justifyContent: 'space-between',
+                  })}
+                >
                   <span>Evidence</span>
                   <span>{viewSummary.evidence}</span>
                 </button>
-                <button type="button" className="orion-home-mini-link" onClick={() => setViewMode('system')}>
+                <button
+                  type="button"
+                  onClick={() => setViewMode('system')}
+                  style={mergeStyles(buttonStyle({ tone: viewMode === 'system' ? 'secondary' : 'ghost', size: 'sm' }), {
+                    justifyContent: 'space-between',
+                  })}
+                >
                   <span>System files</span>
                   <span>{viewSummary.system}</span>
                 </button>
@@ -129,8 +168,26 @@ export default function ArtifactsPage() {
         description="Filter outputs, proof, and support files by type, handler, or channel."
         summary={
           <>
-            <span className="orion-chip">{filteredItems.length} shown</span>
-            {payload ? <span className="orion-chip">{payload.summary.total} saved</span> : null}
+            <span style={mergeStyles(metaTextStyle(), {
+              padding: `${DESIGN_TOKENS.space[2]}px ${DESIGN_TOKENS.space[3]}px`,
+              borderRadius: DESIGN_TOKENS.radius.pill,
+              border: `1px solid ${DESIGN_TOKENS.color.borderSubtle}`,
+              background: DESIGN_TOKENS.color.surfaceMuted,
+            })}
+            >
+              {filteredItems.length} shown
+            </span>
+            {payload ? (
+              <span style={mergeStyles(metaTextStyle(), {
+                padding: `${DESIGN_TOKENS.space[2]}px ${DESIGN_TOKENS.space[3]}px`,
+                borderRadius: DESIGN_TOKENS.radius.pill,
+                border: `1px solid ${DESIGN_TOKENS.color.borderSubtle}`,
+                background: DESIGN_TOKENS.color.surfaceMuted,
+              })}
+              >
+                {payload.summary.total} saved
+              </span>
+            ) : null}
           </>
         }
       >
@@ -159,24 +216,32 @@ export default function ArtifactsPage() {
               );
             })}
           </div>
-          <div className="orion-toolbar-input-wrap" style={{ width: '100%', maxWidth: '100%' }}>
-            <Search size={14} className="icon" />
-            <input
-              className="input"
+          <div style={{ position: 'relative', width: '100%', maxWidth: '100%' }}>
+            <Search
+              size={14}
+              style={{
+                position: 'absolute',
+                left: DESIGN_TOKENS.space[3],
+                top: '50%',
+                transform: 'translateY(-50%)',
+                color: DESIGN_TOKENS.color.textTertiary,
+                pointerEvents: 'none',
+              }}
+            />
+            <Input
               value={query}
               onChange={(event) => setQuery(event.target.value)}
               placeholder="Search assets, tasks, or channels"
-              style={{ paddingLeft: 36, height: 42, borderRadius: 11 }}
+              style={{ paddingLeft: 36, height: 42, borderRadius: DESIGN_TOKENS.radius.lg }}
             />
           </div>
         </div>
 
         <div className="orion-page-filter-grid is-toolbar">
           <select
-            className="input"
             value={kindFilter}
             onChange={(event) => setKindFilter(event.target.value as KindFilter)}
-            style={{ height: 42, minWidth: 0, borderRadius: 11 }}
+            style={mergeStyles(inputStyle(), { height: 42, minWidth: 0, borderRadius: DESIGN_TOKENS.radius.lg })}
           >
             <option value="all">All kinds</option>
             <option value="screenshots">Screenshots</option>
@@ -186,10 +251,9 @@ export default function ArtifactsPage() {
             <option value="files">Saved files</option>
           </select>
           <select
-            className="input"
             value={agentFilter}
             onChange={(event) => setAgentFilter(event.target.value as 'all' | AgentRoleId)}
-            style={{ height: 42, minWidth: 0, borderRadius: 11 }}
+            style={mergeStyles(inputStyle(), { height: 42, minWidth: 0, borderRadius: DESIGN_TOKENS.radius.lg })}
           >
             <option value="all">All handlers</option>
             {AGENT_ROLE_OPTIONS.map((option) => (
@@ -197,10 +261,9 @@ export default function ArtifactsPage() {
             ))}
           </select>
           <select
-            className="input"
             value={channelFilter}
             onChange={(event) => setChannelFilter(event.target.value)}
-            style={{ height: 42, minWidth: 0, borderRadius: 11 }}
+            style={mergeStyles(inputStyle(), { height: 42, minWidth: 0, borderRadius: DESIGN_TOKENS.radius.lg })}
           >
             <option value="all">All channels</option>
             {channelOptions.map((channel) => (
@@ -208,7 +271,7 @@ export default function ArtifactsPage() {
             ))}
           </select>
           {hasActiveFilters ? (
-            <button className="orion-btn orion-btn-ghost" style={{ minHeight: 42, paddingInline: 12 }} onClick={clearFilters}>
+            <button type="button" style={buttonStyle({ tone: 'ghost', size: 'md' })} onClick={clearFilters}>
               Clear filters
             </button>
           ) : null}
@@ -249,30 +312,48 @@ export default function ArtifactsPage() {
         />
       ) : (
         <PageCollection className="orion-home-list-panel" bodyClassName="orion-asset-collection-body">
-          <div className="orion-artifact-workspace-statusbar">
-            <div className="orion-artifact-workspace-status">
-              {selectedArtifact
-                ? `Inspecting ${artifactSurfaceLabel(selectedArtifact)}`
-                : 'Select an artifact to inspect'}
-            </div>
-            <div className="orion-artifact-workspace-hint">
-              {isNarrowViewport
-                ? 'Tap an asset to open the detail pane. Use Back or Esc to return to the list.'
-                : 'The right pane keeps preview, code, and provenance together so you can inspect files without leaving Empyralis.'}
+          <div
+            style={mergeStyles(panelStyle({ muted: true, padding: DESIGN_TOKENS.space[4] }), {
+              display: 'flex',
+              alignItems: 'flex-start',
+              justifyContent: 'space-between',
+              gap: DESIGN_TOKENS.space[4],
+              flexWrap: 'wrap',
+              background: DESIGN_TOKENS.color.surfaceMuted,
+            })}
+          >
+            <div style={{ display: 'grid', gap: DESIGN_TOKENS.space[2] }}>
+              <div style={{ color: DESIGN_TOKENS.color.textPrimary, fontSize: DESIGN_TOKENS.type.size.body, fontWeight: DESIGN_TOKENS.type.weight.semibold }}>
+                {selectedArtifact
+                  ? `Inspecting ${artifactSurfaceLabel(selectedArtifact)}`
+                  : 'Select an artifact to inspect'}
+              </div>
+              <div style={bodyTextStyle()}>
+                {isNarrowViewport
+                  ? 'Tap an asset to open the detail pane. Use Back or Esc to return to the list.'
+                  : 'The right pane keeps preview, code, and provenance together so you can inspect files without leaving Empyralis.'}
+              </div>
             </div>
           </div>
           <div className={`orion-artifact-workspace${mobileDetailOpen ? ' is-mobile-detail-open' : ''}`}>
             <section className="orion-artifact-list-pane">
               {filteredItems.length === 0 ? (
-                <div className="orion-artifact-list-empty">
-                  <div className="orion-panel-title">No visible artifacts</div>
-                  <p>
+                <div style={mergeStyles(panelStyle({ muted: true, padding: DESIGN_TOKENS.space[5] }), {
+                  display: 'grid',
+                  gap: DESIGN_TOKENS.space[3],
+                  background: DESIGN_TOKENS.color.surfaceMuted,
+                })}
+                >
+                  <div style={{ color: DESIGN_TOKENS.color.textPrimary, fontSize: DESIGN_TOKENS.type.size.titleSm, fontWeight: DESIGN_TOKENS.type.weight.semibold }}>
+                    No visible artifacts
+                  </div>
+                  <p style={bodyTextStyle()}>
                     {selectedArtifactHiddenByFilters
                       ? 'The selected artifact is still open on the right, but your current filters hide it from the list.'
                       : 'No artifacts match the current filters.'}
                   </p>
                   {hasActiveFilters ? (
-                    <button className="orion-btn orion-btn-ghost" onClick={clearFilters}>
+                    <button type="button" style={buttonStyle({ tone: 'ghost', size: 'md' })} onClick={clearFilters}>
                       Clear filters
                     </button>
                   ) : null}
@@ -306,13 +387,24 @@ export default function ArtifactsPage() {
             {!isNarrowViewport || selectedArtifact ? (
               <div className="orion-artifact-detail-column">
                 {selectedArtifactHiddenByFilters ? (
-                  <div className="orion-artifact-filter-notice">
-                    <div>
+                  <div style={mergeStyles(panelStyle({ muted: true, padding: DESIGN_TOKENS.space[4] }), {
+                    display: 'flex',
+                    alignItems: 'flex-start',
+                    justifyContent: 'space-between',
+                    gap: DESIGN_TOKENS.space[3],
+                    flexWrap: 'wrap',
+                    background: DESIGN_TOKENS.color.warningSoft,
+                    borderColor: DESIGN_TOKENS.color.warning,
+                  })}
+                  >
+                    <div style={{ display: 'grid', gap: DESIGN_TOKENS.space[1] }}>
                       <strong>Selected artifact is hidden by current filters.</strong>
-                      <span>It stays open here until you clear the filters or pick another file.</span>
+                      <span style={bodyTextStyle()}>
+                        It stays open here until you clear the filters or pick another file.
+                      </span>
                     </div>
                     {hasActiveFilters ? (
-                      <button className="orion-btn orion-btn-ghost" onClick={clearFilters}>
+                      <button type="button" style={buttonStyle({ tone: 'ghost', size: 'md' })} onClick={clearFilters}>
                         Clear filters
                       </button>
                     ) : null}

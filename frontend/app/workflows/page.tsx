@@ -77,8 +77,8 @@ export default function WorkflowsPage() {
     <div style={pageShellStyle()}>
       <PageHero
         kicker="Workflows"
-        title="Save the tasks that work well and run them again."
-        copy="Start with a task. When the steps are stable, keep it here as a reusable workflow for your team."
+        title="Capture repeatable operator work and run it with confidence."
+        copy="Use workflows for stable processes with clear steps, tools, and approvals. Keep the canvas disciplined, then rerun the same operating pattern without rebuilding it from scratch."
         actions={
           <>
             <Link
@@ -134,7 +134,7 @@ export default function WorkflowsPage() {
             </PageHeroCard>
             <PageHeroCard label="When to use this">
               <div style={bodyTextStyle()}>
-                Use workflows for recurring business work that already has a clear process, tools, and approvals.
+                Use workflows for recurring business work that already has a clear process, execution target, and trust boundary.
               </div>
             </PageHeroCard>
           </>
@@ -236,7 +236,7 @@ export default function WorkflowsPage() {
           ) : (
             <PageCollection
               title="Saved workflows"
-              description="Reusable playbooks you can open, refine, and run again."
+              description="Operator playbooks you can inspect, refine, and launch again."
             >
               <section style={{ overflow: 'hidden', borderRadius: DESIGN_TOKENS.radius.lg, border: `1px solid ${DESIGN_TOKENS.color.borderSubtle}` }}>
                 {filteredWorkflows.map((workflow) => (

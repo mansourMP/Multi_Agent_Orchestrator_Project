@@ -47,6 +47,7 @@ import {
 } from '@/hooks/useWorkflowRunTelemetry';
 import DoctorPreflightNotice from '@/components/orion/DoctorPreflightNotice';
 import LocalRuntimeRecoveryCard from '@/components/orion/LocalRuntimeRecoveryCard';
+import { Button } from '@/components/ui/button';
 import AgentNode from '@/components/nodes/AgentNode';
 import TriggerNode from '@/components/nodes/TriggerNode';
 import ActionNode from '@/components/nodes/ActionNode';
@@ -58,7 +59,7 @@ import LoopNode from '@/components/nodes/LoopNode';
 import SmoothConnectionLine from '@/components/nodes/SmoothConnectionLine';
 import SmoothActionEdge, { type SmoothActionEdgeData } from '@/components/nodes/SmoothActionEdge';
 import WorkflowValidationPanel from '@/components/workflows/WorkflowValidationPanel';
-import { DESIGN_TOKENS, inputStyle, mergeStyles, panelStyle } from '@/design-constraints';
+import { DESIGN_TOKENS, badgeStyle, bodyTextStyle, buttonStyle, eyebrowStyle, inputStyle, mergeStyles, panelStyle, sectionTitleStyle } from '@/design-constraints';
 
 type RunStatus = 'idle' | 'running' | 'waiting' | 'completed' | 'error';
 type LogLevel = 'info' | 'warn' | 'error';
@@ -4252,132 +4253,140 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
             }}
         >
             <div
-                className="workflow-pro-toolbar"
                 style={{
-                    display: 'flex',
-                    alignItems: 'flex-start',
-                    justifyContent: 'space-between',
+                    display: 'grid',
                     gap: DESIGN_TOKENS.space[4],
-                    flexWrap: 'wrap',
                     padding: `${DESIGN_TOKENS.space[5]}px ${DESIGN_TOKENS.space[5]}px ${DESIGN_TOKENS.space[4]}px`,
+                    borderBottom: `1px solid ${DESIGN_TOKENS.color.borderSubtle}`,
+                    background: DESIGN_TOKENS.color.surface,
                 }}
             >
-                <div style={{ display: 'grid', gap: 6 }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-                        <div className="workflow-pro-log-title">{workflow?.name || (workflowId ? 'Workflow' : 'New workflow')}</div>
-                        <span style={{
-                            borderRadius: 10,
-                            padding: '4px 10px',
-                            fontSize: 11,
-                            fontWeight: 700,
-                            background: isSimplifiedCanvasWorkflow
-                                ? (isWorkflowActive ? 'var(--success-bg)' : 'var(--bg-element)')
-                                : runBadge.bg,
-                            color: isSimplifiedCanvasWorkflow
-                                ? (isWorkflowActive ? 'var(--success-fg)' : 'var(--text-secondary)')
-                                : runBadge.color,
-                            border: `1px solid ${isSimplifiedCanvasWorkflow ? (isWorkflowActive ? 'var(--success-border)' : 'var(--border-default)') : runBadge.border}`,
-                        }}>
-                            {isSimplifiedCanvasWorkflow ? (isWorkflowActive ? 'Active' : 'Inactive') : runBadge.label}
-                        </span>
-                    </div>
-                    {isSimplifiedCanvasWorkflow ? (
-                        <div style={{ fontSize: 13, color: channelConnected ? 'var(--text-secondary)' : 'var(--warning-fg)' }}>
-                            {workflowStatusSentence}
+                <div
+                    style={{
+                        display: 'flex',
+                        alignItems: 'flex-start',
+                        justifyContent: 'space-between',
+                        gap: DESIGN_TOKENS.space[4],
+                        flexWrap: 'wrap',
+                    }}
+                >
+                    <div style={{ display: 'grid', gap: DESIGN_TOKENS.space[2] }}>
+                        <div style={eyebrowStyle()}>Workflow editor</div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                            <div style={sectionTitleStyle()}>{workflow?.name || (workflowId ? 'Workflow' : 'New workflow')}</div>
+                            <span
+                                style={{
+                                    ...badgeStyle('neutral'),
+                                    background: isSimplifiedCanvasWorkflow
+                                        ? (isWorkflowActive ? DESIGN_TOKENS.color.successSoft : DESIGN_TOKENS.color.surfaceMuted)
+                                        : runBadge.bg,
+                                    color: isSimplifiedCanvasWorkflow
+                                        ? (isWorkflowActive ? DESIGN_TOKENS.color.success : DESIGN_TOKENS.color.textSecondary)
+                                        : runBadge.color,
+                                    border: `1px solid ${isSimplifiedCanvasWorkflow ? (isWorkflowActive ? DESIGN_TOKENS.color.success : DESIGN_TOKENS.color.borderSubtle) : runBadge.border}`,
+                                }}
+                            >
+                                {isSimplifiedCanvasWorkflow ? (isWorkflowActive ? 'Active' : 'Inactive') : runBadge.label}
+                            </span>
                         </div>
-                    ) : null}
+                        <div style={bodyTextStyle(channelConnected ? 'secondary' : 'primary')}>
+                            {isSimplifiedCanvasWorkflow
+                                ? workflowStatusSentence
+                                : 'Build the workflow, validate the route, then run or publish when the execution path is ready.'}
+                        </div>
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: DESIGN_TOKENS.space[3], flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                        {isSimplifiedCanvasWorkflow ? (
+                            <>
+                                <Button
+                                    type="button"
+                                    variant="ghost"
+                                    onClick={() => setShowAdvancedSettings((prev) => !prev)}
+                                >
+                                    {showAdvancedSettings ? 'Hide advanced settings' : 'Advanced settings'}
+                                </Button>
+                                <Button
+                                    type="button"
+                                    variant="secondary"
+                                    onClick={startRun}
+                                    disabled={runStatus === 'running' || isPreflightChecking || routeBlocked || doctorBlocked}
+                                >
+                                    <Play size={14} />
+                                    {runStatus === 'running' ? 'Testing…' : isPreflightChecking ? 'Preparing…' : 'Test once'}
+                                </Button>
+                                {runId ? (
+                                    <Button
+                                        type="button"
+                                        variant="ghost"
+                                        onClick={() => router.push(`/runs/${encodeURIComponent(runId)}/inspect?focus=timeline`)}
+                                    >
+                                        {OPEN_LIVE_RUN_LABEL}
+                                    </Button>
+                                ) : null}
+                                <Button
+                                    type="button"
+                                    variant={isWorkflowActive ? 'default' : 'secondary'}
+                                    onClick={() => void handleActivationToggle()}
+                                    disabled={isSaving}
+                                >
+                                    {isWorkflowActive ? 'ON' : 'OFF'}
+                                </Button>
+                            </>
+                        ) : (
+                            <>
+                                {lastSavedAt ? (
+                                    <span style={workflowMutedCopyStyle}>
+                                        Saved {new Date(lastSavedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                                    </span>
+                                ) : null}
+                                <Button
+                                    type="button"
+                                    variant="secondary"
+                                    onClick={startRun}
+                                    disabled={runStatus === 'running' || isPreflightChecking || routeBlocked || doctorBlocked || isSaving}
+                                >
+                                    <Play size={14} />
+                                    {runStatus === 'running' ? 'Running…' : isPreflightChecking ? 'Preparing…' : 'Run'}
+                                </Button>
+                                {runId ? (
+                                    <Button
+                                        type="button"
+                                        variant="ghost"
+                                        onClick={() => router.push(`/runs/${encodeURIComponent(runId)}/inspect?focus=timeline`)}
+                                    >
+                                        {OPEN_LIVE_RUN_LABEL}
+                                    </Button>
+                                ) : null}
+                                <Button
+                                    type="button"
+                                    variant="ghost"
+                                    onClick={saveWorkflowState}
+                                    disabled={isSaving}
+                                >
+                                    <Save size={14} />
+                                    {isSaving ? 'Saving...' : workflowId ? 'Save' : 'Create draft'}
+                                </Button>
+                                <Button type="button" variant="default" onClick={handlePublish}>
+                                    <UploadCloud size={14} />
+                                    Publish
+                                </Button>
+                            </>
+                        )}
+                    </div>
                 </div>
                 <div
-                    className="workflow-pro-toolbar-actions"
-                    style={{ display: 'flex', alignItems: 'center', gap: DESIGN_TOKENS.space[3], flexWrap: 'wrap' }}
+                    style={mergeStyles(panelStyle({ muted: true, padding: DESIGN_TOKENS.space[4] }), {
+                        display: 'grid',
+                        gap: DESIGN_TOKENS.space[2],
+                        background: routeBlocked ? DESIGN_TOKENS.color.warningSoft : DESIGN_TOKENS.color.surfaceMuted,
+                        borderColor: routeBlocked ? DESIGN_TOKENS.color.warning : DESIGN_TOKENS.color.borderSubtle,
+                    })}
                 >
-                    {isSimplifiedCanvasWorkflow ? (
-                        <>
-                            <button
-                                onClick={() => setShowAdvancedSettings((prev) => !prev)}
-                                className="orion-btn orion-btn-ghost"
-                            >
-                                {showAdvancedSettings ? 'Hide advanced settings' : 'Advanced settings'}
-                            </button>
-                            <button
-                                onClick={startRun}
-                                disabled={runStatus === 'running' || isPreflightChecking || routeBlocked || doctorBlocked}
-                                className="orion-btn orion-btn-ghost"
-                            >
-                                <Play size={14} />
-                                {runStatus === 'running' ? 'Testing…' : isPreflightChecking ? 'Preparing…' : 'Test once'}
-                            </button>
-                            {runId ? (
-                                <button
-                                    onClick={() => router.push(`/runs/${encodeURIComponent(runId)}/inspect?focus=timeline`)}
-                                    className="orion-btn orion-btn-ghost"
-                                >
-                                    {OPEN_LIVE_RUN_LABEL}
-                                </button>
-                            ) : null}
-                            <button
-                                onClick={() => void handleActivationToggle()}
-                                className={`orion-btn ${isWorkflowActive ? 'orion-btn-success' : 'orion-btn-primary'}`}
-                                disabled={isSaving}
-                            >
-                                {isWorkflowActive ? 'ON' : 'OFF'}
-                            </button>
-                        </>
-                    ) : (
-                        <>
-                            {lastSavedAt && (
-                                <span style={workflowMutedCopyStyle}>
-                                    Saved {new Date(lastSavedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                                </span>
-                            )}
-                            <button
-                                onClick={startRun}
-                                disabled={runStatus === 'running' || isPreflightChecking || routeBlocked || doctorBlocked || isSaving}
-                                className="orion-btn orion-btn-ghost"
-                            >
-                                <Play size={14} />
-                                {runStatus === 'running' ? 'Running…' : isPreflightChecking ? 'Preparing…' : 'Run'}
-                            </button>
-                            {runId ? (
-                                <button
-                                    onClick={() => router.push(`/runs/${encodeURIComponent(runId)}/inspect?focus=timeline`)}
-                                    className="orion-btn orion-btn-ghost"
-                                >
-                                    {OPEN_LIVE_RUN_LABEL}
-                                </button>
-                            ) : null}
-                            <button
-                                onClick={saveWorkflowState}
-                                disabled={isSaving}
-                                className="orion-btn orion-btn-ghost"
-                            >
-                                <Save size={14} />
-                                {isSaving ? 'Saving...' : workflowId ? 'Save' : 'Create draft'}
-                            </button>
-                            <button
-                                onClick={handlePublish}
-                                className="orion-btn orion-btn-primary"
-                            >
-                                <UploadCloud size={14} />
-                                Publish
-                            </button>
-                        </>
-                    )}
+                    <div style={eyebrowStyle()}>Execution route</div>
+                    <div style={bodyTextStyle(routeBlocked ? 'primary' : 'secondary')}>
+                        Route: {formatExecutionTargetLabel(executionTarget)}. {describeExecutionTarget(executionTarget, hasLocalRuntime)}
+                    </div>
                 </div>
-            </div>
-            <div
-                className={`workflow-pro-toolbar-note${routeBlocked ? ' is-warning' : ''}`.trim()}
-                style={{
-                    margin: `0 ${DESIGN_TOKENS.space[5]}px ${DESIGN_TOKENS.space[4]}px`,
-                    padding: `${DESIGN_TOKENS.space[3]}px ${DESIGN_TOKENS.space[4]}px`,
-                    borderRadius: DESIGN_TOKENS.radius.lg,
-                    background: routeBlocked ? DESIGN_TOKENS.color.warningSoft : DESIGN_TOKENS.color.surfaceMuted,
-                    border: `1px solid ${routeBlocked ? DESIGN_TOKENS.color.warningSoft : DESIGN_TOKENS.color.borderSubtle}`,
-                    color: routeBlocked ? DESIGN_TOKENS.color.warning : DESIGN_TOKENS.color.textSecondary,
-                    fontSize: DESIGN_TOKENS.type.size.label,
-                }}
-            >
-                Route: {formatExecutionTargetLabel(executionTarget)}. {describeExecutionTarget(executionTarget, hasLocalRuntime)}
             </div>
             {hasWorkflowValidationIssues ? (
                 <div style={{ padding: '0 12px 12px' }}>
@@ -4422,7 +4431,7 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
                         </div>
                     </div>
                     <button
-                        className="orion-btn orion-btn-primary"
+                        style={buttonStyle({ tone: 'primary', size: 'md' })}
                         onClick={() => router.push('/connectors?connector=telegram_bot&onboarding=1')}
                     >
                         Connect Telegram
@@ -4455,14 +4464,15 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
                                 Saved {new Date(lastSavedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                             </span>
                         ) : null}
-                        <button
+                        <Button
+                            type="button"
                             onClick={saveWorkflowState}
                             disabled={isSaving}
-                            className="orion-btn orion-btn-ghost"
+                            variant="ghost"
                         >
                             <Save size={14} />
                             {isSaving ? 'Saving...' : workflowId ? 'Save' : 'Create draft'}
-                        </button>
+                        </Button>
                     </div>
                 </div>
             ) : null}

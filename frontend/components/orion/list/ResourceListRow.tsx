@@ -17,7 +17,12 @@ export function ResourceListRow({
   return (
     <article
       className={className}
-      style={listRowStyle({ interactive: props.onClick != null })}
+      style={{
+        ...listRowStyle({ interactive: props.onClick != null }),
+        gap: DESIGN_TOKENS.space[5],
+        padding: `${DESIGN_TOKENS.space[4]}px ${DESIGN_TOKENS.space[4]}px`,
+        background: DESIGN_TOKENS.color.surface,
+      }}
       {...props}
     >
       {leading ? (
@@ -28,7 +33,7 @@ export function ResourceListRow({
       ) : (
         children
       )}
-      {end ? <div style={{ display: 'flex', alignItems: 'center', gap: DESIGN_TOKENS.space[2], flexWrap: 'wrap' }}>{end}</div> : null}
+      {end ? <div style={{ display: 'flex', alignItems: 'flex-start', gap: DESIGN_TOKENS.space[2], flexWrap: 'wrap' }}>{end}</div> : null}
     </article>
   );
 }

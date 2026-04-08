@@ -1,6 +1,14 @@
 'use client';
 
 import { AlertTriangle, EyeOff, Loader2 } from 'lucide-react';
+import {
+  DESIGN_TOKENS,
+  bodyTextStyle,
+  mergeStyles,
+  metaTextStyle,
+  panelStyle,
+  sectionTitleStyle,
+} from '@/design-constraints';
 import type { ArtifactItem, ArtifactPreviewMode } from '@/lib/artifactsPresentation';
 import { artifactExtension, artifactSurfaceLabel } from '@/lib/artifactsPresentation';
 import { ArtifactHtmlPreview } from './ArtifactHtmlPreview';
@@ -67,13 +75,33 @@ function PreviewState({
   loading?: boolean;
 }) {
   return (
-    <div className={`orion-artifact-state-card${tone === 'warning' ? ' is-warning' : ''}`}>
-      <div className="orion-artifact-state-icon">
+    <div
+      style={mergeStyles(panelStyle({ muted: true, padding: DESIGN_TOKENS.space[5] }), {
+        display: 'grid',
+        gap: DESIGN_TOKENS.space[4],
+        alignItems: 'start',
+        gridTemplateColumns: '40px minmax(0, 1fr)',
+        background: tone === 'warning' ? DESIGN_TOKENS.color.warningSoft : DESIGN_TOKENS.color.surfaceMuted,
+        borderColor: tone === 'warning' ? DESIGN_TOKENS.color.warning : DESIGN_TOKENS.color.borderSubtle,
+      })}
+    >
+      <div
+        style={{
+          width: 40,
+          height: 40,
+          borderRadius: DESIGN_TOKENS.radius.lg,
+          display: 'grid',
+          placeItems: 'center',
+          background: DESIGN_TOKENS.color.surface,
+          border: `1px solid ${DESIGN_TOKENS.color.borderSubtle}`,
+          color: tone === 'warning' ? DESIGN_TOKENS.color.warning : DESIGN_TOKENS.color.textSecondary,
+        }}
+      >
         {loading ? <Loader2 size={18} className="orion-artifact-state-spinner" /> : tone === 'warning' ? <AlertTriangle size={18} /> : <EyeOff size={18} />}
       </div>
-      <div className="orion-artifact-state-copy">
-        <div className="orion-artifact-state-title">{title}</div>
-        <p>{copy}</p>
+      <div style={{ display: 'grid', gap: DESIGN_TOKENS.space[2] }}>
+        <div style={sectionTitleStyle()}>{title}</div>
+        <p style={bodyTextStyle()}>{copy}</p>
       </div>
     </div>
   );
@@ -126,8 +154,10 @@ export function ArtifactPreviewView({
       );
     }
     return (
-      <div className="orion-artifact-detail-body-frame">
-        <div className="orion-artifact-detail-inline-note">Sandboxed HTML preview. Scripts, forms, popups, and parent-page access are disabled.</div>
+      <div style={{ display: 'grid', gap: DESIGN_TOKENS.space[3] }}>
+        <div style={mergeStyles(metaTextStyle(), { color: DESIGN_TOKENS.color.textSecondary })}>
+          Sandboxed HTML preview. Scripts, forms, popups, and parent-page access are disabled.
+        </div>
         <ArtifactHtmlPreview title={`Preview ${artifactSurfaceLabel(item)}`} src={contentHref || ''} />
       </div>
     );
@@ -148,13 +178,27 @@ export function ArtifactPreviewView({
       );
     }
     return (
-      <div className="orion-artifact-preview is-media">
-        <div className="orion-artifact-detail-inline-note">Scaled to fit the workspace for quick inspection without losing the original file.</div>
-        <div className="orion-artifact-media-stage">
+      <div style={{ display: 'grid', gap: DESIGN_TOKENS.space[3] }}>
+        <div style={mergeStyles(metaTextStyle(), { color: DESIGN_TOKENS.color.textSecondary })}>
+          Scaled to fit the workspace for quick inspection without losing the original file.
+        </div>
+        <div
+          style={mergeStyles(panelStyle({ muted: true, padding: DESIGN_TOKENS.space[4] }), {
+            display: 'grid',
+            placeItems: 'center',
+            minHeight: 320,
+            background: DESIGN_TOKENS.color.surfaceMuted,
+          })}
+        >
           <img
-            className="orion-artifact-media-image"
             src={contentHref}
             alt={artifactSurfaceLabel(item)}
+            style={{
+              width: '100%',
+              maxHeight: 560,
+              objectFit: 'contain',
+              borderRadius: DESIGN_TOKENS.radius.lg,
+            }}
           />
         </div>
       </div>
@@ -172,12 +216,20 @@ export function ArtifactPreviewView({
       );
     }
     return (
-      <div className="orion-artifact-detail-body-frame">
-        <div className="orion-artifact-detail-inline-note">Embedded PDF preview for quick review. Download or open externally if you need full viewer controls.</div>
+      <div style={{ display: 'grid', gap: DESIGN_TOKENS.space[3] }}>
+        <div style={mergeStyles(metaTextStyle(), { color: DESIGN_TOKENS.color.textSecondary })}>
+          Embedded PDF preview for quick review. Download or open externally if you need full viewer controls.
+        </div>
         <iframe
           title={`Preview ${artifactSurfaceLabel(item)}`}
-          className="orion-artifact-pdf-frame"
           src={contentHref}
+          style={{
+            width: '100%',
+            minHeight: 620,
+            border: `1px solid ${DESIGN_TOKENS.color.borderSubtle}`,
+            borderRadius: DESIGN_TOKENS.radius.lg,
+            background: DESIGN_TOKENS.color.surface,
+          }}
         />
       </div>
     );
@@ -195,14 +247,40 @@ export function ArtifactPreviewView({
     }
     const [header, ...body] = rows;
     return (
-      <div className="orion-artifact-preview is-table">
-        <div className="orion-artifact-detail-inline-note">Showing the first {rows.length} rows for quick inspection.</div>
-        <div className="orion-artifact-table-wrap">
-          <table className="orion-artifact-table">
+      <div style={{ display: 'grid', gap: DESIGN_TOKENS.space[3] }}>
+        <div style={mergeStyles(metaTextStyle(), { color: DESIGN_TOKENS.color.textSecondary })}>
+          Showing the first {rows.length} rows for quick inspection.
+        </div>
+        <div
+          style={{
+            overflowX: 'auto',
+            border: `1px solid ${DESIGN_TOKENS.color.borderSubtle}`,
+            borderRadius: DESIGN_TOKENS.radius.lg,
+            background: DESIGN_TOKENS.color.surface,
+          }}
+        >
+          <table
+            style={{
+              width: '100%',
+              borderCollapse: 'collapse',
+              fontSize: DESIGN_TOKENS.type.size.label,
+            }}
+          >
             <thead>
               <tr>
                 {header.map((cell, index) => (
-                  <th key={`header-${index}`}>{cell || `Column ${index + 1}`}</th>
+                  <th
+                    key={`header-${index}`}
+                    style={{
+                      padding: `${DESIGN_TOKENS.space[3]}px ${DESIGN_TOKENS.space[4]}px`,
+                      textAlign: 'left',
+                      color: DESIGN_TOKENS.color.textSecondary,
+                      background: DESIGN_TOKENS.color.surfaceMuted,
+                      borderBottom: `1px solid ${DESIGN_TOKENS.color.borderSubtle}`,
+                    }}
+                  >
+                    {cell || `Column ${index + 1}`}
+                  </th>
                 ))}
               </tr>
             </thead>
@@ -210,7 +288,17 @@ export function ArtifactPreviewView({
               {body.map((row, rowIndex) => (
                 <tr key={`row-${rowIndex}`}>
                   {header.map((_, cellIndex) => (
-                    <td key={`row-${rowIndex}-cell-${cellIndex}`}>{row[cellIndex] || '—'}</td>
+                    <td
+                      key={`row-${rowIndex}-cell-${cellIndex}`}
+                      style={{
+                        padding: `${DESIGN_TOKENS.space[3]}px ${DESIGN_TOKENS.space[4]}px`,
+                        borderBottom: `1px solid ${DESIGN_TOKENS.color.borderSubtle}`,
+                        color: DESIGN_TOKENS.color.textPrimary,
+                        verticalAlign: 'top',
+                      }}
+                    >
+                      {row[cellIndex] || '—'}
+                    </td>
                   ))}
                 </tr>
               ))}

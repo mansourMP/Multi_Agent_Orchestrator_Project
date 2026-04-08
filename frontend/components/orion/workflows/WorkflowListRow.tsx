@@ -71,13 +71,14 @@ export function WorkflowListRow({ workflow, onEdit, onRun, onDelete, onDuplicate
       leading={
         <div
           style={{
-            width: 40,
-            height: 40,
+            width: 42,
+            height: 42,
             borderRadius: DESIGN_TOKENS.radius.lg,
             display: 'grid',
             placeItems: 'center',
-            background: DESIGN_TOKENS.color.accentSoft,
-            color: DESIGN_TOKENS.color.accentText,
+            background: DESIGN_TOKENS.color.surfaceMuted,
+            color: DESIGN_TOKENS.color.textSecondary,
+            border: `1px solid ${DESIGN_TOKENS.color.borderSubtle}`,
             fontSize: DESIGN_TOKENS.type.size.label,
             fontWeight: DESIGN_TOKENS.type.weight.semibold,
             flexShrink: 0,
@@ -90,7 +91,7 @@ export function WorkflowListRow({ workflow, onEdit, onRun, onDelete, onDuplicate
         <ResourceActionGroup>
           <Button
             type="button"
-            variant="secondary"
+            variant="ghost"
             size="sm"
             onClick={(event) => {
               event.stopPropagation();
@@ -141,19 +142,21 @@ export function WorkflowListRow({ workflow, onEdit, onRun, onDelete, onDuplicate
       }
     >
       <div style={{ display: 'grid', gap: DESIGN_TOKENS.space[2], minWidth: 0 }}>
-        <div
-          style={{
-            color: DESIGN_TOKENS.color.textPrimary,
-            fontSize: DESIGN_TOKENS.type.size.bodyLg,
-            fontWeight: DESIGN_TOKENS.type.weight.semibold,
-            lineHeight: DESIGN_TOKENS.type.lineHeight.snug,
-          }}
-        >
-          {workflow.name || 'Untitled Workflow'}
+        <div style={{ display: 'flex', alignItems: 'center', gap: DESIGN_TOKENS.space[2], flexWrap: 'wrap' }}>
+          <div
+            style={{
+              color: DESIGN_TOKENS.color.textPrimary,
+              fontSize: DESIGN_TOKENS.type.size.bodyLg,
+              fontWeight: DESIGN_TOKENS.type.weight.semibold,
+              lineHeight: DESIGN_TOKENS.type.lineHeight.snug,
+            }}
+          >
+            {workflow.name || 'Untitled Workflow'}
+          </div>
+          <Badge variant={status.variant}>{status.label}</Badge>
         </div>
         <div style={mergeStyles(bodyTextStyle(), { maxWidth: 720 })}>{compactWorkflowText(workflow.description)}</div>
         <ResourceMetaLine>
-          <Badge variant={status.variant}>{status.label}</Badge>
           <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
             <Clock size={11} />
             Updated {formatDate(workflow.updatedAt)}

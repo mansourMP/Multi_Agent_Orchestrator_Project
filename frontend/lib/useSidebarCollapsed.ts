@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
+import { SHELL_CHROME } from '@/design-constraints';
 
 const SIDEBAR_COLLAPSED_KEY = 'empyralist:sidebar-collapsed';
 const SIDEBAR_COLLAPSED_EVENT = 'empyralist:sidebar-collapsed-change';
@@ -23,7 +24,7 @@ function applySidebarCollapsedToRoot(next: boolean): void {
   if (typeof document === 'undefined') return;
   const root = document.documentElement;
   root.setAttribute('data-sidebar-collapsed', next ? '1' : '0');
-  root.style.setProperty('--shell-sidebar-width', next ? '64px' : '228px');
+  root.style.setProperty('--shell-sidebar-width', next ? `${SHELL_CHROME.sidebarCollapsed}px` : `${SHELL_CHROME.sidebarExpanded}px`);
 }
 
 function persistSidebarCollapsed(next: boolean): void {

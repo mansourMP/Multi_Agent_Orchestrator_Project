@@ -4,7 +4,6 @@ import * as React from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import {
-  BarChart2,
   BookOpen,
   Bot,
   ChevronLeft,
@@ -39,12 +38,11 @@ type NavItem = {
 };
 
 const MAIN_NAV: NavItem[] = [
-  { sectionId: 'home', label: 'Home', href: '/home', icon: House },
-  { sectionId: 'chat', label: 'Chat', href: '/', icon: MessageSquare },
+  { sectionId: 'home', label: 'Overview', href: '/home', icon: House },
+  { sectionId: 'chat', label: 'Sage', href: '/', icon: MessageSquare },
   { sectionId: 'agents', label: 'Agents', href: '/agents', icon: Bot },
-  { sectionId: 'library', label: 'Library', href: '/library', icon: BookOpen },
+  { sectionId: 'library', label: 'Blueprints', href: '/library', icon: BookOpen },
   { sectionId: 'integrations', label: 'Integrations', href: '/connectors', icon: Plug },
-  { sectionId: 'usage', label: 'Usage', href: '/usage', icon: BarChart2 },
 ];
 
 const BOTTOM_NAV: NavItem[] = [
@@ -157,6 +155,7 @@ export default function AppSidebar() {
       '--shell-sidebar-width',
       hideShellChrome ? '0px' : `${collapsed ? SHELL_CHROME.sidebarCollapsed : SHELL_CHROME.sidebarExpanded}px`,
     );
+    root.style.setProperty('--shell-stage-left', hideShellChrome ? '0px' : `${SHELL_CHROME.sidebarExpanded}px`);
   }, [collapsed, hideShellChrome]);
 
   if (hideShellChrome) return null;

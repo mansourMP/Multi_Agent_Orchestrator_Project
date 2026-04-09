@@ -2,8 +2,8 @@
 
 import Link from 'next/link';
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
-import { usePathname, useRouter } from 'next/navigation';
-import { Bell, SquarePen } from 'lucide-react';
+import { usePathname } from 'next/navigation';
+import { Bell } from 'lucide-react';
 import { forwardWheelToMainScroll } from '@/lib/shell/forwardWheelToMainScroll';
 import { useShellChromeVisibility } from '@/lib/shell/useShellChromeVisibility';
 import { usePlatformShell } from './PlatformShellContext';
@@ -76,7 +76,6 @@ function noticeToneStyle(tone: 'warn' | 'error' | 'accent' | 'neutral'): CSSProp
 
 export default function PlatformTopBar() {
   const pathname = usePathname() ?? '/';
-  const router = useRouter();
   const { hideShellChrome } = useShellChromeVisibility(pathname);
   const { chatTopControls } = usePlatformShell();
   const showRouteTitle = pathname !== '/';
@@ -164,30 +163,19 @@ export default function PlatformTopBar() {
     return null;
   }
 
-  const handleNewChat = () => {
-    const dispatch = () => window.dispatchEvent(new Event(EMPYRALIS_NEW_CHAT_EVENT));
-    if (pathname !== '/') {
-      router.push('/');
-      window.setTimeout(dispatch, 180);
-      return;
-    }
-    dispatch();
-  };
-
   return (
     <header
       onWheel={forwardWheelToMainScroll}
       style={{
         position: 'fixed',
         top: 'var(--desktop-titlebar-height)',
-        left: 'var(--shell-sidebar-width)',
+        left: 'var(--shell-stage-left)',
         right: 0,
         zIndex: 70,
         minHeight: SHELL_CHROME.topbarHeight,
         padding: `0 ${DESIGN_TOKENS.space[4]}px`,
         borderBottom: `${DESIGN_TOKENS.border.subtle}px solid ${DESIGN_TOKENS.color.borderSubtle}`,
         background: DESIGN_TOKENS.color.surfaceMuted,
-        transition: 'left 150ms ease',
       }}
     >
       <div
@@ -216,15 +204,6 @@ export default function PlatformTopBar() {
             </div>
           ) : null}
 
-          {pathname === '/' ? (
-            <button
-              type="button"
-              onClick={() => window.dispatchEvent(new Event('orion:open-history'))}
-              style={chromeButtonStyle(false)}
-            >
-              History
-            </button>
-          ) : null}
         </div>
 
         <div
@@ -419,20 +398,6 @@ export default function PlatformTopBar() {
               </div>
             ) : null}
           </div>
-
-          <button
-            type="button"
-            aria-label="New chat"
-            onClick={handleNewChat}
-            title="New chat"
-            style={mergeStyles(iconButtonStyle(), {
-              background: DESIGN_TOKENS.color.surface,
-              borderColor: DESIGN_TOKENS.color.borderStrong,
-              color: DESIGN_TOKENS.color.textPrimary,
-            })}
-          >
-            <SquarePen size={15} strokeWidth={2} />
-          </button>
         </div>
       </div>
     </header>

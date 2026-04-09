@@ -16,16 +16,16 @@ const AGENT_SURFACE_TITLE = SINGLE_AGENT_MODE ? 'Assistant' : 'Agents';
 const SHELL_ROUTE_DEFS: ShellRouteDef[] = [
   {
     id: 'home',
-    title: 'Chat',
-    breadcrumb: 'Chat',
-    slotLabel: 'Talk to your assistant',
+    title: 'Sage',
+    breadcrumb: 'Sage',
+    slotLabel: 'Talk to Sage',
     match: (pathname: string) => pathname === '/',
   },
   {
     id: 'platform-home',
-    title: 'Home',
-    breadcrumb: 'Home',
-    slotLabel: 'Overview of your workspace and recent workflows',
+    title: 'Overview',
+    breadcrumb: 'Overview',
+    slotLabel: 'Overview of your workspace and recent work',
     match: (pathname: string) => pathname === '/home',
   },
   {
@@ -37,9 +37,9 @@ const SHELL_ROUTE_DEFS: ShellRouteDef[] = [
   },
   {
     id: 'automations',
-    title: 'Workflows',
-    breadcrumb: 'Workflows',
-    slotLabel: 'Reusable workflows and playbooks',
+    title: 'Blueprints',
+    breadcrumb: 'Blueprints',
+    slotLabel: 'Reusable blueprints and playbooks',
     match: (pathname: string) => pathname === '/workflows',
   },
   {
@@ -65,15 +65,15 @@ const SHELL_ROUTE_DEFS: ShellRouteDef[] = [
   },
   {
     id: 'run-inspect',
-    title: 'Run Inspect',
+    title: 'Cockpit',
     breadcrumb: 'Runs',
-    slotLabel: 'Evidence and trace',
+    slotLabel: 'Live run trace and controls',
     match: (pathname: string) => pathname.startsWith('/runs/'),
   },
   {
     id: 'files',
-    title: 'Assets',
-    breadcrumb: 'Assets',
+    title: 'Outputs',
+    breadcrumb: 'Outputs',
     slotLabel: 'Outputs and results',
     match: (pathname: string) => pathname === '/artifacts',
   },

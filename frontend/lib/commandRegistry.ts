@@ -43,18 +43,18 @@ export type PlatformCommand = {
 const BASE_COMMANDS: PlatformCommand[] = [
   {
     id: 'nav.home',
-    title: 'Go to Home',
-    description: 'Open the workspace overview and recent workflows.',
+    title: 'Go to Overview',
+    description: 'Open the workspace overview and recent work.',
     group: 'Navigate',
     keywords: ['home', 'overview', 'recent', 'workspace'],
     action: { type: 'navigate', href: '/home' },
   },
   {
     id: 'nav.agents',
-    title: SINGLE_AGENT_MODE ? 'Go to Assistant' : 'Go to Agents',
-    description: SINGLE_AGENT_MODE ? 'Inspect the single assistant workspace, inbox, and live channels.' : 'Open reusable agents, workflow-backed systems, and current workload.',
+    title: SINGLE_AGENT_MODE ? 'Go to Sage' : 'Go to Agents',
+    description: SINGLE_AGENT_MODE ? 'Open Sage and the current workspace conversation.' : 'Open installed agents and current specialist availability.',
     group: 'Navigate',
-    keywords: SINGLE_AGENT_MODE ? ['assistant', 'inbox', 'channels', 'activity'] : ['workers', 'agents', 'activity', 'collaboration', 'workflow', 'workflows', 'automation', 'automations'],
+    keywords: SINGLE_AGENT_MODE ? ['sage', 'assistant', 'conversation', 'activity'] : ['workers', 'agents', 'specialists', 'activity', 'collaboration'],
     action: { type: 'navigate', href: '/agents' },
   },
   {
@@ -83,10 +83,10 @@ const BASE_COMMANDS: PlatformCommand[] = [
   },
   {
     id: 'nav.chat',
-    title: 'Go to Chat',
-    description: 'Open the assistant conversation.',
+    title: 'Go to Sage',
+    description: 'Open the main Sage conversation.',
     group: 'Navigate',
-    keywords: ['chat', 'assistant', 'conversation'],
+    keywords: ['chat', 'sage', 'assistant', 'conversation'],
     action: { type: 'navigate', href: '/' },
   },
   {
@@ -99,10 +99,10 @@ const BASE_COMMANDS: PlatformCommand[] = [
   },
   {
     id: 'nav.library',
-    title: 'Go to Library',
-    description: 'Review runs, outputs, approvals, and execution history.',
+    title: 'Go to Blueprints',
+    description: 'Review reusable blueprints, packs, and capability assets.',
     group: 'Navigate',
-    keywords: ['library', 'history', 'runs', 'executions', 'activity', 'logs', 'artifacts', 'assets', 'approvals'],
+    keywords: ['blueprints', 'library', 'templates', 'packs', 'assets'],
     action: { type: 'navigate', href: '/executions' },
   },
   {
@@ -116,9 +116,9 @@ const BASE_COMMANDS: PlatformCommand[] = [
   {
     id: 'nav.capabilities',
     title: 'Go to Capabilities',
-    description: 'Manage assistant skills, capability packs, and execution policy.',
+    description: 'Manage skills, capability packs, and execution policy.',
     group: 'Navigate',
-    keywords: ['capabilities', 'skills', 'marketplace', 'plugins'],
+    keywords: ['capabilities', 'skills', 'plugins'],
     action: { type: 'navigate', href: '/library' },
   },
   {

@@ -14,11 +14,12 @@ import {
   useKBar,
   useMatches,
 } from 'kbar';
-import { BarChart2, BookOpen, Bot, Home, MessageSquare, PlusSquare, PlugZap, Search, Settings, User, Workflow, Wrench } from 'lucide-react';
+import { BookOpen, Bot, Home, MessageSquare, PlusSquare, PlugZap, Search, Settings, User, Workflow, Wrench } from 'lucide-react';
 import { PRODUCT_SECTIONS, getProductSection } from '@/lib/productArchitecture';
 
 const EMPYRALIS_NEW_CHAT_EVENT = 'empyralis:new-chat';
 export const EMPYRALIS_COMMAND_PALETTE_TOGGLE_EVENT = 'empyralis:command-palette-toggle';
+type VisibleSectionId = Exclude<(typeof PRODUCT_SECTIONS)[number]['id'], 'usage'>;
 
 const positionerStyle: React.CSSProperties = {
   background: 'rgba(10, 12, 16, 0.52)',
@@ -212,36 +213,35 @@ export default function CommandPaletteProvider({ children }: { children: React.R
 
   const actions = React.useMemo(
     () => {
-      const baseActions = PRODUCT_SECTIONS.map((section) => {
-        const shortcuts: Record<string, string[]> = {
+      const baseActions = PRODUCT_SECTIONS.filter((section): section is (typeof PRODUCT_SECTIONS)[number] & { id: VisibleSectionId } => section.id !== 'usage').map((section) => {
+        const sectionId = section.id as VisibleSectionId;
+        const shortcuts: Record<VisibleSectionId, string[]> = {
           home: ['h'],
           chat: ['c'],
           agents: ['a'],
           library: ['l'],
           integrations: ['i'],
-          usage: ['u'],
           account: ['p'],
           settings: ['s'],
         };
-        const icons = {
+        const icons: Record<VisibleSectionId, React.ReactNode> = {
           home: <Home size={16} />,
           chat: <MessageSquare size={16} />,
           agents: <Bot size={16} />,
           library: <BookOpen size={16} />,
           integrations: <PlugZap size={16} />,
-          usage: <BarChart2 size={16} />,
           account: <User size={16} />,
           settings: <Settings size={16} />,
         };
         return {
-          id: `section-${section.id}`,
+          id: `section-${sectionId}`,
           name: section.label,
-          shortcut: shortcuts[section.id],
+          shortcut: shortcuts[sectionId],
           keywords: `${section.label.toLowerCase()} ${section.role.replace(/_/g, ' ')}`,
           subtitle: section.summary,
           section: 'Navigation',
           perform: () => router.push(section.href),
-          icon: icons[section.id],
+          icon: icons[sectionId],
         };
       });
 
@@ -278,11 +278,11 @@ export default function CommandPaletteProvider({ children }: { children: React.R
         },
         {
           id: 'workflows',
-          name: 'Workflows',
+          name: 'Blueprints',
           shortcut: ['w'],
-          keywords: 'library reusable assets automation flows templates',
-          subtitle: 'Reusable workflow assets that belong to the Library.',
-          section: 'Library',
+          keywords: 'blueprints reusable assets templates packs',
+          subtitle: 'Reusable blueprints that belong to the library surface.',
+          section: 'Blueprints',
           perform: () => router.push('/workflows'),
           icon: <Workflow size={16} />,
         },

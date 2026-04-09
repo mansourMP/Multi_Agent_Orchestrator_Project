@@ -924,7 +924,11 @@ export function usePlatformApi(
               isProviderDefault: Boolean(value.is_provider_default),
             } satisfies ModelAliasOption;
           })
-          .filter((item: ModelAliasOption | null): item is ModelAliasOption => item !== null);
+          .filter((item: ModelAliasOption | null): item is ModelAliasOption => {
+            if (item === null) return false;
+            const normalized = item.alias.trim().toLowerCase();
+            return normalized !== 'gpt-4.1' && normalized !== 'gpt-4.1-mini';
+          });
         return mapped.length > 0 ? mapped : DEFAULT_MODEL_ALIAS_OPTIONS;
       },
       () => readAnyCache(modelAliasCatalogCache) ?? DEFAULT_MODEL_ALIAS_OPTIONS,

@@ -3119,7 +3119,7 @@ export function AutopilotWorkspace() {
           identitySections={sessionIdentitySections}
           identityActions={sessionIdentityActions}
           shellNotice={shellTopNotice}
-          historyEnabled={false}
+          historyEnabled
         />
       </div>
     </WorkbenchShell>

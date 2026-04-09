@@ -895,9 +895,7 @@ export const DEFAULT_BUSINESS_PRESET_ID = BUSINESS_PRESETS[0].id;
 
 export const DEFAULT_OPENAI_MODELS = [
   'gpt-4o',
-  'gpt-4.1',
   'gpt-4o-mini',
-  'gpt-4.1-mini',
 ] as const;
 
 export const DEFAULT_OPENAI_CODEX_MODELS = [
@@ -1054,26 +1052,10 @@ export const DEFAULT_MODEL_ALIAS_OPTIONS: ModelAliasOption[] = [
     isProviderDefault: false,
   },
   {
-    alias: 'gpt-4.1',
-    provider: 'openai',
-    model: 'gpt-4.1',
-    resolvedModel: 'gpt-4.1',
-    isGlobalDefault: false,
-    isProviderDefault: false,
-  },
-  {
     alias: 'gpt-4o-mini',
     provider: 'openai',
     model: 'gpt-4o-mini',
     resolvedModel: 'gpt-4o-mini',
-    isGlobalDefault: false,
-    isProviderDefault: false,
-  },
-  {
-    alias: 'gpt-4.1-mini',
-    provider: 'openai',
-    model: 'gpt-4.1-mini',
-    resolvedModel: 'gpt-4.1-mini',
     isGlobalDefault: false,
     isProviderDefault: false,
   },
@@ -1247,6 +1229,13 @@ function normalizeModelToken(value: string): string {
   return trimmed.includes('/') ? trimmed.split('/').pop() || trimmed : trimmed;
 }
 
+const HIDDEN_VISIBLE_MODEL_TOKENS = new Set(['gpt-4.1', 'gpt-4.1-mini']);
+
+function isVisibleModelToken(value: string): boolean {
+  const normalized = normalizeModelToken(value).toLowerCase();
+  return normalized ? !HIDDEN_VISIBLE_MODEL_TOKENS.has(normalized) : false;
+}
+
 function aliasesForProvider(provider: ProviderId, aliases: ModelAliasOption[]): ModelAliasOption[] {
   const normalized = normalizeProviderId(provider);
   return aliases
@@ -1289,14 +1278,15 @@ export function mapModelOptionsToAliases(
       [item.alias, item.model, item.resolvedModel]
         .map((value) => normalizeModelToken(value))
         .some((value) => normalizedRaw.has(value)),
-    );
+    )
+    .filter((item) => isVisibleModelToken(item.alias) || isVisibleModelToken(item.model) || isVisibleModelToken(item.resolvedModel));
   const representedRaw = new Set(
     matchedAliases
       .flatMap((item) => [item.alias, item.model, item.resolvedModel])
       .map((item) => normalizeModelToken(item))
       .filter(Boolean),
   );
-  const unmatchedRaw = rawModels.filter((item) => !representedRaw.has(normalizeModelToken(item)));
+  const unmatchedRaw = rawModels.filter((item) => isVisibleModelToken(item) && !representedRaw.has(normalizeModelToken(item)));
   return Array.from(new Set([...matchedAliases.map((item) => item.alias), ...unmatchedRaw]));
 }
 

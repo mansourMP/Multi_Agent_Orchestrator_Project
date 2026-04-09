@@ -66,31 +66,31 @@ type ProductRouteRule = {
 export const PRODUCT_SECTIONS: ProductSectionDefinition[] = [
   {
     id: 'home',
-    label: 'Home',
+    label: 'Overview',
     href: '/home',
     role: 'work_now',
-    summary: 'Current work, blocked work, approvals, run history, and next actions.',
+    summary: 'Current work, approvals, run history, and next actions.',
   },
   {
     id: 'chat',
-    label: 'Chat',
+    label: 'Sage',
     href: '/',
     role: 'work_now',
-    summary: 'Live conversations and ad hoc work with the workspace agent system.',
+    summary: 'Your primary conversation with Sage and the current workspace context.',
   },
   {
     id: 'agents',
     label: 'Agents',
     href: '/agents',
     role: 'reusable_agents',
-    summary: 'Reusable agent systems you can edit, deploy, and return to.',
+    summary: 'Installed specialists, their status, and where they run.',
   },
   {
     id: 'library',
-    label: 'Library',
+    label: 'Blueprints',
     href: '/library',
     role: 'reusable_assets',
-    summary: 'Reusable assets: skills, templates, starter workflows, packs, and solution kits.',
+    summary: 'Reusable blueprints, packs, and capability assets.',
   },
   {
     id: 'integrations',
@@ -230,14 +230,14 @@ export const CANONICAL_PRODUCT_OBJECTS: CanonicalProductObject[] = [
 ];
 
 export const PRODUCT_ROUTE_RULES: ProductRouteRule[] = [
-  { section: 'chat', title: 'Chat', exact: ['/'] },
-  { section: 'home', title: 'Home', exact: ['/home'] },
+  { section: 'chat', title: 'Sage', exact: ['/'] },
+  { section: 'home', title: 'Overview', exact: ['/home'] },
   { section: 'home', title: 'Runs', exact: ['/runs', '/executions', '/history', '/approvals', '/artifacts'] },
   { section: 'home', title: 'Run', prefixes: ['/runs/'] },
   { section: 'agents', title: 'Agents', exact: ['/agents'] },
-  { section: 'library', title: 'Library', exact: ['/library', '/skills'] },
-  { section: 'library', title: 'Workflows', exact: ['/workflows'] },
-  { section: 'library', title: 'Builder', exact: ['/builder'] },
+  { section: 'library', title: 'Blueprints', exact: ['/library', '/skills'] },
+  { section: 'library', title: 'Blueprints', exact: ['/workflows'] },
+  { section: 'library', title: 'Composer', exact: ['/builder'] },
   { section: 'library', title: 'Solutions', exact: ['/solutions', '/apps'] },
   { section: 'integrations', title: 'Integrations', exact: ['/connectors', '/credentials', '/connect-ai', '/integrations'] },
   { section: 'integrations', title: 'Machines', exact: ['/machines'] },

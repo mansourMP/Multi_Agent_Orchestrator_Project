@@ -1507,6 +1507,86 @@ export function ChatSurface({
           style={artifactPanelVisible ? { width: `${100 - artifactPanelWidth}%` } : undefined}
         >
           <div className="orion-chat-v2-thread-shell" ref={threadRef}>
+            <div
+              style={{
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'flex-start',
+                gap: 16,
+                flexWrap: 'wrap',
+                marginBottom: hasMessages ? 20 : 16,
+                padding: '0 2px',
+              }}
+            >
+              <div style={{ display: 'grid', gap: 6, minWidth: 0 }}>
+                <div
+                  style={{
+                    fontSize: 12,
+                    fontWeight: 600,
+                    letterSpacing: '0.08em',
+                    textTransform: 'uppercase',
+                    color: 'var(--text-tertiary)',
+                  }}
+                >
+                  Sage
+                </div>
+                <div
+                  style={{
+                    fontSize: hasMessages ? 24 : 28,
+                    lineHeight: 1.1,
+                    fontWeight: 700,
+                    letterSpacing: '-0.02em',
+                    color: 'var(--text-primary)',
+                  }}
+                >
+                  {targetLabel}
+                </div>
+                <div
+                  style={{
+                    fontSize: 13,
+                    lineHeight: 1.45,
+                    color: 'var(--text-secondary)',
+                    maxWidth: 560,
+                  }}
+                >
+                  Your primary relationship for planning, delegation, approvals, and execution in this workspace.
+                </div>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                {historyEnabled ? (
+                  <button
+                    type="button"
+                    className="orion-btn"
+                    onClick={() => setHistoryDrawerOpen(true)}
+                    style={{
+                      minHeight: 36,
+                      padding: '0 14px',
+                      borderRadius: 999,
+                      border: '1px solid var(--border-default)',
+                      background: 'var(--bg-surface)',
+                      color: 'var(--text-primary)',
+                    }}
+                  >
+                    History
+                  </button>
+                ) : null}
+                <button
+                  type="button"
+                  className="orion-btn"
+                  onClick={onNewChat}
+                  style={{
+                    minHeight: 36,
+                    padding: '0 14px',
+                    borderRadius: 999,
+                    border: '1px solid var(--border-default)',
+                    background: 'var(--bg-surface)',
+                    color: 'var(--text-primary)',
+                  }}
+                >
+                  New chat
+                </button>
+              </div>
+            </div>
             {!hasMessages ? (
               <div className="orion-chat-v2-compact-empty">
                 <h1 className="orion-chat-v2-compact-title">{historyEnabled ? 'Start a new chat' : `Talk to ${targetLabel}`}</h1>

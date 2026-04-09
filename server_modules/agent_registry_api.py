@@ -13,6 +13,9 @@ from server_modules.run_service import build_server_run_execution_services
 from server_modules import runtime_run_access_service
 from server_modules import template_compiler_service
 from server_modules import thread_service
+from server_modules import inventory_skill
+from server_modules.agent_manifest import AgentManifest
+from server_modules import universal_operator
 
 
 def _late_server_export(name: str):
@@ -60,6 +63,24 @@ class AgentInstallUpsertRequest(BaseModel):
     enabled: Optional[bool] = None
     status: Optional[str] = None
     metadata: Dict[str, Any] = Field(default_factory=dict)
+
+
+class AgentCustomerInventoryPreviewRequest(BaseModel):
+    workspace_id: str
+    tenant_id: Optional[str] = None
+    agent_label: Optional[str] = None
+    customer_message: str
+    hard_context: Optional[str] = None
+    operational_policy: Optional[str] = None
+    seed_demo_if_empty: bool = False
+
+
+class AgentCustomerPreviewRequest(BaseModel):
+    workspace_id: str
+    tenant_id: Optional[str] = None
+    customer_message: str
+    manifest: AgentManifest
+    seed_demo_if_empty: bool = False
 
 
 def _workspace_id_from_query_or_body(
@@ -169,6 +190,60 @@ def register_agent_registry_routes(app) -> None:
             include_master=bool(include_master),
         )
         return {"items": items}
+
+    @app.post("/agents/customer-preview/inventory", dependencies=[Depends(member_dependency)])
+    async def preview_inventory_skill(
+        body: AgentCustomerInventoryPreviewRequest,
+        current_user=Depends(member_dependency),
+    ):
+        _refresh_server_exports()
+        resolved_workspace_id = enforce_workspace_access(
+            current_user,
+            _workspace_id_from_query_or_body(query_workspace_id=None, body_workspace_id=body.workspace_id),
+            tenant_id=str(body.tenant_id or "").strip() or None,
+            minimum_role="viewer",
+        )
+        tenant_id = _tenant_id_for_request(current_user, resolved_workspace_id)
+        result = await inventory_skill.execute_inventory_skill(
+            tenant_id=tenant_id,
+            workspace_id=resolved_workspace_id,
+            goal=str(body.customer_message or "").strip(),
+            agent_label=str(body.agent_label or "").strip() or "Agent",
+            hard_context=str(body.hard_context or "").strip(),
+            operational_policy=str(body.operational_policy or "").strip(),
+            seed_demo_if_empty=bool(body.seed_demo_if_empty),
+        )
+        return {
+            "workspace_id": resolved_workspace_id,
+            "tenant_id": tenant_id,
+            **result,
+        }
+
+    @app.post("/agents/customer-preview/respond", dependencies=[Depends(member_dependency)])
+    async def preview_customer_mode_turn(
+        body: AgentCustomerPreviewRequest,
+        current_user=Depends(member_dependency),
+    ):
+        _refresh_server_exports()
+        resolved_workspace_id = enforce_workspace_access(
+            current_user,
+            _workspace_id_from_query_or_body(query_workspace_id=None, body_workspace_id=body.workspace_id),
+            tenant_id=str(body.tenant_id or "").strip() or None,
+            minimum_role="viewer",
+        )
+        tenant_id = _tenant_id_for_request(current_user, resolved_workspace_id)
+        result = await universal_operator.execute_customer_turn(
+            manifest=body.manifest,
+            tenant_id=tenant_id,
+            workspace_id=resolved_workspace_id,
+            goal=str(body.customer_message or "").strip(),
+            seed_demo_if_empty=bool(body.seed_demo_if_empty),
+        )
+        return {
+            "workspace_id": resolved_workspace_id,
+            "tenant_id": tenant_id,
+            **result,
+        }
 
     @app.get("/agent-registry/chat-context", dependencies=[Depends(member_dependency)])
     async def get_master_chat_context(

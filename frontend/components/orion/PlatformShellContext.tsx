@@ -76,6 +76,18 @@ export type PlatformChatTopControls = {
   artifactCount: number;
   artifactsOpen: boolean;
   onToggleArtifacts: () => void;
+  liveState?: {
+    active: boolean;
+    label: string;
+    runId?: string | null;
+    sparkline: number[];
+    activity: Array<{
+      id: string;
+      label: string;
+      detail?: string | null;
+      status?: string | null;
+    }>;
+  } | null;
   notices: Array<{
     id: string;
     tone: 'neutral' | 'accent' | 'warn' | 'error';
@@ -143,6 +155,35 @@ function areShellStatusEqual(left: PlatformShellStatus, right: PlatformShellStat
 function areChatTopControlsEqual(left: PlatformChatTopControls, right: PlatformChatTopControls): boolean {
   if (left === right) return true;
   if (!left || !right) return left === right;
+  const leftLive = left.liveState || null;
+  const rightLive = right.liveState || null;
+  if (Boolean(leftLive) !== Boolean(rightLive)) return false;
+  if (leftLive && rightLive) {
+    if (
+      leftLive.active !== rightLive.active
+      || leftLive.label !== rightLive.label
+      || leftLive.runId !== rightLive.runId
+      || leftLive.sparkline.length !== rightLive.sparkline.length
+      || leftLive.activity.length !== rightLive.activity.length
+    ) {
+      return false;
+    }
+    for (let index = 0; index < leftLive.sparkline.length; index += 1) {
+      if (leftLive.sparkline[index] !== rightLive.sparkline[index]) return false;
+    }
+    for (let index = 0; index < leftLive.activity.length; index += 1) {
+      const leftEntry = leftLive.activity[index]!;
+      const rightEntry = rightLive.activity[index]!;
+      if (
+        leftEntry.id !== rightEntry.id
+        || leftEntry.label !== rightEntry.label
+        || leftEntry.detail !== rightEntry.detail
+        || leftEntry.status !== rightEntry.status
+      ) {
+        return false;
+      }
+    }
+  }
   if (left.notices.length !== right.notices.length) return false;
   for (let index = 0; index < left.notices.length; index += 1) {
     const leftNotice = left.notices[index]!;

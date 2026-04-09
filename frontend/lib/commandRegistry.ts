@@ -1,5 +1,5 @@
 import { BRAND } from '@/lib/brand';
-import { PACKAGED_SOLUTIONS_ENABLED, SINGLE_AGENT_MODE } from '@/lib/appFlags';
+import { SINGLE_AGENT_MODE } from '@/lib/appFlags';
 
 export type PlatformLocalOpsAction =
   | 'start_services'
@@ -42,92 +42,44 @@ export type PlatformCommand = {
 
 const BASE_COMMANDS: PlatformCommand[] = [
   {
-    id: 'nav.home',
-    title: 'Go to Overview',
-    description: 'Open the workspace overview and recent work.',
-    group: 'Navigate',
-    keywords: ['home', 'overview', 'recent', 'workspace'],
-    action: { type: 'navigate', href: '/home' },
-  },
-  {
-    id: 'nav.agents',
-    title: SINGLE_AGENT_MODE ? 'Go to Sage' : 'Go to Agents',
-    description: SINGLE_AGENT_MODE ? 'Open Sage and the current workspace conversation.' : 'Open installed agents and current specialist availability.',
-    group: 'Navigate',
-    keywords: SINGLE_AGENT_MODE ? ['sage', 'assistant', 'conversation', 'activity'] : ['workers', 'agents', 'specialists', 'activity', 'collaboration'],
-    action: { type: 'navigate', href: '/agents' },
-  },
-  {
-    id: 'nav.integrations',
-    title: 'Go to Connectors',
-    description: 'Connect tools, channels, and accounts.',
-    group: 'Navigate',
-    keywords: ['connections', 'integrations', 'credentials', 'connectors', 'channels'],
-    action: { type: 'navigate', href: '/connectors' },
-  },
-  {
-    id: 'nav.setup',
-    title: 'Go to Setup',
-    description: 'Finish platform setup and required access.',
-    group: 'Navigate',
-    keywords: ['configure', 'onboarding', 'wizard', 'launch assistant'],
-    action: { type: 'navigate', href: '/setup' },
-  },
-  {
-    id: 'nav.control_center',
-    title: 'Go to Admin',
-    description: 'Open advanced controls, diagnostics, and history.',
-    group: 'Navigate',
-    keywords: ['advanced', 'diagnostics', 'setup', 'admin', 'history'],
-    action: { type: 'navigate', href: '/control-center' },
-  },
-  {
-    id: 'nav.chat',
+    id: 'nav.sage',
     title: 'Go to Sage',
-    description: 'Open the main Sage conversation.',
+    description: 'Open the master thread with Sage.',
     group: 'Navigate',
-    keywords: ['chat', 'sage', 'assistant', 'conversation'],
+    keywords: ['sage', 'assistant', 'chat', 'master thread'],
     action: { type: 'navigate', href: '/' },
   },
   {
-    id: 'nav.files',
-    title: 'Go to Assets',
-    description: 'Browse finished work, evidence, and generated files.',
+    id: 'nav.runs',
+    title: 'Go to Runs',
+    description: 'Open operational work, approvals, and live run history.',
     group: 'Navigate',
-    keywords: ['outputs', 'files', 'artifacts', 'deliverables', 'archive'],
-    action: { type: 'navigate', href: '/artifacts' },
+    keywords: ['runs', 'history', 'approvals', 'cockpit', 'operations'],
+    action: { type: 'navigate', href: '/runs' },
   },
   {
-    id: 'nav.library',
-    title: 'Go to Blueprints',
-    description: 'Review reusable blueprints, packs, and capability assets.',
+    id: 'nav.agents',
+    title: SINGLE_AGENT_MODE ? 'Go to Specialists' : 'Go to Agents',
+    description: SINGLE_AGENT_MODE ? 'Open installed specialists and availability.' : 'Open installed agents and specialist availability.',
     group: 'Navigate',
-    keywords: ['blueprints', 'library', 'templates', 'packs', 'assets'],
-    action: { type: 'navigate', href: '/executions' },
+    keywords: ['agents', 'specialists', 'installs', 'availability'],
+    action: { type: 'navigate', href: '/agents' },
   },
   {
-    id: 'nav.approvals',
-    title: 'Go to Approvals',
-    description: 'Review and resolve pending approvals.',
+    id: 'nav.forge',
+    title: 'Open Forge',
+    description: 'Create a specialist, import a blueprint, or refine draft channels.',
     group: 'Navigate',
-    keywords: ['approval', 'pending', 'review', 'risk'],
-    action: { type: 'navigate', href: '/approvals' },
+    keywords: ['forge', 'agents', 'blueprint', 'create specialist'],
+    action: { type: 'navigate', href: '/agents' },
   },
   {
-    id: 'nav.capabilities',
-    title: 'Go to Capabilities',
-    description: 'Manage skills, capability packs, and execution policy.',
+    id: 'nav.connected_systems',
+    title: 'Open Connected Systems',
+    description: 'Manage connectors, credentials, machines, and runtime access from Settings.',
     group: 'Navigate',
-    keywords: ['capabilities', 'skills', 'plugins'],
-    action: { type: 'navigate', href: '/library' },
-  },
-  {
-    id: 'nav.health',
-    title: 'Go to System Health',
-    description: 'Check runtime diagnostics and dependency status.',
-    group: 'Navigate',
-    keywords: ['doctor', 'checks', 'status'],
-    action: { type: 'navigate', href: '/health' },
+    keywords: ['integrations', 'credentials', 'connectors', 'machines', 'health', 'settings'],
+    action: { type: 'navigate', href: '/settings?section=integrations' },
   },
   {
     id: 'nav.settings',
@@ -205,17 +157,6 @@ const BASE_COMMANDS: PlatformCommand[] = [
     action: { type: 'local_op', action: 'ops_daemon_restart' },
   },
 ];
-
-if (PACKAGED_SOLUTIONS_ENABLED) {
-  BASE_COMMANDS.splice(9, 0, {
-    id: 'nav.solutions',
-    title: 'Go to Packages',
-    description: 'Browse optional packaged capability layers.',
-    group: 'Navigate',
-    keywords: ['packages', 'extensions', 'solutions', 'capabilities'],
-    action: { type: 'navigate', href: '/solutions' },
-  });
-}
 
 function scoreCommand(command: PlatformCommand, terms: string[]): number | null {
   const title = command.title.toLowerCase();

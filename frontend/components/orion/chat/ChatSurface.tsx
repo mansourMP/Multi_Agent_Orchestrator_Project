@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from 'react';
-import type { ComponentPropsWithoutRef, PointerEvent as ReactPointerEvent } from 'react';
+import type { ComponentPropsWithoutRef, PointerEvent as ReactPointerEvent, ReactNode } from 'react';
 import { useRouter } from 'next/navigation';
 import {
   ArrowUp,
@@ -120,6 +120,7 @@ type ChatSurfaceProps = {
   onCloseIdentityDrawer: () => void;
   identitySections: ChatIdentitySection[];
   identityActions: ChatIdentityAction[];
+  emptyStateSupplemental?: ReactNode;
   shellNotice?: {
     id: string;
     tone: 'neutral' | 'accent' | 'warn' | 'error';
@@ -179,7 +180,7 @@ declare global {
 }
 
 type ChatArtifactPreviewKind = 'markdown' | 'html' | null;
-type ChatArtifactSource = 'code' | 'structured' | 'file';
+type ChatArtifactSource = 'code' | 'structured' | 'file' | 'manifest';
 
 type ChatArtifactRecord = {
   id: string;
@@ -189,11 +190,23 @@ type ChatArtifactRecord = {
   language: string;
   previewKind: ChatArtifactPreviewKind;
   source: ChatArtifactSource;
+  reference?: string | null;
+  mediaType?: string | null;
+  kind?: string | null;
+  summary?: string | null;
+};
+
+type ChatLiveActivityEntry = {
+  id: string;
+  label: string;
+  detail?: string | null;
+  status?: ChatStepRecord['status'] | null;
 };
 
 const ARTIFACT_PANEL_DEFAULT_WIDTH = 40;
 const ARTIFACT_PANEL_MIN_WIDTH = 28;
 const ARTIFACT_PANEL_MAX_WIDTH = 52;
+const MASTER_THREAD_FOCUS_EVENT = 'empyralis:focus-master-thread';
 
 const LANGUAGE_EXTENSION_MAP: Record<string, string> = {
   bash: 'sh',
@@ -258,6 +271,14 @@ function inferArtifactPreviewKind(language: string, content: string): ChatArtifa
   return null;
 }
 
+function inferArtifactPreviewKindFromMediaType(mediaType: string | null | undefined): ChatArtifactPreviewKind {
+  const normalized = String(mediaType || '').trim().toLowerCase();
+  if (!normalized) return null;
+  if (normalized.includes('markdown')) return 'markdown';
+  if (normalized.includes('html')) return 'html';
+  return null;
+}
+
 function getArtifactBaseName(value: string): string {
   const normalized = String(value || '').trim();
   if (!normalized) return '';
@@ -318,8 +339,65 @@ function looksLikeHtmlDocument(content: string): boolean {
   return normalized.startsWith('<!doctype html') || (normalized.startsWith('<html') && normalized.includes('</html>'));
 }
 
+function artifactRecordFromManifest(
+  messageId: string,
+  payload: Record<string, unknown>,
+  index: number,
+): ChatArtifactRecord | null {
+  const reference = String(
+    payload.uri
+    || payload.uri_or_path
+    || payload.path
+    || payload.file_path
+    || payload.url
+    || '',
+  ).trim();
+  const title = String(
+    payload.label
+    || payload.file_name
+    || payload.filename
+    || payload.name
+    || getArtifactBaseName(reference)
+    || '',
+  ).trim();
+  if (!title && !reference) return null;
+  const content = String(
+    payload.preview_content
+    || payload.content
+    || payload.text
+    || payload.body
+    || '',
+  );
+  const explicitLanguage = String(payload.language || payload.extension || '').trim();
+  const mediaType = String(payload.media_type || payload.mime_type || payload.content_type || '').trim() || null;
+  const language = explicitLanguage
+    ? normalizeArtifactLanguage(explicitLanguage)
+    : (title ? inferLanguageFromFilename(title) : (mediaType?.includes('html') ? 'html' : mediaType?.includes('markdown') ? 'markdown' : 'text'));
+  const previewKind = inferArtifactPreviewKindFromMediaType(mediaType) || inferArtifactPreviewKind(language, content);
+  const kind = String(payload.kind || payload.type || 'artifact').trim() || 'artifact';
+  return {
+    id: `${messageId}:artifact:${index}`,
+    messageId,
+    title: title || deriveArtifactTitle(language, index, reference || null, 'artifact'),
+    content,
+    language,
+    previewKind,
+    source: 'manifest',
+    reference: reference || null,
+    mediaType,
+    kind,
+    summary: String(payload.summary || payload.description || payload.caption || '').trim() || null,
+  };
+}
+
 function extractMessageArtifacts(message: ChatMessageRecord, displayContent: string): ChatArtifactRecord[] {
   if (message.role !== 'assistant') return [];
+  const manifestArtifacts = Array.isArray(message.artifacts)
+    ? message.artifacts
+        .map((artifact, index) => artifactRecordFromManifest(message.id, artifact, index))
+        .filter((artifact): artifact is ChatArtifactRecord => Boolean(artifact))
+    : [];
+  if (manifestArtifacts.length > 0) return manifestArtifacts;
   const content = String(displayContent || '').trim();
   const fileHints = (Array.isArray(message.steps) ? message.steps : [])
     .filter((step) => step.kind === 'file' && step.detail)
@@ -389,6 +467,49 @@ function extractMessageArtifacts(message: ChatMessageRecord, displayContent: str
     ];
   }
   return [];
+}
+
+function describeActivityEntry(step: ChatStepRecord): ChatLiveActivityEntry {
+  const label = String(step.label || '').trim();
+  const detail = String(step.detail || '').trim() || null;
+  const normalized = `${label} ${detail || ''}`.toLowerCase();
+
+  if (step.kind === 'connector') {
+    if (normalized.includes('search') || normalized.includes('tavily') || normalized.includes('web')) {
+      return { id: step.id, label: 'Searching web', detail: detail || label, status: step.status };
+    }
+    if (normalized.includes('spawn') || normalized.includes('delegate') || normalized.includes('sub-agent') || normalized.includes('specialist')) {
+      return { id: step.id, label: 'Spawning specialist', detail: detail || label, status: step.status };
+    }
+    return { id: step.id, label: 'Calling external system', detail: detail || label, status: step.status };
+  }
+  if (step.kind === 'shell') {
+    return { id: step.id, label: 'Running command', detail: detail || label, status: step.status };
+  }
+  if (step.kind === 'file') {
+    const descriptor = normalized.includes('write') ? 'Writing file' : normalized.includes('read') ? 'Reading file' : 'Preparing file';
+    return { id: step.id, label: descriptor, detail: detail || label, status: step.status };
+  }
+  if (step.kind === 'screenshot') {
+    return { id: step.id, label: 'Capturing screenshot', detail: detail || label, status: step.status };
+  }
+  if (step.kind === 'thinking') {
+    return { id: step.id, label: 'Reasoning', detail: detail || label, status: step.status };
+  }
+  return { id: step.id, label: label || 'Working', detail, status: step.status };
+}
+
+function buildInlineActivity(message: ChatMessageRecord | null): ChatLiveActivityEntry[] {
+  if (!message || !Array.isArray(message.steps) || message.steps.length === 0) return [];
+  return message.steps.slice(-6).map((step) => describeActivityEntry(step));
+}
+
+function buildLiveSparkline(entries: ChatLiveActivityEntry[]): number[] {
+  return entries.map((entry) => {
+    if (entry.status === 'error') return 1;
+    if (entry.status === 'done') return 4;
+    return 3;
+  });
 }
 
 function previewLabelForArtifact(artifact: ChatArtifactRecord): string {
@@ -609,6 +730,147 @@ function ChatMessageToolbar({
   );
 }
 
+function ChatInlineActivityLog({ entries }: { entries: ChatLiveActivityEntry[] }) {
+  if (entries.length === 0) return null;
+  return (
+    <div
+      style={{
+        display: 'grid',
+        gap: 6,
+        marginTop: 12,
+        padding: '12px 14px',
+        borderRadius: 16,
+        border: '1px solid color-mix(in srgb, var(--border-subtle) 88%, transparent)',
+        background: 'color-mix(in srgb, #09090b 86%, transparent)',
+        boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.03)',
+      }}
+    >
+      {entries.map((entry) => (
+        <div
+          key={entry.id}
+          style={{
+            display: 'grid',
+            gridTemplateColumns: 'auto 1fr',
+            alignItems: 'start',
+            gap: 10,
+            color: entry.status === 'error' ? 'rgba(248, 113, 113, 0.92)' : 'rgba(212, 212, 216, 0.72)',
+            fontFamily: 'ui-monospace, SFMono-Regular, SF Mono, Menlo, Monaco, Consolas, monospace',
+            fontSize: 12,
+            lineHeight: 1.45,
+            letterSpacing: '-0.01em',
+          }}
+        >
+          <span
+            aria-hidden="true"
+            style={{
+              marginTop: 3,
+              width: 7,
+              height: 7,
+              borderRadius: 999,
+              background:
+                entry.status === 'done'
+                  ? 'rgba(96, 165, 250, 0.95)'
+                  : entry.status === 'error'
+                    ? 'rgba(248, 113, 113, 0.95)'
+                    : 'rgba(161, 161, 170, 0.86)',
+              boxShadow:
+                entry.status === 'done'
+                  ? '0 0 0 3px rgba(59,130,246,0.12)'
+                  : entry.status === 'error'
+                    ? '0 0 0 3px rgba(239,68,68,0.12)'
+                    : '0 0 0 3px rgba(161,161,170,0.10)',
+            }}
+          />
+          <div style={{ display: 'grid', gap: 2 }}>
+            <div>{entry.label}</div>
+            {entry.detail ? (
+              <div style={{ color: 'rgba(161, 161, 170, 0.66)' }}>{entry.detail}</div>
+            ) : null}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function ChatArtifactPreviewCard({
+  artifact,
+  onOpen,
+}: {
+  artifact: ChatArtifactRecord;
+  onOpen: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onOpen}
+      style={{
+        width: '100%',
+        marginTop: 12,
+        display: 'grid',
+        gap: 10,
+        padding: '14px 16px',
+        borderRadius: 18,
+        border: '1px solid color-mix(in srgb, rgba(255,255,255,0.18) 68%, transparent)',
+        background: 'linear-gradient(180deg, rgba(24,24,27,0.94) 0%, rgba(15,15,18,0.98) 100%)',
+        textAlign: 'left',
+        boxShadow: '0 18px 34px rgba(0,0,0,0.22)',
+        cursor: 'pointer',
+      }}
+    >
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
+          <span
+            style={{
+              width: 32,
+              height: 32,
+              borderRadius: 12,
+              display: 'inline-flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              background: 'rgba(255,255,255,0.06)',
+              color: 'rgba(244,244,245,0.92)',
+              flexShrink: 0,
+            }}
+          >
+            <FileText size={16} />
+          </span>
+          <div style={{ minWidth: 0 }}>
+            <div style={{ color: 'rgba(244,244,245,0.96)', fontSize: 14, fontWeight: 600, lineHeight: 1.2 }}>
+              {artifact.title}
+            </div>
+            <div style={{ color: 'rgba(161,161,170,0.75)', fontSize: 12, lineHeight: 1.4, marginTop: 3 }}>
+              {artifact.summary || artifact.reference || artifact.kind || 'Generated artifact'}
+            </div>
+          </div>
+        </div>
+        <div style={{ color: 'rgba(161,161,170,0.72)', fontSize: 12, fontWeight: 600, letterSpacing: '-0.01em' }}>
+          Open
+        </div>
+      </div>
+      {artifact.previewKind ? (
+        <div
+          style={{
+            minHeight: 56,
+            borderRadius: 14,
+            border: '1px solid color-mix(in srgb, rgba(255,255,255,0.12) 70%, transparent)',
+            background: 'rgba(250,250,250,0.04)',
+            padding: '12px 14px',
+            color: 'rgba(228,228,231,0.78)',
+            fontSize: 12,
+            lineHeight: 1.5,
+            overflow: 'hidden',
+          }}
+        >
+          {artifact.previewKind === 'html'
+            ? 'Interactive preview available in the artifact pane.'
+            : artifact.content.slice(0, 180) || 'Preview available in the artifact pane.'}
+        </div>
+      ) : null}
+    </button>
+  );
+}
+
 function resolveAssistantLifecycle(status: ChatMessageRecord['status']): {
   label: string;
   tone: 'thinking' | 'working' | 'confirmation' | 'failed' | 'done';
@@ -709,6 +971,7 @@ export function ChatSurface({
   onCloseIdentityDrawer,
   identitySections,
   identityActions,
+  emptyStateSupplemental = null,
   shellNotice = null,
 }: ChatSurfaceProps) {
   const router = useRouter();
@@ -789,6 +1052,14 @@ export function ChatSurface({
       status: activeStep?.status || null,
     };
   }, [messages]);
+  const latestInlineActivity = useMemo(
+    () => buildInlineActivity(latestAssistantMessage),
+    [latestAssistantMessage],
+  );
+  const latestLiveSparkline = useMemo(
+    () => buildLiveSparkline(latestInlineActivity),
+    [latestInlineActivity],
+  );
   const pendingAssistantMessage = latestAssistantMessage;
   const pendingAssistantContent = pendingAssistantMessage
     ? normalizeAssembledAssistantText(normalizeAssistantDisplayText(pendingAssistantMessage.content))
@@ -1397,12 +1668,23 @@ export function ChatSurface({
   }, []);
 
   useEffect(() => {
+    const liveActive = Boolean(
+      latestAssistantMessage
+      && ['sending', 'running', 'waiting'].includes(String(latestAssistantMessage.status || '').trim()),
+    );
     setChatTopControls({
       assistantLabel: targetLabel,
       onOpenContext: handleOpenContextFromTopBar,
       artifactCount: artifacts.length,
       artifactsOpen: artifactPanelVisible,
       onToggleArtifacts: handleToggleArtifactsFromTopBar,
+      liveState: {
+        active: liveActive,
+        label: latestAssistantLifecycle?.label || latestInlineActivity[latestInlineActivity.length - 1]?.label || 'Idle',
+        runId: latestAssistantMessage?.run_id || null,
+        sparkline: latestLiveSparkline,
+        activity: latestInlineActivity,
+      },
       notices: topPanelNotices.filter((n) => n.id !== 'provider' && (n.tone === 'warn' || n.tone === 'error') && Array.isArray(n.actions) && n.actions.length > 0),
     });
   }, [
@@ -1410,6 +1692,10 @@ export function ChatSurface({
     artifacts.length,
     handleOpenContextFromTopBar,
     handleToggleArtifactsFromTopBar,
+    latestAssistantLifecycle?.label,
+    latestAssistantMessage,
+    latestInlineActivity,
+    latestLiveSparkline,
     setChatTopControls,
     targetLabel,
     topPanelNotices,
@@ -1420,6 +1706,17 @@ export function ChatSurface({
       setChatTopControls(null);
     };
   }, [setChatTopControls]);
+
+  useEffect(() => {
+    const handleFocusMasterThread = () => {
+      if (threadRef.current) {
+        threadRef.current.scrollTo({ top: threadRef.current.scrollHeight, behavior: 'smooth' });
+      }
+      primaryGoalRef.current?.focus();
+    };
+    window.addEventListener(MASTER_THREAD_FOCUS_EVENT, handleFocusMasterThread);
+    return () => window.removeEventListener(MASTER_THREAD_FOCUS_EVENT, handleFocusMasterThread);
+  }, [primaryGoalRef]);
 
   useEffect(() => {
     return () => {
@@ -1509,73 +1806,23 @@ export function ChatSurface({
           <div className="orion-chat-v2-thread-shell" ref={threadRef}>
             <div
               style={{
+                width: 'min(100%, 880px)',
+                margin: '0 auto 14px',
+                padding: '0 24px',
                 display: 'flex',
-                justifyContent: 'space-between',
-                alignItems: 'flex-start',
-                gap: 16,
+                justifyContent: 'flex-end',
+                alignItems: 'center',
+                gap: 10,
                 flexWrap: 'wrap',
-                marginBottom: hasMessages ? 20 : 16,
-                padding: '0 2px',
               }}
             >
-              <div style={{ display: 'grid', gap: 6, minWidth: 0 }}>
-                <div
-                  style={{
-                    fontSize: 12,
-                    fontWeight: 600,
-                    letterSpacing: '0.08em',
-                    textTransform: 'uppercase',
-                    color: 'var(--text-tertiary)',
-                  }}
-                >
-                  Sage
-                </div>
-                <div
-                  style={{
-                    fontSize: hasMessages ? 24 : 28,
-                    lineHeight: 1.1,
-                    fontWeight: 700,
-                    letterSpacing: '-0.02em',
-                    color: 'var(--text-primary)',
-                  }}
-                >
-                  {targetLabel}
-                </div>
-                <div
-                  style={{
-                    fontSize: 13,
-                    lineHeight: 1.45,
-                    color: 'var(--text-secondary)',
-                    maxWidth: 560,
-                  }}
-                >
-                  Your primary relationship for planning, delegation, approvals, and execution in this workspace.
-                </div>
-              </div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-                {historyEnabled ? (
-                  <button
-                    type="button"
-                    className="orion-btn"
-                    onClick={() => setHistoryDrawerOpen(true)}
-                    style={{
-                      minHeight: 36,
-                      padding: '0 14px',
-                      borderRadius: 999,
-                      border: '1px solid var(--border-default)',
-                      background: 'var(--bg-surface)',
-                      color: 'var(--text-primary)',
-                    }}
-                  >
-                    History
-                  </button>
-                ) : null}
+              {historyEnabled ? (
                 <button
                   type="button"
                   className="orion-btn"
-                  onClick={onNewChat}
+                  onClick={() => setHistoryDrawerOpen(true)}
                   style={{
-                    minHeight: 36,
+                    minHeight: 34,
                     padding: '0 14px',
                     borderRadius: 999,
                     border: '1px solid var(--border-default)',
@@ -1583,9 +1830,24 @@ export function ChatSurface({
                     color: 'var(--text-primary)',
                   }}
                 >
-                  New chat
+                  History
                 </button>
-              </div>
+              ) : null}
+              <button
+                type="button"
+                className="orion-btn"
+                onClick={onNewChat}
+                style={{
+                  minHeight: 34,
+                  padding: '0 14px',
+                  borderRadius: 999,
+                  border: '1px solid var(--border-default)',
+                  background: 'var(--bg-surface)',
+                  color: 'var(--text-primary)',
+                }}
+              >
+                New chat
+              </button>
             </div>
             {!hasMessages ? (
               <div className="orion-chat-v2-compact-empty">
@@ -1602,6 +1864,11 @@ export function ChatSurface({
                     {providerBanner.label}
                   </button>
                 ) : null}
+                {emptyStateSupplemental ? (
+                  <div className="orion-chat-v2-empty-supplemental">
+                    {emptyStateSupplemental}
+                  </div>
+                ) : null}
               </div>
             ) : null}
             {visibleMessages.length > 0 ? (
@@ -1615,6 +1882,10 @@ export function ChatSurface({
               const isFirstAssistantEntry = !isUser && isFirstThread && index <= 1;
               const artifactsForMessage = !isUser ? messageArtifacts.byMessage.get(message.id) || [] : [];
               const codeArtifacts = artifactsForMessage.filter((artifact) => artifact.source === 'code');
+              const previewArtifacts = artifactsForMessage.filter(
+                (artifact) => artifact.source === 'manifest' || artifact.source === 'file',
+              );
+              const activityEntries = !isUser ? buildInlineActivity(message) : [];
               if (!isUser && suppressBody && artifactsForMessage.length === 0 && (!message.approvalRequests || message.approvalRequests.length === 0) && (!message.interventions || message.interventions.length === 0)) {
                 return null;
               }
@@ -1688,6 +1959,20 @@ export function ChatSurface({
                           >
                             {displayContent}
                           </ReactMarkdown>
+                        </div>
+                      ) : null}
+                      {activityEntries.length > 0 ? (
+                        <ChatInlineActivityLog entries={activityEntries} />
+                      ) : null}
+                      {previewArtifacts.length > 0 ? (
+                        <div style={{ display: 'grid', gap: 12 }}>
+                          {previewArtifacts.map((artifact) => (
+                            <ChatArtifactPreviewCard
+                              key={artifact.id}
+                              artifact={artifact}
+                              onOpen={() => handleSelectArtifact(artifact.id)}
+                            />
+                          ))}
                         </div>
                       ) : null}
                       {approvalRequests.length > 0 ? (

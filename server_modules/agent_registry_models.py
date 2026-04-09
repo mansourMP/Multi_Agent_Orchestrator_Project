@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Optional
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text, func
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, Numeric, String, Text, func
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -125,5 +125,27 @@ class WorkspaceAgentInstallModel(WorkflowControlPlaneBase):
     memory_scope_overrides: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
     policy_context_overrides: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
     install_metadata: Mapped[dict[str, Any]] = mapped_column("metadata", JSONB, nullable=False, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
+
+
+class WorkspaceInventoryItemModel(WorkflowControlPlaneBase):
+    __tablename__ = "workspace_inventory_items"
+
+    id: Mapped[str] = mapped_column(Text, primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(Text, nullable=False, index=True)
+    workspace_id: Mapped[str] = mapped_column(Text, nullable=False, index=True)
+    sku: Mapped[str] = mapped_column(Text, nullable=False)
+    product_name: Mapped[str] = mapped_column(Text, nullable=False)
+    manufacturer: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    make: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    model: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    category: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    year_start: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    year_end: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    quantity_available: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    unit_price: Mapped[float] = mapped_column(Numeric(12, 2), nullable=False, default=0)
+    currency: Mapped[str] = mapped_column(String(length=8), nullable=False, default="USD")
+    item_metadata: Mapped[dict[str, Any]] = mapped_column("metadata", JSONB, nullable=False, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())

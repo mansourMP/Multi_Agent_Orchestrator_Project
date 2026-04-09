@@ -7,6 +7,7 @@ from server_modules.agent_registry_models import (
     AgentDefinitionVersionModel,
     RuntimeProfileModel,
     WorkspaceAgentInstallModel,
+    WorkspaceInventoryItemModel,
 )
 
 
@@ -19,6 +20,7 @@ class ControlPlaneAgentRegistrySchemaTests(unittest.TestCase):
             "CREATE TABLE IF NOT EXISTS agent_definitions",
             "CREATE TABLE IF NOT EXISTS agent_definition_versions",
             "CREATE TABLE IF NOT EXISTS workspace_agent_installs",
+            "CREATE TABLE IF NOT EXISTS workspace_inventory_items",
             "compiled_workflow_version_id TEXT NULL REFERENCES workflow_versions(id) ON DELETE SET NULL",
             "ALTER TABLE workspace_agent_installs\n    ADD COLUMN IF NOT EXISTS compiled_workflow_version_id TEXT NULL;",
             "ALTER TABLE agent_threads\n    ADD COLUMN IF NOT EXISTS master_agent_install_id TEXT NULL;",
@@ -37,6 +39,7 @@ class ControlPlaneAgentRegistrySchemaTests(unittest.TestCase):
             AgentDefinitionModel,
             AgentDefinitionVersionModel,
             WorkspaceAgentInstallModel,
+            WorkspaceInventoryItemModel,
         ):
             table = model.__table__
             self.assertIn("tenant_id", table.c)

@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Check, ExternalLink, RefreshCw } from 'lucide-react';
-import { AGENT_ROLE_OPTIONS, isAgentRoleId } from '../page.catalog';
+import { AGENT_ROLE_OPTIONS, isAgentRoleId } from '@/app/page.catalog';
 import { PageFilterBar } from '@/components/orion/page/PageFilterBar';
 import { PageHero } from '@/components/orion/page/PageHero';
 import { PageHeroCard } from '@/components/orion/page/PageHeroCard';

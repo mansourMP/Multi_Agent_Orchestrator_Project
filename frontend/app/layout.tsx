@@ -1,13 +1,9 @@
 import type { Metadata } from "next";
 import type { Viewport } from "next";
 import type { CSSProperties } from "react";
-import { Suspense } from "react";
-import Sidebar from "@/components/Sidebar";
 import { ToastProvider } from "@/components/Toast";
 import { ThemeProvider } from "@/components/ThemeProvider";
 import { PlatformShellProvider } from "@/components/orion/PlatformShellContext";
-import PlatformInspectPanel from "@/components/orion/PlatformInspectPanel";
-import PlatformTopBar from "@/components/orion/PlatformTopBar";
 import CommandPaletteProvider from "@/components/ui/CommandPalette";
 import { SidebarProvider } from "@/components/ui/sidebar";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -94,7 +90,10 @@ a {
   max-width: calc(100vw - var(--shell-sidebar-width));
   padding-top: calc(var(--topbar-height) + var(--desktop-titlebar-height));
   min-height: 100vh;
+  height: 100vh;
   overflow: hidden;
+  overflow-y: auto;
+  overflow-x: hidden;
   box-sizing: border-box;
   position: relative;
   z-index: 1;
@@ -102,8 +101,8 @@ a {
 }
 .orion-main-stage {
   min-height: calc(100vh - var(--topbar-height) - var(--desktop-titlebar-height));
-  height: calc(100vh - var(--topbar-height) - var(--desktop-titlebar-height));
-  overflow: hidden;
+  height: auto;
+  overflow: visible;
   padding: 0;
   background: var(--critical-bg-app);
   position: relative;
@@ -240,32 +239,7 @@ export default function RootLayout({
             <CommandPaletteProvider>
               <PlatformShellProvider>
                 <SidebarProvider style={sidebarStyle}>
-                  <ToastProvider>
-                    <div className="orion-app-shell">
-                      <div
-                        data-tauri-drag-region
-                        aria-hidden="true"
-                        style={{
-                          height: `${SHELL_CHROME.desktopTitlebarHeight}px`,
-                          width: '100%',
-                          position: 'fixed',
-                          top: 0,
-                          left: 0,
-                          zIndex: 9999,
-                          pointerEvents: 'none',
-                          paddingLeft: 'var(--desktop-drag-padding-left)',
-                        }}
-                      />
-                      <Suspense fallback={null}>
-                        <Sidebar />
-                      </Suspense>
-                      <PlatformTopBar />
-                      <main className="orion-main-shell">
-                        <div className="orion-main-stage">{children}</div>
-                      </main>
-                      <PlatformInspectPanel />
-                    </div>
-                  </ToastProvider>
+                  <ToastProvider>{children}</ToastProvider>
                 </SidebarProvider>
               </PlatformShellProvider>
             </CommandPaletteProvider>

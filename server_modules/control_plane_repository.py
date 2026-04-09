@@ -266,6 +266,27 @@ CREATE TABLE IF NOT EXISTS workspace_agent_installs (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+CREATE TABLE IF NOT EXISTS workspace_inventory_items (
+    id TEXT PRIMARY KEY,
+    tenant_id TEXT NOT NULL,
+    workspace_id TEXT NOT NULL,
+    sku TEXT NOT NULL,
+    product_name TEXT NOT NULL,
+    manufacturer TEXT NULL,
+    make TEXT NULL,
+    model TEXT NULL,
+    category TEXT NULL,
+    year_start INTEGER NULL,
+    year_end INTEGER NULL,
+    quantity_available INTEGER NOT NULL DEFAULT 0,
+    unit_price NUMERIC(12,2) NOT NULL DEFAULT 0,
+    currency TEXT NOT NULL DEFAULT 'USD',
+    metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE(tenant_id, workspace_id, sku)
+);
+
 ALTER TABLE agent_threads
     ADD COLUMN IF NOT EXISTS master_agent_install_id TEXT NULL;
 
@@ -304,6 +325,9 @@ CREATE INDEX IF NOT EXISTS idx_workspace_agent_installs_status_enabled ON worksp
 CREATE INDEX IF NOT EXISTS idx_workspace_agent_installs_thread ON workspace_agent_installs(tenant_id, workspace_id, thread_id);
 CREATE INDEX IF NOT EXISTS idx_workspace_agent_installs_runtime_profile ON workspace_agent_installs(tenant_id, workspace_id, runtime_profile_id);
 CREATE INDEX IF NOT EXISTS idx_workspace_agent_installs_compiled_workflow ON workspace_agent_installs(tenant_id, workspace_id, compiled_workflow_version_id);
+CREATE INDEX IF NOT EXISTS idx_workspace_inventory_items_scope ON workspace_inventory_items(tenant_id, workspace_id, category);
+CREATE INDEX IF NOT EXISTS idx_workspace_inventory_items_vehicle ON workspace_inventory_items(tenant_id, workspace_id, make, model, year_start, year_end);
+CREATE INDEX IF NOT EXISTS idx_workspace_inventory_items_product_name ON workspace_inventory_items(tenant_id, workspace_id, product_name);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_turns_request_role
     ON agent_turns(tenant_id, workspace_id, thread_id, role, request_id)
     WHERE request_id IS NOT NULL;

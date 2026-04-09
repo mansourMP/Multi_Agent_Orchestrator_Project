@@ -4107,10 +4107,10 @@ input:focus-visible {
   gap: 10px;
   align-items: stretch;
   align-content: stretch;
-  min-height: 0;
-  height: 100%;
+  min-height: calc(100dvh - var(--topbar-height));
+  height: auto;
   flex: 1 1 0%;
-  overflow: hidden;
+  overflow: visible;
   border-radius: 0;
 }
 
@@ -9953,7 +9953,8 @@ body.orion-chat-home .sidebar-brandmark {
   background: var(--bg-shell);
   height: 100dvh;
   min-height: 100dvh;
-  overflow: hidden;
+  overflow-y: auto;
+  overflow-x: hidden;
   transition:
     margin-left 150ms ease-out,
     width 150ms ease-out,
@@ -9970,13 +9971,13 @@ body.orion-chat-home .sidebar-brandmark {
   color: var(--text-primary);
   font-family: var(--font-sans);
   min-height: calc(100dvh - var(--topbar-height));
-  height: calc(100dvh - var(--topbar-height));
+  height: auto;
   padding: 0;
   background: var(--bg-shell);
   position: relative;
   display: flex;
   flex-direction: column;
-  overflow: hidden;
+  overflow: visible;
   transition:
     transform 150ms ease-out,
     filter 150ms ease-out,
@@ -10497,11 +10498,11 @@ body.orion-inspect-open .orion-inspect-panel-backdrop {
   max-width: none;
   margin: 0;
   flex: 1 1 auto;
-  height: 100%;
-  min-height: 0;
+  height: auto;
+  min-height: calc(100dvh - var(--topbar-height));
   display: flex;
   flex-direction: column;
-  overflow: hidden;
+  overflow: visible;
   padding: 0;
   animation: none;
   transform: none !important;

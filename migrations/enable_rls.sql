@@ -149,4 +149,12 @@ CREATE POLICY empyralis_workspace_agent_installs_scope ON workspace_agent_instal
     USING (public.empyralis_rls_scope_match(tenant_id, workspace_id))
     WITH CHECK (public.empyralis_rls_scope_match(tenant_id, workspace_id));
 
+ALTER TABLE workspace_inventory_items ENABLE ROW LEVEL SECURITY;
+ALTER TABLE workspace_inventory_items FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS empyralis_workspace_inventory_items_scope ON workspace_inventory_items;
+CREATE POLICY empyralis_workspace_inventory_items_scope ON workspace_inventory_items
+    FOR ALL
+    USING (public.empyralis_rls_scope_match(tenant_id, workspace_id))
+    WITH CHECK (public.empyralis_rls_scope_match(tenant_id, workspace_id));
+
 COMMIT;

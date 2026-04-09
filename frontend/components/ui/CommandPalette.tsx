@@ -14,12 +14,12 @@ import {
   useKBar,
   useMatches,
 } from 'kbar';
-import { BookOpen, Bot, Home, MessageSquare, PlusSquare, PlugZap, Search, Settings, User, Workflow, Wrench } from 'lucide-react';
+import { ActivitySquare, Bot, MessageSquare, PlusSquare, Search, Settings, User, Wrench } from 'lucide-react';
 import { PRODUCT_SECTIONS, getProductSection } from '@/lib/productArchitecture';
 
 const EMPYRALIS_NEW_CHAT_EVENT = 'empyralis:new-chat';
 export const EMPYRALIS_COMMAND_PALETTE_TOGGLE_EVENT = 'empyralis:command-palette-toggle';
-type VisibleSectionId = Exclude<(typeof PRODUCT_SECTIONS)[number]['id'], 'usage'>;
+type VisibleSectionId = (typeof PRODUCT_SECTIONS)[number]['id'];
 
 const positionerStyle: React.CSSProperties = {
   background: 'rgba(10, 12, 16, 0.52)',
@@ -213,23 +213,21 @@ export default function CommandPaletteProvider({ children }: { children: React.R
 
   const actions = React.useMemo(
     () => {
-      const baseActions = PRODUCT_SECTIONS.filter((section): section is (typeof PRODUCT_SECTIONS)[number] & { id: VisibleSectionId } => section.id !== 'usage').map((section) => {
+      const baseActions = PRODUCT_SECTIONS.map((section) => {
         const sectionId = section.id as VisibleSectionId;
         const shortcuts: Record<VisibleSectionId, string[]> = {
-          home: ['h'],
-          chat: ['c'],
+          sage: ['c'],
+          runs: ['r'],
           agents: ['a'],
-          library: ['l'],
-          integrations: ['i'],
+          usage: ['u'],
           account: ['p'],
           settings: ['s'],
         };
         const icons: Record<VisibleSectionId, React.ReactNode> = {
-          home: <Home size={16} />,
-          chat: <MessageSquare size={16} />,
+          sage: <MessageSquare size={16} />,
+          runs: <ActivitySquare size={16} />,
           agents: <Bot size={16} />,
-          library: <BookOpen size={16} />,
-          integrations: <PlugZap size={16} />,
+          usage: <Wrench size={16} />,
           account: <User size={16} />,
           settings: <Settings size={16} />,
         };
@@ -252,8 +250,8 @@ export default function CommandPaletteProvider({ children }: { children: React.R
           name: 'New chat',
           shortcut: ['n'],
           keywords: 'chat fresh conversation work now',
-          subtitle: getProductSection('chat').summary,
-          section: 'Chat',
+          subtitle: getProductSection('sage').summary,
+          section: 'Sage',
           perform: startNewChat,
           icon: <PlusSquare size={16} />,
         },
@@ -261,48 +259,38 @@ export default function CommandPaletteProvider({ children }: { children: React.R
           id: 'runs',
           name: 'Runs',
           shortcut: ['r'],
-          keywords: 'home work now active blocked execution history',
+          keywords: 'runs active blocked execution history cockpit',
           subtitle: 'Operational work in motion, blocked work, and completed work.',
-          section: 'Home',
-          perform: () => router.push('/runs'),
+          section: 'Runs',
+          perform: () => router.push('/executions'),
           icon: <Wrench size={16} />,
         },
         {
           id: 'approvals',
           name: 'Approvals',
-          keywords: 'home blocked confirm attention inbox',
+          keywords: 'runs blocked confirm attention inbox',
           subtitle: 'Approvals and interventions that need your attention now.',
-          section: 'Home',
+          section: 'Runs',
           perform: () => router.push('/approvals'),
           icon: <Wrench size={16} />,
-        },
-        {
-          id: 'workflows',
-          name: 'Blueprints',
-          shortcut: ['w'],
-          keywords: 'blueprints reusable assets templates packs',
-          subtitle: 'Reusable blueprints that belong to the library surface.',
-          section: 'Blueprints',
-          perform: () => router.push('/workflows'),
-          icon: <Workflow size={16} />,
         },
         {
           id: 'machines',
           name: 'Machines',
           keywords: 'integrations local runtime machine capability',
           subtitle: 'Workspace runtime targets and local machine availability.',
-          section: 'Integrations',
-          perform: () => router.push('/machines'),
-          icon: <PlugZap size={16} />,
+          section: 'Settings',
+          perform: () => router.push('/settings?section=integrations'),
+          icon: <Settings size={16} />,
         },
         {
           id: 'health',
           name: 'Health',
           keywords: 'integrations runtime doctor diagnostics machine health',
           subtitle: 'Operational health for connected runtimes and workspace capabilities.',
-          section: 'Integrations',
-          perform: () => router.push('/health'),
-          icon: <PlugZap size={16} />,
+          section: 'Settings',
+          perform: () => router.push('/settings?section=integrations'),
+          icon: <Settings size={16} />,
         },
       ];
     },

@@ -3,7 +3,7 @@
 import Link from 'next/link';
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { usePathname } from 'next/navigation';
-import { Bell } from 'lucide-react';
+import { Bell, User } from 'lucide-react';
 import { forwardWheelToMainScroll } from '@/lib/shell/forwardWheelToMainScroll';
 import { useShellChromeVisibility } from '@/lib/shell/useShellChromeVisibility';
 import { usePlatformShell } from './PlatformShellContext';
@@ -274,6 +274,16 @@ export default function PlatformTopBar() {
         </div>
 
         <div style={{ display: 'flex', alignItems: 'center', gap: DESIGN_TOKENS.space[2], justifyContent: 'flex-end' }}>
+          <Link
+            href="/account"
+            aria-label="Account"
+            title="Account"
+            style={mergeStyles(iconButtonStyle(), {
+              textDecoration: 'none',
+            })}
+          >
+            <User size={16} strokeWidth={2.05} />
+          </Link>
           <div ref={notificationsRef} style={{ position: 'relative' }}>
             <button
               type="button"
@@ -335,8 +345,8 @@ export default function PlatformTopBar() {
                     >
                       Mark all read
                     </button>
-                    <Link href="/notifications" style={chromeButtonStyle(false)}>
-                      Open feed
+                    <Link href="/executions" style={chromeButtonStyle(false)}>
+                      Open runs
                     </Link>
                   </div>
                 </div>

@@ -140,6 +140,7 @@ export type ChatMessageRecord = {
   status?: ChatMessageStatus;
   run_id?: string | null;
   steps?: ChatStepRecord[];
+  artifacts?: Array<Record<string, unknown>>;
   actions?: ChatMessageActionRecord[];
   runCard?: ChatRunCardRecord | null;
   approvalRequests?: ChatApprovalRequestRecord[];
@@ -440,6 +441,9 @@ export function sanitizeChatStore(value: unknown): ChatStoreRecord | null {
                 status: item.status as ChatMessageStatus | undefined,
                 run_id: typeof item.run_id === 'string' ? item.run_id : null,
                 steps: steps.length > 0 ? steps : undefined,
+                artifacts: Array.isArray(item.artifacts)
+                  ? item.artifacts.filter((artifact): artifact is Record<string, unknown> => Boolean(artifact && typeof artifact === 'object'))
+                  : undefined,
                 actions: Array.isArray(item.actions)
                   ? item.actions
                       .map((action): ChatMessageActionRecord | null => {

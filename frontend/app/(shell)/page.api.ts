@@ -352,6 +352,7 @@ export type OperatorChatResponsePayload = {
   actions?: OperatorChatActionPayload[];
   approvals?: AgentTurnApprovalRequest[];
   interventions?: AgentTurnIntervention[];
+  artifacts?: Array<Record<string, unknown>>;
   suggestions?: string[];
   mode?: string;
   usage_masked?: Record<string, unknown> | null;
@@ -458,6 +459,9 @@ function normalizeOperatorChatResponsePayload(payload: unknown): OperatorChatRes
             };
           })
           .filter((entry): entry is AgentTurnIntervention => Boolean(entry))
+      : [],
+    artifacts: Array.isArray(record.artifacts)
+      ? record.artifacts.filter((entry): entry is Record<string, unknown> => Boolean(entry && typeof entry === 'object'))
       : [],
     suggestions: Array.isArray(record.suggestions)
       ? record.suggestions.map((item) => String(item || '').trim()).filter(Boolean).slice(0, 3)

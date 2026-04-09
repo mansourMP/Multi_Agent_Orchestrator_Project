@@ -23,6 +23,16 @@ def configured_database_url() -> str:
     return str(os.getenv("DATABASE_URL") or "").strip()
 
 
+def configured_postgres_pool_max_size() -> int:
+    raw = str(os.getenv("ORION_POSTGRES_POOL_MAX_SIZE") or "").strip()
+    if not raw:
+        return 50
+    try:
+        return max(50, int(raw))
+    except Exception:
+        return 50
+
+
 def sqlite_health_status() -> str:
     raw = str(os.getenv("ORION_RUNTIME_STATE_DB") or ".orion_runtime_state.db").strip()
     try:
@@ -57,7 +67,12 @@ async def get_pool() -> Any:
         return _POOL
 
     try:
-        _POOL = await asyncpg.create_pool(dsn=database_url, min_size=1, max_size=5, command_timeout=10.0)
+        _POOL = await asyncpg.create_pool(
+            dsn=database_url,
+            min_size=1,
+            max_size=configured_postgres_pool_max_size(),
+            command_timeout=10.0,
+        )
         _POOL_DSN = database_url
         _POOL_INIT_FAILED = False
         LOGGER.info("Postgres pool initialized — run state will be durable")

@@ -14,45 +14,43 @@ LOGGER = logging.getLogger(__name__)
 _T = TypeVar("_T")
 
 
+class RunStateRepositoryError(RuntimeError):
+    """Base exception for durable run-state failures."""
+
+
+class RunStatePersistenceError(RunStateRepositoryError):
+    """Raised when a critical run-state persistence operation cannot complete."""
+
+
+class RunClaimConflictError(RunStatePersistenceError):
+    """Raised when a run is already claimed by another live worker."""
+
+
 def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
 def dispatch_repository_call(awaitable: Awaitable[Any], *, operation: str) -> None:
-    async def _guard() -> None:
-        try:
-            await awaitable
-        except Exception as exc:
-            LOGGER.warning("Repository dispatch failed during %s: %s", operation, exc)
+    _run_sync(
+        lambda: awaitable,
+        operation=operation,
+        fallback=None,
+        raise_on_error=True,
+    )
 
-    try:
-        loop = asyncio.get_running_loop()
-    except RuntimeError:
-        try:
-            worker = threading.Thread(
-                target=lambda: asyncio.run(_guard()),
-                name=f"run-state-repository-{operation}",
-                daemon=True,
-            )
-            worker.start()
-        except Exception as exc:
-            LOGGER.warning("Repository background dispatch start failed during %s: %s", operation, exc)
-        return
-    try:
-        loop.create_task(_guard())
-    except Exception as exc:
-        LOGGER.warning("Repository async dispatch failed during %s: %s", operation, exc)
 
-def _run_sync(awaitable_factory: Callable[[], Awaitable[_T]], *, operation: str, fallback: _T) -> _T:
+def _run_sync(
+    awaitable_factory: Callable[[], Awaitable[_T]],
+    *,
+    operation: str,
+    fallback: _T,
+    raise_on_error: bool = False,
+) -> _T:
     result_box: dict[str, _T] = {"value": fallback}
+    error_box: dict[str, Exception] = {}
 
     async def _guard() -> _T:
-        try:
-            value = await awaitable_factory()
-        except Exception as exc:
-            LOGGER.warning("Repository sync operation failed during %s: %s", operation, exc)
-            return fallback
-        return value
+        return await awaitable_factory()
 
     try:
         asyncio.get_running_loop()
@@ -60,20 +58,41 @@ def _run_sync(awaitable_factory: Callable[[], Awaitable[_T]], *, operation: str,
         try:
             return asyncio.run(_guard())
         except Exception as exc:
+            if raise_on_error:
+                raise
             LOGGER.warning("Repository sync dispatch failed during %s: %s", operation, exc)
             return fallback
 
     def _worker() -> None:
-        result_box["value"] = asyncio.run(_guard())
+        try:
+            result_box["value"] = asyncio.run(_guard())
+        except Exception as exc:
+            error_box["exc"] = exc
 
     try:
         thread = threading.Thread(target=_worker, name=f"run-state-sync-{operation}", daemon=True)
         thread.start()
         thread.join()
     except Exception as exc:
+        if raise_on_error:
+            raise
         LOGGER.warning("Repository sync thread failed during %s: %s", operation, exc)
         return fallback
+    if "exc" in error_box:
+        if raise_on_error:
+            raise error_box["exc"]
+        LOGGER.warning("Repository sync operation failed during %s: %s", operation, error_box["exc"])
+        return fallback
     return result_box["value"]
+
+
+async def _require_pool(*, operation: str) -> Any:
+    pool = await runtime_db.get_pool()
+    if pool is None:
+        raise RunStatePersistenceError(
+            f"Postgres pool unavailable during {operation}; refusing to continue with non-durable run state"
+        )
+    return pool
 
 
 def _json_payload(value: Any) -> str:
@@ -105,9 +124,7 @@ async def upsert_live_run(
     token = str(run_id or "").strip()
     if not token:
         return None
-    pool = await runtime_db.get_pool()
-    if pool is None:
-        return None
+    pool = await _require_pool(operation="upsert_live_run")
     try:
         await pool.execute(
             """
@@ -129,8 +146,7 @@ async def upsert_live_run(
             str(trace_id or "").strip() or None,
         )
     except Exception as exc:
-        LOGGER.warning("Postgres upsert_live_run failed for %s: %s", token, exc)
-        return None
+        raise RunStatePersistenceError(f"Postgres upsert_live_run failed for {token}: {exc}") from exc
     return None
 
 
@@ -205,9 +221,7 @@ async def delete_live_run(run_id: str) -> None:
     token = str(run_id or "").strip()
     if not token:
         return None
-    pool = await runtime_db.get_pool()
-    if pool is None:
-        return None
+    pool = await _require_pool(operation="delete_live_run")
     try:
         await pool.execute(
             """
@@ -217,8 +231,7 @@ async def delete_live_run(run_id: str) -> None:
             token,
         )
     except Exception as exc:
-        LOGGER.warning("Postgres delete_live_run failed for %s: %s", token, exc)
-        return None
+        raise RunStatePersistenceError(f"Postgres delete_live_run failed for {token}: {exc}") from exc
     return None
 
 
@@ -370,9 +383,7 @@ async def record_transition(
     token = str(run_id or "").strip()
     if not token:
         return None
-    pool = await runtime_db.get_pool()
-    if pool is None:
-        return None
+    pool = await _require_pool(operation="record_transition")
     try:
         await pool.execute(
             """
@@ -395,8 +406,7 @@ async def record_transition(
             str(trace_id or "").strip() or None,
         )
     except Exception as exc:
-        LOGGER.warning("Postgres record_transition failed for %s: %s", token, exc)
-        return None
+        raise RunStatePersistenceError(f"Postgres record_transition failed for {token}: {exc}") from exc
     return None
 
 
@@ -409,9 +419,7 @@ async def archive_run(
     token = str(run_id or "").strip()
     if not token:
         return None
-    pool = await runtime_db.get_pool()
-    if pool is None:
-        return None
+    pool = await _require_pool(operation="archive_run")
     try:
         await pool.execute(
             """
@@ -433,8 +441,7 @@ async def archive_run(
             str(trace_id or "").strip() or None,
         )
     except Exception as exc:
-        LOGGER.warning("Postgres archive_run failed for %s: %s", token, exc)
-        return None
+        raise RunStatePersistenceError(f"Postgres archive_run failed for {token}: {exc}") from exc
     return None
 
 
@@ -443,11 +450,9 @@ async def claim_run(run_id: str, worker_id: str, ttl: int, trace_id: str) -> Non
     worker = str(worker_id or "").strip()
     if not token or not worker:
         return None
-    pool = await runtime_db.get_pool()
-    if pool is None:
-        return None
+    pool = await _require_pool(operation="claim_run")
     try:
-        await pool.execute(
+        row = await pool.fetchrow(
             """
             INSERT INTO local_queue_claims (run_id, worker_id, claimed_at, ttl, trace_id)
             VALUES ($1, $2, NOW(), $3, $4)
@@ -456,6 +461,10 @@ async def claim_run(run_id: str, worker_id: str, ttl: int, trace_id: str) -> Non
                 claimed_at = NOW(),
                 ttl = EXCLUDED.ttl,
                 trace_id = COALESCE(NULLIF(EXCLUDED.trace_id, ''), local_queue_claims.trace_id)
+            WHERE
+                local_queue_claims.worker_id = EXCLUDED.worker_id OR
+                local_queue_claims.claimed_at + (GREATEST(COALESCE(local_queue_claims.ttl, 0), 1) * INTERVAL '1 second') <= NOW()
+            RETURNING run_id
             """,
             token,
             worker,
@@ -463,8 +472,11 @@ async def claim_run(run_id: str, worker_id: str, ttl: int, trace_id: str) -> Non
             str(trace_id or "").strip() or None,
         )
     except Exception as exc:
-        LOGGER.warning("Postgres claim_run failed for %s: %s", token, exc)
-        return None
+        raise RunStatePersistenceError(f"Postgres claim_run failed for {token}: {exc}") from exc
+    if row is None:
+        raise RunClaimConflictError(
+            f"Run {token} is already claimed by another live worker; refusing to overwrite the active claim"
+        )
     return None
 
 
@@ -472,9 +484,7 @@ async def release_claim(run_id: str) -> None:
     token = str(run_id or "").strip()
     if not token:
         return None
-    pool = await runtime_db.get_pool()
-    if pool is None:
-        return None
+    pool = await _require_pool(operation="release_claim")
     try:
         await pool.execute(
             """
@@ -484,8 +494,7 @@ async def release_claim(run_id: str) -> None:
             token,
         )
     except Exception as exc:
-        LOGGER.warning("Postgres release_claim failed for %s: %s", token, exc)
-        return None
+        raise RunStatePersistenceError(f"Postgres release_claim failed for {token}: {exc}") from exc
     return None
 
 
@@ -500,9 +509,7 @@ async def record_approval_resolution(
     approval_token = str(approval_id or "").strip()
     if not run_token or not approval_token:
         return None
-    pool = await runtime_db.get_pool()
-    if pool is None:
-        return None
+    pool = await _require_pool(operation="record_approval_resolution")
     try:
         await pool.execute(
             """
@@ -525,8 +532,9 @@ async def record_approval_resolution(
             str(trace_id or "").strip() or None,
         )
     except Exception as exc:
-        LOGGER.warning("Postgres record_approval_resolution failed for %s/%s: %s", run_token, approval_token, exc)
-        return None
+        raise RunStatePersistenceError(
+            f"Postgres record_approval_resolution failed for {run_token}/{approval_token}: {exc}"
+        ) from exc
     return None
 
 
@@ -579,9 +587,7 @@ async def persist_outbox_event(
     token = str(event_id or "").strip()
     if not token:
         return None
-    pool = await runtime_db.get_pool()
-    if pool is None:
-        return None
+    pool = await _require_pool(operation="persist_outbox_event")
     try:
         await _ensure_runtime_outbox_table(pool)
         await pool.execute(
@@ -627,8 +633,7 @@ async def persist_outbox_event(
             _json_payload(payload),
         )
     except Exception as exc:
-        LOGGER.warning("Postgres persist_outbox_event failed for %s: %s", token, exc)
-        return None
+        raise RunStatePersistenceError(f"Postgres persist_outbox_event failed for {token}: {exc}") from exc
     return None
 
 
@@ -713,9 +718,7 @@ async def mark_outbox_event_delivered(event_id: str) -> None:
     token = str(event_id or "").strip()
     if not token:
         return None
-    pool = await runtime_db.get_pool()
-    if pool is None:
-        return None
+    pool = await _require_pool(operation="mark_outbox_event_delivered")
     try:
         await _ensure_runtime_outbox_table(pool)
         await pool.execute(
@@ -732,8 +735,7 @@ async def mark_outbox_event_delivered(event_id: str) -> None:
             token,
         )
     except Exception as exc:
-        LOGGER.warning("Postgres mark_outbox_event_delivered failed for %s: %s", token, exc)
-        return None
+        raise RunStatePersistenceError(f"Postgres mark_outbox_event_delivered failed for {token}: {exc}") from exc
     return None
 
 
@@ -747,9 +749,7 @@ async def record_outbox_delivery_failure(
     token = str(event_id or "").strip()
     if not token:
         return None
-    pool = await runtime_db.get_pool()
-    if pool is None:
-        return None
+    pool = await _require_pool(operation="record_outbox_delivery_failure")
     try:
         await _ensure_runtime_outbox_table(pool)
         await pool.execute(
@@ -773,8 +773,7 @@ async def record_outbox_delivery_failure(
             (None if retry_delay_seconds is None else max(0, int(retry_delay_seconds))),
         )
     except Exception as exc:
-        LOGGER.warning("Postgres record_outbox_delivery_failure failed for %s: %s", token, exc)
-        return None
+        raise RunStatePersistenceError(f"Postgres record_outbox_delivery_failure failed for {token}: {exc}") from exc
     return None
 
 
@@ -892,6 +891,7 @@ def sync_upsert_live_run(
         lambda: upsert_live_run(run_id, workspace_id, tenant_id, state, payload, trace_id),
         operation="sync_upsert_live_run",
         fallback=None,
+        raise_on_error=True,
     )
 
 
@@ -900,6 +900,7 @@ def sync_delete_live_run(run_id: str) -> None:
         lambda: delete_live_run(run_id),
         operation="sync_delete_live_run",
         fallback=None,
+        raise_on_error=True,
     )
 
 
@@ -908,6 +909,7 @@ def sync_archive_run(run_id: str, final_state: str, payload: Dict[str, Any], tra
         lambda: archive_run(run_id, final_state, payload, trace_id),
         operation="sync_archive_run",
         fallback=None,
+        raise_on_error=True,
     )
 
 
@@ -966,6 +968,7 @@ def sync_record_approval_resolution(
         lambda: record_approval_resolution(run_id, approval_id, resolution, actor, trace_id),
         operation="sync_record_approval_resolution",
         fallback=None,
+        raise_on_error=True,
     )
 
 
@@ -995,6 +998,7 @@ def sync_persist_outbox_event(
         ),
         operation="sync_persist_outbox_event",
         fallback=None,
+        raise_on_error=True,
     )
 
 
@@ -1011,6 +1015,7 @@ def sync_mark_outbox_event_delivered(event_id: str) -> None:
         lambda: mark_outbox_event_delivered(event_id),
         operation="sync_mark_outbox_event_delivered",
         fallback=None,
+        raise_on_error=True,
     )
 
 
@@ -1030,6 +1035,7 @@ def sync_record_outbox_delivery_failure(
         ),
         operation="sync_record_outbox_delivery_failure",
         fallback=None,
+        raise_on_error=True,
     )
 
 
@@ -1060,4 +1066,5 @@ def sync_release_claim(run_id: str) -> None:
         lambda: release_claim(run_id),
         operation="sync_release_claim",
         fallback=None,
+        raise_on_error=True,
     )

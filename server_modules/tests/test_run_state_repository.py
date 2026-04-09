@@ -71,22 +71,21 @@ class RunStateRepositoryTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertIsNone(result)
 
-    async def test_record_transition_is_non_throwing_when_postgres_fails(self):
+    async def test_record_transition_raises_when_postgres_fails(self):
         pool = _FakePool(execute_error=RuntimeError("db down"))
         with patch("server_modules.run_state_repository.runtime_db.get_pool", return_value=pool):
-            result = await run_state_repository.record_transition(
-                "run-1",
-                "queued",
-                "executing",
-                "runtime",
-                "trace-1",
-            )
-
-        self.assertIsNone(result)
+            with self.assertRaises(run_state_repository.RunStatePersistenceError):
+                await run_state_repository.record_transition(
+                    "run-1",
+                    "queued",
+                    "executing",
+                    "runtime",
+                    "trace-1",
+                )
         self.assertEqual(len(pool.execute_calls), 1)
 
     async def test_archive_run_claim_and_release_are_idempotent_calls(self):
-        pool = _FakePool()
+        pool = _FakePool(fetchrow_result={"run_id": "run-1"})
         with patch("server_modules.run_state_repository.runtime_db.get_pool", return_value=pool):
             await run_state_repository.archive_run(
                 "run-1",
@@ -103,10 +102,31 @@ class RunStateRepositoryTests(unittest.IsolatedAsyncioTestCase):
             await run_state_repository.claim_run("run-1", "worker-1", 30, "trace-2")
             await run_state_repository.release_claim("run-1")
 
-        self.assertEqual(len(pool.execute_calls), 3)
+        self.assertEqual(len(pool.execute_calls), 2)
         self.assertIn("run_archive", pool.execute_calls[0][0])
-        self.assertIn("local_queue_claims", pool.execute_calls[1][0])
-        self.assertIn("DELETE FROM local_queue_claims", pool.execute_calls[2][0])
+        self.assertIn("local_queue_claims", pool.fetchrow_calls[0][0])
+        self.assertIn("DELETE FROM local_queue_claims", pool.execute_calls[1][0])
+
+    async def test_claim_run_rejects_overwriting_an_active_claim(self):
+        pool = _FakePool(fetchrow_result=None)
+        with patch("server_modules.run_state_repository.runtime_db.get_pool", return_value=pool):
+            with self.assertRaises(run_state_repository.RunClaimConflictError):
+                await run_state_repository.claim_run("run-1", "worker-2", 30, "trace-2")
+
+        self.assertEqual(len(pool.fetchrow_calls), 1)
+
+    def test_sync_upsert_live_run_raises_when_postgres_write_fails(self):
+        pool = _FakePool(execute_error=RuntimeError("db down"))
+        with patch("server_modules.run_state_repository.runtime_db.get_pool", return_value=pool):
+            with self.assertRaises(run_state_repository.RunStatePersistenceError):
+                run_state_repository.sync_upsert_live_run(
+                    "run-1",
+                    "workspace-1",
+                    "tenant-1",
+                    "queued",
+                    {"run_id": "run-1", "status": "queued"},
+                    "trace-1",
+                )
 
     async def test_persist_and_replay_outbox_events_round_trip_through_postgres(self):
         pool = _FakePool(

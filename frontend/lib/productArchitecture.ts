@@ -1,20 +1,16 @@
 export type ProductSectionId =
-  | 'home'
-  | 'chat'
+  | 'sage'
+  | 'runs'
   | 'agents'
-  | 'library'
-  | 'integrations'
   | 'usage'
   | 'account'
   | 'settings';
 
 export type ProductShapeRole =
-  | 'work_now'
-  | 'reusable_agents'
-  | 'reusable_assets'
-  | 'workspace_capabilities'
-  | 'operational_usage'
-  | 'account_controls';
+  | 'master_agent'
+  | 'operations'
+  | 'specialists'
+  | 'utility';
 
 export type CanonicalProductObjectId =
   | 'workspace'
@@ -65,84 +61,82 @@ type ProductRouteRule = {
 
 export const PRODUCT_SECTIONS: ProductSectionDefinition[] = [
   {
-    id: 'home',
-    label: 'Overview',
-    href: '/home',
-    role: 'work_now',
-    summary: 'Current work, approvals, run history, and next actions.',
-  },
-  {
-    id: 'chat',
+    id: 'sage',
     label: 'Sage',
     href: '/',
-    role: 'work_now',
-    summary: 'Your primary conversation with Sage and the current workspace context.',
+    role: 'master_agent',
+    summary: 'Your primary relationship for planning, delegation, approvals, and execution.',
+  },
+  {
+    id: 'runs',
+    label: 'Runs',
+    href: '/runs',
+    role: 'operations',
+    summary: 'Operational work in motion, approvals, outputs, and live cockpit visibility.',
   },
   {
     id: 'agents',
     label: 'Agents',
     href: '/agents',
-    role: 'reusable_agents',
-    summary: 'Installed specialists, their status, and where they run.',
-  },
-  {
-    id: 'library',
-    label: 'Blueprints',
-    href: '/library',
-    role: 'reusable_assets',
-    summary: 'Reusable blueprints, packs, and capability assets.',
-  },
-  {
-    id: 'integrations',
-    label: 'Integrations',
-    href: '/connectors',
-    role: 'workspace_capabilities',
-    summary: 'Workspace-level capabilities: connected systems, machines, health, and runtime access.',
+    role: 'specialists',
+    summary: 'Creation Forge, specialist channels, and owner refinement.',
   },
   {
     id: 'usage',
     label: 'Usage',
     href: '/usage',
-    role: 'operational_usage',
+    role: 'utility',
     summary: 'Consumption, throughput, and operational usage trends.',
   },
   {
     id: 'account',
     label: 'Account',
     href: '/account',
-    role: 'account_controls',
-    summary: 'Personal identity, preferences, and personal session state.',
+    role: 'utility',
+    summary: 'Identity, session, and personal preferences.',
   },
   {
     id: 'settings',
     label: 'Settings',
     href: '/settings',
-    role: 'account_controls',
-    summary: 'Workspace policy, defaults, governance, and advanced configuration.',
+    role: 'utility',
+    summary: 'Workspace defaults, policy, governance, and advanced configuration.',
   },
+];
+
+export const PRIMARY_NAV_SECTION_IDS: ProductSectionId[] = [
+  'sage',
+  'runs',
+  'agents',
+];
+
+export const UTILITY_NAV_SECTION_IDS: ProductSectionId[] = [
+  'usage',
+  'account',
+  'settings',
 ];
 
 export const CANONICAL_PRODUCT_OBJECTS: CanonicalProductObject[] = [
   {
     id: 'workspace',
     label: 'Workspace',
-    whatItIs: 'The operating environment that contains agents, memory, integrations, machines, policy, and work history.',
-    navOwner: 'home',
+    whatItIs: 'The operating environment that contains Sage, specialists, integrations, policy, and work history.',
+    navOwner: 'sage',
     linksTo: ['agent', 'integration', 'machine_runtime_target', 'run', 'approval', 'memory_item'],
-    isNot: 'It is not a single chat thread or a single workflow.',
+    isNot: 'It is not a single builder graph or one isolated chat message.',
   },
   {
     id: 'chat_session',
     label: 'Chat Session',
-    whatItIs: 'A live conversation used to ask for work, review outputs, and hand work into durable runs.',
-    navOwner: 'chat',
+    whatItIs: 'A live conversation with Sage used to ask for work, review outputs, and launch durable runs.',
+    navOwner: 'sage',
     linksTo: ['agent', 'run', 'artifact', 'memory_item'],
-    isNot: 'It is not the reusable agent definition itself.',
+    isNot: 'It is not the reusable specialist definition itself.',
   },
   {
     id: 'agent',
     label: 'Agent',
-    whatItIs: 'A reusable operator system with role, scope, capabilities, and deployment context.',
+    whatItIs: 'An installed specialist with scope, capabilities, and deployment context.',
     navOwner: 'agents',
     linksTo: ['chat_session', 'workflow', 'integration', 'run', 'memory_item'],
     isNot: 'It is not just a one-off run or a generic template.',
@@ -150,56 +144,56 @@ export const CANONICAL_PRODUCT_OBJECTS: CanonicalProductObject[] = [
   {
     id: 'agent_template',
     label: 'Agent Template',
-    whatItIs: 'A reusable starting pattern for creating a workspace agent.',
-    navOwner: 'library',
+    whatItIs: 'A reusable starting pattern that can be installed into a workspace.',
+    navOwner: 'agents',
     linksTo: ['agent', 'workflow', 'skill', 'pack_solution_kit'],
     isNot: 'It is not an already configured live agent in the workspace.',
   },
   {
     id: 'workflow',
     label: 'Workflow',
-    whatItIs: 'A reusable execution asset that defines repeatable steps, decisions, and automation flow.',
-    navOwner: 'library',
+    whatItIs: 'An internal reusable execution asset that powers automation and advanced creator tooling.',
+    navOwner: 'agents',
     linksTo: ['agent', 'run', 'artifact', 'integration'],
-    isNot: 'It is not the live operational history of a task.',
+    isNot: 'It is not the primary consumer-facing surface of the product.',
   },
   {
     id: 'skill',
     label: 'Skill',
     whatItIs: 'A reusable capability module the workspace can install and use.',
-    navOwner: 'library',
+    navOwner: 'agents',
     linksTo: ['agent', 'agent_template', 'pack_solution_kit'],
     isNot: 'It is not the workspace itself or a connector account.',
   },
   {
     id: 'pack_solution_kit',
     label: 'Pack / Solution Kit',
-    whatItIs: 'A reusable starter bundle that groups templates, workflows, roles, and capabilities around a job to be done.',
-    navOwner: 'library',
+    whatItIs: 'A reusable starter bundle around a job to be done.',
+    navOwner: 'agents',
     linksTo: ['agent_template', 'workflow', 'skill'],
     isNot: 'It is not a live run or a raw integration credential.',
   },
   {
     id: 'integration',
     label: 'Integration',
-    whatItIs: 'A workspace-level connected system, channel, or credentialed external capability.',
-    navOwner: 'integrations',
+    whatItIs: 'A connected system, channel, credentialed provider, or workspace capability.',
+    navOwner: 'settings',
     linksTo: ['agent', 'workflow', 'run', 'machine_runtime_target'],
-    isNot: 'It is not the place where an agent’s behavior is defined.',
+    isNot: 'It is not the place where Sage or a specialist is configured.',
   },
   {
     id: 'machine_runtime_target',
     label: 'Machine / Runtime Target',
     whatItIs: 'A local or hosted execution destination the workspace can use to perform work.',
-    navOwner: 'integrations',
+    navOwner: 'settings',
     linksTo: ['integration', 'run', 'approval'],
-    isNot: 'It is not a standalone product outside the workspace.',
+    isNot: 'It is not a standalone product surface.',
   },
   {
     id: 'run',
     label: 'Run',
     whatItIs: 'A concrete piece of work in motion or completed, with lifecycle, status, diagnostics, and outputs.',
-    navOwner: 'home',
+    navOwner: 'runs',
     linksTo: ['agent', 'workflow', 'approval', 'artifact', 'machine_runtime_target'],
     isNot: 'It is not a reusable asset.',
   },
@@ -207,42 +201,39 @@ export const CANONICAL_PRODUCT_OBJECTS: CanonicalProductObject[] = [
     id: 'approval',
     label: 'Approval',
     whatItIs: 'A workspace intervention request for confirmation, recovery, or policy-gated continuation.',
-    navOwner: 'home',
+    navOwner: 'runs',
     linksTo: ['run', 'agent', 'machine_runtime_target'],
-    isNot: 'It is not a full run history item or a settings page.',
+    isNot: 'It is not a settings page or a full run history item.',
   },
   {
     id: 'artifact',
-    label: 'Artifact',
+    label: 'Output',
     whatItIs: 'A result produced by work: text, file, image, output package, or generated document.',
-    navOwner: 'home',
+    navOwner: 'runs',
     linksTo: ['run', 'workflow', 'chat_session'],
     isNot: 'It is not the execution plan or the agent itself.',
   },
   {
     id: 'memory_item',
-    label: 'Memory Item / Context Asset',
+    label: 'Memory Item',
     whatItIs: 'Stored context the workspace can retrieve and use again across runs, agents, and chats.',
-    navOwner: 'library',
+    navOwner: 'sage',
     linksTo: ['workspace', 'agent', 'chat_session', 'run'],
     isNot: 'It is not merely a transient log line.',
   },
 ];
 
 export const PRODUCT_ROUTE_RULES: ProductRouteRule[] = [
-  { section: 'chat', title: 'Sage', exact: ['/'] },
-  { section: 'home', title: 'Overview', exact: ['/home'] },
-  { section: 'home', title: 'Runs', exact: ['/runs', '/executions', '/history', '/approvals', '/artifacts'] },
-  { section: 'home', title: 'Run', prefixes: ['/runs/'] },
-  { section: 'agents', title: 'Agents', exact: ['/agents'] },
-  { section: 'library', title: 'Blueprints', exact: ['/library', '/skills'] },
-  { section: 'library', title: 'Blueprints', exact: ['/workflows'] },
-  { section: 'library', title: 'Composer', exact: ['/builder'] },
-  { section: 'library', title: 'Solutions', exact: ['/solutions', '/apps'] },
-  { section: 'integrations', title: 'Integrations', exact: ['/connectors', '/credentials', '/connect-ai', '/integrations'] },
-  { section: 'integrations', title: 'Machines', exact: ['/machines'] },
-  { section: 'integrations', title: 'Health', exact: ['/health', '/setup'] },
-  { section: 'integrations', title: 'Variables', exact: ['/variables'] },
+  { section: 'sage', title: 'Sage', exact: ['/', '/home'] },
+  { section: 'runs', title: 'Runs', exact: ['/runs', '/executions', '/history'] },
+  { section: 'runs', title: 'Approvals', exact: ['/approvals'] },
+  { section: 'runs', title: 'Outputs', exact: ['/artifacts'] },
+  { section: 'runs', title: 'Cockpit', prefixes: ['/runs/'] },
+  { section: 'agents', title: 'Agents', exact: ['/agents', '/store', '/library'] },
+  { section: 'agents', title: 'Agent Configuration', prefixes: ['/agents/'] },
+  { section: 'agents', title: 'Blueprint Import', exact: ['/workflows', '/builder', '/skills', '/solutions', '/apps'] },
+  { section: 'settings', title: 'Connected Systems', exact: ['/integrations', '/connectors', '/credentials', '/connect-ai'] },
+  { section: 'settings', title: 'Runtime Targets', exact: ['/machines', '/health', '/setup'] },
   { section: 'usage', title: 'Usage', exact: ['/usage'] },
   { section: 'account', title: 'Account', exact: ['/account'] },
   { section: 'settings', title: 'Settings', exact: ['/settings', '/workspace', '/team', '/admin', '/feedback'] },
@@ -250,80 +241,33 @@ export const PRODUCT_ROUTE_RULES: ProductRouteRule[] = [
 
 export const PRODUCT_SECTION_BOUNDARIES: ProductSectionBoundary[] = [
   {
+    sectionId: 'runs',
+    owns: ['Runs', 'Approvals', 'Outputs', 'Run diagnostics', 'Cockpit interventions'],
+    firstClass: ['Inspect run', 'Resolve approval', 'Open output', 'Kill execution'],
+    notHere: ['Reusable templates', 'Raw connector credentials', 'Advanced builder authoring'],
+    relatedLinks: [
+      { label: 'Sage', href: '/', reason: 'Start work and review inline intervention cards in the master thread.' },
+      { label: 'Agents', href: '/agents', reason: 'See which specialist or install produced the work.' },
+    ],
+  },
+  {
     sectionId: 'agents',
-    owns: [
-      'Reusable agents',
-      'Agent drafts',
-      'Live agent definitions',
-      'Agent-specific deployment and capability summaries',
-    ],
-    firstClass: [
-      'Chat with agent',
-      'Edit agent',
-      'Duplicate agent',
-      'See what the agent uses',
-    ],
-    notHere: [
-      'Marketplace skills',
-      'Raw connectors and credentials',
-      'Machines and health infrastructure',
-      'Generic workflow/template catalog browsing',
-    ],
+    owns: ['Creation Forge', 'Installed specialists', 'Blueprint import', 'Specialist configuration'],
+    firstClass: ['Create specialist', 'Open owner mode', 'Open customer mode', 'Import blueprint'],
+    notHere: ['Marketplace storefronts', 'Low-level runtime health', 'Standalone workflow graph editing'],
     relatedLinks: [
-      { label: 'Library', href: '/library', reason: 'Start from reusable templates, packs, workflows, and skills.' },
-      { label: 'Integrations', href: '/connectors', reason: 'Connect workspace systems, channels, machines, and credentials.' },
+      { label: 'Runs', href: '/runs', reason: 'Inspect what specialists are doing in production.' },
+      { label: 'Settings', href: '/settings', reason: 'Manage the connected systems specialists depend on.' },
     ],
   },
   {
-    sectionId: 'library',
-    owns: [
-      'Skills',
-      'Templates',
-      'Workflows',
-      'Packs and solution kits',
-      'Reusable context and starter assets',
-    ],
-    firstClass: [
-      'Install asset',
-      'Browse marketplace',
-      'Start from template',
-      'Open reusable workflow or pack',
-    ],
-    notHere: [
-      'Live agent roster',
-      'Connector account management',
-      'Machine/runtime health',
-      'Blocked run operations',
-    ],
+    sectionId: 'settings',
+    owns: ['Connectors', 'Credentials', 'Machines', 'Health', 'Runtime availability', 'Governance'],
+    firstClass: ['Connect tool', 'Check credential health', 'Review machine availability', 'Inspect runtime status'],
+    notHere: ['Marketplace browsing', 'Sage conversation history', 'Customer channel creation'],
     relatedLinks: [
-      { label: 'Agents', href: '/agents', reason: 'Work with configured reusable agents already in this workspace.' },
-      { label: 'Integrations', href: '/connectors', reason: 'Manage workspace capabilities that assets can depend on.' },
-    ],
-  },
-  {
-    sectionId: 'integrations',
-    owns: [
-      'Connectors',
-      'Credentials',
-      'Channels',
-      'Machine and runtime targets',
-      'Health and infrastructure access surfaces',
-    ],
-    firstClass: [
-      'Connect tool',
-      'Test access',
-      'See machine/runtime availability',
-      'Review health and channel bindings',
-    ],
-    notHere: [
-      'Reusable agent definitions',
-      'Marketplace asset browsing',
-      'Workflow catalog ownership',
-      'General work inbox and run history',
-    ],
-    relatedLinks: [
-      { label: 'Agents', href: '/agents', reason: 'See which reusable agents use those capabilities.' },
-      { label: 'Library', href: '/library', reason: 'See reusable assets that can consume those capabilities.' },
+      { label: 'Agents', href: '/agents', reason: 'See which specialists use those capabilities.' },
+      { label: 'Runs', href: '/runs', reason: 'Inspect work that is blocked by capability health.' },
     ],
   },
 ];
@@ -359,14 +303,16 @@ export function resolveProductRoute(pathname: string): {
       return { section: getProductSection(rule.section), title: rule.title };
     }
   }
+
   const segments = normalized.split('/').filter(Boolean);
   const fallbackTitle = segments.length === 0
-    ? 'Chat'
+    ? 'Sage'
     : segments[segments.length - 1]!
       .split('-')
       .filter(Boolean)
       .map((part) => part.slice(0, 1).toUpperCase() + part.slice(1))
       .join(' ');
+
   return {
     section: getProductSection('settings'),
     title: fallbackTitle,

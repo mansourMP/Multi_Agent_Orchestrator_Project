@@ -9,17 +9,97 @@ const nextConfig: NextConfig = {
   async redirects() {
     return [
       {
+        source: '/executions',
+        destination: '/runs',
+        permanent: false,
+      },
+      {
+        source: '/history',
+        destination: '/runs',
+        permanent: false,
+      },
+      {
+        source: '/approvals',
+        destination: '/runs',
+        permanent: false,
+      },
+      {
+        source: '/artifacts',
+        destination: '/runs',
+        permanent: false,
+      },
+      {
+        source: '/store',
+        destination: '/agents',
+        permanent: false,
+      },
+      {
+        source: '/library',
+        destination: '/agents',
+        permanent: false,
+      },
+      {
+        source: '/connectors',
+        destination: '/settings?section=integrations',
+        permanent: false,
+      },
+      {
+        source: '/notifications',
+        destination: '/runs',
+        permanent: false,
+      },
+      {
+        source: '/credentials',
+        destination: '/settings?section=integrations',
+        permanent: false,
+      },
+      {
+        source: '/machines',
+        destination: '/settings?section=integrations',
+        permanent: false,
+      },
+      {
+        source: '/health',
+        destination: '/settings?section=integrations',
+        permanent: false,
+      },
+      {
+        source: '/integrations/:path*',
+        destination: '/settings?section=integrations',
+        permanent: false,
+      },
+      {
+        source: '/home',
+        destination: '/',
+        permanent: false,
+      },
+      {
         source: '/builder/:path*',
         destination: '/agents',
         permanent: false,
       },
       {
-        source: '/workflows/new',
-        destination: '/',
+        source: '/skills/:path*',
+        destination: '/agents',
         permanent: false,
       },
       {
-        source: '/workflows/:id',
+        source: '/solutions/:path*',
+        destination: '/agents',
+        permanent: false,
+      },
+      {
+        source: '/apps/:path*',
+        destination: '/agents',
+        permanent: false,
+      },
+      {
+        source: '/workflows/new',
+        destination: '/agents',
+        permanent: false,
+      },
+      {
+        source: '/workflows/:path*',
         destination: '/agents',
         permanent: false,
       },

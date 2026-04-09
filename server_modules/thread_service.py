@@ -126,5 +126,16 @@ async def list_threads(
     )
 
 
-async def get_thread(thread_id: str, *, include_turns: bool = True) -> Optional[Dict[str, Any]]:
-    return await control_plane_repository.get_agent_thread(thread_id, include_turns=include_turns)
+async def get_thread(
+    thread_id: str,
+    *,
+    tenant_id: str,
+    workspace_id: str,
+    include_turns: bool = True,
+) -> Optional[Dict[str, Any]]:
+    return await control_plane_repository.get_agent_thread(
+        thread_id,
+        tenant_id=tenant_id,
+        workspace_id=workspace_id,
+        include_turns=include_turns,
+    )

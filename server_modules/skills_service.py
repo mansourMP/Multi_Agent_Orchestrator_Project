@@ -1110,17 +1110,21 @@ def build_direct_local_tool_config(
     raise RuntimeError(f"Unsupported direct local tool '{connector_id}__{action_id}'.")
 
 
-def _resolve_direct_tool_browser_engine(session_ctx: Any) -> Any:
+def _is_authorized_browser_adapter(browser: Any) -> bool:
+    return bool(getattr(browser, "__empyralis_browser_adapter__", False))
+
+
+def _resolve_direct_tool_browser_adapter(session_ctx: Any) -> Any:
     context = session_ctx if isinstance(session_ctx, dict) else {}
     metadata = context.get("metadata") if isinstance(context.get("metadata"), dict) else {}
     runtime_handle = context.get("runtime_handle")
     browser = getattr(runtime_handle, "browser", None)
     if browser is None:
         browser = context.get("browser")
-    if browser is None:
-        from server_modules.execution_router import get_browser_engine
+    if not _is_authorized_browser_adapter(browser):
+        from server_modules.execution_router import get_browser_adapter
 
-        browser = get_browser_engine(metadata, target="local_companion")
+        browser = get_browser_adapter(metadata, target="local_companion")
         if runtime_handle is not None:
             try:
                 runtime_handle.browser = browser
@@ -1188,7 +1192,7 @@ def execute_single_direct_tool_call(
             [f"Generated {len(saved_images)} image(s):", *[f"{tool_index}. {path}" for tool_index, path in enumerate(saved_images, start=1)]]
         ).strip()
     if connector_id == "browser":
-        browser = _resolve_direct_tool_browser_engine(session_ctx)
+        browser = _resolve_direct_tool_browser_adapter(session_ctx)
         if action_id == "navigate":
             return json.dumps(browser.run_sync("navigate", argument_payload.get("url") or ""), ensure_ascii=False)
         if action_id == "screenshot":

@@ -52,6 +52,21 @@ def _expires_at_iso(ttl_seconds: int) -> str:
     return (_utc_now() + timedelta(seconds=max(60, int(ttl_seconds or DEFAULT_SESSION_TTL_SECONDS)))).isoformat().replace("+00:00", "Z")
 
 
+def _coerce_timestamptz(value: Any) -> Optional[datetime]:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value.astimezone(timezone.utc) if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
+    token = str(value or "").strip()
+    if not token:
+        return None
+    try:
+        parsed = datetime.fromisoformat(token.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return parsed.astimezone(timezone.utc) if parsed.tzinfo is not None else parsed.replace(tzinfo=timezone.utc)
+
+
 def _normalized_runtime_state_db_path() -> Path:
     raw = str(os.getenv("ORION_RUNTIME_STATE_DB") or ".orion_runtime_state.db").strip()
     return Path(raw).expanduser().resolve()
@@ -253,8 +268,8 @@ async def create_session(
                 record["tenant_id"],
                 record["channel"],
                 json.dumps(record["actor"], ensure_ascii=False, separators=(",", ":"), default=str),
-                record["created_at"],
-                record["expires_at"],
+                _coerce_timestamptz(record["created_at"]),
+                _coerce_timestamptz(record["expires_at"]),
                 json.dumps(record["metadata"], ensure_ascii=False, separators=(",", ":"), default=str),
             )
         except Exception as exc:
@@ -333,7 +348,7 @@ async def extend_session(session_id: str) -> Optional[Dict[str, Any]]:
                 WHERE session_id = $1
                 """,
                 existing["session_id"],
-                existing["expires_at"],
+                _coerce_timestamptz(existing["expires_at"]),
                 json.dumps(existing.get("metadata") or {}, ensure_ascii=False, separators=(",", ":"), default=str),
             )
         except Exception as exc:
@@ -366,6 +381,7 @@ async def terminate_session(session_id: str) -> None:
     token = str(session_id or "").strip()
     if not token:
         return None
+    existing = await get_session(token)
     pool = await _ensure_runtime_sessions_table()
     if pool is not None:
         try:
@@ -374,7 +390,12 @@ async def terminate_session(session_id: str) -> None:
             LOGGER.warning("Postgres terminate_session failed for %s: %s", token, exc)
     _delete_sqlite_session(token)
     try:
-        await control_plane_repository.terminate_agent_session(token)
+        if isinstance(existing, dict):
+            await control_plane_repository.terminate_agent_session(
+                token,
+                tenant_id=str(existing.get("tenant_id") or "").strip(),
+                workspace_id=str(existing.get("workspace_id") or "").strip(),
+            )
     except Exception as exc:
         LOGGER.warning("Control-plane terminate_session mirror failed for %s: %s", token, exc)
     return None

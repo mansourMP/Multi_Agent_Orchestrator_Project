@@ -5,6 +5,7 @@ import json
 import logging
 import re
 import uuid
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
@@ -16,6 +17,13 @@ LOGGER = logging.getLogger(__name__)
 
 _SCHEMA_READY = False
 _SCHEMA_LOCK: asyncio.Lock = asyncio.Lock()
+
+_CONTROL_PLANE_SESSION_SCOPE_SQL = """
+SELECT
+    set_config('app.current_tenant_id', $1, true),
+    set_config('app.current_workspace_id', $2, true),
+    set_config('app.rls_bypass', $3, true)
+"""
 
 CONTROL_PLANE_SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS tenants (
@@ -481,6 +489,25 @@ def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
+def _utc_now_ts() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _coerce_timestamptz(value: Any) -> Optional[datetime]:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value.astimezone(timezone.utc) if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
+    token = str(value or "").strip()
+    if not token:
+        return None
+    try:
+        parsed = datetime.fromisoformat(token.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return parsed.astimezone(timezone.utc) if parsed.tzinfo is not None else parsed.replace(tzinfo=timezone.utc)
+
+
 def _slugify(value: str, fallback: str) -> str:
     token = re.sub(r"[^a-z0-9]+", "-", str(value or "").strip().lower()).strip("-")
     return token or fallback
@@ -510,6 +537,56 @@ async def ensure_control_plane_schema() -> Any:
     return pool
 
 
+def _normalize_scope_token(value: Any) -> str:
+    return str(value or "").strip()
+
+
+def _require_scope_token(value: Any, label: str) -> str:
+    token = _normalize_scope_token(value)
+    if not token:
+        raise ValueError(f"{label} is required for scoped control-plane access.")
+    return token
+
+
+async def _apply_connection_scope(
+    connection: Any,
+    *,
+    tenant_id: Optional[str] = None,
+    workspace_id: Optional[str] = None,
+    bypass_rls: bool = False,
+) -> None:
+    resolved_tenant_id = "" if bypass_rls else _require_scope_token(tenant_id, "tenant_id")
+    resolved_workspace_id = "" if bypass_rls else _require_scope_token(workspace_id, "workspace_id")
+    await connection.execute(
+        _CONTROL_PLANE_SESSION_SCOPE_SQL,
+        resolved_tenant_id,
+        resolved_workspace_id,
+        "on" if bypass_rls else "off",
+    )
+
+
+@asynccontextmanager
+async def _scoped_connection(
+    *,
+    tenant_id: Optional[str] = None,
+    workspace_id: Optional[str] = None,
+    bypass_rls: bool = False,
+):
+    pool = await ensure_control_plane_schema()
+    if pool is None:
+        yield None
+        return
+    async with pool.acquire() as connection:
+        async with connection.transaction():
+            await _apply_connection_scope(
+                connection,
+                tenant_id=tenant_id,
+                workspace_id=workspace_id,
+                bypass_rls=bypass_rls,
+            )
+            yield connection
+
+
 def _user_row_to_dict(row: Any) -> Optional[Dict[str, Any]]:
     if row is None:
         return None
@@ -528,15 +605,11 @@ async def create_local_password_account(
     workspace_id: Optional[str] = None,
     role: str = "owner",
 ) -> Optional[Dict[str, Any]]:
-    pool = await ensure_control_plane_schema()
-    if pool is None:
-        return None
-
     normalized_email = str(email or "").strip().lower()
     if not normalized_email:
         return None
 
-    created_at = _utc_now_iso()
+    created_at = _utc_now_ts()
     resolved_user_id = str(user_id or uuid.uuid4()).strip() or str(uuid.uuid4())
     display_label = str(display_name or "").strip()
     email_prefix = normalized_email.split("@", 1)[0]
@@ -549,88 +622,89 @@ async def create_local_password_account(
     auth_identity_id = str(uuid.uuid4())
     membership_id = str(uuid.uuid4())
 
-    async with pool.acquire() as connection:
-        async with connection.transaction():
-            existing_user = await connection.fetchrow(
-                """
-                SELECT id, tenant_id, workspace_id, email, display_name, avatar_url, status, metadata, created_at, updated_at
-                FROM users
-                WHERE lower(email) = lower($1)
-                LIMIT 1
-                """,
-                normalized_email,
-            )
-            if existing_user is not None:
-                return await get_user_bundle_by_id(str(existing_user["id"]))
+    async with _scoped_connection(bypass_rls=True) as connection:
+        if connection is None:
+            return None
+        existing_user = await connection.fetchrow(
+            """
+            SELECT id, tenant_id, workspace_id, email, display_name, avatar_url, status, metadata, created_at, updated_at
+            FROM users
+            WHERE lower(email) = lower($1)
+            LIMIT 1
+            """,
+            normalized_email,
+        )
+        if existing_user is not None:
+            return await get_user_bundle_by_id(str(existing_user["id"]))
 
-            await connection.execute(
-                """
-                INSERT INTO tenants (
-                    id, tenant_id, workspace_id, slug, name, status, created_by_user_id, metadata, created_at, updated_at
-                ) VALUES ($1, $2, $3, $4, $5, 'active', $6, '{}'::jsonb, $7::timestamptz, $7::timestamptz)
-                """,
-                resolved_tenant_id,
-                resolved_tenant_id,
-                resolved_workspace_id,
-                tenant_slug,
-                tenant_name,
-                resolved_user_id,
-                created_at,
-            )
-            await connection.execute(
-                """
-                INSERT INTO workspaces (
-                    id, tenant_id, workspace_id, slug, name, workspace_type, status, created_by_user_id, metadata, created_at, updated_at
-                ) VALUES ($1, $2, $3, $4, $5, 'personal', 'active', $6, '{}'::jsonb, $7::timestamptz, $7::timestamptz)
-                """,
-                resolved_workspace_id,
-                resolved_tenant_id,
-                resolved_workspace_id,
-                workspace_slug,
-                workspace_name,
-                resolved_user_id,
-                created_at,
-            )
-            await connection.execute(
-                """
-                INSERT INTO users (
-                    id, tenant_id, workspace_id, email, display_name, avatar_url, status, metadata, created_at, updated_at
-                ) VALUES ($1, $2, $3, $4, $5, NULL, 'active', '{}'::jsonb, $6::timestamptz, $6::timestamptz)
-                """,
-                resolved_user_id,
-                resolved_tenant_id,
-                resolved_workspace_id,
-                normalized_email,
-                display_label or None,
-                created_at,
-            )
-            await connection.execute(
-                """
-                INSERT INTO auth_identities (
-                    id, tenant_id, workspace_id, user_id, provider, subject, password_hash, identity_role, label, status, is_primary, metadata, created_at, updated_at
-                ) VALUES ($1, $2, $3, $4, 'empyralis_password', $5, $6, 'account_access', 'Email and password', 'active', TRUE, '{}'::jsonb, $7::timestamptz, $7::timestamptz)
-                """,
-                auth_identity_id,
-                resolved_tenant_id,
-                resolved_workspace_id,
-                resolved_user_id,
-                normalized_email,
-                password_hash,
-                created_at,
-            )
-            await connection.execute(
-                """
-                INSERT INTO workspace_memberships (
-                    id, tenant_id, workspace_id, user_id, role, status, metadata, created_at, updated_at
-                ) VALUES ($1, $2, $3, $4, $5, 'active', '{}'::jsonb, $6::timestamptz, $6::timestamptz)
-                """,
-                membership_id,
-                resolved_tenant_id,
-                resolved_workspace_id,
-                resolved_user_id,
-                str(role or "owner").strip().lower() or "owner",
-                created_at,
-            )
+        await connection.execute(
+            """
+            INSERT INTO tenants (
+                id, tenant_id, workspace_id, slug, name, status, created_by_user_id, metadata, created_at, updated_at
+            ) VALUES ($1, $2, $3, $4, $5, 'active', $6, '{}'::jsonb, $7::timestamptz, $7::timestamptz)
+            """,
+            resolved_tenant_id,
+            resolved_tenant_id,
+            resolved_workspace_id,
+            tenant_slug,
+            tenant_name,
+            resolved_user_id,
+            created_at,
+        )
+        await connection.execute(
+            """
+            INSERT INTO workspaces (
+                id, tenant_id, workspace_id, slug, name, workspace_type, status, created_by_user_id, metadata, created_at, updated_at
+            ) VALUES ($1, $2, $3, $4, $5, 'personal', 'active', $6, '{}'::jsonb, $7::timestamptz, $7::timestamptz)
+            """,
+            resolved_workspace_id,
+            resolved_tenant_id,
+            resolved_workspace_id,
+            workspace_slug,
+            workspace_name,
+            resolved_user_id,
+            created_at,
+        )
+        await connection.execute(
+            """
+            INSERT INTO users (
+                id, tenant_id, workspace_id, email, display_name, avatar_url, status, metadata, created_at, updated_at
+            ) VALUES ($1, $2, $3, $4, $5, NULL, 'active', '{}'::jsonb, $6::timestamptz, $6::timestamptz)
+            """,
+            resolved_user_id,
+            resolved_tenant_id,
+            resolved_workspace_id,
+            normalized_email,
+            display_label or None,
+            created_at,
+        )
+        await connection.execute(
+            """
+            INSERT INTO auth_identities (
+                id, tenant_id, workspace_id, user_id, provider, subject, password_hash, identity_role, label, status, is_primary, metadata, created_at, updated_at
+            ) VALUES ($1, $2, $3, $4, 'empyralis_password', $5, $6, 'account_access', 'Email and password', 'active', TRUE, '{}'::jsonb, $7::timestamptz, $7::timestamptz)
+            """,
+            auth_identity_id,
+            resolved_tenant_id,
+            resolved_workspace_id,
+            resolved_user_id,
+            normalized_email,
+            password_hash,
+            created_at,
+        )
+        await connection.execute(
+            """
+            INSERT INTO workspace_memberships (
+                id, tenant_id, workspace_id, user_id, role, status, metadata, created_at, updated_at
+            ) VALUES ($1, $2, $3, $4, $5, 'active', '{}'::jsonb, $6::timestamptz, $6::timestamptz)
+            """,
+            membership_id,
+            resolved_tenant_id,
+            resolved_workspace_id,
+            resolved_user_id,
+            str(role or "owner").strip().lower() or "owner",
+            created_at,
+        )
     return await get_user_bundle_by_id(resolved_user_id)
 
 
@@ -646,11 +720,7 @@ async def ensure_workspace_membership(
     provider: Optional[str] = None,
     subject: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
-    pool = await ensure_control_plane_schema()
-    if pool is None:
-        return None
-
-    created_at = _utc_now_iso()
+    created_at = _utc_now_ts()
     resolved_user_id = str(user_id or uuid.uuid4()).strip() or str(uuid.uuid4())
     normalized_email = str(email or "").strip().lower()
     resolved_tenant_id = str(tenant_id or "").strip()
@@ -659,214 +729,215 @@ async def ensure_workspace_membership(
         return None
     display_label = str(display_name or "").strip()
 
-    async with pool.acquire() as connection:
-        async with connection.transaction():
-            workspace_row = await connection.fetchrow(
-                "SELECT id, tenant_id, workspace_id, slug, name FROM workspaces WHERE workspace_id = $1 LIMIT 1",
-                resolved_workspace_id,
-            )
-            if workspace_row is None:
-                await connection.execute(
-                    """
-                    INSERT INTO tenants (
-                        id, tenant_id, workspace_id, slug, name, status, created_by_user_id, metadata, created_at, updated_at
-                    ) VALUES ($1, $2, $3, $4, $5, 'active', $6, '{}'::jsonb, $7::timestamptz, $7::timestamptz)
-                    ON CONFLICT (id) DO NOTHING
-                    """,
-                    resolved_tenant_id,
-                    resolved_tenant_id,
-                    resolved_workspace_id,
-                    _slugify(resolved_tenant_id, resolved_tenant_id),
-                    resolved_tenant_id,
-                    resolved_user_id,
-                    created_at,
-                )
-                await connection.execute(
-                    """
-                    INSERT INTO workspaces (
-                        id, tenant_id, workspace_id, slug, name, workspace_type, status, created_by_user_id, metadata, created_at, updated_at
-                    ) VALUES ($1, $2, $3, $4, $5, 'shared', 'active', $6, '{}'::jsonb, $7::timestamptz, $7::timestamptz)
-                    ON CONFLICT (workspace_id) DO NOTHING
-                    """,
-                    resolved_workspace_id,
-                    resolved_tenant_id,
-                    resolved_workspace_id,
-                    _slugify(resolved_workspace_id, resolved_workspace_id),
-                    resolved_workspace_id,
-                    resolved_user_id,
-                    created_at,
-                )
-
+    async with _scoped_connection(bypass_rls=True) as connection:
+        if connection is None:
+            return None
+        workspace_row = await connection.fetchrow(
+            "SELECT id, tenant_id, workspace_id, slug, name FROM workspaces WHERE workspace_id = $1 LIMIT 1",
+            resolved_workspace_id,
+        )
+        if workspace_row is None:
             await connection.execute(
                 """
-                INSERT INTO users (
-                    id, tenant_id, workspace_id, email, display_name, avatar_url, status, metadata, created_at, updated_at
-                ) VALUES ($1, $2, $3, $4, $5, NULL, 'active', '{}'::jsonb, $6::timestamptz, $6::timestamptz)
-                ON CONFLICT (id) DO UPDATE SET
-                    tenant_id = EXCLUDED.tenant_id,
-                    workspace_id = EXCLUDED.workspace_id,
-                    email = EXCLUDED.email,
-                    display_name = COALESCE(EXCLUDED.display_name, users.display_name),
-                    updated_at = EXCLUDED.updated_at
+                INSERT INTO tenants (
+                    id, tenant_id, workspace_id, slug, name, status, created_by_user_id, metadata, created_at, updated_at
+                ) VALUES ($1, $2, $3, $4, $5, 'active', $6, '{}'::jsonb, $7::timestamptz, $7::timestamptz)
+                ON CONFLICT (id) DO NOTHING
                 """,
-                resolved_user_id,
+                resolved_tenant_id,
                 resolved_tenant_id,
                 resolved_workspace_id,
-                normalized_email,
-                display_label or None,
+                _slugify(resolved_tenant_id, resolved_tenant_id),
+                resolved_tenant_id,
+                resolved_user_id,
+                created_at,
+            )
+            await connection.execute(
+                """
+                INSERT INTO workspaces (
+                    id, tenant_id, workspace_id, slug, name, workspace_type, status, created_by_user_id, metadata, created_at, updated_at
+                ) VALUES ($1, $2, $3, $4, $5, 'shared', 'active', $6, '{}'::jsonb, $7::timestamptz, $7::timestamptz)
+                ON CONFLICT (workspace_id) DO NOTHING
+                """,
+                resolved_workspace_id,
+                resolved_tenant_id,
+                resolved_workspace_id,
+                _slugify(resolved_workspace_id, resolved_workspace_id),
+                resolved_workspace_id,
+                resolved_user_id,
                 created_at,
             )
 
-            if password_hash is not None or provider or subject:
-                await connection.execute(
-                    """
-                    INSERT INTO auth_identities (
-                        id, tenant_id, workspace_id, user_id, provider, subject, password_hash, identity_role, label, status, is_primary, metadata, created_at, updated_at
-                    ) VALUES ($1, $2, $3, $4, $5, $6, $7, 'account_access', $8, 'active', FALSE, '{}'::jsonb, $9::timestamptz, $9::timestamptz)
-                    ON CONFLICT (provider, subject) DO UPDATE SET
-                        tenant_id = EXCLUDED.tenant_id,
-                        workspace_id = EXCLUDED.workspace_id,
-                        password_hash = COALESCE(EXCLUDED.password_hash, auth_identities.password_hash),
-                        updated_at = EXCLUDED.updated_at
-                    """,
-                    str(uuid.uuid4()),
-                    resolved_tenant_id,
-                    resolved_workspace_id,
-                    resolved_user_id,
-                    str(provider or "empyralis_password").strip() or "empyralis_password",
-                    str(subject or normalized_email).strip() or normalized_email,
-                    password_hash,
-                    "Email and password" if (provider or "empyralis_password") == "empyralis_password" else str(provider or "Identity").replace("_", " ").title(),
-                    created_at,
-                )
+        await connection.execute(
+            """
+            INSERT INTO users (
+                id, tenant_id, workspace_id, email, display_name, avatar_url, status, metadata, created_at, updated_at
+            ) VALUES ($1, $2, $3, $4, $5, NULL, 'active', '{}'::jsonb, $6::timestamptz, $6::timestamptz)
+            ON CONFLICT (id) DO UPDATE SET
+                tenant_id = EXCLUDED.tenant_id,
+                workspace_id = EXCLUDED.workspace_id,
+                email = EXCLUDED.email,
+                display_name = COALESCE(EXCLUDED.display_name, users.display_name),
+                updated_at = EXCLUDED.updated_at
+            """,
+            resolved_user_id,
+            resolved_tenant_id,
+            resolved_workspace_id,
+            normalized_email,
+            display_label or None,
+            created_at,
+        )
 
+        if password_hash is not None or provider or subject:
             await connection.execute(
                 """
-                INSERT INTO workspace_memberships (
-                    id, tenant_id, workspace_id, user_id, role, status, metadata, created_at, updated_at
-                ) VALUES ($1, $2, $3, $4, $5, 'active', '{}'::jsonb, $6::timestamptz, $6::timestamptz)
-                ON CONFLICT (tenant_id, workspace_id, user_id) DO UPDATE SET
-                    role = EXCLUDED.role,
-                    status = EXCLUDED.status,
+                INSERT INTO auth_identities (
+                    id, tenant_id, workspace_id, user_id, provider, subject, password_hash, identity_role, label, status, is_primary, metadata, created_at, updated_at
+                ) VALUES ($1, $2, $3, $4, $5, $6, $7, 'account_access', $8, 'active', FALSE, '{}'::jsonb, $9::timestamptz, $9::timestamptz)
+                ON CONFLICT (provider, subject) DO UPDATE SET
+                    tenant_id = EXCLUDED.tenant_id,
+                    workspace_id = EXCLUDED.workspace_id,
+                    password_hash = COALESCE(EXCLUDED.password_hash, auth_identities.password_hash),
                     updated_at = EXCLUDED.updated_at
                 """,
                 str(uuid.uuid4()),
                 resolved_tenant_id,
                 resolved_workspace_id,
                 resolved_user_id,
-                str(role or "member").strip().lower() or "member",
+                str(provider or "empyralis_password").strip() or "empyralis_password",
+                str(subject or normalized_email).strip() or normalized_email,
+                password_hash,
+                "Email and password" if (provider or "empyralis_password") == "empyralis_password" else str(provider or "Identity").replace("_", " ").title(),
                 created_at,
             )
+
+        await connection.execute(
+            """
+            INSERT INTO workspace_memberships (
+                id, tenant_id, workspace_id, user_id, role, status, metadata, created_at, updated_at
+            ) VALUES ($1, $2, $3, $4, $5, 'active', '{}'::jsonb, $6::timestamptz, $6::timestamptz)
+            ON CONFLICT (tenant_id, workspace_id, user_id) DO UPDATE SET
+                role = EXCLUDED.role,
+                status = EXCLUDED.status,
+                updated_at = EXCLUDED.updated_at
+            """,
+            str(uuid.uuid4()),
+            resolved_tenant_id,
+            resolved_workspace_id,
+            resolved_user_id,
+            str(role or "member").strip().lower() or "member",
+            created_at,
+        )
     return await get_user_bundle_by_id(resolved_user_id)
 
 
 async def get_user_by_email(email: str) -> Optional[Dict[str, Any]]:
-    pool = await ensure_control_plane_schema()
-    if pool is None:
-        return None
-    row = await pool.fetchrow(
-        """
-        SELECT id, tenant_id, workspace_id, email, display_name, avatar_url, status, metadata, created_at, updated_at
-        FROM users
-        WHERE lower(email) = lower($1)
-        LIMIT 1
-        """,
-        str(email or "").strip().lower(),
-    )
+    async with _scoped_connection(bypass_rls=True) as connection:
+        if connection is None:
+            return None
+        row = await connection.fetchrow(
+            """
+            SELECT id, tenant_id, workspace_id, email, display_name, avatar_url, status, metadata, created_at, updated_at
+            FROM users
+            WHERE lower(email) = lower($1)
+            LIMIT 1
+            """,
+            str(email or "").strip().lower(),
+        )
     return _user_row_to_dict(row)
 
 
 async def get_user_by_id(user_id: str) -> Optional[Dict[str, Any]]:
-    pool = await ensure_control_plane_schema()
-    if pool is None:
-        return None
-    row = await pool.fetchrow(
-        """
-        SELECT id, tenant_id, workspace_id, email, display_name, avatar_url, status, metadata, created_at, updated_at
-        FROM users
-        WHERE id = $1
-        LIMIT 1
-        """,
-        str(user_id or "").strip(),
-    )
+    async with _scoped_connection(bypass_rls=True) as connection:
+        if connection is None:
+            return None
+        row = await connection.fetchrow(
+            """
+            SELECT id, tenant_id, workspace_id, email, display_name, avatar_url, status, metadata, created_at, updated_at
+            FROM users
+            WHERE id = $1
+            LIMIT 1
+            """,
+            str(user_id or "").strip(),
+        )
     return _user_row_to_dict(row)
 
 
 async def get_local_auth_identity_by_email(email: str) -> Optional[Dict[str, Any]]:
-    pool = await ensure_control_plane_schema()
-    if pool is None:
-        return None
-    row = await pool.fetchrow(
-        """
-        SELECT
-            ai.id,
-            ai.tenant_id,
-            ai.workspace_id,
-            ai.user_id,
-            ai.provider,
-            ai.subject,
-            ai.password_hash,
-            ai.identity_role,
-            ai.label,
-            ai.status,
-            ai.is_primary,
-            ai.metadata,
-            ai.created_at,
-            ai.updated_at,
-            u.email,
-            u.display_name,
-            u.avatar_url
-        FROM auth_identities ai
-        JOIN users u ON u.id = ai.user_id
-        WHERE ai.provider = 'empyralis_password'
-          AND lower(ai.subject) = lower($1)
-        LIMIT 1
-        """,
-        str(email or "").strip().lower(),
-    )
+    async with _scoped_connection(bypass_rls=True) as connection:
+        if connection is None:
+            return None
+        row = await connection.fetchrow(
+            """
+            SELECT
+                ai.id,
+                ai.tenant_id,
+                ai.workspace_id,
+                ai.user_id,
+                ai.provider,
+                ai.subject,
+                ai.password_hash,
+                ai.identity_role,
+                ai.label,
+                ai.status,
+                ai.is_primary,
+                ai.metadata,
+                ai.created_at,
+                ai.updated_at,
+                u.email,
+                u.display_name,
+                u.avatar_url
+            FROM auth_identities ai
+            JOIN users u ON u.id = ai.user_id
+            WHERE ai.provider = 'empyralis_password'
+              AND lower(ai.subject) = lower($1)
+            LIMIT 1
+            """,
+            str(email or "").strip().lower(),
+        )
     return dict(row) if row is not None else None
 
 
 async def list_workspace_memberships_for_user(user_id: str) -> List[Dict[str, Any]]:
-    pool = await ensure_control_plane_schema()
-    if pool is None:
-        return []
-    rows = await pool.fetch(
-        """
-        SELECT
-            wm.id,
-            wm.tenant_id,
-            wm.workspace_id,
-            wm.user_id,
-            wm.role,
-            wm.status,
-            wm.metadata,
-            wm.created_at,
-            wm.updated_at,
-            w.name AS workspace_name
-        FROM workspace_memberships wm
-        LEFT JOIN workspaces w ON w.workspace_id = wm.workspace_id
-        WHERE wm.user_id = $1
-        ORDER BY wm.created_at ASC
-        """,
-        str(user_id or "").strip(),
-    )
+    async with _scoped_connection(bypass_rls=True) as connection:
+        if connection is None:
+            return []
+        rows = await connection.fetch(
+            """
+            SELECT
+                wm.id,
+                wm.tenant_id,
+                wm.workspace_id,
+                wm.user_id,
+                wm.role,
+                wm.status,
+                wm.metadata,
+                wm.created_at,
+                wm.updated_at,
+                w.name AS workspace_name
+            FROM workspace_memberships wm
+            LEFT JOIN workspaces w ON w.workspace_id = wm.workspace_id
+            WHERE wm.user_id = $1
+            ORDER BY wm.created_at ASC
+            """,
+            str(user_id or "").strip(),
+        )
     return [dict(row) for row in rows]
 
 
 async def get_workspace_by_id(workspace_id: str) -> Optional[Dict[str, Any]]:
-    pool = await ensure_control_plane_schema()
-    if pool is None:
-        return None
-    row = await pool.fetchrow(
-        """
-        SELECT id, tenant_id, workspace_id, slug, name, workspace_type, status, created_by_user_id, metadata, created_at, updated_at
-        FROM workspaces
-        WHERE workspace_id = $1
-        LIMIT 1
-        """,
-        str(workspace_id or "").strip(),
-    )
+    async with _scoped_connection(bypass_rls=True) as connection:
+        if connection is None:
+            return None
+        row = await connection.fetchrow(
+            """
+            SELECT id, tenant_id, workspace_id, slug, name, workspace_type, status, created_by_user_id, metadata, created_at, updated_at
+            FROM workspaces
+            WHERE workspace_id = $1
+            LIMIT 1
+            """,
+            str(workspace_id or "").strip(),
+        )
     return dict(row) if row is not None else None
 
 
@@ -904,40 +975,47 @@ async def ensure_agent_thread(
     title: Optional[str] = None,
     metadata: Optional[Dict[str, Any]] = None,
 ) -> Optional[Dict[str, Any]]:
-    pool = await ensure_control_plane_schema()
-    if pool is None:
-        return None
     token = str(thread_id or "").strip()
     if not token:
         return None
-    now_iso = _utc_now_iso()
+    now_ts = _utc_now_ts()
     payload_title = str(title or "").strip() or "New chat"
-    await pool.execute(
-        """
-        INSERT INTO agent_threads (
-            id, tenant_id, workspace_id, owner_user_id, master_agent_install_id, channel, title, status, metadata, created_at, updated_at, last_turn_at
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, 'active', $8::jsonb, $9::timestamptz, $9::timestamptz, NULL)
-        ON CONFLICT (id) DO UPDATE SET
-            tenant_id = EXCLUDED.tenant_id,
-            workspace_id = EXCLUDED.workspace_id,
-            owner_user_id = COALESCE(EXCLUDED.owner_user_id, agent_threads.owner_user_id),
-            master_agent_install_id = COALESCE(EXCLUDED.master_agent_install_id, agent_threads.master_agent_install_id),
-            channel = EXCLUDED.channel,
-            title = CASE WHEN agent_threads.title = 'New chat' THEN EXCLUDED.title ELSE agent_threads.title END,
-            metadata = agent_threads.metadata || EXCLUDED.metadata,
-            updated_at = EXCLUDED.updated_at
-        """,
+    resolved_tenant_id = _require_scope_token(tenant_id, "tenant_id")
+    resolved_workspace_id = _require_scope_token(workspace_id, "workspace_id")
+    async with _scoped_connection(tenant_id=resolved_tenant_id, workspace_id=resolved_workspace_id) as connection:
+        if connection is None:
+            return None
+        await connection.execute(
+            """
+            INSERT INTO agent_threads (
+                id, tenant_id, workspace_id, owner_user_id, master_agent_install_id, channel, title, status, metadata, created_at, updated_at, last_turn_at
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, 'active', $8::jsonb, $9::timestamptz, $9::timestamptz, NULL)
+            ON CONFLICT (id) DO UPDATE SET
+                tenant_id = EXCLUDED.tenant_id,
+                workspace_id = EXCLUDED.workspace_id,
+                owner_user_id = COALESCE(EXCLUDED.owner_user_id, agent_threads.owner_user_id),
+                master_agent_install_id = COALESCE(EXCLUDED.master_agent_install_id, agent_threads.master_agent_install_id),
+                channel = EXCLUDED.channel,
+                title = CASE WHEN agent_threads.title = 'New chat' THEN EXCLUDED.title ELSE agent_threads.title END,
+                metadata = agent_threads.metadata || EXCLUDED.metadata,
+                updated_at = EXCLUDED.updated_at
+            """,
+            token,
+            resolved_tenant_id,
+            resolved_workspace_id,
+            str(owner_user_id or "").strip() or None,
+            str(master_agent_install_id or "").strip() or None,
+            str(channel or "web").strip() or "web",
+            payload_title,
+            _to_json(metadata, default={}),
+            now_ts,
+        )
+    return await get_agent_thread(
         token,
-        str(tenant_id or "").strip() or "default",
-        str(workspace_id or "").strip() or "default",
-        str(owner_user_id or "").strip() or None,
-        str(master_agent_install_id or "").strip() or None,
-        str(channel or "web").strip() or "web",
-        payload_title,
-        _to_json(metadata, default={}),
-        now_iso,
+        tenant_id=resolved_tenant_id,
+        workspace_id=resolved_workspace_id,
+        include_turns=False,
     )
-    return await get_agent_thread(token, include_turns=False)
 
 
 async def upsert_agent_session(
@@ -954,60 +1032,78 @@ async def upsert_agent_session(
     expires_at: Optional[str] = None,
     status: str = "active",
 ) -> Optional[Dict[str, Any]]:
-    pool = await ensure_control_plane_schema()
-    if pool is None:
-        return None
-    now_iso = _utc_now_iso()
-    await pool.execute(
-        """
-        INSERT INTO agent_sessions (
-            id, tenant_id, workspace_id, thread_id, channel, actor, master_agent_install_id, runtime_profile_id, status, metadata, created_at, updated_at, expires_at
-        ) VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9, $10::jsonb, $11::timestamptz, $11::timestamptz, $12::timestamptz)
-        ON CONFLICT (id) DO UPDATE SET
-            tenant_id = EXCLUDED.tenant_id,
-            workspace_id = EXCLUDED.workspace_id,
-            thread_id = EXCLUDED.thread_id,
-            channel = EXCLUDED.channel,
-            actor = EXCLUDED.actor,
-            master_agent_install_id = COALESCE(EXCLUDED.master_agent_install_id, agent_sessions.master_agent_install_id),
-            runtime_profile_id = COALESCE(EXCLUDED.runtime_profile_id, agent_sessions.runtime_profile_id),
-            status = EXCLUDED.status,
-            metadata = EXCLUDED.metadata,
-            updated_at = EXCLUDED.updated_at,
-            expires_at = EXCLUDED.expires_at
-        """,
-        str(session_id or "").strip(),
-        str(tenant_id or "").strip() or "default",
-        str(workspace_id or "").strip() or "default",
-        str(thread_id or "").strip() or "direct-chat",
-        str(channel or "web").strip() or "web",
-        _to_json(actor, default={}),
-        str(master_agent_install_id or "").strip() or None,
-        str(runtime_profile_id or "").strip() or None,
-        str(status or "active").strip() or "active",
-        _to_json(metadata, default={}),
-        now_iso,
-        expires_at,
+    now_ts = _utc_now_ts()
+    expires_ts = _coerce_timestamptz(expires_at)
+    resolved_tenant_id = _require_scope_token(tenant_id, "tenant_id")
+    resolved_workspace_id = _require_scope_token(workspace_id, "workspace_id")
+    resolved_session_id = str(session_id or "").strip()
+    async with _scoped_connection(tenant_id=resolved_tenant_id, workspace_id=resolved_workspace_id) as connection:
+        if connection is None:
+            return None
+        await connection.execute(
+            """
+            INSERT INTO agent_sessions (
+                id, tenant_id, workspace_id, thread_id, channel, actor, master_agent_install_id, runtime_profile_id, status, metadata, created_at, updated_at, expires_at
+            ) VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9, $10::jsonb, $11::timestamptz, $11::timestamptz, $12::timestamptz)
+            ON CONFLICT (id) DO UPDATE SET
+                tenant_id = EXCLUDED.tenant_id,
+                workspace_id = EXCLUDED.workspace_id,
+                thread_id = EXCLUDED.thread_id,
+                channel = EXCLUDED.channel,
+                actor = EXCLUDED.actor,
+                master_agent_install_id = COALESCE(EXCLUDED.master_agent_install_id, agent_sessions.master_agent_install_id),
+                runtime_profile_id = COALESCE(EXCLUDED.runtime_profile_id, agent_sessions.runtime_profile_id),
+                status = EXCLUDED.status,
+                metadata = EXCLUDED.metadata,
+                updated_at = EXCLUDED.updated_at,
+                expires_at = EXCLUDED.expires_at
+            """,
+            resolved_session_id,
+            resolved_tenant_id,
+            resolved_workspace_id,
+            str(thread_id or "").strip() or resolved_session_id,
+            str(channel or "web").strip() or "web",
+            _to_json(actor, default={}),
+            str(master_agent_install_id or "").strip() or None,
+            str(runtime_profile_id or "").strip() or None,
+            str(status or "active").strip() or "active",
+            _to_json(metadata, default={}),
+            now_ts,
+            expires_ts,
+        )
+    return await get_agent_session(
+        resolved_session_id,
+        tenant_id=resolved_tenant_id,
+        workspace_id=resolved_workspace_id,
     )
-    return await get_agent_session(str(session_id or "").strip())
 
 
-async def get_agent_session(session_id: str) -> Optional[Dict[str, Any]]:
-    pool = await ensure_control_plane_schema()
-    if pool is None:
-        return None
-    row = await pool.fetchrow("SELECT * FROM agent_sessions WHERE id = $1 LIMIT 1", str(session_id or "").strip())
+async def get_agent_session(
+    session_id: str,
+    *,
+    tenant_id: str,
+    workspace_id: str,
+) -> Optional[Dict[str, Any]]:
+    async with _scoped_connection(tenant_id=tenant_id, workspace_id=workspace_id) as connection:
+        if connection is None:
+            return None
+        row = await connection.fetchrow("SELECT * FROM agent_sessions WHERE id = $1 LIMIT 1", str(session_id or "").strip())
     return dict(row) if row is not None else None
 
 
-async def terminate_agent_session(session_id: str) -> None:
-    pool = await ensure_control_plane_schema()
-    if pool is None:
-        return
-    await pool.execute(
-        "UPDATE agent_sessions SET status = 'terminated', updated_at = NOW() WHERE id = $1",
-        str(session_id or "").strip(),
-    )
+async def terminate_agent_session(
+    session_id: str,
+    *,
+    tenant_id: str,
+    workspace_id: str,
+) -> None:
+    async with _scoped_connection(tenant_id=tenant_id, workspace_id=workspace_id) as connection:
+        if connection is None:
+            return
+        await connection.execute(
+            "UPDATE agent_sessions SET status = 'terminated', updated_at = NOW() WHERE id = $1",
+            str(session_id or "").strip(),
+        )
 
 
 async def upsert_agent_turn(
@@ -1029,149 +1125,174 @@ async def upsert_agent_turn(
     request_id: Optional[str] = None,
     turn_id: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
-    pool = await ensure_control_plane_schema()
-    if pool is None:
-        return None
-    now_iso = _utc_now_iso()
+    now_ts = _utc_now_ts()
     resolved_turn_id = str(turn_id or uuid.uuid4()).strip() or str(uuid.uuid4())
     resolved_request_id = str(request_id or "").strip() or None
-    await pool.execute(
-        """
-        INSERT INTO agent_turns (
-            id, tenant_id, workspace_id, thread_id, session_id, request_id, role, status, content, run_id, actor, active_agent_install_id, runtime_profile_id, approvals, interventions, metadata, created_at, updated_at
-        ) VALUES (
-            $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, $12, $13, $14::jsonb, $15::jsonb, $16::jsonb, $17::timestamptz, $17::timestamptz
+    resolved_tenant_id = _require_scope_token(tenant_id, "tenant_id")
+    resolved_workspace_id = _require_scope_token(workspace_id, "workspace_id")
+    resolved_thread_id = str(thread_id or "").strip()
+    async with _scoped_connection(tenant_id=resolved_tenant_id, workspace_id=resolved_workspace_id) as connection:
+        if connection is None:
+            return None
+        await connection.execute(
+            """
+            INSERT INTO agent_turns (
+                id, tenant_id, workspace_id, thread_id, session_id, request_id, role, status, content, run_id, actor, active_agent_install_id, runtime_profile_id, approvals, interventions, metadata, created_at, updated_at
+            ) VALUES (
+                $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, $12, $13, $14::jsonb, $15::jsonb, $16::jsonb, $17::timestamptz, $17::timestamptz
+            )
+            ON CONFLICT (tenant_id, workspace_id, thread_id, role, request_id)
+            WHERE request_id IS NOT NULL
+            DO UPDATE SET
+                status = EXCLUDED.status,
+                content = EXCLUDED.content,
+                run_id = COALESCE(EXCLUDED.run_id, agent_turns.run_id),
+                actor = EXCLUDED.actor,
+                active_agent_install_id = COALESCE(EXCLUDED.active_agent_install_id, agent_turns.active_agent_install_id),
+                runtime_profile_id = COALESCE(EXCLUDED.runtime_profile_id, agent_turns.runtime_profile_id),
+                approvals = EXCLUDED.approvals,
+                interventions = EXCLUDED.interventions,
+                metadata = agent_turns.metadata || EXCLUDED.metadata,
+                updated_at = EXCLUDED.updated_at
+            """,
+            resolved_turn_id,
+            resolved_tenant_id,
+            resolved_workspace_id,
+            resolved_thread_id,
+            str(session_id or "").strip() or None,
+            resolved_request_id,
+            str(role or "assistant").strip().lower() or "assistant",
+            str(status or "completed").strip().lower() or "completed",
+            str(content or ""),
+            str(run_id or "").strip() or None,
+            _to_json(actor, default={}),
+            str(active_agent_install_id or "").strip() or None,
+            str(runtime_profile_id or "").strip() or None,
+            _to_json(approvals, default=[]),
+            _to_json(interventions, default=[]),
+            _to_json(metadata, default={}),
+            now_ts,
         )
-        ON CONFLICT (tenant_id, workspace_id, thread_id, role, request_id)
-        WHERE request_id IS NOT NULL
-        DO UPDATE SET
-            status = EXCLUDED.status,
-            content = EXCLUDED.content,
-            run_id = COALESCE(EXCLUDED.run_id, agent_turns.run_id),
-            actor = EXCLUDED.actor,
-            active_agent_install_id = COALESCE(EXCLUDED.active_agent_install_id, agent_turns.active_agent_install_id),
-            runtime_profile_id = COALESCE(EXCLUDED.runtime_profile_id, agent_turns.runtime_profile_id),
-            approvals = EXCLUDED.approvals,
-            interventions = EXCLUDED.interventions,
-            metadata = agent_turns.metadata || EXCLUDED.metadata,
-            updated_at = EXCLUDED.updated_at
-        """,
-        resolved_turn_id,
-        str(tenant_id or "").strip() or "default",
-        str(workspace_id or "").strip() or "default",
-        str(thread_id or "").strip() or "direct-chat",
-        str(session_id or "").strip() or None,
-        resolved_request_id,
-        str(role or "assistant").strip().lower() or "assistant",
-        str(status or "completed").strip().lower() or "completed",
-        str(content or ""),
-        str(run_id or "").strip() or None,
-        _to_json(actor, default={}),
-        str(active_agent_install_id or "").strip() or None,
-        str(runtime_profile_id or "").strip() or None,
-        _to_json(approvals, default=[]),
-        _to_json(interventions, default=[]),
-        _to_json(metadata, default={}),
-        now_iso,
+        await connection.execute(
+            """
+            UPDATE agent_threads
+            SET
+                updated_at = $2::timestamptz,
+                last_turn_at = $2::timestamptz,
+                title = CASE
+                    WHEN title = 'New chat' AND $3 <> '' AND $4 = 'user' THEN $3
+                    ELSE title
+                END
+            WHERE id = $1
+            """,
+            resolved_thread_id,
+            now_ts,
+            build_default_thread_title(content),
+            str(role or "").strip().lower(),
+        )
+    return await get_agent_thread(
+        resolved_thread_id,
+        tenant_id=resolved_tenant_id,
+        workspace_id=resolved_workspace_id,
+        include_turns=True,
     )
-    await pool.execute(
-        """
-        UPDATE agent_threads
-        SET
-            updated_at = $2::timestamptz,
-            last_turn_at = $2::timestamptz,
-            title = CASE
-                WHEN title = 'New chat' AND $3 <> '' AND $4 = 'user' THEN $3
-                ELSE title
-            END
-        WHERE id = $1
-        """,
-        str(thread_id or "").strip() or "direct-chat",
-        now_iso,
-        build_default_thread_title(content),
-        str(role or "").strip().lower(),
-    )
-    return await get_agent_thread(str(thread_id or "").strip(), include_turns=True)
 
 
 async def list_agent_turns(
     thread_id: str,
     *,
+    tenant_id: str,
+    workspace_id: str,
     limit: int = 200,
 ) -> List[Dict[str, Any]]:
-    pool = await ensure_control_plane_schema()
-    if pool is None:
-        return []
-    rows = await pool.fetch(
-        """
-        SELECT *
-        FROM agent_turns
-        WHERE thread_id = $1
-        ORDER BY created_at ASC
-        LIMIT $2
-        """,
-        str(thread_id or "").strip(),
-        max(1, int(limit or 200)),
-    )
+    async with _scoped_connection(tenant_id=tenant_id, workspace_id=workspace_id) as connection:
+        if connection is None:
+            return []
+        rows = await connection.fetch(
+            """
+            SELECT *
+            FROM agent_turns
+            WHERE thread_id = $1
+            ORDER BY created_at ASC
+            LIMIT $2
+            """,
+            str(thread_id or "").strip(),
+            max(1, int(limit or 200)),
+        )
     return [dict(row) for row in rows]
 
 
-async def get_agent_thread(thread_id: str, *, include_turns: bool = True) -> Optional[Dict[str, Any]]:
-    pool = await ensure_control_plane_schema()
-    if pool is None:
-        return None
-    row = await pool.fetchrow(
-        """
-        SELECT id, tenant_id, workspace_id, owner_user_id, master_agent_install_id, channel, title, status, metadata, created_at, updated_at, last_turn_at
-        FROM agent_threads
-        WHERE id = $1
-        LIMIT 1
-        """,
-        str(thread_id or "").strip(),
-    )
+async def get_agent_thread(
+    thread_id: str,
+    *,
+    tenant_id: str,
+    workspace_id: str,
+    include_turns: bool = True,
+) -> Optional[Dict[str, Any]]:
+    async with _scoped_connection(tenant_id=tenant_id, workspace_id=workspace_id) as connection:
+        if connection is None:
+            return None
+        row = await connection.fetchrow(
+            """
+            SELECT id, tenant_id, workspace_id, owner_user_id, master_agent_install_id, channel, title, status, metadata, created_at, updated_at, last_turn_at
+            FROM agent_threads
+            WHERE id = $1
+            LIMIT 1
+            """,
+            str(thread_id or "").strip(),
+        )
     if row is None:
         return None
     payload = dict(row)
     if include_turns:
-        payload["turns"] = await list_agent_turns(str(thread_id or "").strip())
+        payload["turns"] = await list_agent_turns(
+            str(thread_id or "").strip(),
+            tenant_id=tenant_id,
+            workspace_id=workspace_id,
+        )
     return payload
 
 
 async def list_agent_threads(
     *,
     workspace_id: str,
-    tenant_id: Optional[str] = None,
+    tenant_id: str,
     owner_user_id: Optional[str] = None,
     include_turns: bool = False,
     limit: int = 50,
 ) -> List[Dict[str, Any]]:
-    pool = await ensure_control_plane_schema()
-    if pool is None:
-        return []
     conditions = ["workspace_id = $1"]
-    params: List[Any] = [str(workspace_id or "").strip() or "default"]
+    resolved_workspace_id = _require_scope_token(workspace_id, "workspace_id")
+    resolved_tenant_id = _require_scope_token(tenant_id, "tenant_id")
+    params: List[Any] = [resolved_workspace_id]
     next_index = 2
-    if tenant_id:
-        conditions.append(f"tenant_id = ${next_index}")
-        params.append(str(tenant_id or "").strip())
-        next_index += 1
+    conditions.append(f"tenant_id = ${next_index}")
+    params.append(resolved_tenant_id)
+    next_index += 1
     if owner_user_id:
         conditions.append(f"owner_user_id = ${next_index}")
         params.append(str(owner_user_id or "").strip())
         next_index += 1
     params.append(max(1, int(limit or 50)))
-    rows = await pool.fetch(
-        f"""
-        SELECT id, tenant_id, workspace_id, owner_user_id, master_agent_install_id, channel, title, status, metadata, created_at, updated_at, last_turn_at
-        FROM agent_threads
-        WHERE {' AND '.join(conditions)}
-        ORDER BY COALESCE(last_turn_at, updated_at, created_at) DESC
-        LIMIT ${next_index}
-        """,
-        *params,
-    )
+    async with _scoped_connection(tenant_id=resolved_tenant_id, workspace_id=resolved_workspace_id) as connection:
+        if connection is None:
+            return []
+        rows = await connection.fetch(
+            f"""
+            SELECT id, tenant_id, workspace_id, owner_user_id, master_agent_install_id, channel, title, status, metadata, created_at, updated_at, last_turn_at
+            FROM agent_threads
+            WHERE {' AND '.join(conditions)}
+            ORDER BY COALESCE(last_turn_at, updated_at, created_at) DESC
+            LIMIT ${next_index}
+            """,
+            *params,
+        )
     items = [dict(row) for row in rows]
     if include_turns:
         for item in items:
-            item["turns"] = await list_agent_turns(str(item.get("id") or "").strip())
+            item["turns"] = await list_agent_turns(
+                str(item.get("id") or "").strip(),
+                tenant_id=resolved_tenant_id,
+                workspace_id=resolved_workspace_id,
+            )
     return items

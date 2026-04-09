@@ -172,6 +172,39 @@ class LocalQueueWatchdogTests(unittest.TestCase):
         self.assertEqual(local_queue._server, original_server)
         self.assertTrue(persisted)
 
+    def test_handle_heartbeat_local_run_emits_structured_computer_action_event(self) -> None:
+        emitted = []
+        original_server = local_queue._server
+        run_id = "00000000-0000-0000-0000-000000000001"
+        local_queue._server = SimpleNamespace(
+            runs={run_id: {"logs": object()}},
+            LOCAL_QUEUE_LOCK=__import__("threading").Lock(),
+            LOCAL_CLAIMED_RUNS={},
+            emit_log=lambda log_queue, level, message, **kwargs: emitted.append((level, message, kwargs)),
+            _utc_now=lambda: datetime.fromisoformat("2026-04-07T10:00:00"),
+            _utc_now_iso=lambda: "2026-04-07T10:00:00Z",
+        )
+        try:
+            with patch("server_modules.worker_dispatch_service.heartbeat_local_run", return_value={"last_heartbeat_at": "2026-04-07T10:00:00Z"}):
+                local_queue.handle_heartbeat_local_run(
+                    local_queue.uuid.UUID(run_id),
+                    local_queue.LocalRunHeartbeatPayload(
+                        worker_id="worker-1",
+                        note="Step 1/3",
+                        event={
+                            "event": "computer_action",
+                            "message": "Step 1/3: Capturing screenshot",
+                            "data": {"label": "Capturing screenshot", "step_number": 1, "step_total": 3},
+                        },
+                    ),
+                )
+        finally:
+            local_queue._server = original_server
+
+        self.assertEqual(emitted[0][0], "info")
+        self.assertEqual(emitted[0][2]["event"], "computer_action")
+        self.assertEqual(emitted[0][2]["data"]["step_total"], 3)
+
 
 if __name__ == "__main__":
     unittest.main()

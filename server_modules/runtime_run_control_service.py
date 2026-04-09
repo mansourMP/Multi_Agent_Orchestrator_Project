@@ -32,6 +32,42 @@ def local_worker_recovery_confirmation_prompt(run: dict[str, Any]) -> str:
     return " ".join(details)
 
 
+def _local_execution_checkpoint(run: dict[str, Any]) -> dict[str, Any]:
+    checkpoint = run.get("local_execution_checkpoint")
+    if isinstance(checkpoint, dict) and checkpoint:
+        return dict(checkpoint)
+    result_data = run.get("result_data") if isinstance(run.get("result_data"), dict) else {}
+    result_checkpoint = result_data.get("local_execution_checkpoint")
+    if isinstance(result_checkpoint, dict) and result_checkpoint:
+        return dict(result_checkpoint)
+    context = run.get("context") if isinstance(run.get("context"), dict) else {}
+    metadata = context.get("metadata") if isinstance(context.get("metadata"), dict) else {}
+    metadata_checkpoint = metadata.get("local_execution_checkpoint")
+    if isinstance(metadata_checkpoint, dict) and metadata_checkpoint:
+        return dict(metadata_checkpoint)
+    pack_inputs = metadata.get("pack_inputs") if isinstance(metadata.get("pack_inputs"), dict) else {}
+    operations = pack_inputs.get("operations") if isinstance(pack_inputs.get("operations"), list) else []
+    if operations:
+        return {
+            "kind": "local_execution_v1",
+            "next_operation_index": 0,
+            "total_operations": len(operations),
+            "phase": "planned",
+            "mode": "observing",
+        }
+    return {}
+
+
+def _resume_capability(snapshot_run: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+    browser_checkpoint = snapshot_run.get("browser_checkpoint") if isinstance(snapshot_run.get("browser_checkpoint"), dict) else {}
+    if browser_checkpoint:
+        return "browser_checkpoint", dict(browser_checkpoint)
+    local_execution_checkpoint = _local_execution_checkpoint(snapshot_run)
+    if local_execution_checkpoint:
+        return "local_execution_checkpoint", dict(local_execution_checkpoint)
+    return "", {}
+
+
 def build_resume_waiting_run_callbacks(
     *,
     serialize_run_snapshot: Callable[[str, dict[str, Any]], dict[str, Any]],
@@ -119,6 +155,7 @@ def pause_run_for_takeover(
         result_text="Control handed back to the user. Run paused for manual takeover.",
         result_data={
             "manual_takeover": True,
+            "resume_available": True,
             "summary": "Control handed back to the user. Run paused for manual takeover.",
         },
         browser_checkpoint=(
@@ -304,9 +341,9 @@ def resume_waiting_run(
     pending_confirmation = get_pending_confirmation(snapshot_run)
     if isinstance(pending_confirmation, dict) and pending_confirmation:
         raise HTTPException(status_code=409, detail="Run requires confirmation resolution, not direct resume.")
-    checkpoint = snapshot_run.get("browser_checkpoint") if isinstance(snapshot_run.get("browser_checkpoint"), dict) else {}
-    if not checkpoint:
-        raise HTTPException(status_code=409, detail="Run does not have a resumable browser checkpoint.")
+    resume_kind, checkpoint = _resume_capability(snapshot_run)
+    if not resume_kind:
+        raise HTTPException(status_code=409, detail="Run does not have a resumable local execution checkpoint.")
     if local_worker_recovery_confirmation_required(snapshot_run):
         if not isinstance(run, dict):
             raise HTTPException(status_code=409, detail="Run is not active in this process.")
@@ -331,15 +368,55 @@ def resume_waiting_run(
         }
     if not isinstance(run, dict):
         raise HTTPException(status_code=409, detail="Run is not active in this process.")
+    run_result_data = run.get("result_data") if isinstance(run.get("result_data"), dict) else {}
+    if isinstance(run_result_data, dict) and run_result_data:
+        run_result_data.pop("manual_takeover", None)
+        run_result_data["resume_available"] = True
+        run["result_data"] = run_result_data
+    context = run.get("context") if isinstance(run.get("context"), dict) else {}
+    metadata = context.get("metadata") if isinstance(context.get("metadata"), dict) else {}
+    metadata["manual_takeover"] = False
+    if resume_kind == "local_execution_checkpoint":
+        metadata["local_execution_resume_supported"] = True
+    context["metadata"] = metadata
+    run["context"] = context
+    run.pop("wait_reason", None)
     emit_log(
         run["logs"],
         "info",
-        "Resume requested for paused browser operator run.",
-        event="browser_resume_requested",
+        (
+            "Resume requested for paused browser operator run."
+            if resume_kind == "browser_checkpoint"
+            else "Resume requested for paused local computer-control run."
+        ),
+        event=("browser_resume_requested" if resume_kind == "browser_checkpoint" else "local_execution_resume_requested"),
         data={
             "run_id": run_id,
             "next_action_index": checkpoint.get("next_action_index"),
             "session_profile": checkpoint.get("session_profile"),
+        },
+    )
+    emit_log(
+        run["logs"],
+        "info",
+        "AI control is resuming from the saved checkpoint.",
+        event="computer_action",
+        data={
+            "schema": "empyralis.computer_action.v1",
+            "mode": "acting",
+            "phase": "planned",
+            "tool": "computer_control",
+            "action_type": "resume",
+            "label": "AI control is resuming",
+            "reason": (
+                "Resuming from the saved browser checkpoint."
+                if resume_kind == "browser_checkpoint"
+                else "Resuming from the saved local execution checkpoint."
+            ),
+            "status": "queued_local",
+            "success": True,
+            "step_number": (int(checkpoint.get("next_action_index") or 0) + 1) if resume_kind == "browser_checkpoint" and checkpoint else (int(checkpoint.get("next_operation_index") or 0) + 1) if checkpoint else None,
+            "step_total": int(checkpoint.get("total_operations") or 0) or None,
         },
     )
     if not schedule_restored_run_resume(run_id, run):
@@ -347,6 +424,7 @@ def resume_waiting_run(
     return {
         "status": "ok",
         "run_id": run_id,
-        "resume_kind": "browser_checkpoint",
+        "resume_kind": resume_kind,
         "next_action_index": checkpoint.get("next_action_index"),
+        "next_operation_index": checkpoint.get("next_operation_index"),
     }

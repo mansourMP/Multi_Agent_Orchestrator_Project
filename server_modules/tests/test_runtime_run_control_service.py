@@ -60,6 +60,40 @@ class RuntimeRunControlServiceTests(unittest.TestCase):
         self.assertEqual(payload["resume_kind"], "browser_checkpoint")
         self.assertEqual(payload["next_action_index"], 3)
         self.assertEqual(emitted[0]["event"], "browser_resume_requested")
+        self.assertEqual(emitted[1]["event"], "computer_action")
+
+    def test_resume_waiting_run_returns_local_execution_resume_payload(self):
+        emitted = []
+        run = {
+            "status": "waiting_for_input",
+            "logs": object(),
+            "local_execution_checkpoint": {
+                "kind": "local_execution_v1",
+                "next_operation_index": 4,
+                "total_operations": 8,
+            },
+            "result_data": {"manual_takeover": True},
+            "context": {"metadata": {"manual_takeover": True}},
+        }
+
+        payload = runtime_run_control_service.resume_waiting_run(
+            "run-1",
+            run=run,
+            current_user={"user_id": "user-1"},
+            serialize_run_snapshot=lambda run_id, run: {"run_id": run_id},
+            enforce_run_owner_access=lambda current_user, snapshot: None,
+            get_pending_confirmation=lambda run: None,
+            begin_run_pending_confirmation=lambda *args, **kwargs: {},
+            emit_log=lambda *args, **kwargs: emitted.append(kwargs),
+            schedule_restored_run_resume=lambda run_id, active_run: True,
+        )
+
+        self.assertEqual(payload["resume_kind"], "local_execution_checkpoint")
+        self.assertEqual(payload["next_operation_index"], 4)
+        self.assertFalse(run["result_data"].get("manual_takeover"))
+        self.assertFalse(run["context"]["metadata"].get("manual_takeover"))
+        self.assertEqual(emitted[0]["event"], "local_execution_resume_requested")
+        self.assertEqual(emitted[1]["event"], "computer_action")
 
     def test_resume_waiting_run_requires_manual_confirmation_for_exhausted_local_recovery(self):
         prompted = []

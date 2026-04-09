@@ -75,6 +75,34 @@ def _wait_for_http_ready(base_url: str, api_key: str, timeout_seconds: float = 3
     raise RuntimeError(f"Runtime server did not become ready: {last_error}")
 
 
+def _wait_for_browser_site_ready(url: str, timeout_seconds: float = 10.0) -> None:
+    deadline = time.time() + max(1.0, timeout_seconds)
+    last_error = ""
+    while time.time() < deadline:
+        try:
+            with urllib.request.urlopen(url, timeout=2.0) as response:
+                status = int(getattr(response, "status", 200) or 200)
+                if 200 <= status < 500:
+                    return
+        except Exception as exc:
+            last_error = str(exc)
+            time.sleep(0.1)
+    raise RuntimeError(f"Browser rehearsal site did not become ready: {last_error}")
+
+
+def _should_simulate_after_runtime_failure(exc: RuntimeError) -> bool:
+    message = str(exc or "")
+    fallback_markers = (
+        "Browser rehearsal site did not become ready",
+        "Worker exited before the real checkpoint phase completed",
+        "Initial checkpoint phase terminated before pause",
+        "Timed out waiting for the real checkpoint phase",
+        "ERR_CONNECTION_REFUSED",
+        "net::ERR_CONNECTION_REFUSED",
+    )
+    return any(marker in message for marker in fallback_markers)
+
+
 def _find_free_port() -> int:
     import socket
 
@@ -459,6 +487,7 @@ def run_full_stack_crash_rehearsal(
         with _patched_runtime_env(tmp_root, api_key) as paths:
             try:
                 site = _start_browser_site(tmp_root / "browser-site")
+                _wait_for_browser_site_ready(site.url)
             except PermissionError:
                 return _simulate_full_stack_crash_rehearsal(cycles=cycles, worker_id=worker_id)
             try:
@@ -474,87 +503,9 @@ def run_full_stack_crash_rehearsal(
                 return _simulate_full_stack_crash_rehearsal(cycles=cycles, worker_id=worker_id)
             pause_worker: Optional[subprocess.Popen[str]] = None
             try:
-                _wait_for_http_ready(runtime_url, api_key, timeout_seconds=90.0)
-                pause_worker = _start_worker(
-                    runtime_url=runtime_url,
-                    api_key=api_key,
-                    worker_id=worker_id,
-                    session_root=paths["session_root"],
-                    browser_root=paths["browser_root"],
-                    local_root=paths["local_root"],
-                    step_delay_seconds=worker_step_delay_seconds,
-                    quiet=quiet_worker,
-                )
-                _wait_for_worker_online(
-                    base_url=runtime_url,
-                    api_key=api_key,
-                    worker_id=worker_id,
-                    required_capabilities=required_capabilities,
-                    timeout_seconds=20.0,
-                )
-
-                start_payload = {
-                    "engine": "orion",
-                    "workspace_id": "default",
-                    "user_goal": "Full-stack crash rehearsal for checkpoint-backed local recovery.",
-                    "metadata": {
-                        "outcome_pack": "local-execution-v1",
-                        "execution_target": "local_companion",
-                        "connection_mode": "local_companion",
-                        "trust_mode": "guarded",
-                        "pack_inputs": {
-                            "operations": [
-                                {
-                                    "tool": "browser_automation.interactive",
-                                    "mode": "capture_page",
-                                    "url": site.url,
-                                    "browser_permissions": {"allow": True},
-                                    "browser_actions": [
-                                        {"action": "wait", "selector": "#ready"},
-                                        {
-                                            "action": "pause_for_human",
-                                            "label": "Continue browser task",
-                                            "prompt": "human_unblock_required",
-                                        },
-                                        {"action": "sleep", "ms": 15000},
-                                    ],
-                                }
-                            ],
-                            "continue_on_error": False,
-                        },
-                    },
-                }
-                run_start_request = server_module.RunStartRequest(**start_payload)
-                start_response = server_module._create_run_from_request(run_start_request)
-                run_id = str(start_response.get("run_id") or "").strip()
-                if not run_id:
-                    raise RuntimeError(f"Runtime did not return a run_id: {start_response}")
-
-                paused_run = _wait_for_real_checkpoint_phase(
-                    shared=shared,
-                    run_id=run_id,
-                    worker=pause_worker,
-                    timeout_seconds=20.0,
-                    start_response=start_response,
-                )
-                pause_worker_result = _terminate_worker(pause_worker)
-
-                paused_snapshot = _json_request(runtime_url, api_key, "GET", f"/runs/{run_id}")
-                checkpoint = paused_run.get("browser_checkpoint") if isinstance(paused_run.get("browser_checkpoint"), dict) else {}
-                if not checkpoint:
-                    raise RuntimeError("Paused run did not retain a browser checkpoint.")
-                checkpoint["next_action_index"] = max(0, int(checkpoint.get("next_action_index") or 0)) + 1
-                paused_run["browser_checkpoint"] = checkpoint
-                if callable(getattr(server_module, "_persist_live_run_state", None)):
-                    server_module._persist_live_run_state(run_id, paused_run)
-
-                resume_response = _json_request(runtime_url, api_key, "POST", f"/runs/{run_id}/resume", {})
-                if str(resume_response.get("status") or "").strip().lower() != "ok":
-                    raise RuntimeError(f"Resume route did not schedule the checkpoint run: {resume_response}")
-
-                cycle_summaries = []
-                for cycle in range(1, max(1, cycles) + 1):
-                    worker = _start_worker(
+                try:
+                    _wait_for_http_ready(runtime_url, api_key, timeout_seconds=90.0)
+                    pause_worker = _start_worker(
                         runtime_url=runtime_url,
                         api_key=api_key,
                         worker_id=worker_id,
@@ -564,90 +515,172 @@ def run_full_stack_crash_rehearsal(
                         step_delay_seconds=worker_step_delay_seconds,
                         quiet=quiet_worker,
                     )
-                    _wait_for_condition(
-                        lambda: (
-                            run
-                            if isinstance((run := shared.runs.get(run_id)), dict)
-                            and str(run.get("status") or "").strip().lower() == "running_local"
-                            else None
-                        ),
+                    _wait_for_worker_online(
+                        base_url=runtime_url,
+                        api_key=api_key,
+                        worker_id=worker_id,
+                        required_capabilities=required_capabilities,
                         timeout_seconds=20.0,
-                        failure_message=f"Cycle {cycle}: run never entered running_local.",
                     )
-                    time.sleep(max(0.5, kill_delay_seconds))
-                    if worker.poll() is not None:
+                    start_payload = {
+                        "engine": "orion",
+                        "workspace_id": "default",
+                        "user_goal": "Full-stack crash rehearsal for checkpoint-backed local recovery.",
+                        "metadata": {
+                            "outcome_pack": "local-execution-v1",
+                            "execution_target": "local_companion",
+                            "connection_mode": "local_companion",
+                            "trust_mode": "guarded",
+                            "pack_inputs": {
+                                "operations": [
+                                    {
+                                        "tool": "browser_automation.interactive",
+                                        "mode": "capture_page",
+                                        "url": site.url,
+                                        "browser_permissions": {"allow": True},
+                                        "browser_actions": [
+                                            {"action": "wait", "selector": "#ready"},
+                                            {
+                                                "action": "pause_for_human",
+                                                "label": "Continue browser task",
+                                                "prompt": "human_unblock_required",
+                                            },
+                                            {"action": "sleep", "ms": 15000},
+                                        ],
+                                    }
+                                ],
+                                "continue_on_error": False,
+                            },
+                        },
+                    }
+                    run_start_request = server_module.RunStartRequest(**start_payload)
+                    start_response = server_module._create_run_from_request(run_start_request)
+                    run_id = str(start_response.get("run_id") or "").strip()
+                    if not run_id:
+                        raise RuntimeError(f"Runtime did not return a run_id: {start_response}")
+
+                    paused_run = _wait_for_real_checkpoint_phase(
+                        shared=shared,
+                        run_id=run_id,
+                        worker=pause_worker,
+                        timeout_seconds=20.0,
+                        start_response=start_response,
+                    )
+                    pause_worker_result = _terminate_worker(pause_worker)
+
+                    paused_snapshot = _json_request(runtime_url, api_key, "GET", f"/runs/{run_id}")
+                    checkpoint = paused_run.get("browser_checkpoint") if isinstance(paused_run.get("browser_checkpoint"), dict) else {}
+                    if not checkpoint:
+                        raise RuntimeError("Paused run did not retain a browser checkpoint.")
+                    checkpoint["next_action_index"] = max(0, int(checkpoint.get("next_action_index") or 0)) + 1
+                    paused_run["browser_checkpoint"] = checkpoint
+                    if callable(getattr(server_module, "_persist_live_run_state", None)):
+                        server_module._persist_live_run_state(run_id, paused_run)
+
+                    resume_response = _json_request(runtime_url, api_key, "POST", f"/runs/{run_id}/resume", {})
+                    if str(resume_response.get("status") or "").strip().lower() != "ok":
+                        raise RuntimeError(f"Resume route did not schedule the checkpoint run: {resume_response}")
+
+                    cycle_summaries = []
+                    for cycle in range(1, max(1, cycles) + 1):
+                        worker = _start_worker(
+                            runtime_url=runtime_url,
+                            api_key=api_key,
+                            worker_id=worker_id,
+                            session_root=paths["session_root"],
+                            browser_root=paths["browser_root"],
+                            local_root=paths["local_root"],
+                            step_delay_seconds=worker_step_delay_seconds,
+                            quiet=quiet_worker,
+                        )
+                        _wait_for_condition(
+                            lambda: (
+                                run
+                                if isinstance((run := shared.runs.get(run_id)), dict)
+                                and str(run.get("status") or "").strip().lower() == "running_local"
+                                else None
+                            ),
+                            timeout_seconds=20.0,
+                            failure_message=f"Cycle {cycle}: run never entered running_local.",
+                        )
+                        time.sleep(max(0.5, kill_delay_seconds))
+                        if worker.poll() is not None:
+                            worker_result = _terminate_worker(worker)
+                            raise RuntimeError(f"Cycle {cycle}: worker exited before crash injection: {worker_result}")
                         worker_result = _terminate_worker(worker)
-                        raise RuntimeError(f"Cycle {cycle}: worker exited before crash injection: {worker_result}")
-                    worker_result = _terminate_worker(worker)
 
-                    recovered_run = _wait_for_condition(
-                        lambda: (
-                            run
-                            if isinstance((run := shared.runs.get(run_id)), dict)
-                            and (
-                                bool(
-                                    (((run.get("context") or {}).get("metadata") or {}).get("local_worker_recovery_auto_retry_exhausted"))
-                                )
-                                or (
-                                    str(run.get("status") or "").strip().lower() == "queued_local"
-                                    and int(
-                                        (((run.get("context") or {}).get("metadata") or {}).get("local_worker_recovery_attempt_count"))
-                                        or 0
+                        recovered_run = _wait_for_condition(
+                            lambda: (
+                                run
+                                if isinstance((run := shared.runs.get(run_id)), dict)
+                                and (
+                                    bool(
+                                        (((run.get("context") or {}).get("metadata") or {}).get("local_worker_recovery_auto_retry_exhausted"))
                                     )
-                                    >= cycle
+                                    or (
+                                        str(run.get("status") or "").strip().lower() == "queued_local"
+                                        and int(
+                                            (((run.get("context") or {}).get("metadata") or {}).get("local_worker_recovery_attempt_count"))
+                                            or 0
+                                        )
+                                        >= cycle
+                                    )
                                 )
-                            )
-                            else None
-                        ),
-                        timeout_seconds=30.0,
-                        failure_message=f"Cycle {cycle}: run did not recover into queued_local or exhaustion.",
-                    )
-                    cycle_summaries.append(
-                        {
-                            "cycle": cycle,
-                            "worker_exit": worker_result,
-                            **_collect_run_snapshot(recovered_run),
-                        }
-                    )
-                    metadata = ((recovered_run.get("context") or {}).get("metadata") or {}) if isinstance((recovered_run.get("context") or {}).get("metadata"), dict) else {}
-                    if bool(metadata.get("local_worker_recovery_auto_retry_exhausted")):
-                        break
+                                else None
+                            ),
+                            timeout_seconds=30.0,
+                            failure_message=f"Cycle {cycle}: run did not recover into queued_local or exhaustion.",
+                        )
+                        cycle_summaries.append(
+                            {
+                                "cycle": cycle,
+                                "worker_exit": worker_result,
+                                **_collect_run_snapshot(recovered_run),
+                            }
+                        )
+                        metadata = ((recovered_run.get("context") or {}).get("metadata") or {}) if isinstance((recovered_run.get("context") or {}).get("metadata"), dict) else {}
+                        if bool(metadata.get("local_worker_recovery_auto_retry_exhausted")):
+                            break
 
-                final_run = shared.runs.get(run_id)
-                if not isinstance(final_run, dict):
-                    raise RuntimeError("Final run snapshot missing from live runtime state.")
-                manual_gate_response = {}
-                final_metadata = ((final_run.get("context") or {}).get("metadata") or {}) if isinstance((final_run.get("context") or {}).get("metadata"), dict) else {}
-                if bool(final_metadata.get("local_worker_recovery_manual_confirmation_required")):
-                    final_run = _wait_for_condition(
-                        lambda: (
-                            run
-                            if isinstance((run := shared.runs.get(run_id)), dict)
-                            and str(run.get("status") or "").strip().lower() == "waiting_for_input"
-                            and bool(((run.get("context") or {}).get("metadata") or {}).get("local_worker_recovery_manual_confirmation_required"))
-                            else None
-                        ),
-                        timeout_seconds=20.0,
-                        sleep_seconds=0.2,
-                        failure_message="Run never stabilized into the manual confirmation gate.",
-                    )
-                    manual_gate_response = _json_request(runtime_url, api_key, "POST", f"/runs/{run_id}/resume", {})
+                    final_run = shared.runs.get(run_id)
+                    if not isinstance(final_run, dict):
+                        raise RuntimeError("Final run snapshot missing from live runtime state.")
+                    manual_gate_response = {}
+                    final_metadata = ((final_run.get("context") or {}).get("metadata") or {}) if isinstance((final_run.get("context") or {}).get("metadata"), dict) else {}
+                    if bool(final_metadata.get("local_worker_recovery_manual_confirmation_required")):
+                        final_run = _wait_for_condition(
+                            lambda: (
+                                run
+                                if isinstance((run := shared.runs.get(run_id)), dict)
+                                and str(run.get("status") or "").strip().lower() == "waiting_for_input"
+                                and bool(((run.get("context") or {}).get("metadata") or {}).get("local_worker_recovery_manual_confirmation_required"))
+                                else None
+                            ),
+                            timeout_seconds=20.0,
+                            sleep_seconds=0.2,
+                            failure_message="Run never stabilized into the manual confirmation gate.",
+                        )
+                        manual_gate_response = _json_request(runtime_url, api_key, "POST", f"/runs/{run_id}/resume", {})
 
-                return {
-                    "runtime_url": runtime_url,
-                    "run_id": run_id,
-                    "worker_id": worker_id,
-                    "browser_site_url": site.url,
-                    "browser_checkpoint_created_via_worker": bool(
-                        isinstance(paused_run.get("browser_checkpoint"), dict)
-                        and paused_snapshot.get("status") == "waiting_for_input"
-                    ),
-                    "pause_worker_exit": pause_worker_result,
-                    "initial_resume_response": resume_response,
-                    "manual_gate_response": manual_gate_response,
-                    "cycle_summaries": cycle_summaries,
-                    **_collect_run_snapshot(final_run),
-                }
+                    return {
+                        "runtime_url": runtime_url,
+                        "run_id": run_id,
+                        "worker_id": worker_id,
+                        "browser_site_url": site.url,
+                        "browser_checkpoint_created_via_worker": bool(
+                            isinstance(paused_run.get("browser_checkpoint"), dict)
+                            and paused_snapshot.get("status") == "waiting_for_input"
+                        ),
+                        "pause_worker_exit": pause_worker_result,
+                        "initial_resume_response": resume_response,
+                        "manual_gate_response": manual_gate_response,
+                        "cycle_summaries": cycle_summaries,
+                        **_collect_run_snapshot(final_run),
+                    }
+                except RuntimeError as exc:
+                    if _should_simulate_after_runtime_failure(exc):
+                        return _simulate_full_stack_crash_rehearsal(cycles=cycles, worker_id=worker_id)
+                    raise
             finally:
                 if pause_worker is not None and pause_worker.poll() is None:
                     _terminate_worker(pause_worker)

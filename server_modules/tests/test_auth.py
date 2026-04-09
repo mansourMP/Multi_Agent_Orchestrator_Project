@@ -121,16 +121,24 @@ def test_expired_token_rejected(monkeypatch: pytest.MonkeyPatch, tmp_path):
 def test_workspace_membership_scope_and_viewer_role(monkeypatch: pytest.MonkeyPatch, tmp_path):
     auth, _, _ = _reload_auth(monkeypatch, tmp_path)
     created = auth.register_user("workspace.viewer@example.com", "password-123", name="Viewer")
-    home_workspace_id = created["workspace_access"][0]["workspace_id"]
-    auth.upsert_workspace_membership(created["user"]["id"], "finance", "viewer")
+    home_entry = next(
+        item
+        for item in created["workspace_access"]
+        if isinstance(item, dict) and str(item.get("workspace_id") or "").startswith("ws_")
+    )
+    home_workspace_id = home_entry["workspace_id"]
+    home_tenant_id = home_entry["tenant_id"]
+    finance_workspace_id = f"finance-{tmp_path.name}"
+    auth.ensure_workspace_tenant_binding(finance_workspace_id, home_tenant_id)
+    auth.upsert_workspace_membership(created["user"]["id"], finance_workspace_id, "viewer")
     token = auth.login_user("workspace.viewer@example.com", "password-123")["token"]
     current_user = auth.get_current_user(_Request(), authorization=f"Bearer {token}")
 
     assert auth.workspace_role(current_user, home_workspace_id) == "owner"
-    assert auth.workspace_role(current_user, "finance") == "viewer"
-    assert auth.enforce_workspace_access(current_user, "finance", minimum_role="viewer") == "finance"
+    assert auth.workspace_role(current_user, finance_workspace_id) == "viewer"
+    assert auth.enforce_workspace_access(current_user, finance_workspace_id, minimum_role="viewer") == finance_workspace_id
     with pytest.raises(HTTPException):
-        auth.enforce_workspace_access(current_user, "finance", minimum_role="member")
+        auth.enforce_workspace_access(current_user, finance_workspace_id, minimum_role="member")
     with pytest.raises(HTTPException):
         auth.enforce_workspace_access(current_user, "secret-lab", minimum_role="viewer")
 
@@ -157,8 +165,9 @@ def test_workspace_capability_policy_denies_local_capability(monkeypatch: pytest
 def test_tenant_binding_and_policy_precedence(monkeypatch: pytest.MonkeyPatch, tmp_path):
     auth, _, _ = _reload_auth(monkeypatch, tmp_path)
     created = auth.register_user("tenant.member@example.com", "password-123", name="Tenant Member")
-    auth.ensure_workspace_tenant_binding("finance", "tenant-acme")
-    auth.upsert_workspace_membership(created["user"]["id"], "finance", "owner")
+    finance_workspace_id = f"finance-{tmp_path.name}"
+    auth.ensure_workspace_tenant_binding(finance_workspace_id, "tenant-acme")
+    auth.upsert_workspace_membership(created["user"]["id"], finance_workspace_id, "owner")
     auth.upsert_tenant_policy(
         "tenant-acme",
         capability_allow=["computer_control.type"],
@@ -166,7 +175,7 @@ def test_tenant_binding_and_policy_precedence(monkeypatch: pytest.MonkeyPatch, t
         machine_enrollment_scope="tenant",
     )
     auth.upsert_workspace_policy(
-        "finance",
+        finance_workspace_id,
         capability_deny=["computer_control.type"],
         connector_deny=["gmail"],
         machine_enrollment_scope="workspace",
@@ -174,16 +183,16 @@ def test_tenant_binding_and_policy_precedence(monkeypatch: pytest.MonkeyPatch, t
     refreshed = auth.login_user("tenant.member@example.com", "password-123")
     current_user = auth.get_current_user(_Request(), authorization=f"Bearer {refreshed['token']}")
 
-    assert auth.workspace_tenant_id(current_user, "finance") == "tenant-acme"
+    assert auth.workspace_tenant_id(current_user, finance_workspace_id) == "tenant-acme"
     assert auth.tenant_role(current_user, "tenant-acme") == "owner"
-    assert auth.workspace_machine_enrollment_scope(current_user, "finance") == "workspace"
-    assert auth.workspace_connector_decision(current_user, "finance", "gmail")["decision"] == "deny"
-    assert auth.workspace_capability_decision(current_user, "finance", "computer_control.type")["decision"] == "deny"
+    assert auth.workspace_machine_enrollment_scope(current_user, finance_workspace_id) == "workspace"
+    assert auth.workspace_connector_decision(current_user, finance_workspace_id, "gmail")["decision"] == "deny"
+    assert auth.workspace_capability_decision(current_user, finance_workspace_id, "computer_control.type")["decision"] == "deny"
 
     with pytest.raises(HTTPException) as exc:
         auth.enforce_workspace_access(
             current_user,
-            "finance",
+            finance_workspace_id,
             tenant_id="tenant-other",
             minimum_role="viewer",
         )
@@ -193,6 +202,8 @@ def test_tenant_binding_and_policy_precedence(monkeypatch: pytest.MonkeyPatch, t
 
 def test_enterprise_settings_and_admin_provisioning_hooks(monkeypatch: pytest.MonkeyPatch, tmp_path):
     auth, _, _ = _reload_auth(monkeypatch, tmp_path)
+    finance_workspace_id = f"finance-{tmp_path.name}"
+    ops_workspace_id = f"ops-{tmp_path.name}"
     auth.upsert_tenant_enterprise_settings(
         "tenant-acme",
         sso={
@@ -223,7 +234,7 @@ def test_enterprise_settings_and_admin_provisioning_hooks(monkeypatch: pytest.Mo
         email="provisioned@example.com",
         name="Provisioned User",
         tenant_id="tenant-acme",
-        workspace_roles={"finance": "viewer", "ops": "member"},
+        workspace_roles={finance_workspace_id: "viewer", ops_workspace_id: "member"},
         provisioning_source="scim_bridge",
         external_id="scim-user-123",
         auth_provider="oidc",
@@ -235,7 +246,7 @@ def test_enterprise_settings_and_admin_provisioning_hooks(monkeypatch: pytest.Mo
     boundary = provisioned["identity_boundary"]
     auth_methods = boundary["auth_methods"]
 
-    assert workspace_ids == {"finance", "ops"}
+    assert workspace_ids == {finance_workspace_id, ops_workspace_id}
     assert security["auth_provider"] == "oidc"
     assert security["provisioning_source"] == "scim_bridge"
     assert security["external_id"] == "scim-user-123"

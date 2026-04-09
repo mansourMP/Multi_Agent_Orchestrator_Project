@@ -1,10 +1,9 @@
 from typing import Optional
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from server_modules.auth import (
-    ORION_DEFAULT_TENANT_ID,
     enterprise_status_for_user,
     ensure_public_registration_enabled,
     get_authenticated_user_profile,
@@ -24,6 +23,13 @@ from server_modules.schemas import AuthLoginRequest, AuthRegisterRequest
 
 
 router = APIRouter()
+
+
+def _require_tenant_id(value: Optional[str]) -> str:
+    token = str(value or "").strip()
+    if not token:
+        raise HTTPException(status_code=400, detail="tenant_id is required.")
+    return token
 
 
 class AuthMePatchRequest(BaseModel):
@@ -110,7 +116,7 @@ async def get_enterprise_config(
     tenant_id: Optional[str] = None,
     current_user=Depends(require_admin_access),
 ):
-    resolved_tenant_id = str(tenant_id or ORION_DEFAULT_TENANT_ID).strip() or ORION_DEFAULT_TENANT_ID
+    resolved_tenant_id = _require_tenant_id(tenant_id)
     return {
         "ok": True,
         "tenant_id": resolved_tenant_id,
@@ -123,7 +129,7 @@ async def patch_enterprise_config(
     body: EnterpriseConfigPatchRequest,
     current_user=Depends(require_admin_access),
 ):
-    resolved_tenant_id = str(body.tenant_id or ORION_DEFAULT_TENANT_ID).strip() or ORION_DEFAULT_TENANT_ID
+    resolved_tenant_id = _require_tenant_id(body.tenant_id)
     config = upsert_tenant_enterprise_settings(
         resolved_tenant_id,
         sso=body.sso.model_dump(exclude_none=True) if body.sso is not None else None,

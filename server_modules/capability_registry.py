@@ -265,6 +265,16 @@ CAPABILITY_REGISTRY: Dict[str, CapabilityContract] = {
         allowed_environments=["local_companion"],
         artifact_outputs=["text/plain"],
     ),
+    "computer_control.move": _contract(
+        "computer_control.move",
+        "Move Mouse",
+        risk_level="critical",
+        requires_approval=True,
+        reversible=True,
+        required_os_permissions=["accessibility"],
+        allowed_environments=["local_companion"],
+        artifact_outputs=[],
+    ),
     "computer_control.click": _contract(
         "computer_control.click",
         "Click Screen",

@@ -64,8 +64,11 @@ class EmpyralisSessionManager:
         # Direct chat can still attach the global browser singleton to a handle.
         # The session manager does not own that lifecycle, so it must not close it.
         if (
-            type(browser).__name__ == "BrowserEngine"
-            and str(type(browser).__module__ or "").strip() == "server_modules.browser_engine"
+            (
+                type(browser).__name__ == "BrowserEngine"
+                and str(type(browser).__module__ or "").strip() == "server_modules.browser_engine"
+            )
+            or bool(getattr(browser, "__empyralis_browser_adapter__", False))
         ):
             return
         if hasattr(browser, "close_sync"):

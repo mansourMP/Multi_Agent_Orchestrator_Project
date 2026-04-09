@@ -32,6 +32,25 @@ class _FakeEventSourceResponse:
 
 
 class RuntimeRuntimeApiTests(unittest.TestCase):
+    @staticmethod
+    def _current_user(**overrides):
+        current_user = {
+            "auth_type": "api_key",
+            "role": "owner",
+            "is_admin": True,
+            "user_id": "owner-1",
+            "workspace_access": {
+                "default": {
+                    "workspace_id": "default",
+                    "tenant_id": "default",
+                    "role": "owner",
+                    "tenant_role": "owner",
+                }
+            },
+        }
+        current_user.update(overrides)
+        return current_user
+
     @patch("server_modules.outbox_service.get_outbox_delivery_status")
     @patch("server_modules.local_queue.handle_get_local_workers_status")
     def test_runtime_status_payload_maps_worker_summary(self, mock_status, mock_outbox_status):
@@ -119,7 +138,7 @@ class RuntimeRuntimeApiTests(unittest.TestCase):
         result = self._run_async(
             handler(
                 runtime_runtime_api.MachineEnrollPayload(display_name="Machine 1", workspace_id="default"),
-                current_user={"role": "owner", "is_admin": True},
+                current_user=self._current_user(),
             )
         )
 
@@ -152,7 +171,7 @@ class RuntimeRuntimeApiTests(unittest.TestCase):
         result = self._run_async(
             handler(
                 runtime_runtime_api.MachineEnrollPayload(display_name="Machine 1", workspace_id="default"),
-                current_user={"role": "owner", "is_admin": True},
+                current_user=self._current_user(),
             )
         )
 
@@ -239,7 +258,7 @@ class RuntimeRuntimeApiTests(unittest.TestCase):
         }
         handler = app.routes[("DELETE", "/machines/{machine_id}")]
 
-        result = self._run_async(handler("machine-1", current_user={"role": "owner", "is_admin": True}))
+        result = self._run_async(handler("machine-1", current_user=self._current_user()))
 
         self.assertTrue(result["revoked"])
         mock_delete.assert_called_once_with("machine-1")
@@ -261,7 +280,7 @@ class RuntimeRuntimeApiTests(unittest.TestCase):
             handler(
                 "machine-1",
                 runtime_runtime_api.MachineControlPayload(reason="Maintenance"),
-                current_user={"role": "owner", "is_admin": True},
+                current_user=self._current_user(),
             )
         )
 
@@ -284,7 +303,7 @@ class RuntimeRuntimeApiTests(unittest.TestCase):
             handler(
                 "machine-1",
                 runtime_runtime_api.MachineControlPayload(reason="Recovered"),
-                current_user={"role": "owner", "is_admin": True},
+                current_user=self._current_user(),
             )
         )
 
@@ -307,7 +326,7 @@ class RuntimeRuntimeApiTests(unittest.TestCase):
             handler(
                 "machine-1",
                 runtime_runtime_api.MachineControlPayload(reason="Operator stop"),
-                current_user={"role": "owner", "is_admin": True, "user_id": "owner-1"},
+                current_user=self._current_user(),
             )
         )
 
@@ -338,7 +357,7 @@ class RuntimeRuntimeApiTests(unittest.TestCase):
                     handler(
                         runtime_runtime_api.uuid.UUID("00000000-0000-0000-0000-000000000001"),
                         runtime_runtime_api.MachineControlPayload(reason="Operator stop"),
-                        current_user={"role": "owner", "is_admin": True, "user_id": "owner-1"},
+                        current_user=self._current_user(),
                     )
                 )
         finally:

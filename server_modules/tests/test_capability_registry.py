@@ -30,6 +30,14 @@ class CapabilityRegistryTests(unittest.TestCase):
         self.assertEqual(contract.risk_level, "critical")
         self.assertTrue(contract.requires_approval)
 
+    def test_resolve_capability_returns_move_mouse_contract(self) -> None:
+        contract = resolve_capability("computer_control.move")
+
+        assert contract is not None
+        self.assertEqual(contract.capability_id, "computer_control.move")
+        self.assertEqual(contract.display_name, "Move Mouse")
+        self.assertEqual(contract.required_os_permissions, ["accessibility"])
+
     def test_resolve_capability_denies_when_global_safe_mode_blocks_unsafe_capability(self) -> None:
         safe_mode_service.set_safe_mode(enabled=True, reason="incident")
 

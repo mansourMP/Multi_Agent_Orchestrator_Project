@@ -57,7 +57,13 @@ def enforce_run_owner_access(
 def stamp_request_owner(req: Any, current_user: Any) -> Any:
     if not isinstance(current_user, dict):
         return req
-    if str(current_user.get("auth_type") or "").strip() == "api_key":
+    auth_type = str(current_user.get("auth_type") or "").strip().lower()
+    if auth_type == "api_key":
+        metadata = dict(req.metadata or {})
+        metadata["auth_type"] = "api_key"
+        metadata.setdefault("owner_role", "owner")
+        metadata["owner_is_admin"] = True
+        req.metadata = metadata
         return req
     owner_user_id = str(current_user.get("user_id") or "").strip()
     if not owner_user_id:
@@ -67,5 +73,11 @@ def stamp_request_owner(req: Any, current_user: Any) -> Any:
     email = str(current_user.get("email") or "").strip().lower()
     if email:
         metadata["owner_email"] = email
+    role = str(current_user.get("role") or "").strip().lower()
+    if role:
+        metadata["owner_role"] = role
+    metadata["owner_is_admin"] = bool(current_user.get("is_admin"))
+    if auth_type:
+        metadata["auth_type"] = auth_type
     req.metadata = metadata
     return req

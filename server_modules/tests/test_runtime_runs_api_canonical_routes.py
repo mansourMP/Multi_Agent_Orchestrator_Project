@@ -38,6 +38,52 @@ class _FakeRequest:
 
 
 class RuntimeRunsApiCanonicalRouteTests(unittest.TestCase):
+    def _current_user(self):
+        return {
+            "user_id": "user-1",
+            "email": "user@example.com",
+            "auth_type": "bearer",
+            "role": "owner",
+            "is_admin": True,
+            "workspace_ids": ["default", "finance"],
+            "workspace_access": {
+                "default": {
+                    "workspace_id": "default",
+                    "tenant_id": "default",
+                    "role": "owner",
+                    "tenant_role": "owner",
+                    "capabilities": {"allow": [], "deny": []},
+                    "tenant_capabilities": {"allow": [], "deny": []},
+                    "workspace_capabilities": {"allow": [], "deny": []},
+                    "dangerous_action_classes": {"allow": [], "deny": []},
+                    "tenant_dangerous_action_classes": {"allow": [], "deny": []},
+                    "workspace_dangerous_action_classes": {"allow": [], "deny": []},
+                    "connectors": {"allow": [], "deny": []},
+                    "tenant_connectors": {"allow": [], "deny": []},
+                    "workspace_connectors": {"allow": [], "deny": []},
+                    "machine_enrollment_scope": "workspace",
+                    "trusted_owner_machine_ids": [],
+                },
+                "finance": {
+                    "workspace_id": "finance",
+                    "tenant_id": "default",
+                    "role": "owner",
+                    "tenant_role": "owner",
+                    "capabilities": {"allow": [], "deny": []},
+                    "tenant_capabilities": {"allow": [], "deny": []},
+                    "workspace_capabilities": {"allow": [], "deny": []},
+                    "dangerous_action_classes": {"allow": [], "deny": []},
+                    "tenant_dangerous_action_classes": {"allow": [], "deny": []},
+                    "workspace_dangerous_action_classes": {"allow": [], "deny": []},
+                    "connectors": {"allow": [], "deny": []},
+                    "tenant_connectors": {"allow": [], "deny": []},
+                    "workspace_connectors": {"allow": [], "deny": []},
+                    "machine_enrollment_scope": "workspace",
+                    "trusted_owner_machine_ids": [],
+                },
+            },
+        }
+
     def test_register_run_routes_adds_turn_and_runs(self):
         fake_server = types.ModuleType("server")
         fake_server.require_api_key = object()
@@ -176,7 +222,7 @@ class RuntimeRunsApiCanonicalRouteTests(unittest.TestCase):
                         "execution_mode": "durable",
                         "response_mode": "artifact",
                     },
-                    current_user={"user_id": "user-1"},
+                    current_user=self._current_user(),
                 )
             )
             self.assertEqual(turn_payload.status, "stream_ready")
@@ -201,7 +247,7 @@ class RuntimeRunsApiCanonicalRouteTests(unittest.TestCase):
                         "actor": {"type": "user", "id": "user-1"},
                         "message": "stream hello",
                     },
-                    current_user={"user_id": "user-1"},
+                    current_user=self._current_user(),
                 )
             )
             self.assertEqual(stream_payload["kind"], "stream")
@@ -229,7 +275,7 @@ class RuntimeRunsApiCanonicalRouteTests(unittest.TestCase):
                         "message": "legacy hello",
                         "provider": "anthropic",
                     },
-                    current_user={"user_id": "user-1"},
+                    current_user=self._current_user(),
                 )
             )
             self.assertEqual(legacy_stream_payload["kind"], "stream")
@@ -253,16 +299,17 @@ class RuntimeRunsApiCanonicalRouteTests(unittest.TestCase):
                         "user_goal": "legacy durable hello",
                         "metadata": {"trust_mode": "auto"},
                     },
-                    current_user={"user_id": "user-1"},
+                    current_user=self._current_user(),
                 )
             )
             self.assertEqual(legacy_run_payload.status, "accepted")
             self.assertEqual(legacy_run_payload.run_id, "run-from-legacy-start")
 
-            runs_payload = self._run_async(app.routes[("GET", "/runs")](current_user={"user_id": "user-1"}))
-            self.assertEqual(runs_payload["count"], 2)
+            runs_payload = self._run_async(app.routes[("GET", "/runs")](current_user=self._current_user()))
+            self.assertEqual(runs_payload["count"], 4)
             self.assertEqual(runs_payload["items"][0]["source"], "live")
-            self.assertEqual(runs_payload["items"][1]["source"], "history")
+            self.assertEqual(runs_payload["items"][1]["source"], "live")
+            self.assertEqual(runs_payload["items"][2]["source"], "history")
 
             original_create_session = runtime_runs_api.session_service.create_session
             original_get_session = runtime_runs_api.session_service.get_session
@@ -281,7 +328,7 @@ class RuntimeRunsApiCanonicalRouteTests(unittest.TestCase):
                             actor={"type": "user", "id": "user-1"},
                             metadata={"source": "test"},
                         ),
-                        current_user={"user_id": "user-1", "email": "user@example.com"},
+                        current_user=self._current_user(),
                     )
                 )
                 self.assertEqual(session_payload.session_id, "session-created")
@@ -289,7 +336,7 @@ class RuntimeRunsApiCanonicalRouteTests(unittest.TestCase):
                 fetched_session = self._run_async(
                     app.routes[("GET", "/sessions/{session_id}")](
                         "session-created",
-                        current_user={"user_id": "user-1"},
+                        current_user=self._current_user(),
                     )
                 )
                 self.assertEqual(fetched_session.session_id, "session-created")
@@ -297,7 +344,7 @@ class RuntimeRunsApiCanonicalRouteTests(unittest.TestCase):
                 deleted_session = self._run_async(
                     app.routes[("DELETE", "/sessions/{session_id}")](
                         "session-created",
-                        current_user={"user_id": "user-1"},
+                        current_user=self._current_user(),
                     )
                 )
                 self.assertTrue(deleted_session["ok"])
@@ -307,7 +354,7 @@ class RuntimeRunsApiCanonicalRouteTests(unittest.TestCase):
                         workspace_id="default",
                         include_turns=True,
                         limit=25,
-                        current_user={"user_id": "user-1"},
+                        current_user=self._current_user(),
                     )
                 )
                 self.assertEqual(thread_list["count"], 1)
@@ -317,7 +364,7 @@ class RuntimeRunsApiCanonicalRouteTests(unittest.TestCase):
                 thread_detail = self._run_async(
                     app.routes[("GET", "/threads/{thread_id}")](
                         "thread-1",
-                        current_user={"user_id": "user-1"},
+                        current_user=self._current_user(),
                     )
                 )
                 self.assertEqual(thread_detail["id"], "thread-1")
@@ -449,7 +496,7 @@ class RuntimeRunsApiCanonicalRouteTests(unittest.TestCase):
             }
         ]
 
-    async def _fake_get_thread(self, thread_id, *, include_turns=True):
+    async def _fake_get_thread(self, thread_id, *, tenant_id, workspace_id, include_turns=True):
         items = await self._fake_list_threads(workspace_id="default", tenant_id="default", owner_user_id="user-1", include_turns=include_turns, limit=1)
         return items[0] if thread_id == "thread-1" else None
 

@@ -670,7 +670,7 @@ async def list_undelivered_outbox_events(
             FROM runtime_outbox
             WHERE delivered_at IS NULL
               AND poisoned_at IS NULL
-              AND COALESCE(next_attempt_at, created_at) <= NOW() - ($1::text || ' seconds')::interval
+              AND COALESCE(next_attempt_at, created_at) <= NOW() - ($1 * INTERVAL '1 second')
             ORDER BY COALESCE(next_attempt_at, created_at) ASC, created_at ASC
             LIMIT $2
             """,

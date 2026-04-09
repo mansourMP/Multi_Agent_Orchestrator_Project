@@ -3649,10 +3649,14 @@ def _workflow_final_result_data(
     final_text: str,
     final_data: Optional[Dict[str, Any]],
     run_id: str,
+    workflow_id: Optional[str] = None,
+    workflow_version_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     result: Dict[str, Any] = {
         "summary": final_text,
         "workflow_execution": {
+            "workflow_id": str(workflow_id or "").strip() or None,
+            "workflow_version_id": str(workflow_version_id or "").strip() or None,
             "schema_version": str(workflow_definition.get("version") or "").strip() or None,
             "node_count": len(workflow_definition.get("nodes") or []),
             "edge_count": len(workflow_definition.get("edges") or []),
@@ -4257,6 +4261,8 @@ def _execute_workflow_graph(
             final_text=final_text,
             final_data=final_data,
             run_id=run_id,
+            workflow_id=str(context.get("workflow_id") or "").strip() or None,
+            workflow_version_id=str(context.get("workflow_version_id") or "").strip() or None,
         ),
         "usage_masked": usage,
         "active_profile_id": None,

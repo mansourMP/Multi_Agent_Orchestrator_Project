@@ -32,10 +32,6 @@ JWT_EXP_SECONDS = int(os.getenv("ORION_JWT_EXP_SECONDS", "3600"))
 ORION_PUBLIC_REGISTRATION_ENABLED = str(os.getenv("ORION_PUBLIC_REGISTRATION_ENABLED", "0")).strip().lower() in {"1", "true", "yes", "on"}
 ORION_ADMIN_USER_IDS = {item.strip() for item in str(os.getenv("ORION_ADMIN_USER_IDS", "")).split(",") if item.strip()}
 ORION_ADMIN_EMAILS = {item.strip().lower() for item in str(os.getenv("ORION_ADMIN_EMAILS", "")).split(",") if item.strip()}
-ORION_DEFAULT_TENANT_ID = str(os.getenv("ORION_DEFAULT_TENANT_ID", "default")).strip() or "default"
-ORION_DEFAULT_WORKSPACE_IDS = tuple(
-    item.strip() for item in str(os.getenv("ORION_DEFAULT_WORKSPACE_IDS", "default")).split(",") if item.strip()
-) or ("default",)
 ORION_SERVICE_RATE_LIMIT_PER_MINUTE = int(os.getenv("ORION_SERVICE_RATE_LIMIT_PER_MINUTE", "600"))
 RBAC_ROLE_ORDER = {"viewer": 0, "member": 1, "owner": 2}
 WORKSPACE_CAPABILITY_ALL = "*"
@@ -63,14 +59,38 @@ def normalize_rbac_role(value: Any, *, default: str = "member") -> str:
     return fallback if fallback in RBAC_ROLE_ORDER else "member"
 
 
-def _normalize_workspace_token(value: Any, *, default: str = "default") -> str:
+def _normalize_workspace_token(value: Any, *, default: str = "") -> str:
     token = str(value or "").strip()
-    return token or str(default or "default").strip() or "default"
+    return token or str(default or "").strip()
 
 
-def _normalize_tenant_token(value: Any, *, default: str = ORION_DEFAULT_TENANT_ID) -> str:
+def _normalize_tenant_token(value: Any, *, default: str = "") -> str:
     token = str(value or "").strip()
-    return token or str(default or ORION_DEFAULT_TENANT_ID).strip() or ORION_DEFAULT_TENANT_ID
+    return token or str(default or "").strip()
+
+
+def _require_workspace_token(
+    value: Any,
+    *,
+    detail: str = "workspace_id is required.",
+    status_code: int = 403,
+) -> str:
+    token = _normalize_workspace_token(value, default="")
+    if not token:
+        raise HTTPException(status_code=status_code, detail=detail)
+    return token
+
+
+def _require_tenant_token(
+    value: Any,
+    *,
+    detail: str = "tenant_id is required.",
+    status_code: int = 403,
+) -> str:
+    token = _normalize_tenant_token(value, default="")
+    if not token:
+        raise HTTPException(status_code=status_code, detail=detail)
+    return token
 
 
 def _normalize_distinct_tokens(value: Any) -> list[str]:
@@ -576,8 +596,8 @@ def _write_workspace_registry(
 
 
 def ensure_workspace_tenant_binding(workspace_id: str, tenant_id: Optional[str] = None) -> dict[str, Any]:
-    clean_workspace_id = _normalize_workspace_token(workspace_id)
-    clean_tenant_id = _normalize_tenant_token(tenant_id)
+    clean_workspace_id = _require_workspace_token(workspace_id, detail="workspace_id is required for tenant binding.", status_code=400)
+    clean_tenant_id = _require_tenant_token(tenant_id, detail="tenant_id is required for tenant binding.", status_code=400)
     ts = int(time.time())
     with AUTH_LOCK:
         with _connect_auth_db() as connection:
@@ -592,10 +612,13 @@ def ensure_workspace_tenant_binding(workspace_id: str, tenant_id: Optional[str] 
 
 
 def tenant_id_for_workspace(workspace_id: str) -> str:
-    clean_workspace_id = _normalize_workspace_token(workspace_id)
+    clean_workspace_id = _require_workspace_token(
+        workspace_id,
+        detail="workspace_id is required to resolve tenant scope.",
+    )
     pg_tenant_id = _control_plane_call(control_plane_repository.tenant_id_for_workspace(clean_workspace_id))
     if isinstance(pg_tenant_id, str) and pg_tenant_id.strip():
-        return _normalize_tenant_token(pg_tenant_id)
+        return _require_tenant_token(pg_tenant_id, detail="Workspace is not bound to a valid tenant.")
     with AUTH_LOCK:
         with _connect_auth_db() as connection:
             row = connection.execute(
@@ -608,27 +631,23 @@ def tenant_id_for_workspace(workspace_id: str) -> str:
                 (clean_workspace_id,),
             ).fetchone()
             if row is None:
-                _write_workspace_registry(
-                    connection,
-                    workspace_id=clean_workspace_id,
-                    tenant_id=ORION_DEFAULT_TENANT_ID,
-                    now_ts=int(time.time()),
-                )
-                connection.commit()
-                return ORION_DEFAULT_TENANT_ID
-            return _normalize_tenant_token(row["tenant_id"])
+                raise HTTPException(status_code=403, detail=f"Workspace '{clean_workspace_id}' is not bound to a tenant.")
+            tenant_id = _normalize_tenant_token(row["tenant_id"], default="")
+            if not tenant_id:
+                raise HTTPException(status_code=403, detail=f"Workspace '{clean_workspace_id}' is not bound to a valid tenant.")
+            return tenant_id
 
 
 def upsert_workspace_membership(user_id: str, workspace_id: str, role: str) -> dict[str, Any]:
     clean_user_id = str(user_id or "").strip()
     if not clean_user_id:
         raise HTTPException(status_code=400, detail="user_id is required.")
-    clean_workspace_id = _normalize_workspace_token(workspace_id)
+    clean_workspace_id = _require_workspace_token(workspace_id, detail="workspace_id is required.", status_code=400)
     clean_role = normalize_rbac_role(role, default="member")
     ts = int(time.time())
     user_email = ""
     user_name = None
-    resolved_tenant_id = ORION_DEFAULT_TENANT_ID
+    resolved_tenant_id = tenant_id_for_workspace(clean_workspace_id)
     with AUTH_LOCK:
         with _connect_auth_db() as connection:
             user_row = connection.execute(
@@ -644,9 +663,11 @@ def upsert_workspace_membership(user_id: str, workspace_id: str, role: str) -> d
                 """,
                 (clean_workspace_id,),
             ).fetchone()
-            resolved_tenant_id = _normalize_tenant_token(
-                registry_row["tenant_id"] if registry_row is not None else ORION_DEFAULT_TENANT_ID
-            )
+            if registry_row is not None:
+                resolved_tenant_id = _require_tenant_token(
+                    registry_row["tenant_id"],
+                    detail=f"Workspace '{clean_workspace_id}' is not bound to a valid tenant.",
+                )
             _write_workspace_registry(
                 connection,
                 workspace_id=clean_workspace_id,
@@ -692,7 +713,7 @@ def _write_workspace_policy(
     trusted_owner_machine_ids: Optional[list[str]] = None,
     updated_at: Optional[int] = None,
 ) -> None:
-    clean_workspace_id = _normalize_workspace_token(workspace_id)
+    clean_workspace_id = _require_workspace_token(workspace_id, detail="workspace_id is required.", status_code=400)
     ts = int(updated_at or time.time())
     connection.execute(
         """
@@ -735,7 +756,10 @@ def _decode_json_token_list(raw: Any) -> list[str]:
 
 
 def _workspace_policy_from_row(row: Any, workspace_id: str, *, tenant_id: Optional[str] = None) -> dict[str, Any]:
-    resolved_tenant_id = _normalize_tenant_token(tenant_id or ORION_DEFAULT_TENANT_ID)
+    resolved_tenant_id = _require_tenant_token(
+        tenant_id,
+        detail=f"Workspace '{workspace_id}' is not bound to a valid tenant.",
+    )
     if row is None:
         return {
             "workspace_id": workspace_id,
@@ -769,7 +793,7 @@ def _workspace_policy_from_row(row: Any, workspace_id: str, *, tenant_id: Option
 
 
 def load_workspace_policy(workspace_id: str) -> dict[str, Any]:
-    clean_workspace_id = _normalize_workspace_token(workspace_id)
+    clean_workspace_id = _require_workspace_token(workspace_id)
     with AUTH_LOCK:
         with _connect_auth_db() as connection:
             registry_row = connection.execute(
@@ -781,16 +805,12 @@ def load_workspace_policy(workspace_id: str) -> dict[str, Any]:
                 """,
                 (clean_workspace_id,),
             ).fetchone()
-            resolved_tenant_id = _normalize_tenant_token(
-                registry_row["tenant_id"] if registry_row is not None else ORION_DEFAULT_TENANT_ID
-            )
             if registry_row is None:
-                _write_workspace_registry(
-                    connection,
-                    workspace_id=clean_workspace_id,
-                    tenant_id=resolved_tenant_id,
-                    now_ts=int(time.time()),
-                )
+                raise HTTPException(status_code=403, detail=f"Workspace '{clean_workspace_id}' is not bound to a tenant.")
+            resolved_tenant_id = _require_tenant_token(
+                registry_row["tenant_id"],
+                detail=f"Workspace '{clean_workspace_id}' is not bound to a valid tenant.",
+            )
             row = connection.execute(
                 """
                 SELECT
@@ -1792,7 +1812,7 @@ def user_identity_boundary(user_id: str) -> dict[str, Any]:
 def enterprise_status_for_user(current_user: Optional[Dict[str, Any]]) -> dict[str, Any]:
     user_id = _current_bearer_user_id(current_user)
     user_security = load_user_enterprise_security(user_id)
-    tenant_ids = sorted(allowed_tenant_ids(current_user) or {ORION_DEFAULT_TENANT_ID})
+    tenant_ids = sorted(allowed_tenant_ids(current_user) or [])
     tenant_settings = [load_tenant_enterprise_settings(tenant_id) for tenant_id in tenant_ids]
     mfa_required = any(bool(item.get("mfa", {}).get("required")) for item in tenant_settings)
     return {
@@ -1822,15 +1842,15 @@ def provision_user_account(
     email_token = str(email or "").strip().lower()
     if not email_token or "@" not in email_token:
         raise HTTPException(status_code=400, detail="Valid email is required.")
-    resolved_tenant_id = _normalize_tenant_token(tenant_id)
+    resolved_tenant_id = _require_tenant_token(tenant_id, detail="tenant_id is required for admin provisioning.", status_code=400)
     normalized_workspace_roles: dict[str, str] = {}
-    for raw_workspace_id, raw_role in dict(workspace_roles or {"default": "member"}).items():
+    for raw_workspace_id, raw_role in dict(workspace_roles or {}).items():
         workspace_id = _normalize_workspace_token(raw_workspace_id, default="")
         if not workspace_id:
             continue
         normalized_workspace_roles[workspace_id] = normalize_rbac_role(raw_role, default="member")
     if not normalized_workspace_roles:
-        normalized_workspace_roles = {"default": "member"}
+        raise HTTPException(status_code=400, detail="At least one workspace role is required for admin provisioning.")
     created_at = int(time.time())
     _control_plane_workspace_roles = dict(normalized_workspace_roles)
     with AUTH_LOCK:
@@ -2018,8 +2038,6 @@ def _effective_workspace_access(
     }
     effective_workspace_ids.update(claim_roles.keys())
     effective_workspace_ids.update(membership_roles.keys())
-    if not effective_workspace_ids:
-        effective_workspace_ids.update(ORION_DEFAULT_WORKSPACE_IDS)
 
     access: dict[str, dict[str, Any]] = {}
     for workspace_id in sorted(effective_workspace_ids):
@@ -2154,12 +2172,12 @@ def issue_token(
         _normalize_workspace_token(item.get("workspace_id"))
         for item in normalized_workspace_access
         if str(item.get("workspace_id") or "").strip()
-    ] or list(ORION_DEFAULT_WORKSPACE_IDS)
+    ]
     tenant_ids = [
         _normalize_tenant_token(item.get("tenant_id"))
         for item in normalized_workspace_access
         if str(item.get("tenant_id") or "").strip()
-    ] or [ORION_DEFAULT_TENANT_ID]
+    ]
     workspace_roles = {
         _normalize_workspace_token(item.get("workspace_id")): normalize_rbac_role(item.get("role"), default=role)
         for item in normalized_workspace_access
@@ -2226,7 +2244,7 @@ def _normalize_workspace_ids_claim(value: Any) -> list[str]:
             continue
         seen.add(token)
         normalized.append(token)
-    return normalized or list(ORION_DEFAULT_WORKSPACE_IDS)
+    return normalized
 
 
 def allowed_workspace_ids(user: Optional[Dict[str, Any]]) -> Optional[set[str]]:
@@ -2325,7 +2343,9 @@ def tenant_access_map(current_user: Optional[Dict[str, Any]]) -> dict[str, dict[
     for workspace_id, entry in workspace_access.items():
         if not isinstance(entry, dict):
             continue
-        tenant_id = _normalize_tenant_token(entry.get("tenant_id"))
+        tenant_id = _normalize_tenant_token(entry.get("tenant_id"), default="")
+        if not tenant_id:
+            continue
         existing = out.get(tenant_id)
         role = normalize_rbac_role(entry.get("role"), default="viewer")
         if existing is None:
@@ -2369,10 +2389,10 @@ def workspace_role(current_user: Optional[Dict[str, Any]], workspace_id: Optiona
 
 
 def workspace_tenant_id(current_user: Optional[Dict[str, Any]], workspace_id: Optional[str]) -> str:
-    token = _normalize_workspace_token(workspace_id)
+    token = _require_workspace_token(workspace_id)
     entry = workspace_access_map(current_user).get(token)
     if isinstance(entry, dict):
-        return _normalize_tenant_token(entry.get("tenant_id"))
+        return _require_tenant_token(entry.get("tenant_id"), detail=f"Workspace '{token}' is not bound to a valid tenant.")
     return tenant_id_for_workspace(token)
 
 
@@ -2646,16 +2666,18 @@ def register_user(email: str, password: str, *, name: Optional[str] = None) -> D
         _normalize_workspace_token(item.get("workspace_id")): normalize_rbac_role(item.get("role"), default="owner")
         for item in list(control_plane_memberships or [])
         if isinstance(item, dict) and str(item.get("workspace_id") or "").strip()
-    } or {
-        workspace_id: "owner"
-        for workspace_id in ORION_DEFAULT_WORKSPACE_IDS
     }
-    workspace_ids = list(workspace_roles.keys())
     tenant_ids = {
         _normalize_tenant_token(item.get("tenant_id"))
         for item in list(control_plane_memberships or [])
         if isinstance(item, dict) and str(item.get("tenant_id") or "").strip()
     }
+    if not workspace_roles:
+        bootstrap_workspace_id = f"ws_{user_id[:12]}"
+        bootstrap_tenant_id = f"tenant_{user_id[:12]}"
+        workspace_roles = {bootstrap_workspace_id: "owner"}
+        tenant_ids = {bootstrap_tenant_id}
+    workspace_ids = list(workspace_roles.keys())
     with AUTH_LOCK:
         with _connect_auth_db() as connection:
             existing = connection.execute(
@@ -2702,7 +2724,7 @@ def register_user(email: str, password: str, *, name: Optional[str] = None) -> D
                 now_ts=created_at,
             )
             for workspace_id, role in workspace_roles.items():
-                resolved_tenant_id = next(iter(tenant_ids), ORION_DEFAULT_TENANT_ID)
+                resolved_tenant_id = next(iter(tenant_ids), "") or tenant_id_for_workspace(workspace_id)
                 _write_workspace_registry(
                     connection,
                     workspace_id=workspace_id,
@@ -2769,7 +2791,9 @@ def login_user(email: str, password: str) -> Dict[str, Any]:
         _normalize_workspace_token(item.get("workspace_id"))
         for item in membership_rows
         if isinstance(item, dict) and str(item.get("workspace_id") or "").strip()
-    ] or list(ORION_DEFAULT_WORKSPACE_IDS)
+    ]
+    if not workspace_ids:
+        raise HTTPException(status_code=403, detail="Authenticated user does not have workspace access.")
     effective_role = "viewer"
     for item in membership_rows:
         candidate_role = normalize_rbac_role((item or {}).get("role"), default="viewer")

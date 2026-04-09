@@ -10,6 +10,7 @@ from server_modules.auth import (
     allowed_workspace_ids,
     build_workspace_authorization_metadata,
     enforce_workspace_access,
+    workspace_access_map,
     workspace_tenant_id,
 )
 
@@ -867,7 +868,19 @@ def register_run_routes(app) -> None:
     ):
         from fastapi import HTTPException
 
-        record = await thread_service.get_thread(thread_id, include_turns=True)
+        record = None
+        for workspace_id, access in workspace_access_map(current_user).items():
+            tenant_id = str((access or {}).get("tenant_id") or "").strip()
+            if not tenant_id:
+                continue
+            record = await thread_service.get_thread(
+                thread_id,
+                tenant_id=tenant_id,
+                workspace_id=workspace_id,
+                include_turns=True,
+            )
+            if isinstance(record, dict):
+                break
         if not isinstance(record, dict):
             raise HTTPException(status_code=404, detail="Thread not found.")
         enforce_workspace_access(

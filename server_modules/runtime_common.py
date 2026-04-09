@@ -349,30 +349,27 @@ def _workflow_api_headers() -> Dict[str, str]:
     return headers
 
 
-def fetch_workflow_snapshot(workflow_id: Any) -> Optional[Dict[str, Any]]:
+def fetch_workflow_snapshot(
+    workflow_id: Any,
+    *,
+    workflow_version_id: Any = None,
+    workspace_id: Any = None,
+    tenant_id: Any = None,
+) -> Optional[Dict[str, Any]]:
     token = str(workflow_id or "").strip()
     if not token:
         return None
-    response = http_json_request(
-        f"{EMPYRALIST_WORKFLOW_API_URL}/workflows/{quote_plus(token)}",
-        headers=_workflow_api_headers(),
-        timeout=20,
+    from server_modules import workflow_service
+
+    snapshot = workflow_service.fetch_workflow_snapshot_sync(
+        token,
+        workflow_version_id=str(workflow_version_id or "").strip() or None,
+        workspace_id=str(workspace_id or "").strip() or None,
+        tenant_id=str(tenant_id or "").strip() or None,
     )
-    status = int(response.get("status") or 500)
-    payload = response.get("json") if isinstance(response.get("json"), dict) else {}
-    if status >= 400:
-        detail = str(payload.get("message") or payload.get("detail") or "").strip()
-        raise HTTPException(
-            status_code=status if status in {400, 401, 403, 404, 409} else 502,
-            detail=detail or f"Unable to load workflow '{token}'.",
-        )
-    definition = payload.get("definition") if isinstance(payload.get("definition"), dict) else {}
-    return {
-        "id": str(payload.get("id") or token).strip() or token,
-        "name": str(payload.get("name") or "").strip() or None,
-        "status": str(payload.get("status") or "").strip() or None,
-        "definition": definition,
-    }
+    if not isinstance(snapshot, dict):
+        raise HTTPException(status_code=404, detail=f"Unable to load workflow '{token}'.")
+    return snapshot
 
 _normalize_workspace_id = _normalize_workspace_id_impl
 _workspace_visible = _workspace_visible_impl

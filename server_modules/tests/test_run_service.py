@@ -1789,6 +1789,7 @@ class RunServiceTests(unittest.TestCase):
                 "context_hints": {
                     "engine": "orion",
                     "workflow_id": "workflow-2",
+                    "workflow_version_id": "wfver-2",
                     "provider": "anthropic",
                     "model": "claude-test",
                     "agent_role": "builder",
@@ -1802,6 +1803,7 @@ class RunServiceTests(unittest.TestCase):
         converted = build_run_start_request_from_turn(turn_request, base_request=None)
 
         self.assertEqual(converted.workflow_id, "workflow-2")
+        self.assertEqual(converted.workflow_version_id, "wfver-2")
         self.assertEqual(converted.business_plan, "Ship the builder changes")
         self.assertEqual(converted.provider, "anthropic")
         self.assertEqual(converted.model, "claude-test")
@@ -1822,10 +1824,16 @@ class RunServiceTests(unittest.TestCase):
         preview_context = build_run_preview_context(
             request,
             metadata={"agent_role": "builder"},
-            workflow_snapshot={"definition": {"version": "1"}, "name": "Inbox", "status": "active"},
+            workflow_snapshot={
+                "definition": {"version": "1"},
+                "name": "Inbox",
+                "status": "active",
+                "workflowVersionId": "wfver-1",
+            },
         )
 
         self.assertEqual(preview_context["workflow_id"], "workflow-1")
+        self.assertEqual(preview_context["workflow_version_id"], "wfver-1")
         self.assertEqual(preview_context["workflow_definition"], {"version": "1"})
         self.assertEqual(preview_context["workflow_name"], "Inbox")
         self.assertEqual(preview_context["workflow_status"], "active")
@@ -2144,6 +2152,7 @@ class RunServiceTests(unittest.TestCase):
             workspace_id="default",
             user_goal="hello",
             workflow_id="wf-1",
+            workflow_version_id="wfver-9",
             max_iterations=12,
             metadata={
                 "trust_mode": "auto",
@@ -2171,10 +2180,12 @@ class RunServiceTests(unittest.TestCase):
                 resolve_app_permissions=lambda app_id: {"allow": ["read"]},
                 action_policy_from_app_permissions=lambda permissions: {"allowed": permissions["allow"]},
                 merge_action_policies=lambda existing, new: {"merged": [existing["action_policy"], new["action_policy"]]},
-                fetch_workflow_snapshot=lambda workflow_id: {
+                fetch_workflow_snapshot=lambda workflow_id, **kwargs: {
                     "definition": {"version": "v1"},
                     "name": "Workflow",
                     "status": "active",
+                    "workflowVersionId": kwargs.get("workflow_version_id"),
+                    "versionNumber": 9,
                 },
                 postprocess_metadata=lambda req, metadata: {**metadata, "postprocessed": True},
             ),
@@ -2186,6 +2197,8 @@ class RunServiceTests(unittest.TestCase):
         self.assertEqual(prepared["metadata"]["agent_role"], "orchestrator")
         self.assertEqual(prepared["metadata"]["agent_role_source"], "detected")
         self.assertEqual(prepared["metadata"]["workflow_name"], "Workflow")
+        self.assertEqual(prepared["metadata"]["workflow_version_id"], "wfver-9")
+        self.assertEqual(prepared["metadata"]["workflow_version_number"], 9)
         self.assertEqual(prepared["metadata"]["postprocessed"], True)
 
     def test_build_runs_core_creation_result_shapes_legacy_core_payload(self):

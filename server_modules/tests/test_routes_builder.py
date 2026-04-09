@@ -12,6 +12,23 @@ from server_modules.routes_builder import (
 
 
 class BuilderRouteTests(unittest.IsolatedAsyncioTestCase):
+    @staticmethod
+    def _current_user():
+        return {
+            "auth_type": "api_key",
+            "is_admin": True,
+            "role": "owner",
+            "user_id": "builder-owner",
+            "workspace_access": {
+                "default": {
+                    "workspace_id": "default",
+                    "tenant_id": "default",
+                    "role": "owner",
+                    "tenant_role": "owner",
+                }
+            },
+        }
+
     def test_parse_workflow_payload_returns_canonical_workflow(self):
         payload = _parse_workflow_payload(
             """
@@ -526,7 +543,8 @@ class BuilderRouteTests(unittest.IsolatedAsyncioTestCase):
             }
 
             result = await builder_generate(
-                BuilderGenerateRequest(prompt="Build me a workflow", model="gpt-4o-mini", workspace_id="default")
+                BuilderGenerateRequest(prompt="Build me a workflow", model="gpt-4o-mini", workspace_id="default"),
+                current_user=self._current_user(),
             )
 
         self.assertEqual(result["provider"], "openai")
@@ -562,7 +580,10 @@ class BuilderRouteTests(unittest.IsolatedAsyncioTestCase):
             }
 
             with self.assertRaises(HTTPException) as ctx:
-                await builder_generate(BuilderGenerateRequest(prompt="Build me a workflow"))
+                await builder_generate(
+                    BuilderGenerateRequest(prompt="Build me a workflow", workspace_id="default"),
+                    current_user=self._current_user(),
+                )
 
         self.assertEqual(ctx.exception.status_code, 502)
 

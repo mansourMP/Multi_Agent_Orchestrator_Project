@@ -78,7 +78,19 @@ class RuntimeEventsApiTests(unittest.TestCase):
             )
             fake_server._summarize_channel_sessions = lambda items, limit=None: [{"session_key": "chat-1"}]
             fake_server._iter_channel_events_stream = lambda **kwargs: iter([{"id": "evt-1"}])
-            current_user = {"auth_type": "api_key", "is_admin": False, "role": "owner"}
+            current_user = {
+                "auth_type": "api_key",
+                "is_admin": False,
+                "role": "owner",
+                "workspace_access": {
+                    "default": {
+                        "workspace_id": "default",
+                        "tenant_id": "default",
+                        "role": "owner",
+                        "tenant_role": "owner",
+                    }
+                },
+            }
 
             previous_server = sys.modules.get("server")
             sys.modules["server"] = fake_server

@@ -33,16 +33,16 @@ def usage_snapshots_for_user(
             if run_id:
                 combined[run_id] = item
 
-    live_runs = list_live_runs_fn() if callable(list_live_runs_fn) else run_state_repository.sync_list_live_runs()
     live_run_items: list[tuple[str, Any]] = []
+    live_runs = list_live_runs_fn() if callable(list_live_runs_fn) else run_state_repository.sync_list_live_runs()
     if live_runs:
-        live_run_items = [
+        live_run_items.extend(
             (str(run.get("run_id") or "").strip(), run)
             for run in live_runs
             if isinstance(run, dict)
-        ]
-    elif isinstance(runs, dict):
-        live_run_items = [(str(run_id or "").strip(), run) for run_id, run in runs.items()]
+        )
+    if isinstance(runs, dict):
+        live_run_items.extend((str(run_id or "").strip(), run) for run_id, run in runs.items())
     for run_id, run in live_run_items:
         if not isinstance(run, dict):
             continue

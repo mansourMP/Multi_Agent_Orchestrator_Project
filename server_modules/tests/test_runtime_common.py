@@ -70,6 +70,26 @@ class RuntimeCommonRateLimitTests(unittest.TestCase):
         self.assertIsNotNone(second)
         self.assertEqual(second.status_code, 429)
 
+    def test_fetch_workflow_snapshot_uses_control_plane_service(self) -> None:
+        with patch(
+            "server_modules.workflow_service.fetch_workflow_snapshot_sync",
+            return_value={"id": "wf-1", "workflowVersionId": "wfver-1", "definition": {"version": "v1"}},
+        ) as snapshot_mock:
+            payload = runtime_common.fetch_workflow_snapshot(
+                "wf-1",
+                workflow_version_id="wfver-1",
+                workspace_id="workspace-1",
+                tenant_id="tenant-1",
+            )
+
+        self.assertEqual(payload["workflowVersionId"], "wfver-1")
+        snapshot_mock.assert_called_once_with(
+            "wf-1",
+            workflow_version_id="wfver-1",
+            workspace_id="workspace-1",
+            tenant_id="tenant-1",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

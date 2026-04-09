@@ -6,7 +6,7 @@ from fastapi import Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from server_modules import agent_registry_repository
-from server_modules.auth import enforce_workspace_access
+from server_modules.auth import enforce_workspace_access, workspace_tenant_id
 from server_modules.agent_turn import AgentTurnRequest, TurnActor, agent_turn as execute_canonical_agent_turn
 from server_modules.api_contract import ApiAgentTurnResponse, normalize_agent_turn_result
 from server_modules.run_service import build_server_run_execution_services
@@ -67,7 +67,11 @@ def _workspace_id_from_query_or_body(
     query_workspace_id: Optional[str],
     body_workspace_id: Optional[str] = None,
 ) -> str:
-    return str(body_workspace_id or query_workspace_id or "").strip() or "default"
+    return str(body_workspace_id or query_workspace_id or "").strip()
+
+
+def _tenant_id_for_request(current_user: Any, workspace_id: str) -> str:
+    return workspace_tenant_id(current_user, workspace_id)
 
 
 def _run_execution_services():
@@ -99,7 +103,7 @@ def register_agent_registry_routes(app) -> None:
             _workspace_id_from_query_or_body(query_workspace_id=workspace_id),
             minimum_role="viewer",
         )
-        tenant_id = str((current_user or {}).get("tenant_id") or "default").strip() or "default"
+        tenant_id = _tenant_id_for_request(current_user, resolved_workspace_id)
         items = await agent_registry_repository.list_agent_definitions(
             tenant_id=tenant_id,
             workspace_id=resolved_workspace_id,
@@ -118,7 +122,7 @@ def register_agent_registry_routes(app) -> None:
             _workspace_id_from_query_or_body(query_workspace_id=workspace_id),
             minimum_role="viewer",
         )
-        tenant_id = str((current_user or {}).get("tenant_id") or "default").strip() or "default"
+        tenant_id = _tenant_id_for_request(current_user, resolved_workspace_id)
         record = await agent_registry_repository.get_agent_definition(
             definition_id,
             tenant_id=tenant_id,
@@ -139,7 +143,7 @@ def register_agent_registry_routes(app) -> None:
             _workspace_id_from_query_or_body(query_workspace_id=workspace_id),
             minimum_role="viewer",
         )
-        tenant_id = str((current_user or {}).get("tenant_id") or "default").strip() or "default"
+        tenant_id = _tenant_id_for_request(current_user, resolved_workspace_id)
         items = await agent_registry_repository.list_runtime_profiles(
             tenant_id=tenant_id,
             workspace_id=resolved_workspace_id,
@@ -158,7 +162,7 @@ def register_agent_registry_routes(app) -> None:
             _workspace_id_from_query_or_body(query_workspace_id=workspace_id),
             minimum_role="viewer",
         )
-        tenant_id = str((current_user or {}).get("tenant_id") or "default").strip() or "default"
+        tenant_id = _tenant_id_for_request(current_user, resolved_workspace_id)
         items = await agent_registry_repository.list_workspace_agent_installs(
             tenant_id=tenant_id,
             workspace_id=resolved_workspace_id,
@@ -177,7 +181,7 @@ def register_agent_registry_routes(app) -> None:
             _workspace_id_from_query_or_body(query_workspace_id=workspace_id),
             minimum_role="viewer",
         )
-        tenant_id = str((current_user or {}).get("tenant_id") or "default").strip() or "default"
+        tenant_id = _tenant_id_for_request(current_user, resolved_workspace_id)
         owner_user_id = str((current_user or {}).get("user_id") or "").strip() or None
         master_install = await agent_registry_repository.get_workspace_master_agent_install(
             tenant_id=tenant_id,
@@ -204,7 +208,12 @@ def register_agent_registry_routes(app) -> None:
                 "workspace_master": True,
             },
         )
-        thread_record = await thread_service.get_thread(thread_id, include_turns=True)
+        thread_record = await thread_service.get_thread(
+            thread_id,
+            tenant_id=tenant_id,
+            workspace_id=resolved_workspace_id,
+            include_turns=True,
+        )
         specialist_installs = await agent_registry_repository.list_workspace_agent_installs(
             tenant_id=tenant_id,
             workspace_id=resolved_workspace_id,
@@ -236,7 +245,7 @@ def register_agent_registry_routes(app) -> None:
             _workspace_id_from_query_or_body(query_workspace_id=None, body_workspace_id=body.workspace_id),
             minimum_role="member",
         )
-        tenant_id = str((current_user or {}).get("tenant_id") or "default").strip() or "default"
+        tenant_id = _tenant_id_for_request(current_user, resolved_workspace_id)
         install = await agent_registry_repository.create_workspace_agent_install(
             tenant_id=tenant_id,
             workspace_id=resolved_workspace_id,
@@ -277,7 +286,7 @@ def register_agent_registry_routes(app) -> None:
             _workspace_id_from_query_or_body(query_workspace_id=workspace_id),
             minimum_role="viewer",
         )
-        tenant_id = str((current_user or {}).get("tenant_id") or "default").strip() or "default"
+        tenant_id = _tenant_id_for_request(current_user, resolved_workspace_id)
         record = await agent_registry_repository.get_workspace_agent_install_bundle(
             install_id,
             tenant_id=tenant_id,
@@ -299,7 +308,7 @@ def register_agent_registry_routes(app) -> None:
             _workspace_id_from_query_or_body(query_workspace_id=None, body_workspace_id=body.workspace_id),
             minimum_role="member",
         )
-        tenant_id = str((current_user or {}).get("tenant_id") or "default").strip() or "default"
+        tenant_id = _tenant_id_for_request(current_user, resolved_workspace_id)
         install = await agent_registry_repository.update_workspace_agent_install(
             install_id,
             tenant_id=tenant_id,
@@ -342,7 +351,7 @@ def register_agent_registry_routes(app) -> None:
         install = compiled.get("install") if isinstance(compiled.get("install"), dict) else {}
         workspace_id = enforce_workspace_access(
             current_user,
-            str(install.get("workspace_id") or "").strip() or "default",
+            str(install.get("workspace_id") or "").strip(),
             tenant_id=str(install.get("tenant_id") or "").strip() or None,
             minimum_role="member",
         )
@@ -393,7 +402,7 @@ def register_agent_registry_routes(app) -> None:
             or None
         )
         turn_request = AgentTurnRequest(
-            tenant_id=str(install.get("tenant_id") or "").strip() or "default",
+            tenant_id=str(install.get("tenant_id") or "").strip(),
             workspace_id=workspace_id,
             thread_id=thread_id,
             session_id=session_id,

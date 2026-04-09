@@ -53,12 +53,15 @@ class RuntimeRunAccessServiceTests(unittest.TestCase):
 
         stamped = runtime_run_access_service.stamp_request_owner(
             request,
-            {"user_id": "user-1", "email": "user@example.com"},
+            {"user_id": "user-1", "email": "user@example.com", "role": "owner", "is_admin": True, "auth_type": "bearer"},
         )
 
         self.assertIs(stamped, request)
         self.assertEqual(stamped.metadata["owner_user_id"], "user-1")
         self.assertEqual(stamped.metadata["owner_email"], "user@example.com")
+        self.assertEqual(stamped.metadata["owner_role"], "owner")
+        self.assertTrue(stamped.metadata["owner_is_admin"])
+        self.assertEqual(stamped.metadata["auth_type"], "bearer")
 
 
 if __name__ == "__main__":

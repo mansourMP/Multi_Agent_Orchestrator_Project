@@ -8,9 +8,11 @@ import signal
 import subprocess
 import sentry_sdk
 import sys
+import tempfile
 import threading
 import time
 import uuid
+from contextlib import contextmanager
 from html import unescape
 from html.parser import HTMLParser
 from pathlib import Path
@@ -18,6 +20,11 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 from urllib import request as urlrequest
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
+
+try:
+    import fcntl
+except ImportError:  # pragma: no cover - non-posix fallback
+    fcntl = None  # type: ignore[assignment]
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
 if str(ROOT_DIR) not in sys.path:
@@ -1532,6 +1539,135 @@ def _is_text_file(path: Path) -> bool:
     return suffix in LOCAL_EXECUTION_TEXT_EXTENSIONS or not suffix
 
 
+def _resource_lock_path(target: Path) -> Path:
+    return target.parent / f".{target.name}.orion.lock"
+
+
+def _file_lock_timeout_seconds(operation: Dict[str, Any]) -> float:
+    raw = operation.get("lock_timeout_seconds")
+    if raw is None:
+        raw = os.getenv("ORION_LOCAL_FILE_LOCK_TIMEOUT_SECONDS")
+    try:
+        return max(0.1, float(raw))
+    except Exception:
+        return 3.0
+
+
+def _file_lock_poll_seconds(operation: Dict[str, Any]) -> float:
+    raw = operation.get("lock_retry_interval_seconds")
+    if raw is None:
+        raw = os.getenv("ORION_LOCAL_FILE_LOCK_POLL_SECONDS")
+    try:
+        return max(0.02, min(1.0, float(raw)))
+    except Exception:
+        return 0.1
+
+
+@contextmanager
+def _acquire_resource_lock(target: Path, operation: Dict[str, Any]) -> Any:
+    lock_path = _resource_lock_path(target)
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    timeout_seconds = _file_lock_timeout_seconds(operation)
+    poll_seconds = _file_lock_poll_seconds(operation)
+    deadline = time.monotonic() + timeout_seconds
+
+    if fcntl is None:  # pragma: no cover - non-posix fallback
+        while True:
+            try:
+                fd = os.open(str(lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+                break
+            except FileExistsError:
+                if time.monotonic() >= deadline:
+                    raise RuntimeError(
+                        f"File is currently locked by another local run: {target.name}. Retry this operation after the active write finishes."
+                    )
+                time.sleep(poll_seconds)
+        try:
+            yield fd
+        finally:
+            try:
+                os.close(fd)
+            except Exception:
+                pass
+            try:
+                lock_path.unlink()
+            except FileNotFoundError:
+                pass
+        return
+
+    handle = lock_path.open("a+", encoding="utf-8")
+    acquired = False
+    try:
+        while True:
+            try:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                acquired = True
+                break
+            except BlockingIOError:
+                if time.monotonic() >= deadline:
+                    raise RuntimeError(
+                        f"File is currently locked by another local run: {target.name}. Retry this operation after the active write finishes."
+                    )
+                time.sleep(poll_seconds)
+        yield handle
+    finally:
+        if acquired:
+            try:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+            except Exception:
+                pass
+        try:
+            handle.close()
+        except Exception:
+            pass
+
+
+def _fsync_directory(directory: Path) -> None:
+    if not hasattr(os, "O_RDONLY"):
+        return
+    try:
+        fd = os.open(str(directory), os.O_RDONLY)
+    except Exception:
+        return
+    try:
+        os.fsync(fd)
+    except Exception:
+        pass
+    finally:
+        try:
+            os.close(fd)
+        except Exception:
+            pass
+
+
+def _atomic_write_text(target: Path, content: str) -> None:
+    target.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(prefix=f".{target.name}.", suffix=".tmp", dir=str(target.parent))
+    tmp_path = Path(tmp_name)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp_path, target)
+        _fsync_directory(target.parent)
+    finally:
+        try:
+            if tmp_path.exists():
+                tmp_path.unlink()
+        except Exception:
+            pass
+
+
+def _append_text_with_fsync(target: Path, content: str) -> None:
+    target.parent.mkdir(parents=True, exist_ok=True)
+    with target.open("a", encoding="utf-8") as handle:
+        handle.write(content)
+        handle.flush()
+        os.fsync(handle.fileno())
+    _fsync_directory(target.parent)
+
+
 def _parse_operations(pack_inputs: Dict[str, Any], metadata: Optional[Dict[str, Any]] = None) -> Tuple[List[Dict[str, Any]], bool]:
     raw_ops = pack_inputs.get("operations") if isinstance(pack_inputs.get("operations"), list) else []
     continue_on_error = bool(pack_inputs.get("continue_on_error"))
@@ -1783,11 +1919,13 @@ def _run_file_operation(operation: Dict[str, Any], root: Path, metadata: Dict[st
         return action, artifact
 
     if mode == "delete":
-        if not target.exists():
-            raise RuntimeError(f"File not found: {relative_path}")
-        if target.is_dir():
-            raise RuntimeError("Directories cannot be deleted in V1.")
-        target.unlink()
+        with _acquire_resource_lock(target, operation):
+            if not target.exists():
+                raise RuntimeError(f"File not found: {relative_path}")
+            if target.is_dir():
+                raise RuntimeError("Directories cannot be deleted in V1.")
+            target.unlink()
+            _fsync_directory(target.parent)
         action = {
             "step_index": int(operation.get("__step_index__") or 0),
             "step_number": int(operation.get("__step_index__") or 0) + 1,
@@ -1810,14 +1948,14 @@ def _run_file_operation(operation: Dict[str, Any], root: Path, metadata: Dict[st
         return action, artifact
 
     content = _coerce_text_content(operation.get("content"))
-    if mode == "write":
-        overwrite = bool(operation.get("overwrite"))
-        if target.exists() and not overwrite:
-            raise RuntimeError(f"File already exists: {relative_path} (set overwrite=true to replace).")
-        target.write_text(content, encoding="utf-8")
-    else:
-        with target.open("a", encoding="utf-8") as handle:
-            handle.write(content)
+    with _acquire_resource_lock(target, operation):
+        if mode == "write":
+            overwrite = bool(operation.get("overwrite"))
+            if target.exists() and not overwrite:
+                raise RuntimeError(f"File already exists: {relative_path} (set overwrite=true to replace).")
+            _atomic_write_text(target, content)
+        else:
+            _append_text_with_fsync(target, content)
     action = {
         "step_index": int(operation.get("__step_index__") or 0),
         "step_number": int(operation.get("__step_index__") or 0) + 1,

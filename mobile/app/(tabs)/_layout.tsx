@@ -44,10 +44,10 @@ export default function TabsLayout() {
         },
         tabBarIcon: ({ color, size, focused }) => {
           const iconMap: Record<string, keyof typeof Ionicons.glyphMap> = {
-            kin: "chatbubble-ellipses",
+            chats: "chatbubble-ellipses",
             "apps/index": "grid",
             "home/index": "home",
-            "inbox/index": "mail",
+            "inbox/index": "notifications",
             "profile/index": "person-circle",
           };
           const icon = iconMap[route.name] ?? "ellipse";
@@ -56,11 +56,11 @@ export default function TabsLayout() {
       })}
     >
       <Tabs.Screen name="home/index" options={{ title: "Home" }} />
-      <Tabs.Screen name="kin" options={{ title: "KIN" }} />
-      <Tabs.Screen name="apps/index" options={{ title: "Apps" }} />
-      <Tabs.Screen name="inbox/index" options={{ title: "Inbox" }} />
+      <Tabs.Screen name="chats" options={{ title: "Chat" }} />
+      <Tabs.Screen name="apps/index" options={{ title: "Applications" }} />
+      <Tabs.Screen name="inbox/index" options={{ title: "Notifications" }} />
       <Tabs.Screen name="profile/index" options={{ title: "Profile" }} />
-      <Tabs.Screen name="chats" options={{ href: null }} />
+      <Tabs.Screen name="kin" options={{ href: null }} />
       <Tabs.Screen name="today/index" options={{ href: null }} />
       <Tabs.Screen name="spaces/index" options={{ href: null }} />
     </Tabs>

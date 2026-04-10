@@ -1,5 +1,17 @@
 import { ensureControlPlaneSession } from '@/lib/controlPlaneSession';
 import { formatExecutionTargetLabel, normalizeExecutionTarget } from '@/lib/executionTargets';
+import {
+    agentBiblePath,
+    agentChannelsPath,
+    agentConnectorsPath,
+    agentDetailPath,
+    agentManifestPath,
+    agentRuntimePath,
+    agentsCollectionPath,
+    agentsListPath,
+    agentSkillsPath,
+    installedAgentRunPath,
+} from '@/lib/agentApiPaths.js';
 
 /**
  * Enhanced fetch wrapper to handle JSON errors and provide better feedback
@@ -482,6 +494,7 @@ export type WorkspaceAgentInstallRecord = {
     status?: string;
     enabled?: boolean;
     runtime_profile_id?: string | null;
+    runtime_mode?: 'hosted_secure' | 'local_secure' | 'privileged_device';
     compiled_workflow_version_id?: string | null;
     root_folder_uri?: string | null;
     tool_toggles?: Record<string, boolean>;
@@ -520,6 +533,47 @@ export type MasterChatContextRecord = {
     master_install: WorkspaceAgentInstallRecord | null;
     specialist_installs: WorkspaceAgentInstallRecord[];
     thread?: Record<string, unknown> | null;
+    personal_context: {
+        recent_changes: Record<string, unknown>[];
+        summary: Record<string, unknown>;
+    } | null;
+    unified_memory: {
+        layer_order: string[];
+        summary: Record<string, unknown>;
+        boundary_map: Record<string, unknown>;
+    } | null;
+    runtime_attachments: {
+        deployment_mode?: string | null;
+        attachments: Array<Record<string, unknown>>;
+        selection_policy: Record<string, unknown>;
+    } | null;
+    scheduler: Record<string, unknown> | null;
+    recent_activity: {
+        items: Array<Record<string, unknown>>;
+        summary: Record<string, unknown>;
+    } | null;
+};
+
+export type ActivityTimelineRecord = {
+    id: string;
+    actor_type?: string | null;
+    actor_id?: string | null;
+    install_id?: string | null;
+    app_id?: string | null;
+    event_class?: string | null;
+    action?: string | null;
+    title?: string | null;
+    summary?: string | null;
+    created_at?: string | null;
+    review_required?: boolean;
+    artifacts: Array<Record<string, unknown>>;
+    metadata: Record<string, unknown>;
+};
+
+export type ActivityTimelinePayload = {
+    count: number;
+    summary: Record<string, unknown>;
+    items: ActivityTimelineRecord[];
 };
 
 function normalizeDefinitionList(payload: unknown): AgentDefinitionRecord[] {
@@ -552,6 +606,74 @@ function normalizeMasterChatContext(payload: unknown): MasterChatContextRecord {
         master_install: isRecord(record.master_install) ? record.master_install as WorkspaceAgentInstallRecord : null,
         specialist_installs: normalizeInstallList({ items: Array.isArray(record.specialist_installs) ? record.specialist_installs : [] }),
         thread: isRecord(record.thread) ? record.thread : null,
+        personal_context: isRecord(record.personal_context)
+            ? {
+                recent_changes: Array.isArray(record.personal_context.recent_changes)
+                    ? record.personal_context.recent_changes.filter((item): item is Record<string, unknown> => isRecord(item))
+                    : [],
+                summary: isRecord(record.personal_context.summary) ? record.personal_context.summary : {},
+            }
+            : null,
+        unified_memory: isRecord(record.unified_memory)
+            ? {
+                layer_order: Array.isArray(record.unified_memory.layer_order)
+                    ? record.unified_memory.layer_order.map((item) => String(item || '').trim()).filter(Boolean)
+                    : [],
+                summary: isRecord(record.unified_memory.summary) ? record.unified_memory.summary : {},
+                boundary_map: isRecord(record.unified_memory.boundary_map) ? record.unified_memory.boundary_map : {},
+            }
+            : null,
+        runtime_attachments: isRecord(record.runtime_attachments)
+            ? {
+                deployment_mode: typeof record.runtime_attachments.deployment_mode === 'string'
+                    ? record.runtime_attachments.deployment_mode
+                    : null,
+                attachments: Array.isArray(record.runtime_attachments.attachments)
+                    ? record.runtime_attachments.attachments.filter((item): item is Record<string, unknown> => isRecord(item))
+                    : [],
+                selection_policy: isRecord(record.runtime_attachments.selection_policy)
+                    ? record.runtime_attachments.selection_policy
+                    : {},
+            }
+            : null,
+        scheduler: isRecord(record.scheduler) ? record.scheduler : null,
+        recent_activity: isRecord(record.recent_activity)
+            ? {
+                items: Array.isArray(record.recent_activity.items)
+                    ? record.recent_activity.items.filter((item): item is Record<string, unknown> => isRecord(item))
+                    : [],
+                summary: isRecord(record.recent_activity.summary) ? record.recent_activity.summary : {},
+            }
+            : null,
+    };
+}
+
+function normalizeActivityTimeline(payload: unknown): ActivityTimelinePayload {
+    const record = isRecord(payload) ? payload : {};
+    const items = Array.isArray(record.items) ? record.items : [];
+    return {
+        count: Number(record.count) > 0 ? Number(record.count) : items.length,
+        summary: isRecord(record.summary) ? record.summary : {},
+        items: items
+            .filter((item): item is Record<string, unknown> => isRecord(item))
+            .map((item) => ({
+                id: String(item.id || '').trim(),
+                actor_type: typeof item.actor_type === 'string' ? item.actor_type : null,
+                actor_id: typeof item.actor_id === 'string' ? item.actor_id : null,
+                install_id: typeof item.install_id === 'string' ? item.install_id : null,
+                app_id: typeof item.app_id === 'string' ? item.app_id : null,
+                event_class: typeof item.event_class === 'string' ? item.event_class : null,
+                action: typeof item.action === 'string' ? item.action : null,
+                title: typeof item.title === 'string' ? item.title : null,
+                summary: typeof item.summary === 'string' ? item.summary : null,
+                created_at: typeof item.created_at === 'string' ? item.created_at : null,
+                review_required: item.review_required === true,
+                artifacts: Array.isArray(item.artifacts)
+                    ? item.artifacts.filter((artifact): artifact is Record<string, unknown> => isRecord(artifact))
+                    : [],
+                metadata: isRecord(item.metadata) ? item.metadata : {},
+            }))
+            .filter((item) => item.id.length > 0),
     };
 }
 
@@ -573,20 +695,27 @@ export async function fetchRuntimeProfiles(workspaceId: string): Promise<Runtime
 }
 
 export async function fetchAgents(workspaceId: string): Promise<WorkspaceAgentInstallRecord[]> {
-    const query = new URLSearchParams({ workspace_id: workspaceId });
-    const payload = await internalApiFetch(`/api/agents?${query.toString()}`);
+    const payload = await internalApiFetch(agentsListPath(workspaceId));
     return normalizeInstallList(payload);
 }
 
 export async function fetchAgentInstall(id: string, workspaceId: string): Promise<WorkspaceAgentInstallRecord> {
-    const query = new URLSearchParams({ workspace_id: workspaceId });
-    return internalApiFetch(`/api/agents/${encodeURIComponent(id)}?${query.toString()}`);
+    return internalApiFetch(agentDetailPath(id, workspaceId));
 }
 
 export async function fetchMasterChatContext(workspaceId: string): Promise<MasterChatContextRecord> {
     const query = new URLSearchParams({ workspace_id: workspaceId });
     const payload = await internalApiFetch(`/api/chat/master-context?${query.toString()}`);
     return normalizeMasterChatContext(payload);
+}
+
+export async function fetchActivityTimeline(workspaceId: string, limit = 8): Promise<ActivityTimelinePayload> {
+    const query = new URLSearchParams({
+        workspace_id: workspaceId,
+        limit: String(Math.max(1, Math.min(limit, 24))),
+    });
+    const payload = await internalApiFetch(`/api/activity/timeline?${query.toString()}`);
+    return normalizeActivityTimeline(payload);
 }
 
 export type AgentInstallUpsertPayload = {
@@ -606,8 +735,29 @@ export type AgentInstallUpsertPayload = {
     metadata?: Record<string, unknown>;
 };
 
+export type SpecialistCreatePayload = {
+    workspace_id: string;
+    label?: string;
+    manifest: Record<string, unknown>;
+    runtime_profile_id?: string;
+    runtime_mode?: 'hosted_secure' | 'local_secure' | 'privileged_device';
+    connector_bindings?: Record<string, unknown>;
+    channel_bindings?: Record<string, unknown>;
+    metadata?: Record<string, unknown>;
+};
+
+export type SpecialistManifestUpdatePayload = {
+    workspace_id: string;
+    manifest: Record<string, unknown>;
+    runtime_profile_id?: string;
+    runtime_mode?: 'hosted_secure' | 'local_secure' | 'privileged_device';
+    connector_bindings?: Record<string, unknown>;
+    channel_bindings?: Record<string, unknown>;
+    metadata?: Record<string, unknown>;
+};
+
 export async function createAgentInstall(payload: AgentInstallUpsertPayload): Promise<WorkspaceAgentInstallRecord> {
-    return internalApiFetch('/api/agents', {
+    return internalApiFetch(agentsCollectionPath(), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
@@ -615,15 +765,78 @@ export async function createAgentInstall(payload: AgentInstallUpsertPayload): Pr
 }
 
 export async function updateAgentInstall(id: string, payload: AgentInstallUpsertPayload): Promise<WorkspaceAgentInstallRecord> {
-    return internalApiFetch(`/api/agents/${encodeURIComponent(id)}`, {
+    return internalApiFetch(`${agentsCollectionPath()}/${encodeURIComponent(id)}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
     });
 }
 
+export async function createSpecialistAgent(payload: SpecialistCreatePayload): Promise<WorkspaceAgentInstallRecord> {
+    return internalApiFetch(agentsCollectionPath(), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+    });
+}
+
+export async function updateSpecialistManifest(id: string, payload: SpecialistManifestUpdatePayload): Promise<WorkspaceAgentInstallRecord> {
+    return internalApiFetch(agentManifestPath(id), {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+    });
+}
+
+export async function saveSpecialistBible(id: string, payload: { workspace_id: string; bible: string }): Promise<WorkspaceAgentInstallRecord> {
+    return internalApiFetch(agentBiblePath(id), {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+    });
+}
+
+export async function saveSpecialistSkillBindings(id: string, payload: { workspace_id: string; skill_ids: string[] }): Promise<WorkspaceAgentInstallRecord> {
+    return internalApiFetch(agentSkillsPath(id), {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+    });
+}
+
+export async function saveSpecialistConnectorBindings(id: string, payload: { workspace_id: string; connector_bindings: Record<string, unknown> }): Promise<WorkspaceAgentInstallRecord> {
+    return internalApiFetch(agentConnectorsPath(id), {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+    });
+}
+
+export async function saveSpecialistChannelBindings(id: string, payload: { workspace_id: string; channel_bindings: Record<string, unknown> }): Promise<WorkspaceAgentInstallRecord> {
+    return internalApiFetch(agentChannelsPath(id), {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+    });
+}
+
+export async function saveSpecialistRuntimeProfile(
+    id: string,
+    payload: {
+        workspace_id: string;
+        runtime_profile_id?: string;
+        runtime_mode: 'hosted_secure' | 'local_secure' | 'privileged_device';
+    },
+): Promise<WorkspaceAgentInstallRecord> {
+    return internalApiFetch(agentRuntimePath(id), {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+    });
+}
+
 export async function runInstalledAgent(installId: string, payload: Record<string, unknown> = {}) {
-    return internalApiFetch(`/api/agents/${encodeURIComponent(installId)}/run`, {
+    return internalApiFetch(installedAgentRunPath(installId), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),

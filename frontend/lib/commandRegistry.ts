@@ -74,12 +74,12 @@ const BASE_COMMANDS: PlatformCommand[] = [
     action: { type: 'navigate', href: '/agents' },
   },
   {
-    id: 'nav.connected_systems',
-    title: 'Open Connected Systems',
-    description: 'Manage connectors, credentials, machines, and runtime access from Settings.',
+    id: 'nav.integrations',
+    title: 'Go to Integrations',
+    description: 'Manage connectors, credentials, machines, health, and runtime access.',
     group: 'Navigate',
-    keywords: ['integrations', 'credentials', 'connectors', 'machines', 'health', 'settings'],
-    action: { type: 'navigate', href: '/settings?section=integrations' },
+    keywords: ['integrations', 'credentials', 'connectors', 'machines', 'health', 'runtime'],
+    action: { type: 'navigate', href: '/integrations' },
   },
   {
     id: 'nav.settings',

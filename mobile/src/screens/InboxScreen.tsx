@@ -50,7 +50,7 @@ export default function InboxScreen() {
 
   const openKin = React.useCallback(() => {
     const sessionId = ensureSessionForAgent(kin);
-    router.push(`/kin/${sessionId}`);
+    router.push(`/chats/${sessionId}`);
   }, [ensureSessionForAgent, kin, router]);
 
   return (
@@ -60,14 +60,15 @@ export default function InboxScreen() {
       showsVerticalScrollIndicator={false}
     >
       <PrimaryScreenHeader
-        title="Inbox"
-        subtitle="Approvals, completed work, and saved outputs in one trust layer."
+        title="Notifications"
+        subtitle="Alerts, approvals, completed work, and saved outputs in one trust layer."
       />
 
       <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 10 }}>
         <MiniAction label="Approvals" onPress={() => router.push("/approvals" as never)} />
         <MiniAction label="Artifacts" onPress={() => router.push("/artifacts" as never)} />
         <MiniAction label="Machines" onPress={() => router.push("/machines" as never)} />
+        <MiniAction label="Push settings" onPress={() => router.push("/notifications" as never)} />
       </View>
 
       {!connected ? (
@@ -81,9 +82,9 @@ export default function InboxScreen() {
             backgroundColor: theme.colors.surface,
           }}
         >
-          <Text style={{ fontSize: 16, fontFamily: "DMSans_700Bold", color: theme.colors.text }}>Connect your core first</Text>
+          <Text style={{ fontSize: 16, fontFamily: "DMSans_700Bold", color: theme.colors.text }}>Pair and connect first</Text>
           <Text style={{ marginTop: 8, fontSize: 14, lineHeight: 22, color: theme.colors.textSecondary }}>
-            Inbox becomes your trust layer once KIN can sync runs, approvals, and outputs from your private runtime.
+            Notifications become your trust layer once Sage can sync runs, approvals, and outputs from your private runtime.
           </Text>
           <TouchableOpacity
             onPress={() => router.push("/session")}
@@ -98,7 +99,7 @@ export default function InboxScreen() {
               justifyContent: "center",
             }}
           >
-            <Text style={{ color: "#FFFFFF", fontSize: 13, fontWeight: "700" }}>Connected Accounts</Text>
+            <Text style={{ color: "#FFFFFF", fontSize: 13, fontWeight: "700" }}>Pair &amp; Connect</Text>
           </TouchableOpacity>
         </View>
       ) : null}
@@ -111,11 +112,11 @@ export default function InboxScreen() {
             <ActivityCard
               key={approval.approval_id}
               title={approval.action}
-              subtitle={approval.summary || "KIN is waiting for approval before it continues."}
+              subtitle={approval.summary || "Sage is waiting for approval before it continues."}
               meta={formatRelativeTime(approval.requested_at)}
               status="Needs approval"
               capability={capability}
-              actionLabel="Review in KIN"
+              actionLabel="Review in Chat"
               onPress={openKin}
             />
           );
@@ -130,12 +131,12 @@ export default function InboxScreen() {
           return (
             <ActivityCard
               key={run.run_id}
-              title={run.summary || "KIN is working on a request."}
+              title={run.summary || "Sage is working on a request."}
               subtitle={`Status: ${formatRunStatus(run.status)}`}
               meta={formatRelativeTime(run.started_at)}
               status={formatRunStatus(run.status)}
               capability={capability}
-              actionLabel="Open KIN"
+              actionLabel="Open Chat"
               onPress={openKin}
             />
           );
@@ -155,7 +156,7 @@ export default function InboxScreen() {
               meta={formatRelativeTime(run.started_at)}
               status={formatRunStatus(run.status)}
               capability={capability}
-              actionLabel="Open KIN"
+              actionLabel="Open Chat"
               onPress={openKin}
             />
           );

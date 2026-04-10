@@ -34,6 +34,13 @@ export async function getSession(): Promise<MobileSession | null> {
     workspaceId: parsed?.workspaceId || "default",
     platformUrl: parsed?.platformUrl,
     platformKey: parsed?.platformKey,
+    pairingMethod: parsed?.pairingMethod,
+    pairedAt: parsed?.pairedAt,
+    pairingId: parsed?.pairingId,
+    pairingExpiresAt: parsed?.pairingExpiresAt,
+    pairingLabel: parsed?.pairingLabel,
+    deviceId: parsed?.deviceId,
+    sessionLinkedAt: parsed?.sessionLinkedAt,
   };
 
   if (legacyRuntimeUrl || legacyRuntimeKey) {

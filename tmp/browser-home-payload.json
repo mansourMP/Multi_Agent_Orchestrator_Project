@@ -1,7 +1,0 @@
-{
-  "mode": "capture_page",
-  "url": "http://localhost:3000/",
-  "screenshotPath": "/Users/mansur/Multi_Agent_Orchestrator_Project/tmp/home-qa.png",
-  "settleMs": 1800,
-  "timeoutMs": 45000
-}

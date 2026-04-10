@@ -1,12 +1,13 @@
-import { Stack, router } from "expo-router";
+import { Stack, router, useSegments } from "expo-router";
 import { StatusBar } from "expo-status-bar";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { useEffect } from "react";
+import { AppState } from "react-native";
 import * as Notifications from "expo-notifications";
 import * as Font from 'expo-font';
 import * as SplashScreen from 'expo-splash-screen';
-import { QueryClientProvider } from "@tanstack/react-query";
+import { QueryClientProvider, useQueryClient } from "@tanstack/react-query";
 import { 
   DMSans_400Regular, 
   DMSans_500Medium, 
@@ -18,15 +19,22 @@ import {
 } from '@expo-google-fonts/fraunces';
 
 import { initDatabase } from "@/src/services/db";
-import { SessionProvider } from "@/src/lib/session-context";
-import { useSessionState } from "@/src/lib/session-context";
+import { SessionProvider, useSessionState } from "@/src/lib/session-context";
 import { ThemeProvider } from "@/src/theme";
 import { queryClient } from "@/src/lib/queryClient";
 import {
   configureNotificationChannelAsync,
   getNotificationHref,
+  registerForPushNotificationsAsync,
   syncRuntimeNotifications,
 } from "@/src/lib/notifications";
+import {
+  ensureMobileDeviceId,
+  flushQueuedPersonalContextEvents,
+  proposeBoundedWakeup,
+  recordRoutePresence,
+  rememberLinkedSession,
+} from "@/src/lib/mobile-engine";
 
 SplashScreen.preventAutoHideAsync();
 
@@ -171,31 +179,101 @@ export default function RootLayout() {
 }
 
 function MobileRuntimeNotificationBridge() {
-  const { session } = useSessionState();
+  const { session, saveSession } = useSessionState();
+  const queryClient = useQueryClient();
+  const segments = useSegments();
+  const routeKey = getRouteKeyFromSegments(segments);
+
+  useEffect(() => {
+    void recordRoutePresence(routeKey);
+    return () => {
+      void recordRoutePresence(null);
+    };
+  }, [routeKey]);
 
   useEffect(() => {
     if (!session?.runtimeUrl || !session?.runtimeKey) return;
 
     let cancelled = false;
-    const runSync = async () => {
-      if (cancelled) return;
+    let syncing = false;
+    const syncSession = async (trigger: "startup" | "interval" | "resume") => {
+      if (cancelled || syncing) return;
+      syncing = true;
       try {
-        await syncRuntimeNotifications(session);
+        await recordRoutePresence(routeKey);
+        const deviceId = await ensureMobileDeviceId(session.deviceId);
+        const linkedSession = deviceId && deviceId !== session.deviceId
+          ? {
+              ...session,
+              deviceId,
+              sessionLinkedAt: session.sessionLinkedAt || new Date().toISOString(),
+            }
+          : session;
+        if (linkedSession !== session) {
+          await saveSession(linkedSession);
+        }
+        await rememberLinkedSession(linkedSession);
+        await registerForPushNotificationsAsync(linkedSession);
+        const syncResult = await syncRuntimeNotifications(linkedSession);
+        const flushResult = await flushQueuedPersonalContextEvents(linkedSession);
+        if (syncResult.highPriorityCount > 0) {
+          await proposeBoundedWakeup(linkedSession, {
+            summary: `Review ${syncResult.highPriorityCount} high-priority mobile changes.`,
+            reason: "mobile_runtime_attention",
+            dueAt: new Date(Date.now() + 2 * 60 * 1000).toISOString(),
+            payload: {
+              trigger,
+              fresh_notifications: syncResult.freshCount,
+              queued_context_events: syncResult.queuedContextEventCount,
+              remaining_context_events: flushResult.remainingCount,
+            },
+            policyContext: {
+              source: "mobile_engine",
+              bounded: true,
+              route_key: routeKey,
+            },
+          });
+        }
+        await queryClient.invalidateQueries({ queryKey: ["mobile"] });
       } catch (error) {
         console.warn("Notification sync failed", error);
+      } finally {
+        syncing = false;
       }
     };
 
-    void runSync();
+    void syncSession("startup");
     const interval = setInterval(() => {
-      void runSync();
-    }, 15000);
+      void syncSession("interval");
+    }, 30000);
+
+    const appStateSubscription = AppState.addEventListener("change", (nextState) => {
+      if (nextState === "active") {
+        void recordRoutePresence(routeKey);
+        void syncSession("resume");
+        return;
+      }
+      void recordRoutePresence(null);
+    });
 
     return () => {
       cancelled = true;
       clearInterval(interval);
+      appStateSubscription.remove();
     };
-  }, [session]);
+  }, [queryClient, routeKey, saveSession, session]);
 
   return null;
+}
+
+function getRouteKeyFromSegments(segments: string[]) {
+  const visible = segments.filter((segment) => !segment.startsWith("(") && segment !== "_layout");
+  const first = String(visible[0] || "home").toLowerCase();
+  if (first === "index") return "home";
+  if (first === "chats") return "chats";
+  if (first === "apps") return "applications";
+  if (first === "inbox" || first === "notifications") return "notifications";
+  if (first === "profile") return "profile";
+  if (first === "home") return "home";
+  return first || "home";
 }

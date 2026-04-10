@@ -62,6 +62,55 @@ export type NotificationSummary = {
   read_at?: string;
 };
 
+export type RuntimeAttachmentSummary = {
+  attachment_id?: string;
+  attachment_kind?: string;
+  label?: string;
+  runtime_id?: string;
+  machine_id?: string;
+  online?: boolean;
+  healthy?: boolean;
+  status?: string;
+  control_state?: string;
+  runtime_profile_label?: string;
+  note?: string;
+};
+
+export type ActivityArtifactSummary = {
+  path?: string;
+  label?: string;
+  preview_url?: string;
+  review_required?: boolean;
+};
+
+export type ActivitySummary = {
+  id: string;
+  actor_type?: string;
+  actor_id?: string;
+  event_class?: string;
+  action?: string;
+  title?: string;
+  summary?: string;
+  created_at?: string;
+  review_required?: boolean;
+  artifacts: ActivityArtifactSummary[];
+};
+
+export type UnifiedMemorySummary = {
+  layerOrder: string[];
+  summary: Record<string, any>;
+  boundaryMap: {
+    neverSyncByDefault: string[];
+    cloudSyncedByDefault: string[];
+    explicitOptIn: string[];
+  };
+};
+
+export type SchedulerSummary = {
+  policy: Record<string, any>;
+  wakeQueue: Record<string, any>;
+};
+
 export type AppRecordSource = "core" | "platform" | "preview";
 
 export type AppRecord = {
@@ -86,6 +135,13 @@ export type MobileSession = {
   workspaceId: string;
   platformUrl?: string;
   platformKey?: string;
+  pairingMethod?: "manual" | "pairing_qr" | "pairing_code";
+  pairedAt?: string;
+  pairingId?: string;
+  pairingExpiresAt?: string;
+  pairingLabel?: string;
+  deviceId?: string;
+  sessionLinkedAt?: string;
 };
 
 export type MobileSpace = {

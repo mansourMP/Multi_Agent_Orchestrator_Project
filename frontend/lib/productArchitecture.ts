@@ -2,6 +2,7 @@ export type ProductSectionId =
   | 'sage'
   | 'runs'
   | 'agents'
+  | 'integrations'
   | 'usage'
   | 'account'
   | 'settings';
@@ -10,6 +11,7 @@ export type ProductShapeRole =
   | 'master_agent'
   | 'operations'
   | 'specialists'
+  | 'capabilities'
   | 'utility';
 
 export type CanonicalProductObjectId =
@@ -82,6 +84,13 @@ export const PRODUCT_SECTIONS: ProductSectionDefinition[] = [
     summary: 'Creation Forge, specialist channels, and owner refinement.',
   },
   {
+    id: 'integrations',
+    label: 'Integrations',
+    href: '/integrations',
+    role: 'capabilities',
+    summary: 'Connected tools, credentials, machines, and runtime health.',
+  },
+  {
     id: 'usage',
     label: 'Usage',
     href: '/usage',
@@ -108,6 +117,7 @@ export const PRIMARY_NAV_SECTION_IDS: ProductSectionId[] = [
   'sage',
   'runs',
   'agents',
+  'integrations',
 ];
 
 export const UTILITY_NAV_SECTION_IDS: ProductSectionId[] = [
@@ -177,7 +187,7 @@ export const CANONICAL_PRODUCT_OBJECTS: CanonicalProductObject[] = [
     id: 'integration',
     label: 'Integration',
     whatItIs: 'A connected system, channel, credentialed provider, or workspace capability.',
-    navOwner: 'settings',
+    navOwner: 'integrations',
     linksTo: ['agent', 'workflow', 'run', 'machine_runtime_target'],
     isNot: 'It is not the place where Sage or a specialist is configured.',
   },
@@ -185,7 +195,7 @@ export const CANONICAL_PRODUCT_OBJECTS: CanonicalProductObject[] = [
     id: 'machine_runtime_target',
     label: 'Machine / Runtime Target',
     whatItIs: 'A local or hosted execution destination the workspace can use to perform work.',
-    navOwner: 'settings',
+    navOwner: 'integrations',
     linksTo: ['integration', 'run', 'approval'],
     isNot: 'It is not a standalone product surface.',
   },
@@ -232,8 +242,8 @@ export const PRODUCT_ROUTE_RULES: ProductRouteRule[] = [
   { section: 'agents', title: 'Agents', exact: ['/agents', '/store', '/library'] },
   { section: 'agents', title: 'Agent Configuration', prefixes: ['/agents/'] },
   { section: 'agents', title: 'Blueprint Import', exact: ['/workflows', '/builder', '/skills', '/solutions', '/apps'] },
-  { section: 'settings', title: 'Connected Systems', exact: ['/integrations', '/connectors', '/credentials', '/connect-ai'] },
-  { section: 'settings', title: 'Runtime Targets', exact: ['/machines', '/health', '/setup'] },
+  { section: 'integrations', title: 'Integrations', exact: ['/integrations', '/connectors', '/credentials', '/connect-ai'] },
+  { section: 'integrations', title: 'Runtime Targets', exact: ['/machines', '/health', '/setup'] },
   { section: 'usage', title: 'Usage', exact: ['/usage'] },
   { section: 'account', title: 'Account', exact: ['/account'] },
   { section: 'settings', title: 'Settings', exact: ['/settings', '/workspace', '/team', '/admin', '/feedback'] },
@@ -261,13 +271,23 @@ export const PRODUCT_SECTION_BOUNDARIES: ProductSectionBoundary[] = [
     ],
   },
   {
-    sectionId: 'settings',
-    owns: ['Connectors', 'Credentials', 'Machines', 'Health', 'Runtime availability', 'Governance'],
-    firstClass: ['Connect tool', 'Check credential health', 'Review machine availability', 'Inspect runtime status'],
+    sectionId: 'integrations',
+    owns: ['Connectors', 'Credentials', 'Machines', 'Health', 'Runtime availability'],
+    firstClass: ['Connect tool', 'Review credentials', 'Check machine availability', 'Inspect runtime status'],
     notHere: ['Marketplace browsing', 'Sage conversation history', 'Customer channel creation'],
     relatedLinks: [
+      { label: 'Agents', href: '/agents', reason: 'See which specialists depend on those capabilities.' },
+      { label: 'Runs', href: '/runs', reason: 'Inspect work blocked by capability health or missing access.' },
+    ],
+  },
+  {
+    sectionId: 'settings',
+    owns: ['Workspace defaults', 'Policy', 'Governance', 'Advanced configuration'],
+    firstClass: ['Review workspace policy', 'Adjust defaults', 'Manage governance', 'Update advanced configuration'],
+    notHere: ['Connected tool operations', 'Runtime target health', 'Reusable blueprint browsing'],
+    relatedLinks: [
+      { label: 'Integrations', href: '/integrations', reason: 'Open connected systems, runtime targets, and capability health.' },
       { label: 'Agents', href: '/agents', reason: 'See which specialists use those capabilities.' },
-      { label: 'Runs', href: '/runs', reason: 'Inspect work that is blocked by capability health.' },
     ],
   },
 ];

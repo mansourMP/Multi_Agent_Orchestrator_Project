@@ -30,6 +30,7 @@ import {
 } from '@/app/page.catalog';
 import { ensureControlPlaneSession } from '@/lib/controlPlaneSession';
 import AiAccountsPanel from '@/components/orion/connections/AiAccountsPanel';
+import { usePlatformShell } from '@/components/orion/PlatformShellContext';
 import { ConnectorLogoMark } from '@/components/orion/connections/ConnectionMarks';
 import { PageFilterBar } from '@/components/orion/page/PageFilterBar';
 import { PageHero } from '@/components/orion/page/PageHero';
@@ -38,7 +39,6 @@ import SectionOwnershipPanel from '@/components/orion/page/SectionOwnershipPanel
 import { PageSection } from '@/components/orion/page/PageSection';
 import { PageStatePanel } from '@/components/orion/page/PageStatePanel';
 
-const WORKSPACE_ID = 'default';
 const RUNTIME_TIMEOUT_MS = 3500;
 
 type ConnectorRow = {
@@ -843,6 +843,7 @@ function connectorTierLabel(tier: ConnectorRoadmapTier): string {
 function CredentialsPageContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
+  const { activeWorkspaceId, workspaceAccess, workspaceLoading, status } = usePlatformShell();
   const [connectors, setConnectors] = useState<ConnectorRow[]>([]);
   const [catalogViewFilter, setCatalogViewFilter] = useState<CatalogViewFilter>('all');
   const [loading, setLoading] = useState(true);
@@ -878,6 +879,10 @@ function CredentialsPageContent() {
     const scopedWindow = window as typeof window & { orionDesktop?: DesktopBridge; empyralisDesktop?: DesktopBridge };
     return scopedWindow.orionDesktop || scopedWindow.empyralisDesktop || null;
   }, []);
+  const workspaceId = useMemo(() => {
+    const selected = workspaceAccess.find((item) => item.workspaceId === activeWorkspaceId)?.workspaceId;
+    return String(selected || workspaceAccess[0]?.workspaceId || '').trim();
+  }, [activeWorkspaceId, workspaceAccess]);
 
   const controlPlaneFetch = useCallback(async (input: string, init?: RequestInit) => {
     await ensureControlPlaneSession();
@@ -891,12 +896,23 @@ function CredentialsPageContent() {
   }, []);
 
   const loadConnectors = useCallback(async () => {
+    if (workspaceLoading) return;
+    if (!workspaceId) {
+      setConnectors([]);
+      setLoading(false);
+      setPageError(
+        status.authRequired
+          ? String(status.authMessage || 'Continue in your browser to sign in before loading integrations.')
+          : 'No workspace is available for integrations yet.',
+      );
+      return;
+    }
     setLoading(true);
     setPageError('');
     try {
       const controller = new AbortController();
       const timeoutId = window.setTimeout(() => controller.abort(), RUNTIME_TIMEOUT_MS);
-      const res = await controlPlaneFetch(`/api/control-plane/connectors?workspace_id=${encodeURIComponent(WORKSPACE_ID)}`, {
+      const res = await controlPlaneFetch(`/api/control-plane/connectors?workspace_id=${encodeURIComponent(workspaceId)}`, {
         signal: controller.signal,
       });
       window.clearTimeout(timeoutId);
@@ -924,7 +940,7 @@ function CredentialsPageContent() {
     } finally {
       setLoading(false);
     }
-  }, [controlPlaneFetch]);
+  }, [controlPlaneFetch, status.authMessage, status.authRequired, workspaceId, workspaceLoading]);
 
   useEffect(() => {
     void loadConnectors();
@@ -1221,7 +1237,7 @@ function CredentialsPageContent() {
   async function patchConnector(id: string, payload: { label?: string; metadata?: Record<string, unknown> }) {
     const res = await controlPlaneFetch(`/api/control-plane/connectors/${encodeURIComponent(id)}`, {
       method: 'PATCH',
-      body: JSON.stringify({ workspace_id: WORKSPACE_ID, ...payload }),
+      body: JSON.stringify({ workspace_id: workspaceId, ...payload }),
     });
     const raw = await res.text().catch(() => '');
     const body = raw ? JSON.parse(raw) : {};
@@ -1267,7 +1283,7 @@ function CredentialsPageContent() {
     setBusy(row.id, 'test');
     setPageError('');
     try {
-      const res = await controlPlaneFetch(`/api/control-plane/connectors/${encodeURIComponent(row.id)}/test?workspace_id=${encodeURIComponent(WORKSPACE_ID)}`, {
+      const res = await controlPlaneFetch(`/api/control-plane/connectors/${encodeURIComponent(row.id)}/test?workspace_id=${encodeURIComponent(workspaceId)}`, {
         method: 'POST',
       });
       const raw = await res.text().catch(() => '');
@@ -1395,7 +1411,7 @@ function CredentialsPageContent() {
       },
     }));
     try {
-      const params = new URLSearchParams({ workspace_id: WORKSPACE_ID });
+      const params = new URLSearchParams({ workspace_id: workspaceId });
       if (nextPath && nextPath !== 'onedrive:/') params.set('path', nextPath);
       const res = await controlPlaneFetch(`/api/connectors/${encodeURIComponent(row.id)}/microsoft-drive?${params.toString()}`);
       const raw = await res.text().catch(() => '');
@@ -1437,7 +1453,7 @@ function CredentialsPageContent() {
       },
     }));
     try {
-      const params = new URLSearchParams({ workspace_id: WORKSPACE_ID });
+      const params = new URLSearchParams({ workspace_id: workspaceId });
       if (nextPath && nextPath !== 'gdrive:/') params.set('path', nextPath);
       const res = await controlPlaneFetch(`/api/control-plane/connectors/${encodeURIComponent(row.id)}/google-drive?${params.toString()}`);
       const raw = await res.text().catch(() => '');
@@ -1521,7 +1537,7 @@ function CredentialsPageContent() {
       const title = `${label} ${new Date().toLocaleDateString()}`;
       const path = kind === 'doc' ? 'google-doc' : 'google-sheet';
       const res = await controlPlaneFetch(
-        `/api/control-plane/connectors/${encodeURIComponent(row.id)}/${path}?workspace_id=${encodeURIComponent(WORKSPACE_ID)}`,
+        `/api/control-plane/connectors/${encodeURIComponent(row.id)}/${path}?workspace_id=${encodeURIComponent(workspaceId)}`,
         {
           method: 'POST',
           body: JSON.stringify({ title }),
@@ -1545,7 +1561,7 @@ function CredentialsPageContent() {
     setBusy(row.id, 'remove');
     setPageError('');
     try {
-      const res = await controlPlaneFetch(`/api/control-plane/connectors/${encodeURIComponent(row.id)}?workspace_id=${encodeURIComponent(WORKSPACE_ID)}`, {
+      const res = await controlPlaneFetch(`/api/control-plane/connectors/${encodeURIComponent(row.id)}?workspace_id=${encodeURIComponent(workspaceId)}`, {
         method: 'DELETE',
       });
       const raw = await res.text().catch(() => '');
@@ -1785,7 +1801,7 @@ function buildCredentialsPayload(state: ConnectModalState): Record<string, unkno
         body: JSON.stringify({
           label: form.label.trim() || connectorLabel(form.connector),
           connector: form.connector,
-          workspace_id: WORKSPACE_ID,
+          workspace_id: workspaceId,
           credentials: buildCredentialsPayload(form),
           metadata: form.agentRole ? { agent_role: form.agentRole } : {},
         }),
@@ -2316,7 +2332,19 @@ function buildCredentialsPayload(state: ConnectModalState): Record<string, unkno
         description="Manage saved AI accounts and choose what Platform should use by default."
         className="orion-home-list-panel"
       >
-        <AiAccountsPanel workspaceId={WORKSPACE_ID} />
+        {workspaceId ? (
+          <AiAccountsPanel workspaceId={workspaceId} />
+        ) : (
+          <PageStatePanel
+            variant={status.authRequired ? 'error' : 'empty'}
+            title={status.authRequired ? 'Sign in required' : 'Workspace unavailable'}
+            copy={
+              status.authRequired
+                ? String(status.authMessage || 'Continue in your browser to sign in before managing integrations.')
+                : 'A valid workspace scope is required before integrations can load.'
+            }
+          />
+        )}
       </PageSection>
 
       <div className="orion-flat-section">

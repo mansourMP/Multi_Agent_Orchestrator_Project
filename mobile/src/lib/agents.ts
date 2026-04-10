@@ -12,12 +12,12 @@ export type AgentThread = {
 
 export const PRIMARY_AGENT: AgentThread = {
   id: "assistant",
-  label: "KIN",
+  label: "Sage",
   runtimeRole: "private-assistant",
-  subtitle: "One visible intelligence with hidden specialist workers.",
+  subtitle: "Pinned master channel for your workspace, context, and specialist routing.",
   icon: "sparkles",
   avatarColor: "#111827",
-  intro: "I can coordinate work across apps, runs, and approvals without exposing a visible bot roster.",
+  intro: "I can coordinate work across specialists, approvals, context changes, and active runs without leaking power between them.",
 };
 
 const BUILT_IN_AGENTS: AgentThread[] = [
@@ -73,6 +73,19 @@ function normalize(value: string) {
   return value.trim().toLowerCase();
 }
 
+function pickTemplate(value: string) {
+  const token = normalize(value);
+  return (
+    BUILT_IN_AGENTS.find((item) => normalize(item.id) === token || normalize(item.label) === token) ||
+    BUILT_IN_AGENTS.find((item) => token.includes("finance") && item.id === "finance-agent") ||
+    BUILT_IN_AGENTS.find((item) => token.includes("health") && item.id === "health-agent") ||
+    BUILT_IN_AGENTS.find((item) => token.includes("travel") && item.id === "travel-agent") ||
+    BUILT_IN_AGENTS.find((item) => token.includes("research") && item.id === "research-agent") ||
+    BUILT_IN_AGENTS.find((item) => token.includes("assistant") && item.id === "personal-assistant") ||
+    null
+  );
+}
+
 function builtInMatches(agent: Pick<AgentSummary, "id" | "label">, target: AgentThread) {
   const id = normalize(agent.id);
   const label = normalize(agent.label);
@@ -126,6 +139,30 @@ export function getBuiltInAgents() {
 
 export function getPrimaryAgent() {
   return PRIMARY_AGENT;
+}
+
+export function getFallbackSpecialists() {
+  return BUILT_IN_AGENTS.filter((agent) => agent.id !== PRIMARY_AGENT.id);
+}
+
+export function buildAgentThreadFromInstall(install: Record<string, any>): AgentThread {
+  const metadata = install?.metadata && typeof install.metadata === "object" ? install.metadata : {};
+  const manifest = metadata.manifest && typeof metadata.manifest === "object" ? metadata.manifest : {};
+  const identity = manifest.identity && typeof manifest.identity === "object" ? manifest.identity : {};
+  const label = String(install?.label || identity.name || "Specialist").trim();
+  const role = String(identity.role || install?.runtime_role || install?.status || "").trim();
+  const summary = String(identity.summary || role || "Specialist channel").trim();
+  const template = pickTemplate(`${label} ${role}`) || getFallbackSpecialists()[0] || PRIMARY_AGENT;
+
+  return {
+    id: String(install?.id || template.id || label).trim(),
+    label,
+    runtimeRole: role || template.runtimeRole,
+    subtitle: summary || template.subtitle,
+    icon: template.icon,
+    avatarColor: template.avatarColor,
+    intro: template.intro,
+  };
 }
 
 export function buildAgentDirectory(discovered: AgentSummary[] = []) {

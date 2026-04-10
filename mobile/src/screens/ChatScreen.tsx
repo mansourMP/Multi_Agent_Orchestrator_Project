@@ -8,6 +8,7 @@ import {
   Modal,
   KeyboardAvoidingView,
   Platform,
+  ScrollView,
   TouchableOpacity,
 } from "react-native";
 import * as Haptics from "expo-haptics";
@@ -18,10 +19,15 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { TransientBanner } from "@/src/components/TransientBanner";
 import { InputBar } from "@/src/components/InputBar";
 import { AgentPayload } from "@/src/components/Renderer";
-import { useChatStore } from "@/src/stores/chatStore";
-import { useSessionState } from "@/src/lib/session-context";
+import {
+  buildAgentThreadFromInstall,
+  getPrimaryAgent,
+  type AgentThread,
+} from "@/src/lib/agents";
 import { mobileApi } from "@/src/lib/api";
-import { getPrimaryAgent } from "@/src/lib/agents";
+import { useMobileChatContext, useMobileOverviewData } from "@/src/lib/mobile-data";
+import { useSessionState } from "@/src/lib/session-context";
+import { useChatStore, type ChatSession } from "@/src/stores/chatStore";
 import { useAppTheme as useTheme } from "@/src/theme/useAppTheme";
 import { useTransientBanner } from "@/src/lib/useTransientBanner";
 import { useAppContextStore } from "@/src/stores/appContextStore";
@@ -39,40 +45,6 @@ type ApprovalCard = {
 };
 
 const SPACING = { sm: 8, md: 16, lg: 24 };
-
-function describeRunPhase(run: any) {
-  const status = String(run?.status ?? "").toLowerCase();
-  const route = String(run?.route?.selected ?? run?.route?.requested ?? "").toLowerCase();
-  const operation = run?.context?.metadata?.pack_inputs?.operations?.[0];
-  const operationMode = String(operation?.mode ?? "").toLowerCase();
-
-  if (status === "queued" || status === "pending") {
-    return "Queued on your core";
-  }
-
-  if (status === "running") {
-    if (operationMode === "read") return "Reading files and context";
-    if (operationMode === "write") return "Preparing a file change";
-    if (operationMode === "delete") return "Preparing a delete action";
-    if (route === "local") return "Working with your local core";
-    if (route === "cloud") return "Reasoning in the cloud";
-    return "Working on your request";
-  }
-
-  if (status === "waiting_approval") {
-    return "Waiting for your approval";
-  }
-
-  if (status === "completed") {
-    return "Preparing the final reply";
-  }
-
-  if (status === "failed") {
-    return "Run failed";
-  }
-
-  return "Thinking";
-}
 
 type ChatScreenProps = {
   sessionId: string;
@@ -187,28 +159,101 @@ function formatTimestamp(timestamp?: number) {
   return date.toLocaleDateString([], { month: "short", day: "numeric" });
 }
 
+function resolveAgentThread(
+  session: ChatSession | undefined,
+  specialistInstalls: Record<string, any>[],
+  sage: AgentThread,
+): AgentThread {
+  if (!session) {
+    return sage;
+  }
+
+  if (session.agentId === sage.id || session.agentId === "assistant") {
+    return sage;
+  }
+
+  const normalizedSessionName = String(session.agentName || "").trim().toLowerCase();
+  const matchingInstall = specialistInstalls.find((install) => {
+    const installId = String(install?.id || "").trim();
+    const installLabel = String(
+      install?.label ||
+        install?.metadata?.manifest?.identity?.name ||
+        install?.metadata?.identity?.name ||
+        "",
+    )
+      .trim()
+      .toLowerCase();
+    return installId === session.agentId || (installLabel && installLabel === normalizedSessionName);
+  });
+
+  if (matchingInstall) {
+    return buildAgentThreadFromInstall(matchingInstall);
+  }
+
+  return {
+    id: session.agentId || "specialist",
+    label: session.agentName || "Specialist",
+    runtimeRole: session.runtimeRole,
+    subtitle: session.runtimeRole ? `${session.runtimeRole} channel` : "Scoped specialist channel",
+    icon: session.icon || "sparkles",
+    avatarColor: session.avatarColor || "#111827",
+    intro: `Scoped channel for ${session.agentName || "specialist"} work.`,
+  };
+}
+
 export default function ChatScreen({ sessionId }: ChatScreenProps) {
   const theme = useTheme();
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const { session } = useSessionState();
-  const { sessions, createSession, addMessage, updateMessage, setActiveSession, setSessionTitle } = useChatStore();
+  const {
+    sessions,
+    createSession,
+    addMessage,
+    updateMessage,
+    setActiveSession,
+    setSessionTitle,
+  } = useChatStore();
   const activeApp = useAppContextStore((state) => state.activeApp);
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [failedMessageIndex, setFailedMessageIndex] = useState<number | null>(null);
   const [runActivity, setRunActivity] = useState<string[]>([]);
   const [recentsOpen, setRecentsOpen] = useState(false);
+  const [viewMode, setViewMode] = useState<"customer" | "owner">("customer");
   const { banner, showBanner } = useTransientBanner();
-  const activeAgent = getPrimaryAgent();
+  const overview = useMobileOverviewData();
+  const chatContextQuery = useMobileChatContext();
+  const sage = getPrimaryAgent();
   const messagesListRef = useRef<FlatList<AgentPayload>>(null);
   const loadingDotOpacities = useRef([0, 1, 2].map(() => new Animated.Value(0.3))).current;
   const loadingDotAnimationsRef = useRef<Animated.CompositeAnimation[]>([]);
   const activeSession = sessions.find((item) => item.id === sessionId);
+  const specialistInstalls = useMemo(
+    () => chatContextQuery.data?.specialistInstalls ?? [],
+    [chatContextQuery.data?.specialistInstalls],
+  );
+  const activeAgent = useMemo(
+    () => resolveAgentThread(activeSession, specialistInstalls, sage),
+    [activeSession, sage, specialistInstalls],
+  );
   const messages = activeSession?.messages || [];
   const lastMessageSpeech = messages[messages.length - 1]?.speech || "";
   const recentSessions = useMemo(() => [...sessions].sort((a, b) => b.updatedAt - a.updatedAt), [sessions]);
-  const runtimeRole = activeAgent.runtimeRole || activeAgent.id;
+  const pendingApprovals = overview.approvals.length;
+  const liveRuns = overview.runs.length;
+  const unseenChanges = Number(chatContextQuery.data?.personalContext.summary?.unseen_count || 0);
+  const recentChanges = (chatContextQuery.data?.personalContext.recentChanges ?? []).slice(0, 3);
+  const channelLabel = activeAgent.label;
+  const channelRole = activeSession?.runtimeRole || activeAgent.runtimeRole || "specialist";
+  const channelSubtitle = viewMode === "owner"
+    ? "Owner controls for this mobile thread"
+    : activeApp
+      ? `Using ${activeApp.name} app context`
+      : activeAgent.id === sage.id
+        ? "Pinned Sage channel"
+        : "Specialist customer thread";
+  const latestRunActivity = runActivity[runActivity.length - 1];
 
   const scrollToBottom = React.useCallback((animated = true) => {
     requestAnimationFrame(() => {
@@ -222,9 +267,9 @@ export default function ChatScreen({ sessionId }: ChatScreenProps) {
       return;
     }
 
-    const nextSessionId = createSession(activeAgent);
-    router.replace(`/kin/${nextSessionId}`);
-  }, [activeAgent, activeSession?.id, createSession, router, setActiveSession]);
+    const nextSessionId = createSession(sage);
+    router.replace(`/chats/${nextSessionId}`);
+  }, [activeSession?.id, createSession, router, sage, setActiveSession]);
 
   useEffect(() => {
     scrollToBottom(false);
@@ -268,8 +313,8 @@ export default function ChatScreen({ sessionId }: ChatScreenProps) {
     };
   }, [isLoading, loadingDotOpacities]);
 
-  const handleMediaUpload = () => {
-    showBanner("Media uploads are not available yet.", "error");
+  const handleMediaUpload = (_formData?: FormData) => {
+    showBanner("Uploads will land through the file bridge soon. Use pairing or desktop export for now.", "error");
   };
 
   const appendRunActivity = (label: string) => {
@@ -297,7 +342,7 @@ export default function ChatScreen({ sessionId }: ChatScreenProps) {
       .map((message) => ({
         role: message.intent === "user" ? "user" : "assistant",
         content: message.speech.trim(),
-      })) as Array<{ role: "user" | "assistant"; content: string }>;
+      })) as { role: "user" | "assistant"; content: string }[];
 
     addMessage(sessionId, userMessage);
     addMessage(sessionId, { intent: "assistant", speech: "" });
@@ -335,6 +380,9 @@ export default function ChatScreen({ sessionId }: ChatScreenProps) {
           threadId: sessionId,
           provider: "",
           model: "",
+          agentId: activeAgent.id,
+          agentName: activeAgent.label,
+          agentRole: channelRole,
           priorMessages,
         },
         {
@@ -384,7 +432,7 @@ export default function ChatScreen({ sessionId }: ChatScreenProps) {
 
       setRunActivity([]);
     } catch (err) {
-      const message = err instanceof Error ? err.message : "Could not reach KIN. Check the server connection.";
+      const message = err instanceof Error ? err.message : `Could not reach ${channelLabel}. Check the server connection.`;
       console.warn("Chat request failed:", message);
       setFailedMessageIndex(nextUserMessageIndex);
       updateMessage(sessionId, placeholderIndex, {
@@ -431,6 +479,9 @@ export default function ChatScreen({ sessionId }: ChatScreenProps) {
             threadId: activeSession.id,
             provider: "",
             model: "",
+            agentId: activeAgent.id,
+            agentName: activeAgent.label,
+            agentRole: channelRole,
             approvedAction: {
               connector: card.connector,
               action: card.actionId,
@@ -623,7 +674,7 @@ export default function ChatScreen({ sessionId }: ChatScreenProps) {
               textAlign: "right",
             }}
           >
-            Could not reach KIN
+            Could not reach {channelLabel}
           </Text>
         ) : null}
       </View>
@@ -633,7 +684,7 @@ export default function ChatScreen({ sessionId }: ChatScreenProps) {
   const handleNewChat = () => {
     const nextSessionId = createSession(activeAgent);
     setRecentsOpen(false);
-    router.push(`/kin/${nextSessionId}`);
+    router.push(`/chats/${nextSessionId}`);
   };
 
   if (!activeSession) {
@@ -707,7 +758,7 @@ export default function ChatScreen({ sessionId }: ChatScreenProps) {
                   activeOpacity={0.84}
                   onPress={() => {
                     setRecentsOpen(false);
-                    router.push(`/kin/${item.id}`);
+                    router.push(`/chats/${item.id}`);
                   }}
                   style={{
                     padding: 16,
@@ -777,12 +828,28 @@ export default function ChatScreen({ sessionId }: ChatScreenProps) {
         </View>
         <View style={{ flex: 1 }}>
           <Text style={{ fontSize: 17, fontFamily: "DMSans_700Bold", color: theme.colors.text }}>
-            {activeAgent.label}
+            {channelLabel}
           </Text>
           <Text style={{ marginTop: 2, fontSize: 12, color: theme.colors.textSecondary }}>
-            {activeApp ? `Using ${activeApp.name} app context` : "Main thread"}
+            {channelSubtitle}
           </Text>
         </View>
+        <TouchableOpacity
+          onPress={() => handleMediaUpload()}
+          style={{
+            width: 40,
+            height: 40,
+            borderRadius: 20,
+            borderWidth: 1,
+            borderColor: theme.colors.border,
+            backgroundColor: theme.colors.surface,
+            alignItems: "center",
+            justifyContent: "center",
+            marginRight: 10,
+          }}
+        >
+          <Ionicons name="add" size={18} color={theme.colors.text} />
+        </TouchableOpacity>
         <TouchableOpacity
           onPress={() => setRecentsOpen(true)}
           style={{
@@ -796,44 +863,359 @@ export default function ChatScreen({ sessionId }: ChatScreenProps) {
             justifyContent: "center",
           }}
         >
-          <Ionicons name="time-outline" size={18} color={theme.colors.text} />
+          <Ionicons name="ellipsis-horizontal" size={18} color={theme.colors.text} />
         </TouchableOpacity>
       </View>
-      <View style={{ flex: 1 }}>
-        <FlatList
-          ref={messagesListRef}
-          data={messages}
-          keyExtractor={(_, i) => i.toString()}
-          renderItem={renderMessage}
-          ItemSeparatorComponent={() => <View style={{ height: 6 }} />}
-          keyboardShouldPersistTaps="handled"
-          onContentSizeChange={() => scrollToBottom()}
-          contentContainerStyle={{
-            paddingTop: SPACING.sm,
-            paddingBottom: SPACING.md,
-            backgroundColor: theme.colors.background,
+      <View style={{ paddingHorizontal: 20, paddingBottom: 12, borderBottomWidth: 1, borderBottomColor: theme.colors.border }}>
+        <View
+          style={{
+            flexDirection: "row",
+            borderRadius: 16,
+            borderWidth: 1,
+            borderColor: theme.colors.border,
+            backgroundColor: theme.colors.surface,
+            padding: 4,
+            gap: 4,
           }}
-          ListEmptyComponent={
-            <View />
-          }
-        />
-
-        {isLoading ? (
-          <View style={{ paddingHorizontal: SPACING.md, paddingTop: 8 }}>
-            <KinThinkingIndicator theme={theme} loadingDotOpacities={loadingDotOpacities} />
-          </View>
-        ) : null}
-
-        <View style={{ paddingBottom: 0 }}>
-          <InputBar
-            onSend={(text) => sendMessage(text)}
-            onMediaUpload={handleMediaUpload}
-            isLoading={isLoading}
-            prefilledPrompt={input}
-            placeholder="Message KIN"
-          />
+        >
+          {(["customer", "owner"] as const).map((mode) => {
+            const selected = viewMode === mode;
+            return (
+              <TouchableOpacity
+                key={mode}
+                activeOpacity={0.86}
+                onPress={() => setViewMode(mode)}
+                style={{
+                  flex: 1,
+                  height: 40,
+                  borderRadius: 12,
+                  backgroundColor: selected ? theme.colors.accent : "transparent",
+                  alignItems: "center",
+                  justifyContent: "center",
+                }}
+              >
+                <Text
+                  style={{
+                    color: selected ? "#FFFFFF" : theme.colors.textSecondary,
+                    fontSize: 13,
+                    fontWeight: "700",
+                  }}
+                >
+                  {mode === "customer" ? "Customer" : "Owner"}
+                </Text>
+              </TouchableOpacity>
+            );
+          })}
         </View>
       </View>
+      <View style={{ flex: 1 }}>
+        {viewMode === "customer" ? (
+          <>
+            <FlatList
+              ref={messagesListRef}
+              data={messages}
+              keyExtractor={(_, i) => i.toString()}
+              renderItem={renderMessage}
+              ItemSeparatorComponent={() => <View style={{ height: 6 }} />}
+              keyboardShouldPersistTaps="handled"
+              onContentSizeChange={() => scrollToBottom()}
+              contentContainerStyle={{
+                paddingTop: SPACING.sm,
+                paddingBottom: SPACING.md,
+                backgroundColor: theme.colors.background,
+              }}
+              ListEmptyComponent={
+                <View style={{ paddingHorizontal: 20, paddingTop: 18 }}>
+                  <View
+                    style={{
+                      borderRadius: 18,
+                      borderWidth: 1,
+                      borderColor: theme.colors.border,
+                      backgroundColor: theme.colors.surface,
+                      padding: 18,
+                      gap: 8,
+                    }}
+                  >
+                    <Text style={{ fontSize: 20, fontFamily: "DMSans_700Bold", color: theme.colors.text }}>
+                      {channelLabel}
+                    </Text>
+                    <Text style={{ fontSize: 13, lineHeight: 20, color: theme.colors.textSecondary }}>
+                      {activeAgent.intro}
+                    </Text>
+                    <Text style={{ fontSize: 12, color: theme.colors.textSecondary }}>
+                      {activeAgent.id === sage.id
+                        ? "Use this main thread for direct help, context review, and specialist routing."
+                        : "Customer View stays chat-first. Owner controls are available in the Owner tab above."}
+                    </Text>
+                  </View>
+                </View>
+              }
+            />
+
+            {isLoading ? (
+              <View style={{ paddingHorizontal: SPACING.md, paddingTop: 8, gap: 6 }}>
+                <KinThinkingIndicator theme={theme} loadingDotOpacities={loadingDotOpacities} />
+                {latestRunActivity ? (
+                  <Text style={{ fontSize: 12, color: theme.colors.textSecondary }}>{latestRunActivity}</Text>
+                ) : null}
+              </View>
+            ) : null}
+
+            <View style={{ paddingBottom: 0 }}>
+              <InputBar
+                onSend={(text) => sendMessage(text)}
+                onMediaUpload={handleMediaUpload}
+                isLoading={isLoading}
+                prefilledPrompt={input}
+                placeholder={`Message ${channelLabel}`}
+              />
+            </View>
+          </>
+        ) : (
+          <ScrollView
+            style={{ flex: 1 }}
+            contentContainerStyle={{ paddingHorizontal: 20, paddingTop: 16, paddingBottom: 36, gap: 12 }}
+            showsVerticalScrollIndicator={false}
+          >
+            <View
+              style={{
+                borderRadius: 18,
+                borderWidth: 1,
+                borderColor: theme.colors.border,
+                backgroundColor: theme.colors.surface,
+                padding: 18,
+                gap: 10,
+              }}
+            >
+              <Text
+                style={{
+                  fontSize: 11,
+                  fontFamily: "DMSans_700Bold",
+                  color: theme.colors.textSecondary,
+                  textTransform: "uppercase",
+                  letterSpacing: 1.1,
+                }}
+              >
+                Channel
+              </Text>
+              <Text style={{ fontSize: 20, fontFamily: "DMSans_700Bold", color: theme.colors.text }}>
+                {channelLabel}
+              </Text>
+              <Text style={{ fontSize: 13, lineHeight: 20, color: theme.colors.textSecondary }}>
+                {activeAgent.id === sage.id
+                  ? "Sage stays pinned as the main daily-use channel. It can review changes, steer work, and route intentionally."
+                  : "This specialist stays scoped to its own channel, context, and install boundary by default."}
+              </Text>
+              <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
+                <OwnerMetric label="Role" value={channelRole} />
+                <OwnerMetric label="Messages" value={String(messages.length)} />
+                <OwnerMetric label="Updated" value={formatTimestamp(activeSession?.updatedAt) || "Now"} />
+              </View>
+            </View>
+
+            <View
+              style={{
+                borderRadius: 18,
+                borderWidth: 1,
+                borderColor: theme.colors.border,
+                backgroundColor: theme.colors.surface,
+                padding: 18,
+                gap: 12,
+              }}
+            >
+              <Text
+                style={{
+                  fontSize: 11,
+                  fontFamily: "DMSans_700Bold",
+                  color: theme.colors.textSecondary,
+                  textTransform: "uppercase",
+                  letterSpacing: 1.1,
+                }}
+              >
+                Mobile State
+              </Text>
+              <View style={{ flexDirection: "row", gap: 10 }}>
+                <OwnerStatCard label="Approvals" value={pendingApprovals} theme={theme} />
+                <OwnerStatCard label="Live runs" value={liveRuns} theme={theme} />
+                <OwnerStatCard
+                  label={activeAgent.id === sage.id ? "Unseen" : "Scoped"}
+                  value={activeAgent.id === sage.id ? unseenChanges : 1}
+                  theme={theme}
+                />
+              </View>
+              {latestRunActivity ? (
+                <Text style={{ fontSize: 13, lineHeight: 20, color: theme.colors.textSecondary }}>
+                  Current activity: {latestRunActivity}
+                </Text>
+              ) : null}
+            </View>
+
+            <View
+              style={{
+                borderRadius: 18,
+                borderWidth: 1,
+                borderColor: theme.colors.border,
+                backgroundColor: theme.colors.surface,
+                padding: 18,
+                gap: 12,
+              }}
+            >
+              <Text
+                style={{
+                  fontSize: 11,
+                  fontFamily: "DMSans_700Bold",
+                  color: theme.colors.textSecondary,
+                  textTransform: "uppercase",
+                  letterSpacing: 1.1,
+                }}
+              >
+                Quick Actions
+              </Text>
+              <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 10 }}>
+                <OwnerActionButton label="Applications" icon="grid-outline" onPress={() => router.push("/apps" as never)} theme={theme} />
+                <OwnerActionButton label="Notifications" icon="notifications-outline" onPress={() => router.push("/inbox" as never)} theme={theme} />
+                <OwnerActionButton label="Pair & Connect" icon="link-outline" onPress={() => router.push("/session" as never)} theme={theme} />
+                <OwnerActionButton label="Recent Threads" icon="time-outline" onPress={() => setRecentsOpen(true)} theme={theme} />
+              </View>
+            </View>
+
+            <View
+              style={{
+                borderRadius: 18,
+                borderWidth: 1,
+                borderColor: theme.colors.border,
+                backgroundColor: theme.colors.surface,
+                padding: 18,
+                gap: 10,
+              }}
+            >
+              <Text
+                style={{
+                  fontSize: 11,
+                  fontFamily: "DMSans_700Bold",
+                  color: theme.colors.textSecondary,
+                  textTransform: "uppercase",
+                  letterSpacing: 1.1,
+                }}
+              >
+                {activeAgent.id === sage.id ? "Recent Context" : "Boundary"}
+              </Text>
+              {activeAgent.id === sage.id ? (
+                recentChanges.length ? (
+                  recentChanges.map((item, index) => (
+                    <View
+                      key={`${item.event_type || "event"}-${item.entity_id || index}`}
+                      style={{
+                        borderRadius: 14,
+                        borderWidth: 1,
+                        borderColor: theme.colors.border,
+                        backgroundColor: theme.colors.background,
+                        padding: 12,
+                        gap: 4,
+                      }}
+                    >
+                      <Text style={{ fontSize: 14, fontFamily: "DMSans_700Bold", color: theme.colors.text }}>
+                        {String(item.summary || item.event_type || "Context change")}
+                      </Text>
+                      <Text style={{ fontSize: 12, lineHeight: 18, color: theme.colors.textSecondary }}>
+                        {String(item.source_app || "context")} • {String(item.priority || "normal")}
+                      </Text>
+                    </View>
+                  ))
+                ) : (
+                  <Text style={{ fontSize: 13, lineHeight: 20, color: theme.colors.textSecondary }}>
+                    No unseen context changes yet. Sage will surface structured changes here instead of raw device state.
+                  </Text>
+                )
+              ) : (
+                <Text style={{ fontSize: 13, lineHeight: 20, color: theme.colors.textSecondary }}>
+                  This specialist should only see the memory, files, artifacts, and context explicitly scoped to this install. Cross-agent access stays brokered, not implied.
+                </Text>
+              )}
+            </View>
+          </ScrollView>
+        )}
+      </View>
     </KeyboardAvoidingView>
+  );
+}
+
+function OwnerMetric({ label, value }: { label: string; value: string }) {
+  return (
+    <View
+      style={{
+        height: 32,
+        paddingHorizontal: 12,
+        borderRadius: 999,
+        backgroundColor: "#111827",
+        alignItems: "center",
+        justifyContent: "center",
+      }}
+    >
+      <Text style={{ color: "#FFFFFF", fontSize: 11, fontWeight: "700" }}>
+        {label}: {value}
+      </Text>
+    </View>
+  );
+}
+
+function OwnerStatCard({
+  label,
+  value,
+  theme,
+}: {
+  label: string;
+  value: number;
+  theme: ReturnType<typeof useTheme>;
+}) {
+  return (
+    <View
+      style={{
+        flex: 1,
+        borderRadius: 16,
+        borderWidth: 1,
+        borderColor: theme.colors.border,
+        backgroundColor: theme.colors.background,
+        padding: 12,
+        gap: 4,
+      }}
+    >
+      <Text style={{ fontSize: 11, color: theme.colors.textSecondary, textTransform: "uppercase", letterSpacing: 0.8 }}>
+        {label}
+      </Text>
+      <Text style={{ fontSize: 22, fontFamily: "DMSans_700Bold", color: theme.colors.text }}>{value}</Text>
+    </View>
+  );
+}
+
+function OwnerActionButton({
+  label,
+  icon,
+  onPress,
+  theme,
+}: {
+  label: string;
+  icon: keyof typeof Ionicons.glyphMap;
+  onPress: () => void;
+  theme: ReturnType<typeof useTheme>;
+}) {
+  return (
+    <TouchableOpacity
+      activeOpacity={0.86}
+      onPress={onPress}
+      style={{
+        minWidth: "47%",
+        flexGrow: 1,
+        borderRadius: 16,
+        borderWidth: 1,
+        borderColor: theme.colors.border,
+        backgroundColor: theme.colors.background,
+        padding: 14,
+        gap: 8,
+      }}
+    >
+      <Ionicons name={icon} size={18} color={theme.colors.text} />
+      <Text style={{ fontSize: 14, fontFamily: "DMSans_700Bold", color: theme.colors.text }}>{label}</Text>
+    </TouchableOpacity>
   );
 }

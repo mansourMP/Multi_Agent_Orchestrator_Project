@@ -117,7 +117,7 @@ export type EmpyralistChatAction = {
 export type EmpyralistDirectChatResponse = {
   reply: string;
   actions: EmpyralistChatAction[];
-  approvals?: Array<Record<string, unknown>>;
+  approvals?: Record<string, unknown>[];
   interventions?: AgentTurnIntervention[];
   mode?: string;
   error?: string;
@@ -129,6 +129,9 @@ type EmpyralistDirectChatRequest = {
   threadId?: string;
   provider?: string;
   model?: string;
+  agentId?: string;
+  agentName?: string;
+  agentRole?: string;
   priorMessages?: EmpyralistChatPriorMessage[];
   approvedAction?: {
     connector: string;
@@ -178,6 +181,32 @@ function getEmpyralistChatEndpoint(session?: MobileSession | null) {
   return `${getEmpyralistApiBaseUrl(session)}/turn`;
 }
 
+async function fetchAgentRegistryJson(
+  session: MobileSession,
+  path: string,
+  options?: RequestInit,
+) {
+  const baseUrl = normalizeServerUrl(session.runtimeUrl);
+  let response: Response;
+  try {
+    response = await fetch(`${baseUrl}${path}`, {
+      ...options,
+      headers: {
+        ...(options?.headers || {}),
+        ...(session.runtimeKey ? { "X-API-Key": session.runtimeKey } : {}),
+      },
+    });
+  } catch (error) {
+    throw new Error(error instanceof TypeError ? formatNetworkError(baseUrl) : "Request failed.");
+  }
+
+  const payload = await response.json().catch(() => null);
+  if (!response.ok) {
+    throw new Error(typeof payload?.detail === "string" ? payload.detail : "Agent registry request failed.");
+  }
+  return payload;
+}
+
 function buildMobileRuntimeClient(session: MobileSession) {
   const baseUrl = normalizeServerUrl(session.runtimeUrl);
   return createApiClient({
@@ -198,7 +227,7 @@ function normalizeEmpyralistChatResponse(payload: unknown): EmpyralistDirectChat
   return {
     reply: typeof record.reply === "string" ? record.reply : "",
     actions: Array.isArray(record.actions) ? (record.actions as EmpyralistChatAction[]) : [],
-    approvals: Array.isArray(record.approvals) ? (record.approvals as Array<Record<string, unknown>>) : [],
+    approvals: Array.isArray(record.approvals) ? (record.approvals as Record<string, unknown>[]) : [],
     interventions: Array.isArray(record.interventions) ? (record.interventions as AgentTurnIntervention[]) : [],
     mode: typeof record.mode === "string" ? record.mode : undefined,
     error: typeof record.error === "string" ? record.error : undefined,
@@ -345,11 +374,15 @@ export const mobileApi = {
         context_hints: {
           provider: payload.provider ?? getDefaultEmpyralistChatProvider(),
           model: payload.model ?? getDefaultEmpyralistChatModel(),
+          agent_role: payload.agentRole || undefined,
           prior_messages: payload.priorMessages && payload.priorMessages.length > 0 ? payload.priorMessages : undefined,
           approved_action: payload.approvedAction || undefined,
           metadata: {
             source: "mobile_chat",
             thread_id: payload.threadId || undefined,
+            agent_id: payload.agentId || undefined,
+            agent_label: payload.agentName || undefined,
+            agent_role: payload.agentRole || undefined,
             availability: { ai_ready: true },
           },
         },
@@ -403,6 +436,10 @@ export const mobileApi = {
       workspace_id: session.workspaceId,
     }) as Promise<ConnectorListResponse>;
   },
+  getChatContext(session: MobileSession) {
+    const query = new URLSearchParams({ workspace_id: session.workspaceId });
+    return fetchAgentRegistryJson(session, `/agent-registry/chat-context?${query.toString()}`) as Promise<Record<string, unknown>>;
+  },
   getNotifications(session: MobileSession, params?: {
     workspace_id?: string;
     channel?: string;
@@ -451,6 +488,41 @@ export const mobileApi = {
       app_id: request.app_id,
       capabilities: request.capabilities,
     }) as Promise<NotificationDeviceRegistrationResponse>;
+  },
+  publishPersonalContextEvent(session: MobileSession, request: {
+    source_app: string;
+    event_type: string;
+    entity_id: string;
+    summary?: string;
+    payload?: Record<string, unknown>;
+    priority?: number;
+    scope?: Record<string, unknown>;
+    metadata?: Record<string, unknown>;
+  }) {
+    return fetchAgentRegistryJson(session, "/agent-registry/personal-context/events", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        workspace_id: session.workspaceId,
+        ...request,
+      }),
+    }) as Promise<Record<string, unknown>>;
+  },
+  proposeSelfWakeup(session: MobileSession, request: {
+    summary: string;
+    reason: string;
+    due_at?: string;
+    payload?: Record<string, unknown>;
+    policy_context?: Record<string, unknown>;
+  }) {
+    return fetchAgentRegistryJson(session, "/agent-registry/scheduler/self-wakeups", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        workspace_id: session.workspaceId,
+        ...request,
+      }),
+    }) as Promise<Record<string, unknown>>;
   },
   async testConnector(session: MobileSession, connectorId: string) {
     const baseUrl = normalizeServerUrl(session.runtimeUrl);

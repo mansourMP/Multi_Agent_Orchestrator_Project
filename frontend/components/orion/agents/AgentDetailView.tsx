@@ -1,15 +1,17 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import { useSearchParams } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { Skeleton } from '@/components/ui/Skeleton';
 import { ChannelHeader } from '@/components/orion/agents/ChannelHeader';
 import { CustomerModeSimulator } from '@/components/orion/agents/CustomerModeSimulator';
 import { OwnerPanel } from '@/components/orion/agents/OwnerPanel';
+import { MobileThreadHeader } from '@/components/orion/agents/MobileThreadHeader';
 import { useAgentsWorkspace } from '@/components/orion/agents/AgentsWorkspaceContext';
 import { fetchAgentInstall, type WorkspaceAgentInstallRecord } from '@/lib/api';
 import { usePlatformShell } from '@/components/orion/PlatformShellContext';
 import type { AgentMode } from '@/components/orion/agents/AgentModeToggle';
+import { useIsMobile } from '@/hooks/use-mobile';
 
 function DetailSkeleton() {
   return (
@@ -21,7 +23,9 @@ function DetailSkeleton() {
 }
 
 export function AgentDetailView({ installId }: { installId: string }) {
+  const router = useRouter();
   const searchParams = useSearchParams();
+  const isMobile = useIsMobile();
   const modeQuery = String(searchParams.get('mode') || '').trim().toLowerCase();
   const { channels, loading, draftAgents } = useAgentsWorkspace();
   const { activeWorkspaceId, workspaceLoading } = usePlatformShell();
@@ -86,6 +90,23 @@ export function AgentDetailView({ installId }: { installId: string }) {
     };
   }, [activeWorkspaceId, installId, installedMatch, previewMatch, workspaceLoading]);
 
+  useEffect(() => {
+    let alive = true;
+    if (mode !== 'customer' || !activeWorkspaceId || !installId) {
+      return () => {
+        alive = false;
+      };
+    }
+    void fetchAgentInstall(installId, activeWorkspaceId)
+      .then((install) => {
+        if (alive) setResolvedInstall(install);
+      })
+      .catch(() => undefined);
+    return () => {
+      alive = false;
+    };
+  }, [activeWorkspaceId, installId, mode]);
+
   if (loading || detailLoading) {
     return <DetailSkeleton />;
   }
@@ -106,10 +127,24 @@ export function AgentDetailView({ installId }: { installId: string }) {
 
   return (
     <div className="space-y-4">
-      <ChannelHeader install={resolvedInstall} mode={mode} onModeChange={setMode} />
+      {isMobile ? (
+        <MobileThreadHeader
+          install={resolvedInstall}
+          mode={mode}
+          onModeChange={setMode}
+          onUpload={() => {
+            if (mode !== 'owner') {
+              setMode('owner');
+              router.replace(`/agents/${encodeURIComponent(installId)}?mode=owner`);
+            }
+          }}
+        />
+      ) : (
+        <ChannelHeader install={resolvedInstall} mode={mode} onModeChange={setMode} />
+      )}
       {mode === 'customer'
-        ? <CustomerModeSimulator install={resolvedInstall} onRequestOwnerMode={() => setMode('owner')} />
-        : <OwnerPanel install={resolvedInstall} />}
+        ? <CustomerModeSimulator install={resolvedInstall} onRequestOwnerMode={() => setMode('owner')} isMobile={isMobile} />
+        : <OwnerPanel install={resolvedInstall} isMobile={isMobile} />}
     </div>
   );
 }

@@ -36,6 +36,16 @@ export type AgentManifestChannelBindings = {
   telegram: boolean;
 };
 
+export type AgentRuntimeMode = 'hosted_secure' | 'local_secure' | 'privileged_device';
+
+export type AgentChannelBindingKey = keyof AgentManifestChannelBindings;
+
+export type AgentChannelBindingRecord = {
+  enabled: boolean;
+  is_inbound_owner: boolean;
+  endpoint_key: string;
+};
+
 export type AgentManifestBible = {
   mission: string;
   hard_context: string;
@@ -43,6 +53,28 @@ export type AgentManifestBible = {
   core_responsibilities: string;
   guardrails: string;
   escalation_triggers: string;
+};
+
+export type AgentManifestRoleProfile = {
+  job_to_be_done: string;
+  success_definition: string;
+  escalation_owner: string;
+};
+
+export type AgentManifestVoiceProfile = {
+  tone: string;
+  response_style: string;
+  service_boundaries: string;
+};
+
+export type AgentManifestConnectors = {
+  requested: string[];
+  bound: string[];
+};
+
+export type AgentManifestRuntime = {
+  mode: AgentRuntimeMode;
+  profile_id?: string;
 };
 
 export type AgentManifest = {
@@ -58,9 +90,13 @@ export type AgentManifest = {
     owner_mode_enabled: boolean;
     customer_mode_enabled: boolean;
   };
+  role: AgentManifestRoleProfile;
+  voice: AgentManifestVoiceProfile;
   bible: AgentManifestBible;
   skills: AgentManifestSkillBinding[];
+  connectors: AgentManifestConnectors;
   channels: AgentManifestChannelBindings;
+  runtime: AgentManifestRuntime;
   policy: {
     reflection_enabled: boolean;
     approval_mode: 'system' | 'guarded' | 'strict';
@@ -156,6 +192,93 @@ const DEFAULT_CHANNELS: AgentManifestChannelBindings = {
   telegram: false,
 };
 
+const CONNECTOR_SUGGESTIONS_BY_SKILL: Record<AgentBoundSkillId, string[]> = {
+  'email-access': ['email'],
+  'web-search': ['web'],
+  'calendar-access': ['calendar'],
+  'task-runner': ['automation'],
+  'inventory-tool': ['inventory'],
+  'crm-notes': ['crm'],
+};
+
+export const AGENT_CHANNEL_KEYS: AgentChannelBindingKey[] = [
+  'web_chat',
+  'email',
+  'phone',
+  'whatsapp',
+  'telegram',
+];
+
+function uniqueStrings(values: unknown[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const value of values) {
+    const token = String(value || '').trim();
+    if (!token || seen.has(token)) continue;
+    seen.add(token);
+    out.push(token);
+  }
+  return out;
+}
+
+function defaultToneForArchetype(archetype: AgentManifestArchetype): string {
+  if (archetype === 'task_automator') return 'Direct, structured, and action-oriented.';
+  if (archetype === 'intelligence_researcher') return 'Analytical, evidence-based, and calm.';
+  if (archetype === 'master_os') return 'Clear, supervisory, and orchestrated.';
+  return 'Warm, concise, and reassuring.';
+}
+
+function defaultResponseStyleForArchetype(archetype: AgentManifestArchetype): string {
+  if (archetype === 'task_automator') return 'Use short operational steps, confirm constraints, and make next actions explicit.';
+  if (archetype === 'intelligence_researcher') return 'Lead with the answer, then cite the reasoning and open questions.';
+  if (archetype === 'master_os') return 'Summarize, route, and surface approvals without leaking internal complexity.';
+  return 'Answer like a polished service specialist with clear next steps and clean customer language.';
+}
+
+function connectorSuggestionsForSkills(skillIds: AgentBoundSkillId[]): string[] {
+  return uniqueStrings(skillIds.flatMap((skillId) => CONNECTOR_SUGGESTIONS_BY_SKILL[skillId] || []));
+}
+
+function defaultRoleProfile(input: {
+  name: string;
+  prompt: string;
+  archetype: AgentManifestArchetype;
+}): AgentManifestRoleProfile {
+  return {
+    job_to_be_done: input.prompt.trim() || `${input.name} should handle its assigned specialist work.`,
+    success_definition: input.archetype === 'intelligence_researcher'
+      ? 'Deliver reliable findings, highlight uncertainty, and recommend the next decision.'
+      : input.archetype === 'task_automator'
+        ? 'Complete the task safely, keep the audit trail legible, and escalate irreversible actions.'
+        : 'Resolve the customer request quickly, safely, and without inventing live business facts.',
+    escalation_owner: 'Workspace owner',
+  };
+}
+
+function defaultVoiceProfile(input: {
+  archetype: AgentManifestArchetype;
+  behaviorPrompt?: string;
+}): AgentManifestVoiceProfile {
+  return {
+    tone: input.behaviorPrompt?.trim() || defaultToneForArchetype(input.archetype),
+    response_style: defaultResponseStyleForArchetype(input.archetype),
+    service_boundaries: 'Never promise inventory, scheduling, pricing, or approvals without the correct bound skill or owner confirmation.',
+  };
+}
+
+export function getRuntimeMode(install: WorkspaceAgentInstallRecord): AgentRuntimeMode {
+  const runtimeBinding = install.metadata?.['runtime_binding'] as { runtime_mode?: string } | undefined;
+  const token = String(install.runtime_mode || runtimeBinding?.runtime_mode || '').trim().toLowerCase();
+  if (token === 'local_secure' || token === 'privileged_device') return token;
+  return 'hosted_secure';
+}
+
+export function runtimeModeLabel(mode: AgentRuntimeMode): string {
+  if (mode === 'local_secure') return 'Local Secure';
+  if (mode === 'privileged_device') return 'Privileged Device';
+  return 'Hosted Secure';
+}
+
 export const SAGE_GLOBAL_MANIFEST: AgentManifest = {
   version: 'empyralis.agent-manifest.v1',
   manifest_id: 'sage-global-manifest',
@@ -169,6 +292,16 @@ export const SAGE_GLOBAL_MANIFEST: AgentManifest = {
     owner_mode_enabled: false,
     customer_mode_enabled: false,
   },
+  role: {
+    job_to_be_done: 'Act as the master operator across planning, delegation, approvals, and system-wide supervision.',
+    success_definition: 'Keep the workspace legible, route work well, and surface approvals at the right moment.',
+    escalation_owner: 'Workspace owner',
+  },
+  voice: {
+    tone: 'Calm, supervisory, and precise.',
+    response_style: 'Lead with the answer, then show the next action or escalation path.',
+    service_boundaries: 'Never hide policy tradeoffs or approval boundaries from the operator.',
+  },
   bible: {
     mission: 'Operate as the master relationship for planning, delegation, approvals, execution, and system-wide awareness.',
     hard_context: 'Sage has cross-system context and is the only visible omniscient operator surface.',
@@ -178,7 +311,14 @@ export const SAGE_GLOBAL_MANIFEST: AgentManifest = {
     escalation_triggers: 'policy conflicts\nuncertain destructive actions\ncross-tenant boundary concerns',
   },
   skills: AGENT_SKILL_LIBRARY.map((skill) => ({ id: skill.id, enabled: true })),
+  connectors: {
+    requested: ['email', 'web', 'calendar', 'inventory', 'crm', 'automation'],
+    bound: [],
+  },
   channels: { ...DEFAULT_CHANNELS },
+  runtime: {
+    mode: 'hosted_secure',
+  },
   policy: {
     reflection_enabled: true,
     approval_mode: 'system',
@@ -233,7 +373,35 @@ function parseManifestChannels(value: unknown): AgentManifestChannelBindings {
   };
 }
 
-function defaultBibleSections(name: string, prompt: string, archetype: AgentManifestArchetype): AgentBibleSections {
+function parseChannelRegistryBinding(
+  channelKey: AgentChannelBindingKey,
+  value: unknown,
+  fallbackEnabled: boolean,
+): AgentChannelBindingRecord {
+  if (typeof value === 'boolean') {
+    return {
+      enabled: value,
+      is_inbound_owner: false,
+      endpoint_key: '',
+    };
+  }
+  const source = coerceRecord(value);
+  return {
+    enabled: source.enabled == null ? fallbackEnabled : Boolean(source.enabled),
+    is_inbound_owner: Boolean(source.is_inbound_owner),
+    endpoint_key: String(source.endpoint_key || '').trim(),
+  };
+}
+
+function defaultBibleSections(
+  name: string,
+  prompt: string,
+  archetype: AgentManifestArchetype,
+  input?: {
+    behaviorPrompt?: string;
+    knowledgePrompt?: string;
+  },
+): AgentBibleSections {
   const runtimeLabel = archetype === 'support_specialist'
     ? 'Support inbox + phone lane'
     : archetype === 'task_automator'
@@ -249,14 +417,20 @@ function defaultBibleSections(name: string, prompt: string, archetype: AgentMani
       `- Primary lane: ${runtimeLabel}`,
       '- This agent works inside a supervised customer-facing channel.',
       '- It must keep business facts, availability, and commitments anchored to approved sources and bound skills.',
-    ].join('\n'),
+      input?.knowledgePrompt?.trim()
+        ? `- Owner context: ${input.knowledgePrompt.trim()}`
+        : '- Owner context will be refined in the Bible and knowledge layer.',
+    ].filter(Boolean).join('\n'),
     'operational policy': [
       '- Be concise and specific.',
       '- Use bound skills when the request requires live business facts.',
       '- Never invent inventory, appointments, pricing, or commitments.',
       '- Ask for clarification before irreversible actions.',
       '- Escalate uncertain money, privacy, or reputation issues to the owner lane.',
-    ].join('\n'),
+      input?.behaviorPrompt?.trim()
+        ? `- Response behavior: ${input.behaviorPrompt.trim()}`
+        : '',
+    ].filter(Boolean).join('\n'),
     'core responsibilities': [
       '- Handle the first response fast and clearly.',
       '- Gather only the context needed to complete the job.',
@@ -290,7 +464,12 @@ function buildManifestFromSections(input: {
   blueprintSource?: AgentManifest['blueprint']['source'];
   blueprintId?: string;
   blueprintTitle?: string;
+  roleProfile?: AgentManifestRoleProfile;
+  voiceProfile?: AgentManifestVoiceProfile;
+  connectors?: AgentManifestConnectors;
+  runtime?: AgentManifestRuntime;
 }): AgentManifest {
+  const enabledSkillIds = canonicalSkillIds(input.skills);
   return {
     version: 'empyralis.agent-manifest.v1',
     manifest_id: input.manifestId,
@@ -304,6 +483,12 @@ function buildManifestFromSections(input: {
       owner_mode_enabled: input.scope !== 'global_master',
       customer_mode_enabled: input.scope !== 'global_master',
     },
+    role: input.roleProfile || defaultRoleProfile({
+      name: input.name,
+      prompt: input.summary,
+      archetype: input.archetype,
+    }),
+    voice: input.voiceProfile || defaultVoiceProfile({ archetype: input.archetype }),
     bible: {
       mission: input.sections.mission,
       hard_context: input.sections['hard context'],
@@ -312,10 +497,17 @@ function buildManifestFromSections(input: {
       guardrails: input.sections.guardrails,
       escalation_triggers: input.sections['escalation triggers'],
     },
-    skills: canonicalSkillIds(input.skills).map((skillId) => ({ id: skillId, enabled: true })),
+    skills: enabledSkillIds.map((skillId) => ({ id: skillId, enabled: true })),
+    connectors: input.connectors || {
+      requested: connectorSuggestionsForSkills(enabledSkillIds),
+      bound: [],
+    },
     channels: {
       ...DEFAULT_CHANNELS,
       ...(input.channels || {}),
+    },
+    runtime: input.runtime || {
+      mode: 'hosted_secure',
     },
     policy: {
       reflection_enabled: true,
@@ -384,12 +576,18 @@ export function createDraftManifest(input: {
   name: string;
   prompt: string;
   archetype: AgentForgeArchetype;
+  behaviorPrompt?: string;
+  knowledgePrompt?: string;
   blueprintId?: string;
   blueprintTitle?: string;
 }): AgentManifest {
   const name = input.name.trim() || 'Untitled Agent';
   const prompt = input.prompt.trim() || `help with ${name}`;
-  const sections = defaultBibleSections(name, prompt, input.archetype);
+  const sections = defaultBibleSections(name, prompt, input.archetype, {
+    behaviorPrompt: input.behaviorPrompt,
+    knowledgePrompt: input.knowledgePrompt,
+  });
+  const enabledSkills = defaultSkillBindingsForArchetype(input.archetype);
   return buildManifestFromSections({
     manifestId: `manifest-${safeManifestId(name)}`,
     name,
@@ -397,8 +595,24 @@ export function createDraftManifest(input: {
     role: name,
     archetype: input.archetype,
     scope: 'specialist',
-    skills: defaultSkillBindingsForArchetype(input.archetype),
+    skills: enabledSkills,
     sections,
+    roleProfile: defaultRoleProfile({
+      name,
+      prompt,
+      archetype: input.archetype,
+    }),
+    voiceProfile: defaultVoiceProfile({
+      archetype: input.archetype,
+      behaviorPrompt: input.behaviorPrompt,
+    }),
+    connectors: {
+      requested: connectorSuggestionsForSkills(enabledSkills),
+      bound: [],
+    },
+    runtime: {
+      mode: 'hosted_secure',
+    },
     blueprintSource: input.blueprintId ? 'imported_blueprint' : 'forge',
     blueprintId: input.blueprintId,
     blueprintTitle: input.blueprintTitle,
@@ -414,7 +628,11 @@ export function createDraftManifestFromBlueprint(rawBlueprint: string, fallbackN
   }
   const source = coerceRecord(parsed);
   const identity = coerceRecord(source.identity);
+  const roleProfile = coerceRecord(source.role);
+  const voice = coerceRecord(source.voice);
   const bible = coerceRecord(source.bible);
+  const connectors = coerceRecord(source.connectors);
+  const runtime = coerceRecord(source.runtime);
   const channels = parseManifestChannels(source.channels);
   const skillIds = canonicalSkillIds(
     Array.isArray(source.skills)
@@ -448,6 +666,24 @@ export function createDraftManifestFromBlueprint(rawBlueprint: string, fallbackN
     skills: skillIds.length > 0 ? skillIds : defaultSkillBindingsForArchetype(archetype),
     channels,
     sections,
+    roleProfile: {
+      job_to_be_done: String(roleProfile.job_to_be_done || summary).trim() || summary,
+      success_definition: String(roleProfile.success_definition || 'Imported blueprint requires owner verification before live deployment.').trim(),
+      escalation_owner: String(roleProfile.escalation_owner || 'Workspace owner').trim() || 'Workspace owner',
+    },
+    voiceProfile: {
+      tone: String(voice.tone || defaultToneForArchetype(archetype)).trim() || defaultToneForArchetype(archetype),
+      response_style: String(voice.response_style || defaultResponseStyleForArchetype(archetype)).trim() || defaultResponseStyleForArchetype(archetype),
+      service_boundaries: String(voice.service_boundaries || 'Keep imported specialists in Owner Mode until the owner approves the live behavior.').trim(),
+    },
+    connectors: {
+      requested: uniqueStrings(Array.isArray(connectors.requested) ? connectors.requested : []),
+      bound: uniqueStrings(Array.isArray(connectors.bound) ? connectors.bound : []),
+    },
+    runtime: {
+      mode: runtime.mode === 'local_secure' || runtime.mode === 'privileged_device' ? runtime.mode : 'hosted_secure',
+      profile_id: String(runtime.profile_id || '').trim() || undefined,
+    },
     blueprintSource: 'imported_blueprint',
     blueprintId: String(source.manifest_id || '').trim() || undefined,
     blueprintTitle: String(source.blueprint_title || name).trim() || name,
@@ -482,6 +718,10 @@ function buildManifestFromLegacyInstall(install: WorkspaceAgentInstallRecord): A
   const sections = parseBibleSections(bibleText);
   const channels = parseManifestChannels(metadata.channel_bindings);
   const skills = canonicalSkillIds(metadata.bound_skills);
+  const enabledSkills = skills.length > 0 ? skills : defaultSkillBindingsForArchetype(archetype);
+  const runtimeBinding = metadata.runtime_binding as { runtime_profile_id?: string } | undefined;
+  const connectorsMetadata = metadata.connectors as { bound?: unknown[] } | undefined;
+  const runtimeProfileId = String(install.runtime_profile_id || runtimeBinding?.runtime_profile_id || '').trim() || undefined;
 
   return buildManifestFromSections({
     manifestId: String(metadata.manifest_id || `manifest-${safeManifestId(name)}`).trim(),
@@ -490,7 +730,7 @@ function buildManifestFromLegacyInstall(install: WorkspaceAgentInstallRecord): A
     role: String(install.agent_definition?.name || name).trim() || name,
     archetype,
     scope: name.toLowerCase() === 'sage' ? 'global_master' : 'specialist',
-    skills: skills.length > 0 ? skills : defaultSkillBindingsForArchetype(archetype),
+    skills: enabledSkills,
     channels,
     sections: {
       mission: sections.mission || `${name} exists to ${prompt}.`,
@@ -500,6 +740,14 @@ function buildManifestFromLegacyInstall(install: WorkspaceAgentInstallRecord): A
       guardrails: sections.guardrails || '- Never invent live business facts.',
       'escalation triggers': sections['escalation triggers'] || '- low confidence',
     },
+    connectors: {
+      requested: connectorSuggestionsForSkills(enabledSkills),
+      bound: uniqueStrings(Array.isArray(connectorsMetadata?.bound) ? connectorsMetadata.bound : []),
+    },
+    runtime: {
+      mode: getRuntimeMode(install),
+      profile_id: runtimeProfileId,
+    },
     blueprintSource: 'forge',
   });
 }
@@ -507,7 +755,11 @@ function buildManifestFromLegacyInstall(install: WorkspaceAgentInstallRecord): A
 function normalizeManifest(raw: unknown, fallbackInstall?: WorkspaceAgentInstallRecord): AgentManifest | null {
   const source = coerceRecord(raw);
   const identity = coerceRecord(source.identity);
+  const roleProfile = coerceRecord(source.role);
+  const voice = coerceRecord(source.voice);
   const bible = coerceRecord(source.bible);
+  const connectors = coerceRecord(source.connectors);
+  const runtime = coerceRecord(source.runtime);
   const policy = coerceRecord(source.policy);
   const blueprint = coerceRecord(source.blueprint);
   const skillIds = canonicalSkillIds(
@@ -542,6 +794,16 @@ function normalizeManifest(raw: unknown, fallbackInstall?: WorkspaceAgentInstall
       owner_mode_enabled: identity.owner_mode_enabled !== false,
       customer_mode_enabled: identity.customer_mode_enabled !== false,
     },
+    role: {
+      job_to_be_done: String(roleProfile.job_to_be_done || fallback.role.job_to_be_done).trim() || fallback.role.job_to_be_done,
+      success_definition: String(roleProfile.success_definition || fallback.role.success_definition).trim() || fallback.role.success_definition,
+      escalation_owner: String(roleProfile.escalation_owner || fallback.role.escalation_owner).trim() || fallback.role.escalation_owner,
+    },
+    voice: {
+      tone: String(voice.tone || fallback.voice.tone).trim() || fallback.voice.tone,
+      response_style: String(voice.response_style || fallback.voice.response_style).trim() || fallback.voice.response_style,
+      service_boundaries: String(voice.service_boundaries || fallback.voice.service_boundaries).trim() || fallback.voice.service_boundaries,
+    },
     bible: {
       mission: String(bible.mission || fallback.bible.mission).trim(),
       hard_context: String(bible.hard_context || fallback.bible.hard_context).trim(),
@@ -552,7 +814,25 @@ function normalizeManifest(raw: unknown, fallbackInstall?: WorkspaceAgentInstall
     },
     skills: (skillIds.length > 0 ? skillIds : fallback.skills.filter((skill) => skill.enabled).map((skill) => skill.id))
       .map((skillId) => ({ id: skillId, enabled: true })),
+    connectors: {
+      requested: uniqueStrings(
+        Array.isArray(connectors.requested)
+          ? connectors.requested
+          : fallback.connectors.requested,
+      ),
+      bound: uniqueStrings(
+        Array.isArray(connectors.bound)
+          ? connectors.bound
+          : fallback.connectors.bound,
+      ),
+    },
     channels: parseManifestChannels(source.channels || fallback.channels),
+    runtime: {
+      mode: runtime.mode === 'local_secure' || runtime.mode === 'privileged_device'
+        ? runtime.mode
+        : fallback.runtime.mode,
+      profile_id: String(runtime.profile_id || fallback.runtime.profile_id || '').trim() || undefined,
+    },
     policy: {
       reflection_enabled: policy.reflection_enabled !== false,
       approval_mode: policy.approval_mode === 'strict' || policy.approval_mode === 'system'
@@ -570,6 +850,21 @@ function normalizeManifest(raw: unknown, fallbackInstall?: WorkspaceAgentInstall
 export function getAgentManifest(install: WorkspaceAgentInstallRecord): AgentManifest {
   const normalized = normalizeManifest(metadataRecord(install).agent_manifest, install);
   return normalized || buildManifestFromLegacyInstall(install);
+}
+
+export function getChannelRegistryBindings(
+  install: WorkspaceAgentInstallRecord,
+): Record<AgentChannelBindingKey, AgentChannelBindingRecord> {
+  const metadata = metadataRecord(install);
+  const manifest = getAgentManifest(install);
+  const rawBindings = coerceRecord(metadata.channel_registry_bindings);
+  return {
+    web_chat: parseChannelRegistryBinding('web_chat', rawBindings.web_chat, manifest.channels.web_chat),
+    email: parseChannelRegistryBinding('email', rawBindings.email, manifest.channels.email),
+    phone: parseChannelRegistryBinding('phone', rawBindings.phone, manifest.channels.phone),
+    whatsapp: parseChannelRegistryBinding('whatsapp', rawBindings.whatsapp, manifest.channels.whatsapp),
+    telegram: parseChannelRegistryBinding('telegram', rawBindings.telegram, manifest.channels.telegram),
+  };
 }
 
 export function getEnabledSkillBindings(manifest: AgentManifest): AgentBoundSkillId[] {
@@ -635,6 +930,12 @@ export function buildCustomerModeSystemPrompt(install: WorkspaceAgentInstallReco
 
   return [
     `You are ${manifest.identity.name}.`,
+    '',
+    'Job To Be Done',
+    manifest.role.job_to_be_done,
+    '',
+    'Voice',
+    `${manifest.voice.tone} ${manifest.voice.response_style}`.trim(),
     '',
     'Mission',
     manifest.bible.mission,

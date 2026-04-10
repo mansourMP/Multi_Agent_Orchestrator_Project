@@ -6,6 +6,7 @@ import { MobileScreen } from "@/src/components/MobileScreen";
 import { ScreenHeader } from "@/src/components/ScreenHeader";
 import { SectionCard } from "@/src/components/SectionCard";
 import { mobileApi } from "@/src/lib/api";
+import { getMobileEngineState, type MobileEngineState } from "@/src/lib/mobile-engine";
 import { useMobileNotifications } from "@/src/lib/mobile-data";
 import {
   getStoredNotificationState,
@@ -22,14 +23,15 @@ export default function NotificationsScreen() {
   const { session } = useSessionState();
   const notificationsQuery = useMobileNotifications();
   const [notificationState, setNotificationState] = React.useState<StoredNotificationState>({ permissionStatus: "undetermined" });
+  const [engineState, setEngineState] = React.useState<MobileEngineState | null>(null);
   const [busy, setBusy] = React.useState(false);
 
   React.useEffect(() => {
     let active = true;
-    getStoredNotificationState().then((state) => {
-      if (active) {
-        setNotificationState(state);
-      }
+    Promise.all([getStoredNotificationState(), getMobileEngineState()]).then(([state, engine]) => {
+      if (!active) return;
+      setNotificationState(state);
+      setEngineState(engine);
     });
     return () => {
       active = false;
@@ -42,6 +44,12 @@ export default function NotificationsScreen() {
   const runtimeRegisteredLabel = notificationState.runtimeRegistration?.registeredAt
     ? new Date(notificationState.runtimeRegistration.registeredAt).toLocaleString()
     : "Not registered with runtime yet";
+  const engineLastSyncLabel = engineState?.lastNotificationSyncAt
+    ? new Date(engineState.lastNotificationSyncAt).toLocaleString()
+    : "No mobile sync yet";
+  const engineWakeLabel = engineState?.lastWakeRequestAt
+    ? new Date(engineState.lastWakeRequestAt).toLocaleString()
+    : "No wake requested yet";
 
   return (
     <MobileScreen>
@@ -67,7 +75,7 @@ export default function NotificationsScreen() {
         </View>
       </View>
 
-      <SectionCard title="Push Delivery" subtitle="Control how KIN alerts arrive on this device.">
+      <SectionCard title="Push Delivery" subtitle="Control how Sage alerts arrive on this device.">
         <View style={{ gap: 12 }}>
           <DetailRow label="Permission" value={notificationState.permissionStatus} />
           <DetailRow
@@ -82,6 +90,12 @@ export default function NotificationsScreen() {
           />
           <DetailRow label="Runtime sync" value={runtimeRegisteredLabel} />
           <DetailRow label="Last updated" value={updatedLabel} />
+          <DetailRow label="Mobile sync loop" value={engineLastSyncLabel} />
+          <DetailRow label="Last wake request" value={engineWakeLabel} />
+          <DetailRow
+            label="Queued context events"
+            value={String(engineState?.queuedContextEvents.length ?? 0)}
+          />
 
           {notificationState.error ? (
             <Text style={{ fontSize: 13, lineHeight: 20, color: theme.colors.warning }}>{notificationState.error}</Text>
@@ -96,6 +110,7 @@ export default function NotificationsScreen() {
                 try {
                   const nextState = await registerForPushNotificationsAsync(session);
                   setNotificationState(nextState);
+                  setEngineState(await getMobileEngineState());
                 } finally {
                   setBusy(false);
                 }
@@ -122,6 +137,7 @@ export default function NotificationsScreen() {
                 setBusy(true);
                 try {
                   await scheduleAgentTestNotification();
+                  setEngineState(await getMobileEngineState());
                 } finally {
                   setBusy(false);
                 }

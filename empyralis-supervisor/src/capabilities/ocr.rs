@@ -27,11 +27,7 @@ fn capture_temp_image(arguments: &Value) -> Result<std::path::PathBuf> {
 }
 
 pub fn read_screen_text(arguments: &Value) -> Result<Value> {
-    if Command::new("tesseract")
-        .arg("--version")
-        .output()
-        .is_err()
-    {
+    if Command::new("tesseract").arg("--version").output().is_err() {
         bail!("tesseract is not installed on this machine");
     }
     let temp_path = capture_temp_image(arguments)?;
@@ -56,11 +52,7 @@ pub fn read_screen_text(arguments: &Value) -> Result<Value> {
 }
 
 pub fn find_text_center(arguments: &Value) -> Result<Value> {
-    if Command::new("tesseract")
-        .arg("--version")
-        .output()
-        .is_err()
-    {
+    if Command::new("tesseract").arg("--version").output().is_err() {
         bail!("tesseract is not installed on this machine");
     }
     let target = arguments
@@ -91,7 +83,10 @@ pub fn find_text_center(arguments: &Value) -> Result<Value> {
         if cols.len() < 12 {
             continue;
         }
-        let text = cols.get(11).map(|value| value.trim().to_lowercase()).unwrap_or_default();
+        let text = cols
+            .get(11)
+            .map(|value| value.trim().to_lowercase())
+            .unwrap_or_default();
         if text.is_empty() {
             continue;
         }

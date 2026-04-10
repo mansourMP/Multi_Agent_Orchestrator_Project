@@ -3,11 +3,15 @@ import { ScrollView, Text, TouchableOpacity, View } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
 
-import { CoreStatusBar } from "@/src/components/CoreStatusBar";
 import { PrimaryScreenHeader } from "@/src/components/navigation/PrimaryScreenHeader";
-import { getPrimaryAgent } from "@/src/lib/agents";
-import { formatRelativeTime, inferKinCapability } from "@/src/lib/kin-surface";
-import { useMobileOverviewData } from "@/src/lib/mobile-data";
+import {
+  buildAgentThreadFromInstall,
+  getFallbackSpecialists,
+  getPrimaryAgent,
+  type AgentThread,
+} from "@/src/lib/agents";
+import { useMobileChatContext, useMobileOverviewData } from "@/src/lib/mobile-data";
+import { useSessionState } from "@/src/lib/session-context";
 import { useChatStore } from "@/src/stores/chatStore";
 import { useAppTheme as useTheme } from "@/src/theme/useAppTheme";
 
@@ -15,59 +19,65 @@ function formatTimestamp(timestamp?: number) {
   if (!timestamp) return "";
   const date = new Date(timestamp);
   const now = new Date();
-  const sameDay = date.toDateString() === now.toDateString();
-
-  if (sameDay) {
+  if (date.toDateString() === now.toDateString()) {
     return date.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
   }
-
   return date.toLocaleDateString([], { month: "short", day: "numeric" });
 }
 
 export default function ChatsScreen() {
   const theme = useTheme();
   const router = useRouter();
+  const { session } = useSessionState();
+  const { approvals } = useMobileOverviewData();
+  const chatContextQuery = useMobileChatContext();
   const sessions = useChatStore((state) => state.sessions);
   const createSession = useChatStore((state) => state.createSession);
   const ensureSessionForAgent = useChatStore((state) => state.ensureSessionForAgent);
-  const { approvals, artifacts, loading } = useMobileOverviewData();
-  const kin = getPrimaryAgent();
 
-  const rows = useMemo(
-    () =>
-      [...sessions]
-        .sort((a, b) => b.updatedAt - a.updatedAt)
-        .map((session) => {
-          const lastMessage = session.messages[session.messages.length - 1];
-          return {
-            id: session.id,
-            title: session.title || "New thread",
-            preview: lastMessage?.speech?.trim() || "",
-            timestamp: session.updatedAt,
-          };
-        }),
+  const connected = Boolean(session?.runtimeUrl && session?.runtimeKey);
+  const sage = getPrimaryAgent();
+  const unseenChanges = Number(chatContextQuery.data?.personalContext.summary?.unseen_count || 0);
+  const specialistCount = chatContextQuery.data?.specialistInstalls.length ?? 0;
+  const pendingApprovals = approvals.length;
+
+  const specialistChannels = useMemo(() => {
+    const installs = chatContextQuery.data?.specialistInstalls ?? [];
+    if (installs.length > 0) {
+      return installs.map((install) => buildAgentThreadFromInstall(install));
+    }
+    return getFallbackSpecialists();
+  }, [chatContextQuery.data?.specialistInstalls]);
+
+  const sortedSessions = useMemo(
+    () => [...sessions].sort((a, b) => b.updatedAt - a.updatedAt),
     [sessions],
   );
 
-  const pendingApprovals = useMemo(
-    () =>
-      [...approvals]
-        .sort((a, b) => new Date(b.requested_at || 0).getTime() - new Date(a.requested_at || 0).getTime())
-        .slice(0, 3),
-    [approvals],
+  const findSessionForAgent = React.useCallback(
+    (agent: AgentThread) =>
+      sortedSessions.find((item) => item.agentId === agent.id || (agent.id === sage.id && item.agentId === "assistant")),
+    [sage.id, sortedSessions],
   );
 
-  const recentOutputs = useMemo(() => artifacts.slice(0, 4), [artifacts]);
+  const openChannel = React.useCallback(
+    (agent: AgentThread) => {
+      const sessionId = ensureSessionForAgent(agent);
+      router.push(`/chats/${sessionId}`);
+    },
+    [ensureSessionForAgent, router],
+  );
 
-  const handleNewChat = () => {
-    const sessionId = createSession(kin);
-    router.push(`/kin/${sessionId}`);
-  };
+  const startNewSageThread = React.useCallback(() => {
+    const sessionId = createSession(sage);
+    router.push(`/chats/${sessionId}`);
+  }, [createSession, router, sage]);
 
-  const openKin = React.useCallback(() => {
-    const sessionId = ensureSessionForAgent(kin);
-    router.push(`/kin/${sessionId}`);
-  }, [ensureSessionForAgent, kin, router]);
+  const subtitle = connected
+    ? "Sage stays pinned. Specialists sit below it as separate channels."
+    : "Preview the channel model now. Pair and connect to load live specialists.";
+
+  const sageSession = findSessionForAgent(sage);
 
   return (
     <ScrollView
@@ -76,300 +86,267 @@ export default function ChatsScreen() {
       showsVerticalScrollIndicator={false}
     >
       <PrimaryScreenHeader
-        title="KIN"
-        subtitle="Threads, approvals, and outputs in one workspace."
+        title="Chat"
+        subtitle={subtitle}
         action={{
-          accessibilityLabel: "Start a new thread",
+          accessibilityLabel: "Start a new Sage thread",
           icon: "add",
-          onPress: handleNewChat,
+          onPress: startNewSageThread,
           variant: "primary",
         }}
       />
 
-      <View
+      {!connected ? (
+        <View
+          style={{
+            marginBottom: 14,
+            padding: 16,
+            borderRadius: 18,
+            borderWidth: 1,
+            borderColor: theme.colors.border,
+            backgroundColor: theme.colors.surface,
+            gap: 10,
+          }}
+        >
+          <Text style={{ fontSize: 16, fontFamily: "DMSans_700Bold", color: theme.colors.text }}>
+            Pair the phone with your desktop workspace
+          </Text>
+          <Text style={{ fontSize: 13, lineHeight: 20, color: theme.colors.textSecondary }}>
+            QR pairing opens the session setup with runtime values prefilled. The fallback pairing code does the same if scanning is not available.
+          </Text>
+          <TouchableOpacity
+            activeOpacity={0.86}
+            onPress={() => router.push("/session")}
+            style={{
+              height: 42,
+              alignSelf: "flex-start",
+              paddingHorizontal: 16,
+              borderRadius: 999,
+              backgroundColor: theme.colors.accent,
+              alignItems: "center",
+              justifyContent: "center",
+            }}
+          >
+            <Text style={{ color: "#FFFFFF", fontSize: 13, fontWeight: "700" }}>Open pairing</Text>
+          </TouchableOpacity>
+        </View>
+      ) : null}
+
+      <Text
         style={{
-          borderRadius: 18,
-          borderWidth: 1,
-          borderColor: theme.colors.border,
-          backgroundColor: theme.colors.surface,
-          padding: 16,
+          fontSize: 11,
+          fontFamily: "DMSans_700Bold",
+          color: theme.colors.textSecondary,
+          textTransform: "uppercase",
+          letterSpacing: 1.1,
+        }}
+      >
+        Pinned
+      </Text>
+
+      <TouchableOpacity
+        activeOpacity={0.86}
+        onPress={() => openChannel(sage)}
+        style={{
+          marginTop: 10,
+          padding: 18,
+          borderRadius: 22,
+          backgroundColor: "#0F172A",
           gap: 14,
         }}
       >
         <View style={{ flexDirection: "row", alignItems: "flex-start", justifyContent: "space-between", gap: 12 }}>
-          <View style={{ flex: 1, gap: 8 }}>
-            <Text
-              style={{
-                fontSize: 11,
-                fontFamily: "DMSans_700Bold",
-                color: theme.colors.textSecondary,
-                textTransform: "uppercase",
-                letterSpacing: 1.1,
-              }}
-            >
-              Quick Start
-            </Text>
-            <Text style={{ fontSize: 22, fontFamily: "DMSans_700Bold", color: theme.colors.text }}>
-              Start a focused KIN thread
-            </Text>
-            <Text style={{ fontSize: 14, lineHeight: 21, color: theme.colors.textSecondary }}>
-              Open a clean conversation, review pending approvals, or jump back into a recent thread.
-            </Text>
-          </View>
-          <CoreStatusBar variant="pill" />
-        </View>
-
-        <TouchableOpacity
-          activeOpacity={0.86}
-          onPress={handleNewChat}
-          style={{
-            height: 44,
-            alignSelf: "flex-start",
-            paddingHorizontal: 18,
-            borderRadius: 999,
-            backgroundColor: theme.colors.accent,
-            alignItems: "center",
-            justifyContent: "center",
-          }}
-        >
-          <Text style={{ color: "#FFFFFF", fontSize: 13, fontWeight: "700" }}>New thread</Text>
-        </TouchableOpacity>
-      </View>
-
-      <SectionTitle title="Pending Approvals" />
-      <View style={{ marginTop: 10, gap: 10 }}>
-        {pendingApprovals.map((approval) => {
-          const capability = inferKinCapability(approval.action, approval.summary);
-          return (
+          <View style={{ flexDirection: "row", gap: 12, flex: 1 }}>
             <View
-              key={approval.approval_id}
               style={{
-                borderRadius: 16,
-                borderWidth: 1,
-                borderColor: theme.colors.border,
-                backgroundColor: theme.colors.surface,
-                padding: 16,
-                gap: 10,
+                width: 52,
+                height: 52,
+                borderRadius: 26,
+                backgroundColor: "rgba(255,255,255,0.14)",
+                alignItems: "center",
+                justifyContent: "center",
               }}
             >
-              <CapabilityBadge label={capability.label} icon={capability.icon} color={capability.color} />
-              <Text style={{ fontSize: 15, fontFamily: "DMSans_700Bold", color: theme.colors.text }}>
-                {approval.action}
-              </Text>
-              <Text style={{ fontSize: 13, lineHeight: 20, color: theme.colors.textSecondary }}>
-                {approval.summary || "KIN is waiting for approval before continuing."}
-              </Text>
-              <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
-                <Text style={{ flex: 1, fontSize: 12, color: theme.colors.textSecondary }}>
-                  {formatRelativeTime(approval.requested_at)}
+              <Ionicons name={sage.icon as any} size={22} color="#FFFFFF" />
+            </View>
+            <View style={{ flex: 1, gap: 6 }}>
+              <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+                <Text style={{ fontSize: 22, fontFamily: "DMSans_700Bold", color: "#FFFFFF" }}>
+                  {sage.label}
                 </Text>
-                <TouchableOpacity
-                  activeOpacity={0.86}
-                  onPress={openKin}
+                <View
                   style={{
-                    height: 38,
-                    paddingHorizontal: 16,
+                    height: 22,
+                    paddingHorizontal: 10,
                     borderRadius: 999,
-                    backgroundColor: theme.colors.accent,
+                    backgroundColor: "rgba(255,255,255,0.14)",
                     alignItems: "center",
                     justifyContent: "center",
                   }}
                 >
-                  <Text style={{ color: "#FFFFFF", fontSize: 13, fontWeight: "700" }}>Review</Text>
-                </TouchableOpacity>
+                  <Text style={{ color: "#FFFFFF", fontSize: 10, fontWeight: "700", letterSpacing: 0.8 }}>
+                    PINNED
+                  </Text>
+                </View>
               </View>
-            </View>
-          );
-        })}
-        {!loading && pendingApprovals.length === 0 ? (
-          <EmptyCard label="Approvals that need your sign-off will appear here." />
-        ) : null}
-      </View>
-
-      <SectionTitle title="Recent Threads" />
-      <View style={{ marginTop: 10, gap: 10 }}>
-        {rows.slice(0, 6).map((item) => (
-          <TouchableOpacity
-            key={item.id}
-            activeOpacity={0.82}
-            onPress={() => router.push(`/kin/${item.id}`)}
-            style={{
-              flexDirection: "row",
-              alignItems: "center",
-              paddingHorizontal: 16,
-              paddingVertical: 14,
-              backgroundColor: theme.colors.surface,
-              borderWidth: 1,
-              borderColor: theme.colors.border,
-              borderRadius: 16,
-            }}
-          >
-            <View
-              style={{
-                width: 48,
-                height: 48,
-                borderRadius: 24,
-                backgroundColor: kin.avatarColor,
-                alignItems: "center",
-                justifyContent: "center",
-              }}
-            >
-              <Ionicons name={kin.icon as any} size={20} color="#FFFFFF" />
-            </View>
-
-            <View style={{ flex: 1, marginLeft: 12 }}>
-              <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
-                <Text style={{ flex: 1, fontSize: 16, fontFamily: "DMSans_700Bold", color: theme.colors.text }} numberOfLines={1}>
-                  {item.title}
-                </Text>
-                <Text style={{ fontSize: 12, color: theme.colors.textSecondary }}>{formatTimestamp(item.timestamp)}</Text>
-              </View>
-              <Text
-                numberOfLines={1}
-                style={{
-                  marginTop: 4,
-                  fontSize: 13,
-                  lineHeight: 19,
-                  color: theme.colors.textSecondary,
-                }}
-              >
-                {item.preview || "Fresh thread ready for work."}
+              <Text style={{ fontSize: 13, lineHeight: 19, color: "rgba(255,255,255,0.76)" }}>
+                {connected
+                  ? "Master channel for context review, follow-ups, and specialist orchestration."
+                  : sage.subtitle}
               </Text>
             </View>
-          </TouchableOpacity>
-        ))}
-
-        {!rows.length ? (
-          <View
-            style={{
-              padding: 16,
-              borderRadius: 16,
-              borderWidth: 1,
-              borderColor: theme.colors.border,
-              backgroundColor: theme.colors.surface,
-              gap: 10,
-            }}
-          >
-            <Text style={{ fontSize: 16, fontFamily: "DMSans_700Bold", color: theme.colors.text }}>No threads yet</Text>
-            <Text style={{ fontSize: 13, lineHeight: 20, color: theme.colors.textSecondary }}>
-              Start one thread when you need KIN to reason, draft, plan, or review.
-            </Text>
-            <TouchableOpacity
-              activeOpacity={0.86}
-              onPress={handleNewChat}
-              style={{
-                height: 40,
-                alignSelf: "flex-start",
-                paddingHorizontal: 16,
-                borderRadius: 999,
-                backgroundColor: theme.colors.accent,
-                alignItems: "center",
-                justifyContent: "center",
-              }}
-            >
-              <Text style={{ color: "#FFFFFF", fontSize: 13, fontWeight: "700" }}>New thread</Text>
-            </TouchableOpacity>
           </View>
-        ) : null}
-      </View>
+          <Ionicons name="chevron-forward" size={18} color="rgba(255,255,255,0.78)" />
+        </View>
 
-      <SectionTitle title="Recent Outputs" />
+        <View style={{ flexDirection: "row", gap: 10 }}>
+          <MetricPill label="Specialists" value={specialistCount || specialistChannels.length} tone="dark" />
+          <MetricPill label="Unseen" value={unseenChanges} tone="dark" />
+          <MetricPill label="Approvals" value={pendingApprovals} tone="dark" />
+        </View>
+
+        <Text style={{ fontSize: 13, color: "rgba(255,255,255,0.76)" }} numberOfLines={2}>
+          {sageSession?.messages[sageSession.messages.length - 1]?.speech?.trim() || "Open Sage to start the main conversation."}
+        </Text>
+      </TouchableOpacity>
+
+      <Text
+        style={{
+          marginTop: 22,
+          fontSize: 11,
+          fontFamily: "DMSans_700Bold",
+          color: theme.colors.textSecondary,
+          textTransform: "uppercase",
+          letterSpacing: 1.1,
+        }}
+      >
+        Specialist Channels
+      </Text>
+
       <View style={{ marginTop: 10, gap: 10 }}>
-        {recentOutputs.map((artifact) => {
-          const capability = inferKinCapability(artifact.kind, artifact.label);
+        {specialistChannels.map((agent) => {
+          const sessionForAgent = findSessionForAgent(agent);
           return (
-            <View
-              key={artifact.id}
+            <TouchableOpacity
+              key={agent.id}
+              activeOpacity={0.84}
+              onPress={() => openChannel(agent)}
               style={{
-                borderRadius: 16,
+                flexDirection: "row",
+                alignItems: "center",
+                padding: 16,
+                borderRadius: 18,
                 borderWidth: 1,
                 borderColor: theme.colors.border,
                 backgroundColor: theme.colors.surface,
-                padding: 16,
-                gap: 10,
+                gap: 12,
               }}
             >
-              <CapabilityBadge label={capability.label} icon={capability.icon} color={capability.color} />
-              <Text style={{ fontSize: 15, fontFamily: "DMSans_700Bold", color: theme.colors.text }}>
-                {artifact.label}
-              </Text>
-              <Text style={{ fontSize: 12, color: theme.colors.textSecondary }}>
-                {artifact.kind ? `Saved as ${artifact.kind}` : "Saved output"}
-              </Text>
-            </View>
+              <View
+                style={{
+                  width: 48,
+                  height: 48,
+                  borderRadius: 24,
+                  backgroundColor: agent.avatarColor,
+                  alignItems: "center",
+                  justifyContent: "center",
+                }}
+              >
+                <Ionicons name={agent.icon as any} size={20} color="#FFFFFF" />
+              </View>
+
+              <View style={{ flex: 1, gap: 4 }}>
+                <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
+                  <Text style={{ flex: 1, fontSize: 16, fontFamily: "DMSans_700Bold", color: theme.colors.text }} numberOfLines={1}>
+                    {agent.label}
+                  </Text>
+                  <Text style={{ fontSize: 12, color: theme.colors.textSecondary }}>
+                    {formatTimestamp(sessionForAgent?.updatedAt)}
+                  </Text>
+                </View>
+                <Text style={{ fontSize: 13, lineHeight: 19, color: theme.colors.textSecondary }} numberOfLines={2}>
+                  {sessionForAgent?.messages[sessionForAgent.messages.length - 1]?.speech?.trim() || agent.subtitle || "Ready for a focused conversation."}
+                </Text>
+              </View>
+
+              <Ionicons name="chevron-forward" size={18} color={theme.colors.textSecondary} />
+            </TouchableOpacity>
           );
         })}
-        {!loading && recentOutputs.length === 0 ? <EmptyCard label="Useful outputs will appear here as KIN finishes work." /> : null}
       </View>
+
+      {!!sortedSessions.length ? (
+        <>
+          <Text
+            style={{
+              marginTop: 22,
+              fontSize: 11,
+              fontFamily: "DMSans_700Bold",
+              color: theme.colors.textSecondary,
+              textTransform: "uppercase",
+              letterSpacing: 1.1,
+            }}
+          >
+            Recent Activity
+          </Text>
+          <View style={{ marginTop: 10, gap: 10 }}>
+            {sortedSessions.slice(0, 4).map((sessionItem) => (
+              <TouchableOpacity
+                key={sessionItem.id}
+                activeOpacity={0.84}
+                onPress={() => router.push(`/chats/${sessionItem.id}`)}
+                style={{
+                  padding: 14,
+                  borderRadius: 16,
+                  borderWidth: 1,
+                  borderColor: theme.colors.border,
+                  backgroundColor: theme.colors.surface,
+                  gap: 6,
+                }}
+              >
+                <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
+                  <Text style={{ flex: 1, fontSize: 15, fontFamily: "DMSans_700Bold", color: theme.colors.text }} numberOfLines={1}>
+                    {sessionItem.agentName}
+                  </Text>
+                  <Text style={{ fontSize: 12, color: theme.colors.textSecondary }}>{formatTimestamp(sessionItem.updatedAt)}</Text>
+                </View>
+                <Text style={{ fontSize: 13, lineHeight: 18, color: theme.colors.textSecondary }} numberOfLines={2}>
+                  {sessionItem.messages[sessionItem.messages.length - 1]?.speech?.trim() || sessionItem.title}
+                </Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+        </>
+      ) : null}
     </ScrollView>
   );
 }
 
-function SectionTitle({ title }: { title: string }) {
-  const theme = useTheme();
-
-  return (
-    <Text
-      style={{
-        marginTop: 22,
-        fontSize: 11,
-        fontFamily: "DMSans_700Bold",
-        color: theme.colors.textSecondary,
-        textTransform: "uppercase",
-        letterSpacing: 1.1,
-      }}
-    >
-      {title}
-    </Text>
-  );
-}
-
-function CapabilityBadge({
+function MetricPill({
   label,
-  icon,
-  color,
+  value,
+  tone,
 }: {
   label: string;
-  icon: string;
-  color: string;
+  value: number;
+  tone: "dark" | "light";
 }) {
-  const theme = useTheme();
-
   return (
     <View
       style={{
-        alignSelf: "flex-start",
         flexDirection: "row",
         alignItems: "center",
-        gap: 8,
+        gap: 6,
+        height: 30,
+        paddingHorizontal: 12,
         borderRadius: 999,
-        paddingHorizontal: 10,
-        paddingVertical: 6,
-        borderWidth: 1,
-        borderColor: theme.colors.border,
-        backgroundColor: theme.colors.cardHover,
+        backgroundColor: tone === "dark" ? "rgba(255,255,255,0.12)" : "#111827",
       }}
     >
-      <Ionicons name={icon as any} size={14} color={color} />
-      <Text style={{ fontSize: 12, color: theme.colors.text, fontWeight: "700" }}>{label}</Text>
-    </View>
-  );
-}
-
-function EmptyCard({ label }: { label: string }) {
-  const theme = useTheme();
-
-  return (
-    <View
-      style={{
-        padding: 16,
-        borderRadius: 16,
-        borderWidth: 1,
-        borderColor: theme.colors.border,
-        backgroundColor: theme.colors.surface,
-      }}
-    >
-      <Text style={{ fontSize: 14, color: theme.colors.textSecondary }}>{label}</Text>
+      <Text style={{ color: tone === "dark" ? "rgba(255,255,255,0.74)" : "#FFFFFF", fontSize: 11, fontWeight: "700" }}>
+        {label}
+      </Text>
+      <Text style={{ color: "#FFFFFF", fontSize: 12, fontWeight: "800" }}>{value}</Text>
     </View>
   );
 }

@@ -2,15 +2,23 @@
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import { usePlatformShell } from '@/components/orion/PlatformShellContext';
-import { fetchAgents, type WorkspaceAgentInstallRecord } from '@/lib/api';
+import {
+  createSpecialistAgent,
+  fetchAgents,
+  saveSpecialistBible,
+  saveSpecialistChannelBindings,
+  saveSpecialistConnectorBindings,
+  saveSpecialistRuntimeProfile,
+  saveSpecialistSkillBindings,
+  updateSpecialistManifest,
+  type WorkspaceAgentInstallRecord,
+} from '@/lib/api';
 import {
   createDraftManifest,
   createDraftManifestFromBlueprint,
-  getAgentManifest,
-  metadataFromManifest,
-  updateManifestBible,
-  updateManifestIdentity,
-  updateManifestSkills,
+  type AgentManifest,
+  getRuntimeMode,
+  runtimeModeLabel,
   type AgentBoundSkillId,
   type AgentForgeArchetype,
 } from '@/components/orion/agents/agentRuntime';
@@ -43,65 +51,41 @@ type AgentsWorkspaceContextValue = {
   createDraftAgent: (input: {
     name: string;
     prompt: string;
+    behaviorPrompt?: string;
+    knowledgePrompt?: string;
     archetype: AgentForgeArchetype;
-  }) => WorkspaceAgentInstallRecord;
+  }) => Promise<WorkspaceAgentInstallRecord>;
   createDraftAgentFromBlueprint: (input: {
     rawBlueprint: string;
     fallbackName?: string;
-  }) => WorkspaceAgentInstallRecord;
-  updateDraftAgent: (
+  }) => Promise<WorkspaceAgentInstallRecord>;
+  saveDraftBible: (draftId: string, bible: string) => Promise<WorkspaceAgentInstallRecord | null>;
+  saveDraftSkills: (draftId: string, skills: AgentBoundSkillId[]) => Promise<WorkspaceAgentInstallRecord | null>;
+  saveDraftChannels: (draftId: string, channelBindings: Record<string, unknown>) => Promise<WorkspaceAgentInstallRecord | null>;
+  saveDraftManifest: (
     draftId: string,
-    patch: Partial<WorkspaceAgentInstallRecord> & { metadata?: Record<string, unknown> },
-  ) => void;
+    payload: {
+      manifest: AgentManifest;
+      runtime_profile_id?: string;
+      runtime_mode?: 'hosted_secure' | 'local_secure' | 'privileged_device';
+      connector_bindings?: Record<string, unknown>;
+      channel_bindings?: Record<string, unknown>;
+      metadata?: Record<string, unknown>;
+    },
+  ) => Promise<WorkspaceAgentInstallRecord | null>;
+  saveDraftConnectors: (draftId: string, connectorBindings: Record<string, unknown>) => Promise<WorkspaceAgentInstallRecord | null>;
+  saveDraftRuntime: (
+    draftId: string,
+    payload: {
+      runtime_profile_id?: string;
+      runtime_mode: 'hosted_secure' | 'local_secure' | 'privileged_device';
+    },
+  ) => Promise<WorkspaceAgentInstallRecord | null>;
 };
 
-const AGENT_DRAFTS_STORAGE_KEY = 'empyralis.agent-drafts.v1';
 const FORGE_NAME_STORAGE_KEY = 'empyralis.agent-forge-name.v1';
 
-const ARCHETYPE_LABELS: Record<AgentForgeArchetype, { category: string; runtimeLabel: string; description: string }> = {
-  support_specialist: {
-    category: 'Support',
-    runtimeLabel: 'Support inbox + phone lane',
-    description: 'Handles inbound questions, triage, and high-confidence replies with escalation rules.',
-  },
-  task_automator: {
-    category: 'Operations',
-    runtimeLabel: 'Workflow lane + runtime tools',
-    description: 'Executes repeatable tasks, updates systems, and requests approval only when policy requires it.',
-  },
-  intelligence_researcher: {
-    category: 'Research',
-    runtimeLabel: 'Web research + report lane',
-    description: 'Investigates, synthesizes, and turns messy information into operator-ready conclusions.',
-  },
-};
-
 const AgentsWorkspaceContext = createContext<AgentsWorkspaceContextValue | null>(null);
-
-function safeSlug(value: string): string {
-  return String(value || '')
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '') || 'agent';
-}
-
-function draftId(): string {
-  return `draft-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
-}
-
-function readDraftAgents(): WorkspaceAgentInstallRecord[] {
-  if (typeof window === 'undefined') return [];
-  try {
-    const raw = window.localStorage.getItem(AGENT_DRAFTS_STORAGE_KEY);
-    if (!raw) return [];
-    const parsed = JSON.parse(raw);
-    if (!Array.isArray(parsed)) return [];
-    return parsed.filter((item): item is WorkspaceAgentInstallRecord => typeof item?.id === 'string');
-  } catch {
-    return [];
-  }
-}
 
 function installSummary(install: WorkspaceAgentInstallRecord): string {
   const draftPrompt = String(install.metadata?.draft_prompt || '').trim();
@@ -116,9 +100,7 @@ function installCategory(install: WorkspaceAgentInstallRecord): string {
 }
 
 function installSource(install: WorkspaceAgentInstallRecord): AgentChannelSource {
-  const metadataSource = String(install.metadata?.source || '').trim().toLowerCase();
-  if (metadataSource === 'draft') return 'draft';
-  return 'installed';
+  return String(install.metadata?.source || '').trim().toLowerCase() === 'draft' ? 'draft' : 'installed';
 }
 
 function sourceLabelForInstall(install: WorkspaceAgentInstallRecord): string {
@@ -139,7 +121,7 @@ function statusLabelForInstall(install: WorkspaceAgentInstallRecord): string {
 }
 
 function runtimeLabelForInstall(install: WorkspaceAgentInstallRecord): string {
-  return String(install.runtime_profile?.label || '').trim() || 'Awaiting placement';
+  return String(install.runtime_profile?.label || '').trim() || runtimeModeLabel(getRuntimeMode(install));
 }
 
 function isLiveInstall(install: WorkspaceAgentInstallRecord): boolean {
@@ -165,22 +147,15 @@ function toChannelRecord(install: WorkspaceAgentInstallRecord): AgentChannelReco
 export function AgentsWorkspaceProvider({ children }: { children: React.ReactNode }) {
   const { activeWorkspaceId, workspaceLoading } = usePlatformShell();
   const [items, setItems] = useState<WorkspaceAgentInstallRecord[]>([]);
-  const [draftAgents, setDraftAgents] = useState<WorkspaceAgentInstallRecord[]>([]);
   const [forgeName, setForgeName] = useState('');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    setDraftAgents(readDraftAgents());
     if (typeof window === 'undefined') return;
     const nextForgeName = window.localStorage.getItem(FORGE_NAME_STORAGE_KEY) || '';
     setForgeName(nextForgeName);
   }, []);
-
-  useEffect(() => {
-    if (typeof window === 'undefined') return;
-    window.localStorage.setItem(AGENT_DRAFTS_STORAGE_KEY, JSON.stringify(draftAgents));
-  }, [draftAgents]);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -215,148 +190,166 @@ export function AgentsWorkspaceProvider({ children }: { children: React.ReactNod
     void load();
   }, [load, workspaceLoading]);
 
-  const channels = useMemo(() => {
-    const installedChannels = items.map(toChannelRecord);
-    const draftChannels = draftAgents.map(toChannelRecord);
-    return [...installedChannels, ...draftChannels];
-  }, [draftAgents, items]);
-
-  const updateDraftAgent = useCallback((
-    draftId: string,
-    patch: Partial<WorkspaceAgentInstallRecord> & { metadata?: Record<string, unknown> },
-  ) => {
-    const normalizedId = String(draftId || '').trim();
-    if (!normalizedId) return;
-    setDraftAgents((current) => current.map((item) => {
-      if (item.id !== normalizedId) return item;
-      const nextPatchMetadata = patch.metadata && typeof patch.metadata === 'object' ? patch.metadata : {};
-      let nextManifest = getAgentManifest(item);
-      if (Object.prototype.hasOwnProperty.call(nextPatchMetadata, 'agent_manifest')) {
-        nextManifest = getAgentManifest({
-          ...item,
-          metadata: { ...(item.metadata || {}), agent_manifest: nextPatchMetadata.agent_manifest },
-        } as WorkspaceAgentInstallRecord);
-      }
-      if (typeof patch.label === 'string' && patch.label.trim()) {
-        nextManifest = updateManifestIdentity(nextManifest, { name: patch.label.trim(), role: patch.label.trim() });
-      }
-      if (typeof nextPatchMetadata.draft_bible === 'string') {
-        nextManifest = updateManifestBible(nextManifest, nextPatchMetadata.draft_bible);
-      }
-      if (Array.isArray(nextPatchMetadata.bound_skills)) {
-        nextManifest = updateManifestSkills(nextManifest, nextPatchMetadata.bound_skills as AgentBoundSkillId[]);
-      }
-      const nextMetadata = {
-        ...(item.metadata || {}),
-        ...nextPatchMetadata,
-        ...metadataFromManifest(nextManifest, {
-          source: 'draft',
-          draft_prompt: String(nextPatchMetadata.draft_prompt || item.metadata?.draft_prompt || item.agent_definition?.description || nextManifest.identity.summary || '').trim(),
-          visibility: String(nextPatchMetadata.visibility || item.metadata?.visibility || 'private').trim() || 'private',
-          channel_bindings: nextManifest.channels,
-        }),
-      };
-      return {
-        ...item,
-        ...patch,
-        metadata: nextMetadata,
-      };
-    }));
+  const upsertInstall = useCallback((record: WorkspaceAgentInstallRecord) => {
+    setItems((current) => {
+      const existingIndex = current.findIndex((item) => item.id === record.id);
+      if (existingIndex === -1) return [record, ...current];
+      const next = [...current];
+      next[existingIndex] = record;
+      return next;
+    });
   }, []);
 
-  const createDraftAgent = useCallback((input: {
+  const draftAgents = useMemo(
+    () => items.filter((item) => installSource(item) === 'draft'),
+    [items],
+  );
+
+  const channels = useMemo(
+    () => items.map(toChannelRecord),
+    [items],
+  );
+
+  const createDraftAgent = useCallback(async (input: {
     name: string;
     prompt: string;
+    behaviorPrompt?: string;
+    knowledgePrompt?: string;
     archetype: AgentForgeArchetype;
   }) => {
+    if (!activeWorkspaceId) throw new Error('Active workspace is unavailable.');
     const trimmedName = input.name.trim() || 'Untitled Agent';
     const trimmedPrompt = input.prompt.trim() || `help with ${trimmedName}`;
-    const archetype = ARCHETYPE_LABELS[input.archetype];
     const manifest = createDraftManifest({
       name: trimmedName,
       prompt: trimmedPrompt,
+      behaviorPrompt: input.behaviorPrompt,
+      knowledgePrompt: input.knowledgePrompt,
       archetype: input.archetype,
     });
-    const nextDraft: WorkspaceAgentInstallRecord = {
-      id: draftId(),
-      label: trimmedName,
-      status: 'draft',
-      enabled: true,
+    const record = await createSpecialistAgent({
       workspace_id: activeWorkspaceId,
-      thread_id: `draft-thread-${safeSlug(trimmedName)}`,
-      metadata: metadataFromManifest(manifest, {
+      label: trimmedName,
+      manifest,
+      runtime_mode: 'hosted_secure',
+      metadata: {
         source: 'draft',
-        draft_prompt: trimmedPrompt,
         visibility: 'private',
-        channel_bindings: manifest.channels,
-      }),
-      policy_context_overrides: {
-        trust_mode: 'guarded',
+        draft_prompt: trimmedPrompt,
       },
-      agent_definition: {
-        id: safeSlug(trimmedName),
-        slug: safeSlug(trimmedName),
-        name: trimmedName,
-        description: trimmedPrompt,
-        category: archetype.category,
-        agent_kind: 'specialist',
-      },
-      runtime_profile: {
-        id: `draft-runtime-${safeSlug(trimmedName)}`,
-        label: archetype.runtimeLabel,
-        runtime_class: 'cloud_worker',
-        placement_mode: 'shared',
-        status: 'draft',
-      },
-    };
-    setDraftAgents((current) => [nextDraft, ...current.filter((item) => item.id !== nextDraft.id)]);
+      channel_bindings: manifest.channels,
+    });
+    upsertInstall(record);
     setForgeName(trimmedName);
-    return nextDraft;
-  }, [activeWorkspaceId]);
+    return record;
+  }, [activeWorkspaceId, upsertInstall]);
 
-  const createDraftAgentFromBlueprint = useCallback((input: {
+  const createDraftAgentFromBlueprint = useCallback(async (input: {
     rawBlueprint: string;
     fallbackName?: string;
   }) => {
+    if (!activeWorkspaceId) throw new Error('Active workspace is unavailable.');
     const manifest = createDraftManifestFromBlueprint(input.rawBlueprint, input.fallbackName);
     const trimmedName = manifest.identity.name.trim() || input.fallbackName?.trim() || 'Imported Agent';
-    const nextDraft: WorkspaceAgentInstallRecord = {
-      id: draftId(),
-      label: trimmedName,
-      status: 'draft',
-      enabled: true,
+    const record = await createSpecialistAgent({
       workspace_id: activeWorkspaceId,
-      thread_id: `draft-thread-${safeSlug(trimmedName)}`,
-      metadata: metadataFromManifest(manifest, {
+      label: trimmedName,
+      manifest,
+      runtime_mode: 'hosted_secure',
+      metadata: {
         source: 'draft',
-        draft_prompt: manifest.identity.summary,
         visibility: 'private',
         imported_blueprint: true,
-        channel_bindings: manifest.channels,
-      }),
-      policy_context_overrides: {
-        trust_mode: 'guarded',
+        draft_prompt: manifest.identity.summary,
       },
-      agent_definition: {
-        id: safeSlug(trimmedName),
-        slug: safeSlug(trimmedName),
-        name: trimmedName,
-        description: manifest.identity.summary,
-        category: ARCHETYPE_LABELS[manifest.identity.archetype === 'master_os' ? 'support_specialist' : manifest.identity.archetype].category,
-        agent_kind: 'specialist',
-      },
-      runtime_profile: {
-        id: `draft-runtime-${safeSlug(trimmedName)}`,
-        label: ARCHETYPE_LABELS[manifest.identity.archetype === 'master_os' ? 'support_specialist' : manifest.identity.archetype].runtimeLabel,
-        runtime_class: 'cloud_worker',
-        placement_mode: 'shared',
-        status: 'draft',
-      },
-    };
-    setDraftAgents((current) => [nextDraft, ...current.filter((item) => item.id !== nextDraft.id)]);
+      channel_bindings: manifest.channels,
+    });
+    upsertInstall(record);
     setForgeName(trimmedName);
-    return nextDraft;
-  }, [activeWorkspaceId]);
+    return record;
+  }, [activeWorkspaceId, upsertInstall]);
+
+  const saveDraftBible = useCallback(async (draftId: string, bible: string) => {
+    if (!activeWorkspaceId) return null;
+    const record = await saveSpecialistBible(draftId, {
+      workspace_id: activeWorkspaceId,
+      bible,
+    });
+    upsertInstall(record);
+    return record;
+  }, [activeWorkspaceId, upsertInstall]);
+
+  const saveDraftSkills = useCallback(async (draftId: string, skills: AgentBoundSkillId[]) => {
+    if (!activeWorkspaceId) return null;
+    const record = await saveSpecialistSkillBindings(draftId, {
+      workspace_id: activeWorkspaceId,
+      skill_ids: skills,
+    });
+    upsertInstall(record);
+    return record;
+  }, [activeWorkspaceId, upsertInstall]);
+
+  const saveDraftChannels = useCallback(async (draftId: string, channelBindings: Record<string, unknown>) => {
+    if (!activeWorkspaceId) return null;
+    const record = await saveSpecialistChannelBindings(draftId, {
+      workspace_id: activeWorkspaceId,
+      channel_bindings: channelBindings,
+    });
+    upsertInstall(record);
+    return record;
+  }, [activeWorkspaceId, upsertInstall]);
+
+  const saveDraftManifest = useCallback(async (
+    draftId: string,
+    payload: {
+      manifest: AgentManifest;
+      runtime_profile_id?: string;
+      runtime_mode?: 'hosted_secure' | 'local_secure' | 'privileged_device';
+      connector_bindings?: Record<string, unknown>;
+      channel_bindings?: Record<string, unknown>;
+      metadata?: Record<string, unknown>;
+    },
+  ) => {
+    if (!activeWorkspaceId) return null;
+    const record = await updateSpecialistManifest(draftId, {
+      workspace_id: activeWorkspaceId,
+      manifest: payload.manifest,
+      runtime_profile_id: payload.runtime_profile_id,
+      runtime_mode: payload.runtime_mode,
+      connector_bindings: payload.connector_bindings,
+      channel_bindings: payload.channel_bindings,
+      metadata: payload.metadata,
+    });
+    upsertInstall(record);
+    return record;
+  }, [activeWorkspaceId, upsertInstall]);
+
+  const saveDraftConnectors = useCallback(async (draftId: string, connectorBindings: Record<string, unknown>) => {
+    if (!activeWorkspaceId) return null;
+    const record = await saveSpecialistConnectorBindings(draftId, {
+      workspace_id: activeWorkspaceId,
+      connector_bindings: connectorBindings,
+    });
+    upsertInstall(record);
+    return record;
+  }, [activeWorkspaceId, upsertInstall]);
+
+  const saveDraftRuntime = useCallback(async (
+    draftId: string,
+    payload: {
+      runtime_profile_id?: string;
+      runtime_mode: 'hosted_secure' | 'local_secure' | 'privileged_device';
+    },
+  ) => {
+    if (!activeWorkspaceId) return null;
+    const record = await saveSpecialistRuntimeProfile(draftId, {
+      workspace_id: activeWorkspaceId,
+      runtime_profile_id: payload.runtime_profile_id,
+      runtime_mode: payload.runtime_mode,
+    });
+    upsertInstall(record);
+    return record;
+  }, [activeWorkspaceId, upsertInstall]);
 
   const value = useMemo<AgentsWorkspaceContextValue>(() => ({
     items,
@@ -369,8 +362,30 @@ export function AgentsWorkspaceProvider({ children }: { children: React.ReactNod
     setForgeName,
     createDraftAgent,
     createDraftAgentFromBlueprint,
-    updateDraftAgent,
-  }), [channels, createDraftAgent, createDraftAgentFromBlueprint, draftAgents, error, forgeName, items, load, loading, updateDraftAgent, workspaceLoading]);
+    saveDraftBible,
+    saveDraftSkills,
+    saveDraftChannels,
+    saveDraftManifest,
+    saveDraftConnectors,
+    saveDraftRuntime,
+  }), [
+    channels,
+    createDraftAgent,
+    createDraftAgentFromBlueprint,
+    draftAgents,
+    error,
+    forgeName,
+    items,
+    load,
+    loading,
+    saveDraftBible,
+    saveDraftChannels,
+    saveDraftConnectors,
+    saveDraftManifest,
+    saveDraftRuntime,
+    saveDraftSkills,
+    workspaceLoading,
+  ]);
 
   return (
     <AgentsWorkspaceContext.Provider value={value}>

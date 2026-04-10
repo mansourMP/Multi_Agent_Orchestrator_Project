@@ -13,12 +13,12 @@ import { useAppTheme as useTheme } from "@/src/theme/useAppTheme";
 const PROFILE_APP_IDS = ["study", "health", "finance", "travel", "nutrition", "language"];
 const DEFAULT_ACTIVE_APP_IDS = ["study", "health", "finance", "travel"];
 
-const UTILITY_LINKS: Array<{
+const UTILITY_LINKS: {
   href: string;
   label: string;
   subtitle: string;
   icon: keyof typeof Ionicons.glyphMap;
-}> = [
+}[] = [
   {
     href: "/notifications",
     label: "Notifications",
@@ -27,8 +27,8 @@ const UTILITY_LINKS: Array<{
   },
   {
     href: "/session",
-    label: "Connected Accounts",
-    subtitle: "Runtime and platform access",
+    label: "Pair & Connect",
+    subtitle: "Desktop pairing, runtime, and platform access",
     icon: "link-outline",
   },
   {
@@ -107,7 +107,7 @@ export default function SettingsScreen() {
           </Text>
           <Text style={{ fontSize: 14, lineHeight: 21, color: theme.colors.textSecondary }}>
             {connected
-              ? "KIN can use the runtime access you enabled. Utilities stay in the drawer so the main tabs remain focused."
+              ? "Sage can use the runtime access you enabled. Utilities stay in the drawer so the main tabs remain focused."
               : "Connect your runtime when you want live approvals, active runs, and saved outputs to flow into the app."}
           </Text>
           <TouchableOpacity
@@ -124,7 +124,7 @@ export default function SettingsScreen() {
             }}
           >
             <Text style={{ color: "#FFFFFF", fontSize: 13, fontWeight: "700" }}>
-              {connected ? "Open Status" : "Connected Accounts"}
+              {connected ? "Open Status" : "Pair & Connect"}
             </Text>
           </TouchableOpacity>
         </View>
@@ -171,7 +171,7 @@ export default function SettingsScreen() {
           ))}
         </View>
 
-        <SectionTitle title="KIN Preferences" />
+        <SectionTitle title="Sage Preferences" />
         <View
           style={{
             marginTop: 10,
@@ -228,7 +228,7 @@ export default function SettingsScreen() {
           }}
         >
           <Text style={{ fontSize: 13, lineHeight: 20, color: theme.colors.textSecondary }}>
-            KIN only uses the connections and apps you allow. Disconnecting removes this device from your private core.
+            Sage only uses the connections and apps you allow. Disconnecting removes this device from your private core.
           </Text>
           <TouchableOpacity
             activeOpacity={0.86}
@@ -283,7 +283,7 @@ export default function SettingsScreen() {
         <View style={{ flex: 1 }}>
           <Text style={{ fontSize: 22, fontFamily: "DMSans_700Bold", color: theme.colors.text }}>Settings</Text>
           <Text style={{ marginTop: 3, fontSize: 13, color: theme.colors.textSecondary }}>
-            Deeper controls for KIN behavior, app access, and privacy.
+            Deeper controls for Sage behavior, app access, and privacy.
           </Text>
         </View>
       </View>
@@ -299,11 +299,11 @@ export default function SettingsScreen() {
           }}
         >
           <Text style={{ fontSize: 14, lineHeight: 21, color: theme.colors.textSecondary }}>
-            Notifications, connected accounts, and runtime status stay in dedicated utility screens. Settings focuses on how KIN behaves inside the app.
+            Notifications, pairing, and runtime status stay in dedicated utility screens. Settings focuses on how Sage behaves inside the app.
           </Text>
         </View>
 
-        <SectionTitle title="KIN Behavior" />
+        <SectionTitle title="Sage Behavior" />
         <View
           style={{
             marginTop: 10,
@@ -315,7 +315,7 @@ export default function SettingsScreen() {
             backgroundColor: theme.colors.surface,
           }}
         >
-          <PreferenceGroup title="How proactive should KIN be?">
+          <PreferenceGroup title="How proactive should Sage be?">
             <ChoicePill
               label="Calm"
               selected={preferences.proactivity === "calm"}
@@ -333,7 +333,7 @@ export default function SettingsScreen() {
             />
           </PreferenceGroup>
 
-          <PreferenceGroup title="What should KIN remember across work?">
+          <PreferenceGroup title="What should Sage remember across work?">
             <ChoicePill
               label="Thread"
               selected={preferences.memoryBoundary === "thread"}
@@ -351,7 +351,7 @@ export default function SettingsScreen() {
             />
           </PreferenceGroup>
 
-          <PreferenceGroup title="How often should KIN remind you?">
+          <PreferenceGroup title="How often should Sage remind you?">
             <ChoicePill
               label="Important"
               selected={preferences.reminderCadence === "important"}
@@ -372,7 +372,7 @@ export default function SettingsScreen() {
           <View>
             <Text style={{ fontSize: 13, color: theme.colors.text, marginBottom: 10 }}>Active apps</Text>
             <Text style={{ fontSize: 13, lineHeight: 20, color: theme.colors.textSecondary, marginBottom: 12 }}>
-              KIN can open these app workspaces when structure helps.
+              Sage can open these app workspaces when structure helps.
             </Text>
             <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 10 }}>
               {activeApps.map((app) => {
@@ -407,7 +407,7 @@ export default function SettingsScreen() {
           }}
         >
           <Text style={{ fontSize: 14, lineHeight: 22, color: theme.colors.textSecondary }}>
-            KIN only uses the runtime and apps you explicitly enable. Use Connected Accounts in the drawer when you want to change runtime access.
+            Sage only uses the runtime and apps you explicitly enable. Use Pair & Connect in the drawer when you want to change runtime access.
           </Text>
 
           <TouchableOpacity

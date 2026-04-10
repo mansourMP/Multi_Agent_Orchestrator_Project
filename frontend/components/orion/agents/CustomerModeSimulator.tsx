@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
+import { useSearchParams } from 'next/navigation';
 import { ChatSurface, type ChatDepthOption, type ChatIdentityAction, type ChatIdentitySection } from '@/components/orion/chat/ChatSurface';
 import {
   buildChatSessionTitle,
@@ -56,6 +57,7 @@ async function buildUniversalHarnessReply(
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
+      install_id: install.id,
       workspace_id: String(install.workspace_id || '').trim(),
       tenant_id: String(install.tenant_id || '').trim() || undefined,
       customer_message: goal,
@@ -135,11 +137,14 @@ function createSession(install: WorkspaceAgentInstallRecord): ChatSessionRecord 
 export function CustomerModeSimulator({
   install,
   onRequestOwnerMode,
+  isMobile = false,
 }: {
   install: WorkspaceAgentInstallRecord;
   onRequestOwnerMode: () => void;
+  isMobile?: boolean;
 }) {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const { draftAgents } = useAgentsWorkspace();
   const primaryGoalRef = useRef<HTMLTextAreaElement | null>(null);
   const [sessions, setSessions] = useState<ChatSessionRecord[]>(() => [createSession(install)]);
@@ -152,12 +157,19 @@ export function CustomerModeSimulator({
     () => draftAgents.find((draft) => draft.id === install.id) || install,
     [draftAgents, install],
   );
+  const seededGoal = String(searchParams.get('q') || '').trim();
 
   useEffect(() => {
     if (!selectedSessionId && sessions[0]?.id) {
       setSelectedSessionId(sessions[0].id);
     }
   }, [selectedSessionId, sessions]);
+
+  useEffect(() => {
+    if (seededGoal && !goal.trim()) {
+      setGoal(seededGoal);
+    }
+  }, [goal, seededGoal]);
 
   const selectedSession = useMemo(
     () => sessions.find((session) => session.id === selectedSessionId) || sessions[0] || createSession(install),
@@ -275,7 +287,7 @@ export function CustomerModeSimulator({
 
   return (
     <ChatSurface
-      isMobile={false}
+      isMobile={isMobile}
       sessions={sessions}
       selectedSessionId={selectedSession.id}
       onSelectSession={setSelectedSessionId}

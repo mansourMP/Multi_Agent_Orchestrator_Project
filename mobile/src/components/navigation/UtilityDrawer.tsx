@@ -11,12 +11,12 @@ type UtilityDrawerProps = {
   onClose: () => void;
 };
 
-const DRAWER_ITEMS: Array<{
+const DRAWER_ITEMS: {
   href: string;
   label: string;
   subtitle: string;
   icon: keyof typeof Ionicons.glyphMap;
-}> = [
+}[] = [
   {
     href: "/notifications",
     label: "Notifications",
@@ -25,8 +25,8 @@ const DRAWER_ITEMS: Array<{
   },
   {
     href: "/session",
-    label: "Connected Accounts",
-    subtitle: "Runtime and platform access",
+    label: "Pair & Connect",
+    subtitle: "Desktop pairing, runtime, and platform access",
     icon: "link-outline",
   },
   {

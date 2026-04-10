@@ -2,7 +2,13 @@ import { Platform } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import Constants from "expo-constants";
 import * as Notifications from "expo-notifications";
+import type { NotificationItem } from "@shared/api-contract";
 import { mobileApi } from "./api";
+import {
+  ensureMobileDeviceId,
+  queuePersonalContextEvent,
+  recordNotificationSync,
+} from "./mobile-engine";
 import type { MobileSession } from "./types";
 
 const STORAGE_KEY = "empyralis.mobile.notifications.v1";
@@ -35,6 +41,13 @@ type RuntimeSyncState = {
   lastSyncedAt?: number;
 };
 
+export type RuntimeNotificationSyncResult = {
+  freshCount: number;
+  queuedContextEventCount: number;
+  highPriorityCount: number;
+  lastSyncedAt: number;
+};
+
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
     shouldShowBanner: true,
@@ -46,10 +59,6 @@ Notifications.setNotificationHandler({
 
 async function persist(state: StoredNotificationState) {
   await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(state));
-}
-
-function buildLocalDeviceId() {
-  return `mobile-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
 async function getRuntimeSyncState(): Promise<RuntimeSyncState> {
@@ -92,7 +101,7 @@ async function ensureStoredDeviceId(existing?: string): Promise<string> {
   const state = await getStoredNotificationState();
   const fromState = String(state.deviceId || "").trim();
   if (fromState) return fromState;
-  const nextId = buildLocalDeviceId();
+  const nextId = await ensureMobileDeviceId();
   await persist({ ...state, deviceId: nextId, updatedAt: Date.now() });
   return nextId;
 }
@@ -189,10 +198,96 @@ export async function registerForPushNotificationsAsync(session?: MobileSession 
   }
 }
 
-export async function syncRuntimeNotifications(session: MobileSession): Promise<number> {
+function parsePriority(item: NotificationItem) {
+  const metadata = item.metadata && typeof item.metadata === "object" ? item.metadata : {};
+  const explicit = Number((metadata as Record<string, unknown>).priority ?? -1);
+  if (Number.isFinite(explicit) && explicit >= 0) return explicit;
+  const action = String(item.action || "").toLowerCase();
+  const text = String(item.text || "").toLowerCase();
+  if (action.includes("approval") || text.includes("urgent") || text.includes("asap")) return 4;
+  if (action.includes("message") || text.includes("reply")) return 3;
+  return 2;
+}
+
+function isMessageAwaitingReply(item: NotificationItem) {
+  const channel = String(item.channel || "").toLowerCase();
+  const action = String(item.action || "").toLowerCase();
+  const text = String(item.text || "").toLowerCase();
+  return (
+    channel === "telegram" ||
+    channel === "whatsapp" ||
+    channel === "email" ||
+    channel === "web_chat" ||
+    action.includes("message") ||
+    text.includes("awaiting reply") ||
+    text.includes("needs reply")
+  );
+}
+
+function isReminderIgnored(item: NotificationItem) {
+  const action = String(item.action || "").toLowerCase();
+  const text = String(item.text || "").toLowerCase();
+  return (
+    (action.includes("reminder") || text.includes("reminder")) &&
+    (text.includes("ignored") || text.includes("missed") || text.includes("overdue"))
+  );
+}
+
+async function queueEventsFromNotification(item: NotificationItem) {
+  const queued: string[] = [];
+  const id = String(item.id || item.message_id || item.trace_id || item.run_id || "").trim();
+  const routePayload = item.metadata && typeof item.metadata === "object" ? item.metadata : {};
+  if (!id) return queued;
+
+  if (isMessageAwaitingReply(item)) {
+    await queuePersonalContextEvent({
+      sourceApp: "mobile_notifications",
+      eventType: "message_awaiting_reply",
+      entityId: `notification:${id}`,
+      summary: item.text || `A ${item.channel || "customer"} message is waiting for reply.`,
+      payload: {
+        notification_id: id,
+        channel: item.channel,
+        session_key: item.session_key,
+        route: routePayload,
+      },
+      priority: Math.max(3, parsePriority(item)),
+      scope: { audience: "sage" },
+      metadata: { source: "runtime_notification" },
+    });
+    queued.push("message_awaiting_reply");
+  }
+
+  if (isReminderIgnored(item)) {
+    await queuePersonalContextEvent({
+      sourceApp: "mobile_notifications",
+      eventType: "reminder_ignored",
+      entityId: `notification:${id}:reminder`,
+      summary: item.text || "A reminder looks ignored or overdue.",
+      payload: {
+        notification_id: id,
+        channel: item.channel,
+        route: routePayload,
+      },
+      priority: Math.max(3, parsePriority(item)),
+      scope: { audience: "sage" },
+      metadata: { source: "runtime_notification" },
+    });
+    queued.push("reminder_ignored");
+  }
+
+  return queued;
+}
+
+export async function syncRuntimeNotifications(session: MobileSession): Promise<RuntimeNotificationSyncResult> {
   let permission = await getStoredNotificationState();
   if (permission.permissionStatus !== "granted") {
-    return 0;
+    return {
+      freshCount: 0,
+      queuedContextEventCount: 0,
+      highPriorityCount: 0,
+      lastSyncedAt: Date.now(),
+    };
   }
   if (!permission.expoPushToken || !permission.deviceId || !permission.runtimeRegistration?.registeredAt) {
     permission = await registerForPushNotificationsAsync(session);
@@ -210,36 +305,52 @@ export async function syncRuntimeNotifications(session: MobileSession): Promise<
     const id = String(item?.id ?? "");
     return id && !delivered.has(id);
   });
+  let queuedContextEventCount = 0;
+  let highPriorityCount = 0;
   for (const item of fresh) {
     const id = String(item?.id ?? "");
     if (id) delivered.add(id);
+    const queued = await queueEventsFromNotification(item);
+    queuedContextEventCount += queued.length;
+    if (parsePriority(item) >= 3) {
+      highPriorityCount += 1;
+    }
   }
 
+  const lastSyncedAt = Date.now();
   await persistRuntimeSyncState({
     deliveredIds: [...delivered],
-    lastSyncedAt: Date.now(),
+    lastSyncedAt,
   });
-  return fresh.length;
+  await recordNotificationSync({
+    freshCount: fresh.length,
+  });
+  return {
+    freshCount: fresh.length,
+    queuedContextEventCount,
+    highPriorityCount,
+    lastSyncedAt,
+  };
 }
 
 export function getNotificationHref(data: NotificationRouteData | undefined | null) {
   if (!data) return null;
   if (typeof data.url === "string" && data.url.trim()) return data.url.trim();
   if (typeof data.path === "string" && data.path.trim()) return data.path.trim().startsWith("/") ? data.path.trim() : `/${data.path.trim()}`;
-  if (typeof data.agentId === "string" && data.agentId.trim()) return "/kin";
+  if (typeof data.agentId === "string" && data.agentId.trim()) return "/chats";
   if (typeof data.screen === "string" && data.screen.trim()) {
     const screen = data.screen.trim().toLowerCase();
     if (screen === "today" || screen === "home") return "/home";
-    if (screen === "spaces" || screen === "inbox") return "/inbox";
+    if (screen === "spaces" || screen === "inbox" || screen === "notifications") return "/inbox";
     if (screen === "apps") return "/apps";
-    if (screen === "chats" || screen === "kin") return "/kin";
+    if (screen === "chats" || screen === "kin" || screen === "chat") return "/chats";
     if (screen === "profile" || screen === "settings") return "/profile";
   }
   if (typeof data.tab === "string" && data.tab.trim()) {
     const normalized = data.tab.trim().toLowerCase();
     if (normalized === "today") return "/home";
-    if (normalized === "spaces") return "/inbox";
-    if (normalized === "chats") return "/kin";
+    if (normalized === "spaces" || normalized === "notifications") return "/inbox";
+    if (normalized === "chats" || normalized === "chat") return "/chats";
     return `/${normalized}`;
   }
   return null;
@@ -255,10 +366,10 @@ export async function scheduleAgentTestNotification(options?: {
 
   return Notifications.scheduleNotificationAsync({
     content: {
-      title: options?.title || "KIN",
-      body: options?.body || "Test notification from KIN. Tap to open the conversation.",
+      title: options?.title || "Sage",
+      body: options?.body || "Test notification from Sage. Tap to open the conversation.",
       data: {
-        url: options?.path || (options?.agentId ? "/kin" : "/home"),
+        url: options?.path || (options?.agentId ? "/chats" : "/home"),
         agentId: options?.agentId,
       },
     },

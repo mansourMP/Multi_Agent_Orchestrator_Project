@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { ChevronLeft, ShieldCheck } from 'lucide-react';
 import { AgentModeToggle, type AgentMode } from './AgentModeToggle';
 import type { WorkspaceAgentInstallRecord } from '@/lib/api';
+import { getRuntimeMode, runtimeModeLabel } from './agentRuntime';
 
 function labelOf(install: WorkspaceAgentInstallRecord): string {
   return String(install.label || install.agent_definition?.name || 'Agent').trim() || 'Agent';
@@ -47,7 +48,7 @@ export function ChannelHeader({
               {String(install.agent_definition?.category || 'Operations')}
             </span>
             <span className="rounded-full border border-white/5 bg-white/[0.05] px-2.5 py-1 backdrop-blur-xl">
-              {String(install.runtime_profile?.label || 'Unassigned placement')}
+              {String(install.runtime_profile?.label || '').trim() || runtimeModeLabel(getRuntimeMode(install))}
             </span>
             <span className="inline-flex items-center gap-1 rounded-full border border-emerald-300/20 bg-emerald-300/10 px-2.5 py-1 text-emerald-100 backdrop-blur-xl">
               <ShieldCheck size={12} />

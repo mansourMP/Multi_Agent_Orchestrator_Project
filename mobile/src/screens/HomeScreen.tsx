@@ -16,9 +16,9 @@ import {
   isActiveRunStatus,
   isCompletedRunStatus,
 } from "@/src/lib/kin-surface";
-import { useMobileOverviewData } from "@/src/lib/mobile-data";
+import { useMobileChatContext, useMobileOverviewData } from "@/src/lib/mobile-data";
 import { useSessionState } from "@/src/lib/session-context";
-import type { AppRecord } from "@/src/lib/types";
+import type { ActivitySummary, AppRecord, RuntimeAttachmentSummary, UnifiedMemorySummary } from "@/src/lib/types";
 import { useChatStore } from "@/src/stores/chatStore";
 import { useAppTheme as useTheme } from "@/src/theme/useAppTheme";
 
@@ -30,10 +30,15 @@ export default function HomeScreen() {
   const { session } = useSessionState();
   const { preferences } = useKinPreferences();
   const { runs, approvals, artifacts, loading } = useMobileOverviewData();
+  const chatContextQuery = useMobileChatContext();
   const ensureSessionForAgent = useChatStore((state) => state.ensureSessionForAgent);
   const [featuredApps, setFeaturedApps] = React.useState<AppRecord[]>([]);
   const connected = Boolean(session?.runtimeUrl && session?.runtimeKey);
   const kin = getPrimaryAgent();
+  const runtimeAttachments = chatContextQuery.data?.runtimeAttachments;
+  const recentActivity = chatContextQuery.data?.recentActivity;
+  const unifiedMemory = chatContextQuery.data?.unifiedMemory;
+  const scheduler = chatContextQuery.data?.scheduler;
   const selectedAppIds = React.useMemo(
     () => (preferences.activeAppIds.length ? preferences.activeAppIds : DEFAULT_ACTIVE_APP_IDS),
     [preferences.activeAppIds],
@@ -121,15 +126,31 @@ export default function HomeScreen() {
   );
 
   const recentOutputs = React.useMemo(() => artifacts.slice(0, 4), [artifacts]);
+  const continuity = React.useMemo(
+    () => summarizeRuntimeContinuity(connected, runtimeAttachments),
+    [connected, runtimeAttachments],
+  );
+  const recentCaptainActivity = React.useMemo(
+    () => (recentActivity?.items ?? []).slice(0, 3),
+    [recentActivity?.items],
+  );
+  const privacySummary = React.useMemo(
+    () => summarizeMemoryBoundary(unifiedMemory),
+    [unifiedMemory],
+  );
+  const queuedWakeups = React.useMemo(() => {
+    const value = Number(scheduler?.wakeQueue?.pending_count ?? 0);
+    return Number.isFinite(value) ? value : 0;
+  }, [scheduler?.wakeQueue?.pending_count]);
 
   const openKin = React.useCallback(() => {
     const sessionId = ensureSessionForAgent(kin);
-    router.push(`/kin/${sessionId}`);
+    router.push(`/chats/${sessionId}`);
   }, [ensureSessionForAgent, kin, router]);
 
-  const briefTitle = connected ? "Operational snapshot" : "Connect your private core";
+  const briefTitle = connected ? continuity.title : "Connect your private core";
   const briefText = connected
-    ? `KIN has ${approvalQueue.length} approvals waiting, ${activeRuns.length} live runs, and ${featuredApps.length} pinned apps ready to open.`
+    ? `${continuity.detail} Sage has ${approvalQueue.length} approvals waiting, ${activeRuns.length} live runs, and ${recentCaptainActivity.length} recent captain updates${queuedWakeups > 0 ? ` with ${queuedWakeups} background wake${queuedWakeups === 1 ? "" : "s"} queued.` : "."}`
     : "Connect your runtime to populate Home with live approvals, active work, and saved outputs.";
 
   return (
@@ -177,6 +198,11 @@ export default function HomeScreen() {
         </Text>
         <Text style={{ fontSize: 22, fontFamily: "DMSans_700Bold", color: theme.colors.text }}>{briefTitle}</Text>
         <Text style={{ fontSize: 14, lineHeight: 21, color: theme.colors.textSecondary }}>{briefText}</Text>
+        {connected ? (
+          <Text style={{ fontSize: 12, lineHeight: 18, color: theme.colors.textSecondary }}>
+            {privacySummary}
+          </Text>
+        ) : null}
       </View>
 
       {!connected ? (
@@ -195,7 +221,7 @@ export default function HomeScreen() {
             Live data is offline
           </Text>
           <Text style={{ fontSize: 13, lineHeight: 20, color: theme.colors.textSecondary }}>
-            Connect accounts to turn Home into a real operations view.
+            Pair and connect your core to turn Home into a real operations view.
           </Text>
           <TouchableOpacity
             activeOpacity={0.86}
@@ -210,13 +236,114 @@ export default function HomeScreen() {
               justifyContent: "center",
             }}
           >
-            <Text style={{ color: "#FFFFFF", fontSize: 13, fontWeight: "700" }}>Connected Accounts</Text>
+            <Text style={{ color: "#FFFFFF", fontSize: 13, fontWeight: "700" }}>Pair &amp; Connect</Text>
           </TouchableOpacity>
         </View>
       ) : null}
 
       {connected ? (
         <>
+          <SectionTitle title="Continuity" />
+          <View style={{ marginTop: 10, gap: 10 }}>
+            <View
+              style={{
+                borderRadius: 16,
+                borderWidth: 1,
+                borderColor: theme.colors.border,
+                backgroundColor: theme.colors.surface,
+                padding: 16,
+                gap: 10,
+              }}
+            >
+              <CapabilityBadge
+                label={continuity.modeLabel}
+                icon={continuity.icon}
+                color={continuity.color}
+              />
+              <Text style={{ fontSize: 15, fontFamily: "DMSans_700Bold", color: theme.colors.text }}>
+                {continuity.title}
+              </Text>
+              <Text style={{ fontSize: 13, lineHeight: 20, color: theme.colors.textSecondary }}>
+                {continuity.detail}
+              </Text>
+              <Text style={{ fontSize: 12, lineHeight: 18, color: theme.colors.textSecondary }}>
+                {continuity.attachmentSummary}
+              </Text>
+              <View style={{ flexDirection: "row", gap: 10 }}>
+                <TouchableOpacity
+                  activeOpacity={0.86}
+                  onPress={() => router.push("/status")}
+                  style={{
+                    height: 38,
+                    paddingHorizontal: 14,
+                    borderRadius: 999,
+                    backgroundColor: theme.colors.accent,
+                    alignItems: "center",
+                    justifyContent: "center",
+                  }}
+                >
+                  <Text style={{ color: "#FFFFFF", fontSize: 12, fontWeight: "700" }}>Open Status</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  activeOpacity={0.86}
+                  onPress={() => router.push("/notifications")}
+                  style={{
+                    height: 38,
+                    paddingHorizontal: 14,
+                    borderRadius: 999,
+                    borderWidth: 1,
+                    borderColor: theme.colors.border,
+                    backgroundColor: theme.colors.surface,
+                    alignItems: "center",
+                    justifyContent: "center",
+                  }}
+                >
+                  <Text style={{ color: theme.colors.text, fontSize: 12, fontWeight: "700" }}>Review Feed</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          </View>
+
+          <SectionTitle title="Recent Captain Activity" />
+          <View style={{ marginTop: 10, gap: 10 }}>
+            {recentCaptainActivity.map((item) => (
+              <View
+                key={item.id}
+                style={{
+                  borderRadius: 16,
+                  borderWidth: 1,
+                  borderColor: theme.colors.border,
+                  backgroundColor: theme.colors.surface,
+                  padding: 16,
+                  gap: 10,
+                }}
+              >
+                <CapabilityBadge
+                  label={formatActivityActor(item)}
+                  icon={activityIcon(item)}
+                  color={activityColor(item)}
+                />
+                <Text style={{ fontSize: 15, fontFamily: "DMSans_700Bold", color: theme.colors.text }}>
+                  {item.title || item.summary || "Captain activity"}
+                </Text>
+                <Text style={{ fontSize: 13, lineHeight: 20, color: theme.colors.textSecondary }}>
+                  {item.summary || "A new bounded activity summary is ready."}
+                </Text>
+                <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
+                  <Text style={{ flex: 1, fontSize: 12, color: theme.colors.textSecondary }}>
+                    {item.created_at ? formatRelativeTime(item.created_at) : "Just now"}
+                  </Text>
+                  <Text style={{ fontSize: 12, color: item.review_required ? theme.colors.warning : theme.colors.textSecondary }}>
+                    {item.review_required ? "Review needed" : `${item.artifacts.length} artifact${item.artifacts.length === 1 ? "" : "s"}`}
+                  </Text>
+                </View>
+              </View>
+            ))}
+            {!chatContextQuery.isLoading && recentCaptainActivity.length === 0 ? (
+              <EmptyCard label="Captain activity summaries will appear here once Sage or a specialist finishes work." />
+            ) : null}
+          </View>
+
           <SectionTitle title="Needs Attention" />
           <View style={{ marginTop: 10, gap: 10 }}>
             {approvalQueue.map((approval) => {
@@ -238,7 +365,7 @@ export default function HomeScreen() {
                     {approval.action}
                   </Text>
                   <Text style={{ fontSize: 13, lineHeight: 20, color: theme.colors.textSecondary }}>
-                    {approval.summary || "KIN is waiting for approval before it continues."}
+                    {approval.summary || "Sage is waiting for approval before it continues."}
                   </Text>
                   <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
                     <Text style={{ flex: 1, fontSize: 12, color: theme.colors.textSecondary }}>
@@ -287,7 +414,7 @@ export default function HomeScreen() {
                     <Text style={{ fontSize: 12, color: theme.colors.textSecondary }}>{formatRunStatus(run.status)}</Text>
                   </View>
                   <Text style={{ fontSize: 15, fontFamily: "DMSans_700Bold", color: theme.colors.text }}>
-                    {run.summary || "KIN is working on a request."}
+                    {run.summary || "Sage is working on a request."}
                   </Text>
                   <Text style={{ fontSize: 13, lineHeight: 20, color: theme.colors.textSecondary }}>
                     Started {formatRelativeTime(run.started_at)}
@@ -304,8 +431,8 @@ export default function HomeScreen() {
                       alignItems: "center",
                       justifyContent: "center",
                     }}
-                  >
-                    <Text style={{ color: "#FFFFFF", fontSize: 13, fontWeight: "700" }}>Open KIN</Text>
+                    >
+                    <Text style={{ color: "#FFFFFF", fontSize: 13, fontWeight: "700" }}>Open Sage</Text>
                   </TouchableOpacity>
                 </View>
               );
@@ -363,7 +490,7 @@ export default function HomeScreen() {
                     <Text style={{ fontSize: 12, color: theme.colors.textSecondary }}>{formatRunStatus(run.status)}</Text>
                   </View>
                   <Text style={{ fontSize: 15, fontFamily: "DMSans_700Bold", color: theme.colors.text }}>
-                    {run.summary || "KIN finished a run."}
+                    {run.summary || "Sage finished a run."}
                   </Text>
                   <Text style={{ fontSize: 13, lineHeight: 20, color: theme.colors.textSecondary }}>
                     {formatRelativeTime(run.started_at)}
@@ -371,7 +498,7 @@ export default function HomeScreen() {
                 </View>
               );
             })}
-            {!loading && importantChanges.length === 0 ? <EmptyCard label="Important changes will land here once KIN finishes work." /> : null}
+            {!loading && importantChanges.length === 0 ? <EmptyCard label="Important changes will land here once Sage finishes work." /> : null}
           </View>
         </>
       ) : null}
@@ -406,7 +533,7 @@ export default function HomeScreen() {
               </Text>
               <Text style={{ marginTop: 4, fontSize: 12, lineHeight: 18, color: theme.colors.textSecondary }}>
                 {app.status === "installed" && !needsUpdate
-                  ? "Ready in KIN"
+                  ? "Ready in Sage"
                   : needsUpdate
                     ? "Update available"
                     : "Available to activate"}
@@ -542,4 +669,101 @@ function EmptyCard({ label }: { label: string }) {
       <Text style={{ fontSize: 14, color: theme.colors.textSecondary }}>{label}</Text>
     </View>
   );
+}
+
+function humanizeToken(value: string | undefined): string {
+  return String(value || "")
+    .trim()
+    .replace(/[_-]+/g, " ")
+    .replace(/\s+/g, " ")
+    .replace(/\b\w/g, (match) => match.toUpperCase()) || "Unknown";
+}
+
+function formatDeploymentMode(value: string | undefined): string {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (normalized === "cloud_only") return "Cloud + Phone";
+  if (normalized === "local_only") return "Local Core";
+  if (normalized === "hybrid") return "Hybrid Core";
+  if (normalized === "self_hosted_business") return "Self-Hosted";
+  return "Connected Core";
+}
+
+function summarizeRuntimeContinuity(
+  connected: boolean,
+  runtimeAttachments:
+    | {
+        deploymentMode?: string;
+        attachments: RuntimeAttachmentSummary[];
+      }
+    | undefined,
+) {
+  if (!connected) {
+    return {
+      title: "Connect your private core",
+      detail: "Mobile stays the same captain surface, but it needs a paired runtime before live work, activity, and memory continuity can appear.",
+      modeLabel: "Offline",
+      attachmentSummary: "No runtime is attached to this phone yet.",
+      icon: "cloud-offline-outline",
+      color: "#F59E0B",
+    };
+  }
+
+  const attachments = runtimeAttachments?.attachments ?? [];
+  const deploymentMode = runtimeAttachments?.deploymentMode;
+  const localAttachments = attachments.filter((item) => item.attachment_kind === "local_companion");
+  const healthyLocalCount = localAttachments.filter((item) => item.healthy !== false && item.online !== false).length;
+  const healthyAttachmentCount = attachments.filter((item) => item.healthy !== false).length;
+  const degradedLocal = localAttachments.length > 0 && healthyLocalCount === 0;
+  const modeLabel = formatDeploymentMode(deploymentMode);
+
+  if (degradedLocal) {
+    return {
+      title: "Hybrid continuity is degraded",
+      detail: "Sage stays the same across phone and desktop, but local-private execution is currently unavailable until your paired companion comes back online.",
+      modeLabel,
+      attachmentSummary: `${healthyAttachmentCount}/${Math.max(attachments.length, 1)} attachments are healthy. ${localAttachments.length} local attachment${localAttachments.length === 1 ? "" : "s"} detected.`,
+      icon: "warning-outline",
+      color: "#F59E0B",
+    };
+  }
+
+  return {
+    title: `${modeLabel} is ready`,
+    detail: "Requests from mobile keep the same runtime and policy semantics as desktop. Capability comes from the attached runtimes, not from the phone surface.",
+    modeLabel,
+    attachmentSummary: `${healthyAttachmentCount}/${Math.max(attachments.length, 1)} attachments are healthy${localAttachments.length > 0 ? `, with ${healthyLocalCount} local companion${healthyLocalCount === 1 ? "" : "s"} online.` : "."}`,
+    icon: "sync-outline",
+    color: "#10B981",
+  };
+}
+
+function summarizeMemoryBoundary(unifiedMemory: UnifiedMemorySummary | undefined): string {
+  if (!unifiedMemory) {
+    return "Memory boundaries will appear after Sage syncs the shared captain context.";
+  }
+  const localOnly = unifiedMemory.boundaryMap.neverSyncByDefault.length;
+  const cloudSynced = unifiedMemory.boundaryMap.cloudSyncedByDefault.length;
+  const optIn = unifiedMemory.boundaryMap.explicitOptIn.length;
+  return `${localOnly} memory layer${localOnly === 1 ? "" : "s"} stay local by default, ${cloudSynced} cloud-safe layer${cloudSynced === 1 ? "" : "s"} sync by default, and ${optIn} layer${optIn === 1 ? "" : "s"} still require explicit opt-in.`;
+}
+
+function formatActivityActor(item: ActivitySummary): string {
+  if (item.actor_type === "sage") return "Sage";
+  if (item.actor_type === "specialist") return item.actor_id ? `Specialist · ${humanizeToken(item.actor_id)}` : "Specialist";
+  if (item.actor_type === "application") return item.actor_id ? `App · ${humanizeToken(item.actor_id)}` : "Application";
+  return humanizeToken(item.actor_type || item.event_class || "activity");
+}
+
+function activityIcon(item: ActivitySummary): string {
+  if (item.review_required) return "alert-circle-outline";
+  if ((item.artifacts || []).length > 0) return "document-text-outline";
+  if (item.event_class === "delegation") return "git-branch-outline";
+  if (item.event_class === "memory_update") return "albums-outline";
+  return "sparkles-outline";
+}
+
+function activityColor(item: ActivitySummary): string {
+  if (item.review_required) return "#F59E0B";
+  if ((item.artifacts || []).length > 0) return "#14B8A6";
+  return "#10B981";
 }

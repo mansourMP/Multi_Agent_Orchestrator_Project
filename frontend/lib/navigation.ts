@@ -2,6 +2,7 @@ export type NavigationSectionId =
   | 'sage'
   | 'runs'
   | 'agents'
+  | 'integrations'
   | 'usage'
   | 'account'
   | 'settings';
@@ -50,6 +51,15 @@ export const NAVIGATION_SECTIONS: NavigationSection[] = [
     prefixes: ['/agents/'],
   },
   {
+    id: 'integrations',
+    label: 'Integrations',
+    href: '/integrations',
+    summary: 'Connected tools, credentials, machines, and runtime health.',
+    kind: 'primary',
+    exact: ['/integrations', '/connectors', '/credentials', '/machines', '/health', '/connect-ai'],
+    prefixes: ['/integrations/'],
+  },
+  {
     id: 'usage',
     label: 'Usage',
     href: '/usage',
@@ -69,10 +79,9 @@ export const NAVIGATION_SECTIONS: NavigationSection[] = [
     id: 'settings',
     label: 'Settings',
     href: '/settings',
-    summary: 'Workspace defaults, policy, governance, and connected system health.',
+    summary: 'Workspace defaults, policy, governance, and advanced configuration.',
     kind: 'utility',
-    exact: ['/settings', '/workspace', '/team', '/admin', '/feedback', '/integrations', '/connectors', '/credentials', '/machines', '/health', '/connect-ai'],
-    prefixes: ['/integrations/'],
+    exact: ['/settings', '/workspace', '/team', '/admin', '/feedback'],
   },
 ];
 

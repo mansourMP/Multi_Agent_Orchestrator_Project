@@ -10,6 +10,10 @@ use std::time::{Duration, Instant};
 
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
+#[cfg(target_os = "macos")]
+use objc2_app_kit::NSWindow;
+#[cfg(target_os = "macos")]
+use objc2_foundation::{ns_string, NSUserDefaults};
 use rand::{rngs::OsRng, RngCore};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -45,8 +49,14 @@ const OPENAI_CODEX_JWT_PROFILE_CLAIM_PATH: &str = "https://api.openai.com/profil
 const OPENAI_CODEX_CALLBACK_TIMEOUT: Duration = Duration::from_secs(180);
 
 struct DesktopShellLockState {
-    lock_path: PathBuf,
-    start_meta_path: PathBuf,
+    lock_path: Option<PathBuf>,
+    start_meta_path: Option<PathBuf>,
+    skip_launch: bool,
+}
+
+enum DesktopShellAcquireResult {
+    Acquired(PathBuf),
+    AlreadyRunning,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -583,6 +593,51 @@ fn ensure_state_dir() -> Result<(), String> {
     fs::create_dir_all(pid_dir()).map_err(|error| format!("Failed to create pid directory: {error}"))
 }
 
+#[cfg(target_os = "macos")]
+fn disable_macos_window_restoration() {
+    let defaults = NSUserDefaults::standardUserDefaults();
+    defaults.setBool_forKey(true, ns_string!("ApplePersistenceIgnoreState"));
+}
+
+#[cfg(not(target_os = "macos"))]
+fn disable_macos_window_restoration() {}
+
+#[cfg(target_os = "macos")]
+fn clear_macos_saved_window_state() -> Result<(), String> {
+    let Some(home) = std::env::var_os("HOME") else {
+        return Ok(());
+    };
+
+    let home = PathBuf::from(home);
+    let saved_state_paths = [
+        home.join("Library")
+            .join("Saved Application State")
+            .join("com.empyralis.desktop.savedState"),
+        home.join("Library")
+            .join("Containers")
+            .join("com.empyralis.desktop")
+            .join("Data")
+            .join("Library")
+            .join("Saved Application State")
+            .join("com.empyralis.desktop.savedState"),
+    ];
+
+    for path in saved_state_paths {
+        if path.exists() {
+            fs::remove_dir_all(&path).map_err(|error| {
+                format!("Failed to clear macOS saved window state at {}: {error}", path.display())
+            })?;
+        }
+    }
+
+    Ok(())
+}
+
+#[cfg(not(target_os = "macos"))]
+fn clear_macos_saved_window_state() -> Result<(), String> {
+    Ok(())
+}
+
 fn process_running(pid: u32) -> bool {
     if pid == 0 {
         return false;
@@ -666,14 +721,14 @@ fn existing_desktop_process() -> Option<u32> {
     None
 }
 
-fn acquire_desktop_shell_lock() -> Result<PathBuf, String> {
+fn acquire_desktop_shell_lock() -> Result<DesktopShellAcquireResult, String> {
     ensure_state_dir()?;
     let lock_path = desktop_shell_lock_path();
     let current_pid = std::process::id();
 
     if let Some(existing_pid) = existing_desktop_process() {
         focus_existing_desktop_process(existing_pid);
-        return Err("Empyralis desktop is already running.".into());
+        return Ok(DesktopShellAcquireResult::AlreadyRunning);
     }
 
     if lock_path.exists() {
@@ -681,7 +736,7 @@ fn acquire_desktop_shell_lock() -> Result<PathBuf, String> {
         let existing_pid = raw.trim().parse::<u32>().unwrap_or(0);
         if existing_pid != 0 && existing_pid != current_pid && process_running(existing_pid) {
             focus_existing_desktop_process(existing_pid);
-            return Err("Empyralis desktop is already running.".into());
+            return Ok(DesktopShellAcquireResult::AlreadyRunning);
         }
     }
 
@@ -692,7 +747,7 @@ fn acquire_desktop_shell_lock() -> Result<PathBuf, String> {
         )
     })?;
 
-    Ok(lock_path)
+    Ok(DesktopShellAcquireResult::Acquired(lock_path))
 }
 
 fn release_desktop_shell_lock(lock_path: &PathBuf) {
@@ -1022,7 +1077,7 @@ fn backend_base_url() -> String {
 }
 
 fn backend_health_url() -> String {
-    format!("http://{BACKEND_HOST}:{BACKEND_PORT}/health")
+    format!("{}/health", backend_base_url())
 }
 
 fn next_url() -> String {
@@ -1285,16 +1340,34 @@ enum BackendMode {
 }
 
 fn service_ready(url: &str, accept_client_errors: bool) -> bool {
-    let Ok(response) = ureq::get(url).call() else {
-        return false;
-    };
-
-    let status = response.status().as_u16();
-    if accept_client_errors {
-        (200..500).contains(&status)
-    } else {
-        (200..300).contains(&status)
+    match ureq::get(url).call() {
+        Ok(response) => {
+            let status = response.status().as_u16();
+            if accept_client_errors {
+                (200..600).contains(&status)
+            } else {
+                (200..300).contains(&status)
+            }
+        }
+        Err(ureq::Error::StatusCode(status)) if accept_client_errors => (400..600).contains(&status),
+        Err(_) => false,
     }
+}
+
+#[cfg(target_os = "macos")]
+fn mark_window_non_restorable<R: Runtime>(window: &tauri::WebviewWindow<R>) -> Result<(), String> {
+    let ns_window = window
+        .ns_window()
+        .map_err(|error| format!("Failed to resolve macOS window handle: {error}"))?;
+    let ns_window: &NSWindow = unsafe { &*ns_window.cast() };
+    ns_window.setRestorable(false);
+    ns_window.disableSnapshotRestoration();
+    Ok(())
+}
+
+#[cfg(not(target_os = "macos"))]
+fn mark_window_non_restorable<R: Runtime>(_window: &tauri::WebviewWindow<R>) -> Result<(), String> {
+    Ok(())
 }
 
 fn wait_for_ready(url: &str, accept_client_errors: bool, label: &str) -> Result<(), String> {
@@ -1354,6 +1427,7 @@ fn spawn_backend(runtime_key: &str) -> Result<Child, String> {
 
     command
         .current_dir(backend_dir())
+        .env("PORT", BACKEND_PORT)
         .env("RUNTIME_KEY", runtime_key)
         .env("ORION_API_KEY", runtime_key)
         .env("ORION_API_URL", runtime_url())
@@ -1455,15 +1529,22 @@ fn desktop_bridge_script() -> String {
     )
 }
 
-fn ensure_main_window<R: Runtime>(app: &tauri::App<R>) -> Result<(), String> {
+fn ensure_main_window<R: Runtime, M: Manager<R>>(app: &M) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        let _ = app.app_handle().set_activation_policy(tauri::ActivationPolicy::Regular);
+    }
+
     if let Some(window) = app.get_webview_window(WINDOW_LABEL) {
         window
             .eval(&desktop_bridge_script())
             .map_err(|error| format!("Failed to refresh desktop bridge on existing main window: {error}"))?;
         let _ = window.set_title(WINDOW_TITLE);
         let _ = window.set_size(Size::Logical(LogicalSize::new(WINDOW_WIDTH, WINDOW_HEIGHT)));
+        let _ = window.unminimize();
         let _ = window.show();
         let _ = window.set_focus();
+        let _ = mark_window_non_restorable(&window);
         return Ok(());
     }
 
@@ -1474,22 +1555,30 @@ fn ensure_main_window<R: Runtime>(app: &tauri::App<R>) -> Result<(), String> {
     let mut window_builder = WebviewWindowBuilder::new(app, WINDOW_LABEL, WebviewUrl::External(url))
         .initialization_script(&desktop_bridge_script())
         .title(WINDOW_TITLE)
-        .inner_size(WINDOW_WIDTH, WINDOW_HEIGHT);
+        .inner_size(WINDOW_WIDTH, WINDOW_HEIGHT)
+        .visible(true)
+        .focused(true);
 
     #[cfg(target_os = "macos")]
     {
         window_builder = window_builder.title_bar_style(tauri::TitleBarStyle::Overlay);
     }
 
-    window_builder
+    let window = window_builder
         .build()
         .map_err(|error| format!("Failed to build main window: {error}"))?;
+
+    let _ = mark_window_non_restorable(&window);
+    let _ = window.unminimize();
+    let _ = window.show();
+    let _ = window.set_focus();
 
     Ok(())
 }
 
-fn overlay_monitor_bounds<R: Runtime>(app: &tauri::App<R>) -> Result<(f64, f64, f64, f64), String> {
+fn overlay_monitor_bounds<R: Runtime, M: Manager<R>>(app: &M) -> Result<(f64, f64, f64, f64), String> {
     let monitor = app
+        .app_handle()
         .primary_monitor()
         .map_err(|error| format!("Failed to resolve primary monitor for overlay: {error}"))?;
     if let Some(monitor) = monitor {
@@ -1506,7 +1595,7 @@ fn overlay_monitor_bounds<R: Runtime>(app: &tauri::App<R>) -> Result<(f64, f64, 
     Ok((0.0, 0.0, WINDOW_WIDTH, WINDOW_HEIGHT))
 }
 
-fn create_overlay_window<R: Runtime>(app: &tauri::App<R>) -> Result<(), String> {
+fn create_overlay_window<R: Runtime, M: Manager<R>>(app: &M) -> Result<(), String> {
     if app.get_webview_window(OVERLAY_WINDOW_LABEL).is_some() {
         return Ok(());
     }
@@ -1534,6 +1623,7 @@ fn create_overlay_window<R: Runtime>(app: &tauri::App<R>) -> Result<(), String> 
     .build()
     .map_err(|error| format!("Failed to build computer-control overlay window: {error}"))?;
 
+    let _ = mark_window_non_restorable(&overlay_window);
     let _ = overlay_window.set_always_on_top(true);
     let _ = overlay_window.set_ignore_cursor_events(true);
     let _ = overlay_window.set_focusable(false);
@@ -1956,6 +2046,7 @@ fn bootstrap_machine_enrollment(
 }
 
 pub fn run() {
+    disable_macos_window_restoration();
     tauri::Builder::default()
         .plugin(tauri_plugin_updater::Builder::new().build())
         .invoke_handler(tauri::generate_handler![
@@ -1965,11 +2056,35 @@ pub fn run() {
             bootstrap_machine_enrollment
         ])
         .setup(|app| {
+            #[cfg(target_os = "macos")]
+            app.set_activation_policy(tauri::ActivationPolicy::Regular);
+
+            if let Err(error) = clear_macos_saved_window_state() {
+                return Err(Box::new(std::io::Error::other(error)));
+            }
+
             let app_handle = app.handle().clone();
-            let lock_path =
+            let launch_state =
                 acquire_desktop_shell_lock().map_err(|error| -> Box<dyn std::error::Error> {
                     Box::new(std::io::Error::other(error))
                 })?;
+
+            app.manage(SidecarState(Mutex::new(Sidecars::default())));
+
+            if matches!(launch_state, DesktopShellAcquireResult::AlreadyRunning) {
+                app.manage(DesktopShellLockState {
+                    lock_path: None,
+                    start_meta_path: None,
+                    skip_launch: true,
+                });
+                app.handle().exit(0);
+                return Ok(());
+            }
+
+            let lock_path = match launch_state {
+                DesktopShellAcquireResult::Acquired(lock_path) => lock_path,
+                DesktopShellAcquireResult::AlreadyRunning => unreachable!(),
+            };
 
             let runtime_key =
                 ensure_runtime_key().map_err(|error| -> Box<dyn std::error::Error> {
@@ -1981,11 +2096,10 @@ pub fn run() {
                     release_desktop_shell_lock(&lock_path);
                     Box::new(std::io::Error::other(error))
                 })?;
-
-            app.manage(SidecarState(Mutex::new(Sidecars::default())));
             app.manage(DesktopShellLockState {
-                lock_path: lock_path.clone(),
-                start_meta_path: start_meta_path.clone(),
+                lock_path: Some(lock_path.clone()),
+                start_meta_path: Some(start_meta_path.clone()),
+                skip_launch: false,
             });
 
             let state = app.state::<SidecarState>();
@@ -2054,33 +2168,62 @@ pub fn run() {
                 return Err(Box::new(std::io::Error::other(error)));
             }
 
-            if let Err(error) = ensure_main_window(app) {
-                stop_sidecars(&state);
-                release_desktop_start_metadata(&start_meta_path);
-                release_desktop_shell_lock(&lock_path);
-                return Err(Box::new(std::io::Error::other(error)));
-            }
-
-            if let Err(error) = create_overlay_window(app) {
-                stop_sidecars(&state);
-                release_desktop_start_metadata(&start_meta_path);
-                release_desktop_shell_lock(&lock_path);
-                return Err(Box::new(std::io::Error::other(error)));
-            }
-
-            start_overlay_bridge(app_handle);
-
             Ok(())
         })
         .build(tauri::generate_context!())
         .expect("failed to build Empyralis Tauri shell")
         .run(|app_handle, event| {
-            if matches!(event, RunEvent::Exit | RunEvent::ExitRequested { .. }) {
-                let state = app_handle.state::<SidecarState>();
-                stop_sidecars(&state);
-                let lock_state = app_handle.state::<DesktopShellLockState>();
-                release_desktop_start_metadata(&lock_state.start_meta_path);
-                release_desktop_shell_lock(&lock_state.lock_path);
+            match event {
+                RunEvent::Ready => {
+                    let lock_state = app_handle.state::<DesktopShellLockState>();
+                    if lock_state.skip_launch {
+                        return;
+                    }
+
+                    if let Err(error) = ensure_main_window(app_handle) {
+                        eprintln!("Empyralis desktop failed to create the main window: {error}");
+                        let state = app_handle.state::<SidecarState>();
+                        stop_sidecars(&state);
+                        let lock_state = app_handle.state::<DesktopShellLockState>();
+                        if let Some(path) = &lock_state.start_meta_path {
+                            release_desktop_start_metadata(path);
+                        }
+                        if let Some(path) = &lock_state.lock_path {
+                            release_desktop_shell_lock(path);
+                        }
+                        app_handle.exit(1);
+                        return;
+                    }
+
+                    if let Err(error) = create_overlay_window(app_handle) {
+                        eprintln!("Empyralis desktop failed to create the overlay window: {error}");
+                        let state = app_handle.state::<SidecarState>();
+                        stop_sidecars(&state);
+                        let lock_state = app_handle.state::<DesktopShellLockState>();
+                        if let Some(path) = &lock_state.start_meta_path {
+                            release_desktop_start_metadata(path);
+                        }
+                        if let Some(path) = &lock_state.lock_path {
+                            release_desktop_shell_lock(path);
+                        }
+                        app_handle.exit(1);
+                        return;
+                    }
+
+                    start_overlay_bridge(app_handle.clone());
+                }
+                RunEvent::Exit | RunEvent::ExitRequested { .. } => {
+                    let state = app_handle.state::<SidecarState>();
+                    stop_sidecars(&state);
+                    let lock_state = app_handle.state::<DesktopShellLockState>();
+                    if let Some(path) = &lock_state.start_meta_path {
+                        release_desktop_start_metadata(path);
+                    }
+                    if let Some(path) = &lock_state.lock_path {
+                        release_desktop_shell_lock(path);
+                    }
+                }
+                _ => {}
             }
         });
 }

@@ -254,7 +254,7 @@ export default function AppHomeScreen() {
                   Version {app.version}
                 </Text>
                 <Text style={{ fontSize: 12, color: theme.colors.textSecondary }}>
-                  Ready to use in KIN.
+                  Ready to use in Sage.
                 </Text>
                 <Text style={{ fontSize: 12, color: theme.colors.textSecondary }}>
                   Updates must be installed before launch.

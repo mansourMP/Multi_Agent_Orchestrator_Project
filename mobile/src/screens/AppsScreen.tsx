@@ -133,8 +133,8 @@ export default function AppsScreen() {
       contentContainerStyle={{ paddingHorizontal: 20, paddingBottom: 40 }}
     >
       <PrimaryScreenHeader
-        title="Apps"
-        subtitle="Focused tools KIN can open when structure helps."
+        title="Applications"
+        subtitle="Focused modules Sage can open when structure helps."
         action={{
           accessibilityLabel: "Open app store",
           label: "Store",
@@ -159,7 +159,7 @@ export default function AppsScreen() {
           }}
         >
           <Text style={{ fontSize: 12, color: theme.colors.textSecondary }}>
-            Connect your Mac Mini to install and open apps.
+            Pair and connect your core to install and open applications.
           </Text>
           <TouchableOpacity
             onPress={() => router.push("/session")}

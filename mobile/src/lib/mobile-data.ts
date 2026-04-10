@@ -3,12 +3,16 @@ import { useQuery } from "@tanstack/react-query";
 import { mobileApi } from "./api";
 import { useSessionState } from "./session-context";
 import type {
+  ActivitySummary,
   ApprovalSummary,
   ArtifactSummary,
   ConnectorSummary,
   MachineSummary,
   NotificationSummary,
+  RuntimeAttachmentSummary,
   RunSummary,
+  SchedulerSummary,
+  UnifiedMemorySummary,
 } from "./types";
 
 function dedupeBy<T>(items: T[], keyOf: (item: T) => string) {
@@ -149,6 +153,138 @@ function normalizeNotifications(payload: any): NotificationSummary[] {
   );
 }
 
+export type MobileChatContextSnapshot = {
+  threadId?: string;
+  masterInstall: Record<string, any> | null;
+  specialistInstalls: Record<string, any>[];
+  personalContext: {
+    recentChanges: Record<string, any>[];
+    summary: Record<string, any>;
+  };
+  runtimeAttachments: {
+    deploymentMode?: string;
+    attachments: RuntimeAttachmentSummary[];
+    selectionPolicy: Record<string, any>;
+  };
+  recentActivity: {
+    items: ActivitySummary[];
+    summary: Record<string, any>;
+  };
+  unifiedMemory: UnifiedMemorySummary;
+  scheduler: SchedulerSummary;
+};
+
+function normalizeStringList(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.map((item) => String(item ?? "").trim()).filter(Boolean)
+    : [];
+}
+
+function normalizeRuntimeAttachments(payload: unknown): MobileChatContextSnapshot["runtimeAttachments"] {
+  const record = payload && typeof payload === "object" ? (payload as Record<string, any>) : {};
+  const attachments = Array.isArray(record.attachments) ? record.attachments : [];
+  return {
+    deploymentMode: typeof record.deployment_mode === "string" ? record.deployment_mode : undefined,
+    attachments: attachments
+      .filter((item) => item && typeof item === "object")
+      .map((item) => ({
+        attachment_id: typeof item.attachment_id === "string" ? item.attachment_id : undefined,
+        attachment_kind: typeof item.attachment_kind === "string" ? item.attachment_kind : undefined,
+        label: typeof item.label === "string" ? item.label : undefined,
+        runtime_id: typeof item.runtime_id === "string" ? item.runtime_id : undefined,
+        machine_id: typeof item.machine_id === "string" ? item.machine_id : undefined,
+        online: typeof item.online === "boolean" ? item.online : undefined,
+        healthy: typeof item.healthy === "boolean" ? item.healthy : undefined,
+        status: typeof item.status === "string" ? item.status : undefined,
+        control_state: typeof item.control_state === "string" ? item.control_state : undefined,
+        runtime_profile_label: typeof item.runtime_profile_label === "string" ? item.runtime_profile_label : undefined,
+        note: typeof item.note === "string" ? item.note : undefined,
+      })),
+    selectionPolicy: record.selection_policy && typeof record.selection_policy === "object"
+      ? record.selection_policy
+      : {},
+  };
+}
+
+function normalizeRecentActivity(payload: unknown): MobileChatContextSnapshot["recentActivity"] {
+  const record = payload && typeof payload === "object" ? (payload as Record<string, any>) : {};
+  const items = Array.isArray(record.items) ? record.items : [];
+  return {
+    items: items
+      .filter((item) => item && typeof item === "object")
+      .map((item) => ({
+        id: String(item.id ?? ""),
+        actor_type: typeof item.actor_type === "string" ? item.actor_type : undefined,
+        actor_id: typeof item.actor_id === "string" ? item.actor_id : undefined,
+        event_class: typeof item.event_class === "string" ? item.event_class : undefined,
+        action: typeof item.action === "string" ? item.action : undefined,
+        title: typeof item.title === "string" ? item.title : undefined,
+        summary: typeof item.summary === "string" ? item.summary : undefined,
+        created_at: typeof item.created_at === "string" ? item.created_at : undefined,
+        review_required: item.review_required === true,
+        artifacts: Array.isArray(item.artifacts)
+          ? item.artifacts
+              .filter((artifact) => artifact && typeof artifact === "object")
+              .map((artifact) => ({
+                path: typeof artifact.path === "string" ? artifact.path : undefined,
+                label: typeof artifact.label === "string" ? artifact.label : undefined,
+                preview_url: typeof artifact.preview_url === "string" ? artifact.preview_url : undefined,
+                review_required: artifact.review_required === true,
+              }))
+          : [],
+      }))
+      .filter((item) => Boolean(item.id)),
+    summary: record.summary && typeof record.summary === "object" ? record.summary : {},
+  };
+}
+
+function normalizeUnifiedMemory(payload: unknown): UnifiedMemorySummary {
+  const record = payload && typeof payload === "object" ? (payload as Record<string, any>) : {};
+  const boundaryMap = record.boundary_map && typeof record.boundary_map === "object"
+    ? (record.boundary_map as Record<string, any>)
+    : {};
+  return {
+    layerOrder: normalizeStringList(record.layer_order),
+    summary: record.summary && typeof record.summary === "object" ? record.summary : {},
+    boundaryMap: {
+      neverSyncByDefault: normalizeStringList(boundaryMap.never_sync_by_default),
+      cloudSyncedByDefault: normalizeStringList(boundaryMap.cloud_synced_by_default),
+      explicitOptIn: normalizeStringList(boundaryMap.requires_explicit_opt_in_to_sync),
+    },
+  };
+}
+
+function normalizeScheduler(payload: unknown): SchedulerSummary {
+  const record = payload && typeof payload === "object" ? (payload as Record<string, any>) : {};
+  return {
+    policy: record.policy && typeof record.policy === "object" ? record.policy : {},
+    wakeQueue: record.wake_queue && typeof record.wake_queue === "object" ? record.wake_queue : {},
+  };
+}
+
+function normalizeChatContext(payload: any): MobileChatContextSnapshot {
+  const record = payload && typeof payload === "object" ? (payload as Record<string, any>) : {};
+  return {
+    threadId: typeof record.thread_id === "string" ? record.thread_id : undefined,
+    masterInstall: record.master_install && typeof record.master_install === "object" ? record.master_install : null,
+    specialistInstalls: Array.isArray(record.specialist_installs)
+      ? record.specialist_installs.filter((item) => item && typeof item === "object")
+      : [],
+    personalContext: {
+      recentChanges: Array.isArray(record.personal_context?.recent_changes)
+        ? record.personal_context.recent_changes.filter((item: unknown) => item && typeof item === "object")
+        : [],
+      summary: record.personal_context?.summary && typeof record.personal_context.summary === "object"
+        ? record.personal_context.summary
+        : {},
+    },
+    runtimeAttachments: normalizeRuntimeAttachments(record.runtime_attachments),
+    recentActivity: normalizeRecentActivity(record.recent_activity),
+    unifiedMemory: normalizeUnifiedMemory(record.unified_memory),
+    scheduler: normalizeScheduler(record.scheduler),
+  };
+}
+
 export function useMobileOverviewData() {
   const { session } = useSessionState();
   const enabled = Boolean(session?.runtimeUrl && session?.runtimeKey);
@@ -278,5 +414,17 @@ export function useMobileNotifications() {
       include_backlog: true,
       limit: 25,
     })),
+  });
+}
+
+export function useMobileChatContext() {
+  const { session } = useSessionState();
+  const enabled = Boolean(session?.runtimeUrl && session?.runtimeKey);
+  return useQuery({
+    queryKey: ["mobile", "chat-context", session?.runtimeUrl, session?.workspaceId],
+    enabled,
+    retry: false,
+    refetchInterval: enabled ? 15_000 : false,
+    queryFn: async () => normalizeChatContext(await mobileApi.getChatContext(session!)),
   });
 }

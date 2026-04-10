@@ -29,7 +29,13 @@ import {
   type ChatSessionSelectDetail,
   type ChatStoreRecord,
 } from '@/components/orion/chat/chatSchema';
-import { fetchMasterChatContext, type WorkspaceAgentInstallRecord } from '@/lib/api';
+import {
+  fetchActivityTimeline,
+  fetchMasterChatContext,
+  type ActivityTimelinePayload,
+  type MasterChatContextRecord,
+  type WorkspaceAgentInstallRecord,
+} from '@/lib/api';
 import type { ThreadRecord } from '@shared/api-contract';
 import { WorkbenchShell } from '@/components/orion/workbench/WorkbenchShell';
 import {
@@ -189,6 +195,43 @@ function humanizeProviderLabel(value: string): string {
   if (normalized === 'codex_cli') return 'Codex/OpenAI';
   if (normalized === 'claude_code_cli') return 'Claude Code';
   return humanizeRunCardLabel(normalized);
+}
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
+}
+
+function listStrings(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.map((item) => String(item || '').trim()).filter(Boolean)
+    : [];
+}
+
+function formatRuntimeDeploymentMode(value: string | null | undefined): string {
+  const normalized = String(value || '').trim().toLowerCase();
+  if (normalized === 'cloud_only') return 'Cloud + mobile';
+  if (normalized === 'local_only') return 'Local captain';
+  if (normalized === 'hybrid') return 'Hybrid captain';
+  if (normalized === 'self_hosted_business') return 'Self-hosted';
+  return 'Connected workspace';
+}
+
+function humanizeScopeLabel(value: string | null | undefined): string {
+  return String(value || '')
+    .trim()
+    .replace(/[_-]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .replace(/\b\w/g, (match) => match.toUpperCase()) || 'Unknown';
+}
+
+function formatActivityActorLabel(item: Record<string, unknown>): string {
+  const actorType = String(item.actor_type || '').trim().toLowerCase();
+  const actorId = String(item.actor_id || '').trim();
+  if (actorType === 'sage') return 'Sage';
+  if (actorType === 'specialist') return actorId ? `Specialist · ${humanizeScopeLabel(actorId)}` : 'Specialist';
+  if (actorType === 'application') return actorId ? `App · ${humanizeScopeLabel(actorId)}` : 'Application';
+  if (actorType === 'system') return 'System';
+  return humanizeScopeLabel(actorType || actorId || 'activity');
 }
 
 function readPendingApprovalRecord(payload: Record<string, unknown> | null): SimpleChatPermissionPrompt | null {
@@ -552,6 +595,8 @@ function SageWorkspace() {
   const [masterThreadId, setMasterThreadId] = useState<string | null>(null);
   const [sageInstall, setSageInstall] = useState<WorkspaceAgentInstallRecord | null>(null);
   const [activeSpecialistAgents, setActiveSpecialistAgents] = useState<WorkspaceAgentInstallRecord[]>([]);
+  const [masterContext, setMasterContext] = useState<MasterChatContextRecord | null>(null);
+  const [activityTimeline, setActivityTimeline] = useState<ActivityTimelinePayload | null>(null);
 
   const selectedSessionId = chatStore.selectedSessionId || chatStore.sessions[0]?.id || null;
   const selectedChatSession = useMemo(
@@ -686,8 +731,13 @@ function SageWorkspace() {
 
     const loadMasterContext = async () => {
       try {
-        const context = await fetchMasterChatContext(activeWorkspaceId);
+        const [context, timeline] = await Promise.all([
+          fetchMasterChatContext(activeWorkspaceId),
+          fetchActivityTimeline(activeWorkspaceId, 8).catch(() => null),
+        ]);
         if (!alive) return;
+        setMasterContext(context);
+        setActivityTimeline(timeline);
         setMasterThreadId(String(context.thread_id || '').trim() || null);
         setSageInstall(context.master_install);
         setActiveSpecialistAgents(Array.isArray(context.specialist_installs) ? context.specialist_installs : []);
@@ -739,6 +789,8 @@ function SageWorkspace() {
         });
       } catch {
         if (!alive) return;
+        setMasterContext(null);
+        setActivityTimeline(null);
         setMasterThreadId(null);
         setSageInstall(null);
         setActiveSpecialistAgents([]);
@@ -1375,6 +1427,81 @@ function SageWorkspace() {
     return null;
   }, [chatAuthRequiredMessage, chatNoProviderStatus, modelOptions.length, modelsLoading]);
 
+  const runtimeSurfaceState = useMemo(() => {
+    const attachments = Array.isArray(masterContext?.runtime_attachments?.attachments)
+      ? masterContext.runtime_attachments.attachments
+      : [];
+    const localAttachments = attachments.filter((item) => String(item.attachment_kind || '').trim() === 'local_companion');
+    const hostedAttachments = attachments.filter((item) => String(item.attachment_kind || '').trim() !== 'local_companion');
+    const healthyAttachments = attachments.filter((item) => item.healthy !== false && item.online !== false);
+    const healthyLocalCount = localAttachments.filter((item) => item.healthy !== false && item.online !== false).length;
+    return {
+      deploymentMode: formatRuntimeDeploymentMode(masterContext?.runtime_attachments?.deployment_mode),
+      attachmentCount: attachments.length,
+      healthyCount: healthyAttachments.length,
+      localCount: localAttachments.length,
+      hostedCount: hostedAttachments.length,
+      healthyLocalCount,
+      degradedLocal: localAttachments.length > 0 && healthyLocalCount === 0,
+    };
+  }, [masterContext]);
+
+  const memoryBoundaryState = useMemo(() => {
+    const boundaryMap = isPlainRecord(masterContext?.unified_memory?.boundary_map)
+      ? masterContext.unified_memory.boundary_map
+      : {};
+    return {
+      layerCount: Number(masterContext?.unified_memory?.summary?.layer_count || 0)
+        || listStrings(masterContext?.unified_memory?.layer_order).length,
+      neverSync: listStrings(boundaryMap.never_sync_by_default),
+      cloudSynced: listStrings(boundaryMap.cloud_synced_by_default),
+      explicitOptIn: listStrings(boundaryMap.requires_explicit_opt_in_to_sync),
+    };
+  }, [masterContext]);
+
+  const recentActivityState = useMemo(() => {
+    const summary = isPlainRecord(masterContext?.recent_activity?.summary)
+      ? masterContext.recent_activity.summary
+      : {};
+    const byClass = isPlainRecord(summary.by_class) ? summary.by_class : {};
+    return {
+      count: Number(summary.count || 0)
+        || (Array.isArray(masterContext?.recent_activity?.items) ? masterContext.recent_activity.items.length : 0),
+      delegationCount: Number(byClass.delegation || 0) || 0,
+      memoryCount: Number(byClass.memory_update || 0) || 0,
+      reviewCount: Number(summary.review_required_count || 0) || 0,
+    };
+  }, [masterContext]);
+
+  const timelinePreviewItems = useMemo(
+    () => (Array.isArray(activityTimeline?.items) ? activityTimeline.items.slice(0, 4) : []),
+    [activityTimeline],
+  );
+
+  const hybridContinuityNotice = useMemo(() => {
+    if (runtimeSurfaceState.attachmentCount === 0 || !runtimeSurfaceState.degradedLocal) return null;
+    return {
+      id: 'hybrid-continuity',
+      tone: 'warn' as const,
+      label: 'Hybrid continuity degraded',
+      detail: 'Sage still uses the same workspace and captain identity, but local-private execution is unavailable until the paired companion comes back online.',
+      actions: [
+        {
+          id: 'hybrid:machines',
+          label: 'Open Machines',
+          tone: 'primary' as const,
+          onClick: () => router.push('/machines'),
+        },
+        {
+          id: 'hybrid:settings',
+          label: 'Memory & Privacy',
+          tone: 'default' as const,
+          onClick: () => router.push('/settings'),
+        },
+      ],
+    };
+  }, [router, runtimeSurfaceState]);
+
   const identitySections = useMemo<ChatIdentitySection[]>(() => {
     const sections: ChatIdentitySection[] = [
       {
@@ -1403,6 +1530,73 @@ function SageWorkspace() {
       },
     ];
 
+    if (runtimeSurfaceState.attachmentCount > 0) {
+      sections.push({
+        title: 'Runtime topology',
+        note: 'Desktop keeps the deeper control layer, but Sage uses the same runtime and policy rules across phone and desktop.',
+        items: [
+          { label: 'Deployment', value: runtimeSurfaceState.deploymentMode, priority: 'high' },
+          {
+            label: 'Placement visibility',
+            value: `${runtimeSurfaceState.healthyCount}/${runtimeSurfaceState.attachmentCount} attachments healthy · ${runtimeSurfaceState.localCount} local · ${runtimeSurfaceState.hostedCount} hosted`,
+            tone: runtimeSurfaceState.degradedLocal ? 'warning' : 'success',
+          },
+          {
+            label: 'Parity rule',
+            value: 'Execution capability follows runtime, policy, memory scope, connector scope, and approvals, not surface origin.',
+          },
+        ],
+      });
+    }
+
+    if (memoryBoundaryState.layerCount > 0 || memoryBoundaryState.neverSync.length > 0 || memoryBoundaryState.cloudSynced.length > 0) {
+      sections.push({
+        title: 'Memory & privacy',
+        note: 'Desktop keeps the deeper controls, while mobile reads the same captain state through bounded summaries.',
+        items: [
+          { label: 'Memory layers', value: `${memoryBoundaryState.layerCount} active`, priority: 'high' },
+          {
+            label: 'Never sync by default',
+            value: memoryBoundaryState.neverSync.length > 0
+              ? memoryBoundaryState.neverSync.map((item) => humanizeScopeLabel(item)).slice(0, 3).join(', ')
+              : 'No local-only layers reported',
+          },
+          {
+            label: 'Explicit opt-in',
+            value: memoryBoundaryState.explicitOptIn.length > 0
+              ? `${memoryBoundaryState.explicitOptIn.length} layer(s) still require owner approval to sync`
+              : 'No extra opt-in layers reported',
+          },
+          {
+            label: 'Cloud-safe by default',
+            value: memoryBoundaryState.cloudSynced.length > 0
+              ? memoryBoundaryState.cloudSynced.map((item) => humanizeScopeLabel(item)).slice(0, 3).join(', ')
+              : 'No cloud-safe synced layers reported',
+          },
+        ],
+      });
+    }
+
+    if (timelinePreviewItems.length > 0 || recentActivityState.count > 0) {
+      sections.push({
+        title: 'Activity timeline',
+        note: 'Desktop keeps the deeper review surface for ledger-backed captain, specialist, and app work.',
+        items: timelinePreviewItems.length > 0
+          ? timelinePreviewItems.map((item) => ({
+              label: String(item.title || item.summary || humanizeScopeLabel(item.event_class || item.action || 'activity')).trim(),
+              value: `${formatActivityActorLabel(item)}${item.summary ? ` · ${String(item.summary).trim()}` : ''}${item.review_required ? ' · Review required' : ''}`,
+              tone: item.review_required ? 'warning' : 'neutral',
+            }))
+          : [
+              {
+                label: 'Recent captain activity',
+                value: `${recentActivityState.count} recent summaries · ${recentActivityState.delegationCount} delegations · ${recentActivityState.memoryCount} memory updates`,
+                tone: recentActivityState.reviewCount > 0 ? 'warning' : 'success',
+              },
+            ],
+      });
+    }
+
     if (latestDirectChatContext) {
       sections.push({
         title: 'Latest context',
@@ -1416,7 +1610,20 @@ function SageWorkspace() {
     }
 
     return sections;
-  }, [accessMode, activeSpecialistAgents, activeWorkspaceId, latestDirectChatContext, masterThreadId, model, selectedChatSession?.id, trustMode]);
+  }, [
+    accessMode,
+    activeSpecialistAgents,
+    activeWorkspaceId,
+    latestDirectChatContext,
+    masterThreadId,
+    memoryBoundaryState,
+    model,
+    recentActivityState,
+    runtimeSurfaceState,
+    selectedChatSession?.id,
+    timelinePreviewItems,
+    trustMode,
+  ]);
 
   const identityActions = useMemo<ChatIdentityAction[]>(() => {
     const actions: ChatIdentityAction[] = [];
@@ -1439,6 +1646,33 @@ function SageWorkspace() {
         },
       });
     }
+    if ((timelinePreviewItems.length > 0 || recentActivityState.count > 0) && !actions.some((action) => action.label === 'Open Runs')) {
+      actions.push({
+        label: 'Timeline',
+        onClick: () => {
+          setChatIdentityDrawerOpen(false);
+          router.push('/runs');
+        },
+      });
+    }
+    if (runtimeSurfaceState.attachmentCount > 0) {
+      actions.push({
+        label: 'Open Machines',
+        onClick: () => {
+          setChatIdentityDrawerOpen(false);
+          router.push('/machines');
+        },
+      });
+    }
+    if (memoryBoundaryState.layerCount > 0) {
+      actions.push({
+        label: 'Memory & Privacy',
+        onClick: () => {
+          setChatIdentityDrawerOpen(false);
+          router.push('/settings');
+        },
+      });
+    }
     if (providerBanner) {
       actions.push({
         label: 'Open Integrations',
@@ -1449,17 +1683,29 @@ function SageWorkspace() {
       });
     }
     return actions;
-  }, [activeSpecialistAgents.length, latestSessionRunCard?.runId, providerBanner, router, runId]);
+  }, [
+    activeSpecialistAgents.length,
+    latestSessionRunCard?.runId,
+    memoryBoundaryState.layerCount,
+    providerBanner,
+    recentActivityState.count,
+    router,
+    runId,
+    runtimeSurfaceState.attachmentCount,
+    timelinePreviewItems.length,
+  ]);
 
   const shellNotice = useMemo(() => {
     const formatted = formatShellTopError(topError);
-    if (!formatted) return null;
-    return {
-      id: 'sage-error',
-      tone: 'error' as const,
-      label: formatted,
-    };
-  }, [topError]);
+    if (formatted) {
+      return {
+        id: 'sage-error',
+        tone: 'error' as const,
+        label: formatted,
+      };
+    }
+    return hybridContinuityNotice;
+  }, [hybridContinuityNotice, topError]);
 
   return (
     <WorkbenchShell

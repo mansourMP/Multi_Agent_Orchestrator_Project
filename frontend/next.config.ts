@@ -40,7 +40,7 @@ const nextConfig: NextConfig = {
       },
       {
         source: '/connectors',
-        destination: '/settings?section=integrations',
+        destination: '/integrations',
         permanent: false,
       },
       {
@@ -50,22 +50,17 @@ const nextConfig: NextConfig = {
       },
       {
         source: '/credentials',
-        destination: '/settings?section=integrations',
+        destination: '/integrations',
         permanent: false,
       },
       {
         source: '/machines',
-        destination: '/settings?section=integrations',
+        destination: '/integrations',
         permanent: false,
       },
       {
         source: '/health',
-        destination: '/settings?section=integrations',
-        permanent: false,
-      },
-      {
-        source: '/integrations/:path*',
-        destination: '/settings?section=integrations',
+        destination: '/integrations',
         permanent: false,
       },
       {

@@ -224,13 +224,16 @@ function normalizeRecentActivity(payload: unknown): MobileChatContextSnapshot["r
         review_required: item.review_required === true,
         artifacts: Array.isArray(item.artifacts)
           ? item.artifacts
-              .filter((artifact) => artifact && typeof artifact === "object")
-              .map((artifact) => ({
-                path: typeof artifact.path === "string" ? artifact.path : undefined,
-                label: typeof artifact.label === "string" ? artifact.label : undefined,
-                preview_url: typeof artifact.preview_url === "string" ? artifact.preview_url : undefined,
-                review_required: artifact.review_required === true,
-              }))
+              .filter((artifact: unknown) => artifact && typeof artifact === "object")
+              .map((artifact: unknown) => {
+                const artifactRecord = artifact as Record<string, any>;
+                return {
+                  path: typeof artifactRecord.path === "string" ? artifactRecord.path : undefined,
+                  label: typeof artifactRecord.label === "string" ? artifactRecord.label : undefined,
+                  preview_url: typeof artifactRecord.preview_url === "string" ? artifactRecord.preview_url : undefined,
+                  review_required: artifactRecord.review_required === true,
+                };
+              })
           : [],
       }))
       .filter((item) => Boolean(item.id)),

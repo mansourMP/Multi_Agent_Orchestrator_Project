@@ -35,6 +35,18 @@ class _FakeApp:
 
 
 class AgentRegistryApiRouteTests(unittest.TestCase):
+    def setUp(self) -> None:
+        super().setUp()
+        self._tenant_id_patcher = patch(
+            "server_modules.agent_registry_api._tenant_id_for_request",
+            return_value="tenant-1",
+        )
+        self._tenant_id_patcher.start()
+
+    def tearDown(self) -> None:
+        self._tenant_id_patcher.stop()
+        super().tearDown()
+
     def test_register_agent_registry_routes_adds_install_run_endpoint(self):
         fake_server = types.ModuleType("server")
         fake_server.require_api_key = object()

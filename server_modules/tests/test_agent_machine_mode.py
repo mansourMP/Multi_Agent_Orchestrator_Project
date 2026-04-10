@@ -31,6 +31,21 @@ class _PassiveQueue:
 
 
 class AgentMachineModeTests(unittest.TestCase):
+    def setUp(self) -> None:
+        super().setUp()
+        self._run_state_patchers = [
+            patch("server_modules.run_state_repository.sync_upsert_live_run", return_value=None),
+            patch("server_modules.run_state_repository.sync_delete_live_run", return_value=None),
+            patch("server_modules.run_state_repository.sync_archive_run", return_value=None),
+        ]
+        for patcher in self._run_state_patchers:
+            patcher.start()
+
+    def tearDown(self) -> None:
+        for patcher in reversed(self._run_state_patchers):
+            patcher.stop()
+        super().tearDown()
+
     def test_agent_machine_full_trust_enabled_requires_matching_owner(self):
         with patch.object(runtime_config, "AGENT_MACHINE_MODE", "agent"):
             with patch.object(runtime_config, "AGENT_MACHINE_OWNER", "user-123"):

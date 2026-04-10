@@ -12,6 +12,14 @@ These files are the current documentation entry points:
 - [docs/README.md](/Users/mansur/Multi_Agent_Orchestrator_Project/docs/README.md)
 - [docs/EMPYRALIS_CANONICAL_ARCHITECTURE.md](/Users/mansur/Multi_Agent_Orchestrator_Project/docs/EMPYRALIS_CANONICAL_ARCHITECTURE.md)
 - [docs/EMPYRALIS_EXECUTION_LEDGER.md](/Users/mansur/Multi_Agent_Orchestrator_Project/docs/EMPYRALIS_EXECUTION_LEDGER.md)
+- [docs/EMPYRALIS_OPEN_CORE_BOUNDARY.md](/Users/mansur/Multi_Agent_Orchestrator_Project/docs/EMPYRALIS_OPEN_CORE_BOUNDARY.md)
+- [docs/EMPYRALIS_PRODUCT_SURFACES.md](/Users/mansur/Multi_Agent_Orchestrator_Project/docs/EMPYRALIS_PRODUCT_SURFACES.md)
+- [docs/EMPYRALIS_SURFACE_PARITY_CONTRACT.md](/Users/mansur/Multi_Agent_Orchestrator_Project/docs/EMPYRALIS_SURFACE_PARITY_CONTRACT.md)
+- [docs/EMPYRALIS_CAPTAIN_SPECIALIST_ARCHITECTURE.md](/Users/mansur/Multi_Agent_Orchestrator_Project/docs/EMPYRALIS_CAPTAIN_SPECIALIST_ARCHITECTURE.md)
+- [docs/EMPYRALIS_APPLICATION_RUNTIME_CONTRACTS.md](/Users/mansur/Multi_Agent_Orchestrator_Project/docs/EMPYRALIS_APPLICATION_RUNTIME_CONTRACTS.md)
+- [docs/EMPYRALIS_AGENT_ACTIVITY_TIMELINE.md](/Users/mansur/Multi_Agent_Orchestrator_Project/docs/EMPYRALIS_AGENT_ACTIVITY_TIMELINE.md)
+- [docs/EMPYRALIS_LOCAL_RUNTIME_CLUSTER.md](/Users/mansur/Multi_Agent_Orchestrator_Project/docs/EMPYRALIS_LOCAL_RUNTIME_CLUSTER.md)
+- [docs/EMPYRALIS_HYBRID_SYNC_PLACEMENT_POLICY.md](/Users/mansur/Multi_Agent_Orchestrator_Project/docs/EMPYRALIS_HYBRID_SYNC_PLACEMENT_POLICY.md)
 - [docs/QUICKSTART_EMPYRALIS_AUTOPILOT.md](/Users/mansur/Multi_Agent_Orchestrator_Project/docs/QUICKSTART_EMPYRALIS_AUTOPILOT.md)
 - [docs/DESKTOP_DISTRIBUTION_STRATEGY.md](/Users/mansur/Multi_Agent_Orchestrator_Project/docs/DESKTOP_DISTRIBUTION_STRATEGY.md)
 - [docs/EMPYRALIS_DESKTOP_APP.md](/Users/mansur/Multi_Agent_Orchestrator_Project/docs/EMPYRALIS_DESKTOP_APP.md)
@@ -78,17 +86,24 @@ The maintained operator quickstart is:
 
 ## Distribution
 
-Empyralis is web-first.
+Empyralis is mobile-first for daily use.
 
-- Primary experience: web app
-- Installable option: PWA
-- Packaged desktop shell: Tauri in [src-tauri](/Users/mansur/Multi_Agent_Orchestrator_Project/src-tauri)
+- Daily-use default surface: Expo mobile app in [mobile](/Users/mansur/Multi_Agent_Orchestrator_Project/mobile)
+- Desktop-power surfaces: browser-hosted workspace in [frontend](/Users/mansur/Multi_Agent_Orchestrator_Project/frontend) and packaged Tauri shell in [src-tauri](/Users/mansur/Multi_Agent_Orchestrator_Project/src-tauri)
+- Preferred packaged desktop experience: Tauri
 - Frozen legacy shell: Electron in [desktop](/Users/mansur/Multi_Agent_Orchestrator_Project/desktop)
 
 See:
 
 - [docs/DESKTOP_DISTRIBUTION_STRATEGY.md](/Users/mansur/Multi_Agent_Orchestrator_Project/docs/DESKTOP_DISTRIBUTION_STRATEGY.md)
 - [docs/EMPYRALIS_DESKTOP_APP.md](/Users/mansur/Multi_Agent_Orchestrator_Project/docs/EMPYRALIS_DESKTOP_APP.md)
+- [docs/EMPYRALIS_PRODUCT_SURFACES.md](/Users/mansur/Multi_Agent_Orchestrator_Project/docs/EMPYRALIS_PRODUCT_SURFACES.md)
+- [docs/EMPYRALIS_SURFACE_PARITY_CONTRACT.md](/Users/mansur/Multi_Agent_Orchestrator_Project/docs/EMPYRALIS_SURFACE_PARITY_CONTRACT.md)
+- [docs/EMPYRALIS_CAPTAIN_SPECIALIST_ARCHITECTURE.md](/Users/mansur/Multi_Agent_Orchestrator_Project/docs/EMPYRALIS_CAPTAIN_SPECIALIST_ARCHITECTURE.md)
+- [docs/EMPYRALIS_APPLICATION_RUNTIME_CONTRACTS.md](/Users/mansur/Multi_Agent_Orchestrator_Project/docs/EMPYRALIS_APPLICATION_RUNTIME_CONTRACTS.md)
+- [docs/EMPYRALIS_AGENT_ACTIVITY_TIMELINE.md](/Users/mansur/Multi_Agent_Orchestrator_Project/docs/EMPYRALIS_AGENT_ACTIVITY_TIMELINE.md)
+- [docs/EMPYRALIS_LOCAL_RUNTIME_CLUSTER.md](/Users/mansur/Multi_Agent_Orchestrator_Project/docs/EMPYRALIS_LOCAL_RUNTIME_CLUSTER.md)
+- [docs/EMPYRALIS_HYBRID_SYNC_PLACEMENT_POLICY.md](/Users/mansur/Multi_Agent_Orchestrator_Project/docs/EMPYRALIS_HYBRID_SYNC_PLACEMENT_POLICY.md)
 
 ## Documentation Policy
 

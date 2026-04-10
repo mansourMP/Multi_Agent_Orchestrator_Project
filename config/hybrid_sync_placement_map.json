@@ -1,0 +1,107 @@
+{
+  "version": 1,
+  "shared_identity": {
+    "account": "shared",
+    "workspace": "shared",
+    "sage_identity": "shared",
+    "deployment_modes": [
+      "cloud_only",
+      "local_only",
+      "hybrid"
+    ]
+  },
+  "sync_classes": [
+    "local_only",
+    "sync_allowed",
+    "summary_bridge_only",
+    "explicit_opt_in"
+  ],
+  "default_policy": {
+    "private_local_memory": "local_only",
+    "cloud_safe_shared_memory": "sync_allowed",
+    "sensitive_local_activity": "summary_bridge_only"
+  },
+  "placement_rules": {
+    "sage_cloud_when": [
+      "always_on_required",
+      "mobile_continuity_required",
+      "task_cloud_safe",
+      "local_only_memory_not_required"
+    ],
+    "sage_local_when": [
+      "local_private_memory_required",
+      "local_files_apps_or_device_actions_required",
+      "privacy_sensitive_reasoning_should_stay_local"
+    ],
+    "specialist_local_when": [
+      "local_tools_required",
+      "local_private_context_required",
+      "local_files_or_applications_required",
+      "device_scoped_connectors_or_permissions_required"
+    ],
+    "specialist_cloud_when": [
+      "always_on_business_automation",
+      "private_local_context_not_required",
+      "hosted_availability_preferred"
+    ],
+    "self_hosted_preferred_when": [
+      "customer_controlled_compute_required",
+      "compliance_or_residency_required",
+      "hosted_class_workload_without_shared_managed_cloud"
+    ],
+    "priority_order": [
+      "privacy_and_sync_class",
+      "required_capabilities_and_connectors",
+      "local_vs_cloud_data_dependency",
+      "availability_and_always_on_requirement",
+      "user_or_workspace_policy_preference"
+    ]
+  },
+  "fallback_behavior": {
+    "local_offline": {
+      "local_only_tasks": "wait_or_fail_closed",
+      "summary_bridge_only": "use_last_safe_summary_only",
+      "cloud_safe_tasks": "continue_in_cloud_if_policy_allows"
+    },
+    "cloud_unavailable": {
+      "local_sage_and_specialists": "continue_for_local_safe_work",
+      "cloud_only_automations": "wait_or_degrade_visibly"
+    },
+    "hybrid_degraded_mode": {
+      "fallback": "policy_safe_only",
+      "promote_raw_private_local_memory": false,
+      "user_signal": "summary_level_degraded_state"
+    }
+  },
+  "summary_bridge": {
+    "allowed_payloads": [
+      "bounded_local_private_summaries",
+      "specialist_outcome_summaries",
+      "artifact_summaries",
+      "pending_review_markers",
+      "selected_memory_update_summaries"
+    ],
+    "forbidden_payloads": [
+      "unrestricted_raw_local_private_memory",
+      "full_local_specialist_internals",
+      "raw_private_file_content_without_explicit_share"
+    ]
+  },
+  "surface_responsibility": {
+    "mobile": [
+      "sage_continuity",
+      "runtime_attachment_summaries",
+      "sync_state_summaries",
+      "review_needed_items",
+      "degraded_mode_notices"
+    ],
+    "desktop_power": [
+      "hybrid_sync_controls",
+      "placement_policy_visibility",
+      "runtime_attachment_management",
+      "local_cloud_preference_tuning",
+      "explicit_opt_in_sync_classes",
+      "deeper_degraded_state_review"
+    ]
+  }
+}

@@ -1,5 +1,9 @@
 ## Empyralis Local Execution Boundary
 
+The broader local companion and Mac mini cluster model is defined in [docs/EMPYRALIS_LOCAL_RUNTIME_CLUSTER.md](/Users/mansur/Multi_Agent_Orchestrator_Project/docs/EMPYRALIS_LOCAL_RUNTIME_CLUSTER.md).
+
+This note remains the device-control ownership boundary. It is not the full local cluster architecture.
+
 This note records the current local-execution ownership boundary after the Rust-first cutover.
 
 ### Rust owns now

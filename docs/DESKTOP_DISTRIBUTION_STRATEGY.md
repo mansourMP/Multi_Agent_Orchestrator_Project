@@ -2,17 +2,17 @@
 
 ## Current State
 
-Empyralis is web-first.
+Empyralis is mobile-first for daily use and desktop-power for deep control.
 
-- Primary product surface: web application
-- Preferred installable experience: PWA
+- Daily-use default surface: mobile application
+- Desktop-power surfaces: browser-hosted workspace and packaged desktop shell
 - Packaged desktop shell: Tauri in [src-tauri](/Users/mansur/Multi_Agent_Orchestrator_Project/src-tauri)
 - Archived legacy Electron shell: removed from the active repo tree
 
 ## What This Means
 
-- The web app remains the main control plane.
-- Desktop packaging exists, but it should stay aligned with the web app rather than becoming a separate product.
+- The browser-hosted workspace and the Tauri shell are one desktop-power family.
+- Desktop packaging exists to support deeper building, configuration, and control work.
 - Tauri is the only supported packaged desktop shell.
 - Any legacy Electron notes are historical only and not part of the active runtime.
 
@@ -24,4 +24,4 @@ Empyralis is web-first.
 
 ## Packaging Rule
 
-If a desktop-specific change conflicts with the web/PWA product path, prefer the web/PWA path unless there is a concrete local-system requirement that only the desktop shell can satisfy.
+If a desktop-specific change conflicts with the mobile-first daily-use product model, keep daily use on mobile and reserve deeper configuration, builder, and runtime-control depth for the desktop-power surfaces.

@@ -4,63 +4,76 @@ This workspace is the dedicated Expo app for Empyralis Mobile V1.
 
 ## Scope
 
-Mobile is the remote cockpit, not the desktop builder:
+Mobile is the default daily-use product surface:
 
-- direct chat with agents
-- approvals
-- run monitoring
+- direct chat with Sage and specialists
+- notifications and approvals
+- Applications as a first-class tab
+- quick daily actions
+- daily context
+- pairing and device linking
 - artifact previews
-- account/preferences
 
-It should not become a second desktop UI in V1.
+It should not become a squeezed desktop builder or admin console.
 
 ## What exists now
 
 - Expo Router app shell
 - bottom tabs:
   - `Home`
-  - `Agents`
-  - `Runs`
-  - `Approvals`
-  - `You`
+  - `Chat`
+  - `Applications`
+  - `Notifications`
+  - `Profile`
 - shared Empyralis theme tokens
 - reusable mobile shell components
-- secure session storage scaffold
-- runtime API client scaffold
+- secure session and pairing storage
+- mobile engine and sync scaffolding
+- notification and personal-context bridges
 
-## Assumptions
+## Surface Role
 
-This scaffold intentionally stops at shell level until mobile-safe runtime contracts are validated.
+Mobile owns:
 
-Assumed available or mostly available:
+- chat
+- notifications
+- approvals
+- applications
+- quick follow-up actions
+- daily context
+- pairing
+
+Desktop-power surfaces own:
+
+- specialist creation
+- connector and MCP/server management
+- runtime attachment management
+- memory controls
+- advanced automations
+- policy/debug/admin depth
+
+## Current Integration Assumptions
+
+Key supported or expected contracts include:
 
 1. `GET /agents/workspace/snapshot`
-2. `GET /runs/history`
-3. `GET /approvals`
-4. `GET /artifacts`
-5. `POST /turn`
-6. `POST /runs/{run_id}/approvals/{approval_id}/resolve`
+2. `GET /agent-registry/chat-context`
+3. `GET /runs/history`
+4. `GET /approvals`
+5. `GET /artifacts`
+6. `POST /turn`
+7. `POST /runs/{run_id}/approvals/{approval_id}/resolve`
+8. personal-context publish and scheduler self-wakeup routes
 
-## Known backend/API gaps
+## Product Rule
 
-These should be reviewed before full data wiring:
+The mobile app and desktop-power surfaces must share:
 
-1. Mobile-safe agent chat endpoint
-   - current web chat flow is UI-local and agent-thread oriented
-   - mobile needs a clean endpoint for sending a message directly to a selected agent and reading thread history
-
-2. Mobile-safe run feed contract
-   - runtime history payload shape may differ from what the mobile list wants
-   - mobile should not receive heavy debug/runtime internals by default
-
-3. Mobile artifact preview contract
-   - mobile needs predictable preview-safe payloads for:
-     - image preview
-     - text preview
-     - file open/download
-
-4. Notifications
-   - mobile push and deep-link routing are not wired yet
+- same Sage
+- same workspace
+- same memory model
+- same specialists
+- same runtime attachments
 
 ## Recommended setup
 
@@ -78,4 +91,4 @@ EXPO_PUBLIC_RUNTIME_URL=http://127.0.0.1:8001
 EXPO_PUBLIC_WORKSPACE_ID=default
 ```
 
-Session/API key storage is intentionally scaffolded, not fully wired in the UI yet.
+Session, pairing, and mobile-engine storage are intentionally local to the mobile shell, but they still map to the same shared platform core.

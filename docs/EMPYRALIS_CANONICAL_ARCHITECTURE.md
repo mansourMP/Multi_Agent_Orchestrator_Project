@@ -155,6 +155,44 @@ It is one platform with:
 - one audit path
 - one artifact path
 
+The product-surface responsibility split is defined in [docs/EMPYRALIS_PRODUCT_SURFACES.md](/Users/mansur/Multi_Agent_Orchestrator_Project/docs/EMPYRALIS_PRODUCT_SURFACES.md).
+
+The accepted product rule is:
+
+- mobile is the default daily-use surface
+- desktop-power surfaces own deeper building, configuration, and control depth
+- both still map to the same Sage, workspace, memory, specialist, and runtime-attachment core
+
+The explicit surface-parity contract is defined separately in [docs/EMPYRALIS_SURFACE_PARITY_CONTRACT.md](/Users/mansur/Multi_Agent_Orchestrator_Project/docs/EMPYRALIS_SURFACE_PARITY_CONTRACT.md).
+
+That document defines what must remain identical across mobile and desktop-power surfaces, what may differ by density and control depth, and the rule that capability is determined by runtime and policy rather than UI origin.
+
+The captain, specialist, and application runtime boundary is defined separately in [docs/EMPYRALIS_CAPTAIN_SPECIALIST_ARCHITECTURE.md](/Users/mansur/Multi_Agent_Orchestrator_Project/docs/EMPYRALIS_CAPTAIN_SPECIALIST_ARCHITECTURE.md).
+
+That document defines Sage as the personal captain, specialists as scoped workers, applications as product modules, and the control-plane boundary that governs all three.
+
+The application runtime and app/agent bridge contract is defined separately in [docs/EMPYRALIS_APPLICATION_RUNTIME_CONTRACTS.md](/Users/mansur/Multi_Agent_Orchestrator_Project/docs/EMPYRALIS_APPLICATION_RUNTIME_CONTRACTS.md).
+
+That document defines application identity, application scope, explicit app-to-agent bridges, default denials, and the app context envelope that keeps product modules separate from captain and specialist memory.
+
+The durable agent activity and memory timeline boundary is defined separately in [docs/EMPYRALIS_AGENT_ACTIVITY_TIMELINE.md](/Users/mansur/Multi_Agent_Orchestrator_Project/docs/EMPYRALIS_AGENT_ACTIVITY_TIMELINE.md).
+
+That document defines activity event identity, event classes, retention tiers, summary vs detail levels, product-surface placement, and the safe summary path Sage uses to consume recent agent and app activity.
+
+The local companion and Mac mini runtime-cluster boundary is defined separately in [docs/EMPYRALIS_LOCAL_RUNTIME_CLUSTER.md](/Users/mansur/Multi_Agent_Orchestrator_Project/docs/EMPYRALIS_LOCAL_RUNTIME_CLUSTER.md).
+
+That document defines local Sage, local specialist sandboxes, the local runtime supervisor, local memory stores, the local artifact bridge, and the local worker lifecycle while preserving the same workspace and Sage identity model used in cloud and hybrid deployments.
+
+The hybrid sync and runtime-placement policy is defined separately in [docs/EMPYRALIS_HYBRID_SYNC_PLACEMENT_POLICY.md](/Users/mansur/Multi_Agent_Orchestrator_Project/docs/EMPYRALIS_HYBRID_SYNC_PLACEMENT_POLICY.md).
+
+That document defines sync classes, local/cloud summary bridging, placement priorities, degraded behavior, and the mobile-vs-desktop responsibility split for hybrid controls.
+
+## Distribution Boundary
+
+The product-distribution boundary is defined separately in [docs/EMPYRALIS_OPEN_CORE_BOUNDARY.md](/Users/mansur/Multi_Agent_Orchestrator_Project/docs/EMPYRALIS_OPEN_CORE_BOUNDARY.md).
+
+That document defines what is open source, source-available, managed-cloud-only, and enterprise/self-host only. It is a product and distribution decision, not a replacement for runtime policy or security enforcement.
+
 ## What We Continue, What We Stop, What We Archive
 
 ### Continue Building In
@@ -1368,7 +1406,61 @@ Object storage boundary:
    - unsupported leaves may truthfully report unavailable or unknown until a platform adapter exists
    - OCR and coordinate fallback remain canonical where DOM, accessibility, or app adapters are absent
 
-5. Thin compatibility delegates may remain in the repo.
+5. Captain, specialist, and application boundaries are explicit.
+
+   Accepted boundary:
+
+   - [docs/EMPYRALIS_CAPTAIN_SPECIALIST_ARCHITECTURE.md](/Users/mansur/Multi_Agent_Orchestrator_Project/docs/EMPYRALIS_CAPTAIN_SPECIALIST_ARCHITECTURE.md) is the authoritative runtime-boundary definition for Sage, specialists, applications, and the platform control plane
+   - Sage is the personal captain with broad but policy-bound visibility
+   - specialists are separate scoped runtimes with install-scoped memory, tools, connectors, and artifacts
+   - applications remain product modules and do not inherit Sage or specialist memory by default
+
+6. Surface parity is explicit.
+
+   Accepted boundary:
+
+   - [docs/EMPYRALIS_SURFACE_PARITY_CONTRACT.md](/Users/mansur/Multi_Agent_Orchestrator_Project/docs/EMPYRALIS_SURFACE_PARITY_CONTRACT.md) is the authoritative contract for keeping mobile and desktop-power as one platform model
+   - mobile and desktop-power share one engine, Sage, specialist system, memory model, runtime-selection model, and policy model
+   - allowed differences are limited to navigation, information density, control depth, and admin or builder ergonomics
+   - mobile-origin or app-origin requests must not be downgraded unless runtime availability or policy requires it
+
+7. Application runtime contracts are explicit.
+
+   Accepted boundary:
+
+   - [docs/EMPYRALIS_APPLICATION_RUNTIME_CONTRACTS.md](/Users/mansur/Multi_Agent_Orchestrator_Project/docs/EMPYRALIS_APPLICATION_RUNTIME_CONTRACTS.md) is the authoritative contract for application identity, scope, context envelope, and allowed bridge paths
+   - applications may run models, workflows, structured backend actions, and allowed connector-backed actions directly
+   - applications cannot read Sage memory or specialist memory by default
+   - any app-to-captain or app-to-specialist interaction must happen through explicit bridge contracts
+
+8. Agent activity and memory timeline boundaries are explicit.
+
+   Accepted boundary:
+
+   - [docs/EMPYRALIS_AGENT_ACTIVITY_TIMELINE.md](/Users/mansur/Multi_Agent_Orchestrator_Project/docs/EMPYRALIS_AGENT_ACTIVITY_TIMELINE.md) is the authoritative contract for durable agent/app activity, memory timeline events, and summary-vs-detail rendering
+   - Notifications is the lightweight daily stream
+   - desktop-power surfaces own deeper activity and timeline review
+   - Sage consumes safe summaries of specialist/app activity rather than unrestricted raw worker internals
+
+9. Local runtime cluster boundaries are explicit.
+
+   Accepted boundary:
+
+   - [docs/EMPYRALIS_LOCAL_RUNTIME_CLUSTER.md](/Users/mansur/Multi_Agent_Orchestrator_Project/docs/EMPYRALIS_LOCAL_RUNTIME_CLUSTER.md) is the authoritative model for local Sage, local specialist sandboxes, local memory, artifact surfacing, and worker lifecycle
+   - local deployments preserve the same account, workspace, and Sage identity model as cloud and hybrid
+   - private local memory remains local by default
+   - local Sage and local specialists remain separated by explicit sandbox boundaries
+
+10. Hybrid sync and placement boundaries are explicit.
+
+   Accepted boundary:
+
+   - [docs/EMPYRALIS_HYBRID_SYNC_PLACEMENT_POLICY.md](/Users/mansur/Multi_Agent_Orchestrator_Project/docs/EMPYRALIS_HYBRID_SYNC_PLACEMENT_POLICY.md) is the authoritative contract for sync classes, placement rules, degraded behavior, and the local/cloud summary bridge
+   - cloud-only, local-only, and hybrid keep one Sage identity model
+   - private local memory does not sync accidentally
+   - mobile surfaces summarize hybrid continuity while desktop-power surfaces own deep controls
+
+11. Thin compatibility delegates may remain in the repo.
 
    Accepted boundary:
 

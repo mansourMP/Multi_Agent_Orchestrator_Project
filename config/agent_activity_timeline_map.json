@@ -1,0 +1,71 @@
+{
+  "version": 1,
+  "activity_event_model": {
+    "required_actor_fields": [
+      "actor_type",
+      "actor_id",
+      "workspace_id"
+    ],
+    "optional_scope_fields": [
+      "install_id",
+      "app_id",
+      "run_id",
+      "thread_id"
+    ],
+    "event_classes": [
+      "sage_activity",
+      "specialist_activity",
+      "application_activity",
+      "delegation",
+      "artifact_activity",
+      "approval_state",
+      "blocked_action",
+      "memory_update",
+      "connector_action"
+    ],
+    "retention_tiers": [
+      "feed_window",
+      "timeline_window",
+      "audit_archive"
+    ]
+  },
+  "detail_levels": [
+    "feed_summary",
+    "timeline_detail",
+    "audit_reference"
+  ],
+  "surface_placement": {
+    "notifications": "lightweight_daily_stream",
+    "desktop_power_timeline": "deeper_reviewable_history",
+    "mobile": "safe_summaries_only"
+  },
+  "sage_ingestion": {
+    "allowed_summary_inputs": [
+      "recent_specialist_work",
+      "recent_application_activity",
+      "pending_review_items",
+      "blocked_action_summaries",
+      "artifact_activity",
+      "memory_update_summaries"
+    ],
+    "raw_internal_access": false
+  },
+  "artifact_visibility": {
+    "supports": [
+      "created_files",
+      "updated_files",
+      "linked_artifacts",
+      "previews",
+      "review_needed_markers"
+    ]
+  },
+  "memory_timeline": {
+    "event_classes": [
+      "profile_memory_updated",
+      "episodic_summary_refreshed",
+      "specialist_memory_checkpoint_created",
+      "app_history_checkpoint_updated"
+    ],
+    "full_memory_dump_in_feed": false
+  }
+}

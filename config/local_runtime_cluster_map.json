@@ -1,0 +1,63 @@
+{
+  "version": 1,
+  "shared_identity": {
+    "account": "shared",
+    "workspace": "shared",
+    "sage_identity": "shared",
+    "deployment_modes": [
+      "local",
+      "cloud",
+      "hybrid"
+    ]
+  },
+  "cluster_model": {
+    "required_parts": [
+      "local_sage_runtime",
+      "local_specialist_runtimes",
+      "local_runtime_supervisor",
+      "local_memory_stores",
+      "local_artifact_bridge"
+    ],
+    "different_product": false
+  },
+  "sandbox_boundaries": {
+    "sage": "local_captain_boundary",
+    "specialists": "separate_scoped_sandboxes",
+    "applications": "separate_product_module_boundary"
+  },
+  "worker_lifecycle": [
+    "register",
+    "start",
+    "health_heartbeat",
+    "stop",
+    "revoke",
+    "recover"
+  ],
+  "local_memory": {
+    "private_memory_default": "local_only",
+    "allowed_summary_bridge": true,
+    "automatic_full_sync_to_cloud": false,
+    "stores": [
+      "local_private_captain_memory",
+      "local_specialist_scoped_memory",
+      "local_app_owned_state",
+      "local_retrieval_indexes"
+    ]
+  },
+  "local_specialist_isolation": {
+    "separate_tools": true,
+    "separate_connectors": true,
+    "separate_memory": true,
+    "separate_artifacts": true,
+    "separate_runtime_policy": true
+  },
+  "artifact_bridge": {
+    "supports": [
+      "local_file_creation_references",
+      "artifact_previews",
+      "summary_publication_to_sage",
+      "review_needed_markers"
+    ],
+    "raw_filesystem_dump": false
+  }
+}

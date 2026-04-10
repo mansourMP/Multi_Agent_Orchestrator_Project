@@ -1,0 +1,52 @@
+{
+  "version": 1,
+  "shared_core": {
+    "sage_identity": "shared",
+    "workspace_model": "shared",
+    "memory_system": "shared",
+    "specialist_installs": "shared",
+    "runtime_attachments": "shared"
+  },
+  "mobile_first": {
+    "daily_use_default": true,
+    "bottom_tabs": [
+      "Home",
+      "Chat",
+      "Applications",
+      "Notifications",
+      "Profile"
+    ],
+    "primary_responsibilities": [
+      "chat",
+      "notifications",
+      "applications",
+      "quick_actions",
+      "daily_context",
+      "pairing",
+      "artifact_previews"
+    ]
+  },
+  "desktop_power": {
+    "surfaces": [
+      "frontend_web_workspace",
+      "tauri_desktop_shell"
+    ],
+    "primary_responsibilities": [
+      "specialist_creation",
+      "connector_management",
+      "mcp_server_connections",
+      "runtime_attachment_management",
+      "memory_controls",
+      "advanced_automations",
+      "policy_debug_admin_depth"
+    ]
+  },
+  "placement": {
+    "pairing": "mobile_primary_desktop_secondary",
+    "runtime_attachment_management": "desktop_primary_mobile_summary_only",
+    "connector_management": "desktop_primary",
+    "specialist_creation": "desktop_primary",
+    "daily_context": "mobile_primary",
+    "notifications": "mobile_primary"
+  }
+}

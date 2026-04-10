@@ -2,12 +2,25 @@
 
 The current packaged desktop shell is Tauri.
 
+Desktop is the power-user, builder, and control surface. It is not a separate product brain.
+
 ## Current Desktop Surfaces
 
 - Active packaged shell: [src-tauri](/Users/mansur/Multi_Agent_Orchestrator_Project/src-tauri)
+- Browser-hosted full workspace: [frontend](/Users/mansur/Multi_Agent_Orchestrator_Project/frontend)
 - Archived historical Electron shell: removed from the active repo tree
 
-The desktop app should be treated as a shell over the main web/runtime stack, not as a separate product.
+The desktop app should be treated as part of the desktop-power family over the same Sage/workspace/runtime core, not as a separate product.
+
+## Primary Desktop Responsibilities
+
+- specialist creation and editing
+- connector management
+- MCP/server connections
+- runtime attachment management
+- memory/privacy controls
+- advanced automations
+- policy, debug, and admin depth
 
 ## Local Usage
 
@@ -45,4 +58,4 @@ tail -f .orion-stack/logs/frontend.log
 
 ## Important Note
 
-The active desktop build path is Tauri. Historical Electron material is archived and not a supported runtime path.
+The active desktop build path is Tauri. Historical Electron material is archived and not a supported runtime path. Mobile remains the primary daily-use surface.

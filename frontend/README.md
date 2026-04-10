@@ -1,8 +1,8 @@
 # Empyralis Frontend
 
-This is the current Next.js web application for Empyralis.
+This is the current Next.js browser-hosted workspace for Empyralis.
 
-It contains the main operator UI, chat surface, approvals, workbench views, builder UI, health views, account flows, and the server-side API routes that proxy to the runtime/control plane.
+It is part of the desktop-power surface family alongside the Tauri shell. It contains the deeper workspace, builder, connector, runtime, and control surfaces while sharing the same Sage/workspace/runtime core as mobile.
 
 ## Tech Stack
 

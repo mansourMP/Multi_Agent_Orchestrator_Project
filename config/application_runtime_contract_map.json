@@ -1,0 +1,88 @@
+{
+  "version": 1,
+  "application_runtime": {
+    "identity_fields": [
+      "app_id",
+      "workspace_id",
+      "actor_scope",
+      "surface_origin"
+    ],
+    "scope_model": "app_scoped_separate_from_captain_and_specialists",
+    "storage_context": [
+      "app_owned_history",
+      "app_workflow_state",
+      "scoped_documents_and_structured_records",
+      "user_selected_inputs",
+      "connector_backed_app_state",
+      "optional_explicit_imports_from_sage"
+    ],
+    "api_runtime_envelope": [
+      "app_identity",
+      "actor_identity",
+      "app_owned_context",
+      "explicit_imported_context",
+      "allowed_operations",
+      "runtime_target"
+    ]
+  },
+  "direct_capabilities": {
+    "allowed": [
+      "model_calls",
+      "workflow_execution",
+      "structured_backend_actions",
+      "connector_backed_actions",
+      "app_scoped_retrieval"
+    ],
+    "denied_by_default": [
+      "read_sage_memory",
+      "read_specialist_memory",
+      "access_user_private_context_without_explicit_contract",
+      "call_unrestricted_tools_outside_app_policy",
+      "silently_impersonate_sage",
+      "silently_impersonate_specialist"
+    ]
+  },
+  "bridge_contracts": {
+    "app_to_sage": [
+      "summary_request",
+      "context_import_request",
+      "recommendation_request",
+      "delegation_request"
+    ],
+    "app_to_specialist": [
+      "task_request",
+      "artifact_request",
+      "status_request"
+    ],
+    "sage_to_app": [
+      "launch_app_flow",
+      "handoff_to_app",
+      "request_app_action"
+    ],
+    "app_to_connector_runtime": [
+      "brokered_connector_action",
+      "brokered_workflow_runtime",
+      "brokered_structured_backend_route"
+    ]
+  },
+  "context_envelope": {
+    "default_classes": [
+      "user_selected_inputs",
+      "app_owned_history",
+      "scoped_documents_and_data",
+      "app_workflow_state"
+    ],
+    "optional_classes": [
+      "explicit_imports_from_sage",
+      "explicit_summaries_from_specialists",
+      "explicit_shared_artifacts"
+    ],
+    "inherits_sage_memory_by_default": false,
+    "inherits_specialist_memory_by_default": false
+  },
+  "cross_surface_contract": {
+    "mobile": "same_contract",
+    "desktop_power": "same_contract",
+    "cloud": "same_contract"
+  }
+}

@@ -1,0 +1,75 @@
+{
+  "shared_platform_contract": {
+    "platform": "same",
+    "engine": "same",
+    "sage": "same",
+    "specialists": "same",
+    "memory_model": "same",
+    "runtime_placement_model": "same",
+    "policy_model": "same"
+  },
+  "identical_across_surfaces": [
+    "identity_model",
+    "workspace_model",
+    "sage_orchestration_model",
+    "specialist_power_model",
+    "specialist_memory_boundaries",
+    "application_runtime_contracts",
+    "runtime_routing_behavior",
+    "approval_semantics",
+    "policy_enforcement_semantics",
+    "auditability"
+  ],
+  "allowed_surface_differences": [
+    "navigation_structure",
+    "information_density",
+    "control_depth",
+    "builder_ergonomics",
+    "admin_and_debug_ergonomics",
+    "inspection_depth"
+  ],
+  "forbidden_surface_divergence": [
+    "weaker_execution_from_mobile_origin",
+    "weaker_specialists_from_app_origin",
+    "different_backend_semantics_between_mobile_and_desktop",
+    "hidden_mobile_only_memory_restrictions_without_policy",
+    "hidden_desktop_only_power_paths_outside_runtime_and_policy",
+    "ui_origin_based_capability_downgrades"
+  ],
+  "capability_determinants": [
+    "runtime_availability",
+    "policy",
+    "connector_scope",
+    "memory_scope",
+    "approval_state"
+  ],
+  "applications_under_parity": {
+    "mobile_primary_consumer_surface": true,
+    "desktop_management_and_inspection_views_allowed": true,
+    "backend_semantics": "identical",
+    "execution_contracts": "identical",
+    "inherits_sage_memory_by_default": false,
+    "inherits_specialist_memory_by_default": false
+  },
+  "sage_and_specialist_parity": {
+    "sage": {
+      "orchestration_model": "same",
+      "power_model": "same",
+      "runtime_routing": "same",
+      "memory_boundaries": "same"
+    },
+    "specialists": {
+      "orchestration_model": "same",
+      "power_model": "same",
+      "runtime_routing": "same",
+      "memory_boundaries": "same"
+    }
+  },
+  "desktop_only_depth": [
+    "runtime_attachment_management",
+    "memory_privacy_configuration",
+    "specialist_builder_flows",
+    "deeper_activity_review",
+    "debug_and_admin_depth"
+  ]
+}

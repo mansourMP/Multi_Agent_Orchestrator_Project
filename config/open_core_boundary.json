@@ -1,0 +1,96 @@
+{
+  "version": 1,
+  "distribution_classes": [
+    "open_source",
+    "source_available",
+    "managed_cloud_only",
+    "enterprise_self_host_only"
+  ],
+  "components": [
+    {
+      "id": "local_runtime_daemon",
+      "label": "Local runtime daemon",
+      "distribution": "open_source"
+    },
+    {
+      "id": "desktop_app_shell",
+      "label": "Desktop app shell",
+      "distribution": "open_source"
+    },
+    {
+      "id": "mobile_clients",
+      "label": "Mobile clients",
+      "distribution": "source_available"
+    },
+    {
+      "id": "plugin_skill_sdk",
+      "label": "Plugin/skill SDK",
+      "distribution": "open_source"
+    },
+    {
+      "id": "hosted_control_plane",
+      "label": "Hosted control plane",
+      "distribution": "managed_cloud_only"
+    },
+    {
+      "id": "cloud_sage_runtime",
+      "label": "Cloud Sage runtime",
+      "distribution": "managed_cloud_only"
+    },
+    {
+      "id": "managed_scheduler_background_automation",
+      "label": "Managed scheduler/background automation",
+      "distribution": "managed_cloud_only"
+    },
+    {
+      "id": "managed_memory_sync",
+      "label": "Managed memory sync",
+      "distribution": "managed_cloud_only"
+    },
+    {
+      "id": "connector_framework_and_vault_framework",
+      "label": "Connector framework and secrets/vault framework",
+      "distribution": "source_available"
+    },
+    {
+      "id": "shared_secure_vault_and_hosted_connector_operations",
+      "label": "Shared secure vault and hosted connector operations",
+      "distribution": "managed_cloud_only"
+    },
+    {
+      "id": "workspace_rbac_admin_primitives",
+      "label": "Workspace RBAC/admin primitives",
+      "distribution": "source_available"
+    },
+    {
+      "id": "billing_subscriptions_and_saas_org_operations",
+      "label": "Billing, subscriptions, and SaaS org operations",
+      "distribution": "managed_cloud_only"
+    },
+    {
+      "id": "private_control_plane_package",
+      "label": "Private control-plane package",
+      "distribution": "enterprise_self_host_only"
+    },
+    {
+      "id": "private_sage_runtime_cluster",
+      "label": "Private Sage runtime cluster",
+      "distribution": "enterprise_self_host_only"
+    },
+    {
+      "id": "private_scheduler_and_sync_services",
+      "label": "Private scheduler and sync services",
+      "distribution": "enterprise_self_host_only"
+    },
+    {
+      "id": "private_vault_and_connector_runners",
+      "label": "Private vault and connector runners",
+      "distribution": "enterprise_self_host_only"
+    },
+    {
+      "id": "enterprise_identity_and_admin_pack",
+      "label": "Enterprise identity and admin pack",
+      "distribution": "enterprise_self_host_only"
+    }
+  ]
+}

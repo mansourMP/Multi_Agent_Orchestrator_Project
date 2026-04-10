@@ -1,0 +1,100 @@
+{
+  "version": 1,
+  "shared_identity": {
+    "account": "shared",
+    "workspace": "shared",
+    "sage_identity": "shared",
+    "deployment_modes": [
+      "cloud",
+      "local",
+      "hybrid"
+    ]
+  },
+  "layers": {
+    "personal_captain": {
+      "role": "private_main_agent",
+      "memory_access": "broad_policy_bound",
+      "observes_specialists_via": [
+        "summaries",
+        "artifacts",
+        "status",
+        "activity_events"
+      ],
+      "tool_access": "brokered",
+      "secret_access": "brokered"
+    },
+    "specialist_agents": {
+      "role": "scoped_operational_workers",
+      "memory_access": "install_scoped_default",
+      "tool_access": "manifest_and_policy_scoped",
+      "connector_access": "manifest_and_policy_scoped",
+      "artifact_scope": "install_scoped",
+      "runtime_boundary": "separate_scoped_sandbox"
+    },
+    "applications": {
+      "role": "product_modules",
+      "default_memory_access": "app_owned_only",
+      "inherits_sage_memory": false,
+      "inherits_specialist_memory": false,
+      "agent_bridge_mode": "explicit_contract_only"
+    },
+    "platform_control_plane": {
+      "role": "orchestration_and_policy_system_of_record",
+      "owns": [
+        "identity",
+        "policy",
+        "runtime_selection",
+        "memory_routing",
+        "tool_broker",
+        "secrets_broker",
+        "audit",
+        "activity_events"
+      ]
+    }
+  },
+  "memory_routing": {
+    "sage_direct_read": [
+      "profile_memory",
+      "episodic_memory",
+      "app_history_summaries",
+      "connector_history_summaries",
+      "allowed_documents_and_retrieval"
+    ],
+    "sage_summary_only": [
+      "specialist_activity_history",
+      "specialist_artifacts",
+      "local_private_memory_summaries",
+      "app_operational_history"
+    ],
+    "specialist_direct_read": [
+      "install_scoped_memory",
+      "explicitly_shared_memory",
+      "manifest_allowed_retrieval",
+      "scoped_artifacts"
+    ],
+    "application_direct_read": [
+      "app_owned_history",
+      "user_selected_inputs",
+      "app_owned_structured_data",
+      "explicit_agent_bridges"
+    ]
+  },
+  "runtime_boundaries": {
+    "platform_boundary": "control_plane_and_brokers",
+    "sage_boundary": "broad_policy_bound_agent_boundary",
+    "specialist_boundary": "separate_scoped_runtime",
+    "application_boundary": "product_module_runtime_boundary"
+  },
+  "activity_model": {
+    "notifications_surface": "lightweight_daily_activity",
+    "desktop_power_surface": "deeper_agent_activity_and_control",
+    "event_types": [
+      "delegated_work",
+      "task_completed",
+      "artifact_created",
+      "blocked_action",
+      "approval_needed",
+      "status_changed"
+    ]
+  }
+}

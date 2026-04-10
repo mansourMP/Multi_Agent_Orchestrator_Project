@@ -148,6 +148,45 @@ class RuntimeRunQueryServiceTests(unittest.TestCase):
         self.assertEqual(payload["safe_context"], {"redacted": True})
         self.assertEqual(payload["pending_confirmation"], {"approval_id": "approval-1"})
 
+    def test_build_run_detail_response_prefers_explicit_runs_map_over_repository_lookup(self):
+        payload = runtime_run_query_service.build_run_detail_response(
+            "run-1",
+            current_user={"auth_type": "api_key"},
+            runs={
+                "run-1": {
+                    "context": {"metadata": {"owner_user_id": "user-1"}, "secret": True},
+                    "memory_trace": {"raw": True},
+                }
+            },
+            get_live_run_fn=lambda run_id: {
+                "context": {"metadata": {"owner_user_id": "user-1"}, "secret": False},
+                "memory_trace": {},
+            },
+            get_replay_payload=lambda run_id: {"archived": True},
+            serialize_run_snapshot=lambda run_id, run: {"run_id": run_id, "secret": run["context"].get("secret")},
+            enforce_run_owner_access=lambda current_user, snapshot: None,
+            can_view_sensitive_run_payload=lambda current_user: True,
+            limited_run_context_view=lambda context: {"workspace_id": "default"},
+            build_delegation_summary=lambda snapshot, child_runs: {"count": len(child_runs)},
+            find_run_relationships=lambda run_id, snapshot: (None, []),
+            resolve_run_connector_binding=lambda snapshot: {"connector": "telegram"},
+            redact_sensitive=lambda context: {"secret": context.get("secret")},
+            limited_result_data_view_fn=lambda value: {"summary": "trimmed"},
+            limited_node_states_view_fn=lambda value: {"trimmed": True},
+            trim_memory_trace_fn=lambda value: {"trimmed": bool(value)},
+            get_pending_confirmation_fn=lambda run: None,
+            build_archived_run_detail_response=lambda **kwargs: {"archived": True},
+            build_live_run_detail_response=lambda **kwargs: {
+                "archived": False,
+                "safe_context": kwargs["safe_context"],
+                "snapshot": kwargs["snapshot"],
+            },
+        )
+
+        self.assertFalse(payload["archived"])
+        self.assertEqual(payload["safe_context"], {"secret": True})
+        self.assertEqual(payload["snapshot"], {"run_id": "run-1", "secret": True})
+
     def test_build_run_detail_response_raises_not_found_when_no_live_or_archived_run_exists(self):
         with self.assertRaises(HTTPException):
             runtime_run_query_service.build_run_detail_response(

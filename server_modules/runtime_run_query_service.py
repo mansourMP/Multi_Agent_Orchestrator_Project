@@ -3,7 +3,6 @@ from __future__ import annotations
 from typing import Any, Callable
 
 from fastapi import HTTPException
-from server_modules import run_state_repository
 
 
 def build_run_detail_response_callbacks(
@@ -114,8 +113,9 @@ def build_run_detail_response(
     build_live_run_detail_response: Callable[..., dict[str, Any]],
 ) -> dict[str, Any]:
     include_sensitive = can_view_sensitive_run_payload(current_user)
-    fetch_live_run = get_live_run_fn or run_state_repository.sync_get_live_run
-    run = fetch_live_run(run_id)
+    run = runs.get(run_id) if isinstance(runs, dict) else None
+    if not isinstance(run, dict) and callable(get_live_run_fn):
+        run = get_live_run_fn(run_id)
 
     if run is None:
         try:

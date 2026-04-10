@@ -6,6 +6,20 @@ from server_modules import runs_core
 
 
 class RunsCoreRunServiceTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self._persist_patch = patch(
+            "server_modules.acp_manager.run_state_repository.sync_upsert_live_run",
+            return_value=None,
+        )
+        self._delete_patch = patch(
+            "server_modules.acp_manager.run_state_repository.sync_delete_live_run",
+            return_value=None,
+        )
+        self._persist_patch.start()
+        self._delete_patch.start()
+        self.addCleanup(self._persist_patch.stop)
+        self.addCleanup(self._delete_patch.stop)
+
     def test_initialize_runtime_services_delegates_bootstrap_to_run_service(self) -> None:
         with patch.object(runs_core.run_service, "initialize_runtime_services", return_value=None) as bootstrap_mock:
             runs_core.initialize_runtime_services()

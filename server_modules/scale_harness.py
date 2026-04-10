@@ -23,7 +23,7 @@ _BASE_SIM_TIME = datetime(2026, 4, 10, 0, 0, tzinfo=UTC)
 @dataclass(frozen=True, slots=True)
 class ScaleSloTarget:
     name: str
-    metric_key: str
+    metric_id: str
     comparator: str
     target: float
     unit: str
@@ -59,7 +59,7 @@ class FleetScaleConfig:
 DEFAULT_SCALE_SLO_TARGETS: tuple[ScaleSloTarget, ...] = (
     ScaleSloTarget(
         name="control_plane_bulk_insert_10k",
-        metric_key="control_plane.insert_seconds",
+        metric_id="control_plane.insert_seconds",
         comparator="lte",
         target=20.0,
         unit="seconds",
@@ -67,7 +67,7 @@ DEFAULT_SCALE_SLO_TARGETS: tuple[ScaleSloTarget, ...] = (
     ),
     ScaleSloTarget(
         name="control_plane_list_p95",
-        metric_key="control_plane.list_latency_p95_ms",
+        metric_id="control_plane.list_latency_p95_ms",
         comparator="lte",
         target=1500.0,
         unit="ms",
@@ -75,7 +75,7 @@ DEFAULT_SCALE_SLO_TARGETS: tuple[ScaleSloTarget, ...] = (
     ),
     ScaleSloTarget(
         name="fleet_peak_concurrency",
-        metric_key="fleet.peak_concurrency",
+        metric_id="fleet.peak_concurrency",
         comparator="gte",
         target=100.0,
         unit="workers",
@@ -83,7 +83,7 @@ DEFAULT_SCALE_SLO_TARGETS: tuple[ScaleSloTarget, ...] = (
     ),
     ScaleSloTarget(
         name="fleet_queue_delay_p95",
-        metric_key="fleet.queue_delay_p95_seconds",
+        metric_id="fleet.queue_delay_p95_seconds",
         comparator="lte",
         target=60.0,
         unit="seconds",
@@ -91,7 +91,7 @@ DEFAULT_SCALE_SLO_TARGETS: tuple[ScaleSloTarget, ...] = (
     ),
     ScaleSloTarget(
         name="fleet_completion_latency_p95",
-        metric_key="fleet.completion_latency_p95_seconds",
+        metric_id="fleet.completion_latency_p95_seconds",
         comparator="lte",
         target=180.0,
         unit="seconds",
@@ -99,7 +99,7 @@ DEFAULT_SCALE_SLO_TARGETS: tuple[ScaleSloTarget, ...] = (
     ),
     ScaleSloTarget(
         name="fleet_saturation_ratio",
-        metric_key="fleet.saturation_time_ratio",
+        metric_id="fleet.saturation_time_ratio",
         comparator="lte",
         target=0.35,
         unit="ratio",
@@ -107,7 +107,7 @@ DEFAULT_SCALE_SLO_TARGETS: tuple[ScaleSloTarget, ...] = (
     ),
     ScaleSloTarget(
         name="fleet_retry_rate",
-        metric_key="fleet.retry_rate",
+        metric_id="fleet.retry_rate",
         comparator="lte",
         target=0.08,
         unit="ratio",
@@ -115,7 +115,7 @@ DEFAULT_SCALE_SLO_TARGETS: tuple[ScaleSloTarget, ...] = (
     ),
     ScaleSloTarget(
         name="fleet_dead_letter_rate",
-        metric_key="fleet.dead_letter_rate",
+        metric_id="fleet.dead_letter_rate",
         comparator="lte",
         target=0.02,
         unit="ratio",
@@ -123,7 +123,7 @@ DEFAULT_SCALE_SLO_TARGETS: tuple[ScaleSloTarget, ...] = (
     ),
     ScaleSloTarget(
         name="fleet_error_rate",
-        metric_key="fleet.error_rate",
+        metric_id="fleet.error_rate",
         comparator="lte",
         target=0.03,
         unit="ratio",
@@ -131,7 +131,7 @@ DEFAULT_SCALE_SLO_TARGETS: tuple[ScaleSloTarget, ...] = (
     ),
     ScaleSloTarget(
         name="fleet_throughput",
-        metric_key="fleet.throughput_runs_per_second",
+        metric_id="fleet.throughput_runs_per_second",
         comparator="gte",
         target=1.5,
         unit="runs/s",
@@ -1007,9 +1007,9 @@ def run_fleet_runtime_simulation(*, config: FleetScaleConfig | None = None) -> D
     }
 
 
-def _metric_from_report(report: Mapping[str, Any], metric_key: str) -> Optional[float]:
+def _metric_from_report(report: Mapping[str, Any], metric_id: str) -> Optional[float]:
     cursor: Any = report
-    for token in metric_key.split("."):
+    for token in metric_id.split("."):
         if not isinstance(cursor, Mapping):
             return None
         cursor = cursor.get(token)
@@ -1030,7 +1030,7 @@ def evaluate_scale_slos(
 ) -> List[Dict[str, Any]]:
     results: List[Dict[str, Any]] = []
     for target in targets:
-        actual = _metric_from_report(report, target.metric_key)
+        actual = _metric_from_report(report, target.metric_id)
         if actual is None:
             passed = False
         elif target.comparator == "lte":
@@ -1042,7 +1042,7 @@ def evaluate_scale_slos(
         results.append(
             {
                 "name": target.name,
-                "metric_key": target.metric_key,
+                "metric_id": target.metric_id,
                 "actual": _round_float(actual, 4) if actual is not None else None,
                 "comparator": target.comparator,
                 "target": target.target,

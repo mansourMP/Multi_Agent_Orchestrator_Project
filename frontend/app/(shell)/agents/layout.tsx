@@ -1,7 +1,12 @@
 import { AgentsLayoutShell } from '@/components/orion/agents/AgentsLayoutShell';
+import type { ReactNode } from 'react';
+
+type AgentsLayoutProps = {
+  children: ReactNode;
+};
 
 export default function AgentsLayout({
   children,
-}: LayoutProps<'/agents'>) {
+}: AgentsLayoutProps) {
   return <AgentsLayoutShell>{children}</AgentsLayoutShell>;
 }

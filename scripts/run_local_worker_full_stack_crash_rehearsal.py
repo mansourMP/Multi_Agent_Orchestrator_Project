@@ -369,6 +369,9 @@ def _start_runtime_server(port: int):
         for snapshot in _list_live_snapshots()
         if str(snapshot.get("status") or "").strip().lower() in {str(item or "").strip().lower() for item in states}
     ]
+    run_state_repository.sync_upsert_live_run = lambda *args, **kwargs: None
+    run_state_repository.sync_delete_live_run = lambda *args, **kwargs: None
+    run_state_repository.sync_archive_run = lambda *args, **kwargs: None
 
     config = uvicorn.Config(
         server_module.app,

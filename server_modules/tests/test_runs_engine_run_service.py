@@ -6,6 +6,20 @@ from server_modules import runs_core, runs_engine
 
 
 class RunsEngineRunServiceTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self._persist_patch = patch(
+            "server_modules.acp_manager.run_state_repository.sync_upsert_live_run",
+            return_value=None,
+        )
+        self._delete_patch = patch(
+            "server_modules.acp_manager.run_state_repository.sync_delete_live_run",
+            return_value=None,
+        )
+        self._persist_patch.start()
+        self._delete_patch.start()
+        self.addCleanup(self._persist_patch.stop)
+        self.addCleanup(self._delete_patch.stop)
+
     def test_wait_for_human_response_delegates_to_run_service(self) -> None:
         run = {
             "run_id": "run-approval-1",

@@ -40,13 +40,13 @@ class HeartbeatScheduler:
         self,
         *,
         interval_seconds: int = 1800,
-        workspace_id: str = "default",
+        workspace_id: Optional[str] = None,
         run_callback: Optional[HeartbeatRunCallback] = None,
         notify_callback: Optional[HeartbeatNotifyCallback] = None,
         active_hours: Optional[Dict[str, Any]] = None,
     ) -> None:
         self.interval_seconds = max(60, int(interval_seconds or 1800))
-        self.workspace_id = str(workspace_id or "default").strip() or "default"
+        self.workspace_id = str(workspace_id or "").strip() or None
         self.run_callback = run_callback
         self.notify_callback = notify_callback
         configured_hours = active_hours if isinstance(active_hours, dict) else {}
@@ -113,6 +113,14 @@ class HeartbeatScheduler:
                 checked_at=checked_at,
                 status="inactive_hours",
                 summary=f"Heartbeat skipped outside active hours ({start_hour:02d}:00-{end_hour:02d}:59).",
+                tasks=[],
+                trigger=trigger,
+            )
+        if not self.workspace_id:
+            return self._update_status(
+                checked_at=checked_at,
+                status="scope_missing",
+                summary="Heartbeat skipped because workspace scope is not configured.",
                 tasks=[],
                 trigger=trigger,
             )

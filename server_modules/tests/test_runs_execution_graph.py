@@ -4,7 +4,7 @@ from pathlib import Path
 import unittest
 from unittest.mock import patch
 
-from server_modules import run_state_repository, runs_execution, runs_output, shared
+from server_modules import run_state_repository, runs_execution, runs_output, safe_mode_service, shared
 from server_modules.runtime_state_store import init_runtime_state_db
 
 
@@ -48,6 +48,7 @@ class RunsExecutionGraphTests(unittest.TestCase):
         runs_execution.RUN_QUEUE_INDEX.clear()
         with runs_execution.IDEMPOTENCY_LOCK:
             runs_execution.IDEMPOTENCY_RECORDS.clear()
+        safe_mode_service.reset_state_for_tests()
         for patcher in reversed(self.patchers):
             patcher.stop()
         shared.sync_acp_manager_paths(runtime_db_path=runs_execution.ORION_RUNTIME_STATE_DB)
@@ -457,7 +458,7 @@ class RunsExecutionGraphTests(unittest.TestCase):
 
     @patch("server_modules.runs_execution.wait_for_human_decision", return_value=True)
     @patch("server_modules.runs_execution._workflow_execute_connector_action", side_effect=RuntimeError("connector offline"))
-    def test_execute_workflow_graph_marks_failed_node_state(self, _connector_action_mock, _approval_mock):
+    def test_execute_workflow_graph_degrades_retryable_connector_outages(self, _connector_action_mock, _approval_mock):
         log_queue = self._register_live_run("run-node-failure")
         definition = {
             "version": "empyralist.workflow.v2",
@@ -473,18 +474,18 @@ class RunsExecutionGraphTests(unittest.TestCase):
             "edges": [{"id": "e1", "source": "trigger_1", "target": "tool_1"}],
         }
 
-        with self.assertRaises(RuntimeError):
-            runs_execution._execute_workflow_graph(
-                "run-node-failure",
-                {"workflow_id": "wf_fail", "user_goal": "Send alert", "metadata": {}},
-                log_queue,
-                definition,
-            )
+        result = runs_execution._execute_workflow_graph(
+            "run-node-failure",
+            {"workflow_id": "wf_fail", "user_goal": "Send alert", "metadata": {}},
+            log_queue,
+            definition,
+        )
 
         snapshot = runs_output._serialize_run_snapshot("run-node-failure", runs_execution.runs["run-node-failure"])
         items = {item["node_id"]: item for item in snapshot["node_states"]["items"]}
-        self.assertEqual(items["tool_1"]["status"], "failed")
-        self.assertIn("connector offline", (items["tool_1"]["error"] or "").lower())
+        self.assertEqual(items["tool_1"]["status"], "succeeded")
+        self.assertTrue(items["tool_1"]["detail"]["degraded"])
+        self.assertIn("temporarily unavailable", result["result_text"].lower())
 
     @patch("server_modules.runs_execution.wait_for_human_decision", return_value=True)
     @patch("server_modules.runs_execution._workflow_execute_connector_action")
@@ -877,6 +878,38 @@ class RunsExecutionGraphTests(unittest.TestCase):
         self.assertFalse(second["result_data"]["connector_action"]["executed"])
         self.assertTrue(second["result_data"]["connector_action"]["duplicate_protected"])
         self.assertIn("Skipped duplicate execution", second["summary"])
+
+    @patch(
+        "server_modules.runs_execution._workflow_tool_connector_secret",
+        return_value=("cred-telegram", "telegram_bot", {"chat_id": "123"}),
+    )
+    def test_workflow_connector_action_degrades_when_connector_incident_is_active(self, _secret_mock):
+        safe_mode_service.set_incident_control(
+            scope="connector",
+            mode="pause",
+            tenant_id="tenant-1",
+            workspace_id="workspace-1",
+            connector_id="telegram_bot",
+            credential_id="cred-telegram",
+            reason="connector pause",
+        )
+
+        result = runs_execution._workflow_execute_connector_action(
+            "run-incident",
+            "tool-incident",
+            {"tenant_id": "tenant-1", "workspace_id": "workspace-1", "metadata": {}},
+            {
+                "connector": "telegram_bot",
+                "action_id": "send_message",
+                "chat_id": "123",
+            },
+            current_text="Send alert",
+        )
+
+        action = result["result_data"]["connector_action"]
+        self.assertTrue(action["degraded"])
+        self.assertFalse(action["executed"])
+        self.assertEqual(action["incident_mode"], "pause")
 
     @patch(
         "server_modules.runs_execution.http_json_request",

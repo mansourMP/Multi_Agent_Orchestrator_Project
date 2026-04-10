@@ -4,6 +4,7 @@ import threading
 import types
 import unittest
 from pathlib import Path
+from unittest.mock import AsyncMock, patch
 
 from server_modules import runtime_events_api
 from server_modules import runtime_state_store
@@ -101,6 +102,7 @@ class RuntimeEventsApiTests(unittest.TestCase):
                 self.assertIn(("GET", "/notifications"), app.routes)
                 self.assertIn(("POST", "/notifications"), app.routes)
                 self.assertIn(("POST", "/notifications/devices"), app.routes)
+                self.assertIn(("GET", "/activity/timeline"), app.routes)
 
                 payload = self._run_async(
                     app.routes[("GET", "/notifications")](
@@ -157,6 +159,20 @@ class RuntimeEventsApiTests(unittest.TestCase):
                 )
                 self.assertIsInstance(stream_payload, _FakeEventSourceResponse)
                 self.assertEqual(stream_payload.ping, 5)
+
+                with patch(
+                    "server_modules.runtime_events_api.activity_ledger_service.list_activity_timeline_payload",
+                    new=AsyncMock(return_value={"items": [{"id": "aevt-1"}], "count": 1, "total": 1, "summary": {}}),
+                ):
+                    timeline_payload = self._run_async(
+                        app.routes[("GET", "/activity/timeline")](
+                            tenant_id="default",
+                            workspace_id="default",
+                            current_user=current_user,
+                        )
+                    )
+                self.assertEqual(timeline_payload["count"], 1)
+                self.assertEqual(timeline_payload["items"][0]["id"], "aevt-1")
             finally:
                 if previous_server is None:
                     sys.modules.pop("server", None)

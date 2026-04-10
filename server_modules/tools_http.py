@@ -6,6 +6,8 @@ from urllib.parse import urlparse
 
 import httpx
 
+from server_modules import egress_policy
+
 
 DEFAULT_TIMEOUT_SECONDS = 30
 MAX_RESPONSE_BYTES = 100 * 1024
@@ -108,6 +110,7 @@ async def http_request(
         raise RuntimeError("http_request requires a URL.")
 
     normalized_method = _normalize_method(method)
+    egress_policy.enforce_outbound_request(url=normalized_url, method=normalized_method)
     normalized_headers = _normalize_mapping(headers)
     normalized_params = params if isinstance(params, dict) else None
     normalized_headers, auth = _authorization(normalized_headers, auth_type, auth_value)

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from server_modules import bounded_scheduler_service
 from server_modules.heartbeat import HeartbeatScheduler
 from server_modules.run_service import build_run_precheck_result as _build_run_precheck_result
 from server_modules.run_service import build_run_routing_preview as _build_run_routing_preview
@@ -30,7 +31,7 @@ def register_runtime_run_routes_from_api(
     load_webhook_triggers,
     heartbeat_scheduler_class=HeartbeatScheduler,
     interval_seconds: int = 30 * 60,
-    workspace_id: str = "default",
+    workspace_id: str | None = None,
     runtime_heartbeat_service=_runtime_heartbeat_service,
     runtime_route_bootstrap_service=_runtime_route_bootstrap_service,
     runtime_route_binding_service=_runtime_route_binding_service,
@@ -151,6 +152,8 @@ def register_runtime_run_routes_from_api(
         handle_telegram_send_message=deps.handle_telegram_send_message,
         build_heartbeat_run_callback=runtime_heartbeat_service.build_heartbeat_run_callback,
         build_heartbeat_notify_callback=runtime_heartbeat_service.build_heartbeat_notify_callback,
+        resolve_workspace_tenant_id=deps.resolve_workspace_tenant_id,
+        heartbeat_workspace_id=workspace_id,
     )
 
     heartbeat_scheduler = runtime_route_bootstrap_service.ensure_runtime_run_route_bootstrap(
@@ -166,6 +169,12 @@ def register_runtime_run_routes_from_api(
         load_webhook_triggers=load_webhook_triggers,
     )
     heartbeat_scheduler_refresher(heartbeat_scheduler)
+    if heartbeat_scheduler is not None and workspace_id:
+        bounded_scheduler_service.register_ambient_monitor(
+            workspace_id=workspace_id,
+            trigger_now=heartbeat_scheduler.trigger_now,
+            status=heartbeat_scheduler.status,
+        )
 
     route_bindings = runtime_route_binding_service.build_runtime_route_bindings(
         late_server_export=lambda name: getattr(server_module, name),

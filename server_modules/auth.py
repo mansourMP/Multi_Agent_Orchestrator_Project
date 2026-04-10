@@ -35,6 +35,10 @@ ORION_ADMIN_EMAILS = {item.strip().lower() for item in str(os.getenv("ORION_ADMI
 ORION_SERVICE_RATE_LIMIT_PER_MINUTE = int(os.getenv("ORION_SERVICE_RATE_LIMIT_PER_MINUTE", "600"))
 RBAC_ROLE_ORDER = {"viewer": 0, "member": 1, "owner": 2}
 WORKSPACE_CAPABILITY_ALL = "*"
+AUTH_SESSION_CHANNELS = {"web", "desktop", "mobile", "local_runtime_companion"}
+AUTH_SESSION_STATUSES = {"active", "revoked", "expired"}
+DEVICE_LINK_STATUSES = {"active", "pending", "unlinked", "revoked"}
+DEVICE_TRUST_STATES = {"unbound", "pending", "verified", "limited", "revoked"}
 
 
 def _control_plane_call(coro: Any) -> Any:
@@ -432,6 +436,59 @@ def _connect_auth_db() -> sqlite3.Connection:
         )
         """
     )
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS user_identity_versions (
+            user_id TEXT PRIMARY KEY,
+            membership_version INTEGER NOT NULL DEFAULT 1,
+            auth_version INTEGER NOT NULL DEFAULT 1,
+            provider_scope_version INTEGER NOT NULL DEFAULT 1,
+            updated_at INTEGER NOT NULL
+        )
+        """
+    )
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS auth_sessions (
+            session_id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            channel TEXT NOT NULL,
+            device_id TEXT,
+            runtime_id TEXT,
+            trust_state TEXT NOT NULL,
+            status TEXT NOT NULL,
+            session_family_id TEXT,
+            metadata_json TEXT NOT NULL,
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL,
+            last_seen_at INTEGER,
+            expires_at INTEGER NOT NULL,
+            revoked_at INTEGER,
+            revoked_reason TEXT
+        )
+        """
+    )
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS user_devices (
+            device_id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            workspace_id TEXT,
+            channel TEXT NOT NULL,
+            display_name TEXT,
+            platform TEXT,
+            trust_state TEXT NOT NULL,
+            status TEXT NOT NULL,
+            session_binding_required INTEGER NOT NULL DEFAULT 1,
+            metadata_json TEXT NOT NULL,
+            linked_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL,
+            last_seen_at INTEGER,
+            revoked_at INTEGER,
+            revoked_reason TEXT
+        )
+        """
+    )
     existing_columns = {
         str(row[1]).strip().lower()
         for row in connection.execute("PRAGMA table_info(users)").fetchall()
@@ -516,8 +573,651 @@ def _connect_auth_db() -> sqlite3.Connection:
     connection.execute(
         "CREATE INDEX IF NOT EXISTS idx_user_provider_connections_user ON user_provider_connections(user_id, provider, workspace_id)"
     )
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS idx_auth_sessions_user ON auth_sessions(user_id, status, channel, expires_at DESC)"
+    )
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS idx_user_devices_user ON user_devices(user_id, status, channel, workspace_id)"
+    )
     connection.commit()
     return connection
+
+
+def _normalize_auth_session_channel(value: Any, *, default: str = "web") -> str:
+    token = str(value or "").strip().lower()
+    if token in AUTH_SESSION_CHANNELS:
+        return token
+    fallback = str(default or "web").strip().lower()
+    return fallback if fallback in AUTH_SESSION_CHANNELS else "web"
+
+
+def _normalize_auth_session_status(value: Any, *, default: str = "active") -> str:
+    token = str(value or "").strip().lower()
+    if token in AUTH_SESSION_STATUSES:
+        return token
+    fallback = str(default or "active").strip().lower()
+    return fallback if fallback in AUTH_SESSION_STATUSES else "active"
+
+
+def _normalize_device_link_status(value: Any, *, default: str = "active") -> str:
+    token = str(value or "").strip().lower()
+    if token in DEVICE_LINK_STATUSES:
+        return token
+    fallback = str(default or "active").strip().lower()
+    return fallback if fallback in DEVICE_LINK_STATUSES else "active"
+
+
+def _normalize_device_trust_state(value: Any, *, default: str = "verified") -> str:
+    token = str(value or "").strip().lower()
+    if token in DEVICE_TRUST_STATES:
+        return token
+    fallback = str(default or "verified").strip().lower()
+    return fallback if fallback in DEVICE_TRUST_STATES else "verified"
+
+
+def _decode_json_object(raw: Any) -> dict[str, Any]:
+    if isinstance(raw, dict):
+        return dict(raw)
+    if isinstance(raw, str) and raw.strip():
+        try:
+            parsed = json.loads(raw)
+        except Exception:
+            parsed = {}
+        if isinstance(parsed, dict):
+            return parsed
+    return {}
+
+
+def _identity_versions_from_row(row: Any, user_id: str) -> dict[str, Any]:
+    if row is None:
+        return {
+            "user_id": user_id,
+            "membership_version": 1,
+            "auth_version": 1,
+            "provider_scope_version": 1,
+            "updated_at": None,
+        }
+    return {
+        "user_id": user_id,
+        "membership_version": max(int(row["membership_version"] or 1), 1),
+        "auth_version": max(int(row["auth_version"] or 1), 1),
+        "provider_scope_version": max(int(row["provider_scope_version"] or 1), 1),
+        "updated_at": int(row["updated_at"]) if row["updated_at"] is not None else None,
+    }
+
+
+def _ensure_user_identity_versions_locked(
+    connection: sqlite3.Connection,
+    user_id: str,
+    *,
+    now_ts: Optional[int] = None,
+) -> dict[str, Any]:
+    clean_user_id = str(user_id or "").strip()
+    if not clean_user_id:
+        return _identity_versions_from_row(None, "")
+    existing = connection.execute(
+        """
+        SELECT user_id, membership_version, auth_version, provider_scope_version, updated_at
+        FROM user_identity_versions
+        WHERE user_id = ?
+        LIMIT 1
+        """,
+        (clean_user_id,),
+    ).fetchone()
+    if existing is not None:
+        return _identity_versions_from_row(existing, clean_user_id)
+    ts = int(now_ts or time.time())
+    connection.execute(
+        """
+        INSERT OR REPLACE INTO user_identity_versions (
+            user_id, membership_version, auth_version, provider_scope_version, updated_at
+        ) VALUES (?, 1, 1, 1, ?)
+        """,
+        (clean_user_id, ts),
+    )
+    row = connection.execute(
+        """
+        SELECT user_id, membership_version, auth_version, provider_scope_version, updated_at
+        FROM user_identity_versions
+        WHERE user_id = ?
+        LIMIT 1
+        """,
+        (clean_user_id,),
+    ).fetchone()
+    return _identity_versions_from_row(row, clean_user_id)
+
+
+def load_user_identity_versions(user_id: str) -> dict[str, Any]:
+    clean_user_id = str(user_id or "").strip()
+    if not clean_user_id:
+        return _identity_versions_from_row(None, "")
+    with AUTH_LOCK:
+        with _connect_auth_db() as connection:
+            record = _ensure_user_identity_versions_locked(connection, clean_user_id)
+            connection.commit()
+    return record
+
+
+def _bump_user_identity_versions(
+    user_id: str,
+    *,
+    membership: bool = False,
+    auth: bool = False,
+    provider_scope: bool = False,
+) -> dict[str, Any]:
+    clean_user_id = str(user_id or "").strip()
+    if not clean_user_id:
+        return _identity_versions_from_row(None, "")
+    with AUTH_LOCK:
+        with _connect_auth_db() as connection:
+            existing = _ensure_user_identity_versions_locked(connection, clean_user_id)
+            ts = int(time.time())
+            next_membership = int(existing.get("membership_version") or 1) + (1 if membership else 0)
+            next_auth = int(existing.get("auth_version") or 1) + (1 if auth else 0)
+            next_provider_scope = int(existing.get("provider_scope_version") or 1) + (1 if provider_scope else 0)
+            connection.execute(
+                """
+                INSERT OR REPLACE INTO user_identity_versions (
+                    user_id, membership_version, auth_version, provider_scope_version, updated_at
+                ) VALUES (?, ?, ?, ?, ?)
+                """,
+                (clean_user_id, next_membership, next_auth, next_provider_scope, ts),
+            )
+            row = connection.execute(
+                """
+                SELECT user_id, membership_version, auth_version, provider_scope_version, updated_at
+                FROM user_identity_versions
+                WHERE user_id = ?
+                LIMIT 1
+                """,
+                (clean_user_id,),
+            ).fetchone()
+            connection.commit()
+    return _identity_versions_from_row(row, clean_user_id)
+
+
+def _auth_session_from_row(row: Any) -> dict[str, Any]:
+    if row is None:
+        return {}
+    expires_at = int(row["expires_at"]) if row["expires_at"] is not None else None
+    revoked_at = int(row["revoked_at"]) if row["revoked_at"] is not None else None
+    status = _normalize_auth_session_status(row["status"])
+    now_ts = int(time.time())
+    if status == "active" and expires_at is not None and expires_at <= now_ts:
+        status = "expired"
+    return {
+        "session_id": str(row["session_id"] or "").strip(),
+        "user_id": str(row["user_id"] or "").strip(),
+        "channel": _normalize_auth_session_channel(row["channel"]),
+        "device_id": str(row["device_id"] or "").strip() or None,
+        "runtime_id": str(row["runtime_id"] or "").strip() or None,
+        "trust_state": _normalize_device_trust_state(
+            row["trust_state"],
+            default="verified" if str(row["device_id"] or "").strip() else "unbound",
+        ),
+        "status": status,
+        "session_family_id": str(row["session_family_id"] or "").strip() or None,
+        "metadata": _decode_json_object(row["metadata_json"] if "metadata_json" in row.keys() else row.get("metadata_json")),
+        "created_at": int(row["created_at"]) if row["created_at"] is not None else None,
+        "updated_at": int(row["updated_at"]) if row["updated_at"] is not None else None,
+        "last_seen_at": int(row["last_seen_at"]) if row["last_seen_at"] is not None else None,
+        "expires_at": expires_at,
+        "revoked_at": revoked_at,
+        "revoked_reason": str(row["revoked_reason"] or "").strip() or None,
+    }
+
+
+def _device_link_from_row(row: Any) -> dict[str, Any]:
+    if row is None:
+        return {}
+    return {
+        "device_id": str(row["device_id"] or "").strip(),
+        "user_id": str(row["user_id"] or "").strip(),
+        "workspace_id": _normalize_workspace_token(row["workspace_id"], default="") if str(row["workspace_id"] or "").strip() else None,
+        "channel": _normalize_auth_session_channel(row["channel"], default="mobile"),
+        "display_name": str(row["display_name"] or "").strip() or None,
+        "platform": str(row["platform"] or "").strip().lower() or None,
+        "trust_state": _normalize_device_trust_state(row["trust_state"]),
+        "status": _normalize_device_link_status(row["status"]),
+        "session_binding_required": bool(row["session_binding_required"]),
+        "metadata": _decode_json_object(row["metadata_json"] if "metadata_json" in row.keys() else row.get("metadata_json")),
+        "linked_at": int(row["linked_at"]) if row["linked_at"] is not None else None,
+        "updated_at": int(row["updated_at"]) if row["updated_at"] is not None else None,
+        "last_seen_at": int(row["last_seen_at"]) if row["last_seen_at"] is not None else None,
+        "revoked_at": int(row["revoked_at"]) if row["revoked_at"] is not None else None,
+        "revoked_reason": str(row["revoked_reason"] or "").strip() or None,
+    }
+
+
+def _upsert_auth_session_locked(
+    connection: sqlite3.Connection,
+    *,
+    session_id: Optional[str],
+    user_id: str,
+    channel: str,
+    device_id: Optional[str] = None,
+    runtime_id: Optional[str] = None,
+    trust_state: Optional[str] = None,
+    status: str = "active",
+    session_family_id: Optional[str] = None,
+    metadata: Optional[dict[str, Any]] = None,
+    ttl_seconds: Optional[int] = None,
+    now_ts: Optional[int] = None,
+    revoked_at: Optional[int] = None,
+    revoked_reason: Optional[str] = None,
+) -> dict[str, Any]:
+    clean_user_id = str(user_id or "").strip()
+    clean_session_id = str(session_id or "").strip() or f"as_{uuid.uuid4().hex}"
+    clean_channel = _normalize_auth_session_channel(channel)
+    clean_device_id = str(device_id or "").strip() or None
+    clean_runtime_id = str(runtime_id or "").strip() or None
+    clean_trust_state = _normalize_device_trust_state(
+        trust_state,
+        default="verified" if clean_device_id else "unbound",
+    )
+    clean_status = _normalize_auth_session_status(status)
+    ts = int(now_ts or time.time())
+    expires_at = ts + max(int(ttl_seconds or JWT_EXP_SECONDS), 60)
+    existing = connection.execute(
+        "SELECT created_at FROM auth_sessions WHERE session_id = ? LIMIT 1",
+        (clean_session_id,),
+    ).fetchone()
+    created_at = int(existing["created_at"]) if existing is not None and existing["created_at"] is not None else ts
+    connection.execute(
+        """
+        INSERT OR REPLACE INTO auth_sessions (
+            session_id,
+            user_id,
+            channel,
+            device_id,
+            runtime_id,
+            trust_state,
+            status,
+            session_family_id,
+            metadata_json,
+            created_at,
+            updated_at,
+            last_seen_at,
+            expires_at,
+            revoked_at,
+            revoked_reason
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            clean_session_id,
+            clean_user_id,
+            clean_channel,
+            clean_device_id,
+            clean_runtime_id,
+            clean_trust_state,
+            clean_status,
+            str(session_family_id or "").strip() or None,
+            json.dumps(metadata or {}),
+            created_at,
+            ts,
+            ts,
+            expires_at,
+            revoked_at,
+            str(revoked_reason or "").strip() or None,
+        ),
+    )
+    row = connection.execute(
+        "SELECT * FROM auth_sessions WHERE session_id = ? LIMIT 1",
+        (clean_session_id,),
+    ).fetchone()
+    return _auth_session_from_row(row)
+
+
+def create_auth_session(
+    user_id: str,
+    *,
+    channel: str = "web",
+    device_id: Optional[str] = None,
+    runtime_id: Optional[str] = None,
+    trust_state: Optional[str] = None,
+    session_id: Optional[str] = None,
+    session_family_id: Optional[str] = None,
+    metadata: Optional[dict[str, Any]] = None,
+    ttl_seconds: Optional[int] = None,
+) -> dict[str, Any]:
+    clean_user_id = str(user_id or "").strip()
+    if not clean_user_id:
+        raise HTTPException(status_code=400, detail="user_id is required.")
+    with AUTH_LOCK:
+        with _connect_auth_db() as connection:
+            _ensure_user_identity_versions_locked(connection, clean_user_id)
+            record = _upsert_auth_session_locked(
+                connection,
+                session_id=session_id,
+                user_id=clean_user_id,
+                channel=channel,
+                device_id=device_id,
+                runtime_id=runtime_id,
+                trust_state=trust_state,
+                session_family_id=session_family_id,
+                metadata=metadata,
+                ttl_seconds=ttl_seconds,
+            )
+            connection.commit()
+    return record
+
+
+def get_auth_session(session_id: str) -> dict[str, Any]:
+    clean_session_id = str(session_id or "").strip()
+    if not clean_session_id:
+        return {}
+    with AUTH_LOCK:
+        with _connect_auth_db() as connection:
+            row = connection.execute(
+                "SELECT * FROM auth_sessions WHERE session_id = ? LIMIT 1",
+                (clean_session_id,),
+            ).fetchone()
+    return _auth_session_from_row(row)
+
+
+def touch_auth_session(session_id: str) -> dict[str, Any]:
+    clean_session_id = str(session_id or "").strip()
+    if not clean_session_id:
+        return {}
+    with AUTH_LOCK:
+        with _connect_auth_db() as connection:
+            existing = connection.execute(
+                "SELECT * FROM auth_sessions WHERE session_id = ? LIMIT 1",
+                (clean_session_id,),
+            ).fetchone()
+            if existing is None:
+                return {}
+            ts = int(time.time())
+            connection.execute(
+                "UPDATE auth_sessions SET updated_at = ?, last_seen_at = ? WHERE session_id = ?",
+                (ts, ts, clean_session_id),
+            )
+            row = connection.execute(
+                "SELECT * FROM auth_sessions WHERE session_id = ? LIMIT 1",
+                (clean_session_id,),
+            ).fetchone()
+            connection.commit()
+    return _auth_session_from_row(row)
+
+
+def revoke_auth_session(session_id: str, *, reason: Optional[str] = None) -> dict[str, Any]:
+    clean_session_id = str(session_id or "").strip()
+    if not clean_session_id:
+        return {}
+    with AUTH_LOCK:
+        with _connect_auth_db() as connection:
+            existing = connection.execute(
+                "SELECT * FROM auth_sessions WHERE session_id = ? LIMIT 1",
+                (clean_session_id,),
+            ).fetchone()
+            if existing is None:
+                return {}
+            ts = int(time.time())
+            connection.execute(
+                """
+                UPDATE auth_sessions
+                SET status = 'revoked',
+                    trust_state = CASE WHEN device_id IS NOT NULL THEN 'revoked' ELSE trust_state END,
+                    updated_at = ?,
+                    revoked_at = ?,
+                    revoked_reason = ?
+                WHERE session_id = ?
+                """,
+                (ts, ts, str(reason or "").strip() or "Session revoked.", clean_session_id),
+            )
+            row = connection.execute(
+                "SELECT * FROM auth_sessions WHERE session_id = ? LIMIT 1",
+                (clean_session_id,),
+            ).fetchone()
+            connection.commit()
+    return _auth_session_from_row(row)
+
+
+def revoke_user_auth_sessions(
+    user_id: str,
+    *,
+    device_id: Optional[str] = None,
+    reason: Optional[str] = None,
+) -> int:
+    clean_user_id = str(user_id or "").strip()
+    if not clean_user_id:
+        return 0
+    clean_device_id = str(device_id or "").strip() or None
+    with AUTH_LOCK:
+        with _connect_auth_db() as connection:
+            ts = int(time.time())
+            params: list[Any] = [ts, ts, str(reason or "").strip() or "User sessions revoked.", clean_user_id]
+            where = "user_id = ?"
+            if clean_device_id:
+                where += " AND device_id = ?"
+                params.append(clean_device_id)
+            cursor = connection.execute(
+                f"""
+                UPDATE auth_sessions
+                SET status = 'revoked',
+                    trust_state = CASE WHEN device_id IS NOT NULL THEN 'revoked' ELSE trust_state END,
+                    updated_at = ?,
+                    revoked_at = ?,
+                    revoked_reason = ?
+                WHERE {where} AND status = 'active'
+                """,
+                tuple(params),
+            )
+            connection.commit()
+            return int(cursor.rowcount or 0)
+
+
+def list_user_auth_sessions(user_id: str, *, include_inactive: bool = False) -> list[dict[str, Any]]:
+    clean_user_id = str(user_id or "").strip()
+    if not clean_user_id:
+        return []
+    query = "SELECT * FROM auth_sessions WHERE user_id = ?"
+    params: list[Any] = [clean_user_id]
+    if not include_inactive:
+        query += " AND status = 'active'"
+    query += " ORDER BY updated_at DESC, created_at DESC"
+    with AUTH_LOCK:
+        with _connect_auth_db() as connection:
+            rows = connection.execute(query, tuple(params)).fetchall()
+    return [_auth_session_from_row(row) for row in rows]
+
+
+def _upsert_user_device_link_locked(
+    connection: sqlite3.Connection,
+    *,
+    device_id: str,
+    user_id: str,
+    workspace_id: Optional[str] = None,
+    channel: str = "mobile",
+    display_name: Optional[str] = None,
+    platform: Optional[str] = None,
+    trust_state: str = "verified",
+    status: str = "active",
+    session_binding_required: bool = True,
+    metadata: Optional[dict[str, Any]] = None,
+    now_ts: Optional[int] = None,
+    revoked_at: Optional[int] = None,
+    revoked_reason: Optional[str] = None,
+) -> dict[str, Any]:
+    clean_device_id = str(device_id or "").strip()
+    clean_user_id = str(user_id or "").strip()
+    ts = int(now_ts or time.time())
+    existing = connection.execute(
+        "SELECT linked_at FROM user_devices WHERE device_id = ? LIMIT 1",
+        (clean_device_id,),
+    ).fetchone()
+    linked_at = int(existing["linked_at"]) if existing is not None and existing["linked_at"] is not None else ts
+    connection.execute(
+        """
+        INSERT OR REPLACE INTO user_devices (
+            device_id,
+            user_id,
+            workspace_id,
+            channel,
+            display_name,
+            platform,
+            trust_state,
+            status,
+            session_binding_required,
+            metadata_json,
+            linked_at,
+            updated_at,
+            last_seen_at,
+            revoked_at,
+            revoked_reason
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            clean_device_id,
+            clean_user_id,
+            _normalize_workspace_token(workspace_id, default="") if str(workspace_id or "").strip() else None,
+            _normalize_auth_session_channel(channel, default="mobile"),
+            str(display_name or "").strip() or None,
+            str(platform or "").strip().lower() or None,
+            _normalize_device_trust_state(trust_state),
+            _normalize_device_link_status(status),
+            1 if session_binding_required else 0,
+            json.dumps(metadata or {}),
+            linked_at,
+            ts,
+            ts,
+            revoked_at,
+            str(revoked_reason or "").strip() or None,
+        ),
+    )
+    row = connection.execute(
+        "SELECT * FROM user_devices WHERE device_id = ? LIMIT 1",
+        (clean_device_id,),
+    ).fetchone()
+    return _device_link_from_row(row)
+
+
+def upsert_user_device_link(
+    user_id: str,
+    *,
+    device_id: str,
+    workspace_id: Optional[str] = None,
+    channel: str = "mobile",
+    display_name: Optional[str] = None,
+    platform: Optional[str] = None,
+    trust_state: str = "verified",
+    status: str = "active",
+    session_binding_required: bool = True,
+    metadata: Optional[dict[str, Any]] = None,
+) -> dict[str, Any]:
+    clean_user_id = str(user_id or "").strip()
+    clean_device_id = str(device_id or "").strip()
+    if not clean_user_id:
+        raise HTTPException(status_code=400, detail="user_id is required.")
+    if not clean_device_id:
+        raise HTTPException(status_code=400, detail="device_id is required.")
+    with AUTH_LOCK:
+        with _connect_auth_db() as connection:
+            _ensure_user_identity_versions_locked(connection, clean_user_id)
+            record = _upsert_user_device_link_locked(
+                connection,
+                device_id=clean_device_id,
+                user_id=clean_user_id,
+                workspace_id=workspace_id,
+                channel=channel,
+                display_name=display_name,
+                platform=platform,
+                trust_state=trust_state,
+                status=status,
+                session_binding_required=session_binding_required,
+                metadata=metadata,
+            )
+            connection.commit()
+    return record
+
+
+def get_user_device_link(device_id: str) -> dict[str, Any]:
+    clean_device_id = str(device_id or "").strip()
+    if not clean_device_id:
+        return {}
+    with AUTH_LOCK:
+        with _connect_auth_db() as connection:
+            row = connection.execute(
+                "SELECT * FROM user_devices WHERE device_id = ? LIMIT 1",
+                (clean_device_id,),
+            ).fetchone()
+    return _device_link_from_row(row)
+
+
+def list_user_device_links(user_id: str, *, include_inactive: bool = True) -> list[dict[str, Any]]:
+    clean_user_id = str(user_id or "").strip()
+    if not clean_user_id:
+        return []
+    query = "SELECT * FROM user_devices WHERE user_id = ?"
+    params: list[Any] = [clean_user_id]
+    if not include_inactive:
+        query += " AND status = 'active'"
+    query += " ORDER BY updated_at DESC, linked_at DESC"
+    with AUTH_LOCK:
+        with _connect_auth_db() as connection:
+            rows = connection.execute(query, tuple(params)).fetchall()
+    return [_device_link_from_row(row) for row in rows]
+
+
+def revoke_user_device_link(user_id: str, device_id: str, *, reason: Optional[str] = None) -> dict[str, Any]:
+    clean_user_id = str(user_id or "").strip()
+    clean_device_id = str(device_id or "").strip()
+    if not clean_user_id or not clean_device_id:
+        return {}
+    with AUTH_LOCK:
+        with _connect_auth_db() as connection:
+            existing = connection.execute(
+                "SELECT * FROM user_devices WHERE device_id = ? AND user_id = ? LIMIT 1",
+                (clean_device_id, clean_user_id),
+            ).fetchone()
+            if existing is None:
+                return {}
+            ts = int(time.time())
+            connection.execute(
+                """
+                UPDATE user_devices
+                SET status = 'revoked',
+                    trust_state = 'revoked',
+                    updated_at = ?,
+                    last_seen_at = ?,
+                    revoked_at = ?,
+                    revoked_reason = ?
+                WHERE device_id = ? AND user_id = ?
+                """,
+                (ts, ts, ts, str(reason or "").strip() or "Device link revoked.", clean_device_id, clean_user_id),
+            )
+            row = connection.execute(
+                "SELECT * FROM user_devices WHERE device_id = ? AND user_id = ? LIMIT 1",
+                (clean_device_id, clean_user_id),
+            ).fetchone()
+            connection.commit()
+    revoke_user_auth_sessions(clean_user_id, device_id=clean_device_id, reason=reason or "Device link revoked.")
+    return _device_link_from_row(row)
+
+
+def _touch_user_device_link(device_id: str) -> dict[str, Any]:
+    clean_device_id = str(device_id or "").strip()
+    if not clean_device_id:
+        return {}
+    with AUTH_LOCK:
+        with _connect_auth_db() as connection:
+            existing = connection.execute(
+                "SELECT * FROM user_devices WHERE device_id = ? LIMIT 1",
+                (clean_device_id,),
+            ).fetchone()
+            if existing is None:
+                return {}
+            ts = int(time.time())
+            connection.execute(
+                "UPDATE user_devices SET updated_at = ?, last_seen_at = ? WHERE device_id = ?",
+                (ts, ts, clean_device_id),
+            )
+            row = connection.execute(
+                "SELECT * FROM user_devices WHERE device_id = ? LIMIT 1",
+                (clean_device_id,),
+            ).fetchone()
+            connection.commit()
+    return _device_link_from_row(row)
 
 
 def _write_workspace_membership(
@@ -696,7 +1396,31 @@ def upsert_workspace_membership(user_id: str, workspace_id: str, role: str) -> d
                 role=clean_role,
             )
         )
+    _bump_user_identity_versions(clean_user_id, membership=True)
     return {"user_id": clean_user_id, "workspace_id": clean_workspace_id, "role": clean_role}
+
+
+def remove_workspace_membership(user_id: str, workspace_id: str) -> dict[str, Any]:
+    clean_user_id = str(user_id or "").strip()
+    clean_workspace_id = _require_workspace_token(workspace_id, detail="workspace_id is required.", status_code=400)
+    if not clean_user_id:
+        raise HTTPException(status_code=400, detail="user_id is required.")
+    removed = False
+    with AUTH_LOCK:
+        with _connect_auth_db() as connection:
+            cursor = connection.execute(
+                "DELETE FROM workspace_memberships WHERE user_id = ? AND workspace_id = ?",
+                (clean_user_id, clean_workspace_id),
+            )
+            removed = int(cursor.rowcount or 0) > 0
+            connection.commit()
+    if removed:
+        _bump_user_identity_versions(clean_user_id, membership=True)
+        revoke_user_auth_sessions(
+            clean_user_id,
+            reason=f"Workspace membership for '{clean_workspace_id}' was removed.",
+        )
+    return {"user_id": clean_user_id, "workspace_id": clean_workspace_id, "removed": removed}
 
 
 def _write_workspace_policy(
@@ -1277,6 +2001,7 @@ def upsert_user_enterprise_security(
     ts = int(time.time())
     with AUTH_LOCK:
         with _connect_auth_db() as connection:
+            _ensure_user_identity_versions_locked(connection, clean_user_id)
             connection.execute(
                 """
                 INSERT OR REPLACE INTO user_enterprise_security (
@@ -1308,6 +2033,7 @@ def upsert_user_enterprise_security(
                 ),
             )
             connection.commit()
+    _bump_user_identity_versions(clean_user_id, auth=True)
     return load_user_enterprise_security(clean_user_id)
 
 
@@ -1545,6 +2271,7 @@ def _ensure_user_identity_boundary_records(user_id: str) -> None:
     ts = int(time.time())
     with AUTH_LOCK:
         with _connect_auth_db() as connection:
+            _ensure_user_identity_versions_locked(connection, clean_user_id)
             user_row = connection.execute(
                 """
                 SELECT id, email, password_hash
@@ -1656,6 +2383,9 @@ def _auth_payload_for_user(
     workspace_access: Optional[list[dict[str, Any]]] = None,
     tenant_access: Optional[list[dict[str, Any]]] = None,
     enterprise_security: Optional[dict[str, Any]] = None,
+    auth_session: Optional[dict[str, Any]] = None,
+    device_link: Optional[dict[str, Any]] = None,
+    identity_versions: Optional[dict[str, Any]] = None,
 ) -> dict[str, Any]:
     user_id = str(user.get("id") or "").strip()
     payload: dict[str, Any] = {
@@ -1671,6 +2401,12 @@ def _auth_payload_for_user(
         payload["tenant_access"] = tenant_access
     if enterprise_security is not None:
         payload["enterprise_security"] = enterprise_security
+    if auth_session is not None:
+        payload["auth_session"] = auth_session
+    if device_link is not None:
+        payload["device_link"] = device_link
+    if identity_versions is not None:
+        payload["identity_versions"] = identity_versions
     return payload
 
 
@@ -1710,6 +2446,7 @@ def upsert_user_auth_method(
         raise HTTPException(status_code=400, detail="user_id is required.")
     with AUTH_LOCK:
         with _connect_auth_db() as connection:
+            _ensure_user_identity_versions_locked(connection, clean_user_id)
             record = _upsert_user_auth_method_locked(
                 connection,
                 user_id=clean_user_id,
@@ -1723,7 +2460,8 @@ def upsert_user_auth_method(
                 metadata=metadata,
             )
             connection.commit()
-            return record
+    _bump_user_identity_versions(clean_user_id, auth=True)
+    return record
 
 
 def list_user_provider_connections(user_id: str) -> list[dict[str, Any]]:
@@ -1759,6 +2497,7 @@ def upsert_user_provider_connection(
         raise HTTPException(status_code=400, detail="user_id is required.")
     with AUTH_LOCK:
         with _connect_auth_db() as connection:
+            _ensure_user_identity_versions_locked(connection, clean_user_id)
             record = _upsert_user_provider_connection_locked(
                 connection,
                 user_id=clean_user_id,
@@ -1770,22 +2509,32 @@ def upsert_user_provider_connection(
                 metadata=metadata,
             )
             connection.commit()
-            return record
+    _bump_user_identity_versions(clean_user_id, provider_scope=True)
+    return record
 
 
 def user_identity_boundary(user_id: str) -> dict[str, Any]:
     clean_user_id = str(user_id or "").strip()
     auth_methods = list_user_auth_methods(clean_user_id)
     provider_connections = list_user_provider_connections(clean_user_id)
+    device_links = list_user_device_links(clean_user_id)
+    auth_sessions = list_user_auth_sessions(clean_user_id)
+    identity_versions = load_user_identity_versions(clean_user_id)
     primary_auth_method = next((item for item in auth_methods if item.get("is_primary")), auth_methods[0] if auth_methods else None)
     active_provider_connections = [
         item for item in provider_connections if _normalize_provider_connection_status(item.get("status")) == "active"
+    ]
+    active_device_links = [
+        item for item in device_links if _normalize_device_link_status(item.get("status")) == "active"
     ]
     return {
         "account_owner": "empyralis",
         "account_id": clean_user_id,
         "auth_methods": auth_methods,
         "provider_connections": provider_connections,
+        "devices": device_links,
+        "auth_sessions": auth_sessions,
+        "identity_versions": identity_versions,
         "machine_enrollment": {
             "separate_from_account_identity": True,
             "managed_via": "machines_and_runtime_enrollment",
@@ -1794,6 +2543,8 @@ def user_identity_boundary(user_id: str) -> dict[str, Any]:
             "primary_auth_method": primary_auth_method,
             "auth_method_count": len(auth_methods),
             "linked_provider_count": len(active_provider_connections),
+            "linked_device_count": len(active_device_links),
+            "active_session_count": len(auth_sessions),
             "has_recovery_method": any(
                 bool(item.get("can_recover"))
                 and _normalize_auth_method_status(item.get("status")) == "active"
@@ -1804,6 +2555,8 @@ def user_identity_boundary(user_id: str) -> dict[str, Any]:
             "identity": "Empyralis owns the user account, workspaces, runs, artifacts, notifications, and billing.",
             "auth_methods": "Account access methods are separate from AI provider capabilities.",
             "provider_connections": "Linked providers add capability only and can be revoked without deleting the Empyralis account.",
+            "devices": "Linked devices are scoped to the Empyralis account and can be revoked without rotating account identity.",
+            "auth_sessions": "Bearer sessions are short-lived, channel-scoped, and can be revoked independently of the account.",
             "machine_enrollment": "Machine enrollment is a separate execution boundary and does not define account ownership.",
         },
     }
@@ -1873,6 +2626,7 @@ def provision_user_account(
                     "UPDATE users SET name = ? WHERE id = ?",
                     (next_name, user_id),
                 )
+            _ensure_user_identity_versions_locked(connection, user_id, now_ts=created_at)
             for workspace_id, role in normalized_workspace_roles.items():
                 _write_workspace_registry(
                     connection,
@@ -1965,6 +2719,7 @@ def provision_user_account(
                     now_ts=created_at,
                 )
             connection.commit()
+    _bump_user_identity_versions(user_id, membership=True, auth=True)
     for workspace_id, role in _control_plane_workspace_roles.items():
         _control_plane_call(
             control_plane_repository.ensure_workspace_membership(
@@ -1995,6 +2750,7 @@ def provision_user_account(
         workspace_access=list(workspace_access.values()),
         tenant_access=list(tenant_access_map({"workspace_access": workspace_access}).values()),
         enterprise_security=load_user_enterprise_security(user_id),
+        identity_versions=load_user_identity_versions(user_id),
     )
 
 
@@ -2158,15 +2914,97 @@ def _public_user_payload(user: Dict[str, Any], *, role: Optional[str] = None) ->
     return payload
 
 
+def _validated_bearer_context(payload: Dict[str, Any], *, touch_session: bool = False) -> Dict[str, Any]:
+    user_id = str(payload.get("sub") or "").strip()
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Bearer token subject is missing.")
+    exp = int(payload.get("exp") or 0)
+    if exp and exp < int(time.time()):
+        raise HTTPException(status_code=401, detail="Bearer token has expired.")
+
+    identity_versions = load_user_identity_versions(user_id)
+    for claim_key in ("membership_version", "auth_version", "provider_scope_version"):
+        claim_value = int(payload.get(claim_key) or 0)
+        current_value = int(identity_versions.get(claim_key) or 1)
+        if claim_value and claim_value != current_value:
+            raise HTTPException(status_code=401, detail="Bearer token is stale and must be refreshed.")
+
+    session_id = str(payload.get("sid") or "").strip()
+    session_record: Optional[dict[str, Any]] = None
+    device_record: Optional[dict[str, Any]] = None
+    if session_id:
+        session_record = get_auth_session(session_id)
+        if not session_record:
+            raise HTTPException(status_code=401, detail="Bearer session is invalid.")
+        if str(session_record.get("user_id") or "").strip() != user_id:
+            raise HTTPException(status_code=401, detail="Bearer session identity mismatch.")
+        if str(session_record.get("status") or "").strip().lower() != "active":
+            raise HTTPException(status_code=401, detail="Bearer session is no longer active.")
+
+        claimed_channel = _normalize_auth_session_channel(payload.get("channel"), default=session_record.get("channel") or "web")
+        if claimed_channel != _normalize_auth_session_channel(session_record.get("channel"), default="web"):
+            raise HTTPException(status_code=401, detail="Bearer session channel mismatch.")
+
+        claimed_device_id = str(payload.get("device_id") or "").strip() or None
+        actual_device_id = str(session_record.get("device_id") or "").strip() or None
+        if claimed_device_id and actual_device_id and claimed_device_id != actual_device_id:
+            raise HTTPException(status_code=401, detail="Bearer session device mismatch.")
+
+        claimed_runtime_id = str(payload.get("runtime_id") or "").strip() or None
+        actual_runtime_id = str(session_record.get("runtime_id") or "").strip() or None
+        if claimed_runtime_id and actual_runtime_id and claimed_runtime_id != actual_runtime_id:
+            raise HTTPException(status_code=401, detail="Bearer session runtime mismatch.")
+
+        effective_device_id = claimed_device_id or actual_device_id
+        if effective_device_id:
+            device_record = get_user_device_link(effective_device_id)
+            if not device_record:
+                raise HTTPException(status_code=401, detail="Bearer session device is not linked.")
+            if str(device_record.get("user_id") or "").strip() != user_id:
+                raise HTTPException(status_code=401, detail="Bearer session device owner mismatch.")
+            if str(device_record.get("status") or "").strip().lower() != "active":
+                raise HTTPException(status_code=401, detail="Bearer session device is not active.")
+            if str(device_record.get("trust_state") or "").strip().lower() == "revoked":
+                raise HTTPException(status_code=401, detail="Bearer session device trust was revoked.")
+            device_channel = _normalize_auth_session_channel(device_record.get("channel"), default=claimed_channel)
+            if device_channel != claimed_channel:
+                raise HTTPException(status_code=401, detail="Bearer session device channel mismatch.")
+            if bool(device_record.get("session_binding_required")) and actual_device_id != effective_device_id:
+                raise HTTPException(status_code=401, detail="Bearer session is not bound to the active device link.")
+            if touch_session:
+                _touch_user_device_link(effective_device_id)
+        if touch_session:
+            session_record = touch_auth_session(session_id) or session_record
+
+    return {
+        "user_id": user_id,
+        "email": str(payload.get("email") or "").strip().lower() or None,
+        "workspace_ids": _normalize_workspace_ids_claim(payload.get("workspace_ids")),
+        "identity_versions": identity_versions,
+        "auth_session": session_record,
+        "device_link": device_record,
+        "payload": payload,
+    }
+
+
 def issue_token(
     user_id: str,
     *,
     email: Optional[str] = None,
     role: str = "member",
     workspace_access: Optional[list[dict[str, Any]]] = None,
+    channel: str = "web",
+    device_id: Optional[str] = None,
+    runtime_id: Optional[str] = None,
+    trust_state: Optional[str] = None,
+    session_id: Optional[str] = None,
+    session_family_id: Optional[str] = None,
+    session_metadata: Optional[dict[str, Any]] = None,
+    ttl_seconds: Optional[int] = None,
 ) -> str:
     header = {"alg": "HS256", "typ": "JWT"}
     now = int(time.time())
+    resolved_ttl_seconds = max(int(ttl_seconds or JWT_EXP_SECONDS), 60)
     normalized_workspace_access = [dict(item) for item in list(workspace_access or []) if isinstance(item, dict)]
     workspace_ids = [
         _normalize_workspace_token(item.get("workspace_id"))
@@ -2183,6 +3021,18 @@ def issue_token(
         for item in normalized_workspace_access
         if str(item.get("workspace_id") or "").strip()
     }
+    identity_versions = load_user_identity_versions(user_id)
+    auth_session = create_auth_session(
+        str(user_id or "").strip(),
+        channel=channel,
+        device_id=device_id,
+        runtime_id=runtime_id,
+        trust_state=trust_state,
+        session_id=session_id,
+        session_family_id=session_family_id,
+        metadata=session_metadata,
+        ttl_seconds=resolved_ttl_seconds,
+    )
     payload = {
         "sub": str(user_id),
         "email": str(email or "").strip().lower() or None,
@@ -2190,8 +3040,19 @@ def issue_token(
         "tenant_ids": sorted({token for token in tenant_ids if token}),
         "workspace_ids": sorted({token for token in workspace_ids if token}),
         "workspace_roles": workspace_roles,
+        "sid": str(auth_session.get("session_id") or "").strip() or None,
+        "channel": _normalize_auth_session_channel(channel),
+        "device_id": str(device_id or auth_session.get("device_id") or "").strip() or None,
+        "runtime_id": str(runtime_id or auth_session.get("runtime_id") or "").strip() or None,
+        "trust_state": _normalize_device_trust_state(
+            auth_session.get("trust_state"),
+            default="verified" if str(device_id or "").strip() else "unbound",
+        ),
+        "membership_version": int(identity_versions.get("membership_version") or 1),
+        "auth_version": int(identity_versions.get("auth_version") or 1),
+        "provider_scope_version": int(identity_versions.get("provider_scope_version") or 1),
         "iat": now,
-        "exp": now + JWT_EXP_SECONDS,
+        "exp": now + resolved_ttl_seconds,
     }
     header_segment = _b64url_encode(json.dumps(header, separators=(",", ":")).encode("utf-8"))
     payload_segment = _b64url_encode(json.dumps(payload, separators=(",", ":")).encode("utf-8"))
@@ -2221,13 +3082,8 @@ def _decode_token_payload(token: str) -> Dict[str, Any]:
 
 def verify_token(token: str) -> str:
     payload = _decode_token_payload(token)
-    user_id = str(payload.get("sub") or "").strip()
-    if not user_id:
-        raise HTTPException(status_code=401, detail="Bearer token subject is missing.")
-    exp = int(payload.get("exp") or 0)
-    if exp and exp < int(time.time()):
-        raise HTTPException(status_code=401, detail="Bearer token has expired.")
-    return user_id
+    context = _validated_bearer_context(payload, touch_session=False)
+    return str(context.get("user_id") or "").strip()
 
 
 def _normalize_workspace_ids_claim(value: Any) -> list[str]:
@@ -2723,6 +3579,7 @@ def register_user(email: str, password: str, *, name: Optional[str] = None) -> D
                 },
                 now_ts=created_at,
             )
+            _ensure_user_identity_versions_locked(connection, user_id, now_ts=created_at)
             for workspace_id, role in workspace_roles.items():
                 resolved_tenant_id = next(iter(tenant_ids), "") or tenant_id_for_workspace(workspace_id)
                 _write_workspace_registry(
@@ -2748,6 +3605,16 @@ def register_user(email: str, password: str, *, name: Optional[str] = None) -> D
         workspace_ids=workspace_ids,
     )
     tenant_access = tenant_access_map({"workspace_access": workspace_access})
+    token = issue_token(
+        user_id,
+        email=email_token,
+        role="owner",
+        workspace_access=list(workspace_access.values()),
+        channel="web",
+        session_metadata={"auth_flow": "register"},
+    )
+    token_payload = _decode_token_payload(token)
+    auth_session = get_auth_session(str(token_payload.get("sid") or "").strip())
     return _auth_payload_for_user(
         {
             "id": user_id,
@@ -2756,14 +3623,11 @@ def register_user(email: str, password: str, *, name: Optional[str] = None) -> D
             "avatar_url": None,
         },
         role="owner",
-        token=issue_token(
-            user_id,
-            email=email_token,
-            role="owner",
-            workspace_access=list(workspace_access.values()),
-        ),
+        token=token,
         workspace_access=list(workspace_access.values()),
         tenant_access=list(tenant_access.values()),
+        auth_session=auth_session,
+        identity_versions=load_user_identity_versions(user_id),
     )
 
 
@@ -2808,17 +3672,24 @@ def login_user(email: str, password: str) -> Dict[str, Any]:
         workspace_ids=workspace_ids,
     )
     tenant_access = tenant_access_map({"workspace_access": workspace_access})
+    token = issue_token(
+        user_id,
+        email=str(user.get("email") or ""),
+        role=effective_role,
+        workspace_access=list(workspace_access.values()),
+        channel="web",
+        session_metadata={"auth_flow": "login"},
+    )
+    token_payload = _decode_token_payload(token)
+    auth_session = get_auth_session(str(token_payload.get("sid") or "").strip())
     return _auth_payload_for_user(
         user,
         role=effective_role,
-        token=issue_token(
-            user_id,
-            email=str(user.get("email") or ""),
-            role=effective_role,
-            workspace_access=list(workspace_access.values()),
-        ),
+        token=token,
         workspace_access=list(workspace_access.values()),
         tenant_access=list(tenant_access.values()),
+        auth_session=auth_session,
+        identity_versions=load_user_identity_versions(user_id),
     )
 
 
@@ -2844,6 +3715,9 @@ def get_authenticated_user_profile(current_user: Optional[Dict[str, Any]]) -> Di
         workspace_access=list(workspace_access_map(current_user).values()),
         tenant_access=list(tenant_access_map(current_user).values()),
         enterprise_security=enterprise_status_for_user(current_user),
+        auth_session=dict(current_user.get("auth_session") or {}) or None,
+        device_link=dict(current_user.get("device_link") or {}) or None,
+        identity_versions=dict(current_user.get("identity_versions") or {}) or None,
     )
 
 
@@ -2897,14 +3771,10 @@ def get_current_user(
     auth_header = str(authorization or "").strip()
     if auth_header.lower().startswith("bearer "):
         payload = _decode_token_payload(auth_header[7:].strip())
-        user_id = str(payload.get("sub") or "").strip()
-        if not user_id:
-            raise HTTPException(status_code=401, detail="Bearer token subject is missing.")
-        exp = int(payload.get("exp") or 0)
-        if exp and exp < int(time.time()):
-            raise HTTPException(status_code=401, detail="Bearer token has expired.")
-        email = str(payload.get("email") or "").strip().lower() or None
-        workspace_ids = _normalize_workspace_ids_claim(payload.get("workspace_ids"))
+        context = _validated_bearer_context(payload, touch_session=True)
+        user_id = str(context.get("user_id") or "").strip()
+        email = str(context.get("email") or "").strip().lower() or None
+        workspace_ids = list(context.get("workspace_ids") or [])
         role = _resolved_bearer_role(user_id, email, payload.get("role"))
         workspace_access = _effective_workspace_access(
             user_id=user_id,
@@ -2939,6 +3809,13 @@ def get_current_user(
             "tenant_access": tenant_access_map({"workspace_access": workspace_access}),
             "role": role,
             "is_admin": role == "owner",
+            "identity_versions": context.get("identity_versions") or {},
+            "auth_session": context.get("auth_session"),
+            "device_link": context.get("device_link"),
+            "session_id": str((context.get("auth_session") or {}).get("session_id") or payload.get("sid") or "").strip() or None,
+            "channel": str(payload.get("channel") or (context.get("auth_session") or {}).get("channel") or "").strip() or None,
+            "device_id": str(payload.get("device_id") or (context.get("auth_session") or {}).get("device_id") or "").strip() or None,
+            "runtime_id": str(payload.get("runtime_id") or (context.get("auth_session") or {}).get("runtime_id") or "").strip() or None,
         }
 
     expected_api_key = _orion_api_key()

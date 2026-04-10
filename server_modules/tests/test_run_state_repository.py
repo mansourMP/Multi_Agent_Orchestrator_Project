@@ -5,10 +5,11 @@ from server_modules import run_state_repository
 
 
 class _FakePool:
-    def __init__(self, *, fetchrow_result=None, fetchrow_results=None, fetch_result=None, execute_error: Exception | None = None):
+    def __init__(self, *, fetchrow_result=None, fetchrow_results=None, fetch_result=None, fetch_results=None, execute_error: Exception | None = None):
         self.fetchrow_result = fetchrow_result
         self.fetchrow_results = list(fetchrow_results or [])
         self.fetch_result = list(fetch_result or [])
+        self.fetch_results = list(fetch_results or [])
         self.execute_error = execute_error
         self.execute_calls = []
         self.fetchrow_calls = []
@@ -32,6 +33,8 @@ class _FakePool:
         self.fetch_calls.append((query, args))
         if self.execute_error is not None:
             raise self.execute_error
+        if self.fetch_results:
+            return list(self.fetch_results.pop(0))
         return list(self.fetch_result)
 
 
@@ -102,10 +105,9 @@ class RunStateRepositoryTests(unittest.IsolatedAsyncioTestCase):
             await run_state_repository.claim_run("run-1", "worker-1", 30, "trace-2")
             await run_state_repository.release_claim("run-1")
 
-        self.assertEqual(len(pool.execute_calls), 2)
-        self.assertIn("run_archive", pool.execute_calls[0][0])
-        self.assertIn("local_queue_claims", pool.fetchrow_calls[0][0])
-        self.assertIn("DELETE FROM local_queue_claims", pool.execute_calls[1][0])
+        self.assertTrue(any("run_archive" in query for query, _args in pool.execute_calls))
+        self.assertTrue(any("local_queue_claims" in query for query, _args in pool.fetchrow_calls))
+        self.assertTrue(any("DELETE FROM local_queue_claims" in query for query, _args in pool.execute_calls))
 
     async def test_claim_run_rejects_overwriting_an_active_claim(self):
         pool = _FakePool(fetchrow_result=None)
@@ -212,6 +214,8 @@ class RunStateRepositoryTests(unittest.IsolatedAsyncioTestCase):
                     "run_id": "run-1",
                     "worker_id": "worker-1",
                     "claimed_at": "2026-04-07T00:00:00Z",
+                    "last_heartbeat_at": "2026-04-07T00:00:10Z",
+                    "last_progress_at": "2026-04-07T00:00:12Z",
                     "ttl": 30,
                     "trace_id": "trace-1",
                     "run_payload": {"run_id": "run-1", "status": "running_local"},
@@ -223,4 +227,142 @@ class RunStateRepositoryTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(items[0]["run_id"], "run-1")
         self.assertEqual(items[0]["worker_id"], "worker-1")
+        self.assertEqual(items[0]["last_heartbeat_at"], "2026-04-07T00:00:10Z")
         self.assertEqual(items[0]["run_payload"]["status"], "running_local")
+
+    async def test_touch_claim_heartbeat_updates_durable_claim_timestamps(self):
+        pool = _FakePool()
+        with patch("server_modules.run_state_repository.runtime_db.get_pool", return_value=pool):
+            await run_state_repository.touch_claim_heartbeat(
+                "run-1",
+                "worker-1",
+                note="still working",
+                progress=True,
+            )
+
+        self.assertTrue(any("UPDATE local_queue_claims" in query for query, _args in pool.execute_calls))
+
+    async def test_append_dead_letter_and_status_snapshot_round_trip(self):
+        pool = _FakePool(
+            fetchrow_results=[
+                {
+                    "dead_letter_count": 2,
+                    "total_failure_count": 5,
+                    "last_recorded_at": "2026-04-07T00:02:00Z",
+                }
+            ],
+            fetch_results=[
+                [{"workspace_id": "ws-1", "count": 2}],
+                [{"specialist_key": "install-1", "count": 2}],
+            ],
+        )
+        with patch("server_modules.run_state_repository.runtime_db.get_pool", return_value=pool):
+            await run_state_repository.append_local_queue_dead_letter(
+                run_id="run-1",
+                tenant_id="tenant-1",
+                workspace_id="ws-1",
+                specialist_key="install-1",
+                reason="worker_lost_retry_exhausted",
+                trace_id="trace-1",
+                failure_count=3,
+                payload={"run_id": "run-1"},
+            )
+            status = await run_state_repository.get_local_queue_dead_letter_status()
+
+        self.assertTrue(any("local_queue_dead_letters" in query for query, _args in pool.execute_calls))
+        self.assertEqual(status["dead_letter_count"], 2)
+        self.assertEqual(status["workspace_hotspots"][0]["workspace_id"], "ws-1")
+        self.assertEqual(status["specialist_hotspots"][0]["specialist_key"], "install-1")
+
+    async def test_upsert_and_list_fleet_workers_round_trip(self):
+        pool = _FakePool(
+            fetch_result=[
+                {
+                    "worker_id": "worker-1",
+                    "tenant_id": "tenant-1",
+                    "workspace_id": "ws-1",
+                    "machine_id": "machine-1",
+                    "runtime_type": "hosted_secure",
+                    "status": "idle",
+                    "control_state": "active",
+                    "current_run_id": None,
+                    "instance_id": "instance-1",
+                    "shard_key": "tenant-1:ws-1:hosted_secure:hosted_secure",
+                    "prewarm_state": "warm",
+                    "warm_pool": "primary",
+                    "lease_seconds": 45,
+                    "registered_at": "2026-04-10T00:00:00Z",
+                    "last_registered_at": "2026-04-10T00:00:10Z",
+                    "last_heartbeat_at": "2026-04-10T00:00:12Z",
+                    "updated_at": "2026-04-10T00:00:12Z",
+                    "payload": {"display_name": "Hosted Worker"},
+                }
+            ]
+        )
+        with patch("server_modules.run_state_repository.runtime_db.get_pool", return_value=pool):
+            await run_state_repository.upsert_fleet_worker(
+                {
+                    "worker_id": "worker-1",
+                    "tenant_id": "tenant-1",
+                    "workspace_id": "ws-1",
+                    "machine_id": "machine-1",
+                    "runtime_type": "hosted_secure",
+                    "status": "idle",
+                    "control_state": "active",
+                    "execution_targets": ["hosted_secure"],
+                    "prewarm_state": "warm",
+                    "warm_pool": "primary",
+                    "lease_seconds": 45,
+                },
+                heartbeat_seen=True,
+            )
+            items = await run_state_repository.list_fleet_workers(workspace_id="ws-1")
+
+        self.assertTrue(any("fleet_worker_registrations" in query for query, _args in pool.execute_calls))
+        self.assertEqual(items[0]["worker_id"], "worker-1")
+        self.assertEqual(items[0]["prewarm_state"], "warm")
+        self.assertEqual(items[0]["queue_shard"], "tenant-1:ws-1:hosted_secure:hosted_secure")
+
+    async def test_upsert_and_list_fleet_queue_partitions_round_trip(self):
+        pool = _FakePool(
+            fetch_result=[
+                {
+                    "partition_id": "ws-1::install-1",
+                    "tenant_id": "tenant-1",
+                    "workspace_id": "ws-1",
+                    "specialist_key": "install-1",
+                    "pending_count": 3,
+                    "claimed_count": 1,
+                    "online_workers": 2,
+                    "busy_workers": 1,
+                    "idle_workers": 1,
+                    "prewarmed_workers": 1,
+                    "state": "strained",
+                    "retry_after_seconds": 10,
+                    "updated_at": "2026-04-10T00:00:30Z",
+                    "payload": {"summary": "Partition backlog is elevated but progressing."},
+                }
+            ]
+        )
+        with patch("server_modules.run_state_repository.runtime_db.get_pool", return_value=pool):
+            await run_state_repository.upsert_fleet_queue_partition(
+                partition_id="ws-1::install-1",
+                tenant_id="tenant-1",
+                workspace_id="ws-1",
+                specialist_key="install-1",
+                pending_count=3,
+                claimed_count=1,
+                online_workers=2,
+                busy_workers=1,
+                idle_workers=1,
+                prewarmed_workers=1,
+                state="strained",
+                retry_after_seconds=10,
+                payload={"summary": "Partition backlog is elevated but progressing."},
+            )
+            items = await run_state_repository.list_fleet_queue_partitions(workspace_id="ws-1")
+
+        self.assertTrue(any("fleet_queue_partitions" in query for query, _args in pool.execute_calls))
+        self.assertEqual(items[0]["partition_id"], "ws-1::install-1")
+        self.assertEqual(items[0]["pending_count"], 3)
+        self.assertEqual(items[0]["prewarmed_workers"], 1)

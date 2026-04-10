@@ -294,6 +294,110 @@ def test_provider_connections_are_capabilities_not_identity(monkeypatch: pytest.
     assert logged_in["identity_boundary"]["account_owner"] == "empyralis"
 
 
+def test_provider_connections_remain_workspace_scoped(monkeypatch: pytest.MonkeyPatch, tmp_path):
+    auth, _, _ = _reload_auth(monkeypatch, tmp_path)
+    created = auth.register_user("providers.scoped@example.com", "password-123", name="Scoped Provider User")
+    user_id = created["user"]["id"]
+    workspace_a = created["workspace_access"][0]["workspace_id"]
+    workspace_b = f"lab-{tmp_path.name}"
+    if workspace_b == workspace_a:
+        workspace_b = f"{workspace_b}-secondary"
+    auth.ensure_workspace_tenant_binding(workspace_b, created["workspace_access"][0]["tenant_id"])
+    auth.upsert_workspace_membership(user_id, workspace_b, "member")
+
+    first = auth.upsert_user_provider_connection(
+        user_id,
+        provider="openai",
+        workspace_id=workspace_a,
+        status="active",
+        external_account_id="acct-shared",
+    )
+    second = auth.upsert_user_provider_connection(
+        user_id,
+        provider="openai",
+        workspace_id=workspace_b,
+        status="active",
+        external_account_id="acct-shared",
+    )
+    boundary = auth.user_identity_boundary(user_id)
+
+    assert first["workspace_id"] == workspace_a
+    assert second["workspace_id"] == workspace_b
+    assert len(boundary["provider_connections"]) == 2
+    assert boundary["summary"]["linked_provider_count"] == 2
+
+
+def test_membership_change_invalidates_existing_bearer_token(monkeypatch: pytest.MonkeyPatch, tmp_path):
+    auth, _, _ = _reload_auth(monkeypatch, tmp_path)
+    created = auth.register_user("membership.invalidate@example.com", "password-123", name="Membership User")
+    user_id = created["user"]["id"]
+    auth.ensure_workspace_tenant_binding(f"ops-{tmp_path.name}", created["workspace_access"][0]["tenant_id"])
+
+    auth.upsert_workspace_membership(user_id, f"ops-{tmp_path.name}", "viewer")
+
+    with pytest.raises(HTTPException) as exc:
+        auth.get_current_user(_Request(), authorization=f"Bearer {created['token']}")
+
+    assert exc.value.status_code == 401
+    assert exc.value.detail == "Bearer token is stale and must be refreshed."
+
+
+def test_revoked_bearer_session_fails_closed(monkeypatch: pytest.MonkeyPatch, tmp_path):
+    auth, _, _ = _reload_auth(monkeypatch, tmp_path)
+    created = auth.register_user("session.revoke@example.com", "password-123", name="Session User")
+    session_id = created["auth_session"]["session_id"]
+
+    revoked = auth.revoke_auth_session(session_id, reason="manual_revoke")
+
+    assert revoked["status"] == "revoked"
+    with pytest.raises(HTTPException) as exc:
+        auth.get_current_user(_Request(), authorization=f"Bearer {created['token']}")
+
+    assert exc.value.status_code == 401
+    assert exc.value.detail == "Bearer session is no longer active."
+
+
+def test_revoked_device_link_blocks_bound_mobile_session(monkeypatch: pytest.MonkeyPatch, tmp_path):
+    auth, _, _ = _reload_auth(monkeypatch, tmp_path)
+    created = auth.register_user("device.revoke@example.com", "password-123", name="Device User")
+    user_id = created["user"]["id"]
+    workspace_access = list(created["workspace_access"])
+    workspace_id = workspace_access[0]["workspace_id"]
+    device = auth.upsert_user_device_link(
+        user_id,
+        device_id="device-1",
+        workspace_id=workspace_id,
+        channel="mobile",
+        platform="ios",
+        trust_state="verified",
+        metadata={"pairing_method": "qr"},
+    )
+    token = auth.issue_token(
+        user_id,
+        email=created["user"]["email"],
+        role="owner",
+        workspace_access=workspace_access,
+        channel="mobile",
+        device_id=device["device_id"],
+        session_metadata={"auth_flow": "pairing"},
+    )
+
+    current_user = auth.get_current_user(_Request(), authorization=f"Bearer {token}")
+    assert current_user["device_id"] == "device-1"
+
+    revoked = auth.revoke_user_device_link(user_id, "device-1", reason="device_unlinked")
+
+    assert revoked["status"] == "revoked"
+    with pytest.raises(HTTPException) as exc:
+        auth.get_current_user(_Request(), authorization=f"Bearer {token}")
+
+    assert exc.value.status_code == 401
+    assert exc.value.detail in {
+        "Bearer session is no longer active.",
+        "Bearer session device is not active.",
+    }
+
+
 def test_authenticated_profile_includes_identity_boundary(monkeypatch: pytest.MonkeyPatch, tmp_path):
     auth, _, _ = _reload_auth(monkeypatch, tmp_path)
     created = auth.register_user("profile.identity@example.com", "password-123", name="Profile User")
@@ -304,6 +408,8 @@ def test_authenticated_profile_includes_identity_boundary(monkeypatch: pytest.Mo
     assert profile["identity_boundary"]["account_owner"] == "empyralis"
     assert profile["identity_boundary"]["account_id"] == created["user"]["id"]
     assert profile["identity_boundary"]["auth_methods"][0]["provider"] == "empyralis_password"
+    assert profile["auth_session"]["session_id"] == created["auth_session"]["session_id"]
+    assert profile["identity_versions"]["membership_version"] >= 1
 
 
 

@@ -88,6 +88,33 @@ class ArtifactServiceTests(TestCase):
                 self.assertEqual(metadata["retention"]["retention_days"], 30)
                 self.assertEqual(metadata["retention"]["policy_status"], "placeholder")
 
+    def test_artifact_resolution_respects_install_namespace(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            source = Path(tempdir) / "report.txt"
+            source.write_text("install scoped artifact", encoding="utf-8")
+            store_root = Path(tempdir) / "object-store"
+
+            with patch.dict(os.environ, {"EMPYRALIS_OBJECT_STORAGE_ROOT": str(store_root)}, clear=False):
+                record = artifact_service.store_artifact_file(
+                    source,
+                    run_id="run-install",
+                    kind="report",
+                    tenant_id="tenant-1",
+                    workspace_id="workspace-1",
+                    agent_install_id="install-a",
+                )
+
+                allowed = artifact_service.load_artifact_metadata(record.uri, agent_install_id="install-a")
+                denied = artifact_service.load_artifact_metadata(record.uri, agent_install_id="install-b")
+                allowed_path = artifact_service.resolve_artifact_content_path(record.uri, agent_install_id="install-a")
+                denied_path = artifact_service.resolve_artifact_content_path(record.uri, agent_install_id="install-b")
+
+            self.assertIsNotNone(allowed)
+            self.assertEqual(allowed["agent_install_id"], "install-a")
+            self.assertIsNone(denied)
+            self.assertIsNotNone(allowed_path)
+            self.assertIsNone(denied_path)
+
     @patch("server_modules.artifact_service.record_reliability_latency_sample")
     def test_store_artifact_bytes_records_artifact_availability_latency(self, mock_record_latency) -> None:
         with tempfile.TemporaryDirectory() as tempdir:

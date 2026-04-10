@@ -14,7 +14,7 @@ from typing import Any, Dict, List, Optional
 
 from fastapi import HTTPException
 from pydantic import BaseModel, Field
-from server_modules import machine_lease_service, outbox_service, safe_mode_service, worker_dispatch_service
+from server_modules import machine_lease_service, outbox_service, run_state_repository, safe_mode_service, worker_dispatch_service
 from server_modules.telemetry import mark_machine_revocation_requested, observe_machine_revocation_propagated
 
 _server = None
@@ -23,6 +23,8 @@ LOCAL_RUN_WORKER_LOST_TIMEOUT_SECONDS = 30
 LOCAL_RUNTIME_WATCHDOG_INTERVAL_SECONDS = 5
 LOCAL_CHECKPOINT_RECOVERY_MAX_AUTO_RETRIES = 3
 LOCAL_CHECKPOINT_RECOVERY_BACKOFF_SECONDS = [0, 10, 30]
+LOCAL_QUEUE_MAX_AUTO_RETRIES = 3
+LOCAL_QUEUE_RETRY_BACKOFF_SECONDS = [0, 10, 30]
 MACHINE_ENROLLMENT_TIMEOUT_SECONDS = 300
 _COLD_BOOT_RECOVERY_DONE = False
 _EXPIRED_LEASE_RECOVERY_DONE = False
@@ -77,6 +79,16 @@ class LocalWorkerHeartbeatPayload(BaseModel):
     current_run_id: Optional[str] = None
     note: Optional[str] = None
     permission_probe: Dict[str, Dict[str, Any]] = Field(default_factory=dict)
+    runtime_role: Optional[str] = None
+    install_id: Optional[str] = None
+    specialist_key: Optional[str] = None
+    summary_channel: Optional[str] = None
+    artifact_channel: Optional[str] = None
+    local_private_memory_only: Optional[bool] = None
+    summary_text: Optional[str] = None
+    artifacts: Optional[List[Dict[str, Any]]] = None
+    health_state: Optional[str] = None
+    lifecycle_reason: Optional[str] = None
 
 
 class LocalMachineControlPayload(BaseModel):
@@ -114,6 +126,133 @@ def _worker_online_window_seconds(lease_seconds: Optional[int] = None) -> int:
     return max(20, effective_lease * 2)
 
 
+def _normalize_runtime_role(value: Any) -> str:
+    token = str(value or "").strip().lower()
+    if token in {"captain", "specialist"}:
+        return token
+    return "generic"
+
+
+def _normalize_runtime_artifacts(raw_items: Any) -> List[Dict[str, Any]]:
+    if isinstance(raw_items, dict):
+        items = [raw_items]
+    elif isinstance(raw_items, list):
+        items = raw_items
+    else:
+        items = []
+    normalized: List[Dict[str, Any]] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        artifact = {
+            "id": str(item.get("id") or "").strip() or None,
+            "name": str(item.get("name") or "").strip() or None,
+            "kind": str(item.get("kind") or item.get("type") or "").strip() or None,
+            "path": str(item.get("path") or item.get("uri") or "").strip() or None,
+            "preview_path": str(item.get("preview_path") or item.get("preview_url") or "").strip() or None,
+            "review_required": bool(item.get("review_required")),
+        }
+        normalized.append({key: value for key, value in artifact.items() if value is not None})
+    return normalized
+
+
+def _set_runtime_lifecycle_state(
+    record: Dict[str, Any],
+    state: str,
+    *,
+    reason: Optional[str] = None,
+    now_iso: Optional[str] = None,
+) -> Dict[str, Any]:
+    _init()
+    timestamp = str(now_iso or _server._utc_now_iso())
+    normalized = str(state or "").strip().lower() or "registered"
+    if normalized not in {"registered", "running", "stopped", "recovering", "revoked"}:
+        normalized = "registered"
+    previous_state = str(record.get("lifecycle_state") or "").strip().lower()
+    record["lifecycle_state"] = normalized
+    record["lifecycle_state_updated_at"] = timestamp
+    record["lifecycle_reason"] = str(reason or record.get("lifecycle_reason") or "").strip() or None
+    if normalized == "registered":
+        record.setdefault("registered_at", timestamp)
+    elif normalized == "running":
+        record["started_at"] = record.get("started_at") or timestamp
+        record["last_started_at"] = timestamp
+        if previous_state == "recovering":
+            record["last_recovered_at"] = timestamp
+    elif normalized == "stopped":
+        record["stopped_at"] = timestamp
+    elif normalized == "recovering":
+        record["recovery_requested_at"] = timestamp
+    elif normalized == "revoked":
+        record["revoked_at"] = record.get("revoked_at") or timestamp
+    return record
+
+
+def _apply_runtime_identity_fields(
+    record: Dict[str, Any],
+    *,
+    runtime_role: Optional[str] = None,
+    install_id: Optional[str] = None,
+    specialist_key: Optional[str] = None,
+    summary_channel: Optional[str] = None,
+    artifact_channel: Optional[str] = None,
+    local_private_memory_only: Optional[bool] = None,
+) -> Dict[str, Any]:
+    role = _normalize_runtime_role(runtime_role or record.get("runtime_role"))
+    install_token = str(install_id or record.get("install_id") or "").strip() or None
+    specialist_token = str(specialist_key or record.get("specialist_key") or "").strip() or None
+    if role == "specialist" and not (install_token or specialist_token):
+        raise HTTPException(status_code=400, detail="specialist local runtimes require install_id or specialist_key.")
+    record["runtime_role"] = role
+    if role == "captain":
+        record["install_id"] = None
+        record["specialist_key"] = None
+    else:
+        record["install_id"] = install_token
+        record["specialist_key"] = specialist_token or install_token
+    if summary_channel is not None:
+        record["summary_channel"] = str(summary_channel or "").strip() or None
+    elif "summary_channel" not in record:
+        record["summary_channel"] = None
+    if artifact_channel is not None:
+        record["artifact_channel"] = str(artifact_channel or "").strip() or None
+    elif "artifact_channel" not in record:
+        record["artifact_channel"] = None
+    if local_private_memory_only is not None:
+        record["local_private_memory_only"] = bool(local_private_memory_only)
+    elif "local_private_memory_only" not in record:
+        record["local_private_memory_only"] = True
+    return record
+
+
+def _apply_runtime_surface_hooks(
+    record: Dict[str, Any],
+    *,
+    summary_text: Optional[str] = None,
+    artifacts: Optional[List[Dict[str, Any]]] = None,
+    health_state: Optional[str] = None,
+) -> Dict[str, Any]:
+    _init()
+    now_iso = _server._utc_now_iso()
+    if summary_text is not None:
+        summary = " ".join(str(summary_text or "").strip().split())
+        record["last_summary"] = summary or None
+        if summary:
+            record["last_summary_at"] = now_iso
+    if artifacts is not None:
+        normalized_artifacts = _normalize_runtime_artifacts(artifacts)
+        record["last_artifacts"] = normalized_artifacts
+        if normalized_artifacts:
+            record["last_artifact_at"] = now_iso
+    if health_state is not None:
+        token = str(health_state or "").strip().lower() or "healthy"
+        record["health_state"] = token
+        record["health_updated_at"] = now_iso
+    elif not str(record.get("health_state") or "").strip():
+        record["health_state"] = "unknown"
+    return record
+
+
 def _mark_local_worker_seen(worker_id: str, current_run_id: Optional[str], status_hint: str, note: Optional[str] = None):
     _init()
     worker = str(worker_id or "").strip()
@@ -132,6 +271,7 @@ def _mark_local_worker_seen(worker_id: str, current_run_id: Optional[str], statu
             note=note,
         )
         _server.LOCAL_WORKER_REGISTRY[worker] = next_record
+    _sync_durable_fleet_worker(next_record, heartbeat_seen=True)
     _persist_local_runtime_state()
 
 
@@ -367,6 +507,66 @@ def _persist_local_runtime_state() -> None:
         claimed_runs=claimed_runs,
         runtime_registrations=runtime_registrations,
     )
+
+
+def _durable_fleet_worker_payload(record: Dict[str, Any]) -> Dict[str, Any]:
+    payload = dict(record or {})
+    payload.pop("session_token", None)
+    return payload
+
+
+def _sync_durable_fleet_worker(record: Dict[str, Any], *, heartbeat_seen: bool) -> None:
+    if not isinstance(record, dict):
+        return
+    try:
+        run_state_repository.sync_upsert_fleet_worker(
+            _durable_fleet_worker_payload(record),
+            heartbeat_seen=heartbeat_seen,
+        )
+    except Exception:
+        return
+
+
+def _hydrate_worker_from_durable_registry(worker_id: str) -> Optional[Dict[str, Any]]:
+    _init()
+    token = str(worker_id or "").strip()
+    if not token:
+        return None
+    try:
+        record = run_state_repository.sync_get_fleet_worker(token)
+    except Exception:
+        record = None
+    if not isinstance(record, dict):
+        return None
+    with _server.LOCAL_QUEUE_LOCK:
+        existing = _server.LOCAL_WORKER_REGISTRY.get(token) if isinstance(_server.LOCAL_WORKER_REGISTRY.get(token), dict) else {}
+        merged = dict(record)
+        merged.update(existing)
+        _server.LOCAL_WORKER_REGISTRY[token] = merged
+    return dict(merged)
+
+
+def _merged_worker_registry_snapshot() -> Dict[str, Dict[str, Any]]:
+    _init()
+    merged: Dict[str, Dict[str, Any]] = {}
+    try:
+        durable_items = run_state_repository.sync_list_fleet_workers()
+    except Exception:
+        durable_items = []
+    for item in durable_items or []:
+        if not isinstance(item, dict):
+            continue
+        worker_id = str(item.get("worker_id") or item.get("runtime_id") or "").strip()
+        if worker_id:
+            merged[worker_id] = dict(item)
+    with _server.LOCAL_QUEUE_LOCK:
+        for worker_id, record in _server.LOCAL_WORKER_REGISTRY.items():
+            if not isinstance(record, dict):
+                continue
+            base = dict(merged.get(worker_id) or {})
+            base.update(dict(record))
+            merged[worker_id] = base
+    return merged
 
 
 def _emit_machine_outbox_event(action: str, record: Dict[str, Any], *, error: Optional[str] = None) -> None:
@@ -624,6 +824,7 @@ def _mark_ghost_enrollments_failed() -> List[str]:
                 now_iso=_server._utc_now_iso(),
             )
             _server.LOCAL_WORKER_REGISTRY[machine_id] = record
+            _sync_durable_fleet_worker(record, heartbeat_seen=False)
             failed_machine_ids.append(machine_id)
             _emit_machine_outbox_event(
                 "bootstrap_failed",
@@ -770,8 +971,9 @@ def _best_online_preferred_runtime(preferred_runtime_ids: List[str]) -> Optional
     if not preferred_runtime_ids:
         return None
     now = _server._utc_now()
+    runtime_snapshot = _merged_worker_registry_snapshot()
     for runtime_id in preferred_runtime_ids:
-        record = _server.LOCAL_WORKER_REGISTRY.get(runtime_id) if isinstance(_server.LOCAL_WORKER_REGISTRY.get(runtime_id), dict) else None
+        record = runtime_snapshot.get(runtime_id) if isinstance(runtime_snapshot.get(runtime_id), dict) else None
         if not isinstance(record, dict):
             continue
         if not _is_worker_online(record, now):
@@ -797,6 +999,10 @@ def _touch_runtime_session(record: Dict[str, Any]) -> None:
 
 def _assert_runtime_session(runtime_id: str, session_token: Optional[str], *, instance_id: Optional[str] = None) -> Dict[str, Any]:
     _init()
+    with _server.LOCAL_QUEUE_LOCK:
+        existing = _server.LOCAL_WORKER_REGISTRY.get(runtime_id) if isinstance(_server.LOCAL_WORKER_REGISTRY.get(runtime_id), dict) else None
+    if not isinstance(existing, dict):
+        _hydrate_worker_from_durable_registry(runtime_id)
     next_record = machine_lease_service.assert_machine_session(
         runtime_id,
         session_token,
@@ -807,6 +1013,7 @@ def _assert_runtime_session(runtime_id: str, session_token: Optional[str], *, in
         touch_machine_session_fn=_touch_runtime_session,
     )
     _persist_local_runtime_state()
+    _sync_durable_fleet_worker(next_record, heartbeat_seen=True)
     return next_record
 
 
@@ -821,7 +1028,21 @@ def _upsert_runtime_registration(
     execution_targets: Optional[List[str]] = None,
     instance_id: Optional[str] = None,
     capability_digest: Optional[str] = None,
+    prewarm_state: Optional[str] = None,
+    warm_pool: Optional[str] = None,
     permission_probe: Optional[Dict[str, Dict[str, Any]]] = None,
+    runtime_role: Optional[str] = None,
+    install_id: Optional[str] = None,
+    specialist_key: Optional[str] = None,
+    summary_channel: Optional[str] = None,
+    artifact_channel: Optional[str] = None,
+    local_private_memory_only: Optional[bool] = None,
+    lifecycle_state: Optional[str] = None,
+    lifecycle_reason: Optional[str] = None,
+    note: Optional[str] = None,
+    summary_text: Optional[str] = None,
+    artifacts: Optional[List[Dict[str, Any]]] = None,
+    health_state: Optional[str] = None,
 ) -> Dict[str, Any]:
     _init()
     worker = str(runtime_id or "").strip()
@@ -832,6 +1053,8 @@ def _upsert_runtime_registration(
         record = machine_lease_service.build_runtime_registration_record(
             worker,
             previous_record=previous,
+            tenant_id=previous.get("tenant_id"),
+            workspace_id=previous.get("workspace_id"),
             runtime_type=runtime_type,
             display_name=display_name,
             platform=platform,
@@ -844,15 +1067,40 @@ def _upsert_runtime_registration(
             execution_targets=execution_targets,
             instance_id=instance_id,
             capability_digest=capability_digest,
+            prewarm_state=prewarm_state,
+            warm_pool=warm_pool,
             lease_seconds=_server.ORION_LOCAL_LEASE_SECONDS,
             now_iso=_server._utc_now_iso(),
             normalize_policy_mode_fn=_server.normalize_policy_mode,
             capability_digest_fn=_capability_digest,
         )
         session = _issue_runtime_session(record)
+        _apply_runtime_identity_fields(
+            record,
+            runtime_role=runtime_role,
+            install_id=install_id,
+            specialist_key=specialist_key,
+            summary_channel=summary_channel,
+            artifact_channel=artifact_channel,
+            local_private_memory_only=local_private_memory_only,
+        )
+        _set_runtime_lifecycle_state(
+            record,
+            lifecycle_state or str(record.get("lifecycle_state") or "registered"),
+            reason=lifecycle_reason,
+        )
+        if note is not None:
+            record["note"] = str(note or "").strip()[:280] or None
         _apply_permission_probe(record, permission_probe)
+        _apply_runtime_surface_hooks(
+            record,
+            summary_text=summary_text,
+            artifacts=artifacts,
+            health_state=health_state,
+        )
         _server.LOCAL_WORKER_REGISTRY[worker] = record
     _persist_local_runtime_state()
+    _sync_durable_fleet_worker(record, heartbeat_seen=True)
     _emit_machine_outbox_event("runtime_registered", record)
     return {
         "runtime_id": worker,
@@ -887,6 +1135,8 @@ def create_machine_enrollment_intent(
         record = machine_lease_service.build_runtime_registration_record(
             runtime_id,
             previous_record=previous,
+            tenant_id=tenant_id,
+            workspace_id=workspace_id,
             runtime_type=runtime_type,
             display_name=display_name,
             platform=platform,
@@ -895,6 +1145,8 @@ def create_machine_enrollment_intent(
             execution_targets=execution_targets or ["local_companion"],
             instance_id=runtime_id,
             capability_digest=None,
+            prewarm_state=None,
+            warm_pool=None,
             lease_seconds=_server.ORION_LOCAL_LEASE_SECONDS,
             now_iso=now_iso,
             normalize_policy_mode_fn=_server.normalize_policy_mode,
@@ -914,6 +1166,7 @@ def create_machine_enrollment_intent(
         _set_enrollment_state(record, "awaiting_local_acceptance", now_iso=now_iso)
         _server.LOCAL_WORKER_REGISTRY[runtime_id] = record
     _persist_local_runtime_state()
+    _sync_durable_fleet_worker(record, heartbeat_seen=False)
     _emit_machine_outbox_event("enrollment_requested", record)
     return {
         "ok": True,
@@ -954,6 +1207,7 @@ def update_machine_enrollment_state(
         _set_enrollment_state(record, state, error=error)
         _server.LOCAL_WORKER_REGISTRY[runtime_id] = record
     _persist_local_runtime_state()
+    _sync_durable_fleet_worker(record, heartbeat_seen=False)
     _emit_machine_outbox_event("enrollment_state_updated", record, error=error)
     return {"ok": True, "machine_id": runtime_id, "enrollment_state": str(state or "").strip().lower()}
 
@@ -978,6 +1232,7 @@ def complete_machine_bootstrap(
         record["enrollment_token_hash"] = None
         _server.LOCAL_WORKER_REGISTRY[runtime_id] = record
     _persist_local_runtime_state()
+    _sync_durable_fleet_worker(record, heartbeat_seen=False)
     _emit_machine_outbox_event("bootstrap_completed", record)
     status_payload = handle_get_local_workers_status()
     items = status_payload.get("items") if isinstance(status_payload.get("items"), list) else []
@@ -995,6 +1250,11 @@ def complete_machine_bootstrap(
 
 def _is_worker_online(record: Dict[str, Any], now: Optional[datetime] = None) -> bool:
     _init()
+    lifecycle_state = str(record.get("lifecycle_state") or "").strip().lower()
+    if lifecycle_state in {"stopped", "revoked"}:
+        return False
+    if _machine_control_state(record) == "revoked":
+        return False
     ref = now or _server._utc_now()
     seen_at = _server._parse_utc_ts(record.get("last_seen_at"))
     if seen_at is None:
@@ -1017,6 +1277,7 @@ def _cleanup_stale_local_claims() -> List[str]:
     return machine_lease_service.cleanup_stale_machine_leases(
         now=_server._utc_now(),
         local_queue_lock=_server.LOCAL_QUEUE_LOCK,
+        local_pending_run_ids=_server.LOCAL_PENDING_RUN_IDS,
         claimed_runs=_server.LOCAL_CLAIMED_RUNS,
         worker_registry=_server.LOCAL_WORKER_REGISTRY,
         runs_by_id=_server.runs,
@@ -1028,6 +1289,9 @@ def _cleanup_stale_local_claims() -> List[str]:
         schedule_restored_run_resume_fn=_schedule_restored_run_resume,
         checkpoint_recovery_max_auto_retries=LOCAL_CHECKPOINT_RECOVERY_MAX_AUTO_RETRIES,
         checkpoint_recovery_backoff_seconds=LOCAL_CHECKPOINT_RECOVERY_BACKOFF_SECONDS,
+        max_queue_retry_attempts=LOCAL_QUEUE_MAX_AUTO_RETRIES,
+        queue_retry_backoff_seconds=LOCAL_QUEUE_RETRY_BACKOFF_SECONDS,
+        append_dead_letter_fn=run_state_repository.sync_append_local_queue_dead_letter,
         local_worker_lost_timeout_seconds=LOCAL_RUN_WORKER_LOST_TIMEOUT_SECONDS,
         default_lease_seconds=_server.ORION_LOCAL_LEASE_SECONDS,
     )
@@ -1201,7 +1465,6 @@ def recover_orphaned_local_runs_on_startup() -> List[str]:
     _init()
     if _COLD_BOOT_RECOVERY_DONE:
         return []
-    from server_modules import run_state_repository
 
     recovered: List[str] = []
     now = _server._utc_now()
@@ -1217,27 +1480,14 @@ def recover_orphaned_local_runs_on_startup() -> List[str]:
             if isinstance(record, dict) and _is_worker_online(record, now)
         }
         pending_ids = set(str(run_id) for run_id in _server.LOCAL_PENDING_RUN_IDS)
-
-    recoverable_states = [
-        "queued",
-        "planning",
-        "executing",
-        "machine_allocating",
-        "retrying",
-        "blocked",
-    ]
-    recoverable_run_ids = {
-        str(item.get("run_id") or "").strip()
-        for item in run_state_repository.sync_list_live_runs_by_state(recoverable_states)
-        if isinstance(item, dict) and str(item.get("run_id") or "").strip()
-    }
+    terminal_states = {"completed", "failed", "timeout", "stopped", "cancelled"}
 
     for run_id, run in list(_server.runs.items()):
         if not isinstance(run, dict):
             continue
-        if recoverable_run_ids and str(run_id or "").strip() not in recoverable_run_ids:
-            continue
         status = str(run.get("status") or "").strip().lower()
+        if status in terminal_states:
+            continue
         checkpoint = run.get("browser_checkpoint") if isinstance(run.get("browser_checkpoint"), dict) else {}
         context = run.get("context") if isinstance(run.get("context"), dict) else {}
         metadata = context.get("metadata") if isinstance(context.get("metadata"), dict) else {}
@@ -1355,6 +1605,8 @@ def _claim_local_run(worker_id: str, required_capabilities: Optional[List[str]] 
         persist_local_runtime_state_fn=_persist_local_runtime_state,
         mark_local_worker_seen_fn=_mark_local_worker_seen,
         now_iso_fn=_server._utc_now_iso,
+        parse_utc_ts_fn=_server._parse_utc_ts,
+        now_fn=_server._utc_now,
     )
 
 
@@ -1498,6 +1750,258 @@ def _worker_display_sort_key(item: Dict[str, Any]) -> tuple:
     return (online_rank, busy_rank, trust_rank, seen_rank, runtime_id)
 
 
+def _outstanding_scope_counts(
+    queued_ids: List[str],
+    claimed_map: Dict[str, Dict[str, Any]],
+) -> tuple[Dict[str, int], Dict[str, int]]:
+    workspace_counts: Dict[str, int] = {}
+    specialist_counts: Dict[str, int] = {}
+    for run_id in queued_ids:
+        run = _server.runs.get(run_id)
+        if not isinstance(run, dict):
+            continue
+        scope = machine_lease_service._run_scope_from_payload(run)
+        workspace_counts[scope["workspace_id"]] = workspace_counts.get(scope["workspace_id"], 0) + 1
+        specialist_counts[scope["specialist_key"]] = specialist_counts.get(scope["specialist_key"], 0) + 1
+    for run_id in claimed_map:
+        run = _server.runs.get(run_id)
+        if not isinstance(run, dict):
+            continue
+        scope = machine_lease_service._run_scope_from_payload(run)
+        workspace_counts[scope["workspace_id"]] = workspace_counts.get(scope["workspace_id"], 0) + 1
+        specialist_counts[scope["specialist_key"]] = specialist_counts.get(scope["specialist_key"], 0) + 1
+    return workspace_counts, specialist_counts
+
+
+def _queued_retry_after_seconds(queued_ids: List[str]) -> Optional[int]:
+    retry_after: Optional[int] = None
+    now = _server._utc_now()
+    for run_id in queued_ids:
+        run = _server.runs.get(run_id)
+        if not isinstance(run, dict):
+            continue
+        context = run.get("context") if isinstance(run.get("context"), dict) else {}
+        metadata = context.get("metadata") if isinstance(context.get("metadata"), dict) else {}
+        next_retry_at = _server._parse_utc_ts(metadata.get("local_queue_next_retry_at"))
+        if next_retry_at is None:
+            continue
+        seconds = max(0, int((next_retry_at - now).total_seconds()))
+        retry_after = seconds if retry_after is None else min(retry_after, seconds)
+    return retry_after
+
+
+def _sync_fleet_queue_partition_snapshots(
+    *,
+    queued_ids: List[str],
+    claimed_map: Dict[str, Dict[str, Any]],
+    worker_items: List[Dict[str, Any]],
+    retry_after_seconds: int,
+) -> None:
+    partitions: Dict[str, Dict[str, Any]] = {}
+
+    def _ensure_partition(scope: Dict[str, str]) -> Dict[str, Any]:
+        workspace_id = str(scope.get("workspace_id") or "default").strip() or "default"
+        tenant_id = str(scope.get("tenant_id") or "default").strip() or "default"
+        specialist_key = str(scope.get("specialist_key") or "workspace-default").strip() or "workspace-default"
+        partition_id = machine_lease_service.build_queue_partition_key(workspace_id, specialist_key)
+        record = partitions.get(partition_id)
+        if isinstance(record, dict):
+            return record
+        record = {
+            "partition_id": partition_id,
+            "tenant_id": tenant_id,
+            "workspace_id": workspace_id,
+            "specialist_key": specialist_key,
+            "pending_count": 0,
+            "claimed_count": 0,
+            "online_workers": 0,
+            "busy_workers": 0,
+            "idle_workers": 0,
+            "prewarmed_workers": 0,
+        }
+        partitions[partition_id] = record
+        return record
+
+    for run_id in queued_ids:
+        run = _server.runs.get(run_id)
+        if not isinstance(run, dict):
+            continue
+        scope = machine_lease_service._run_scope_from_payload(run)
+        _ensure_partition(scope)["pending_count"] += 1
+
+    for run_id in claimed_map:
+        run = _server.runs.get(run_id)
+        if not isinstance(run, dict):
+            continue
+        scope = machine_lease_service._run_scope_from_payload(run)
+        _ensure_partition(scope)["claimed_count"] += 1
+
+    workspace_worker_counts: Dict[str, Dict[str, Any]] = {}
+    for item in worker_items:
+        if not isinstance(item, dict):
+            continue
+        workspace_id = str(item.get("workspace_id") or "default").strip() or "default"
+        bucket = workspace_worker_counts.setdefault(
+            workspace_id,
+            {
+                "tenant_id": str(item.get("tenant_id") or "default").strip() or "default",
+                "online_workers": 0,
+                "busy_workers": 0,
+                "idle_workers": 0,
+                "prewarmed_workers": 0,
+            },
+        )
+        if bool(item.get("online")):
+            bucket["online_workers"] += 1
+            if item.get("current_run_id"):
+                bucket["busy_workers"] += 1
+            else:
+                bucket["idle_workers"] += 1
+        if (
+            bool(item.get("online"))
+            and not item.get("current_run_id")
+            and str(item.get("prewarm_state") or "").strip().lower() in {"warm", "ready", "prewarmed"}
+        ):
+            bucket["prewarmed_workers"] += 1
+
+    if not partitions:
+        for workspace_id, counts in workspace_worker_counts.items():
+            record = _ensure_partition(
+                {
+                    "tenant_id": str(counts.get("tenant_id") or "default").strip() or "default",
+                    "workspace_id": workspace_id,
+                    "specialist_key": "workspace-default",
+                }
+            )
+            record.update(counts)
+
+    for record in partitions.values():
+        worker_counts = workspace_worker_counts.get(record["workspace_id"], {})
+        record["online_workers"] = int(worker_counts.get("online_workers") or 0)
+        record["busy_workers"] = int(worker_counts.get("busy_workers") or 0)
+        record["idle_workers"] = int(worker_counts.get("idle_workers") or 0)
+        record["prewarmed_workers"] = int(worker_counts.get("prewarmed_workers") or 0)
+        pending_count = int(record["pending_count"] or 0)
+        claimed_count = int(record["claimed_count"] or 0)
+        ready_capacity = int(record["idle_workers"] or 0) + int(record["prewarmed_workers"] or 0)
+        if pending_count <= 0 and claimed_count <= 0:
+            state = "healthy"
+            summary = "Partition idle."
+        elif ready_capacity <= 0 and pending_count > 0:
+            state = "saturated"
+            summary = "Partition backlog is waiting for worker capacity."
+        elif pending_count > max(1, ready_capacity * 2):
+            state = "saturated"
+            summary = "Partition is saturated and backpressure is expected."
+        elif pending_count > max(1, ready_capacity):
+            state = "strained"
+            summary = "Partition backlog is elevated but progressing."
+        else:
+            state = "healthy"
+            summary = "Partition is within normal operating range."
+        payload = {
+            "summary": summary,
+            "workspace_id": record["workspace_id"],
+            "specialist_key": record["specialist_key"],
+            "pending_count": pending_count,
+            "claimed_count": claimed_count,
+            "online_workers": int(record["online_workers"] or 0),
+            "busy_workers": int(record["busy_workers"] or 0),
+            "idle_workers": int(record["idle_workers"] or 0),
+            "prewarmed_workers": int(record["prewarmed_workers"] or 0),
+        }
+        try:
+            run_state_repository.sync_upsert_fleet_queue_partition(
+                partition_id=record["partition_id"],
+                tenant_id=record["tenant_id"],
+                workspace_id=record["workspace_id"],
+                specialist_key=record["specialist_key"],
+                pending_count=pending_count,
+                claimed_count=claimed_count,
+                online_workers=int(record["online_workers"] or 0),
+                busy_workers=int(record["busy_workers"] or 0),
+                idle_workers=int(record["idle_workers"] or 0),
+                prewarmed_workers=int(record["prewarmed_workers"] or 0),
+                state=state,
+                retry_after_seconds=max(0, int(retry_after_seconds or 0)),
+                payload=payload,
+            )
+        except Exception:
+            continue
+
+
+def _build_local_fleet_pressure_snapshot(
+    *,
+    queued_ids: List[str],
+    claimed_map: Dict[str, Dict[str, Any]],
+    worker_items: List[Dict[str, Any]],
+) -> Dict[str, Any]:
+    online_workers = len([item for item in worker_items if bool(item.get("online"))])
+    busy_workers = len([item for item in worker_items if bool(item.get("online")) and item.get("current_run_id")])
+    idle_workers = max(0, online_workers - busy_workers)
+    queued_count = len(queued_ids)
+    claimed_count = len(claimed_map)
+    backlog_per_online_worker = round(queued_count / max(1, online_workers), 2) if online_workers else None
+    retry_after_seconds = _queued_retry_after_seconds(queued_ids)
+    dead_letter_status = run_state_repository.sync_get_local_queue_dead_letter_status()
+    workspace_counts, specialist_counts = _outstanding_scope_counts(queued_ids, claimed_map)
+    workspace_hotspots = [
+        {"workspace_id": workspace_id, "count": count}
+        for workspace_id, count in sorted(workspace_counts.items(), key=lambda item: (-item[1], item[0]))[:5]
+    ]
+    specialist_hotspots = [
+        {"specialist_key": specialist_key, "count": count}
+        for specialist_key, count in sorted(specialist_counts.items(), key=lambda item: (-item[1], item[0]))[:5]
+    ]
+
+    if queued_count <= 0:
+        state = "healthy"
+        summary = "No queued local runs."
+    elif online_workers <= 0:
+        state = "saturated"
+        summary = "Queued local runs are waiting for an online worker."
+    elif backlog_per_online_worker is not None and backlog_per_online_worker > 4:
+        state = "saturated"
+        summary = "Local worker demand is saturated and backpressure should be expected."
+    elif backlog_per_online_worker is not None and backlog_per_online_worker > 1.5:
+        state = "strained"
+        summary = "Local worker demand is elevated but still progressing."
+    else:
+        state = "healthy"
+        summary = "Local worker fleet is within normal operating range."
+
+    if retry_after_seconds is None:
+        if state == "saturated":
+            retry_after_seconds = max(15, int(_server.ORION_LOCAL_LEASE_SECONDS or 30))
+        elif state == "strained":
+            retry_after_seconds = 10
+        else:
+            retry_after_seconds = 0
+
+    _sync_fleet_queue_partition_snapshots(
+        queued_ids=queued_ids,
+        claimed_map=claimed_map,
+        worker_items=worker_items,
+        retry_after_seconds=retry_after_seconds,
+    )
+
+    return {
+        "mode": "workspace_specialist_weighted_fifo",
+        "state": state,
+        "summary": summary,
+        "queued_count": queued_count,
+        "claimed_count": claimed_count,
+        "online_workers": online_workers,
+        "busy_workers": busy_workers,
+        "idle_workers": idle_workers,
+        "backlog_per_online_worker": backlog_per_online_worker,
+        "retry_after_seconds": retry_after_seconds,
+        "workspace_hotspots": workspace_hotspots,
+        "specialist_hotspots": specialist_hotspots,
+        "dead_letters": dead_letter_status,
+    }
+
+
 # ---------------------------------------------------------------------------
 # Handlers for endpoints
 # ---------------------------------------------------------------------------
@@ -1511,9 +2015,19 @@ def handle_get_local_run_queue(workspace_id: Optional[str] = None, limit: int = 
     claimed: List[Dict[str, Any]] = []
     workspace_filter = str(workspace_id or "").strip()
 
+    runtime_snapshot = _merged_worker_registry_snapshot()
     with _server.LOCAL_QUEUE_LOCK:
         queued_ids = list(_server.LOCAL_PENDING_RUN_IDS)
         claimed_map = {rid: dict(info) for rid, info in _server.LOCAL_CLAIMED_RUNS.items() if isinstance(info, dict)}
+        worker_items = [
+            {
+                "worker_id": worker_id,
+                "online": _is_worker_online(record, _server._utc_now()),
+                "current_run_id": record.get("current_run_id"),
+            }
+            for worker_id, record in runtime_snapshot.items()
+            if isinstance(record, dict)
+        ]
 
     for run_id in queued_ids:
         run = _server.runs.get(run_id)
@@ -1542,6 +2056,11 @@ def handle_get_local_run_queue(workspace_id: Optional[str] = None, limit: int = 
         "lease_seconds": _server.ORION_LOCAL_LEASE_SECONDS,
         "queued_count": len(queued),
         "claimed_count": len(claimed),
+        "pressure": _build_local_fleet_pressure_snapshot(
+            queued_ids=queued_ids,
+            claimed_map=claimed_map,
+            worker_items=worker_items,
+        ),
         "queued_runs": queued,
         "claimed_runs": claimed,
     }
@@ -1553,14 +2072,16 @@ def handle_get_local_workers_status() -> Dict[str, Any]:
     _mark_ghost_enrollments_failed()
     items: List[Dict[str, Any]] = []
     now = _server._utc_now()
+    runtime_snapshot = _merged_worker_registry_snapshot()
     queued_ids: List[str] = []
     with _server.LOCAL_QUEUE_LOCK:
-        for worker_id, record in list(_server.LOCAL_WORKER_REGISTRY.items()):
+        for worker_id, record in list(runtime_snapshot.items()):
             if not isinstance(record, dict):
                 continue
             lease_seconds = int(record.get("lease_seconds") or _server.ORION_LOCAL_LEASE_SECONDS)
             online = _is_worker_online(record, now)
             control_state = _machine_control_state(record)
+            lifecycle_state = str(record.get("lifecycle_state") or "registered").strip().lower() or "registered"
             policy_status = _machine_policy_status(record)
             permission_probe = _normalized_permission_probe(record)
             seen_at = _server._parse_utc_ts(record.get("last_seen_at"))
@@ -1568,7 +2089,13 @@ def handle_get_local_workers_status() -> Dict[str, Any]:
             if seen_at is not None:
                 since_seen = max(0, int((now - seen_at).total_seconds()))
             status = str(record.get("status") or "idle")
-            if not online:
+            if lifecycle_state == "stopped":
+                status = "stopped"
+            elif lifecycle_state == "recovering":
+                status = "recovering"
+            elif control_state == "revoked":
+                status = "revoked"
+            elif not online:
                 status = "offline"
             items.append(
                 {
@@ -1578,6 +2105,9 @@ def handle_get_local_workers_status() -> Dict[str, Any]:
                     "machine_id": str(record.get("machine_id") or record.get("runtime_id") or worker_id).strip() or worker_id,
                     "runtime_id": record.get("runtime_id") or worker_id,
                     "runtime_type": record.get("runtime_type") or "local",
+                    "runtime_role": str(record.get("runtime_role") or "generic").strip().lower() or "generic",
+                    "install_id": str(record.get("install_id") or "").strip() or None,
+                    "specialist_key": str(record.get("specialist_key") or "").strip() or None,
                     "display_name": record.get("display_name") or worker_id,
                     "platform": record.get("platform"),
                     "policy_mode": record.get("policy_mode") or _server.ORION_RUNTIME_POLICY_MODE_DEFAULT,
@@ -1603,6 +2133,25 @@ def handle_get_local_workers_status() -> Dict[str, Any]:
                     "note": record.get("note"),
                     "permission_probe": permission_probe,
                     "permission_probe_updated_at": record.get("permission_probe_updated_at"),
+                    "lifecycle_state": lifecycle_state,
+                    "lifecycle_state_updated_at": record.get("lifecycle_state_updated_at"),
+                    "lifecycle_reason": record.get("lifecycle_reason"),
+                    "started_at": record.get("started_at"),
+                    "last_started_at": record.get("last_started_at"),
+                    "stopped_at": record.get("stopped_at"),
+                    "recovery_requested_at": record.get("recovery_requested_at"),
+                    "last_recovered_at": record.get("last_recovered_at"),
+                    "last_recovered_run_ids": list(record.get("last_recovered_run_ids") or []),
+                    "last_resumed_run_ids": list(record.get("last_resumed_run_ids") or []),
+                    "health_state": record.get("health_state") or "unknown",
+                    "health_updated_at": record.get("health_updated_at"),
+                    "summary_channel": record.get("summary_channel"),
+                    "artifact_channel": record.get("artifact_channel"),
+                    "local_private_memory_only": bool(record.get("local_private_memory_only", True)),
+                    "last_summary": record.get("last_summary"),
+                    "last_summary_at": record.get("last_summary_at"),
+                    "last_artifacts": list(record.get("last_artifacts") or []),
+                    "last_artifact_at": record.get("last_artifact_at"),
                     "control_state": control_state,
                     "control_state_updated_at": record.get("control_state_updated_at"),
                     "interrupt_requested_at": record.get("interrupt_requested_at"),
@@ -1618,6 +2167,9 @@ def handle_get_local_workers_status() -> Dict[str, Any]:
                     "enrollment_updated_at": record.get("enrollment_updated_at"),
                     "bootstrap_error": record.get("bootstrap_error"),
                     "machine_enrollment_scope": record.get("machine_enrollment_scope") or "workspace",
+                    "prewarm_state": record.get("prewarm_state"),
+                    "warm_pool": record.get("warm_pool"),
+                    "queue_shard": record.get("queue_shard"),
                 }
             )
         pending_runs = len(_server.LOCAL_PENDING_RUN_IDS)
@@ -1632,11 +2184,52 @@ def handle_get_local_workers_status() -> Dict[str, Any]:
     interrupting = len([item for item in items if str(item.get("control_state") or "").strip().lower() == "interrupting"])
     suspended = len([item for item in items if str(item.get("control_state") or "").strip().lower() == "suspended"])
     revoked = len([item for item in items if str(item.get("control_state") or "").strip().lower() == "revoked"])
+    prewarmed_ready = len(
+        [
+            item
+            for item in items
+            if bool(item.get("online"))
+            and not item.get("current_run_id")
+            and str(item.get("prewarm_state") or "").strip().lower() in {"warm", "ready", "prewarmed"}
+        ]
+    )
+    hosted_ready = len(
+        [
+            item
+            for item in items
+            if bool(item.get("online"))
+            and not item.get("current_run_id")
+            and "hosted_secure" in {str(target).strip().lower() for target in (item.get("execution_targets") or [])}
+        ]
+    )
+    captain_known = len([item for item in items if str(item.get("runtime_role") or "").strip().lower() == "captain"])
+    captain_online = len(
+        [
+            item
+            for item in items
+            if str(item.get("runtime_role") or "").strip().lower() == "captain" and bool(item.get("online"))
+        ]
+    )
+    specialist_known = len([item for item in items if str(item.get("runtime_role") or "").strip().lower() == "specialist"])
+    specialist_online = len(
+        [
+            item
+            for item in items
+            if str(item.get("runtime_role") or "").strip().lower() == "specialist" and bool(item.get("online"))
+        ]
+    )
+    recovering = len([item for item in items if str(item.get("lifecycle_state") or "").strip().lower() == "recovering"])
+    stopped = len([item for item in items if str(item.get("lifecycle_state") or "").strip().lower() == "stopped"])
 
     items.sort(key=_worker_display_sort_key)
     capability_queue = _capability_queue_summary(
         queued_ids,
         [item for item in items if bool(item.get("online"))],
+    )
+    pressure = _build_local_fleet_pressure_snapshot(
+        queued_ids=queued_ids,
+        claimed_map={rid: dict(info) for rid, info in _server.LOCAL_CLAIMED_RUNS.items() if isinstance(info, dict)},
+        worker_items=items,
     )
 
     return {
@@ -1651,10 +2244,19 @@ def handle_get_local_workers_status() -> Dict[str, Any]:
             "interrupting": interrupting,
             "suspended": suspended,
             "revoked": revoked,
+            "recovering": recovering,
+            "stopped": stopped,
+            "prewarmed_ready": prewarmed_ready,
+            "hosted_ready": hosted_ready,
+            "captain_known": captain_known,
+            "captain_online": captain_online,
+            "specialist_known": specialist_known,
+            "specialist_online": specialist_online,
             "pending_runs": pending_runs,
             "claimed_runs": claimed_runs,
         },
         "watchdog": local_runtime_watchdog_status_snapshot(),
+        "pressure": pressure,
         "capability_queue": capability_queue,
         "items": items,
     }
@@ -1689,7 +2291,311 @@ def handle_enroll_local_runtime(
     )
 
 
-def handle_delete_local_runtime(machine_id: str) -> Dict[str, Any]:
+def _runtime_status_item(runtime_id: str) -> Dict[str, Any]:
+    _init()
+    runtime_token = str(runtime_id or "").strip()
+    if not runtime_token:
+        raise HTTPException(status_code=400, detail="runtime_id is required.")
+    _hydrate_worker_from_durable_registry(runtime_token)
+    status_payload = handle_get_local_workers_status()
+    items = status_payload.get("items") if isinstance(status_payload.get("items"), list) else []
+    runtime = next(
+        (
+            item
+            for item in items
+            if isinstance(item, dict)
+            and str(item.get("runtime_id") or item.get("worker_id") or item.get("machine_id") or "").strip() == runtime_token
+        ),
+        None,
+    )
+    if not isinstance(runtime, dict):
+        raise HTTPException(status_code=404, detail="Runtime not found.")
+    return runtime
+
+
+def handle_get_local_runtime_status(runtime_id: str) -> Dict[str, Any]:
+    runtime = _runtime_status_item(runtime_id)
+    runtime_token = str(runtime.get("runtime_id") or runtime.get("machine_id") or runtime_id).strip() or str(runtime_id or "").strip()
+    return {
+        "ok": True,
+        "runtime_id": runtime_token,
+        "machine_id": str(runtime.get("machine_id") or runtime_token).strip() or runtime_token,
+        "runtime": runtime,
+    }
+
+
+def handle_get_local_runtime_health(runtime_id: str) -> Dict[str, Any]:
+    runtime = _runtime_status_item(runtime_id)
+    runtime_token = str(runtime.get("runtime_id") or runtime.get("machine_id") or runtime_id).strip() or str(runtime_id or "").strip()
+    return {
+        "ok": True,
+        "runtime_id": runtime_token,
+        "machine_id": str(runtime.get("machine_id") or runtime_token).strip() or runtime_token,
+        "runtime_role": str(runtime.get("runtime_role") or "generic").strip().lower() or "generic",
+        "lifecycle_state": str(runtime.get("lifecycle_state") or "registered").strip().lower() or "registered",
+        "control_state": str(runtime.get("control_state") or "active").strip().lower() or "active",
+        "online": bool(runtime.get("online")),
+        "status": str(runtime.get("status") or "offline").strip().lower() or "offline",
+        "current_run_id": runtime.get("current_run_id"),
+        "last_seen_at": runtime.get("last_seen_at"),
+        "health_state": str(runtime.get("health_state") or "unknown").strip().lower() or "unknown",
+        "health_updated_at": runtime.get("health_updated_at"),
+        "summary_channel": runtime.get("summary_channel"),
+        "artifact_channel": runtime.get("artifact_channel"),
+        "last_summary": runtime.get("last_summary"),
+        "last_summary_at": runtime.get("last_summary_at"),
+        "last_artifacts": list(runtime.get("last_artifacts") or []),
+        "last_artifact_at": runtime.get("last_artifact_at"),
+        "local_private_memory_only": bool(runtime.get("local_private_memory_only", True)),
+        "runtime": runtime,
+    }
+
+
+def handle_register_local_cluster_runtime(
+    runtime_id: str,
+    *,
+    runtime_type: str = "local_companion",
+    display_name: Optional[str] = None,
+    platform: Optional[str] = None,
+    policy_mode: Optional[str] = None,
+    capabilities: Optional[List[str]] = None,
+    execution_targets: Optional[List[str]] = None,
+    instance_id: Optional[str] = None,
+    capability_digest: Optional[str] = None,
+    prewarm_state: Optional[str] = None,
+    warm_pool: Optional[str] = None,
+    permission_probe: Optional[Dict[str, Dict[str, Any]]] = None,
+    runtime_role: Optional[str] = None,
+    install_id: Optional[str] = None,
+    specialist_key: Optional[str] = None,
+    summary_channel: Optional[str] = None,
+    artifact_channel: Optional[str] = None,
+    local_private_memory_only: Optional[bool] = None,
+    note: Optional[str] = None,
+    summary_text: Optional[str] = None,
+    artifacts: Optional[List[Dict[str, Any]]] = None,
+    health_state: Optional[str] = None,
+) -> Dict[str, Any]:
+    registration = _upsert_runtime_registration(
+        runtime_id,
+        runtime_type=runtime_type,
+        display_name=display_name,
+        platform=platform,
+        policy_mode=policy_mode,
+        capabilities=capabilities,
+        execution_targets=execution_targets or ["local_companion"],
+        instance_id=instance_id,
+        capability_digest=capability_digest,
+        prewarm_state=prewarm_state,
+        warm_pool=warm_pool,
+        permission_probe=permission_probe,
+        runtime_role=runtime_role,
+        install_id=install_id,
+        specialist_key=specialist_key,
+        summary_channel=summary_channel,
+        artifact_channel=artifact_channel,
+        local_private_memory_only=local_private_memory_only,
+        lifecycle_state="registered",
+        lifecycle_reason=note or "local_cluster_registered",
+        note=note or "local_cluster_registered",
+        summary_text=summary_text,
+        artifacts=artifacts,
+        health_state=health_state or "registered",
+    )
+    return {
+        "ok": True,
+        "runtime_id": str(registration.get("runtime_id") or runtime_id).strip() or str(runtime_id or "").strip(),
+        "machine_id": str(registration.get("machine_id") or runtime_id).strip() or str(runtime_id or "").strip(),
+        "session_token": registration.get("session_token"),
+        "instance_id": registration.get("instance_id"),
+        "capability_digest": registration.get("capability_digest"),
+        "session_issued_at": registration.get("session_issued_at"),
+        "runtime": handle_get_local_runtime_status(runtime_id).get("runtime"),
+    }
+
+
+def handle_start_local_runtime(runtime_id: str, payload: Optional[LocalWorkerHeartbeatPayload] = None) -> Dict[str, Any]:
+    _init()
+    runtime_token = str(runtime_id or "").strip()
+    if not runtime_token:
+        raise HTTPException(status_code=400, detail="runtime_id is required.")
+    body = payload or LocalWorkerHeartbeatPayload()
+    _hydrate_worker_from_durable_registry(runtime_token)
+    with _server.LOCAL_QUEUE_LOCK:
+        record = _server.LOCAL_WORKER_REGISTRY.get(runtime_token) if isinstance(_server.LOCAL_WORKER_REGISTRY.get(runtime_token), dict) else None
+        if not isinstance(record, dict):
+            raise HTTPException(status_code=404, detail="Runtime not found.")
+        control_state = _machine_control_state(record)
+        if control_state == "revoked":
+            raise HTTPException(status_code=409, detail="Revoked runtimes cannot be started.")
+        if control_state == "suspended":
+            raise HTTPException(status_code=409, detail="Suspended runtimes must be resumed before they can start.")
+    _mark_local_worker_seen(
+        runtime_token,
+        body.current_run_id,
+        "busy" if str(body.current_run_id or "").strip() else "idle",
+        note=body.note or "local_runtime_started",
+    )
+    with _server.LOCAL_QUEUE_LOCK:
+        record = _server.LOCAL_WORKER_REGISTRY.get(runtime_token) if isinstance(_server.LOCAL_WORKER_REGISTRY.get(runtime_token), dict) else {}
+        _apply_permission_probe(record, body.permission_probe)
+        _apply_runtime_identity_fields(
+            record,
+            runtime_role=body.runtime_role,
+            install_id=body.install_id,
+            specialist_key=body.specialist_key,
+            summary_channel=body.summary_channel,
+            artifact_channel=body.artifact_channel,
+            local_private_memory_only=body.local_private_memory_only,
+        )
+        _set_runtime_lifecycle_state(record, "running", reason=body.lifecycle_reason or body.note or "local_runtime_started")
+        _apply_runtime_surface_hooks(
+            record,
+            summary_text=body.summary_text,
+            artifacts=body.artifacts,
+            health_state=body.health_state or "healthy",
+        )
+        _server.LOCAL_WORKER_REGISTRY[runtime_token] = record
+    _persist_local_runtime_state()
+    _sync_durable_fleet_worker(record, heartbeat_seen=True)
+    _emit_machine_outbox_event("runtime_started", record)
+    return handle_get_local_runtime_status(runtime_token)
+
+
+def handle_stop_local_runtime(
+    runtime_id: str,
+    *,
+    reason: Optional[str] = None,
+    note: Optional[str] = None,
+    summary_text: Optional[str] = None,
+    artifacts: Optional[List[Dict[str, Any]]] = None,
+    health_state: Optional[str] = None,
+) -> Dict[str, Any]:
+    _init()
+    runtime_token = str(runtime_id or "").strip()
+    if not runtime_token:
+        raise HTTPException(status_code=400, detail="runtime_id is required.")
+    _hydrate_worker_from_durable_registry(runtime_token)
+    _mark_local_worker_seen(runtime_token, None, "stopped", note=note or "local_runtime_stopped")
+    with _server.LOCAL_QUEUE_LOCK:
+        record = _server.LOCAL_WORKER_REGISTRY.get(runtime_token) if isinstance(_server.LOCAL_WORKER_REGISTRY.get(runtime_token), dict) else None
+        if not isinstance(record, dict):
+            raise HTTPException(status_code=404, detail="Runtime not found.")
+        if _machine_control_state(record) == "revoked":
+            raise HTTPException(status_code=409, detail="Revoked runtimes cannot be stopped again.")
+        record["current_run_id"] = None
+        record["status"] = "stopped"
+        _set_runtime_lifecycle_state(record, "stopped", reason=reason or note or "local_runtime_stopped")
+        _apply_runtime_surface_hooks(
+            record,
+            summary_text=summary_text,
+            artifacts=artifacts,
+            health_state=health_state or "stopped",
+        )
+        _server.LOCAL_WORKER_REGISTRY[runtime_token] = record
+    _persist_local_runtime_state()
+    _sync_durable_fleet_worker(record, heartbeat_seen=False)
+    _emit_machine_outbox_event("runtime_stopped", record)
+    return handle_get_local_runtime_status(runtime_token)
+
+
+def _run_belongs_to_runtime(run_id: str, runtime_id: str) -> bool:
+    _init()
+    run = _server.runs.get(str(run_id or "").strip())
+    if not isinstance(run, dict):
+        return False
+    runtime_token = str(runtime_id or "").strip()
+    if not runtime_token:
+        return False
+    direct_tokens = {
+        str(run.get("local_worker_id") or "").strip(),
+        str(run.get("machine_id") or "").strip(),
+        str(run.get("interrupt_machine_id") or "").strip(),
+        str(run.get("interrupt_runtime_id") or "").strip(),
+    }
+    if runtime_token in direct_tokens:
+        return True
+    context = run.get("context") if isinstance(run.get("context"), dict) else {}
+    metadata = context.get("metadata") if isinstance(context.get("metadata"), dict) else {}
+    metadata_tokens = {
+        str(metadata.get("machine_id") or "").strip(),
+        str(metadata.get("local_worker_id") or "").strip(),
+        str(metadata.get("interrupt_machine_id") or "").strip(),
+        str(metadata.get("interrupt_runtime_id") or "").strip(),
+    }
+    return runtime_token in metadata_tokens
+
+
+def handle_recover_local_runtime(runtime_id: str, payload: Optional[LocalWorkerHeartbeatPayload] = None) -> Dict[str, Any]:
+    _init()
+    runtime_token = str(runtime_id or "").strip()
+    if not runtime_token:
+        raise HTTPException(status_code=400, detail="runtime_id is required.")
+    body = payload or LocalWorkerHeartbeatPayload()
+    _hydrate_worker_from_durable_registry(runtime_token)
+    with _server.LOCAL_QUEUE_LOCK:
+        record = _server.LOCAL_WORKER_REGISTRY.get(runtime_token) if isinstance(_server.LOCAL_WORKER_REGISTRY.get(runtime_token), dict) else None
+        if not isinstance(record, dict):
+            raise HTTPException(status_code=404, detail="Runtime not found.")
+        control_state = _machine_control_state(record)
+        if control_state == "revoked":
+            raise HTTPException(status_code=409, detail="Revoked runtimes cannot be recovered.")
+        if control_state == "suspended":
+            raise HTTPException(status_code=409, detail="Suspended runtimes must be resumed before recovery.")
+        _apply_permission_probe(record, body.permission_probe)
+        _apply_runtime_identity_fields(
+            record,
+            runtime_role=body.runtime_role,
+            install_id=body.install_id,
+            specialist_key=body.specialist_key,
+            summary_channel=body.summary_channel,
+            artifact_channel=body.artifact_channel,
+            local_private_memory_only=body.local_private_memory_only,
+        )
+        _set_runtime_lifecycle_state(record, "recovering", reason=body.lifecycle_reason or body.note or "local_runtime_recovering")
+        _apply_runtime_surface_hooks(
+            record,
+            summary_text=body.summary_text,
+            artifacts=body.artifacts,
+            health_state=body.health_state or "recovering",
+        )
+        _server.LOCAL_WORKER_REGISTRY[runtime_token] = record
+    _persist_local_runtime_state()
+    _sync_durable_fleet_worker(record, heartbeat_seen=False)
+    _mark_local_worker_seen(
+        runtime_token,
+        body.current_run_id,
+        "busy" if str(body.current_run_id or "").strip() else "idle",
+        note=body.note or "local_runtime_recovering",
+    )
+    recovered_run_ids = [
+        run_id
+        for run_id in (recover_expired_worker_leases_on_startup() + recover_orphaned_local_runs_on_startup())
+        if _run_belongs_to_runtime(run_id, runtime_token)
+    ]
+    resumed_run_ids = [run_id for run_id in _resume_due_checkpoint_recoveries() if _run_belongs_to_runtime(run_id, runtime_token)]
+    with _server.LOCAL_QUEUE_LOCK:
+        record = _server.LOCAL_WORKER_REGISTRY.get(runtime_token) if isinstance(_server.LOCAL_WORKER_REGISTRY.get(runtime_token), dict) else {}
+        record["last_recovered_run_ids"] = recovered_run_ids
+        record["last_resumed_run_ids"] = resumed_run_ids
+        _set_runtime_lifecycle_state(record, "running", reason=body.lifecycle_reason or body.note or "local_runtime_recovered")
+        _apply_runtime_surface_hooks(
+            record,
+            summary_text=body.summary_text,
+            artifacts=body.artifacts,
+            health_state=body.health_state or "healthy",
+        )
+        _server.LOCAL_WORKER_REGISTRY[runtime_token] = record
+    _persist_local_runtime_state()
+    _sync_durable_fleet_worker(record, heartbeat_seen=True)
+    _emit_machine_outbox_event("runtime_recovered", record)
+    payload = handle_get_local_runtime_status(runtime_token)
+    payload["recovered_run_ids"] = recovered_run_ids
+    payload["resumed_run_ids"] = resumed_run_ids
+    return payload
+
+
+def handle_delete_local_runtime(machine_id: str, *, reason: Optional[str] = None) -> Dict[str, Any]:
     _init()
     runtime_id = str(machine_id or "").strip()
     if not runtime_id:
@@ -1700,12 +2606,15 @@ def handle_delete_local_runtime(machine_id: str) -> Dict[str, Any]:
         record = _server.LOCAL_WORKER_REGISTRY.get(runtime_id) if isinstance(_server.LOCAL_WORKER_REGISTRY.get(runtime_id), dict) else None
         if not isinstance(record, dict):
             raise HTTPException(status_code=404, detail="Machine not found.")
-        _set_machine_control_state(record, "revoked", reason="Revoked from fleet controls.")
+        revoke_reason = str(reason or "Revoked from fleet controls.").strip() or "Revoked from fleet controls."
+        _set_machine_control_state(record, "revoked", reason=revoke_reason)
+        _set_runtime_lifecycle_state(record, "revoked", reason=revoke_reason)
         record["note"] = "machine_revoked"
         _server.LOCAL_WORKER_REGISTRY[runtime_id] = record
     mark_machine_revocation_requested(runtime_id, started_monotonic=started_mono, recorded_at=_server._utc_now_iso())
 
     _persist_local_runtime_state()
+    _sync_durable_fleet_worker(record, heartbeat_seen=False)
     _emit_machine_outbox_event("revoked", record)
     status_payload = handle_get_local_workers_status()
     items = status_payload.get("items") if isinstance(status_payload.get("items"), list) else []
@@ -1725,6 +2634,10 @@ def handle_delete_local_runtime(machine_id: str) -> Dict[str, Any]:
         "revoked": True,
         "machine": machine or dict(record),
     }
+
+
+def handle_revoke_local_runtime(runtime_id: str, *, reason: Optional[str] = None) -> Dict[str, Any]:
+    return handle_delete_local_runtime(runtime_id, reason=reason or "Revoked from local cluster controls.")
 
 
 def _mark_run_interrupt_requested(
@@ -1894,6 +2807,7 @@ def handle_request_local_runtime_hard_kill(
         },
     )
     _persist_local_runtime_state()
+    _sync_durable_fleet_worker(record, heartbeat_seen=False)
     _emit_machine_outbox_event("hard_kill_requested", record)
     status_payload = handle_get_local_workers_status()
     items = status_payload.get("items") if isinstance(status_payload.get("items"), list) else []
@@ -1944,6 +2858,7 @@ def handle_set_local_runtime_control(machine_id: str, *, action: str, reason: Op
         _server.LOCAL_WORKER_REGISTRY[runtime_id] = record
 
     _persist_local_runtime_state()
+    _sync_durable_fleet_worker(record, heartbeat_seen=False)
     _emit_machine_outbox_event(outbox_action, record)
     if control_action == "resume":
         _append_runtime_control_event(
@@ -1992,7 +2907,47 @@ def handle_heartbeat_local_worker(worker_id: str, payload: Optional[LocalWorkerH
         maybe_emit_local_still_working_fn=_maybe_emit_local_still_working,
         persist_local_runtime_state_fn=_persist_local_runtime_state,
         utc_now_iso_fn=_server._utc_now_iso,
+        touch_claim_heartbeat_fn=run_state_repository.sync_touch_claim_heartbeat,
     )
+
+
+def handle_heartbeat_local_runtime(runtime_id: str, payload: Optional[LocalWorkerHeartbeatPayload] = None) -> Dict[str, Any]:
+    _init()
+    runtime_token = str(runtime_id or "").strip()
+    if not runtime_token:
+        raise HTTPException(status_code=400, detail="runtime_id is required.")
+    body = payload or LocalWorkerHeartbeatPayload()
+    result = handle_heartbeat_local_worker(runtime_token, body)
+    with _server.LOCAL_QUEUE_LOCK:
+        record = _server.LOCAL_WORKER_REGISTRY.get(runtime_token) if isinstance(_server.LOCAL_WORKER_REGISTRY.get(runtime_token), dict) else None
+        if not isinstance(record, dict):
+            raise HTTPException(status_code=404, detail="Runtime not found.")
+        _apply_permission_probe(record, body.permission_probe)
+        _apply_runtime_identity_fields(
+            record,
+            runtime_role=body.runtime_role,
+            install_id=body.install_id,
+            specialist_key=body.specialist_key,
+            summary_channel=body.summary_channel,
+            artifact_channel=body.artifact_channel,
+            local_private_memory_only=body.local_private_memory_only,
+        )
+        lifecycle_state = str(record.get("lifecycle_state") or "registered").strip().lower() or "registered"
+        if lifecycle_state not in {"stopped", "revoked"} and _machine_control_state(record) != "revoked":
+            _set_runtime_lifecycle_state(record, "running", reason=body.lifecycle_reason or body.note or record.get("lifecycle_reason"))
+        _apply_runtime_surface_hooks(
+            record,
+            summary_text=body.summary_text,
+            artifacts=body.artifacts,
+            health_state=body.health_state,
+        )
+        _server.LOCAL_WORKER_REGISTRY[runtime_token] = record
+    _persist_local_runtime_state()
+    _sync_durable_fleet_worker(record, heartbeat_seen=True)
+    payload = handle_get_local_runtime_status(runtime_token)
+    payload["last_seen_at"] = result.get("last_seen_at")
+    payload["current_run_id"] = result.get("current_run_id")
+    return payload
 
 
 def handle_claim_local_run(body: Optional[LocalRunClaimRequest] = None) -> Dict[str, Any]:
@@ -2007,11 +2962,15 @@ def handle_claim_local_run(body: Optional[LocalRunClaimRequest] = None) -> Dict[
     requested_capabilities = list(body.required_capabilities or []) if body else []
     run_id = _claim_local_run(worker_id, required_capabilities=requested_capabilities)
     if not run_id:
-        return {"ok": True, "worker_id": worker_id, "run": None}
+        queue_snapshot = handle_get_local_run_queue(limit=25)
+        pressure = queue_snapshot.get("pressure") if isinstance(queue_snapshot, dict) else None
+        return {"ok": True, "worker_id": worker_id, "run": None, "backpressure": pressure}
 
     run = _server.runs.get(run_id)
     if not isinstance(run, dict):
-        return {"ok": True, "worker_id": worker_id, "run": None}
+        queue_snapshot = handle_get_local_run_queue(limit=25)
+        pressure = queue_snapshot.get("pressure") if isinstance(queue_snapshot, dict) else None
+        return {"ok": True, "worker_id": worker_id, "run": None, "backpressure": pressure}
 
     context = run.get("context") if isinstance(run.get("context"), dict) else {}
     metadata = context.get("metadata") if isinstance(context.get("metadata"), dict) else {}
@@ -2065,6 +3024,7 @@ def handle_claim_local_run(body: Optional[LocalRunClaimRequest] = None) -> Dict[
 def handle_heartbeat_local_run(run_id: uuid.UUID, payload: Optional[LocalRunHeartbeatPayload] = None) -> Dict[str, Any]:
     _init()
     run_id_str = str(run_id)
+    structured_event = dict(payload.event) if payload and isinstance(payload.event, dict) else None
     result = worker_dispatch_service.heartbeat_local_run(
         run_id_str,
         worker_id=(payload.worker_id if payload else None),
@@ -2075,9 +3035,10 @@ def handle_heartbeat_local_run(run_id: uuid.UUID, payload: Optional[LocalRunHear
         maybe_emit_local_still_working_fn=_maybe_emit_local_still_working,
         mark_local_worker_seen_fn=_mark_local_worker_seen,
         utc_now_iso_fn=_server._utc_now_iso,
+        touch_claim_heartbeat_fn=run_state_repository.sync_touch_claim_heartbeat,
+        progress_event=bool(structured_event),
     )
     note = str((payload.note if payload else None) or "").strip() if payload else ""
-    structured_event = dict(payload.event) if payload and isinstance(payload.event, dict) else None
     run = _server.runs.get(run_id_str)
     if isinstance(run, dict):
         if structured_event:

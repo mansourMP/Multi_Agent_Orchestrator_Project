@@ -401,6 +401,160 @@ class RuntimeRuntimeApiTests(unittest.TestCase):
         self.assertEqual(kwargs["since_sequence"], 4)
         self.assertTrue(kwargs["include_backlog"])
 
+    @patch("server_modules.local_queue.handle_register_local_cluster_runtime")
+    def test_register_runtime_routes_exposes_local_cluster_register(self, mock_register):
+        app = _FakeApp()
+        runtime_runtime_api.register_runtime_routes(app)
+        mock_register.return_value = {"ok": True, "runtime_id": "worker-1", "runtime": {"runtime_id": "worker-1", "runtime_role": "specialist"}}
+        handler = app.routes[("POST", "/runtime/local-cluster/{runtime_id}/register")]
+
+        result = self._run_async(
+            handler(
+                "worker-1",
+                runtime_runtime_api.RuntimeRegisterPayload(
+                    runtime_role="specialist",
+                    install_id="install-1",
+                    specialist_key="support-bot",
+                ),
+            )
+        )
+
+        self.assertEqual(result["runtime"]["runtime_id"], "worker-1")
+        self.assertEqual(mock_register.call_args.kwargs["runtime_role"], "specialist")
+        self.assertEqual(mock_register.call_args.kwargs["install_id"], "install-1")
+        self.assertEqual(mock_register.call_args.kwargs["specialist_key"], "support-bot")
+
+    @patch("server_modules.local_queue.handle_start_local_runtime")
+    @patch("server_modules.local_queue._assert_runtime_session")
+    def test_register_runtime_routes_exposes_local_cluster_start(self, mock_assert_session, mock_start):
+        app = _FakeApp()
+        runtime_runtime_api.register_runtime_routes(app)
+        mock_start.return_value = {"ok": True, "runtime": {"runtime_id": "worker-1", "runtime_role": "captain"}}
+        handler = app.routes[("POST", "/runtime/local-cluster/{runtime_id}/start")]
+
+        result = self._run_async(
+            handler(
+                "worker-1",
+                runtime_runtime_api.LocalClusterLifecyclePayload(
+                    session_token="sess",
+                    instance_id="inst",
+                    runtime_role="captain",
+                    note="Start captain",
+                ),
+            )
+        )
+
+        self.assertEqual(result["runtime"]["runtime_role"], "captain")
+        mock_assert_session.assert_called_once_with("worker-1", "sess", instance_id="inst")
+        payload = mock_start.call_args.args[1]
+        self.assertEqual(payload.runtime_role, "captain")
+        self.assertEqual(payload.note, "Start captain")
+
+    @patch("server_modules.local_queue.handle_get_local_runtime_health")
+    def test_register_runtime_routes_exposes_local_cluster_health(self, mock_health):
+        app = _FakeApp()
+        runtime_runtime_api.register_runtime_routes(app)
+        mock_health.return_value = {"ok": True, "runtime": {"runtime_id": "worker-1", "health_state": "healthy"}, "health_state": "healthy"}
+        handler = app.routes[("GET", "/runtime/local-cluster/{runtime_id}/health")]
+
+        result = self._run_async(handler("worker-1"))
+
+        self.assertEqual(result["health_state"], "healthy")
+        mock_health.assert_called_once_with("worker-1")
+
+    @patch("server_modules.local_queue.handle_heartbeat_local_runtime")
+    @patch("server_modules.local_queue._assert_runtime_session")
+    def test_register_runtime_routes_exposes_local_cluster_heartbeat(self, mock_assert_session, mock_heartbeat):
+        app = _FakeApp()
+        runtime_runtime_api.register_runtime_routes(app)
+        mock_heartbeat.return_value = {"ok": True, "runtime": {"runtime_id": "worker-1", "health_state": "healthy"}}
+        handler = app.routes[("POST", "/runtime/local-cluster/{runtime_id}/heartbeat")]
+
+        result = self._run_async(
+            handler(
+                "worker-1",
+                runtime_runtime_api.LocalClusterLifecyclePayload(
+                    session_token="sess",
+                    instance_id="inst",
+                    summary_text="Still healthy",
+                    health_state="healthy",
+                ),
+            )
+        )
+
+        self.assertEqual(result["runtime"]["health_state"], "healthy")
+        mock_assert_session.assert_called_once_with("worker-1", "sess", instance_id="inst")
+        payload = mock_heartbeat.call_args.args[1]
+        self.assertEqual(payload.summary_text, "Still healthy")
+        self.assertEqual(payload.health_state, "healthy")
+
+    @patch("server_modules.local_queue.handle_stop_local_runtime")
+    @patch("server_modules.local_queue._assert_runtime_session")
+    def test_register_runtime_routes_exposes_local_cluster_stop(self, mock_assert_session, mock_stop):
+        app = _FakeApp()
+        runtime_runtime_api.register_runtime_routes(app)
+        mock_stop.return_value = {"ok": True, "runtime": {"runtime_id": "worker-1", "lifecycle_state": "stopped"}}
+        handler = app.routes[("POST", "/runtime/local-cluster/{runtime_id}/stop")]
+
+        result = self._run_async(
+            handler(
+                "worker-1",
+                runtime_runtime_api.LocalClusterLifecyclePayload(
+                    session_token="sess",
+                    instance_id="inst",
+                    reason="Operator stop",
+                    note="Stop worker",
+                ),
+            )
+        )
+
+        self.assertEqual(result["runtime"]["lifecycle_state"], "stopped")
+        mock_assert_session.assert_called_once_with("worker-1", "sess", instance_id="inst")
+        mock_stop.assert_called_once_with("worker-1", reason="Operator stop", note="Stop worker", summary_text=None, artifacts=None, health_state=None)
+
+    @patch("server_modules.local_queue.handle_revoke_local_runtime")
+    def test_register_runtime_routes_exposes_local_cluster_revoke(self, mock_revoke):
+        app = _FakeApp()
+        runtime_runtime_api.register_runtime_routes(app)
+        mock_revoke.return_value = {"ok": True, "machine": {"runtime_id": "worker-1", "control_state": "revoked"}}
+        handler = app.routes[("POST", "/runtime/local-cluster/{runtime_id}/revoke")]
+
+        result = self._run_async(
+            handler(
+                "worker-1",
+                runtime_runtime_api.LocalClusterLifecyclePayload(reason="Retire worker"),
+            )
+        )
+
+        self.assertEqual(result["machine"]["control_state"], "revoked")
+        mock_revoke.assert_called_once_with("worker-1", reason="Retire worker")
+
+    @patch("server_modules.local_queue.handle_recover_local_runtime")
+    @patch("server_modules.local_queue._assert_runtime_session")
+    def test_register_runtime_routes_exposes_local_cluster_recover(self, mock_assert_session, mock_recover):
+        app = _FakeApp()
+        runtime_runtime_api.register_runtime_routes(app)
+        mock_recover.return_value = {"ok": True, "runtime": {"runtime_id": "worker-1", "lifecycle_state": "running"}, "recovered_run_ids": ["run-1"]}
+        handler = app.routes[("POST", "/runtime/local-cluster/{runtime_id}/recover")]
+
+        result = self._run_async(
+            handler(
+                "worker-1",
+                runtime_runtime_api.LocalClusterLifecyclePayload(
+                    session_token="sess",
+                    instance_id="inst",
+                    runtime_role="specialist",
+                    install_id="install-1",
+                ),
+            )
+        )
+
+        self.assertEqual(result["recovered_run_ids"], ["run-1"])
+        mock_assert_session.assert_called_once_with("worker-1", "sess", instance_id="inst")
+        payload = mock_recover.call_args.args[1]
+        self.assertEqual(payload.runtime_role, "specialist")
+        self.assertEqual(payload.install_id, "install-1")
+
     def _run_async(self, coroutine):
         import asyncio
 

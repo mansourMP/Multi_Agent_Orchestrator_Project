@@ -11,8 +11,8 @@ from pathlib import Path
 from typing import Any, Dict, List
 
 from server_modules.workspace_context import (
+    agent_workspace_context_dir,
     read_workspace_context_file,
-    workspace_context_dir,
     write_workspace_context_file,
 )
 
@@ -28,14 +28,29 @@ def _normalize_workspace_token(workspace_id: str) -> str:
     return token or "default"
 
 
-def _memory_db_path(workspace_id: str) -> Path:
-    _MEMORY_DIR.mkdir(parents=True, exist_ok=True)
-    return _MEMORY_DIR / f"{_normalize_workspace_token(workspace_id)}.db"
+def _normalize_agent_token(agent_install_id: str) -> str:
+    token = re.sub(r"[^A-Za-z0-9_.-]+", "-", str(agent_install_id or "").strip()).strip("-")
+    return token or "install"
 
 
-def _memory_logs_dir(workspace_id: str) -> Path:
+def _memory_db_path(workspace_id: str, agent_install_id: str | None = None) -> Path:
     _MEMORY_DIR.mkdir(parents=True, exist_ok=True)
+    normalized_agent_install_id = str(agent_install_id or "").strip()
+    if not normalized_agent_install_id:
+        return _MEMORY_DIR / f"{_normalize_workspace_token(workspace_id)}.db"
+    path = _MEMORY_DIR / _normalize_workspace_token(workspace_id) / "agents" / _normalize_agent_token(normalized_agent_install_id)
+    path.mkdir(parents=True, exist_ok=True)
+    return path / "memory.db"
+
+
+def _memory_logs_dir(workspace_id: str, agent_install_id: str | None = None) -> Path:
+    _MEMORY_DIR.mkdir(parents=True, exist_ok=True)
+    normalized_agent_install_id = str(agent_install_id or "").strip()
     token = _normalize_workspace_token(workspace_id)
+    if normalized_agent_install_id:
+        path = _MEMORY_DIR / token / "agents" / _normalize_agent_token(normalized_agent_install_id) / "logs"
+        path.mkdir(parents=True, exist_ok=True)
+        return path
     if token == "default":
         return _MEMORY_DIR
     path = _MEMORY_DIR / token
@@ -43,21 +58,21 @@ def _memory_logs_dir(workspace_id: str) -> Path:
     return path
 
 
-def _memory_notebook_dir(_workspace_id: str) -> Path:
-    path = workspace_context_dir() / _NOTEBOOK_DIRNAME
+def _memory_notebook_dir(workspace_id: str, agent_install_id: str | None = None) -> Path:
+    path = agent_workspace_context_dir(workspace_id=workspace_id, agent_install_id=agent_install_id) / _NOTEBOOK_DIRNAME
     path.mkdir(parents=True, exist_ok=True)
     return path
 
 
-def _memory_notebook_documents(workspace_id: str) -> List[Dict[str, Any]]:
-    root = workspace_context_dir()
+def _memory_notebook_documents(workspace_id: str, agent_install_id: str | None = None) -> List[Dict[str, Any]]:
+    root = agent_workspace_context_dir(workspace_id=workspace_id, agent_install_id=agent_install_id)
     docs: List[Dict[str, Any]] = []
 
     memory_md_path = root / "MEMORY.md"
     if memory_md_path.exists():
         docs.append({"path": "MEMORY.md", "abs_path": memory_md_path})
 
-    notes_root = _memory_notebook_dir(workspace_id)
+    notes_root = _memory_notebook_dir(workspace_id, agent_install_id=agent_install_id)
     for path in sorted(notes_root.rglob("*.md")):
         if not path.is_file():
             continue
@@ -66,9 +81,9 @@ def _memory_notebook_documents(workspace_id: str) -> List[Dict[str, Any]]:
     return docs
 
 
-def _resolve_notebook_path(workspace_id: str, rel_path: str) -> Path:
+def _resolve_notebook_path(workspace_id: str, rel_path: str, agent_install_id: str | None = None) -> Path:
     normalized = str(rel_path or "").strip().replace("\\", "/").lstrip("/")
-    root = workspace_context_dir().resolve()
+    root = agent_workspace_context_dir(workspace_id=workspace_id, agent_install_id=agent_install_id).resolve()
     if normalized == "MEMORY.md":
         path = (root / "MEMORY.md").resolve()
         if path.parent != root:
@@ -77,7 +92,7 @@ def _resolve_notebook_path(workspace_id: str, rel_path: str) -> Path:
     prefix = f"{_NOTEBOOK_DIRNAME}/"
     if not normalized.startswith(prefix):
         raise ValueError("Notebook path must be MEMORY.md or memory/*.md.")
-    notes_root = _memory_notebook_dir(workspace_id).resolve()
+    notes_root = _memory_notebook_dir(workspace_id, agent_install_id=agent_install_id).resolve()
     candidate = (notes_root / normalized[len(prefix):]).resolve()
     if candidate == notes_root or notes_root not in candidate.parents:
         raise ValueError("Notebook path escapes memory directory.")
@@ -87,8 +102,8 @@ def _resolve_notebook_path(workspace_id: str, rel_path: str) -> Path:
 
 
 @contextmanager
-def _connect_memory_db(workspace_id: str):
-    db_path = _memory_db_path(workspace_id)
+def _connect_memory_db(workspace_id: str, agent_install_id: str | None = None):
+    db_path = _memory_db_path(workspace_id, agent_install_id=agent_install_id)
     connection = sqlite3.connect(str(db_path), timeout=10.0)
     connection.row_factory = sqlite3.Row
     try:
@@ -141,8 +156,8 @@ def _embed_text(text: str) -> List[float]:
     return [float(item) for item in vector]
 
 
-def _list_memory_entries(workspace_id: str) -> List[Dict[str, Any]]:
-    with _connect_memory_db(workspace_id) as connection:
+def _list_memory_entries(workspace_id: str, agent_install_id: str | None = None) -> List[Dict[str, Any]]:
+    with _connect_memory_db(workspace_id, agent_install_id=agent_install_id) as connection:
         rows = connection.execute(
             """
             SELECT key, content, created_at, updated_at
@@ -161,13 +176,20 @@ def _list_memory_entries(workspace_id: str) -> List[Dict[str, Any]]:
     ]
 
 
-def _save_memory(workspace_id: str, key: str, content: str, *, sync_memory_md: bool = True) -> None:
+def _save_memory(
+    workspace_id: str,
+    key: str,
+    content: str,
+    *,
+    sync_memory_md: bool = True,
+    agent_install_id: str | None = None,
+) -> None:
     normalized_key = str(key or "").strip()
     normalized_content = str(content or "").strip()
     if not normalized_key or not normalized_content:
         return
     now_ts = time.time()
-    with _connect_memory_db(workspace_id) as connection:
+    with _connect_memory_db(workspace_id, agent_install_id=agent_install_id) as connection:
         connection.execute(
             """
             INSERT INTO memory_entries (key, content, created_at, updated_at)
@@ -181,13 +203,13 @@ def _save_memory(workspace_id: str, key: str, content: str, *, sync_memory_md: b
         connection.commit()
     if sync_memory_md:
         try:
-            _export_memory_md(workspace_id)
+            _export_memory_md(workspace_id, agent_install_id=agent_install_id)
         except Exception:
             pass
 
 
-def _get_memory(workspace_id: str) -> str:
-    entries = _list_memory_entries(workspace_id)
+def _get_memory(workspace_id: str, agent_install_id: str | None = None) -> str:
+    entries = _list_memory_entries(workspace_id, agent_install_id=agent_install_id)
     if not entries:
         return ""
     return "\n".join(
@@ -197,12 +219,12 @@ def _get_memory(workspace_id: str) -> str:
     ).strip()
 
 
-def _search_memory(workspace_id: str, query: str) -> List[Dict[str, Any]]:
+def _search_memory(workspace_id: str, query: str, agent_install_id: str | None = None) -> List[Dict[str, Any]]:
     normalized_query = str(query or "").strip()
     if not normalized_query:
         return []
     pattern = f"%{normalized_query}%"
-    with _connect_memory_db(workspace_id) as connection:
+    with _connect_memory_db(workspace_id, agent_install_id=agent_install_id) as connection:
         rows = connection.execute(
             """
             SELECT key, content, created_at, updated_at
@@ -223,16 +245,21 @@ def _search_memory(workspace_id: str, query: str) -> List[Dict[str, Any]]:
     ]
 
 
-def _semantic_search(workspace_id: str, query: str, top_k: int = 5) -> List[Dict[str, Any]]:
+def _semantic_search(
+    workspace_id: str,
+    query: str,
+    top_k: int = 5,
+    agent_install_id: str | None = None,
+) -> List[Dict[str, Any]]:
     normalized_query = str(query or "").strip()
     if not normalized_query:
         return []
-    entries = _list_memory_entries(workspace_id)
+    entries = _list_memory_entries(workspace_id, agent_install_id=agent_install_id)
     if not entries:
         return []
     query_vector = _embed_text(normalized_query)
     if not query_vector:
-        return _search_memory(workspace_id, normalized_query)[: max(1, min(int(top_k or 5), 20))]
+        return _search_memory(workspace_id, normalized_query, agent_install_id=agent_install_id)[: max(1, min(int(top_k or 5), 20))]
     scored: List[Dict[str, Any]] = []
     for entry in entries:
         combined_text = f"{entry.get('key')}: {entry.get('content')}"
@@ -249,11 +276,11 @@ def _semantic_search(workspace_id: str, query: str, top_k: int = 5) -> List[Dict
     return scored[: max(1, min(int(top_k or 5), 20))]
 
 
-def _delete_memory(workspace_id: str, key: str) -> bool:
+def _delete_memory(workspace_id: str, key: str, agent_install_id: str | None = None) -> bool:
     normalized_key = str(key or "").strip()
     if not normalized_key:
         return False
-    with _connect_memory_db(workspace_id) as connection:
+    with _connect_memory_db(workspace_id, agent_install_id=agent_install_id) as connection:
         cursor = connection.execute(
             "DELETE FROM memory_entries WHERE key = ?",
             (normalized_key,),
@@ -262,17 +289,17 @@ def _delete_memory(workspace_id: str, key: str) -> bool:
         deleted = bool(cursor.rowcount)
     if deleted:
         try:
-            _export_memory_md(workspace_id)
+            _export_memory_md(workspace_id, agent_install_id=agent_install_id)
         except Exception:
             pass
     return deleted
 
 
-def _save_daily_log(workspace_id: str, content: str) -> None:
+def _save_daily_log(workspace_id: str, content: str, agent_install_id: str | None = None) -> None:
     normalized_content = str(content or "").strip()
     if not normalized_content:
         return
-    log_dir = _memory_logs_dir(workspace_id)
+    log_dir = _memory_logs_dir(workspace_id, agent_install_id=agent_install_id)
     now = datetime.now(timezone.utc).astimezone()
     log_path = log_dir / f"{now.strftime('%Y-%m-%d')}.md"
     entry = f"## {now.strftime('%H:%M')}\n\n{normalized_content}\n"
@@ -283,9 +310,9 @@ def _save_daily_log(workspace_id: str, content: str) -> None:
         handle.write("\n" + entry)
 
 
-def _get_recent_logs(workspace_id: str, days: int = 7) -> str:
+def _get_recent_logs(workspace_id: str, days: int = 7, agent_install_id: str | None = None) -> str:
     safe_days = max(1, min(int(days or 7), 30))
-    log_dir = _memory_logs_dir(workspace_id)
+    log_dir = _memory_logs_dir(workspace_id, agent_install_id=agent_install_id)
     now = datetime.now(timezone.utc).astimezone()
     parts: List[str] = []
     for offset in range(safe_days - 1, -1, -1):
@@ -302,17 +329,23 @@ def _get_recent_logs(workspace_id: str, days: int = 7) -> str:
     return "\n\n".join(parts).strip()
 
 
-def _update_memory_md(workspace_id: str, content: str) -> Dict[str, Any]:
+def _update_memory_md(workspace_id: str, content: str, agent_install_id: str | None = None) -> Dict[str, Any]:
     _ = _normalize_workspace_token(workspace_id)
-    saved = write_workspace_context_file("MEMORY.md", str(content or ""))
+    saved = write_workspace_context_file(
+        "MEMORY.md",
+        str(content or ""),
+        workspace_id=workspace_id,
+        agent_install_id=agent_install_id,
+    )
     return {
         "workspace_id": _normalize_workspace_token(workspace_id),
+        "agent_install_id": str(agent_install_id or "").strip() or None,
         **saved,
     }
 
 
-def _export_memory_md(workspace_id: str) -> Dict[str, Any]:
-    entries = _list_memory_entries(workspace_id)
+def _export_memory_md(workspace_id: str, agent_install_id: str | None = None) -> Dict[str, Any]:
+    entries = _list_memory_entries(workspace_id, agent_install_id=agent_install_id)
     lines = ["# Curated Memory", ""]
     for entry in entries:
         key = str(entry.get("key") or "").strip()
@@ -320,11 +353,11 @@ def _export_memory_md(workspace_id: str) -> Dict[str, Any]:
         if not key or not content:
             continue
         lines.append(f"- {key}: {content}")
-    return _update_memory_md(workspace_id, "\n".join(lines).strip() + "\n")
+    return _update_memory_md(workspace_id, "\n".join(lines).strip() + "\n", agent_install_id=agent_install_id)
 
 
-def _import_memory_md(workspace_id: str) -> Dict[str, Any]:
-    raw = read_workspace_context_file("MEMORY.md")
+def _import_memory_md(workspace_id: str, agent_install_id: str | None = None) -> Dict[str, Any]:
+    raw = read_workspace_context_file("MEMORY.md", workspace_id=workspace_id, agent_install_id=agent_install_id)
     imported = 0
     for raw_line in str(raw or "").splitlines():
         line = raw_line.strip()
@@ -335,18 +368,25 @@ def _import_memory_md(workspace_id: str) -> Dict[str, Any]:
         normalized_content = str(content or "").strip()
         if not normalized_key or not normalized_content:
             continue
-        _save_memory(workspace_id, normalized_key, normalized_content, sync_memory_md=False)
+        _save_memory(
+            workspace_id,
+            normalized_key,
+            normalized_content,
+            sync_memory_md=False,
+            agent_install_id=agent_install_id,
+        )
         imported += 1
-    _export_memory_md(workspace_id)
+    _export_memory_md(workspace_id, agent_install_id=agent_install_id)
     return {
         "workspace_id": _normalize_workspace_token(workspace_id),
+        "agent_install_id": str(agent_install_id or "").strip() or None,
         "imported": imported,
     }
 
 
-def _list_memory_notebook_files(workspace_id: str) -> List[Dict[str, Any]]:
+def _list_memory_notebook_files(workspace_id: str, agent_install_id: str | None = None) -> List[Dict[str, Any]]:
     docs: List[Dict[str, Any]] = []
-    for item in _memory_notebook_documents(workspace_id):
+    for item in _memory_notebook_documents(workspace_id, agent_install_id=agent_install_id):
         path = item.get("abs_path")
         if not isinstance(path, Path):
             continue
@@ -364,7 +404,13 @@ def _list_memory_notebook_files(workspace_id: str) -> List[Dict[str, Any]]:
     return docs
 
 
-def _search_memory_notebook(workspace_id: str, query: str, *, max_results: int = 5) -> List[Dict[str, Any]]:
+def _search_memory_notebook(
+    workspace_id: str,
+    query: str,
+    *,
+    max_results: int = 5,
+    agent_install_id: str | None = None,
+) -> List[Dict[str, Any]]:
     normalized_query = re.sub(r"\s+", " ", str(query or "").strip()).lower()
     if not normalized_query:
         return []
@@ -373,7 +419,7 @@ def _search_memory_notebook(workspace_id: str, query: str, *, max_results: int =
         for token in re.split(r"[^a-z0-9]+", normalized_query)
         if len(token) >= 2
     ]
-    docs = _memory_notebook_documents(workspace_id)
+    docs = _memory_notebook_documents(workspace_id, agent_install_id=agent_install_id)
     results: List[Dict[str, Any]] = []
     seen: set[tuple[str, int]] = set()
 
@@ -430,8 +476,9 @@ def _get_memory_notebook_excerpt(
     *,
     from_line: int | None = None,
     line_count: int | None = None,
+    agent_install_id: str | None = None,
 ) -> Dict[str, Any]:
-    path = _resolve_notebook_path(workspace_id, rel_path)
+    path = _resolve_notebook_path(workspace_id, rel_path, agent_install_id=agent_install_id)
     text = path.read_text(encoding="utf-8")
     lines = text.splitlines()
     safe_from_line = max(1, int(from_line or 1))

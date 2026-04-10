@@ -15,6 +15,8 @@ from fastapi import Header, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
 
 from server_modules import runtime_config as config
+from server_modules import egress_policy
+from server_modules import secrets_broker
 from server_modules import shared as shared
 from server_modules.telemetry import record_control_plane_request
 
@@ -299,6 +301,7 @@ def http_json_request(
     request_headers = dict(headers or {})
     body: Optional[bytes] = None
     verb = (method or ("POST" if payload is not None else "GET")).upper()
+    egress_policy.enforce_outbound_request(url=url, method=verb)
     if payload is not None:
         if isinstance(payload, (bytes, bytearray)):
             body = bytes(payload)
@@ -380,8 +383,46 @@ _openai_bearer_from_credentials = _openai_bearer_from_credentials_impl
 
 list_vault_credentials = lambda workspace_id=None: _list_vault_credentials_impl(load_vault, CONNECTOR_CATALOG, workspace_id)
 list_vault_connectors = lambda workspace_id=None: _list_vault_connectors_impl(load_vault, CONNECTOR_CATALOG, workspace_id)
-resolve_vault_credential = lambda credential_id, workspace_id=None: _resolve_vault_credential_impl(load_vault, _openssl_decrypt, credential_id, workspace_id)
-resolve_default_vault_credential = lambda provider, workspace_id=None: _resolve_default_vault_credential_impl(load_vault, _openssl_decrypt, provider, workspace_id)
+
+
+def resolve_vault_credential(credential_id, workspace_id=None, **scope):
+    return secrets_broker.resolve_connector_secret(
+        load_vault,
+        _openssl_decrypt,
+        tenant_id=scope.get("tenant_id"),
+        workspace_id=workspace_id,
+        credential_id=credential_id,
+        connector_id=scope.get("connector_id"),
+        action_id=scope.get("action_id"),
+        tool_name=scope.get("tool_name"),
+        run_id=scope.get("run_id"),
+        runtime_mode=scope.get("runtime_mode"),
+        allowed_fields=scope.get("allowed_fields"),
+        actor_type=scope.get("actor_type"),
+        actor_id=scope.get("actor_id"),
+        purpose=scope.get("purpose"),
+        ttl_seconds=scope.get("ttl_seconds") or secrets_broker.DEFAULT_SECRET_GRANT_TTL_SECONDS,
+    )
+
+
+def resolve_default_vault_credential(provider, workspace_id=None, **scope):
+    return secrets_broker.resolve_provider_secret(
+        load_vault,
+        _openssl_decrypt,
+        tenant_id=scope.get("tenant_id"),
+        workspace_id=workspace_id,
+        provider_id=provider,
+        credential_id=scope.get("credential_id"),
+        tool_name=scope.get("tool_name"),
+        run_id=scope.get("run_id"),
+        runtime_mode=scope.get("runtime_mode"),
+        allowed_fields=scope.get("allowed_fields"),
+        actor_type=scope.get("actor_type"),
+        actor_id=scope.get("actor_id"),
+        purpose=scope.get("purpose"),
+        ttl_seconds=scope.get("ttl_seconds") or secrets_broker.DEFAULT_SECRET_GRANT_TTL_SECONDS,
+    )
+
 _codex_token_from_vault = lambda: _codex_token_from_vault_impl(CODEX_AUTH_FILE, _safe_read_json)
 
 validate_google_workspace_connector = lambda credentials: _validate_google_workspace_connector(credentials, http_json_request)

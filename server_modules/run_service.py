@@ -12,6 +12,7 @@ import uuid
 from fastapi import HTTPException
 
 from server_modules.agent_turn import AgentTurnRequest, bind_agent_turn_metadata, resolve_run_start_turn_request
+from server_modules import app_bridge_service
 from server_modules.doctor_gate import build_doctor_run_gate_live
 from server_modules import machine_lease_service
 from server_modules import outbox_service
@@ -1709,15 +1710,21 @@ def trigger_pending_heartbeat_schedules(
     persist_schedules_fn: Callable[[], Any],
     utc_now_fn: Callable[[], datetime],
     utc_now_iso_fn: Callable[[], str],
+    workspace_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     now = utc_now_fn()
     started: List[Dict[str, Any]] = []
     changed = False
+    scoped_workspace_id = str(workspace_id or "").strip() or None
     with schedules_lock:
         pending_items = [
             dict(item)
             for item in weekly_schedules.values()
             if bool(item.get("enabled")) and bool(item.get("pending_heartbeat"))
+            and (
+                scoped_workspace_id is None
+                or str(item.get("workspace_id") or "").strip() == scoped_workspace_id
+            )
         ]
     for schedule in pending_items:
         schedule_id = str(schedule.get("id") or "").strip()
@@ -3811,6 +3818,7 @@ def prepare_run_start_request(
             {"action_policy": existing_policy},
             {"action_policy": app_policy},
         )
+        metadata = app_bridge_service.enforce_app_metadata_contract(metadata=metadata)
 
     workflow_snapshot = _workflow_snapshot_from_metadata(req, metadata=metadata)
     if str(req.workflow_id or "").strip():

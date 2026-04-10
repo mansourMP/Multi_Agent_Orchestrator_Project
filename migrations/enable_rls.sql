@@ -157,4 +157,116 @@ CREATE POLICY empyralis_workspace_inventory_items_scope ON workspace_inventory_i
     USING (public.empyralis_rls_scope_match(tenant_id, workspace_id))
     WITH CHECK (public.empyralis_rls_scope_match(tenant_id, workspace_id));
 
+ALTER TABLE agent_manifests ENABLE ROW LEVEL SECURITY;
+ALTER TABLE agent_manifests FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS empyralis_agent_manifests_scope ON agent_manifests;
+CREATE POLICY empyralis_agent_manifests_scope ON agent_manifests
+    FOR ALL
+    USING (public.empyralis_rls_scope_match(tenant_id, workspace_id))
+    WITH CHECK (public.empyralis_rls_scope_match(tenant_id, workspace_id));
+
+ALTER TABLE agent_bible_versions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE agent_bible_versions FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS empyralis_agent_bible_versions_scope ON agent_bible_versions;
+CREATE POLICY empyralis_agent_bible_versions_scope ON agent_bible_versions
+    FOR ALL
+    USING (public.empyralis_rls_scope_match(tenant_id, workspace_id))
+    WITH CHECK (public.empyralis_rls_scope_match(tenant_id, workspace_id));
+
+ALTER TABLE agent_skill_bindings ENABLE ROW LEVEL SECURITY;
+ALTER TABLE agent_skill_bindings FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS empyralis_agent_skill_bindings_scope ON agent_skill_bindings;
+CREATE POLICY empyralis_agent_skill_bindings_scope ON agent_skill_bindings
+    FOR ALL
+    USING (public.empyralis_rls_scope_match(tenant_id, workspace_id))
+    WITH CHECK (public.empyralis_rls_scope_match(tenant_id, workspace_id));
+
+ALTER TABLE agent_connector_bindings ENABLE ROW LEVEL SECURITY;
+ALTER TABLE agent_connector_bindings FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS empyralis_agent_connector_bindings_scope ON agent_connector_bindings;
+CREATE POLICY empyralis_agent_connector_bindings_scope ON agent_connector_bindings
+    FOR ALL
+    USING (public.empyralis_rls_scope_match(tenant_id, workspace_id))
+    WITH CHECK (public.empyralis_rls_scope_match(tenant_id, workspace_id));
+
+ALTER TABLE agent_channel_bindings ENABLE ROW LEVEL SECURITY;
+ALTER TABLE agent_channel_bindings FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS empyralis_agent_channel_bindings_scope ON agent_channel_bindings;
+CREATE POLICY empyralis_agent_channel_bindings_scope ON agent_channel_bindings
+    FOR ALL
+    USING (public.empyralis_rls_scope_match(tenant_id, workspace_id))
+    WITH CHECK (public.empyralis_rls_scope_match(tenant_id, workspace_id));
+
+ALTER TABLE agent_runtime_profiles ENABLE ROW LEVEL SECURITY;
+ALTER TABLE agent_runtime_profiles FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS empyralis_agent_runtime_profiles_scope ON agent_runtime_profiles;
+CREATE POLICY empyralis_agent_runtime_profiles_scope ON agent_runtime_profiles
+    FOR ALL
+    USING (public.empyralis_rls_scope_match(tenant_id, workspace_id))
+    WITH CHECK (public.empyralis_rls_scope_match(tenant_id, workspace_id));
+
+ALTER TABLE personal_context_events ENABLE ROW LEVEL SECURITY;
+ALTER TABLE personal_context_events FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS empyralis_personal_context_events_scope ON personal_context_events;
+CREATE POLICY empyralis_personal_context_events_scope ON personal_context_events
+    FOR ALL
+    USING (public.empyralis_rls_scope_match(tenant_id, workspace_id))
+    WITH CHECK (public.empyralis_rls_scope_match(tenant_id, workspace_id));
+
+ALTER TABLE agent_scheduler_wake_requests ENABLE ROW LEVEL SECURITY;
+ALTER TABLE agent_scheduler_wake_requests FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS empyralis_agent_scheduler_wake_requests_scope ON agent_scheduler_wake_requests;
+CREATE POLICY empyralis_agent_scheduler_wake_requests_scope ON agent_scheduler_wake_requests
+    FOR ALL
+    USING (public.empyralis_rls_scope_match(tenant_id, workspace_id))
+    WITH CHECK (public.empyralis_rls_scope_match(tenant_id, workspace_id));
+
+ALTER TABLE agent_channel_events ENABLE ROW LEVEL SECURITY;
+ALTER TABLE agent_channel_events FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS empyralis_agent_channel_events_scope ON agent_channel_events;
+CREATE POLICY empyralis_agent_channel_events_scope ON agent_channel_events
+    FOR ALL
+    USING (public.empyralis_rls_scope_match(tenant_id, workspace_id))
+    WITH CHECK (public.empyralis_rls_scope_match(tenant_id, workspace_id));
+
+ALTER TABLE agent_secret_access_events ENABLE ROW LEVEL SECURITY;
+ALTER TABLE agent_secret_access_events FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS empyralis_agent_secret_access_events_scope ON agent_secret_access_events;
+CREATE POLICY empyralis_agent_secret_access_events_scope ON agent_secret_access_events
+    FOR ALL
+    USING (public.empyralis_rls_scope_match(tenant_id, workspace_id))
+    WITH CHECK (public.empyralis_rls_scope_match(tenant_id, workspace_id));
+
+ALTER TABLE agent_egress_events ENABLE ROW LEVEL SECURITY;
+ALTER TABLE agent_egress_events FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS empyralis_agent_egress_events_scope ON agent_egress_events;
+CREATE POLICY empyralis_agent_egress_events_scope ON agent_egress_events
+    FOR ALL
+    USING (public.empyralis_rls_scope_match(tenant_id, workspace_id))
+    WITH CHECK (public.empyralis_rls_scope_match(tenant_id, workspace_id));
+
+ALTER TABLE agent_channel_execution_leases ENABLE ROW LEVEL SECURITY;
+ALTER TABLE agent_channel_execution_leases FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS empyralis_agent_channel_execution_leases_scope ON agent_channel_execution_leases;
+CREATE POLICY empyralis_agent_channel_execution_leases_scope ON agent_channel_execution_leases
+    FOR ALL
+    USING (public.empyralis_rls_scope_match(tenant_id, workspace_id))
+    WITH CHECK (public.empyralis_rls_scope_match(tenant_id, workspace_id));
+
+ALTER TABLE security_control_states ENABLE ROW LEVEL SECURITY;
+ALTER TABLE security_control_states FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS empyralis_security_control_states_scope ON security_control_states;
+CREATE POLICY empyralis_security_control_states_scope ON security_control_states
+    FOR ALL
+    USING (public.empyralis_rls_scope_match(tenant_id, workspace_id))
+    WITH CHECK (public.empyralis_rls_scope_match(tenant_id, workspace_id));
+
+ALTER TABLE security_control_events ENABLE ROW LEVEL SECURITY;
+ALTER TABLE security_control_events FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS empyralis_security_control_events_scope ON security_control_events;
+CREATE POLICY empyralis_security_control_events_scope ON security_control_events
+    FOR ALL
+    USING (public.empyralis_rls_scope_match(tenant_id, workspace_id))
+    WITH CHECK (public.empyralis_rls_scope_match(tenant_id, workspace_id));
+
 COMMIT;

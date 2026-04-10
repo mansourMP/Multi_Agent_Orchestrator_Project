@@ -1,0 +1,86 @@
+import unittest
+from unittest.mock import patch
+
+from fastapi import HTTPException
+
+from server_modules import app_bridge_service
+
+
+class AppBridgeServiceTests(unittest.TestCase):
+    def test_normalize_bridge_contract_rejects_unsupported_bridge_type(self) -> None:
+        with patch(
+            "server_modules.app_bridge_service._resolve_registry_app_item",
+            return_value={"id": "study", "status": "installed", "permissions": ["files.read"]},
+        ):
+            with self.assertRaises(HTTPException) as ctx:
+                app_bridge_service.normalize_bridge_contract(
+                    app_id="study",
+                    bridge_kind="app_to_sage",
+                    bridge_type="bad_type",
+                )
+
+        self.assertEqual(ctx.exception.status_code, 400)
+
+    def test_normalize_bridge_contract_requires_specialist_target(self) -> None:
+        with patch(
+            "server_modules.app_bridge_service._resolve_registry_app_item",
+            return_value={"id": "study", "status": "installed", "permissions": ["files.read"]},
+        ):
+            with self.assertRaises(HTTPException) as ctx:
+                app_bridge_service.normalize_bridge_contract(
+                    app_id="study",
+                    bridge_kind="app_to_specialist",
+                    bridge_type="status_request",
+                )
+
+        self.assertEqual(ctx.exception.status_code, 400)
+
+    def test_enforce_app_metadata_contract_rejects_implicit_captain_context(self) -> None:
+        with patch(
+            "server_modules.app_bridge_service._resolve_registry_app_item",
+            return_value={"id": "study", "status": "installed", "permissions": ["files.read"]},
+        ):
+            with self.assertRaises(HTTPException) as ctx:
+                app_bridge_service.enforce_app_metadata_contract(
+                    metadata={
+                        "app_id": "study",
+                        "captain_context": {"raw": True},
+                    }
+                )
+
+        self.assertEqual(ctx.exception.status_code, 400)
+        self.assertIn("captain_context", str(ctx.exception.detail))
+
+    def test_enforce_app_metadata_contract_normalizes_context_and_bridge(self) -> None:
+        with patch(
+            "server_modules.app_bridge_service._resolve_registry_app_item",
+            return_value={"id": "study", "status": "installed", "permissions": ["files.read"]},
+        ):
+            metadata = app_bridge_service.enforce_app_metadata_contract(
+                metadata={
+                    "app_id": "study",
+                    "app_context": {
+                        "user_selected_inputs": {"topic": "biology"},
+                        "app_history": [{"id": "h-1"}],
+                        "explicit_imports": [{"kind": "summary"}],
+                    },
+                    "app_bridge": {
+                        "kind": "app_to_sage",
+                        "type": "summary_request",
+                    },
+                }
+            )
+
+        self.assertEqual(metadata["app_id"], "study")
+        self.assertEqual(metadata["app_context_envelope"]["classes"], [
+            "app_owned_history",
+            "explicit_imports_from_sage",
+            "user_selected_inputs",
+        ])
+        self.assertEqual(metadata["app_bridge"]["bridge_kind"], "app_to_sage")
+        self.assertEqual(metadata["app_bridge"]["bridge_type"], "summary_request")
+        self.assertTrue(metadata["app_runtime_contract"]["has_explicit_bridge"])
+
+
+if __name__ == "__main__":
+    unittest.main()

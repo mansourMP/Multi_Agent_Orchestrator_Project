@@ -12,6 +12,8 @@ class MachineLeaseServiceTests(unittest.TestCase):
         record = machine_lease_service.build_runtime_registration_record(
             "runtime-1",
             previous_record={},
+            tenant_id="tenant-1",
+            workspace_id="ws-1",
             runtime_type="local",
             display_name="My Runtime",
             platform="darwin",
@@ -20,6 +22,8 @@ class MachineLeaseServiceTests(unittest.TestCase):
             execution_targets=["local"],
             instance_id="instance-1",
             capability_digest=None,
+            prewarm_state="warm",
+            warm_pool="hosted-primary",
             lease_seconds=30,
             now_iso="2026-04-06T00:00:00Z",
             normalize_policy_mode_fn=lambda value: str(value or "local_default"),
@@ -30,6 +34,9 @@ class MachineLeaseServiceTests(unittest.TestCase):
         self.assertEqual(record["machine_id"], "runtime-1")
         self.assertEqual(record["lease_seconds"], 30)
         self.assertEqual(record["trust_state"], "unverified")
+        self.assertEqual(record["prewarm_state"], "warm")
+        self.assertEqual(record["warm_pool"], "hosted-primary")
+        self.assertEqual(record["queue_shard"], "tenant-1:ws-1:local:local")
 
     def test_assert_machine_session_verifies_token_and_instance(self) -> None:
         registry = {
@@ -117,6 +124,58 @@ class MachineLeaseServiceTests(unittest.TestCase):
         self.assertEqual(persisted, [True])
         self.assertEqual(seen, [("worker-1", "run-1", "busy", "claimed_local_run")])
         self.assertIn("claim_run:run-1", repo_claims)
+
+    def test_claim_local_machine_lease_balances_workspaces_and_specialists(self) -> None:
+        pending = ["run-1", "run-2"]
+        claimed = {
+            "existing-1": {
+                "worker_id": "worker-2",
+                "machine_id": "machine-2",
+            }
+        }
+        runs = {
+            "existing-1": {
+                "status": "running_local",
+                "context": {"workspace_id": "ws-1", "metadata": {"active_agent_install_id": "install-a"}},
+            },
+            "run-1": {
+                "status": "queued_local",
+                "context": {"workspace_id": "ws-1", "metadata": {"active_agent_install_id": "install-a"}},
+            },
+            "run-2": {
+                "status": "queued_local",
+                "context": {"workspace_id": "ws-2", "metadata": {"active_agent_install_id": "install-b"}},
+            },
+        }
+        worker_registry = {"worker-1": {"runtime_id": "worker-1", "machine_id": "machine-1", "capabilities": []}}
+
+        with patch(
+            "server_modules.machine_lease_service.run_state_repository.dispatch_repository_call",
+            side_effect=lambda awaitable, operation: __import__("asyncio").run(awaitable),
+        ):
+            claimed_run = machine_lease_service.claim_local_machine_lease(
+                "worker-1",
+                required_capabilities=[],
+                local_queue_lock=threading.Lock(),
+                pending_run_ids=pending,
+                claimed_runs=claimed,
+                worker_registry=worker_registry,
+                runs_by_id=runs,
+                lease_seconds=45,
+                cleanup_stale_local_claims_fn=lambda: None,
+                ordered_runtime_preferences_for_run_fn=lambda run: [],
+                best_online_preferred_runtime_fn=lambda ids: None,
+                required_capabilities_for_run_fn=lambda run: [],
+                normalize_capability_ids_fn=lambda items: [str(item).strip().lower() for item in (items or [])],
+                persist_local_runtime_state_fn=lambda: None,
+                mark_local_worker_seen_fn=lambda *args, **kwargs: None,
+                now_iso_fn=lambda: "2026-04-06T00:00:00Z",
+            )
+
+        self.assertEqual(claimed_run, "run-2")
+        self.assertEqual(pending, ["run-1"])
+        self.assertEqual(claimed["run-2"]["metadata"]["contention_strategy"], "workspace_specialist_weighted_fifo")
+        self.assertEqual(claimed["run-2"]["metadata"]["queue_partition"], "ws-2::install-b")
 
     def test_release_machine_lease_claim_releases_and_marks_worker_idle(self) -> None:
         claimed = {
@@ -363,6 +422,116 @@ class MachineLeaseServiceTests(unittest.TestCase):
         self.assertTrue(run["context"]["metadata"]["local_worker_recovery_auto_retry_exhausted"])
         self.assertTrue(run["context"]["metadata"]["local_worker_recovery_manual_confirmation_required"])
         self.assertEqual(logs[0][2]["event"], "local_worker_recovery_exhausted")
+
+    def test_cleanup_stale_machine_leases_requeues_non_checkpoint_run_before_dead_letter(self) -> None:
+        claimed = {
+            "run-1": {
+                "worker_id": "worker-1",
+                "machine_id": "machine-1",
+                "lease_id": "lease-1",
+                "claimed_at": "2026-04-06T00:00:00Z",
+                "last_heartbeat_at": "2026-04-06T00:00:00Z",
+                "lease_seconds": 30,
+            }
+        }
+        worker_registry = {"worker-1": {"worker_id": "worker-1", "runtime_id": "worker-1", "machine_id": "machine-1", "lease_seconds": 30}}
+        pending = []
+        logs = []
+        statuses = []
+        dead_letters = []
+        persisted = []
+        run = {
+            "status": "running_local",
+            "logs": queue.Queue(),
+            "context": {"workspace_id": "ws-1", "metadata": {"execution_target_selected": "local_companion", "active_agent_install_id": "install-a"}},
+        }
+
+        machine_lease_service.cleanup_stale_machine_leases(
+            now=datetime.fromisoformat("2026-04-06T00:01:00"),
+            local_queue_lock=threading.Lock(),
+            local_pending_run_ids=pending,
+            claimed_runs=claimed,
+            worker_registry=worker_registry,
+            runs_by_id={"run-1": run},
+            parse_utc_ts_fn=lambda value: datetime.fromisoformat(str(value).replace("Z", "")) if value else None,
+            utc_now_iso_fn=lambda: "2026-04-06T00:01:00Z",
+            persist_local_runtime_state_fn=lambda: persisted.append(True),
+            emit_log_fn=lambda log_queue, level, message, **kwargs: logs.append((level, message, kwargs)),
+            set_run_status_fn=lambda run_id, status: statuses.append((run_id, status)) or run.__setitem__("status", status),
+            schedule_restored_run_resume_fn=lambda run_id, live_run: False,
+            checkpoint_recovery_max_auto_retries=3,
+            checkpoint_recovery_backoff_seconds=[0, 10, 30],
+            max_queue_retry_attempts=2,
+            queue_retry_backoff_seconds=[0, 10],
+            append_dead_letter_fn=lambda **kwargs: dead_letters.append(kwargs),
+            local_worker_lost_timeout_seconds=30,
+            default_lease_seconds=30,
+        )
+
+        self.assertEqual(statuses, [("run-1", "queued_local")])
+        self.assertEqual(pending, ["run-1"])
+        self.assertEqual(run["result_data"]["error"], "local_worker_requeued")
+        self.assertEqual(run["context"]["metadata"]["local_queue_retry_count"], 1)
+        self.assertEqual(dead_letters, [])
+        self.assertTrue(persisted)
+        self.assertEqual(logs[0][2]["event"], "local_worker_requeued")
+
+    def test_cleanup_stale_machine_leases_dead_letters_non_checkpoint_run_after_retry_budget(self) -> None:
+        claimed = {
+            "run-1": {
+                "worker_id": "worker-1",
+                "machine_id": "machine-1",
+                "lease_id": "lease-1",
+                "claimed_at": "2026-04-06T00:00:00Z",
+                "last_heartbeat_at": "2026-04-06T00:00:00Z",
+                "lease_seconds": 30,
+            }
+        }
+        worker_registry = {"worker-1": {"worker_id": "worker-1", "runtime_id": "worker-1", "machine_id": "machine-1", "lease_seconds": 30}}
+        logs = []
+        statuses = []
+        dead_letters = []
+        run = {
+            "status": "running_local",
+            "logs": queue.Queue(),
+            "context": {
+                "workspace_id": "ws-1",
+                "metadata": {
+                    "execution_target_selected": "local_companion",
+                    "active_agent_install_id": "install-a",
+                    "local_queue_retry_count": 2,
+                    "local_queue_max_retries": 2,
+                },
+            },
+        }
+
+        machine_lease_service.cleanup_stale_machine_leases(
+            now=datetime.fromisoformat("2026-04-06T00:01:00"),
+            local_queue_lock=threading.Lock(),
+            local_pending_run_ids=[],
+            claimed_runs=claimed,
+            worker_registry=worker_registry,
+            runs_by_id={"run-1": run},
+            parse_utc_ts_fn=lambda value: datetime.fromisoformat(str(value).replace("Z", "")) if value else None,
+            utc_now_iso_fn=lambda: "2026-04-06T00:01:00Z",
+            persist_local_runtime_state_fn=lambda: None,
+            emit_log_fn=lambda log_queue, level, message, **kwargs: logs.append((level, message, kwargs)),
+            set_run_status_fn=lambda run_id, status: statuses.append((run_id, status)) or run.__setitem__("status", status),
+            schedule_restored_run_resume_fn=lambda run_id, live_run: False,
+            checkpoint_recovery_max_auto_retries=3,
+            checkpoint_recovery_backoff_seconds=[0, 10, 30],
+            max_queue_retry_attempts=2,
+            queue_retry_backoff_seconds=[0, 10],
+            append_dead_letter_fn=lambda **kwargs: dead_letters.append(kwargs),
+            local_worker_lost_timeout_seconds=30,
+            default_lease_seconds=30,
+        )
+
+        self.assertEqual(statuses, [("run-1", "failed")])
+        self.assertEqual(run["result_data"]["error"], "local_worker_lost_connection")
+        self.assertEqual(dead_letters[0]["reason"], "worker_lost_retry_exhausted")
+        self.assertEqual(dead_letters[0]["specialist_key"], "install-a")
+        self.assertEqual(logs[0][2]["event"], "local_worker_lost")
 
 
 if __name__ == "__main__":

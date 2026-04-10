@@ -197,6 +197,50 @@ class WorkerDispatchServiceTests(unittest.TestCase):
         self.assertEqual(seen, [("worker-1", None, "idle", "completed_run")])
         self.assertEqual(events[1][2]["event"], "run_complete")
 
+    def test_heartbeat_local_worker_touches_durable_claim(self) -> None:
+        touched = []
+        run = {"status": "running_local"}
+        claimed = {"run-1": {"worker_id": "worker-1", "claimed_at": "2026-04-06T00:00:00Z"}}
+
+        result = worker_dispatch_service.heartbeat_local_worker(
+            "worker-1",
+            current_run_id="run-1",
+            note="step 1",
+            runs_by_id={"run-1": run},
+            local_queue_lock=threading.Lock(),
+            claimed_runs=claimed,
+            mark_local_worker_seen_fn=lambda *args, **kwargs: None,
+            maybe_emit_local_still_working_fn=lambda *args, **kwargs: False,
+            persist_local_runtime_state_fn=lambda: None,
+            utc_now_iso_fn=lambda: "2026-04-06T00:00:10Z",
+            touch_claim_heartbeat_fn=lambda run_id, worker_id, **kwargs: touched.append((run_id, worker_id, kwargs)),
+        )
+
+        self.assertEqual(result["status"], "ok")
+        self.assertEqual(touched, [("run-1", "worker-1", {"note": "step 1", "progress": True})])
+
+    def test_heartbeat_local_run_touches_durable_claim(self) -> None:
+        touched = []
+        run = {"status": "running_local"}
+        claimed = {"run-1": {"worker_id": "worker-1", "claimed_at": "2026-04-06T00:00:00Z"}}
+
+        result = worker_dispatch_service.heartbeat_local_run(
+            "run-1",
+            worker_id="worker-1",
+            note="still going",
+            runs_by_id={"run-1": run},
+            local_queue_lock=threading.Lock(),
+            claimed_runs=claimed,
+            maybe_emit_local_still_working_fn=lambda *args, **kwargs: False,
+            mark_local_worker_seen_fn=lambda *args, **kwargs: None,
+            utc_now_iso_fn=lambda: "2026-04-06T00:00:10Z",
+            touch_claim_heartbeat_fn=lambda run_id, worker_id, **kwargs: touched.append((run_id, worker_id, kwargs)),
+            progress_event=True,
+        )
+
+        self.assertEqual(result["status"], "ok")
+        self.assertEqual(touched, [("run-1", "worker-1", {"note": "still going", "progress": True})])
+
     def test_fail_local_run_preserves_interrupt_reason_and_clears_binding(self) -> None:
         events = []
         statuses = []

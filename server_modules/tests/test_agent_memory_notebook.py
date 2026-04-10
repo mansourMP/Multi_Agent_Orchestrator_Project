@@ -53,3 +53,23 @@ class AgentMemoryNotebookTests(unittest.TestCase):
         self.assertEqual(excerpt["to_line"], 3)
         self.assertIn("Alice likes structured updates.", excerpt["text"])
         self.assertNotIn("Bob prefers async check-ins.", excerpt["text"])
+
+    def test_install_scoped_notebook_search_does_not_cross_specialist_boundaries(self) -> None:
+        shared_notes_dir = memory_service._workspace_memory_store._memory_notebook_dir("default")
+        install_a_notes_dir = memory_service._workspace_memory_store._memory_notebook_dir(
+            "default",
+            agent_install_id="install-a",
+        )
+        install_b_notes_dir = memory_service._workspace_memory_store._memory_notebook_dir(
+            "default",
+            agent_install_id="install-b",
+        )
+        (shared_notes_dir / "shared.md").write_text("# Shared\n\nShared fact.\n", encoding="utf-8")
+        (install_a_notes_dir / "a.md").write_text("# A\n\nAlpha only fact.\n", encoding="utf-8")
+        (install_b_notes_dir / "b.md").write_text("# B\n\nBravo only fact.\n", encoding="utf-8")
+
+        a_results = memory_service.search_memory_notebook("default", "fact", agent_install_id="install-a")
+        b_results = memory_service.search_memory_notebook("default", "fact", agent_install_id="install-b")
+
+        self.assertEqual([item["path"] for item in a_results], ["memory/a.md"])
+        self.assertEqual([item["path"] for item in b_results], ["memory/b.md"])

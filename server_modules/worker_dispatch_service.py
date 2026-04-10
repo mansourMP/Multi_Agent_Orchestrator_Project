@@ -42,6 +42,8 @@ def claim_local_run(
     persist_local_runtime_state_fn: Callable[[], Any],
     mark_local_worker_seen_fn: Callable[..., Any],
     now_iso_fn: Callable[[], str],
+    parse_utc_ts_fn: Optional[Callable[[Any], Any]] = None,
+    now_fn: Optional[Callable[[], Any]] = None,
 ) -> Optional[str]:
     return machine_lease_service.claim_local_machine_lease(
         worker_id,
@@ -60,6 +62,8 @@ def claim_local_run(
         persist_local_runtime_state_fn=persist_local_runtime_state_fn,
         mark_local_worker_seen_fn=mark_local_worker_seen_fn,
         now_iso_fn=now_iso_fn,
+        parse_utc_ts_fn=parse_utc_ts_fn,
+        now_fn=now_fn,
     )
 
 
@@ -75,6 +79,7 @@ def heartbeat_local_worker(
     maybe_emit_local_still_working_fn: Callable[..., bool],
     persist_local_runtime_state_fn: Callable[[], Any],
     utc_now_iso_fn: Callable[[], str],
+    touch_claim_heartbeat_fn: Optional[Callable[..., Any]] = None,
 ) -> Dict[str, Any]:
     worker = str(worker_id or "").strip()
     if not worker:
@@ -99,6 +104,13 @@ def heartbeat_local_worker(
                     should_persist = True
             if should_persist:
                 persist_local_runtime_state_fn()
+            if callable(touch_claim_heartbeat_fn):
+                touch_claim_heartbeat_fn(
+                    current_run,
+                    worker,
+                    note=note_text or None,
+                    progress=bool(note_text),
+                )
 
     return {
         "status": "ok",
@@ -119,6 +131,8 @@ def heartbeat_local_run(
     maybe_emit_local_still_working_fn: Callable[..., bool],
     mark_local_worker_seen_fn: Callable[..., Any],
     utc_now_iso_fn: Callable[[], str],
+    touch_claim_heartbeat_fn: Optional[Callable[..., Any]] = None,
+    progress_event: bool = False,
 ) -> Dict[str, Any]:
     run = runs_by_id.get(run_id)
     if not isinstance(run, dict):
@@ -141,6 +155,13 @@ def heartbeat_local_run(
     run["local_last_heartbeat_at"] = now_iso
     if resolved_worker:
         mark_local_worker_seen_fn(resolved_worker, run_id, "busy", note=note_text or None)
+        if callable(touch_claim_heartbeat_fn):
+            touch_claim_heartbeat_fn(
+                run_id,
+                resolved_worker,
+                note=note_text or None,
+                progress=bool(note_text or progress_event),
+            )
     return {"status": "ok", "run_id": run_id, "last_heartbeat_at": now_iso}
 
 

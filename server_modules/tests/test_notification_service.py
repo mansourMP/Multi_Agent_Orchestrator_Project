@@ -1,6 +1,7 @@
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from server_modules import notification_service
 from server_modules import outbox_service
@@ -8,6 +9,36 @@ from server_modules import runtime_state_store
 
 
 class NotificationServiceTests(unittest.TestCase):
+    def test_register_notification_device_denies_push_gracefully_when_plan_disables_it(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            db_path = Path(tempdir) / "runtime-state.sqlite3"
+            runtime_state_store.init_runtime_state_db(db_path)
+
+            result = notification_service.register_notification_device(
+                current_user={
+                    "auth_type": "bearer",
+                    "user_id": "user-1",
+                    "role": "owner",
+                    "workspace_access": {
+                        "workspace-1": {"tenant_id": "tenant-1", "role": "owner"},
+                    },
+                },
+                workspace_id="workspace-1",
+                device_id="device-1",
+                push_token="ExponentPushToken[test]",
+                workspace={"metadata": {"billing": {"plan": "free"}}},
+                db_path=db_path,
+            )
+
+            self.assertFalse(result["ok"])
+            self.assertEqual(result["reason"], "mobile_push_unavailable")
+            devices = runtime_state_store.list_notification_devices(
+                db_path,
+                tenant_id="tenant-1",
+                workspace_id="workspace-1",
+            )
+            self.assertEqual(devices, [])
+
     def test_deliver_notification_from_outbox_event_persists_and_fans_out(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:
             db_path = Path(tempdir) / "runtime-state.sqlite3"
@@ -76,13 +107,15 @@ class NotificationServiceTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tempdir:
             db_path = Path(tempdir) / "runtime-state.sqlite3"
             runtime_state_store.init_runtime_state_db(db_path)
+            tenant_id = "tenant-mark-read"
+            workspace_id = "workspace-mark-read"
             runtime_state_store.upsert_notification(
                 db_path,
                 {
                     "id": "notif-1",
                     "ts": "2026-04-08T00:00:00Z",
-                    "tenant_id": "tenant-1",
-                    "workspace_id": "workspace-1",
+                    "tenant_id": tenant_id,
+                    "workspace_id": workspace_id,
                     "channel": "runtime",
                     "direction": "system",
                     "event_type": "notification",
@@ -100,24 +133,27 @@ class NotificationServiceTests(unittest.TestCase):
                 "user_id": "user-1",
                 "role": "owner",
                 "workspace_access": {
-                    "workspace-1": {"tenant_id": "tenant-1", "role": "owner"},
+                    workspace_id: {"tenant_id": tenant_id, "role": "owner"},
                 },
             }
 
             before = notification_service.list_notification_payload(
                 current_user=current_user,
                 limit=10,
-                tenant_id="tenant-1",
-                workspace_id="workspace-1",
+                tenant_id=tenant_id,
+                workspace_id=workspace_id,
                 db_path=db_path,
             )
-            self.assertIsNone(before["items"][0].get("read_at"))
+            before_item = next(
+                item for item in before["items"] if str(item.get("id") or "").strip() == "notif-1"
+            )
+            self.assertIsNone(before_item.get("read_at"))
 
             marked = notification_service.mark_notifications_read(
                 current_user=current_user,
                 notification_ids=["notif-1"],
-                tenant_id="tenant-1",
-                workspace_id="workspace-1",
+                tenant_id=tenant_id,
+                workspace_id=workspace_id,
                 db_path=db_path,
             )
             self.assertEqual(marked["marked_count"], 1)
@@ -125,11 +161,77 @@ class NotificationServiceTests(unittest.TestCase):
             after = notification_service.list_notification_payload(
                 current_user=current_user,
                 limit=10,
-                tenant_id="tenant-1",
-                workspace_id="workspace-1",
+                tenant_id=tenant_id,
+                workspace_id=workspace_id,
                 db_path=db_path,
             )
-            self.assertTrue(bool(after["items"][0].get("read_at")))
+            after_item = next(
+                item for item in after["items"] if str(item.get("id") or "").strip() == "notif-1"
+            )
+            self.assertTrue(bool(after_item.get("read_at")))
+
+    def test_list_notification_payload_prefers_activity_ledger_for_workspace_feed(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            db_path = Path(tempdir) / "runtime-state.sqlite3"
+            runtime_state_store.init_runtime_state_db(db_path)
+            runtime_state_store.upsert_notification(
+                db_path,
+                {
+                    "id": "notif-1",
+                    "ts": "2026-04-08T00:00:00Z",
+                    "tenant_id": "tenant-1",
+                    "workspace_id": "workspace-1",
+                    "channel": "runtime",
+                    "direction": "system",
+                    "event_type": "approval",
+                    "action": "approval_requested",
+                    "title": "Approval required",
+                    "text": "Approve deleting the selected file?",
+                    "run_id": "run-1",
+                    "session_key": "run:run-1",
+                    "session_id": "run:run-1",
+                    "metadata": {"path": "/approvals"},
+                },
+            )
+            current_user = {
+                "auth_type": "bearer",
+                "user_id": "user-1",
+                "role": "owner",
+                "workspace_access": {
+                    "workspace-1": {"tenant_id": "tenant-1", "role": "owner"},
+                },
+            }
+
+            with patch(
+                "server_modules.notification_service.activity_ledger_service.list_notification_feed_items_sync",
+                return_value=[
+                    {
+                        "id": "notif-1",
+                        "ts": "2026-04-08T00:00:00Z",
+                        "workspace_id": "workspace-1",
+                        "channel": "runtime",
+                        "direction": "system",
+                        "event_type": "approval",
+                        "session_key": "run:run-1",
+                        "session_id": "run:run-1",
+                        "run_id": "run-1",
+                        "action": "approval_requested",
+                        "title": "Approval required",
+                        "text": "Approve deleting the selected file?",
+                        "metadata": {"path": "/approvals", "detail_level": "feed_summary"},
+                    }
+                ],
+            ):
+                payload = notification_service.list_notification_payload(
+                    current_user=current_user,
+                    limit=10,
+                    tenant_id="tenant-1",
+                    workspace_id="workspace-1",
+                    db_path=db_path,
+                )
+
+            self.assertEqual(payload["count"], 1)
+            self.assertEqual(payload["items"][0]["metadata"]["detail_level"], "feed_summary")
 
     def test_run_failed_and_machine_revoked_are_notification_worthy(self) -> None:
         failed_run_event = outbox_service.OutboxEvent(
@@ -156,6 +258,32 @@ class NotificationServiceTests(unittest.TestCase):
 
         self.assertEqual(failed["action"], "run_failed")
         self.assertEqual(revoked["action"], "machine_revoked")
+
+    def test_deliver_notification_from_outbox_event_records_activity_ledger(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            db_path = Path(tempdir) / "runtime-state.sqlite3"
+            runtime_state_store.init_runtime_state_db(db_path)
+            event = outbox_service.OutboxEvent(
+                event_id="approval-evt-1",
+                event_type="approval_requested",
+                tenant_id="tenant-1",
+                workspace_id="workspace-1",
+                run_id="run-1",
+                trace_id="trace-1",
+                payload={"prompt": "Approve deleting the selected file?"},
+                created_at="2026-04-08T00:00:00Z",
+            )
+
+            with patch(
+                "server_modules.notification_service.activity_ledger_service.record_notification_activity"
+            ) as record_mock:
+                notification_service.deliver_notification_from_outbox_event(
+                    event,
+                    db_path=db_path,
+                    send_push_messages_fn=lambda messages: [{"status": "ok"} for _ in messages],
+                )
+
+            self.assertEqual(record_mock.call_count, 1)
 
 
 if __name__ == "__main__":

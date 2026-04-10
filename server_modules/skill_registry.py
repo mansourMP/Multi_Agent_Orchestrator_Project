@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Awaitable, Callable
+from typing import Any, Awaitable, Callable, Literal
 
 from server_modules import inventory_skill
 
 
 SkillExecutor = Callable[..., Awaitable[dict[str, Any]]]
+SkillActionClass = Literal["read", "write", "execute"]
 
 
 @dataclass(frozen=True)
@@ -16,7 +17,11 @@ class SkillDefinition:
     description: str
     permission_label: str
     execution_mode: str
+    action_class: SkillActionClass
+    connector_scopes: tuple[str, ...]
     trigger_terms: tuple[str, ...]
+    allowed_runtime_modes: tuple[str, ...] = ("hosted_secure", "local_secure", "privileged_device")
+    requires_approval: bool = False
     executor: SkillExecutor | None = None
 
 
@@ -66,6 +71,9 @@ SKILL_REGISTRY: tuple[SkillDefinition, ...] = (
         description="Read, draft, and route customer emails.",
         permission_label="Inbox scope",
         execution_mode="manual",
+        action_class="write",
+        connector_scopes=("email",),
+        requires_approval=True,
         trigger_terms=("email", "inbox", "reply", "respond by email"),
     ),
     SkillDefinition(
@@ -74,6 +82,8 @@ SKILL_REGISTRY: tuple[SkillDefinition, ...] = (
         description="Research public facts and retrieve references.",
         permission_label="Public web",
         execution_mode="preview",
+        action_class="read",
+        connector_scopes=("web",),
         trigger_terms=("latest", "research", "search", "find online", "web", "source", "look up", "compare"),
         executor=_preview_web_search,
     ),
@@ -83,6 +93,9 @@ SKILL_REGISTRY: tuple[SkillDefinition, ...] = (
         description="Create, move, or confirm appointments.",
         permission_label="Calendar scope",
         execution_mode="manual",
+        action_class="write",
+        connector_scopes=("calendar",),
+        requires_approval=True,
         trigger_terms=("appointment", "book", "schedule", "calendar", "reschedule"),
     ),
     SkillDefinition(
@@ -91,6 +104,10 @@ SKILL_REGISTRY: tuple[SkillDefinition, ...] = (
         description="Execute operational tools behind approvals.",
         permission_label="Operational tools",
         execution_mode="manual",
+        action_class="execute",
+        connector_scopes=("task_runner",),
+        allowed_runtime_modes=("local_secure", "privileged_device"),
+        requires_approval=True,
         trigger_terms=("run task", "execute", "automation", "update system"),
     ),
     SkillDefinition(
@@ -99,6 +116,8 @@ SKILL_REGISTRY: tuple[SkillDefinition, ...] = (
         description="Check stock, fitment, and availability from the workspace inventory table.",
         permission_label="Inventory scope",
         execution_mode="live",
+        action_class="read",
+        connector_scopes=("inventory",),
         trigger_terms=("inventory", "stock", "availability", "fitment", "sku", "part", "parts", "wiper", "brake", "rotor", "filter", "tesla", "toyota", "model 3", "eta", "delivery"),
         executor=inventory_skill.execute_inventory_skill,
     ),
@@ -108,6 +127,9 @@ SKILL_REGISTRY: tuple[SkillDefinition, ...] = (
         description="Write structured conversation notes back to the system of record.",
         permission_label="CRM writeback",
         execution_mode="manual",
+        action_class="write",
+        connector_scopes=("crm",),
+        requires_approval=True,
         trigger_terms=("crm", "lead note", "follow up note", "save note"),
     ),
 )
@@ -123,6 +145,18 @@ def get_skill_definition(skill_id: str) -> SkillDefinition | None:
 
 def list_skill_definitions() -> list[SkillDefinition]:
     return list(SKILL_REGISTRY)
+
+
+def skill_connector_scopes(skill_ids: list[str] | tuple[str, ...]) -> list[str]:
+    scopes: list[str] = []
+    for skill_id in skill_ids:
+        definition = get_skill_definition(skill_id)
+        if definition is None:
+            continue
+        for scope in definition.connector_scopes:
+            if scope not in scopes:
+                scopes.append(scope)
+    return scopes
 
 
 def detect_skill_need(goal: str) -> SkillDefinition | None:

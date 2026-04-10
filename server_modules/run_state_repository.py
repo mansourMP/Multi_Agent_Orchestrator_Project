@@ -102,6 +102,19 @@ def _json_payload(value: Any) -> str:
         return "{}"
 
 
+def _json_object(value: Any) -> Dict[str, Any]:
+    if isinstance(value, dict):
+        return dict(value)
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+        except Exception:
+            parsed = None
+        if isinstance(parsed, dict):
+            return parsed
+    return {}
+
+
 def _payload_workspace_id(payload: Dict[str, Any]) -> str:
     context = payload.get("context") if isinstance(payload.get("context"), dict) else {}
     return str(payload.get("workspace_id") or context.get("workspace_id") or "default").strip() or "default"
@@ -111,6 +124,113 @@ def _payload_tenant_id(payload: Dict[str, Any]) -> str:
     context = payload.get("context") if isinstance(payload.get("context"), dict) else {}
     metadata = context.get("metadata") if isinstance(context.get("metadata"), dict) else {}
     return str(payload.get("tenant_id") or context.get("tenant_id") or metadata.get("tenant_id") or "default").strip() or "default"
+
+
+async def _ensure_local_queue_tables(pool: Any) -> None:
+    await pool.execute(
+        """
+        CREATE TABLE IF NOT EXISTS local_queue_claims (
+            run_id TEXT PRIMARY KEY,
+            worker_id TEXT NOT NULL,
+            claimed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            ttl INTEGER NOT NULL,
+            trace_id TEXT
+        )
+        """
+    )
+    await pool.execute("ALTER TABLE local_queue_claims ADD COLUMN IF NOT EXISTS last_heartbeat_at TIMESTAMPTZ NULL")
+    await pool.execute("ALTER TABLE local_queue_claims ADD COLUMN IF NOT EXISTS last_progress_at TIMESTAMPTZ NULL")
+    await pool.execute("ALTER TABLE local_queue_claims ADD COLUMN IF NOT EXISTS last_worker_note TEXT NULL")
+    await pool.execute(
+        "CREATE INDEX IF NOT EXISTS idx_local_queue_claims_worker_id ON local_queue_claims(worker_id, claimed_at DESC)"
+    )
+    await pool.execute(
+        "CREATE INDEX IF NOT EXISTS idx_local_queue_claims_heartbeat ON local_queue_claims(last_heartbeat_at DESC, claimed_at DESC)"
+    )
+    await pool.execute(
+        """
+        CREATE TABLE IF NOT EXISTS local_queue_dead_letters (
+            run_id TEXT PRIMARY KEY,
+            tenant_id TEXT NOT NULL,
+            workspace_id TEXT NOT NULL,
+            specialist_key TEXT NULL,
+            reason TEXT NOT NULL,
+            trace_id TEXT NULL,
+            failure_count INTEGER NOT NULL DEFAULT 0,
+            payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+            first_recorded_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            last_recorded_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+        """
+    )
+    await pool.execute(
+        "CREATE INDEX IF NOT EXISTS idx_local_queue_dead_letters_workspace ON local_queue_dead_letters(workspace_id, last_recorded_at DESC)"
+    )
+    await pool.execute(
+        "CREATE INDEX IF NOT EXISTS idx_local_queue_dead_letters_specialist ON local_queue_dead_letters(specialist_key, last_recorded_at DESC)"
+    )
+
+
+async def _ensure_fleet_runtime_tables(pool: Any) -> None:
+    await pool.execute(
+        """
+        CREATE TABLE IF NOT EXISTS fleet_worker_registrations (
+            worker_id TEXT PRIMARY KEY,
+            tenant_id TEXT NOT NULL,
+            workspace_id TEXT NOT NULL,
+            machine_id TEXT NOT NULL,
+            runtime_type TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'idle',
+            control_state TEXT NOT NULL DEFAULT 'active',
+            current_run_id TEXT NULL,
+            instance_id TEXT NULL,
+            shard_key TEXT NOT NULL,
+            prewarm_state TEXT NULL,
+            warm_pool TEXT NULL,
+            lease_seconds INTEGER NOT NULL DEFAULT 30,
+            payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+            registered_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            last_registered_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            last_heartbeat_at TIMESTAMPTZ NULL,
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+        """
+    )
+    await pool.execute(
+        "CREATE INDEX IF NOT EXISTS idx_fleet_worker_registrations_workspace_seen ON fleet_worker_registrations(workspace_id, last_heartbeat_at DESC, updated_at DESC)"
+    )
+    await pool.execute(
+        "CREATE INDEX IF NOT EXISTS idx_fleet_worker_registrations_shard ON fleet_worker_registrations(shard_key, status, control_state)"
+    )
+    await pool.execute(
+        "CREATE INDEX IF NOT EXISTS idx_fleet_worker_registrations_prewarm ON fleet_worker_registrations(prewarm_state, runtime_type, updated_at DESC)"
+    )
+    await pool.execute(
+        """
+        CREATE TABLE IF NOT EXISTS fleet_queue_partitions (
+            partition_id TEXT PRIMARY KEY,
+            tenant_id TEXT NOT NULL,
+            workspace_id TEXT NOT NULL,
+            specialist_key TEXT NOT NULL,
+            pending_count INTEGER NOT NULL DEFAULT 0,
+            claimed_count INTEGER NOT NULL DEFAULT 0,
+            online_workers INTEGER NOT NULL DEFAULT 0,
+            busy_workers INTEGER NOT NULL DEFAULT 0,
+            idle_workers INTEGER NOT NULL DEFAULT 0,
+            prewarmed_workers INTEGER NOT NULL DEFAULT 0,
+            state TEXT NOT NULL DEFAULT 'healthy',
+            retry_after_seconds INTEGER NOT NULL DEFAULT 0,
+            payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+        """
+    )
+    await pool.execute(
+        "CREATE INDEX IF NOT EXISTS idx_fleet_queue_partitions_workspace ON fleet_queue_partitions(workspace_id, state, updated_at DESC)"
+    )
+    await pool.execute(
+        "CREATE INDEX IF NOT EXISTS idx_fleet_queue_partitions_specialist ON fleet_queue_partitions(specialist_key, updated_at DESC)"
+    )
 
 
 async def upsert_live_run(
@@ -452,18 +572,32 @@ async def claim_run(run_id: str, worker_id: str, ttl: int, trace_id: str) -> Non
         return None
     pool = await _require_pool(operation="claim_run")
     try:
+        await _ensure_local_queue_tables(pool)
         row = await pool.fetchrow(
             """
-            INSERT INTO local_queue_claims (run_id, worker_id, claimed_at, ttl, trace_id)
-            VALUES ($1, $2, NOW(), $3, $4)
+            INSERT INTO local_queue_claims (
+                run_id,
+                worker_id,
+                claimed_at,
+                ttl,
+                trace_id,
+                last_heartbeat_at,
+                last_progress_at,
+                last_worker_note
+            )
+            VALUES ($1, $2, NOW(), $3, $4, NOW(), NOW(), NULL)
             ON CONFLICT (run_id) DO UPDATE SET
                 worker_id = EXCLUDED.worker_id,
                 claimed_at = NOW(),
                 ttl = EXCLUDED.ttl,
-                trace_id = COALESCE(NULLIF(EXCLUDED.trace_id, ''), local_queue_claims.trace_id)
+                trace_id = COALESCE(NULLIF(EXCLUDED.trace_id, ''), local_queue_claims.trace_id),
+                last_heartbeat_at = NOW(),
+                last_progress_at = NOW(),
+                last_worker_note = NULL
             WHERE
                 local_queue_claims.worker_id = EXCLUDED.worker_id OR
-                local_queue_claims.claimed_at + (GREATEST(COALESCE(local_queue_claims.ttl, 0), 1) * INTERVAL '1 second') <= NOW()
+                COALESCE(local_queue_claims.last_heartbeat_at, local_queue_claims.claimed_at) +
+                    (GREATEST(COALESCE(local_queue_claims.ttl, 0), 1) * INTERVAL '1 second') <= NOW()
             RETURNING run_id
             """,
             token,
@@ -486,6 +620,7 @@ async def release_claim(run_id: str) -> None:
         return None
     pool = await _require_pool(operation="release_claim")
     try:
+        await _ensure_local_queue_tables(pool)
         await pool.execute(
             """
             DELETE FROM local_queue_claims
@@ -496,6 +631,489 @@ async def release_claim(run_id: str) -> None:
     except Exception as exc:
         raise RunStatePersistenceError(f"Postgres release_claim failed for {token}: {exc}") from exc
     return None
+
+
+async def touch_claim_heartbeat(
+    run_id: str,
+    worker_id: str,
+    *,
+    note: Optional[str] = None,
+    progress: bool = False,
+) -> None:
+    token = str(run_id or "").strip()
+    worker = str(worker_id or "").strip()
+    if not token or not worker:
+        return None
+    pool = await _require_pool(operation="touch_claim_heartbeat")
+    try:
+        await _ensure_local_queue_tables(pool)
+        await pool.execute(
+            """
+            UPDATE local_queue_claims
+            SET
+                last_heartbeat_at = NOW(),
+                last_progress_at = CASE WHEN $3 THEN NOW() ELSE last_progress_at END,
+                last_worker_note = CASE
+                    WHEN NULLIF($4, '') IS NOT NULL THEN LEFT($4, 280)
+                    ELSE last_worker_note
+                END
+            WHERE run_id = $1
+              AND worker_id = $2
+            """,
+            token,
+            worker,
+            bool(progress),
+            str(note or "").strip() or None,
+        )
+    except Exception as exc:
+        raise RunStatePersistenceError(f"Postgres touch_claim_heartbeat failed for {token}: {exc}") from exc
+    return None
+
+
+async def append_local_queue_dead_letter(
+    *,
+    run_id: str,
+    tenant_id: str,
+    workspace_id: str,
+    specialist_key: Optional[str],
+    reason: str,
+    trace_id: str,
+    failure_count: int,
+    payload: Dict[str, Any],
+) -> None:
+    token = str(run_id or "").strip()
+    if not token:
+        return None
+    pool = await _require_pool(operation="append_local_queue_dead_letter")
+    try:
+        await _ensure_local_queue_tables(pool)
+        await pool.execute(
+            """
+            INSERT INTO local_queue_dead_letters (
+                run_id,
+                tenant_id,
+                workspace_id,
+                specialist_key,
+                reason,
+                trace_id,
+                failure_count,
+                payload,
+                first_recorded_at,
+                last_recorded_at
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, NOW(), NOW())
+            ON CONFLICT (run_id) DO UPDATE SET
+                tenant_id = EXCLUDED.tenant_id,
+                workspace_id = EXCLUDED.workspace_id,
+                specialist_key = EXCLUDED.specialist_key,
+                reason = EXCLUDED.reason,
+                trace_id = COALESCE(NULLIF(EXCLUDED.trace_id, ''), local_queue_dead_letters.trace_id),
+                failure_count = GREATEST(local_queue_dead_letters.failure_count, EXCLUDED.failure_count),
+                payload = EXCLUDED.payload,
+                last_recorded_at = NOW()
+            """,
+            token,
+            str(tenant_id or "").strip() or "default",
+            str(workspace_id or "").strip() or "default",
+            str(specialist_key or "").strip() or None,
+            str(reason or "").strip() or "worker_failure",
+            str(trace_id or "").strip() or None,
+            max(0, int(failure_count or 0)),
+            _json_payload(payload),
+        )
+    except Exception as exc:
+        raise RunStatePersistenceError(f"Postgres append_local_queue_dead_letter failed for {token}: {exc}") from exc
+    return None
+
+
+async def get_local_queue_dead_letter_status() -> Dict[str, Any]:
+    pool = await runtime_db.get_pool()
+    if pool is None:
+        return {
+            "dead_letter_count": 0,
+            "total_failure_count": 0,
+            "last_recorded_at": None,
+            "workspace_hotspots": [],
+            "specialist_hotspots": [],
+        }
+    try:
+        await _ensure_local_queue_tables(pool)
+        summary_row = await pool.fetchrow(
+            """
+            SELECT
+                COUNT(*)::int AS dead_letter_count,
+                COALESCE(SUM(failure_count), 0)::int AS total_failure_count,
+                MAX(last_recorded_at) AS last_recorded_at
+            FROM local_queue_dead_letters
+            """
+        )
+        workspace_rows = await pool.fetch(
+            """
+            SELECT workspace_id, COUNT(*)::int AS count
+            FROM local_queue_dead_letters
+            GROUP BY workspace_id
+            ORDER BY count DESC, workspace_id ASC
+            LIMIT 5
+            """
+        )
+        specialist_rows = await pool.fetch(
+            """
+            SELECT COALESCE(NULLIF(specialist_key, ''), 'workspace-default') AS specialist_key, COUNT(*)::int AS count
+            FROM local_queue_dead_letters
+            GROUP BY COALESCE(NULLIF(specialist_key, ''), 'workspace-default')
+            ORDER BY count DESC, specialist_key ASC
+            LIMIT 5
+            """
+        )
+    except Exception as exc:
+        LOGGER.warning("Postgres get_local_queue_dead_letter_status failed: %s", exc)
+        return {
+            "dead_letter_count": 0,
+            "total_failure_count": 0,
+            "last_recorded_at": None,
+            "workspace_hotspots": [],
+            "specialist_hotspots": [],
+        }
+    return {
+        "dead_letter_count": int(summary_row["dead_letter_count"] if summary_row is not None else 0),
+        "total_failure_count": int(summary_row["total_failure_count"] if summary_row is not None else 0),
+        "last_recorded_at": str(summary_row["last_recorded_at"] or "").strip() or None if summary_row is not None else None,
+        "workspace_hotspots": [
+            {
+                "workspace_id": str(row["workspace_id"] or "").strip() or "default",
+                "count": int(row["count"] or 0),
+            }
+            for row in (workspace_rows or [])
+        ],
+        "specialist_hotspots": [
+            {
+                "specialist_key": str(row["specialist_key"] or "").strip() or "workspace-default",
+                "count": int(row["count"] or 0),
+            }
+            for row in (specialist_rows or [])
+        ],
+    }
+
+
+async def upsert_fleet_worker(record: Dict[str, Any], *, heartbeat_seen: bool = True) -> None:
+    worker_id = str(record.get("worker_id") or record.get("runtime_id") or "").strip()
+    if not worker_id:
+        return None
+    payload = dict(record or {})
+    payload["worker_id"] = worker_id
+    payload["runtime_id"] = str(payload.get("runtime_id") or worker_id).strip() or worker_id
+    payload["machine_id"] = str(payload.get("machine_id") or payload["runtime_id"] or worker_id).strip() or worker_id
+    payload["tenant_id"] = str(payload.get("tenant_id") or "default").strip() or "default"
+    payload["workspace_id"] = str(payload.get("workspace_id") or "default").strip() or "default"
+    execution_targets = payload.get("execution_targets") if isinstance(payload.get("execution_targets"), list) else []
+    first_target = str(execution_targets[0] if execution_targets else "").strip().lower() or "local"
+    shard_key = str(payload.get("queue_shard") or "").strip() or (
+        f"{payload['tenant_id']}:{payload['workspace_id']}:{str(payload.get('runtime_type') or 'local').strip() or 'local'}:{first_target}"
+    )
+    pool = await _require_pool(operation="upsert_fleet_worker")
+    try:
+        await _ensure_fleet_runtime_tables(pool)
+        await pool.execute(
+            """
+            INSERT INTO fleet_worker_registrations (
+                worker_id,
+                tenant_id,
+                workspace_id,
+                machine_id,
+                runtime_type,
+                status,
+                control_state,
+                current_run_id,
+                instance_id,
+                shard_key,
+                prewarm_state,
+                warm_pool,
+                lease_seconds,
+                payload,
+                registered_at,
+                last_registered_at,
+                last_heartbeat_at,
+                updated_at
+            )
+            VALUES (
+                $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14::jsonb,
+                NOW(), NOW(), CASE WHEN $15 THEN NOW() ELSE NULL END, NOW()
+            )
+            ON CONFLICT (worker_id) DO UPDATE SET
+                tenant_id = EXCLUDED.tenant_id,
+                workspace_id = EXCLUDED.workspace_id,
+                machine_id = EXCLUDED.machine_id,
+                runtime_type = EXCLUDED.runtime_type,
+                status = EXCLUDED.status,
+                control_state = EXCLUDED.control_state,
+                current_run_id = EXCLUDED.current_run_id,
+                instance_id = EXCLUDED.instance_id,
+                shard_key = EXCLUDED.shard_key,
+                prewarm_state = EXCLUDED.prewarm_state,
+                warm_pool = EXCLUDED.warm_pool,
+                lease_seconds = EXCLUDED.lease_seconds,
+                payload = EXCLUDED.payload,
+                last_registered_at = NOW(),
+                last_heartbeat_at = CASE
+                    WHEN $15 THEN NOW()
+                    ELSE fleet_worker_registrations.last_heartbeat_at
+                END,
+                updated_at = NOW()
+            """,
+            worker_id,
+            payload["tenant_id"],
+            payload["workspace_id"],
+            payload["machine_id"],
+            str(payload.get("runtime_type") or "local").strip() or "local",
+            str(payload.get("status") or "idle").strip() or "idle",
+            str(payload.get("control_state") or "active").strip().lower() or "active",
+            str(payload.get("current_run_id") or "").strip() or None,
+            str(payload.get("instance_id") or "").strip() or None,
+            shard_key,
+            str(payload.get("prewarm_state") or "").strip().lower() or None,
+            str(payload.get("warm_pool") or "").strip() or None,
+            max(1, int(payload.get("lease_seconds") or 30)),
+            _json_payload(payload),
+            bool(heartbeat_seen),
+        )
+    except Exception as exc:
+        raise RunStatePersistenceError(f"Postgres upsert_fleet_worker failed for {worker_id}: {exc}") from exc
+    return None
+
+
+async def get_fleet_worker(worker_id: str) -> Optional[Dict[str, Any]]:
+    token = str(worker_id or "").strip()
+    if not token:
+        return None
+    pool = await runtime_db.get_pool()
+    if pool is None:
+        return None
+    try:
+        await _ensure_fleet_runtime_tables(pool)
+        row = await pool.fetchrow(
+            """
+            SELECT worker_id, tenant_id, workspace_id, machine_id, runtime_type, status, control_state,
+                   current_run_id, instance_id, shard_key, prewarm_state, warm_pool, lease_seconds,
+                   registered_at, last_registered_at, last_heartbeat_at, updated_at, payload
+            FROM fleet_worker_registrations
+            WHERE worker_id = $1
+            LIMIT 1
+            """,
+            token,
+        )
+    except Exception as exc:
+        LOGGER.warning("Postgres get_fleet_worker failed for %s: %s", token, exc)
+        return None
+    if row is None:
+        return None
+    payload = _json_object(row["payload"])
+    payload.update(
+        {
+            "worker_id": str(row["worker_id"] or "").strip(),
+            "runtime_id": str(payload.get("runtime_id") or row["worker_id"] or "").strip(),
+            "tenant_id": str(row["tenant_id"] or "").strip() or "default",
+            "workspace_id": str(row["workspace_id"] or "").strip() or "default",
+            "machine_id": str(row["machine_id"] or "").strip() or token,
+            "runtime_type": str(row["runtime_type"] or "").strip() or "local",
+            "status": str(row["status"] or "").strip() or "idle",
+            "control_state": str(row["control_state"] or "").strip().lower() or "active",
+            "current_run_id": str(row["current_run_id"] or "").strip() or None,
+            "instance_id": str(row["instance_id"] or "").strip() or None,
+            "queue_shard": str(row["shard_key"] or "").strip() or None,
+            "prewarm_state": str(row["prewarm_state"] or "").strip() or None,
+            "warm_pool": str(row["warm_pool"] or "").strip() or None,
+            "lease_seconds": int(row["lease_seconds"] or 30),
+            "registered_at": str(row["registered_at"] or "").strip() or None,
+            "last_registered_at": str(row["last_registered_at"] or "").strip() or None,
+            "last_heartbeat_at": str(row["last_heartbeat_at"] or "").strip() or None,
+            "updated_at": str(row["updated_at"] or "").strip() or None,
+        }
+    )
+    return payload
+
+
+async def list_fleet_workers(
+    *,
+    tenant_id: Optional[str] = None,
+    workspace_id: Optional[str] = None,
+) -> list[Dict[str, Any]]:
+    pool = await runtime_db.get_pool()
+    if pool is None:
+        return []
+    tenant_filter = str(tenant_id or "").strip()
+    workspace_filter = str(workspace_id or "").strip()
+    try:
+        await _ensure_fleet_runtime_tables(pool)
+        rows = await pool.fetch(
+            """
+            SELECT worker_id, tenant_id, workspace_id, machine_id, runtime_type, status, control_state,
+                   current_run_id, instance_id, shard_key, prewarm_state, warm_pool, lease_seconds,
+                   registered_at, last_registered_at, last_heartbeat_at, updated_at, payload
+            FROM fleet_worker_registrations
+            WHERE ($1 = '' OR tenant_id = $1)
+              AND ($2 = '' OR workspace_id = $2)
+            ORDER BY COALESCE(last_heartbeat_at, updated_at, last_registered_at) DESC, worker_id ASC
+            """,
+            tenant_filter,
+            workspace_filter,
+        )
+    except Exception as exc:
+        LOGGER.warning("Postgres list_fleet_workers failed: %s", exc)
+        return []
+    items: list[Dict[str, Any]] = []
+    for row in rows or []:
+        payload = _json_object(row["payload"])
+        payload.update(
+            {
+                "worker_id": str(row["worker_id"] or "").strip(),
+                "runtime_id": str(payload.get("runtime_id") or row["worker_id"] or "").strip(),
+                "tenant_id": str(row["tenant_id"] or "").strip() or "default",
+                "workspace_id": str(row["workspace_id"] or "").strip() or "default",
+                "machine_id": str(row["machine_id"] or "").strip() or str(row["worker_id"] or "").strip(),
+                "runtime_type": str(row["runtime_type"] or "").strip() or "local",
+                "status": str(row["status"] or "").strip() or "idle",
+                "control_state": str(row["control_state"] or "").strip().lower() or "active",
+                "current_run_id": str(row["current_run_id"] or "").strip() or None,
+                "instance_id": str(row["instance_id"] or "").strip() or None,
+                "queue_shard": str(row["shard_key"] or "").strip() or None,
+                "prewarm_state": str(row["prewarm_state"] or "").strip() or None,
+                "warm_pool": str(row["warm_pool"] or "").strip() or None,
+                "lease_seconds": int(row["lease_seconds"] or 30),
+                "registered_at": str(row["registered_at"] or "").strip() or None,
+                "last_registered_at": str(row["last_registered_at"] or "").strip() or None,
+                "last_heartbeat_at": str(row["last_heartbeat_at"] or "").strip() or None,
+                "updated_at": str(row["updated_at"] or "").strip() or None,
+            }
+        )
+        items.append(payload)
+    return items
+
+
+async def upsert_fleet_queue_partition(
+    *,
+    partition_id: str,
+    tenant_id: str,
+    workspace_id: str,
+    specialist_key: str,
+    pending_count: int,
+    claimed_count: int,
+    online_workers: int,
+    busy_workers: int,
+    idle_workers: int,
+    prewarmed_workers: int,
+    state: str,
+    retry_after_seconds: int,
+    payload: Dict[str, Any],
+) -> None:
+    token = str(partition_id or "").strip()
+    if not token:
+        return None
+    pool = await _require_pool(operation="upsert_fleet_queue_partition")
+    try:
+        await _ensure_fleet_runtime_tables(pool)
+        await pool.execute(
+            """
+            INSERT INTO fleet_queue_partitions (
+                partition_id,
+                tenant_id,
+                workspace_id,
+                specialist_key,
+                pending_count,
+                claimed_count,
+                online_workers,
+                busy_workers,
+                idle_workers,
+                prewarmed_workers,
+                state,
+                retry_after_seconds,
+                payload,
+                updated_at
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13::jsonb, NOW())
+            ON CONFLICT (partition_id) DO UPDATE SET
+                tenant_id = EXCLUDED.tenant_id,
+                workspace_id = EXCLUDED.workspace_id,
+                specialist_key = EXCLUDED.specialist_key,
+                pending_count = EXCLUDED.pending_count,
+                claimed_count = EXCLUDED.claimed_count,
+                online_workers = EXCLUDED.online_workers,
+                busy_workers = EXCLUDED.busy_workers,
+                idle_workers = EXCLUDED.idle_workers,
+                prewarmed_workers = EXCLUDED.prewarmed_workers,
+                state = EXCLUDED.state,
+                retry_after_seconds = EXCLUDED.retry_after_seconds,
+                payload = EXCLUDED.payload,
+                updated_at = NOW()
+            """,
+            token,
+            str(tenant_id or "").strip() or "default",
+            str(workspace_id or "").strip() or "default",
+            str(specialist_key or "").strip() or "workspace-default",
+            max(0, int(pending_count or 0)),
+            max(0, int(claimed_count or 0)),
+            max(0, int(online_workers or 0)),
+            max(0, int(busy_workers or 0)),
+            max(0, int(idle_workers or 0)),
+            max(0, int(prewarmed_workers or 0)),
+            str(state or "").strip().lower() or "healthy",
+            max(0, int(retry_after_seconds or 0)),
+            _json_payload(payload),
+        )
+    except Exception as exc:
+        raise RunStatePersistenceError(f"Postgres upsert_fleet_queue_partition failed for {token}: {exc}") from exc
+    return None
+
+
+async def list_fleet_queue_partitions(
+    *,
+    tenant_id: Optional[str] = None,
+    workspace_id: Optional[str] = None,
+) -> list[Dict[str, Any]]:
+    pool = await runtime_db.get_pool()
+    if pool is None:
+        return []
+    tenant_filter = str(tenant_id or "").strip()
+    workspace_filter = str(workspace_id or "").strip()
+    try:
+        await _ensure_fleet_runtime_tables(pool)
+        rows = await pool.fetch(
+            """
+            SELECT partition_id, tenant_id, workspace_id, specialist_key, pending_count, claimed_count,
+                   online_workers, busy_workers, idle_workers, prewarmed_workers, state, retry_after_seconds,
+                   updated_at, payload
+            FROM fleet_queue_partitions
+            WHERE ($1 = '' OR tenant_id = $1)
+              AND ($2 = '' OR workspace_id = $2)
+            ORDER BY updated_at DESC, partition_id ASC
+            """,
+            tenant_filter,
+            workspace_filter,
+        )
+    except Exception as exc:
+        LOGGER.warning("Postgres list_fleet_queue_partitions failed: %s", exc)
+        return []
+    items: list[Dict[str, Any]] = []
+    for row in rows or []:
+        payload = _json_object(row["payload"])
+        payload.update(
+            {
+                "partition_id": str(row["partition_id"] or "").strip(),
+                "tenant_id": str(row["tenant_id"] or "").strip() or "default",
+                "workspace_id": str(row["workspace_id"] or "").strip() or "default",
+                "specialist_key": str(row["specialist_key"] or "").strip() or "workspace-default",
+                "pending_count": int(row["pending_count"] or 0),
+                "claimed_count": int(row["claimed_count"] or 0),
+                "online_workers": int(row["online_workers"] or 0),
+                "busy_workers": int(row["busy_workers"] or 0),
+                "idle_workers": int(row["idle_workers"] or 0),
+                "prewarmed_workers": int(row["prewarmed_workers"] or 0),
+                "state": str(row["state"] or "").strip().lower() or "healthy",
+                "retry_after_seconds": int(row["retry_after_seconds"] or 0),
+                "updated_at": str(row["updated_at"] or "").strip() or None,
+            }
+        )
+        items.append(payload)
+    return items
 
 
 async def record_approval_resolution(
@@ -840,19 +1458,23 @@ async def list_expired_local_claims() -> list[Dict[str, Any]]:
     if pool is None:
         return []
     try:
+        await _ensure_local_queue_tables(pool)
         rows = await pool.fetch(
             """
             SELECT
                 claims.run_id,
                 claims.worker_id,
                 claims.claimed_at,
+                claims.last_heartbeat_at,
+                claims.last_progress_at,
                 claims.ttl,
                 claims.trace_id,
                 live_runs.payload AS run_payload
             FROM local_queue_claims AS claims
             LEFT JOIN live_runs ON live_runs.run_id = claims.run_id
-            WHERE claims.claimed_at + (GREATEST(COALESCE(claims.ttl, 0), 1) * INTERVAL '1 second') <= NOW()
-            ORDER BY claims.claimed_at ASC
+            WHERE COALESCE(claims.last_heartbeat_at, claims.claimed_at) +
+                    (GREATEST(COALESCE(claims.ttl, 0), 1) * INTERVAL '1 second') <= NOW()
+            ORDER BY COALESCE(claims.last_heartbeat_at, claims.claimed_at) ASC
             """
         )
     except Exception as exc:
@@ -871,6 +1493,8 @@ async def list_expired_local_claims() -> list[Dict[str, Any]]:
                 "run_id": str(row["run_id"] or "").strip() or None,
                 "worker_id": str(row["worker_id"] or "").strip() or None,
                 "claimed_at": str(row["claimed_at"] or "").strip() or None,
+                "last_heartbeat_at": str(row["last_heartbeat_at"] or "").strip() or None,
+                "last_progress_at": str(row["last_progress_at"] or "").strip() or None,
                 "ttl": int(row["ttl"] or 0),
                 "trace_id": str(row["trace_id"] or "").strip() or None,
                 "run_payload": payload if isinstance(payload, dict) else None,
@@ -1067,4 +1691,140 @@ def sync_release_claim(run_id: str) -> None:
         operation="sync_release_claim",
         fallback=None,
         raise_on_error=True,
+    )
+
+
+def sync_touch_claim_heartbeat(
+    run_id: str,
+    worker_id: str,
+    *,
+    note: Optional[str] = None,
+    progress: bool = False,
+) -> None:
+    _run_sync(
+        lambda: touch_claim_heartbeat(run_id, worker_id, note=note, progress=progress),
+        operation="sync_touch_claim_heartbeat",
+        fallback=None,
+        raise_on_error=True,
+    )
+
+
+def sync_append_local_queue_dead_letter(
+    *,
+    run_id: str,
+    tenant_id: str,
+    workspace_id: str,
+    specialist_key: Optional[str],
+    reason: str,
+    trace_id: str,
+    failure_count: int,
+    payload: Dict[str, Any],
+) -> None:
+    _run_sync(
+        lambda: append_local_queue_dead_letter(
+            run_id=run_id,
+            tenant_id=tenant_id,
+            workspace_id=workspace_id,
+            specialist_key=specialist_key,
+            reason=reason,
+            trace_id=trace_id,
+            failure_count=failure_count,
+            payload=payload,
+        ),
+        operation="sync_append_local_queue_dead_letter",
+        fallback=None,
+        raise_on_error=True,
+    )
+
+
+def sync_get_local_queue_dead_letter_status() -> Dict[str, Any]:
+    return _run_sync(
+        get_local_queue_dead_letter_status,
+        operation="sync_get_local_queue_dead_letter_status",
+        fallback={
+            "dead_letter_count": 0,
+            "total_failure_count": 0,
+            "last_recorded_at": None,
+            "workspace_hotspots": [],
+            "specialist_hotspots": [],
+        },
+    )
+
+
+def sync_upsert_fleet_worker(record: Dict[str, Any], *, heartbeat_seen: bool = True) -> None:
+    _run_sync(
+        lambda: upsert_fleet_worker(record, heartbeat_seen=heartbeat_seen),
+        operation="sync_upsert_fleet_worker",
+        fallback=None,
+        raise_on_error=True,
+    )
+
+
+def sync_get_fleet_worker(worker_id: str) -> Optional[Dict[str, Any]]:
+    return _run_sync(
+        lambda: get_fleet_worker(worker_id),
+        operation="sync_get_fleet_worker",
+        fallback=None,
+    )
+
+
+def sync_list_fleet_workers(
+    *,
+    tenant_id: Optional[str] = None,
+    workspace_id: Optional[str] = None,
+) -> list[Dict[str, Any]]:
+    return _run_sync(
+        lambda: list_fleet_workers(tenant_id=tenant_id, workspace_id=workspace_id),
+        operation="sync_list_fleet_workers",
+        fallback=[],
+    )
+
+
+def sync_upsert_fleet_queue_partition(
+    *,
+    partition_id: str,
+    tenant_id: str,
+    workspace_id: str,
+    specialist_key: str,
+    pending_count: int,
+    claimed_count: int,
+    online_workers: int,
+    busy_workers: int,
+    idle_workers: int,
+    prewarmed_workers: int,
+    state: str,
+    retry_after_seconds: int,
+    payload: Dict[str, Any],
+) -> None:
+    _run_sync(
+        lambda: upsert_fleet_queue_partition(
+            partition_id=partition_id,
+            tenant_id=tenant_id,
+            workspace_id=workspace_id,
+            specialist_key=specialist_key,
+            pending_count=pending_count,
+            claimed_count=claimed_count,
+            online_workers=online_workers,
+            busy_workers=busy_workers,
+            idle_workers=idle_workers,
+            prewarmed_workers=prewarmed_workers,
+            state=state,
+            retry_after_seconds=retry_after_seconds,
+            payload=payload,
+        ),
+        operation="sync_upsert_fleet_queue_partition",
+        fallback=None,
+        raise_on_error=True,
+    )
+
+
+def sync_list_fleet_queue_partitions(
+    *,
+    tenant_id: Optional[str] = None,
+    workspace_id: Optional[str] = None,
+) -> list[Dict[str, Any]]:
+    return _run_sync(
+        lambda: list_fleet_queue_partitions(tenant_id=tenant_id, workspace_id=workspace_id),
+        operation="sync_list_fleet_queue_partitions",
+        fallback=[],
     )

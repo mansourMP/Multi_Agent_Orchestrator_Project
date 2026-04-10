@@ -1,0 +1,435 @@
+from __future__ import annotations
+
+import base64
+import hashlib
+import hmac
+import json
+import os
+import secrets
+import time
+from dataclasses import dataclass
+from typing import Any, Dict, Literal
+
+from server_modules.agent_manifest import AgentManifest, manifest_skill_ids
+from server_modules import egress_policy, safe_mode_service, skill_registry
+
+
+ToolActionClass = Literal["read", "write", "execute"]
+_ACTION_CLASS_ORDER = {"read": 0, "write": 1, "execute": 2}
+_SUPPORTED_RUNTIME_MODES = {"hosted_secure", "local_secure", "privileged_device"}
+_TOKEN_VERSION = "empyralis.tool-grant.v1"
+DEFAULT_CAPABILITY_TOKEN_TTL_SECONDS = 120
+MASTER_SCOPE_WILDCARD = "*"
+
+
+@dataclass(frozen=True)
+class CapabilityGrant:
+    token: str
+    claims: Dict[str, Any]
+
+
+class ToolBrokerError(RuntimeError):
+    pass
+
+
+class ToolExecutionDeniedError(ToolBrokerError):
+    def __init__(self, code: str, detail: str) -> None:
+        super().__init__(detail)
+        self.code = str(code or "tool_execution_denied").strip() or "tool_execution_denied"
+        self.detail = str(detail or "Tool execution was denied.").strip() or "Tool execution was denied."
+
+
+def _coerce_dict(value: Any) -> Dict[str, Any]:
+    return dict(value) if isinstance(value, dict) else {}
+
+
+def _normalize_token(value: Any) -> str:
+    return str(value or "").strip().lower()
+
+
+def _normalize_runtime_mode(runtime_mode: str) -> str:
+    token = _normalize_token(runtime_mode)
+    return token if token in _SUPPORTED_RUNTIME_MODES else "hosted_secure"
+
+
+def _normalize_action_class(action_class: Any) -> ToolActionClass:
+    token = _normalize_token(action_class)
+    if token not in _ACTION_CLASS_ORDER:
+        raise ToolExecutionDeniedError("invalid_action_class", f"Unsupported action class '{action_class}'.")
+    return token  # type: ignore[return-value]
+
+
+def _ordered_unique(values: list[str]) -> list[str]:
+    ordered: list[str] = []
+    seen: set[str] = set()
+    for raw in values:
+        token = _normalize_token(raw)
+        if not token or token in seen:
+            continue
+        seen.add(token)
+        ordered.append(token)
+    return ordered
+
+
+def _signing_secret() -> bytes:
+    return str(
+        os.getenv("EMPYRALIS_TOOL_BROKER_SECRET")
+        or "empyralis-dev-tool-broker-secret"
+    ).encode("utf-8")
+
+
+def _b64encode(raw: bytes) -> str:
+    return base64.urlsafe_b64encode(raw).decode("utf-8").rstrip("=")
+
+
+def _b64decode(token: str) -> bytes:
+    padding = "=" * (-len(token) % 4)
+    return base64.urlsafe_b64decode(f"{token}{padding}")
+
+
+def _json_dumps(value: Dict[str, Any]) -> str:
+    return json.dumps(value, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
+
+
+def _is_master_manifest(manifest: AgentManifest) -> bool:
+    return manifest.scope == "global_master" or manifest.identity.archetype == "master_os"
+
+
+def _skill_definitions_for_ids(skill_ids: list[str]) -> list[skill_registry.SkillDefinition]:
+    definitions: list[skill_registry.SkillDefinition] = []
+    for skill_id in skill_ids:
+        definition = skill_registry.get_skill_definition(skill_id)
+        if definition is not None:
+            definitions.append(definition)
+    return definitions
+
+
+def _connector_scopes_for_manifest(manifest: AgentManifest, skill_ids: list[str]) -> list[str]:
+    if _is_master_manifest(manifest):
+        return [MASTER_SCOPE_WILDCARD]
+    manifest_scopes = _ordered_unique(list(manifest.connectors.bound))
+    derived_scopes = skill_registry.skill_connector_scopes(skill_ids)
+    return _ordered_unique([*manifest_scopes, *derived_scopes])
+
+
+def _action_classes_for_manifest(manifest: AgentManifest, definitions: list[skill_registry.SkillDefinition]) -> list[str]:
+    if _is_master_manifest(manifest):
+        return ["read", "write", "execute"]
+    action_classes = _ordered_unique([definition.action_class for definition in definitions])
+    return sorted(action_classes or ["read"], key=lambda item: _ACTION_CLASS_ORDER.get(item, 99))
+
+
+def issue_capability_token(
+    *,
+    manifest: AgentManifest,
+    tenant_id: str,
+    workspace_id: str,
+    agent_install_id: str | None = None,
+    runtime_mode: str,
+    runtime_scope: Dict[str, Any] | None = None,
+    privileged_runtime_approved: bool = False,
+    ttl_seconds: int = DEFAULT_CAPABILITY_TOKEN_TTL_SECONDS,
+) -> CapabilityGrant:
+    normalized_runtime_mode = _normalize_runtime_mode(runtime_mode)
+    issued_at = int(time.time())
+    expires_at = issued_at + max(int(ttl_seconds or DEFAULT_CAPABILITY_TOKEN_TTL_SECONDS), 1)
+    skill_ids = (
+        [definition.id for definition in skill_registry.list_skill_definitions()]
+        if _is_master_manifest(manifest)
+        else manifest_skill_ids(manifest)
+    )
+    definitions = _skill_definitions_for_ids(skill_ids)
+    claims = {
+        "version": _TOKEN_VERSION,
+        "grant_id": f"grant_{secrets.token_urlsafe(12)}",
+        "manifest_id": manifest.manifest_id,
+        "agent_name": manifest.identity.name,
+        "agent_scope": manifest.scope,
+        "agent_install_id": str(agent_install_id or "").strip() or None,
+        "runtime_mode": normalized_runtime_mode,
+        "runtime_constraints": {
+            "mode": normalized_runtime_mode,
+            "driver": str(_coerce_dict(runtime_scope).get("driver") or "").strip() or None,
+            "workspace_kind": str(_coerce_dict(runtime_scope).get("workspace_kind") or "").strip() or None,
+        },
+        "tenant_id": str(tenant_id or "").strip(),
+        "workspace_id": str(workspace_id or "").strip(),
+        "allowed_skills": skill_ids,
+        "allowed_connector_scopes": _connector_scopes_for_manifest(manifest, skill_ids),
+        "allowed_action_classes": _action_classes_for_manifest(manifest, definitions),
+        "approval_granted": bool(privileged_runtime_approved or manifest.policy.approval_mode == "system"),
+        "policy_approval_mode": manifest.policy.approval_mode,
+        "issued_at": issued_at,
+        "expires_at": expires_at,
+    }
+    payload = _b64encode(_json_dumps(claims).encode("utf-8"))
+    signature = _b64encode(hmac.new(_signing_secret(), payload.encode("utf-8"), hashlib.sha256).digest())
+    return CapabilityGrant(token=f"{payload}.{signature}", claims=claims)
+
+
+def verify_capability_token(
+    token: str,
+    *,
+    expected_manifest_id: str | None = None,
+    expected_tenant_id: str | None = None,
+    expected_workspace_id: str | None = None,
+    runtime_mode: str | None = None,
+    now: int | None = None,
+) -> Dict[str, Any]:
+    raw = str(token or "").strip()
+    if "." not in raw:
+        raise ToolExecutionDeniedError("invalid_token", "Capability token is malformed.")
+    payload_part, signature_part = raw.split(".", 1)
+    expected_signature = _b64encode(hmac.new(_signing_secret(), payload_part.encode("utf-8"), hashlib.sha256).digest())
+    if not hmac.compare_digest(signature_part, expected_signature):
+        raise ToolExecutionDeniedError("invalid_token", "Capability token signature is invalid.")
+    try:
+        claims = json.loads(_b64decode(payload_part))
+    except Exception as error:
+        raise ToolExecutionDeniedError("invalid_token", "Capability token payload is invalid.") from error
+    if not isinstance(claims, dict):
+        raise ToolExecutionDeniedError("invalid_token", "Capability token payload is invalid.")
+    if str(claims.get("version") or "").strip() != _TOKEN_VERSION:
+        raise ToolExecutionDeniedError("invalid_token_version", "Capability token version is invalid.")
+
+    current_time = int(now if now is not None else time.time())
+    if current_time >= int(claims.get("expires_at") or 0):
+        raise ToolExecutionDeniedError("token_expired", "Capability token expired before the tool call executed.")
+    if expected_manifest_id and str(claims.get("manifest_id") or "").strip() != str(expected_manifest_id or "").strip():
+        raise ToolExecutionDeniedError("manifest_mismatch", "Capability token does not match the active manifest.")
+    if expected_tenant_id and str(claims.get("tenant_id") or "").strip() != str(expected_tenant_id or "").strip():
+        raise ToolExecutionDeniedError("tenant_mismatch", "Capability token does not match the active tenant.")
+    if expected_workspace_id and str(claims.get("workspace_id") or "").strip() != str(expected_workspace_id or "").strip():
+        raise ToolExecutionDeniedError("workspace_mismatch", "Capability token does not match the active workspace.")
+    if runtime_mode and _normalize_runtime_mode(str(claims.get("runtime_mode") or "")) != _normalize_runtime_mode(runtime_mode):
+        raise ToolExecutionDeniedError("runtime_mismatch", "Capability token does not authorize this runtime profile.")
+    return claims
+
+
+def _require_action_class(claims: Dict[str, Any], action_class: ToolActionClass) -> None:
+    allowed = _ordered_unique([str(item) for item in list(claims.get("allowed_action_classes") or [])])
+    required_rank = _ACTION_CLASS_ORDER.get(action_class, 99)
+    granted_rank = max((_ACTION_CLASS_ORDER.get(token, -1) for token in allowed), default=-1)
+    if granted_rank < required_rank:
+        raise ToolExecutionDeniedError(
+            "action_class_not_granted",
+            f"The current capability token does not allow {action_class} tool execution.",
+        )
+
+
+def _require_runtime_security_controls(claims: Dict[str, Any]) -> None:
+    tenant_id = str(claims.get("tenant_id") or "").strip() or None
+    workspace_id = str(claims.get("workspace_id") or "").strip() or None
+    agent_install_id = str(claims.get("agent_install_id") or "").strip() or None
+    machine_policy = safe_mode_service.resolve_machine_policy_status(
+        tenant_id=tenant_id,
+        workspace_id=workspace_id,
+    )
+    if bool((machine_policy.get("kill_switch") or {}).get("active")):
+        raise ToolExecutionDeniedError(
+            "workspace_disabled",
+            "This workspace is under a security kill switch and cannot execute tools right now.",
+        )
+    if agent_install_id and safe_mode_service.is_agent_disabled(
+        tenant_id=tenant_id,
+        workspace_id=workspace_id,
+        agent_install_id=agent_install_id,
+    ):
+        raise ToolExecutionDeniedError(
+            "agent_disabled",
+            "This agent is currently disabled by a security kill switch.",
+        )
+
+
+def _require_connector_scopes(claims: Dict[str, Any], required_scopes: tuple[str, ...] | list[str]) -> None:
+    required = _ordered_unique(list(required_scopes))
+    if not required:
+        return
+    allowed = set(_ordered_unique([str(item) for item in list(claims.get("allowed_connector_scopes") or [])]))
+    if MASTER_SCOPE_WILDCARD in allowed:
+        return
+    missing = [scope for scope in required if scope not in allowed]
+    if missing:
+        raise ToolExecutionDeniedError(
+            "connector_scope_not_granted",
+            f"The current capability token is missing connector scope(s): {', '.join(missing)}.",
+        )
+    workspace_id = str(claims.get("workspace_id") or "").strip() or None
+    tenant_id = str(claims.get("tenant_id") or "").strip() or None
+    for scope in required:
+        if safe_mode_service.is_connector_disabled(
+            tenant_id=tenant_id,
+            workspace_id=workspace_id,
+            connector_id=scope,
+        ):
+            raise ToolExecutionDeniedError(
+                "connector_disabled",
+                f"The {scope} connector is disabled by a security control.",
+            )
+        incident = safe_mode_service.resolve_connector_incident_state(
+            tenant_id=tenant_id,
+            workspace_id=workspace_id,
+            connector_id=scope,
+        )
+        if bool(incident.get("active")):
+            mode = str(incident.get("mode") or "pause").strip().lower() or "pause"
+            matched_scope = str(incident.get("scope") or "connector").strip().lower() or "connector"
+            code_prefix = "workspace" if matched_scope == "workspace" else "connector"
+            detail = (
+                "This workspace is temporarily paused by an operator incident control."
+                if code_prefix == "workspace" and mode == "pause"
+                else "This workspace is temporarily draining new work while the operator clears backlog."
+                if code_prefix == "workspace" and mode == "drain"
+                else "This workspace is temporarily rejecting new work during an incident."
+                if code_prefix == "workspace" and mode == "reject"
+                else f"The {scope} connector is temporarily paused by an operator incident control."
+                if mode == "pause"
+                else f"The {scope} connector is temporarily draining backlog before it accepts new work."
+                if mode == "drain"
+                else f"The {scope} connector is temporarily rejecting new work during an incident."
+            )
+            denial_code = {
+                ("workspace", "pause"): "workspace_paused",
+                ("workspace", "drain"): "workspace_draining",
+                ("workspace", "reject"): "workspace_rejected",
+                ("connector", "pause"): "connector_paused",
+                ("connector", "drain"): "connector_draining",
+                ("connector", "reject"): "connector_rejected",
+            }.get((code_prefix, mode), "connector_paused")
+            raise ToolExecutionDeniedError(denial_code, detail)
+
+
+def _require_runtime_allowed(definition: skill_registry.SkillDefinition, runtime_mode: str) -> None:
+    normalized_runtime_mode = _normalize_runtime_mode(runtime_mode)
+    if normalized_runtime_mode not in definition.allowed_runtime_modes:
+        raise ToolExecutionDeniedError(
+            "runtime_not_allowed",
+            f"{definition.label} cannot run in {normalized_runtime_mode}.",
+        )
+
+
+def _require_approval_if_needed(claims: Dict[str, Any], definition: skill_registry.SkillDefinition) -> None:
+    if definition.requires_approval and not bool(claims.get("approval_granted")):
+        raise ToolExecutionDeniedError(
+            "approval_required",
+            f"{definition.label} requires owner approval before it can execute.",
+        )
+
+
+async def execute_skill(
+    *,
+    capability_token: str,
+    manifest_id: str,
+    tenant_id: str,
+    workspace_id: str,
+    runtime_mode: str,
+    skill_id: str,
+    goal: str,
+    agent_label: str,
+    hard_context: str,
+    operational_policy: str,
+    seed_demo_if_empty: bool = False,
+) -> Dict[str, Any]:
+    definition = skill_registry.get_skill_definition(skill_id)
+    if definition is None:
+        return {
+            "status": "missing",
+            "reply": f"The requested skill {skill_id} is not registered in the universal harness.",
+            "artifact": None,
+            "steps": [
+                {"label": "Resolving skill registry", "detail": skill_id, "status": "error", "kind": "connector"},
+            ],
+        }
+
+    claims = verify_capability_token(
+        capability_token,
+        expected_manifest_id=manifest_id,
+        expected_tenant_id=tenant_id,
+        expected_workspace_id=workspace_id,
+        runtime_mode=runtime_mode,
+    )
+    _require_runtime_security_controls(claims)
+    allowed_skills = set(_ordered_unique([str(item) for item in list(claims.get("allowed_skills") or [])]))
+    if skill_id not in allowed_skills:
+        raise ToolExecutionDeniedError(
+            "skill_not_granted",
+            f"The current capability token does not allow the {definition.label} skill.",
+        )
+
+    _require_action_class(claims, definition.action_class)
+    _require_connector_scopes(claims, definition.connector_scopes)
+    if definition.executor is not None:
+        _require_runtime_allowed(definition, runtime_mode)
+        _require_approval_if_needed(claims, definition)
+
+    skill_egress_policy = egress_policy.build_egress_policy(
+        tenant_id=tenant_id,
+        workspace_id=workspace_id,
+        runtime_mode=runtime_mode,
+        agent_install_id=str(claims.get("agent_install_id") or "").strip() or None,
+        tool_name=skill_id,
+        connector_scopes=list(definition.connector_scopes),
+        allowed_action_classes=[definition.action_class],
+        metadata={
+            "skill_id": skill_id,
+            "manifest_id": manifest_id,
+        },
+    )
+    with egress_policy.activate_egress_policy(skill_egress_policy, merge_with_current=True):
+        try:
+            return await skill_registry.execute_skill(
+                skill_id=skill_id,
+                tenant_id=tenant_id,
+                workspace_id=workspace_id,
+                goal=goal,
+                agent_label=agent_label,
+                hard_context=hard_context,
+                operational_policy=operational_policy,
+                seed_demo_if_empty=seed_demo_if_empty,
+            )
+        except egress_policy.EgressPolicyDeniedError as error:
+            raise ToolExecutionDeniedError("egress_denied", error.detail) from error
+
+
+def authorize_connector_action(
+    *,
+    capability_token: str,
+    manifest_id: str,
+    tenant_id: str,
+    workspace_id: str,
+    runtime_mode: str,
+    connector_scope: str,
+    action_class: ToolActionClass,
+    approval_required: bool | None = None,
+) -> Dict[str, Any]:
+    claims = verify_capability_token(
+        capability_token,
+        expected_manifest_id=manifest_id,
+        expected_tenant_id=tenant_id,
+        expected_workspace_id=workspace_id,
+        runtime_mode=runtime_mode,
+    )
+    _require_runtime_security_controls(claims)
+    normalized_action_class = _normalize_action_class(action_class)
+    _require_action_class(claims, normalized_action_class)
+    _require_connector_scopes(claims, (_normalize_token(connector_scope),))
+    if bool(approval_required if approval_required is not None else normalized_action_class != "read") and not bool(claims.get("approval_granted")):
+        raise ToolExecutionDeniedError(
+            "approval_required",
+            f"{connector_scope} connector actions require owner approval before they can execute.",
+        )
+    return claims
+
+
+def summarize_capability_grant(claims: Dict[str, Any]) -> str:
+    skill_count = len(list(claims.get("allowed_skills") or []))
+    scope_count = len(list(claims.get("allowed_connector_scopes") or []))
+    actions = ", ".join(list(claims.get("allowed_action_classes") or [])) or "none"
+    issued_at = int(claims.get("issued_at") or 0)
+    expires_at = int(claims.get("expires_at") or issued_at)
+    ttl_seconds = max(expires_at - issued_at, 0)
+    runtime_mode = str(claims.get("runtime_mode") or "hosted_secure")
+    return (
+        f"{skill_count} skill(s) · {scope_count} connector scope(s) · "
+        f"actions {actions} · expires in {ttl_seconds}s · runtime {runtime_mode}"
+    )

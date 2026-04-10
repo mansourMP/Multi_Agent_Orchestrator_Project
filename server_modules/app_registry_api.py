@@ -3,7 +3,15 @@ from __future__ import annotations
 from typing import Any, Dict, List, Optional
 import threading
 
-from server_modules.schemas import WorkflowCreate, WorkflowDelete, WorkflowUpdate
+from server_modules.schemas import (
+    AppCaptainBridgeRequest,
+    AppRuntimeBridgeRequest,
+    AppSpecialistBridgeRequest,
+    SageAppBridgeRequest,
+    WorkflowCreate,
+    WorkflowDelete,
+    WorkflowUpdate,
+)
 
 
 APP_REGISTRY_LOCK = threading.Lock()
@@ -370,3 +378,176 @@ def register_app_registry_routes(app) -> None:
             app_item["updated_at"] = _utc_now_iso()
             _save_app_registry(data)
         return {"status": "ok", "app": app_item}
+
+    @app.post("/apps/bridge/captain", dependencies=[Depends(require_api_key)])
+    async def app_bridge_captain(body: AppCaptainBridgeRequest, current_user=Depends(require_api_key)):
+        from server_modules import app_bridge_service
+        from server_modules.auth import enforce_workspace_access, workspace_tenant_id
+
+        payload = body.model_dump() if hasattr(body, "model_dump") else body.dict()
+        workspace_id = enforce_workspace_access(current_user, payload.get("workspace_id"), minimum_role="viewer")
+        tenant_id = workspace_tenant_id(current_user, workspace_id)
+        bridge = app_bridge_service.normalize_bridge_contract(
+            app_id=str(payload.get("app_id") or "").strip(),
+            bridge_kind="app_to_sage",
+            bridge_type=str(payload.get("bridge_type") or "").strip(),
+            context_envelope=payload.get("context_envelope") if isinstance(payload.get("context_envelope"), dict) else None,
+            metadata={
+                **(dict(payload.get("metadata") or {}) if isinstance(payload.get("metadata"), dict) else {}),
+                "request_text": str(payload.get("request_text") or "").strip() or None,
+            },
+            installed_only=True,
+        )
+        audit = await app_bridge_service.record_app_bridge_audit(
+            tenant_id=tenant_id,
+            workspace_id=workspace_id,
+            actor_type="application",
+            actor_id=str(bridge.get("app_id") or "").strip(),
+            app_id=str(bridge.get("app_id") or "").strip(),
+            bridge_kind=str(bridge.get("bridge_kind") or "").strip(),
+            bridge_type=str(bridge.get("bridge_type") or "").strip(),
+            target=bridge.get("target") if isinstance(bridge.get("target"), dict) else None,
+            metadata={"source": "apps.bridge.captain"},
+        )
+        return {
+            "status": "ok",
+            "workspace_id": workspace_id,
+            "tenant_id": tenant_id,
+            "bridge": bridge,
+            "run_metadata": {
+                "app_id": bridge.get("app_id"),
+                "app_bridge": bridge,
+                "app_context_envelope": bridge.get("context_envelope"),
+            },
+            "audit": {"activity_event_id": str((audit or {}).get("id") or "").strip() or None},
+        }
+
+    @app.post("/apps/bridge/specialist", dependencies=[Depends(require_api_key)])
+    async def app_bridge_specialist(body: AppSpecialistBridgeRequest, current_user=Depends(require_api_key)):
+        from server_modules import app_bridge_service
+        from server_modules.auth import enforce_workspace_access, workspace_tenant_id
+
+        payload = body.model_dump() if hasattr(body, "model_dump") else body.dict()
+        workspace_id = enforce_workspace_access(current_user, payload.get("workspace_id"), minimum_role="viewer")
+        tenant_id = workspace_tenant_id(current_user, workspace_id)
+        bridge = app_bridge_service.normalize_bridge_contract(
+            app_id=str(payload.get("app_id") or "").strip(),
+            bridge_kind="app_to_specialist",
+            bridge_type=str(payload.get("bridge_type") or "").strip(),
+            target={
+                "target_install_id": str(payload.get("target_install_id") or "").strip() or None,
+                "target_capability": str(payload.get("target_capability") or "").strip() or None,
+            },
+            context_envelope=payload.get("context_envelope") if isinstance(payload.get("context_envelope"), dict) else None,
+            metadata={
+                **(dict(payload.get("metadata") or {}) if isinstance(payload.get("metadata"), dict) else {}),
+                "request_text": str(payload.get("request_text") or "").strip() or None,
+            },
+            installed_only=True,
+        )
+        audit = await app_bridge_service.record_app_bridge_audit(
+            tenant_id=tenant_id,
+            workspace_id=workspace_id,
+            actor_type="application",
+            actor_id=str(bridge.get("app_id") or "").strip(),
+            app_id=str(bridge.get("app_id") or "").strip(),
+            bridge_kind=str(bridge.get("bridge_kind") or "").strip(),
+            bridge_type=str(bridge.get("bridge_type") or "").strip(),
+            target=bridge.get("target") if isinstance(bridge.get("target"), dict) else None,
+            metadata={"source": "apps.bridge.specialist"},
+        )
+        return {
+            "status": "ok",
+            "workspace_id": workspace_id,
+            "tenant_id": tenant_id,
+            "bridge": bridge,
+            "run_metadata": {
+                "app_id": bridge.get("app_id"),
+                "app_bridge": bridge,
+                "app_context_envelope": bridge.get("context_envelope"),
+            },
+            "audit": {"activity_event_id": str((audit or {}).get("id") or "").strip() or None},
+        }
+
+    @app.post("/apps/bridge/runtime-action", dependencies=[Depends(require_api_key)])
+    async def app_bridge_runtime_action(body: AppRuntimeBridgeRequest, current_user=Depends(require_api_key)):
+        from server_modules import app_bridge_service
+        from server_modules.auth import enforce_workspace_access, workspace_tenant_id
+
+        payload = body.model_dump() if hasattr(body, "model_dump") else body.dict()
+        workspace_id = enforce_workspace_access(current_user, payload.get("workspace_id"), minimum_role="viewer")
+        tenant_id = workspace_tenant_id(current_user, workspace_id)
+        bridge = app_bridge_service.normalize_bridge_contract(
+            app_id=str(payload.get("app_id") or "").strip(),
+            bridge_kind="app_to_connector_runtime",
+            bridge_type=str(payload.get("bridge_type") or "").strip(),
+            target={
+                "connector_id": str(payload.get("connector_id") or "").strip() or None,
+                "workflow_id": str(payload.get("workflow_id") or "").strip() or None,
+                "route_key": str(payload.get("route_key") or "").strip() or None,
+            },
+            context_envelope=payload.get("context_envelope") if isinstance(payload.get("context_envelope"), dict) else None,
+            metadata=dict(payload.get("metadata") or {}) if isinstance(payload.get("metadata"), dict) else None,
+            installed_only=True,
+        )
+        audit = await app_bridge_service.record_app_bridge_audit(
+            tenant_id=tenant_id,
+            workspace_id=workspace_id,
+            actor_type="application",
+            actor_id=str(bridge.get("app_id") or "").strip(),
+            app_id=str(bridge.get("app_id") or "").strip(),
+            bridge_kind=str(bridge.get("bridge_kind") or "").strip(),
+            bridge_type=str(bridge.get("bridge_type") or "").strip(),
+            target=bridge.get("target") if isinstance(bridge.get("target"), dict) else None,
+            metadata={"source": "apps.bridge.runtime-action"},
+        )
+        return {
+            "status": "ok",
+            "workspace_id": workspace_id,
+            "tenant_id": tenant_id,
+            "bridge": bridge,
+            "run_metadata": {
+                "app_id": bridge.get("app_id"),
+                "app_bridge": bridge,
+                "app_context_envelope": bridge.get("context_envelope"),
+            },
+            "audit": {"activity_event_id": str((audit or {}).get("id") or "").strip() or None},
+        }
+
+    @app.post("/apps/bridge/handoff", dependencies=[Depends(require_api_key)])
+    async def sage_bridge_app(body: SageAppBridgeRequest, current_user=Depends(require_api_key)):
+        from server_modules import app_bridge_service
+        from server_modules.auth import enforce_workspace_access, workspace_tenant_id
+
+        payload = body.model_dump() if hasattr(body, "model_dump") else body.dict()
+        workspace_id = enforce_workspace_access(current_user, payload.get("workspace_id"), minimum_role="viewer")
+        tenant_id = workspace_tenant_id(current_user, workspace_id)
+        bridge = app_bridge_service.normalize_bridge_contract(
+            app_id=str(payload.get("app_id") or "").strip(),
+            bridge_kind="sage_to_app",
+            bridge_type=str(payload.get("bridge_type") or "").strip(),
+            target={"target_app_id": str(payload.get("target_app_id") or payload.get("app_id") or "").strip() or None},
+            metadata={
+                **(dict(payload.get("metadata") or {}) if isinstance(payload.get("metadata"), dict) else {}),
+                "handoff_payload": dict(payload.get("handoff_payload") or {}) if isinstance(payload.get("handoff_payload"), dict) else {},
+            },
+            installed_only=True,
+        )
+        audit = await app_bridge_service.record_app_bridge_audit(
+            tenant_id=tenant_id,
+            workspace_id=workspace_id,
+            actor_type="sage",
+            actor_id=str(current_user.get("user_id") or "sage").strip() or "sage",
+            app_id=str(bridge.get("app_id") or "").strip(),
+            bridge_kind=str(bridge.get("bridge_kind") or "").strip(),
+            bridge_type=str(bridge.get("bridge_type") or "").strip(),
+            target=bridge.get("target") if isinstance(bridge.get("target"), dict) else None,
+            metadata={"source": "apps.bridge.handoff"},
+        )
+        return {
+            "status": "ok",
+            "workspace_id": workspace_id,
+            "tenant_id": tenant_id,
+            "bridge": bridge,
+            "audit": {"activity_event_id": str((audit or {}).get("id") or "").strip() or None},
+        }

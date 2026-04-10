@@ -53,7 +53,7 @@ class CredentialResolutionTests(unittest.TestCase):
         env_bearer_mock,
     ):
         resolve_vault_credential_mock.side_effect = (
-            lambda credential_id, workspace_id=None: {"access_token": f"token-{credential_id}", "workspace_id": workspace_id}
+            lambda credential_id, workspace_id=None, **_kwargs: {"access_token": f"token-{credential_id}", "workspace_id": workspace_id}
         )
         resolve_default_vault_credential_mock.return_value = {"access_token": "token-vault-default"}
         env_bearer_mock.return_value = ("token-env", "OPENAI_API_KEY")
@@ -108,7 +108,7 @@ class CredentialResolutionTests(unittest.TestCase):
         env_bearer_mock,
     ):
         resolve_vault_credential_mock.side_effect = (
-            lambda credential_id, workspace_id=None: {"access_token": f"token-{credential_id}", "workspace_id": workspace_id}
+            lambda credential_id, workspace_id=None, **_kwargs: {"access_token": f"token-{credential_id}", "workspace_id": workspace_id}
         )
         resolve_default_vault_credential_mock.return_value = {"access_token": "token-vault-default"}
         env_bearer_mock.return_value = ("token-env", "OPENAI_API_KEY")

@@ -935,6 +935,18 @@ def _agent_workspace_channel_bindings(
                 secret = resolve_vault_credential(
                     str(connector.get("id") or "").strip(),
                     _normalize_workspace_id(connector.get("workspace_id")),
+                    connector_id=provider,
+                    tool_name="workspace_channel_identity",
+                    purpose="channel_identity_projection",
+                    actor_type="control_plane",
+                    allowed_fields=[
+                        "chat_id",
+                        "bot_username",
+                        "from_number",
+                        "phone_number",
+                        "emailAddress",
+                        "calendar_id",
+                    ],
                 )
             except Exception:
                 secret = {}

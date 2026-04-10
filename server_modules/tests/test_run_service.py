@@ -641,6 +641,7 @@ class RunServiceTests(unittest.TestCase):
             "sched-1": {
                 "id": "sched-1",
                 "name": "Morning",
+                "workspace_id": "ws-1",
                 "enabled": True,
                 "pending_heartbeat": True,
                 "pending_heartbeat_slot": "slot-1",
@@ -666,6 +667,46 @@ class RunServiceTests(unittest.TestCase):
         self.assertIsNone(schedules["sched-1"]["pending_heartbeat_slot"])
         self.assertEqual(schedules["sched-1"]["run_log"], ["started"])
         self.assertEqual(persisted, [True])
+
+    def test_trigger_pending_heartbeat_schedules_respects_workspace_scope(self):
+        schedules = {
+            "sched-1": {
+                "id": "sched-1",
+                "name": "Morning",
+                "workspace_id": "ws-1",
+                "enabled": True,
+                "pending_heartbeat": True,
+                "pending_heartbeat_slot": "slot-1",
+                "run_request": {"engine": "orion", "workspace_id": "ws-1", "user_goal": "Check inbox"},
+            },
+            "sched-2": {
+                "id": "sched-2",
+                "name": "Ops",
+                "workspace_id": "ws-2",
+                "enabled": True,
+                "pending_heartbeat": True,
+                "pending_heartbeat_slot": "slot-2",
+                "run_request": {"engine": "orion", "workspace_id": "ws-2", "user_goal": "Check alerts"},
+            },
+        }
+        started = []
+
+        result = trigger_pending_heartbeat_schedules(
+            schedules_lock=__import__("threading").Lock(),
+            weekly_schedules=schedules,
+            run_start_request_class=lambda **kwargs: kwargs,
+            execute_scheduled_run_request_fn=lambda request, schedule_id=None: started.append(schedule_id) or {"run_id": f"run-for-{schedule_id}"},
+            append_schedule_run_log_fn=lambda schedule, **kwargs: {**schedule, "run_log": [kwargs["status"]]},
+            persist_schedules_fn=lambda: None,
+            utc_now_fn=lambda: datetime(2026, 4, 6, 0, 0, 0, tzinfo=timezone.utc),
+            utc_now_iso_fn=lambda: "2026-04-06T00:00:00Z",
+            workspace_id="ws-1",
+        )
+
+        self.assertTrue(result["acted"])
+        self.assertEqual(started, ["sched-1"])
+        self.assertFalse(schedules["sched-1"]["pending_heartbeat"])
+        self.assertTrue(schedules["sched-2"]["pending_heartbeat"])
 
     def test_initialize_runtime_services_bootstraps_and_starts_threads_once(self):
         calls = []
@@ -2200,6 +2241,104 @@ class RunServiceTests(unittest.TestCase):
         self.assertEqual(prepared["metadata"]["workflow_version_id"], "wfver-9")
         self.assertEqual(prepared["metadata"]["workflow_version_number"], 9)
         self.assertEqual(prepared["metadata"]["postprocessed"], True)
+
+    def test_prepare_run_start_request_rejects_implicit_app_memory_access(self):
+        request = RunStartRequest(
+            engine="orion",
+            workspace_id="default",
+            user_goal="hello",
+            metadata={
+                "app_id": "study",
+                "captain_context": {"raw": True},
+            },
+        )
+
+        with patch(
+            "server_modules.run_service.app_bridge_service._resolve_registry_app_item",
+            return_value={"id": "study", "status": "installed", "permissions": ["files.read"]},
+        ):
+            with self.assertRaises(HTTPException) as ctx:
+                prepare_run_start_request(
+                    request,
+                    services=RunPreparationServices(
+                        engine_registry={"orion": object()},
+                        engine_validation_errors=[],
+                        supported_outcome_packs={"local_execution"},
+                        normalize_requested_max_iterations=lambda value: None,
+                        normalize_trust_mode=lambda value: str(value or ""),
+                        trust_mode_aliases={},
+                        valid_trust_modes={"guarded", "strict"},
+                        normalize_execution_target=lambda value: str(value or "").strip().lower(),
+                        valid_execution_targets={"auto", "cloud", "local_companion"},
+                        normalize_run_id_token=lambda value: str(value or "").strip() or None,
+                        normalize_agent_role=lambda value: str(value or "").strip().lower(),
+                        detect_agent_role=lambda req, metadata: ("orchestrator", "detected"),
+                        resolve_app_permissions=lambda app_id: {"allow": ["read"]},
+                        action_policy_from_app_permissions=lambda permissions: {"allowed": permissions["allow"]},
+                        merge_action_policies=lambda existing, new: {"merged": [existing["action_policy"], new["action_policy"]]},
+                        fetch_workflow_snapshot=lambda workflow_id, **kwargs: None,
+                    ),
+                )
+
+        self.assertEqual(ctx.exception.status_code, 400)
+        self.assertIn("captain_context", str(ctx.exception.detail))
+
+    def test_prepare_run_start_request_normalizes_explicit_app_bridge(self):
+        request = RunStartRequest(
+            engine="orion",
+            workspace_id="default",
+            user_goal="hello",
+            metadata={
+                "app_id": "study",
+                "app_context": {
+                    "user_selected_inputs": {"topic": "biology"},
+                    "app_history": [{"id": "h-1"}],
+                },
+                "app_bridge": {
+                    "kind": "app_to_specialist",
+                    "type": "status_request",
+                    "target": {"target_install_id": "install-1"},
+                },
+            },
+        )
+
+        with patch(
+            "server_modules.run_service.app_bridge_service._resolve_registry_app_item",
+            return_value={"id": "study", "status": "installed", "permissions": ["files.read"]},
+        ):
+            prepared = prepare_run_start_request(
+                request,
+                services=RunPreparationServices(
+                    engine_registry={"orion": object()},
+                    engine_validation_errors=[],
+                    supported_outcome_packs={"local_execution"},
+                    normalize_requested_max_iterations=lambda value: None,
+                    normalize_trust_mode=lambda value: str(value or ""),
+                    trust_mode_aliases={},
+                    valid_trust_modes={"guarded", "strict"},
+                    normalize_execution_target=lambda value: str(value or "").strip().lower(),
+                    valid_execution_targets={"auto", "cloud", "local_companion"},
+                    normalize_run_id_token=lambda value: str(value or "").strip() or None,
+                    normalize_agent_role=lambda value: str(value or "").strip().lower(),
+                    detect_agent_role=lambda req, metadata: ("orchestrator", "detected"),
+                    resolve_app_permissions=lambda app_id: {"allow": ["read"]},
+                    action_policy_from_app_permissions=lambda permissions: {"allowed": permissions["allow"]},
+                    merge_action_policies=lambda existing, new: {"merged": [existing["action_policy"], new["action_policy"]]},
+                    fetch_workflow_snapshot=lambda workflow_id, **kwargs: None,
+                ),
+            )
+
+        self.assertEqual(prepared["metadata"]["app_bridge"]["bridge_kind"], "app_to_specialist")
+        self.assertEqual(prepared["metadata"]["app_bridge"]["bridge_type"], "status_request")
+        self.assertEqual(
+            prepared["metadata"]["app_bridge"]["target"]["target_install_id"],
+            "install-1",
+        )
+        self.assertEqual(
+            prepared["metadata"]["app_context_envelope"]["classes"],
+            ["app_owned_history", "user_selected_inputs"],
+        )
+        self.assertTrue(prepared["metadata"]["app_runtime_contract"]["has_explicit_bridge"])
 
     def test_build_runs_core_creation_result_shapes_legacy_core_payload(self):
         request = RunStartRequest(

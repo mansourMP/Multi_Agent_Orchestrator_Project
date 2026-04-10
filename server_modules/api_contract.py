@@ -121,6 +121,13 @@ class ApiNotificationListResponse(BaseModel):
     stream: bool = False
 
 
+class ApiActivityListResponse(BaseModel):
+    items: List[Dict[str, Any]] = Field(default_factory=list)
+    count: int = 0
+    total: int = 0
+    summary: Dict[str, Any] = Field(default_factory=dict)
+
+
 class ApiNotificationReadRequest(BaseModel):
     notification_ids: List[str] = Field(default_factory=list)
     workspace_id: Optional[str] = None

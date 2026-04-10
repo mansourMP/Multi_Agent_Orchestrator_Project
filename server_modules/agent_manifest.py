@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field
 AgentManifestArchetype = Literal["support_specialist", "task_automator", "intelligence_researcher", "master_os"]
 AgentManifestScope = Literal["global_master", "specialist"]
 AgentManifestApprovalMode = Literal["system", "guarded", "strict"]
+AgentRuntimeMode = Literal["hosted_secure", "local_secure", "privileged_device"]
 
 
 class AgentManifestSkillBinding(BaseModel):
@@ -41,6 +42,28 @@ class AgentManifestIdentity(BaseModel):
     customer_mode_enabled: bool = True
 
 
+class AgentManifestRoleProfile(BaseModel):
+    job_to_be_done: str = ""
+    success_definition: str = ""
+    escalation_owner: str = "Workspace owner"
+
+
+class AgentManifestVoiceProfile(BaseModel):
+    tone: str = ""
+    response_style: str = ""
+    service_boundaries: str = ""
+
+
+class AgentManifestConnectors(BaseModel):
+    requested: list[str] = Field(default_factory=list)
+    bound: list[str] = Field(default_factory=list)
+
+
+class AgentManifestRuntime(BaseModel):
+    mode: AgentRuntimeMode = "hosted_secure"
+    profile_id: str | None = None
+
+
 class AgentManifestPolicy(BaseModel):
     reflection_enabled: bool = True
     approval_mode: AgentManifestApprovalMode = "guarded"
@@ -58,9 +81,13 @@ class AgentManifest(BaseModel):
     engine: Literal["universal_operator"] = "universal_operator"
     scope: AgentManifestScope = "specialist"
     identity: AgentManifestIdentity
+    role: AgentManifestRoleProfile = Field(default_factory=AgentManifestRoleProfile)
+    voice: AgentManifestVoiceProfile = Field(default_factory=AgentManifestVoiceProfile)
     bible: AgentManifestBible = Field(default_factory=AgentManifestBible)
     skills: list[AgentManifestSkillBinding] = Field(default_factory=list)
+    connectors: AgentManifestConnectors = Field(default_factory=AgentManifestConnectors)
     channels: AgentManifestChannels = Field(default_factory=AgentManifestChannels)
+    runtime: AgentManifestRuntime = Field(default_factory=AgentManifestRuntime)
     policy: AgentManifestPolicy = Field(default_factory=AgentManifestPolicy)
     blueprint: AgentManifestBlueprint = Field(default_factory=AgentManifestBlueprint)
 
@@ -74,6 +101,28 @@ def manifest_skill_ids(manifest: AgentManifest) -> list[str]:
     return [binding.id for binding in manifest.skills if binding.enabled]
 
 
+def render_manifest_bible(manifest: AgentManifest) -> str:
+    return "\n".join([
+        "Mission",
+        manifest.bible.mission,
+        "",
+        "Hard Context",
+        manifest.bible.hard_context,
+        "",
+        "Operational Policy",
+        manifest.bible.operational_policy,
+        "",
+        "Core Responsibilities",
+        manifest.bible.core_responsibilities,
+        "",
+        "Guardrails",
+        manifest.bible.guardrails,
+        "",
+        "Escalation Triggers",
+        manifest.bible.escalation_triggers,
+    ])
+
+
 SAGE_GLOBAL_MANIFEST = AgentManifest(
     manifest_id="sage-global-manifest",
     scope="global_master",
@@ -84,6 +133,16 @@ SAGE_GLOBAL_MANIFEST = AgentManifest(
         summary="Global orchestrator with cross-system context and broad skill access.",
         owner_mode_enabled=False,
         customer_mode_enabled=False,
+    ),
+    role=AgentManifestRoleProfile(
+        job_to_be_done="Act as the master operator across planning, delegation, approvals, and system-wide supervision.",
+        success_definition="Keep the workspace legible, route work well, and surface approvals at the right moment.",
+        escalation_owner="Workspace owner",
+    ),
+    voice=AgentManifestVoiceProfile(
+        tone="Calm, supervisory, and precise.",
+        response_style="Lead with the answer, then show the next action or escalation path.",
+        service_boundaries="Never hide policy tradeoffs or approval boundaries from the operator.",
     ),
     bible=AgentManifestBible(
         mission="Operate as the master relationship for planning, delegation, approvals, execution, and system-wide awareness.",
@@ -101,6 +160,11 @@ SAGE_GLOBAL_MANIFEST = AgentManifest(
         AgentManifestSkillBinding(id="inventory-tool"),
         AgentManifestSkillBinding(id="crm-notes"),
     ],
+    connectors=AgentManifestConnectors(
+        requested=["email", "web", "calendar", "inventory", "crm", "automation"],
+        bound=[],
+    ),
+    runtime=AgentManifestRuntime(mode="hosted_secure"),
     blueprint=AgentManifestBlueprint(source="system", title="Sage Master OS"),
     policy=AgentManifestPolicy(reflection_enabled=True, approval_mode="system"),
 )

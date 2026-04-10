@@ -142,6 +142,42 @@ class LocalQueueWatchdogTests(unittest.TestCase):
         self.assertTrue(run["context"]["metadata"]["local_worker_recovery_manual_confirmation_required"])
         self.assertEqual(emitted[0][2]["event"], "local_cold_boot_recovered_manual_gate")
 
+    def test_cold_boot_recovery_ignores_unrelated_durable_live_runs(self) -> None:
+        run = {
+            "status": "running_local",
+            "logs": object(),
+            "browser_checkpoint": {"next_action_index": 4, "session_profile": "qa-browser"},
+            "context": {
+                "metadata": {
+                    "execution_target_selected": "local_companion",
+                    "local_worker_recovery_reason": "worker_lost",
+                    "local_worker_recovery_attempt_count": 1,
+                    "local_worker_recovery_backoff_seconds": 5,
+                }
+            },
+        }
+
+        with patch.object(local_queue.run_state_repository, "sync_list_live_runs_by_state", return_value=[{"run_id": "other-run"}]), \
+             patch.object(local_queue.run_state_repository, "sync_get_live_run", return_value=None):
+            recovered, _emitted, _persisted = self._run_cold_boot_recovery(run)
+
+        self.assertEqual(recovered, ["run-1"])
+        self.assertEqual(run["status"], "waiting_for_input")
+
+    def test_cold_boot_recovery_skips_terminal_local_runs(self) -> None:
+        run = {
+            "status": "completed",
+            "logs": object(),
+            "browser_checkpoint": {"next_action_index": 4, "session_profile": "qa-browser"},
+            "context": {"metadata": {"execution_target_selected": "local_companion"}},
+        }
+
+        recovered, _emitted, persisted = self._run_cold_boot_recovery(run)
+
+        self.assertEqual(recovered, [])
+        self.assertEqual(persisted, [])
+        self.assertEqual(run["status"], "completed")
+
     def test_mark_ghost_enrollments_failed_after_timeout(self) -> None:
         persisted = []
         original_server = local_queue._server

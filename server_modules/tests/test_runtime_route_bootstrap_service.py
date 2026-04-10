@@ -55,6 +55,11 @@ class RuntimeRouteBootstrapServiceTests(unittest.TestCase):
                 (),
                 {"trigger_pending_heartbeat_schedules": staticmethod(lambda: {"started": []})},
             )(),
+            "server_modules.control_plane_repository": type(
+                "ControlPlane",
+                (),
+                {"tenant_id_for_workspace": staticmethod(lambda workspace_id: f"tenant-for-{workspace_id}")},
+            )(),
         }
         module_globals = {"existing": 1}
         server_module = type("ServerModule", (), {})()
@@ -69,6 +74,7 @@ class RuntimeRouteBootstrapServiceTests(unittest.TestCase):
         self.assertEqual(module_globals["FOO"], "bar")
         self.assertTrue(callable(deps.handle_telegram_send_message))
         self.assertTrue(callable(deps.trigger_pending_heartbeat_schedules))
+        self.assertTrue(callable(deps.resolve_workspace_tenant_id))
 
     def test_build_runtime_run_route_bootstrap_callbacks_builds_both_callbacks(self):
         bootstrap_callbacks = runtime_route_bootstrap_service.build_runtime_run_route_bootstrap_callbacks(
@@ -82,10 +88,20 @@ class RuntimeRouteBootstrapServiceTests(unittest.TestCase):
             build_heartbeat_run_callback=lambda **kwargs: ("run", kwargs),
             handle_telegram_send_message=lambda *args, **kwargs: None,
             build_heartbeat_notify_callback=lambda **kwargs: ("notify", kwargs),
+            resolve_workspace_tenant_id=lambda workspace_id: f"tenant-for-{workspace_id}",
+            heartbeat_workspace_id="ws-1",
         )
 
         self.assertEqual(bootstrap_callbacks.heartbeat_run_callback[0], "run")
         self.assertEqual(bootstrap_callbacks.heartbeat_notify_callback[0], "notify")
+        self.assertEqual(
+            bootstrap_callbacks.heartbeat_run_callback[1]["resolve_workspace_tenant_id"]("ws-1"),
+            "tenant-for-ws-1",
+        )
+        self.assertTrue(callable(bootstrap_callbacks.heartbeat_run_callback[1]["claim_due_scheduler_wake_requests"]))
+        self.assertTrue(callable(bootstrap_callbacks.heartbeat_run_callback[1]["build_wakeup_execution_bundle"]))
+        self.assertTrue(callable(bootstrap_callbacks.heartbeat_run_callback[1]["finalize_scheduler_wake_requests"]))
+        self.assertEqual(bootstrap_callbacks.heartbeat_notify_callback[1]["workspace_id"], "ws-1")
 
     def test_ensure_runtime_run_route_bootstrap_starts_scheduler_and_loads_webhooks(self):
         created = []

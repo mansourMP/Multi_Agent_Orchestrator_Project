@@ -98,7 +98,7 @@ def _execution_target_from_runtime_profile(runtime_profile: Dict[str, Any]) -> s
     runtime_class = str(runtime_profile.get("runtime_class") or "").strip().lower()
     if runtime_class in {"desktop_companion", "mobile_runtime"}:
         return "local_companion"
-    if runtime_class == "cloud_worker":
+    if runtime_class in {"cloud_worker", "self_hosted_business_node", "self_hosted_worker", "enterprise_node"}:
         return "cloud"
     return "auto"
 

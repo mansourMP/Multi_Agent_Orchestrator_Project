@@ -90,6 +90,7 @@ from server_modules import shared as shared
 from server_modules import runtime_common as common
 from server_modules import outbox_service
 from server_modules import policy_service
+from server_modules import safe_mode_service
 from server_modules.runs_engine import (
     ENGINE_REGISTRY,
     RUN_TOOL_LOOP_REPLY,
@@ -1570,6 +1571,12 @@ def _workflow_tool_workspace_id(context: Dict[str, Any]) -> Optional[str]:
     return workspace_id or None
 
 
+def _workflow_tool_tenant_id(context: Dict[str, Any]) -> Optional[str]:
+    metadata = context.get("metadata") if isinstance(context.get("metadata"), dict) else {}
+    tenant_id = str(context.get("tenant_id") or metadata.get("tenant_id") or "").strip()
+    return tenant_id or None
+
+
 def _workflow_tool_connector_secret(
     context: Dict[str, Any],
     config: Dict[str, Any],
@@ -1585,12 +1592,25 @@ def _workflow_tool_connector_secret(
         str(config.get("credential_id") or "").strip(),
     ]
     metadata = context.get("metadata") if isinstance(context.get("metadata"), dict) else {}
+    tenant_id = str(context.get("tenant_id") or metadata.get("tenant_id") or "").strip() or None
+    run_id = str(context.get("run_id") or metadata.get("run_id") or "").strip() or None
+    action_id = str(config.get("action_id") or metadata.get("action_id") or "").strip().lower() or None
     explicit_ids.append(str(metadata.get("connector_credential_id") or "").strip())
 
     for credential_id in explicit_ids:
         if not credential_id:
             continue
-        secret = resolve_vault_credential(credential_id, workspace_id)
+        secret = resolve_vault_credential(
+            credential_id,
+            workspace_id,
+            tenant_id=tenant_id,
+            connector_id=requested_connector,
+            action_id=action_id,
+            tool_name="workflow_connector_action",
+            run_id=run_id,
+            purpose="workflow_connector_action",
+            actor_type="runtime",
+        )
         provider = str(secret.get("_provider") or "").strip().lower()
         if provider == requested_connector:
             return credential_id, requested_connector, secret
@@ -1607,8 +1627,105 @@ def _workflow_tool_connector_secret(
     credential_id = str(selected.get("id") or "").strip()
     if not credential_id:
         raise RuntimeError(f"Connector binding for '{requested_connector}' is invalid.")
-    secret = resolve_vault_credential(credential_id, workspace_id)
+    secret = resolve_vault_credential(
+        credential_id,
+        workspace_id,
+        tenant_id=tenant_id,
+        connector_id=requested_connector,
+        action_id=action_id,
+        tool_name="workflow_connector_action",
+        run_id=run_id,
+        purpose="workflow_connector_action",
+        actor_type="runtime",
+    )
     return credential_id, requested_connector, secret
+
+
+def _workflow_emit_connector_reliability_event(
+    *,
+    run_id: str,
+    context: Dict[str, Any],
+    connector_id: str,
+    action_id: str,
+    node_id: str,
+    payload: Dict[str, Any],
+) -> None:
+    tenant_id = _workflow_tool_tenant_id(context)
+    workspace_id = _workflow_tool_workspace_id(context)
+    if not tenant_id or not workspace_id:
+        return
+    outbox_service.emit_runtime_event(
+        event_type="connector_action_degraded",
+        tenant_id=tenant_id,
+        workspace_id=workspace_id,
+        run_id=run_id,
+        idempotency_key=f"{run_id}:{node_id}:{connector_id}:{action_id}:degraded",
+        payload={
+            "node_id": node_id,
+            "connector": connector_id,
+            "action_id": action_id,
+            **dict(payload or {}),
+        },
+    )
+
+
+def _workflow_connector_degraded_result(
+    *,
+    connector_id: str,
+    credential_id: str | None,
+    action_id: str,
+    reason: str,
+    incident_mode: str | None = None,
+    incident_scope: str | None = None,
+    retryable_outage: bool = False,
+) -> Dict[str, Any]:
+    summary = (
+        f"Connector action delayed: {connector_id}.{action_id} is temporarily unavailable."
+        if retryable_outage
+        else f"Connector action deferred: {connector_id}.{action_id} is under an incident control."
+    )
+    return {
+        "summary": summary,
+        "result_data": {
+            "connector_action": {
+                "connector": connector_id,
+                "credential_id": credential_id,
+                "action_id": action_id,
+                "executed": False,
+                "degraded": True,
+                "retryable_outage": bool(retryable_outage),
+                "incident_mode": incident_mode,
+                "incident_scope": incident_scope,
+                "reason": reason,
+            }
+        },
+    }
+
+
+def _workflow_is_retryable_connector_outage(error: Exception) -> bool:
+    token = str(error or "").strip().lower()
+    if not token:
+        return False
+    return any(
+        marker in token
+        for marker in (
+            "connector offline",
+            "temporarily unavailable",
+            "service unavailable",
+            "upstream unavailable",
+            "timed out",
+            "timeout",
+            "connection refused",
+            "connection reset",
+            "network request failed",
+            "temporary failure",
+            "dns",
+            "502",
+            "503",
+            "504",
+            "rate limit",
+        )
+    )
 
 
 def _workflow_tool_connector_headers(secret: Dict[str, Any]) -> Dict[str, str]:
@@ -1816,7 +1933,38 @@ def _workflow_execute_connector_action(
 
     credential_id, connector_id, secret = _workflow_tool_connector_secret(context, config)
     workspace_id = _workflow_tool_workspace_id(context)
+    tenant_id = _workflow_tool_tenant_id(context)
     connector_account_identity = _workflow_connector_account_identity(connector_id, credential_id, secret)
+    connector_incident = safe_mode_service.resolve_connector_incident_state(
+        tenant_id=tenant_id,
+        workspace_id=workspace_id,
+        connector_id=connector_id,
+        credential_id=credential_id,
+    )
+    if bool(connector_incident.get("active")):
+        reason = str(connector_incident.get("reason") or "").strip() or "Connector incident control is active."
+        mode = str(connector_incident.get("mode") or "pause").strip().lower() or "pause"
+        scope = str(connector_incident.get("scope") or "connector").strip().lower() or "connector"
+        _workflow_emit_connector_reliability_event(
+            run_id=run_id,
+            context=context,
+            connector_id=connector_id,
+            action_id=action_id,
+            node_id=node_id,
+            payload={
+                "reason": reason,
+                "incident_mode": mode,
+                "incident_scope": scope,
+            },
+        )
+        return _workflow_connector_degraded_result(
+            connector_id=connector_id,
+            credential_id=credential_id,
+            action_id=action_id,
+            reason=reason,
+            incident_mode=mode,
+            incident_scope=scope,
+        )
 
     if connector_id == "telegram_bot" and action_id in {"send_message", "send_media", "update_message"}:
         chat_id = str(config.get("chat_id") or secret.get("chat_id") or "").strip()
@@ -4092,13 +4240,44 @@ def _execute_workflow_graph(
                         detail={"tool_id": tool_id or "http", "url": url, "method": method},
                     )
                 elif variant == "connector_action":
-                    tool_result = _workflow_execute_connector_action(
-                        run_id,
-                        node_id,
-                        context,
-                        config,
-                        current_text=current_text,
+                    try:
+                        tool_result = _workflow_execute_connector_action(
+                            run_id,
+                            node_id,
+                            context,
+                            config,
+                            current_text=current_text,
+                        )
+                    except RuntimeError as error:
+                        requested_connector = str(config.get("connector") or "").strip().lower() or "connector"
+                        action_id = normalize_action_id(config.get("action_id")) or "action"
+                        if not _workflow_is_retryable_connector_outage(error):
+                            raise
+                        detail = str(error or "").strip() or "Connector temporarily unavailable."
+                        _workflow_emit_connector_reliability_event(
+                            run_id=run_id,
+                            context=context,
+                            connector_id=requested_connector,
+                            action_id=action_id,
+                            node_id=node_id,
+                            payload={
+                                "reason": detail,
+                                "retryable_outage": True,
+                            },
+                        )
+                        tool_result = _workflow_connector_degraded_result(
+                            connector_id=requested_connector,
+                            credential_id=None,
+                            action_id=action_id,
+                            reason=detail,
+                            retryable_outage=True,
+                        )
+                    connector_action = (
+                        tool_result.get("result_data", {}).get("connector_action")
+                        if isinstance(tool_result.get("result_data"), dict)
+                        else {}
                     )
+                    degraded = bool((connector_action or {}).get("degraded"))
                     current_text = _workflow_text_payload(tool_result.get("summary") or current_text)
                     state["last_text"] = current_text
                     state["last_data"] = {
@@ -4108,15 +4287,25 @@ def _execute_workflow_graph(
                         "tool_id": tool_id or "connector_action",
                         **(_json_safe(tool_result.get("result_data")) if isinstance(tool_result.get("result_data"), dict) else {}),
                     }
-                    emit_log(log_queue, "info", current_text, event="workflow_tool_connector_action", data={"node_id": node_id, "tool_id": tool_id})
+                    emit_log(
+                        log_queue,
+                        "warning" if degraded else "info",
+                        current_text,
+                        event="workflow_tool_connector_action",
+                        data={"node_id": node_id, "tool_id": tool_id, "degraded": degraded},
+                    )
                     update_node_state(
                         run_id,
                         node_id,
                         status="succeeded",
                         finalize=True,
                         output_preview=_node_preview_text(current_text),
-                        summary=f"Connector action completed: {label}",
-                        detail={"tool_id": tool_id or "connector_action", "result": tool_result.get("result_data")},
+                        summary=current_text if degraded else f"Connector action completed: {label}",
+                        detail={
+                            "tool_id": tool_id or "connector_action",
+                            "result": tool_result.get("result_data"),
+                            "degraded": degraded,
+                        },
                     )
                 elif variant in {"document", "spreadsheet"}:
                     tool_result = _workflow_execute_document_or_spreadsheet_tool(

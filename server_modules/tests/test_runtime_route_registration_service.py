@@ -18,12 +18,13 @@ class RuntimeRouteRegistrationServiceTests(unittest.TestCase):
             run_start_request_class=type("RunStartRequest", (), {}),
             build_inbound_agent_turn_request=lambda **kwargs: kwargs,
             execute_system_agent_turn=lambda **kwargs: {},
-            trigger_pending_heartbeat_schedules=lambda: {},
+            trigger_pending_heartbeat_schedules=lambda **kwargs: {},
             handle_telegram_send_message=lambda *args, **kwargs: None,
             workspace_memory_snapshot=lambda workspace_id: {},
             delete_memory=lambda workspace_id, key: {},
             read_workspace_context_files=lambda: [],
             write_workspace_context_file=lambda filename, content: {},
+            resolve_workspace_tenant_id=lambda workspace_id: f"tenant-for-{workspace_id}",
         )
         route_bindings = types.SimpleNamespace(
             serialize_run_snapshot=lambda run_id, run: {},

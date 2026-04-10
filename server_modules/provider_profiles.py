@@ -76,14 +76,14 @@ def http_json_request(url, **kwargs):
     return _server.http_json_request(url, **kwargs)
 
 
-def resolve_vault_credential(credential_id, workspace_id=None):
+def resolve_vault_credential(credential_id, workspace_id=None, **scope):
     _init()
-    return _server.resolve_vault_credential(credential_id, workspace_id)
+    return _server.resolve_vault_credential(credential_id, workspace_id, **scope)
 
 
-def resolve_default_vault_credential(provider, workspace_id=None):
+def resolve_default_vault_credential(provider, workspace_id=None, **scope):
     _init()
-    return _server.resolve_default_vault_credential(provider, workspace_id)
+    return _server.resolve_default_vault_credential(provider, workspace_id, **scope)
 
 
 def _validation_message(provider_label: str, response: Dict[str, Any]) -> str:
@@ -1213,13 +1213,24 @@ def _sorted_profiles(provider: str, workspace_id: Optional[str], preferred_profi
 def _build_provider_credential_candidates(context: Dict[str, Any], metadata: Dict[str, Any], provider: str) -> List[Dict[str, Any]]:
     _init()
     workspace_id = str(context.get("workspace_id") or metadata.get("workspace_id") or "default").strip() or "default"
+    tenant_id = str(context.get("tenant_id") or metadata.get("tenant_id") or "").strip() or None
+    run_id = str(context.get("run_id") or metadata.get("run_id") or "").strip() or None
     credential_id = context.get("credential_id") or metadata.get("credential_id")
     canonical_provider = normalize_provider_id(provider)
     candidates: List[Dict[str, Any]] = []
     seen_labels: Set[str] = set()
 
     if credential_id:
-        credentials = resolve_vault_credential(str(credential_id), workspace_id)
+        credentials = resolve_vault_credential(
+            str(credential_id),
+            workspace_id,
+            tenant_id=tenant_id,
+            provider=canonical_provider,
+            tool_name="provider_candidate_resolution",
+            run_id=run_id,
+            purpose="provider_candidate_resolution",
+            actor_type="provider_profile",
+        )
         candidates.append(
             {
                 "source": "credential_id",
@@ -1255,7 +1266,16 @@ def _build_provider_credential_candidates(context: Dict[str, Any], metadata: Dic
             continue
         if cid:
             try:
-                credentials = resolve_vault_credential(cid, workspace_id)
+                credentials = resolve_vault_credential(
+                    cid,
+                    workspace_id,
+                    tenant_id=tenant_id,
+                    provider=canonical_provider,
+                    tool_name="provider_candidate_resolution",
+                    run_id=run_id,
+                    purpose="provider_candidate_resolution",
+                    actor_type="provider_profile",
+                )
             except Exception as exc:
                 _mark_profile_failure(pid, f"Credential resolution failed: {exc}")
                 continue
@@ -1274,7 +1294,15 @@ def _build_provider_credential_candidates(context: Dict[str, Any], metadata: Dic
 
     if canonical_provider == "openai":
         try:
-            fallback = resolve_default_vault_credential("openai", workspace_id)
+            fallback = resolve_default_vault_credential(
+                "openai",
+                workspace_id,
+                tenant_id=tenant_id,
+                tool_name="provider_candidate_resolution",
+                run_id=run_id,
+                purpose="provider_default_resolution",
+                actor_type="provider_profile",
+            )
             if "vault-default" not in seen_labels:
                 candidates.append(
                     {
@@ -1301,7 +1329,15 @@ def _build_provider_credential_candidates(context: Dict[str, Any], metadata: Dic
 
     if canonical_provider == "openai-codex":
         try:
-            fallback = resolve_default_vault_credential("openai-codex", workspace_id)
+            fallback = resolve_default_vault_credential(
+                "openai-codex",
+                workspace_id,
+                tenant_id=tenant_id,
+                tool_name="provider_candidate_resolution",
+                run_id=run_id,
+                purpose="provider_default_resolution",
+                actor_type="provider_profile",
+            )
             if "vault-default-codex" not in seen_labels:
                 candidates.append(
                     {

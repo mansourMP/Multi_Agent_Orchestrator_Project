@@ -10,7 +10,7 @@ from typing import Any, Dict, Iterable, List, Mapping, Optional
 from urllib import error as urllib_error
 from urllib import request as urllib_request
 
-from server_modules import runtime_state_store
+from server_modules import activity_ledger_service, entitlements_service, runtime_state_store
 
 
 LOGGER = logging.getLogger(__name__)
@@ -213,6 +213,75 @@ def _workspace_filtered_items(
     return out
 
 
+def _merge_read_state(
+    *,
+    items: List[Dict[str, Any]],
+    reader_key: str,
+    db_path: Optional[Path] = None,
+) -> List[Dict[str, Any]]:
+    if not items:
+        return []
+    notification_ids = [
+        str(item.get("id") or "").strip()
+        for item in items
+        if isinstance(item, dict) and str(item.get("id") or "").strip()
+    ]
+    read_index = {
+        str(item.get("id") or "").strip(): str(item.get("read_at") or "").strip() or None
+        for item in runtime_state_store.list_notifications_by_ids(
+            _ensure_runtime_state_db(db_path),
+            reader_key=reader_key,
+            notification_ids=notification_ids,
+        )
+    }
+    out: List[Dict[str, Any]] = []
+    for item in items:
+        record = dict(item) if isinstance(item, dict) else {}
+        read_at = read_index.get(str(record.get("id") or "").strip())
+        if read_at:
+            record["read_at"] = read_at
+        out.append(record)
+    return out
+
+
+def _merge_notification_sources(
+    *,
+    primary_items: List[Dict[str, Any]],
+    secondary_items: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    merged: Dict[str, Dict[str, Any]] = {}
+    order: List[str] = []
+    for item in list(primary_items) + list(secondary_items):
+        if not isinstance(item, dict):
+            continue
+        notification_id = str(item.get("id") or "").strip()
+        if not notification_id:
+            continue
+        if notification_id not in merged:
+            order.append(notification_id)
+            merged[notification_id] = dict(item)
+            continue
+        current = merged[notification_id]
+        merged[notification_id] = {
+            **dict(item),
+            **current,
+            "metadata": {
+                **(dict(item.get("metadata") or {}) if isinstance(item.get("metadata"), dict) else {}),
+                **(dict(current.get("metadata") or {}) if isinstance(current.get("metadata"), dict) else {}),
+            },
+        }
+        if str(current.get("read_at") or "").strip():
+            merged[notification_id]["read_at"] = current.get("read_at")
+    out = [merged[item_id] for item_id in order]
+    out.sort(
+        key=lambda item: (
+            -(_parse_ts(item.get("ts")) or 0.0),
+            str(item.get("id") or ""),
+        )
+    )
+    return out
+
+
 def list_notification_payload(
     *,
     current_user: Any,
@@ -229,7 +298,7 @@ def list_notification_payload(
     session_limit: int = 25,
     db_path: Optional[Path] = None,
 ) -> Dict[str, Any]:
-    from server_modules.auth import allowed_workspace_ids, enforce_workspace_access
+    from server_modules.auth import allowed_workspace_ids, enforce_workspace_access, workspace_tenant_id
 
     safe_limit = max(1, min(int(limit or 0), 500))
     requested_workspace_id = (
@@ -238,9 +307,11 @@ def list_notification_payload(
         else None
     )
     allowed_workspaces = allowed_workspace_ids(current_user)
-    items = runtime_state_store.list_notifications(
+    reader_key = reader_key_for_current_user(current_user)
+    filtered: List[Dict[str, Any]] = []
+    runtime_items = runtime_state_store.list_notifications(
         _ensure_runtime_state_db(db_path),
-        reader_key=reader_key_for_current_user(current_user),
+        reader_key=reader_key,
         tenant_id=str(tenant_id or "").strip(),
         workspace_id=str(requested_workspace_id or "").strip(),
         channel=str(channel or "").strip(),
@@ -251,11 +322,39 @@ def list_notification_payload(
         trace_id=str(trace_id or "").strip(),
         limit=max(safe_limit, 500 if requested_workspace_id else safe_limit * 4),
     )
-    filtered = _workspace_filtered_items(
-        items,
+    runtime_filtered = _workspace_filtered_items(
+        runtime_items,
         allowed_workspaces=allowed_workspaces,
         requested_workspace_id=requested_workspace_id,
     )
+    if requested_workspace_id:
+        resolved_tenant_id = str(tenant_id or "").strip() or workspace_tenant_id(current_user, requested_workspace_id)
+        ledger_items = activity_ledger_service.list_notification_feed_items_sync(
+            tenant_id=resolved_tenant_id,
+            workspace_id=requested_workspace_id,
+            channel=str(channel or "").strip(),
+            session_key=str(session_key or "").strip(),
+            direction=str(direction or "").strip(),
+            action=str(action or "").strip(),
+            run_id=str(run_id or "").strip(),
+            trace_id=str(trace_id or "").strip(),
+            limit=max(safe_limit, 500),
+        )
+        if ledger_items:
+            filtered = _merge_notification_sources(
+                primary_items=_merge_read_state(
+                    items=_workspace_filtered_items(
+                        ledger_items,
+                        allowed_workspaces=allowed_workspaces,
+                        requested_workspace_id=requested_workspace_id,
+                    ),
+                    reader_key=reader_key,
+                    db_path=db_path,
+                ),
+                secondary_items=runtime_filtered,
+            )
+    if not filtered:
+        filtered = runtime_filtered
     payload = filtered[:safe_limit]
     sessions = (
         runtime_state_store.summarize_notification_sessions(filtered, limit=session_limit)
@@ -349,11 +448,25 @@ def register_notification_device(
     app_id: str = "",
     capabilities: Optional[List[str]] = None,
     db_path: Optional[Path] = None,
+    workspace: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     from server_modules.auth import enforce_workspace_access, workspace_tenant_id
 
     workspace_token = enforce_workspace_access(current_user, workspace_id, minimum_role="viewer")
     tenant_id = workspace_tenant_id(current_user, workspace_token)
+    try:
+        entitlement_state = entitlements_service.enforce_mobile_push_access(workspace=workspace)
+    except entitlements_service.EntitlementError as exc:
+        return {
+            "ok": False,
+            "device_id": str(device_id or "").strip(),
+            "workspace_id": workspace_token,
+            "tenant_id": str(tenant_id or "default").strip() or "default",
+            "status": "disabled",
+            "reason": exc.reason,
+            "message": exc.message,
+            "entitlements": exc.entitlement_state,
+        }
     record = runtime_state_store.upsert_notification_device(
         _ensure_runtime_state_db(db_path),
         {
@@ -379,6 +492,7 @@ def register_notification_device(
         "status": str(record.get("status") or "active").strip() or "active",
         "registered_at": str(record.get("last_registered_at") or "").strip() or _utc_now_iso(),
         "provider": str(record.get("provider") or "expo").strip() or "expo",
+        "entitlements": entitlement_state,
     }
 
 
@@ -524,6 +638,13 @@ def deliver_notification_from_outbox_event(
         return None
     runtime_db = _ensure_runtime_state_db(db_path)
     runtime_state_store.upsert_notification(runtime_db, notification)
+    try:
+        activity_ledger_service.record_notification_activity(
+            event=event,
+            notification=notification,
+        )
+    except Exception as exc:
+        LOGGER.warning("Failed to persist activity-ledger notification %s: %s", notification.get("id"), exc)
     fanout_notification_push(
         notification,
         db_path=runtime_db,
@@ -563,6 +684,7 @@ def iter_notifications_stream(
     started_mono = time.monotonic()
     next_heartbeat = started_mono + safe_heartbeat
     runtime_db = _ensure_runtime_state_db(db_path)
+    ledger_enabled = bool(str(workspace_id or "").strip())
 
     while True:
         now_mono = time.monotonic()
@@ -570,6 +692,30 @@ def iter_notifications_stream(
             yield {"event": "done", "data": json.dumps({"reason": "timeout", "ts": _utc_now_iso()}, ensure_ascii=True)}
             break
 
+        filtered: List[Dict[str, Any]] = []
+        if ledger_enabled:
+            try:
+                filtered = _merge_read_state(
+                    items=_workspace_filtered_items(
+                        activity_ledger_service.list_notification_feed_items_sync(
+                            tenant_id=str(tenant_id or "").strip() or "default",
+                            workspace_id=str(workspace_id or "").strip(),
+                            channel=str(channel or "").strip(),
+                            session_key=str(session_key or "").strip(),
+                            direction=str(direction or "").strip(),
+                            action=str(action or "").strip(),
+                            run_id=str(run_id or "").strip(),
+                            trace_id=str(trace_id or "").strip(),
+                            limit=max(safe_limit, 300),
+                        ),
+                        allowed_workspaces=allowed_workspace_ids,
+                        requested_workspace_id=str(workspace_id or "").strip() or None,
+                    ),
+                    reader_key=reader_key,
+                    db_path=runtime_db,
+                )
+            except Exception:
+                filtered = []
         snapshot = runtime_state_store.list_notifications(
             runtime_db,
             reader_key=reader_key,
@@ -583,11 +729,18 @@ def iter_notifications_stream(
             trace_id=str(trace_id or "").strip(),
             limit=max(safe_limit, 300),
         )
-        filtered = _workspace_filtered_items(
+        runtime_filtered = _workspace_filtered_items(
             snapshot,
             allowed_workspaces=allowed_workspace_ids,
             requested_workspace_id=str(workspace_id or "").strip() or None,
         )
+        if filtered:
+            filtered = _merge_notification_sources(
+                primary_items=filtered,
+                secondary_items=runtime_filtered,
+            )
+        else:
+            filtered = runtime_filtered
         candidates: List[Dict[str, Any]] = []
         if cursor_id:
             cursor_index = -1

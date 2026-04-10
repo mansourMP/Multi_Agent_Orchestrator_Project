@@ -552,10 +552,22 @@ def _store_artifact_snapshot(
     file_reference = str(artifact.get("file_path") or artifact.get("path") or "").strip()
     label = str(artifact.get("label") or Path(file_reference or "artifact.bin").name).strip() or "artifact.bin"
     step_index, step_number, step_id = _artifact_step_identifiers(artifact)
+    run_context = run.get("context") if isinstance(run.get("context"), dict) else {}
+    run_context_metadata = run_context.get("metadata") if isinstance(run_context.get("metadata"), dict) else {}
+    agent_install_id = str(
+        metadata.get("active_agent_install_id")
+        or metadata.get("workspace_agent_install_id")
+        or metadata.get("master_agent_install_id")
+        or run_context_metadata.get("active_agent_install_id")
+        or run_context_metadata.get("workspace_agent_install_id")
+        or run_context_metadata.get("master_agent_install_id")
+        or ""
+    ).strip() or None
     record_metadata = {
         "tool": str(artifact.get("tool") or (action or {}).get("tool") or "").strip() or None,
         "source_kind": str(artifact.get("kind") or "artifact").strip() or "artifact",
         "action_summary": str((action or {}).get("summary") or "").strip() or None,
+        "agent_install_id": agent_install_id,
     }
     record_metadata = {key: value for key, value in record_metadata.items() if value is not None}
     source_path = _resolve_artifact_source_path(file_reference, root)
@@ -566,6 +578,7 @@ def _store_artifact_snapshot(
             kind=str(artifact.get("kind") or "artifact").strip() or "artifact",
             tenant_id=str(metadata.get("tenant_id") or (run.get("context") if isinstance(run.get("context"), dict) else {}).get("tenant_id") or "default").strip() or "default",
             workspace_id=str(metadata.get("workspace_id") or (run.get("context") if isinstance(run.get("context"), dict) else {}).get("workspace_id") or "default").strip() or "default",
+            agent_install_id=agent_install_id,
             label=label,
             machine_id=_artifact_machine_id(run, metadata),
             step_id=f"{str(run.get('run_id') or '').strip()}:{step_id}" if step_id else None,
@@ -583,6 +596,7 @@ def _store_artifact_snapshot(
             file_name=f"{Path(label).stem or 'artifact'}-record.json",
             tenant_id=str(metadata.get("tenant_id") or (run.get("context") if isinstance(run.get("context"), dict) else {}).get("tenant_id") or "default").strip() or "default",
             workspace_id=str(metadata.get("workspace_id") or (run.get("context") if isinstance(run.get("context"), dict) else {}).get("workspace_id") or "default").strip() or "default",
+            agent_install_id=agent_install_id,
             label=f"{Path(label).stem or 'artifact'}-record.json",
             machine_id=_artifact_machine_id(run, metadata),
             step_id=f"{str(run.get('run_id') or '').strip()}:{step_id}" if step_id else None,

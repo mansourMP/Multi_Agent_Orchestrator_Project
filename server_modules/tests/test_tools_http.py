@@ -4,9 +4,9 @@ import json
 import sys
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
-from server_modules import tools_http
+from server_modules import egress_policy, tools_http
 
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
@@ -116,6 +116,69 @@ class HttpToolTests(unittest.TestCase):
 
         self.assertTrue(result["truncated"])
         self.assertIn("[truncated:", result["body"])
+
+    def test_http_request_denies_unapproved_host_under_active_egress_policy(self):
+        async def _run() -> None:
+            append_mock = AsyncMock(return_value=None)
+            with patch("server_modules.egress_policy.control_plane_repository.append_agent_egress_event", new=append_mock):
+                with egress_policy.activate_egress_policy(
+                    egress_policy.build_egress_policy(
+                        tenant_id="tenant-1",
+                        workspace_id="workspace-1",
+                        runtime_mode="hosted_secure",
+                        runtime_scope={
+                            "network_policy": {
+                                "allow_outbound": True,
+                                "allowed_hosts": [],
+                                "allowed_providers": [],
+                                "allow_private_hosts": False,
+                            }
+                        },
+                        allowed_action_classes=["read"],
+                    )
+                ):
+                    with self.assertRaises(egress_policy.EgressPolicyDeniedError) as raised:
+                        await tools_http.http_request(method="GET", url="https://example.com/data")
+            self.assertEqual(raised.exception.code, "host_not_allowed")
+            await asyncio.sleep(0)
+            self.assertEqual(append_mock.await_count, 1)
+            self.assertEqual(append_mock.await_args.kwargs["status"], "denied")
+
+        asyncio.run(_run())
+
+    def test_http_request_allows_allowlisted_provider_under_active_egress_policy(self):
+        async def _run() -> None:
+            append_mock = AsyncMock(return_value=None)
+            _FakeAsyncClient.response = _FakeResponse(
+                status_code=200,
+                headers={"content-type": "application/json"},
+                body=b'{"ok": true}',
+            )
+            with patch("server_modules.egress_policy.control_plane_repository.append_agent_egress_event", new=append_mock):
+                with patch("server_modules.tools_http.httpx.AsyncClient", _FakeAsyncClient):
+                    with egress_policy.activate_egress_policy(
+                        egress_policy.build_egress_policy(
+                            tenant_id="tenant-1",
+                            workspace_id="workspace-1",
+                            runtime_mode="hosted_secure",
+                            runtime_scope={
+                                "network_policy": {
+                                    "allow_outbound": True,
+                                    "allowed_hosts": [],
+                                    "allowed_providers": ["openai"],
+                                    "allow_private_hosts": False,
+                                }
+                            },
+                            allowed_action_classes=["read"],
+                        )
+                    ):
+                        result = await tools_http.http_request(method="GET", url="https://api.openai.com/v1/models")
+            self.assertEqual(result["status_code"], 200)
+            await asyncio.sleep(0)
+            self.assertEqual(append_mock.await_count, 1)
+            self.assertEqual(append_mock.await_args.kwargs["status"], "allowed")
+
+        asyncio.run(_run())
 
 
 if __name__ == "__main__":

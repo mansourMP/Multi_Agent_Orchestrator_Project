@@ -103,6 +103,8 @@ def build_runtime_registration_record(
     machine_id: str,
     *,
     previous_record: Optional[Mapping[str, Any]],
+    tenant_id: Optional[str],
+    workspace_id: Optional[str],
     runtime_type: str,
     display_name: Optional[str],
     platform: Optional[str],
@@ -111,6 +113,8 @@ def build_runtime_registration_record(
     execution_targets: Optional[List[str]],
     instance_id: Optional[str],
     capability_digest: Optional[str],
+    prewarm_state: Optional[str],
+    warm_pool: Optional[str],
     lease_seconds: int,
     now_iso: str,
     normalize_policy_mode_fn: Callable[[Any], str],
@@ -131,6 +135,8 @@ def build_runtime_registration_record(
     record["worker_id"] = worker
     record["runtime_id"] = worker
     record["machine_id"] = str(previous.get("machine_id") or worker).strip() or worker
+    record["tenant_id"] = str(tenant_id or previous.get("tenant_id") or "default").strip() or "default"
+    record["workspace_id"] = str(workspace_id or previous.get("workspace_id") or "default").strip() or "default"
     record["runtime_type"] = str(runtime_type or previous.get("runtime_type") or "local").strip() or "local"
     record["display_name"] = str(display_name or previous.get("display_name") or worker).strip() or worker
     record["platform"] = str(platform or previous.get("platform") or "").strip() or None
@@ -147,12 +153,18 @@ def build_runtime_registration_record(
         )
         if str(item).strip()
     ]
+    primary_target = str(record["execution_targets"][0] if record["execution_targets"] else "").strip().lower() or "local"
     record["instance_id"] = str(instance_id or previous.get("instance_id") or worker).strip() or worker
     record["capability_digest"] = (
         str(capability_digest or "").strip()
         or str(previous.get("capability_digest") or "").strip()
         or capability_digest_fn(normalized_capabilities)
     )
+    record["queue_shard"] = str(previous.get("queue_shard") or "").strip() or (
+        f"{record['tenant_id']}:{record['workspace_id']}:{record['runtime_type']}:{primary_target}"
+    )
+    record["prewarm_state"] = str(prewarm_state or previous.get("prewarm_state") or "").strip().lower() or None
+    record["warm_pool"] = str(warm_pool or previous.get("warm_pool") or "").strip() or None
     record["registered_at"] = str(previous.get("registered_at") or now_iso)
     record["last_registered_at"] = now_iso
     record["lease_seconds"] = int(previous.get("lease_seconds") or lease_seconds)
@@ -170,6 +182,12 @@ def build_runtime_registration_record(
     record["revoked_reason"] = previous.get("revoked_reason")
     record["control_state_updated_at"] = previous.get("control_state_updated_at")
     return record
+
+
+def build_queue_partition_key(workspace_id: str, specialist_key: str) -> str:
+    workspace = str(workspace_id or "").strip() or "default"
+    specialist = str(specialist_key or "").strip() or "workspace-default"
+    return f"{workspace}::{specialist}"
 
 
 def issue_machine_session(
@@ -274,6 +292,79 @@ def build_machine_lease_record(
     }
 
 
+def _run_scope_from_payload(run: Mapping[str, Any]) -> Dict[str, str]:
+    context = run.get("context") if isinstance(run.get("context"), Mapping) else {}
+    metadata = context.get("metadata") if isinstance(context.get("metadata"), Mapping) else {}
+    workspace_id = str(
+        run.get("workspace_id")
+        or context.get("workspace_id")
+        or metadata.get("workspace_id")
+        or "default"
+    ).strip() or "default"
+    tenant_id = str(
+        run.get("tenant_id")
+        or context.get("tenant_id")
+        or metadata.get("tenant_id")
+        or "default"
+    ).strip() or "default"
+    specialist_key = str(
+        metadata.get("active_agent_install_id")
+        or metadata.get("agent_install_id")
+        or metadata.get("agent_role")
+        or "workspace-default"
+    ).strip() or "workspace-default"
+    return {
+        "workspace_id": workspace_id,
+        "tenant_id": tenant_id,
+        "specialist_key": specialist_key,
+    }
+
+
+def _metadata_for_run(run: Mapping[str, Any]) -> Dict[str, Any]:
+    context = run.get("context") if isinstance(run.get("context"), Mapping) else {}
+    metadata = context.get("metadata") if isinstance(context.get("metadata"), Mapping) else {}
+    return dict(metadata)
+
+
+def _count_claims_by_scope(
+    *,
+    claimed_runs: Mapping[str, Dict[str, Any]],
+    runs_by_id: Mapping[str, Any],
+) -> tuple[Dict[str, int], Dict[str, int]]:
+    workspace_counts: Dict[str, int] = {}
+    specialist_counts: Dict[str, int] = {}
+    for run_id, claim in claimed_runs.items():
+        if not isinstance(claim, Mapping):
+            continue
+        run = runs_by_id.get(run_id)
+        if not isinstance(run, Mapping):
+            continue
+        scope = _run_scope_from_payload(run)
+        workspace_counts[scope["workspace_id"]] = workspace_counts.get(scope["workspace_id"], 0) + 1
+        specialist_counts[scope["specialist_key"]] = specialist_counts.get(scope["specialist_key"], 0) + 1
+    return workspace_counts, specialist_counts
+
+
+def _count_pending_by_scope(
+    *,
+    pending_run_ids: List[str],
+    runs_by_id: Mapping[str, Any],
+) -> tuple[Dict[str, int], Dict[str, int]]:
+    workspace_counts: Dict[str, int] = {}
+    specialist_counts: Dict[str, int] = {}
+    for run_id in pending_run_ids:
+        run = runs_by_id.get(run_id)
+        if not isinstance(run, Mapping):
+            continue
+        status = str(run.get("status") or "").strip().lower()
+        if status not in {"queued_local", "starting"}:
+            continue
+        scope = _run_scope_from_payload(run)
+        workspace_counts[scope["workspace_id"]] = workspace_counts.get(scope["workspace_id"], 0) + 1
+        specialist_counts[scope["specialist_key"]] = specialist_counts.get(scope["specialist_key"], 0) + 1
+    return workspace_counts, specialist_counts
+
+
 def claim_local_machine_lease(
     worker_id: str,
     *,
@@ -292,6 +383,8 @@ def claim_local_machine_lease(
     persist_local_runtime_state_fn: Callable[[], Any],
     mark_local_worker_seen_fn: Callable[..., Any],
     now_iso_fn: Callable[[], str],
+    parse_utc_ts_fn: Optional[Callable[[Any], Any]] = None,
+    now_fn: Optional[Callable[[], Any]] = None,
     lease_id_factory: Callable[[], str] = lambda: uuid.uuid4().hex,
 ) -> Optional[str]:
     cleanup_stale_local_claims_fn()
@@ -327,25 +420,46 @@ def claim_local_machine_lease(
                 note=f"idle_machine_{worker_control_state}",
             )
             return None
-        while pending_run_ids:
-            run_id = pending_run_ids.pop(0)
-            state_changed = True
+        pending_snapshot = list(pending_run_ids)
+        pending_workspace_counts, pending_specialist_counts = _count_pending_by_scope(
+            pending_run_ids=pending_snapshot,
+            runs_by_id=runs_by_id,
+        )
+        active_workspace_counts, active_specialist_counts = _count_claims_by_scope(
+            claimed_runs=claimed_runs,
+            runs_by_id=runs_by_id,
+        )
+        now_dt = now_fn() if callable(now_fn) else None
+        eligible: List[Dict[str, Any]] = []
+        remaining_pending: List[str] = []
+        for queue_index, run_id in enumerate(pending_snapshot):
             run = runs_by_id.get(run_id)
             if not isinstance(run, dict):
                 continue
             status = str(run.get("status") or "").strip().lower()
             if status not in {"queued_local", "starting"}:
                 continue
+            metadata = _metadata_for_run(run)
+            retry_due_at = metadata.get("local_queue_next_retry_at")
+            if retry_due_at and now_dt is not None and callable(parse_utc_ts_fn):
+                due_at = parse_utc_ts_fn(retry_due_at)
+                if due_at is not None and now_dt < due_at:
+                    deferred_run_ids.append(run_id)
+                    remaining_pending.append(run_id)
+                    capability_filtered = True
+                    continue
             preferred_runtime_ids = ordered_runtime_preferences_for_run_fn(run)
             preferred_runtime_id = best_online_preferred_runtime_fn(preferred_runtime_ids)
             if preferred_runtime_id and preferred_runtime_id != worker_id:
                 deferred_run_ids.append(run_id)
+                remaining_pending.append(run_id)
                 capability_filtered = True
                 continue
             run_required_capabilities = required_capabilities_for_run_fn(run)
             required_capability_set = set(run_required_capabilities)
             if run_required_capabilities and not required_capability_set.issubset(worker_capability_set):
                 deferred_run_ids.append(run_id)
+                remaining_pending.append(run_id)
                 capability_filtered = True
                 continue
             if (
@@ -354,12 +468,39 @@ def claim_local_machine_lease(
                 and not required_capability_set.issubset(requested_capability_filter)
             ):
                 deferred_run_ids.append(run_id)
+                remaining_pending.append(run_id)
                 capability_filtered = True
                 continue
+            scope = _run_scope_from_payload(run)
+            retry_count = max(0, int(metadata.get("local_queue_retry_count") or 0))
+            eligible.append(
+                {
+                    "queue_index": queue_index,
+                    "run_id": run_id,
+                    "run": run,
+                    "required_capabilities": run_required_capabilities,
+                    "scope": scope,
+                    "score": (
+                        active_workspace_counts.get(scope["workspace_id"], 0),
+                        active_specialist_counts.get(scope["specialist_key"], 0),
+                        pending_workspace_counts.get(scope["workspace_id"], 0),
+                        pending_specialist_counts.get(scope["specialist_key"], 0),
+                        retry_count,
+                        queue_index,
+                    ),
+                }
+            )
+            remaining_pending.append(run_id)
+        if eligible:
+            chosen = min(eligible, key=lambda item: item["score"])
+            claimed_run_id = str(chosen["run_id"] or "").strip()
+            run = chosen["run"]
+            run_required_capabilities = list(chosen["required_capabilities"] or [])
+            scope = dict(chosen["scope"] or {})
             now_iso = now_iso_fn()
             context = run.get("context") if isinstance(run.get("context"), dict) else {}
             metadata = context.get("metadata") if isinstance(context.get("metadata"), dict) else {}
-            workspace_id = str(context.get("workspace_id") or metadata.get("workspace_id") or "").strip()
+            workspace_id = str(scope.get("workspace_id") or "").strip()
             actor_id = str(
                 metadata.get("owner_user_id")
                 or metadata.get("user_id")
@@ -368,7 +509,7 @@ def claim_local_machine_lease(
             ).strip()
             claim_record = build_machine_lease_record(
                 machine_id=machine_id,
-                run_id=run_id,
+                run_id=claimed_run_id,
                 workspace_id=workspace_id,
                 actor_id=actor_id,
                 ttl_seconds=lease_seconds,
@@ -381,16 +522,21 @@ def claim_local_machine_lease(
                 ],
                 metadata={
                     "runtime_id": worker_id,
-                    "contention_strategy": "fifo_preferred_runtime",
+                    "contention_strategy": "workspace_specialist_weighted_fifo",
+                    "tenant_id": scope.get("tenant_id"),
+                    "specialist_key": scope.get("specialist_key"),
+                    "queue_partition": build_queue_partition_key(
+                        str(scope.get("workspace_id") or "").strip(),
+                        str(scope.get("specialist_key") or "").strip(),
+                    ),
                 },
                 lease_id_factory=lease_id_factory,
             )
-            claimed_runs[run_id] = claim_record
+            claimed_runs[claimed_run_id] = claim_record
+            pending_run_ids[:] = [run_id for run_id in remaining_pending if run_id != claimed_run_id]
             state_changed = True
-            claimed_run_id = run_id
-            break
-        if deferred_run_ids:
-            pending_run_ids[:] = deferred_run_ids + list(pending_run_ids)
+        elif remaining_pending != pending_snapshot:
+            pending_run_ids[:] = remaining_pending
             state_changed = True
 
     if state_changed:
@@ -557,6 +703,10 @@ def cleanup_stale_machine_leases(
     checkpoint_recovery_backoff_seconds: List[int],
     local_worker_lost_timeout_seconds: int,
     default_lease_seconds: int,
+    local_pending_run_ids: Optional[List[str]] = None,
+    max_queue_retry_attempts: int = 0,
+    queue_retry_backoff_seconds: Optional[List[int]] = None,
+    append_dead_letter_fn: Optional[Callable[..., Any]] = None,
 ) -> List[str]:
     stale: List[Dict[str, Any]] = []
     changed = False
@@ -624,6 +774,7 @@ def cleanup_stale_machine_leases(
         checkpoint = run.get("browser_checkpoint") if isinstance(run.get("browser_checkpoint"), dict) else {}
         context = run.get("context") if isinstance(run.get("context"), dict) else {}
         metadata = context.get("metadata") if isinstance(context.get("metadata"), dict) else {}
+        scope = _run_scope_from_payload(run)
         selected_target = str(
             metadata.get("execution_target_selected")
             or metadata.get("execution_target")
@@ -638,6 +789,30 @@ def cleanup_stale_machine_leases(
             if not backoff_schedule:
                 backoff_schedule = [0]
             if attempt_count > max_auto_retries:
+                if callable(append_dead_letter_fn):
+                    try:
+                        append_dead_letter_fn(
+                            run_id=run_id,
+                            tenant_id=scope["tenant_id"],
+                            workspace_id=scope["workspace_id"],
+                            specialist_key=scope["specialist_key"],
+                            reason="checkpoint_recovery_exhausted",
+                            trace_id=str(run.get("trace_id") or metadata.get("trace_id") or "").strip(),
+                            failure_count=previous_attempts,
+                            payload={
+                                "run_id": run_id,
+                                "worker_id": item.get("worker_id"),
+                                "machine_id": item.get("machine_id"),
+                                "last_heartbeat_at": item.get("last_heartbeat_at"),
+                                "next_action_index": checkpoint.get("next_action_index"),
+                                "session_profile": checkpoint.get("session_profile"),
+                                "attempt_count": previous_attempts,
+                                "max_auto_retries": max_auto_retries,
+                                "failure_kind": "checkpoint_recovery",
+                            },
+                        )
+                    except Exception:
+                        LOGGER.warning("Failed to append checkpoint dead-letter for %s", run_id, exc_info=True)
                 run["result"] = "Worker lost connection repeatedly. Automatic checkpoint recovery is paused."
                 run["result_data"] = {
                     "summary": "Worker lost connection repeatedly. Automatic checkpoint recovery is paused.",
@@ -786,6 +961,90 @@ def cleanup_stale_machine_leases(
                     )
                 continue
             run.pop("_resume_after_confirmation_scheduled", None)
+        should_retry_local_queue = selected_target in {"local", "local_companion"} and local_pending_run_ids is not None
+        previous_retry_count = int(metadata.get("local_queue_retry_count") or 0)
+        queue_retry_limit = max(0, int(metadata.get("local_queue_max_retries") or max_queue_retry_attempts or 0))
+        queue_backoff_schedule = [max(0, int(value or 0)) for value in (queue_retry_backoff_seconds or [])]
+        if should_retry_local_queue and previous_retry_count < queue_retry_limit:
+            attempt_count = previous_retry_count + 1
+            if not queue_backoff_schedule:
+                queue_backoff_schedule = [0]
+            backoff_index = min(max(0, attempt_count - 1), len(queue_backoff_schedule) - 1)
+            backoff_seconds = queue_backoff_schedule[backoff_index]
+            next_retry_at = None
+            if backoff_seconds > 0:
+                try:
+                    next_retry_at = (now + timedelta(seconds=backoff_seconds)).isoformat().replace("+00:00", "Z")
+                except Exception:
+                    next_retry_at = utc_now_iso_fn()
+            metadata["local_queue_retry_reason"] = "worker_lost"
+            metadata["local_queue_retry_count"] = attempt_count
+            metadata["local_queue_max_retries"] = queue_retry_limit
+            metadata["local_queue_retry_backoff_seconds"] = backoff_seconds
+            metadata["local_queue_next_retry_at"] = next_retry_at
+            context["metadata"] = metadata
+            run["context"] = context
+            run["result"] = (
+                "Worker lost connection. Requeued for another local worker after backoff."
+                if backoff_seconds > 0
+                else "Worker lost connection. Requeued for another local worker."
+            )
+            run["result_data"] = {
+                "summary": run["result"],
+                "error": "local_worker_requeued",
+                "worker_id": item.get("worker_id"),
+                "machine_id": item.get("machine_id"),
+                "last_heartbeat_at": item.get("last_heartbeat_at"),
+                "retry_count": attempt_count,
+                "max_retries": queue_retry_limit,
+                "retry_backoff_seconds": backoff_seconds,
+                "next_retry_at": next_retry_at,
+            }
+            log_queue = run.get("logs")
+            if log_queue is not None:
+                emit_log_fn(
+                    log_queue,
+                    "warn",
+                    run["result"],
+                    event="local_worker_requeued",
+                    data={
+                        "run_id": run_id,
+                        "retry_count": attempt_count,
+                        "max_retries": queue_retry_limit,
+                        "retry_backoff_seconds": backoff_seconds,
+                        "next_retry_at": next_retry_at,
+                        "worker_id": item.get("worker_id"),
+                        "machine_id": item.get("machine_id"),
+                    },
+                )
+            set_run_status_fn(run_id, "queued_local")
+            with local_queue_lock:
+                if run_id not in local_pending_run_ids:
+                    local_pending_run_ids.append(run_id)
+            persist_local_runtime_state_fn()
+            continue
+        if callable(append_dead_letter_fn):
+            try:
+                append_dead_letter_fn(
+                    run_id=run_id,
+                    tenant_id=scope["tenant_id"],
+                    workspace_id=scope["workspace_id"],
+                    specialist_key=scope["specialist_key"],
+                    reason="worker_lost_retry_exhausted",
+                    trace_id=str(run.get("trace_id") or metadata.get("trace_id") or "").strip(),
+                    failure_count=max(previous_retry_count, queue_retry_limit),
+                    payload={
+                        "run_id": run_id,
+                        "worker_id": item.get("worker_id"),
+                        "machine_id": item.get("machine_id"),
+                        "last_heartbeat_at": item.get("last_heartbeat_at"),
+                        "retry_count": previous_retry_count,
+                        "max_retries": queue_retry_limit,
+                        "failure_kind": "worker_lost",
+                    },
+                )
+            except Exception:
+                LOGGER.warning("Failed to append worker-loss dead-letter for %s", run_id, exc_info=True)
         run["result"] = "Worker lost connection."
         run["result_data"] = {
             "summary": "Worker lost connection.",
@@ -793,13 +1052,15 @@ def cleanup_stale_machine_leases(
             "worker_id": item.get("worker_id"),
             "machine_id": item.get("machine_id"),
             "last_heartbeat_at": item.get("last_heartbeat_at"),
+            "retry_count": previous_retry_count,
+            "max_retries": queue_retry_limit,
         }
         log_queue = run.get("logs")
         if log_queue is not None:
             emit_log_fn(
                 log_queue,
                 "error",
-                "Worker lost connection. Run failed.",
+                "Worker lost connection. Run moved to the dead-letter queue after retry budget exhaustion.",
                 event="local_worker_lost",
                 data={
                     "run_id": run_id,
@@ -807,6 +1068,8 @@ def cleanup_stale_machine_leases(
                     "machine_id": item.get("machine_id"),
                     "lease_seconds": item.get("lease_seconds"),
                     "last_heartbeat_at": item.get("last_heartbeat_at"),
+                    "retry_count": previous_retry_count,
+                    "max_retries": queue_retry_limit,
                 },
             )
         set_run_status_fn(run_id, "failed")

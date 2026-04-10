@@ -153,6 +153,7 @@ def _row_to_install_summary(row: Any) -> Optional[Dict[str, Any]]:
         "status": str(payload.get("status") or "").strip() or "active",
         "enabled": bool(payload.get("enabled")),
         "runtime_profile_id": _normalize_token(payload.get("runtime_profile_id")),
+        "runtime_mode": str(payload.get("runtime_mode") or "").strip() or "hosted_secure",
         "compiled_workflow_version_id": _normalize_token(payload.get("compiled_workflow_version_id")),
         "compiled_workflow_id": _normalize_token(payload.get("compiled_workflow_id")),
         "root_folder_uri": _normalize_token(payload.get("root_folder_uri")),
@@ -332,6 +333,33 @@ DEFAULT_RUNTIME_PROFILES: List[Dict[str, Any]] = [
         "default_execution_target": "cloud",
         "supported_capabilities": ["web_search", "external_api", "file_access"],
         "status": "active",
+        "metadata": {
+            "base_image_id": "empyralis-hosted-secure-v1",
+            "hosted_secure_limits": {
+                "cpu_seconds": 20,
+                "memory_mb": 512,
+                "timeout_seconds": 25,
+                "max_open_files": 64,
+                "max_file_bytes": 16777216,
+            },
+            "network_policy": {
+                "mode": "allowlist_hooks",
+                "allow_outbound": True,
+                "allow_private_hosts": False,
+                "allowed_hosts": [],
+                "allowed_providers": [
+                    "openai",
+                    "anthropic",
+                    "google",
+                    "groq",
+                    "openrouter",
+                    "xai",
+                    "azure_openai",
+                    "deepseek",
+                ],
+                "hooks_ready": True,
+            },
+        },
     },
     {
         "slug": "my-local-mac",
@@ -341,6 +369,28 @@ DEFAULT_RUNTIME_PROFILES: List[Dict[str, Any]] = [
         "default_execution_target": "local_companion",
         "supported_capabilities": ["computer_control", "shell.execute", "file_access", "web_search"],
         "status": "active",
+        "metadata": {
+            "allowed_folders": [],
+            "allowed_applications": [],
+            "network_policy": {
+                "mode": "allowlist_hooks",
+                "allow_outbound": True,
+                "allow_private_hosts": False,
+                "allowed_hosts": [],
+                "allowed_providers": [
+                    "openai",
+                    "anthropic",
+                    "google",
+                    "groq",
+                    "openrouter",
+                    "xai",
+                    "azure_openai",
+                    "deepseek",
+                ],
+                "hooks_ready": True,
+            },
+            "requires_privileged_approval": True,
+        },
     },
 ]
 
@@ -401,7 +451,7 @@ async def ensure_workspace_agent_registry_seeded(
                         default_execution_target, supported_capabilities, root_folder_uri, allowed_connector_scopes, status,
                         last_seen_at, metadata, created_at, updated_at
                     ) VALUES (
-                        $1, $2, $3, $4, $5, $6, $7, NULL, NULL, $8, $9::jsonb, NULL, '[]'::jsonb, $10, NULL, '{}'::jsonb, NOW(), NOW()
+                        $1, $2, $3, $4, $5, $6, $7, NULL, NULL, $8, $9::jsonb, NULL, '[]'::jsonb, $10, NULL, $11::jsonb, NOW(), NOW()
                     )
                     """,
                     profile_id,
@@ -414,6 +464,7 @@ async def ensure_workspace_agent_registry_seeded(
                     profile["default_execution_target"],
                     _to_json(profile.get("supported_capabilities"), default=[]),
                     profile["status"],
+                    _to_json(profile.get("metadata"), default={}),
                 )
 
             for definition in DEFAULT_AGENT_DEFINITIONS:
@@ -765,6 +816,7 @@ async def list_workspace_agent_installs(
             rp.machine_id,
             rp.default_execution_target,
             rp.status AS runtime_profile_status,
+            arp.runtime_mode,
             cwv.workflow_id AS compiled_workflow_id
         FROM workspace_agent_installs wai
         INNER JOIN agent_definitions ad
@@ -773,6 +825,10 @@ async def list_workspace_agent_installs(
             ON adv.id = wai.agent_definition_version_id
         LEFT JOIN runtime_profiles rp
             ON rp.id = wai.runtime_profile_id
+        LEFT JOIN agent_runtime_profiles arp
+            ON arp.agent_install_id = wai.id
+           AND arp.tenant_id = wai.tenant_id
+           AND arp.workspace_id = wai.workspace_id
         LEFT JOIN workflow_versions cwv
             ON cwv.id = wai.compiled_workflow_version_id
         WHERE wai.tenant_id = $1
@@ -1073,6 +1129,7 @@ async def get_workspace_agent_install_bundle(
             rp.status AS runtime_profile_status,
             rp.last_seen_at AS runtime_profile_last_seen_at,
             rp.metadata AS runtime_profile_metadata,
+            arp.runtime_mode,
             cwv.workflow_id AS compiled_workflow_id
         FROM workspace_agent_installs wai
         INNER JOIN agent_definitions ad
@@ -1081,6 +1138,10 @@ async def get_workspace_agent_install_bundle(
             ON adv.id = wai.agent_definition_version_id
         LEFT JOIN runtime_profiles rp
             ON rp.id = wai.runtime_profile_id
+        LEFT JOIN agent_runtime_profiles arp
+            ON arp.agent_install_id = wai.id
+           AND arp.tenant_id = wai.tenant_id
+           AND arp.workspace_id = wai.workspace_id
         LEFT JOIN workflow_versions cwv
             ON cwv.id = wai.compiled_workflow_version_id
         WHERE {' AND '.join(clauses)}
@@ -1125,6 +1186,7 @@ async def get_workspace_agent_install_bundle(
         "status": str(payload.get("status") or "").strip() or "active",
         "enabled": bool(payload.get("enabled")),
         "runtime_profile_id": _normalize_token(payload.get("runtime_profile_id")),
+        "runtime_mode": str(payload.get("runtime_mode") or "").strip() or "hosted_secure",
         "compiled_workflow_version_id": _normalize_token(payload.get("compiled_workflow_version_id")),
         "compiled_workflow_id": _normalize_token(payload.get("compiled_workflow_id")),
         "root_folder_uri": _normalize_token(payload.get("root_folder_uri")),

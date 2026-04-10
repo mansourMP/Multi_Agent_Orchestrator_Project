@@ -34,6 +34,7 @@ def _trim_memory_value(value: str) -> str:
 class MemoryQuery:
     tenant_id: str = ""
     workspace_id: str = "default"
+    agent_install_id: str = ""
     session_id: str = ""
     text: str = ""
     limit: int = 5
@@ -58,12 +59,14 @@ class MemoryResult:
 @dataclass(slots=True)
 class WorkspaceMemorySnapshot:
     workspace_id: str
+    agent_install_id: str = ""
     entries: List[Dict[str, Any]] = field(default_factory=list)
     text: str = ""
 
     def as_payload(self) -> Dict[str, Any]:
         return {
             "workspace_id": self.workspace_id,
+            "agent_install_id": self.agent_install_id or None,
             "entries": list(self.entries),
             "text": self.text,
         }
@@ -223,44 +226,95 @@ class _RuntimeMemoryCompat:
 runtime_memory = _RuntimeMemoryCompat()
 
 
-def list_memory_entries(workspace_id: str) -> List[Dict[str, Any]]:
-    return _workspace_memory_store._list_memory_entries(_normalize_workspace_id(workspace_id))
+def list_memory_entries(workspace_id: str, *, agent_install_id: str | None = None) -> List[Dict[str, Any]]:
+    return _workspace_memory_store._list_memory_entries(
+        _normalize_workspace_id(workspace_id),
+        agent_install_id=str(agent_install_id or "").strip() or None,
+    )
 
 
-def save_memory(workspace_id: str, key: str, content: str, *, sync_memory_md: bool = True) -> None:
+def save_memory(
+    workspace_id: str,
+    key: str,
+    content: str,
+    *,
+    sync_memory_md: bool = True,
+    agent_install_id: str | None = None,
+) -> None:
     _workspace_memory_store._save_memory(
         _normalize_workspace_id(workspace_id),
         key,
         content,
         sync_memory_md=sync_memory_md,
+        agent_install_id=str(agent_install_id or "").strip() or None,
     )
 
 
-def get_memory(workspace_id: str) -> str:
-    return _workspace_memory_store._get_memory(_normalize_workspace_id(workspace_id))
+def get_memory(workspace_id: str, *, agent_install_id: str | None = None) -> str:
+    return _workspace_memory_store._get_memory(
+        _normalize_workspace_id(workspace_id),
+        agent_install_id=str(agent_install_id or "").strip() or None,
+    )
 
 
-def semantic_search(workspace_id: str, query: str, top_k: int = 5) -> List[Dict[str, Any]]:
-    return _workspace_memory_store._semantic_search(_normalize_workspace_id(workspace_id), query, top_k=top_k)
+def semantic_search(
+    workspace_id: str,
+    query: str,
+    top_k: int = 5,
+    *,
+    agent_install_id: str | None = None,
+) -> List[Dict[str, Any]]:
+    return _workspace_memory_store._semantic_search(
+        _normalize_workspace_id(workspace_id),
+        query,
+        top_k=top_k,
+        agent_install_id=str(agent_install_id or "").strip() or None,
+    )
 
 
-def delete_memory(workspace_id: str, key: str) -> bool:
-    return _workspace_memory_store._delete_memory(_normalize_workspace_id(workspace_id), key)
+def delete_memory(workspace_id: str, key: str, *, agent_install_id: str | None = None) -> bool:
+    return _workspace_memory_store._delete_memory(
+        _normalize_workspace_id(workspace_id),
+        key,
+        agent_install_id=str(agent_install_id or "").strip() or None,
+    )
 
 
-def save_daily_log(workspace_id: str, content: str) -> None:
-    _workspace_memory_store._save_daily_log(_normalize_workspace_id(workspace_id), content)
+def save_daily_log(workspace_id: str, content: str, *, agent_install_id: str | None = None) -> None:
+    _workspace_memory_store._save_daily_log(
+        _normalize_workspace_id(workspace_id),
+        content,
+        agent_install_id=str(agent_install_id or "").strip() or None,
+    )
 
 
-def get_recent_logs(workspace_id: str, days: int = 7) -> str:
-    return _workspace_memory_store._get_recent_logs(_normalize_workspace_id(workspace_id), days=days)
+def get_recent_logs(workspace_id: str, days: int = 7, *, agent_install_id: str | None = None) -> str:
+    return _workspace_memory_store._get_recent_logs(
+        _normalize_workspace_id(workspace_id),
+        days=days,
+        agent_install_id=str(agent_install_id or "").strip() or None,
+    )
 
 
-def search_memory_notebook(workspace_id: str, query: str, *, max_results: int = 5) -> List[Dict[str, Any]]:
+def list_memory_notebook_files(workspace_id: str, *, agent_install_id: str | None = None) -> List[Dict[str, Any]]:
+    return _workspace_memory_store._list_memory_notebook_files(
+        _normalize_workspace_id(workspace_id),
+        agent_install_id=str(agent_install_id or "").strip() or None,
+    )
+
+
+def search_memory_notebook(
+    workspace_id: str,
+    query: str,
+    *,
+    max_results: int = 5,
+    agent_install_id: str | None = None,
+) -> List[Dict[str, Any]]:
     return _workspace_memory_store._search_memory_notebook(
         _normalize_workspace_id(workspace_id),
         query,
         max_results=max_results,
+        agent_install_id=str(agent_install_id or "").strip() or None,
     )
 
 
@@ -270,27 +324,32 @@ def get_memory_notebook_excerpt(
     *,
     from_line: int | None = None,
     line_count: int | None = None,
+    agent_install_id: str | None = None,
 ) -> Dict[str, Any]:
     return _workspace_memory_store._get_memory_notebook_excerpt(
         _normalize_workspace_id(workspace_id),
         rel_path,
         from_line=from_line,
         line_count=line_count,
+        agent_install_id=str(agent_install_id or "").strip() or None,
     )
 
 
-def workspace_memory_snapshot(workspace_id: str) -> WorkspaceMemorySnapshot:
+def workspace_memory_snapshot(workspace_id: str, *, agent_install_id: str | None = None) -> WorkspaceMemorySnapshot:
     normalized_workspace_id = _normalize_workspace_id(workspace_id)
-    entries = list_memory_entries(normalized_workspace_id)
+    normalized_agent_install_id = str(agent_install_id or "").strip()
+    entries = list_memory_entries(normalized_workspace_id, agent_install_id=normalized_agent_install_id or None)
     return WorkspaceMemorySnapshot(
         workspace_id=normalized_workspace_id,
+        agent_install_id=normalized_agent_install_id,
         entries=entries,
-        text=get_memory(normalized_workspace_id),
+        text=get_memory(normalized_workspace_id, agent_install_id=normalized_agent_install_id or None),
     )
 
 
 def query_memory(query: MemoryQuery) -> MemoryResult:
     normalized_workspace_id = _normalize_workspace_id(query.workspace_id)
+    normalized_agent_install_id = str(query.agent_install_id or "").strip()
     safe_limit = max(1, min(int(query.limit or 5), 20))
     normalized_query_text = str(query.text or "").strip()
     tracer = get_tracer("server_modules.memory_service")
@@ -300,6 +359,7 @@ def query_memory(query: MemoryQuery) -> MemoryResult:
             {
                 "memory_type": "workspace_query",
                 "workspace_id": normalized_workspace_id,
+                "agent_install_id": normalized_agent_install_id or None,
                 "tenant_id": str(query.tenant_id or "").strip() or "default",
                 "actor_type": str(query.metadata.get("actor_type") or "").strip() or "runtime",
                 "run_id": str(query.metadata.get("run_id") or "").strip() or None,
@@ -309,7 +369,12 @@ def query_memory(query: MemoryQuery) -> MemoryResult:
         items: List[MemoryItem] = []
 
         if normalized_query_text:
-            for entry in semantic_search(normalized_workspace_id, normalized_query_text, top_k=safe_limit):
+            for entry in semantic_search(
+                normalized_workspace_id,
+                normalized_query_text,
+                top_k=safe_limit,
+                agent_install_id=normalized_agent_install_id or None,
+            ):
                 key = str(entry.get("key") or "").strip()
                 content = str(entry.get("content") or "").strip()
                 if not content:
@@ -331,10 +396,14 @@ def query_memory(query: MemoryQuery) -> MemoryResult:
 
         context_blocks: List[str] = []
         if query.include_workspace_context:
-            memory_text = get_memory(normalized_workspace_id)
+            memory_text = get_memory(normalized_workspace_id, agent_install_id=normalized_agent_install_id or None)
             if memory_text:
                 context_blocks.append(f"Runtime Memory Facts\n{memory_text}")
-            recent_logs = get_recent_logs(normalized_workspace_id, days=7)
+            recent_logs = get_recent_logs(
+                normalized_workspace_id,
+                days=7,
+                agent_install_id=normalized_agent_install_id or None,
+            )
             if recent_logs:
                 context_blocks.append(f"Recent Daily Logs\n{recent_logs[:6000].rstrip()}")
 
@@ -342,8 +411,13 @@ def query_memory(query: MemoryQuery) -> MemoryResult:
         return MemoryResult(items=items, context_blocks=context_blocks)
 
 
-def direct_chat_memory_context_message(workspace_id: str, *, system_prefix: str) -> Dict[str, str] | None:
-    memory = get_memory(workspace_id)
+def direct_chat_memory_context_message(
+    workspace_id: str,
+    *,
+    system_prefix: str,
+    agent_install_id: str | None = None,
+) -> Dict[str, str] | None:
+    memory = get_memory(workspace_id, agent_install_id=agent_install_id)
     if not memory:
         return None
     return {
@@ -352,10 +426,18 @@ def direct_chat_memory_context_message(workspace_id: str, *, system_prefix: str)
     }
 
 
-def direct_chat_workspace_context_text(workspace_id: str, *, memory_query: str = "") -> str:
+def direct_chat_workspace_context_text(
+    workspace_id: str,
+    *,
+    memory_query: str = "",
+    agent_install_id: str | None = None,
+) -> str:
     sections: List[str] = []
     try:
-        context_files = read_workspace_context_files()
+        context_files = read_workspace_context_files(
+            workspace_id=workspace_id,
+            agent_install_id=str(agent_install_id or "").strip() or None,
+        )
     except Exception:
         context_files = {}
 
@@ -364,11 +446,15 @@ def direct_chat_workspace_context_text(workspace_id: str, *, memory_query: str =
         if content:
             sections.append(f"{filename}\n{content}")
 
-    recent_logs = get_recent_logs(workspace_id, days=7)
+    recent_logs = get_recent_logs(workspace_id, days=7, agent_install_id=agent_install_id)
     if recent_logs:
         sections.append(f"Recent Daily Logs\n{recent_logs[:6000].rstrip()}")
 
-    memory_entries = semantic_search(workspace_id, memory_query, top_k=5) if str(memory_query or "").strip() else []
+    memory_entries = (
+        semantic_search(workspace_id, memory_query, top_k=5, agent_install_id=agent_install_id)
+        if str(memory_query or "").strip()
+        else []
+    )
     if memory_entries:
         memory_facts = "\n".join(
             f"- {str(item.get('key') or '').strip()}: {str(item.get('content') or '').strip()}"
@@ -376,7 +462,7 @@ def direct_chat_workspace_context_text(workspace_id: str, *, memory_query: str =
             if str(item.get("content") or "").strip()
         ).strip()
     else:
-        memory_facts = get_memory(workspace_id)
+        memory_facts = get_memory(workspace_id, agent_install_id=agent_install_id)
     if memory_facts:
         sections.append(f"Runtime Memory Facts\n{memory_facts}")
 
@@ -619,6 +705,7 @@ def runtime_memory_search(
     query: str,
     bucket: str | None = None,
     workspace_id: str | None = None,
+    agent_install_id: str | None = None,
     profile_id: str | None = None,
     project_id: str | None = None,
     session_key: str | None = None,
@@ -634,6 +721,7 @@ def runtime_memory_search(
             {
                 "memory_type": normalized_bucket or "scoped_search",
                 "workspace_id": normalized_workspace_id,
+                "agent_install_id": str(agent_install_id or "").strip() or None,
                 "tenant_id": "default",
                 "actor_type": "runtime",
                 "memory_limit": int(k),
@@ -643,6 +731,7 @@ def runtime_memory_search(
             query=str(query or "").strip(),
             bucket=normalized_bucket,
             workspace_id=normalized_workspace_id,
+            agent_install_id=str(agent_install_id or "").strip() or None,
             profile_id=str(profile_id or "").strip() or None,
             project_id=str(project_id or "").strip() or None,
             session_key=str(session_key or "").strip() or None,
@@ -654,6 +743,7 @@ def runtime_memory_search(
             "query": str(query or "").strip(),
             "bucket": normalized_bucket,
             "workspace_id": normalized_workspace_id,
+            "agent_install_id": str(agent_install_id or "").strip() or None,
             "count": len(items),
             "items": items,
         }
@@ -664,6 +754,7 @@ def runtime_memory_upsert(
     text: str,
     bucket: str,
     workspace_id: str | None = None,
+    agent_install_id: str | None = None,
     profile_id: str | None = None,
     project_id: str | None = None,
     session_key: str | None = None,
@@ -682,6 +773,7 @@ def runtime_memory_upsert(
         {
             "bucket": normalized_bucket,
             "workspace_id": normalized_workspace_id,
+            "agent_install_id": str(agent_install_id or "").strip(),
             "profile_id": str(profile_id or "").strip(),
             "project_id": str(project_id or "").strip(),
             "session_key": str(session_key or "").strip(),
@@ -698,6 +790,7 @@ def runtime_memory_upsert(
         "id": stored_id,
         "bucket": normalized_bucket,
         "workspace_id": normalized_workspace_id,
+        "agent_install_id": str(agent_install_id or "").strip() or None,
         "retention_days": normalized_retention_days,
         "expires_at": expires_at,
     }
@@ -733,6 +826,7 @@ def _memory_item_matches_scope(
     *,
     bucket: Optional[str],
     workspace_id: Optional[str],
+    agent_install_id: Optional[str],
     profile_id: Optional[str],
     project_id: Optional[str],
     session_key: Optional[str],
@@ -741,13 +835,20 @@ def _memory_item_matches_scope(
         return False
     if workspace_id and str(metadata.get("workspace_id") or "").strip() != workspace_id:
         return False
+    item_agent_install_id = str(metadata.get("agent_install_id") or "").strip()
+    if agent_install_id:
+        if item_agent_install_id and item_agent_install_id != agent_install_id:
+            return False
+        if not item_agent_install_id:
+            pass
     if profile_id and str(metadata.get("profile_id") or "").strip() != profile_id:
         return False
     if project_id and str(metadata.get("project_id") or "").strip() != project_id:
         return False
     if session_key and str(metadata.get("session_key") or "").strip() != session_key:
         return False
-    expires_at = runtime_memory._parse_utc_ts(metadata.get("expires_at"))
+    expires_value = metadata.get("expires_at")
+    expires_at = runtime_memory._parse_utc_ts(expires_value) if expires_value else None
     if expires_at and expires_at <= _runtime_utc_now():
         return False
     return True
@@ -758,6 +859,7 @@ def _memory_search_scoped(
     *,
     bucket: Optional[str] = None,
     workspace_id: Optional[str] = None,
+    agent_install_id: Optional[str] = None,
     profile_id: Optional[str] = None,
     project_id: Optional[str] = None,
     session_key: Optional[str] = None,
@@ -770,6 +872,7 @@ def _memory_search_scoped(
             {
                 "memory_type": str(bucket or "scoped_search").strip() or "scoped_search",
                 "workspace_id": str(workspace_id or "default").strip() or "default",
+                "agent_install_id": str(agent_install_id or "").strip() or None,
                 "tenant_id": "default",
                 "actor_type": "runtime",
                 "run_id": None,
@@ -807,6 +910,7 @@ def _memory_search_scoped(
                 metadata,
                 bucket=bucket,
                 workspace_id=workspace_id,
+                agent_install_id=agent_install_id,
                 profile_id=profile_id,
                 project_id=project_id,
                 session_key=session_key,
@@ -832,6 +936,7 @@ def memory_search_scoped(
     *,
     bucket: Optional[str] = None,
     workspace_id: Optional[str] = None,
+    agent_install_id: Optional[str] = None,
     profile_id: Optional[str] = None,
     project_id: Optional[str] = None,
     session_key: Optional[str] = None,
@@ -841,6 +946,7 @@ def memory_search_scoped(
         query,
         bucket=bucket,
         workspace_id=workspace_id,
+        agent_install_id=agent_install_id,
         profile_id=profile_id,
         project_id=project_id,
         session_key=session_key,
@@ -851,6 +957,11 @@ def memory_search_scoped(
 def _memory_scope_from_context(context: Dict[str, Any]) -> Dict[str, str]:
     metadata = context.get("metadata") if isinstance(context.get("metadata"), dict) else {}
     workspace_id = _runtime_workspace_id(context.get("workspace_id") or metadata.get("workspace_id"))
+    agent_install_id = str(
+        metadata.get("active_agent_install_id")
+        or metadata.get("workspace_agent_install_id")
+        or ""
+    ).strip()
     session_key = str(metadata.get("session_key") or "").strip()
     if not session_key:
         chat_id = str(metadata.get("chat_id") or "").strip()
@@ -858,6 +969,7 @@ def _memory_scope_from_context(context: Dict[str, Any]) -> Dict[str, str]:
             session_key = f"telegram:{chat_id}"
     return {
         "workspace_id": workspace_id,
+        "agent_install_id": agent_install_id,
         "profile_id": str(metadata.get("profile_id") or metadata.get("user_id") or "").strip(),
         "project_id": str(metadata.get("project_id") or context.get("workflow_id") or "").strip(),
         "session_key": session_key,
@@ -1007,6 +1119,7 @@ def _hydrate_run_memory_context(run_id: str, run: Dict[str, Any]) -> None:
                 query,
                 bucket=bucket,
                 workspace_id=scope.get("workspace_id"),
+                agent_install_id=scope.get("agent_install_id"),
                 profile_id=bucket_scope.get("profile_id"),
                 project_id=bucket_scope.get("project_id"),
                 session_key=bucket_scope.get("session_key"),
@@ -1103,6 +1216,7 @@ def _persist_run_memory(run_id: str, run: Dict[str, Any]) -> None:
         record_metadata = {
             "bucket": bucket,
             "workspace_id": scope.get("workspace_id") or "default",
+            "agent_install_id": scope.get("agent_install_id") or "",
             "profile_id": target.get("profile_id") or "",
             "project_id": target.get("project_id") or "",
             "session_key": target.get("session_key") or "",

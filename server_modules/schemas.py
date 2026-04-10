@@ -22,6 +22,46 @@ class WorkflowDelete(BaseModel):
     app_id: str
 
 
+class AppCaptainBridgeRequest(BaseModel):
+    workspace_id: str
+    app_id: str
+    bridge_type: str
+    context_envelope: Optional[Dict[str, Any]] = None
+    metadata: Optional[Dict[str, Any]] = None
+    request_text: Optional[str] = None
+
+
+class AppSpecialistBridgeRequest(BaseModel):
+    workspace_id: str
+    app_id: str
+    bridge_type: str
+    target_install_id: Optional[str] = None
+    target_capability: Optional[str] = None
+    context_envelope: Optional[Dict[str, Any]] = None
+    metadata: Optional[Dict[str, Any]] = None
+    request_text: Optional[str] = None
+
+
+class AppRuntimeBridgeRequest(BaseModel):
+    workspace_id: str
+    app_id: str
+    bridge_type: str
+    connector_id: Optional[str] = None
+    workflow_id: Optional[str] = None
+    route_key: Optional[str] = None
+    context_envelope: Optional[Dict[str, Any]] = None
+    metadata: Optional[Dict[str, Any]] = None
+
+
+class SageAppBridgeRequest(BaseModel):
+    workspace_id: str
+    app_id: str
+    bridge_type: str
+    target_app_id: Optional[str] = None
+    metadata: Optional[Dict[str, Any]] = None
+    handoff_payload: Optional[Dict[str, Any]] = None
+
+
 class AgentCreate(BaseModel):
     path: Optional[str] = None
     workspace_id: Optional[str] = None

@@ -481,6 +481,7 @@ class CodexEngineAdapter:
             workflow_id = context.get("workflow_id")
             metadata = context.get("metadata") or {}
             workspace_id = context.get("workspace_id") or metadata.get("workspace_id")
+            tenant_id = context.get("tenant_id") or metadata.get("tenant_id")
             user_goal = context.get("user_goal") or "Execute the requested business plan."
             business_plan = context.get("business_plan") or ""
             agents = context.get("agents") or []
@@ -494,12 +495,31 @@ class CodexEngineAdapter:
 
             credentials: Dict[str, Any] = {}
             if credential_id:
-                credentials = resolve_vault_credential(str(credential_id), str(workspace_id) if workspace_id else None)
+                credentials = resolve_vault_credential(
+                    str(credential_id),
+                    str(workspace_id) if workspace_id else None,
+                    tenant_id=str(tenant_id) if tenant_id else None,
+                    tool_name="provider_inference",
+                    run_id=run_id,
+                    provider=provider,
+                    runtime_mode=str(metadata.get("runtime_mode") or "").strip().lower() or None,
+                    purpose="provider_execution",
+                    actor_type="runtime",
+                )
             elif isinstance(metadata.get("credentials"), dict):
                 credentials = metadata.get("credentials") or {}
             elif provider == "openai":
                 try:
-                    credentials = resolve_default_vault_credential("openai", str(workspace_id) if workspace_id else None)
+                    credentials = resolve_default_vault_credential(
+                        "openai",
+                        str(workspace_id) if workspace_id else None,
+                        tenant_id=str(tenant_id) if tenant_id else None,
+                        tool_name="provider_inference",
+                        run_id=run_id,
+                        runtime_mode=str(metadata.get("runtime_mode") or "").strip().lower() or None,
+                        purpose="provider_default_execution",
+                        actor_type="runtime",
+                    )
                 except Exception:
                     openai_key, _ = _openai_env_bearer_with_source()
                     if openai_key:

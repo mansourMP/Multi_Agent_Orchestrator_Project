@@ -89,6 +89,39 @@ class AgentWorkspaceApiTests(unittest.TestCase):
             self.assertIsNotNone(target)
             self.assertEqual(target.read_text(encoding="utf-8"), "artifact body")
 
+    def test_agent_workspace_channel_bindings_project_identity_fields_only(self):
+        with patch.object(
+            agent_workspace_api,
+            "list_vault_connectors",
+            return_value=[
+                {
+                    "id": "cred-telegram",
+                    "connector": "telegram_bot",
+                    "label": "Telegram Bot",
+                    "workspace_id": "workspace-1",
+                    "metadata": {},
+                    "updated_at": "2026-04-10T00:00:00Z",
+                }
+            ],
+        ), patch.object(
+            agent_workspace_api,
+            "resolve_vault_credential",
+            return_value={"chat_id": "chat-123"},
+        ) as resolve_secret:
+            bindings = agent_workspace_api._agent_workspace_channel_bindings(
+                agent_role="orchestrator",
+                workspace_id="workspace-1",
+                telegram_payload={},
+                whatsapp_payload={},
+            )
+
+        self.assertEqual(bindings[0]["identity_label"], "chat-123")
+        self.assertEqual(resolve_secret.call_args.kwargs["purpose"], "channel_identity_projection")
+        self.assertEqual(
+            resolve_secret.call_args.kwargs["allowed_fields"],
+            ["chat_id", "bot_username", "from_number", "phone_number", "emailAddress", "calendar_id"],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import re
 from typing import Dict
 
 
@@ -53,8 +54,47 @@ def workspace_context_dir() -> Path:
     return _WORKSPACE_DIR
 
 
-def ensure_workspace_context_files() -> Dict[str, str]:
+def _normalize_scope_token(value: str, *, default: str) -> str:
+    token = re.sub(r"[^A-Za-z0-9_.-]+", "-", str(value or "").strip()).strip("-")
+    return token or default
+
+
+def workspace_scope_dir(workspace_id: str | None = None) -> Path:
     root = workspace_context_dir()
+    normalized_workspace_id = str(workspace_id or "").strip()
+    if not normalized_workspace_id:
+        return root
+    token = _normalize_scope_token(normalized_workspace_id, default="default")
+    if token == "default":
+        return root
+    path = root / "workspaces" / token
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def agent_workspace_context_dir(*, workspace_id: str | None = None, agent_install_id: str | None = None) -> Path:
+    scope_root = workspace_scope_dir(workspace_id)
+    normalized_install_id = str(agent_install_id or "").strip()
+    if not normalized_install_id:
+        return scope_root
+    install_token = _normalize_scope_token(normalized_install_id, default="install")
+    path = scope_root / "agents" / install_token
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def workspace_knowledge_dir(*, workspace_id: str | None = None, agent_install_id: str | None = None) -> Path:
+    path = agent_workspace_context_dir(workspace_id=workspace_id, agent_install_id=agent_install_id) / "knowledge"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def ensure_workspace_context_files(
+    *,
+    workspace_id: str | None = None,
+    agent_install_id: str | None = None,
+) -> Dict[str, str]:
+    root = agent_workspace_context_dir(workspace_id=workspace_id, agent_install_id=agent_install_id)
     out: Dict[str, str] = {}
     for filename in ALLOWED_CONTEXT_FILENAMES:
         path = root / filename
@@ -67,18 +107,33 @@ def ensure_workspace_context_files() -> Dict[str, str]:
     return out
 
 
-def read_workspace_context_files() -> Dict[str, str]:
-    return ensure_workspace_context_files()
+def read_workspace_context_files(
+    *,
+    workspace_id: str | None = None,
+    agent_install_id: str | None = None,
+) -> Dict[str, str]:
+    return ensure_workspace_context_files(workspace_id=workspace_id, agent_install_id=agent_install_id)
 
 
-def read_workspace_context_file(filename: str) -> str:
+def read_workspace_context_file(
+    filename: str,
+    *,
+    workspace_id: str | None = None,
+    agent_install_id: str | None = None,
+) -> str:
     normalized = normalize_workspace_context_filename(filename)
-    return ensure_workspace_context_files().get(normalized, "")
+    return ensure_workspace_context_files(workspace_id=workspace_id, agent_install_id=agent_install_id).get(normalized, "")
 
 
-def write_workspace_context_file(filename: str, content: str) -> Dict[str, str]:
+def write_workspace_context_file(
+    filename: str,
+    content: str,
+    *,
+    workspace_id: str | None = None,
+    agent_install_id: str | None = None,
+) -> Dict[str, str]:
     normalized = normalize_workspace_context_filename(filename)
-    root = workspace_context_dir()
+    root = agent_workspace_context_dir(workspace_id=workspace_id, agent_install_id=agent_install_id)
     path = root / normalized
     text = str(content or "")
     path.write_text(text, encoding="utf-8")

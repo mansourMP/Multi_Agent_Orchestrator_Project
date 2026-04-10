@@ -64,6 +64,11 @@ def _safe_filename(value: str) -> str:
     return text or "artifact.bin"
 
 
+def _safe_scope_token(value: str, *, default: str) -> str:
+    text = re.sub(r"[^A-Za-z0-9._-]+", "-", str(value or "").strip()).strip("-.")
+    return text or default
+
+
 def _json_safe(value: Any) -> Any:
     if value is None:
         return None
@@ -173,10 +178,17 @@ def _object_key_prefix() -> str:
     return _env_first("EMPYRALIS_OBJECT_STORAGE_PREFIX", "ORION_OBJECT_STORAGE_PREFIX").strip().strip("/")
 
 
-def _artifact_object_key(run_id: str, artifact_id: str, file_name: str) -> str:
+def _artifact_object_key(run_id: str, artifact_id: str, file_name: str, *, agent_install_id: str | None = None) -> str:
     run_token = _safe_filename(str(run_id or "").strip() or "run")
     stored_name = _safe_filename(file_name)
-    object_key = f"runs/{run_token}/{artifact_id}/{stored_name}"
+    normalized_agent_install_id = str(agent_install_id or "").strip()
+    if normalized_agent_install_id:
+        object_key = (
+            f"runs/{run_token}/agents/{_safe_scope_token(normalized_agent_install_id, default='install')}/"
+            f"{artifact_id}/{stored_name}"
+        )
+    else:
+        object_key = f"runs/{run_token}/{artifact_id}/{stored_name}"
     prefix = _object_key_prefix()
     return f"{prefix}/{object_key}" if prefix else object_key
 
@@ -301,6 +313,7 @@ class ArtifactRecord:
     uri: str
     tenant_id: str = "default"
     workspace_id: str = "default"
+    agent_install_id: Optional[str] = None
     label: str = ""
     mime_type: str = ""
     content_type: str = ""
@@ -325,6 +338,7 @@ class ArtifactRecord:
             "run_id": self.run_id,
             "tenant_id": self.tenant_id,
             "workspace_id": self.workspace_id,
+            "agent_install_id": self.agent_install_id,
             "kind": self.kind,
             "uri": self.uri,
             "uri_or_path": self.uri,
@@ -378,6 +392,7 @@ def _build_artifact_record(
     byte_size: int,
     tenant_id: Optional[str],
     workspace_id: Optional[str],
+    agent_install_id: Optional[str],
     machine_id: Optional[str],
     step_id: Optional[str],
     step_index: Optional[int],
@@ -395,6 +410,7 @@ def _build_artifact_record(
         run_id=str(run_id or "").strip(),
         tenant_id=str(tenant_id or "default").strip() or "default",
         workspace_id=str(workspace_id or "default").strip() or "default",
+        agent_install_id=str(agent_install_id or "").strip() or None,
         kind=str(kind or "artifact").strip() or "artifact",
         uri=artifact_uri(artifact_id, resolved_label),
         label=resolved_label,
@@ -424,6 +440,7 @@ def store_artifact_file(
     kind: str,
     tenant_id: Optional[str] = None,
     workspace_id: Optional[str] = None,
+    agent_install_id: Optional[str] = None,
     label: Optional[str] = None,
     machine_id: Optional[str] = None,
     step_id: Optional[str] = None,
@@ -443,7 +460,12 @@ def store_artifact_file(
     resolved_label = str(label or source.name).strip() or source.name
     artifact_token = str(artifact_id or uuid.uuid4().hex).strip() or uuid.uuid4().hex
     mime = _guess_content_type(source.name, explicit=content_type)
-    object_key = _artifact_object_key(str(run_id or "").strip(), artifact_token, resolved_label)
+    object_key = _artifact_object_key(
+        str(run_id or "").strip(),
+        artifact_token,
+        resolved_label,
+        agent_install_id=agent_install_id,
+    )
     backend = configured_artifact_storage_backend()
 
     if backend == S3_ARTIFACT_STORAGE_BACKEND:
@@ -460,6 +482,7 @@ def store_artifact_file(
             byte_size=int(source.stat().st_size),
             tenant_id=tenant_id,
             workspace_id=workspace_id,
+            agent_install_id=agent_install_id,
             machine_id=machine_id,
             step_id=step_id,
             step_index=step_index,
@@ -498,6 +521,7 @@ def store_artifact_file(
         byte_size=int(stat.st_size),
         tenant_id=tenant_id,
         workspace_id=workspace_id,
+        agent_install_id=agent_install_id,
         machine_id=machine_id,
         step_id=step_id,
         step_index=step_index,
@@ -532,6 +556,7 @@ def store_artifact_bytes(
     file_name: str,
     tenant_id: Optional[str] = None,
     workspace_id: Optional[str] = None,
+    agent_install_id: Optional[str] = None,
     label: Optional[str] = None,
     machine_id: Optional[str] = None,
     step_id: Optional[str] = None,
@@ -548,7 +573,12 @@ def store_artifact_bytes(
     artifact_token = str(artifact_id or uuid.uuid4().hex).strip() or uuid.uuid4().hex
     resolved_name = str(label or file_name or "artifact.bin").strip() or "artifact.bin"
     mime = _guess_content_type(resolved_name, explicit=content_type)
-    object_key = _artifact_object_key(str(run_id or "").strip(), artifact_token, resolved_name)
+    object_key = _artifact_object_key(
+        str(run_id or "").strip(),
+        artifact_token,
+        resolved_name,
+        agent_install_id=agent_install_id,
+    )
     backend = configured_artifact_storage_backend()
 
     if backend == S3_ARTIFACT_STORAGE_BACKEND:
@@ -565,6 +595,7 @@ def store_artifact_bytes(
             byte_size=len(bytes(content)),
             tenant_id=tenant_id,
             workspace_id=workspace_id,
+            agent_install_id=agent_install_id,
             machine_id=machine_id,
             step_id=step_id,
             step_index=step_index,
@@ -601,6 +632,7 @@ def store_artifact_bytes(
         byte_size=int(target.stat().st_size),
         tenant_id=tenant_id,
         workspace_id=workspace_id,
+        agent_install_id=agent_install_id,
         machine_id=machine_id,
         step_id=step_id,
         step_index=step_index,
@@ -627,7 +659,12 @@ def store_artifact_bytes(
     return record
 
 
-def load_artifact_metadata(reference: str) -> Optional[Dict[str, Any]]:
+def load_artifact_metadata(
+    reference: str,
+    *,
+    agent_install_id: str | None = None,
+    include_shared: bool = True,
+) -> Optional[Dict[str, Any]]:
     artifact_id = artifact_id_from_reference(reference)
     if not artifact_id:
         return None
@@ -638,11 +675,30 @@ def load_artifact_metadata(reference: str) -> Optional[Dict[str, Any]]:
         payload = json.loads(target.read_text(encoding="utf-8"))
     except Exception:
         return None
-    return payload if isinstance(payload, dict) else None
+    if not isinstance(payload, dict):
+        return None
+    normalized_agent_install_id = str(agent_install_id or "").strip()
+    if not normalized_agent_install_id:
+        return payload
+    payload_agent_install_id = str(
+        payload.get("agent_install_id")
+        or (payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}).get("agent_install_id")
+        or ""
+    ).strip()
+    if payload_agent_install_id:
+        return payload if payload_agent_install_id == normalized_agent_install_id else None
+    if include_shared:
+        return payload
+    return None
 
 
-def resolve_artifact_content_path(reference: str) -> Optional[Path]:
-    payload = load_artifact_metadata(reference)
+def resolve_artifact_content_path(
+    reference: str,
+    *,
+    agent_install_id: str | None = None,
+    include_shared: bool = True,
+) -> Optional[Path]:
+    payload = load_artifact_metadata(reference, agent_install_id=agent_install_id, include_shared=include_shared)
     if not isinstance(payload, dict):
         return None
     backend = str(payload.get("storage_backend") or FILESYSTEM_ARTIFACT_STORAGE_BACKEND).strip() or FILESYSTEM_ARTIFACT_STORAGE_BACKEND

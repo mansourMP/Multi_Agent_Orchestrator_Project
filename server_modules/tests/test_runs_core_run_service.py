@@ -26,13 +26,14 @@ class RunsCoreRunServiceTests(unittest.TestCase):
             "trigger_pending_heartbeat_schedules",
             return_value={"acted": False, "started": []},
         ) as trigger_mock:
-            payload = runs_core.trigger_pending_heartbeat_schedules()
+            payload = runs_core.trigger_pending_heartbeat_schedules(workspace_id="ws-1")
 
         self.assertEqual(payload, {"acted": False, "started": []})
         trigger_mock.assert_called_once()
         _, kwargs = trigger_mock.call_args
         self.assertIs(kwargs["weekly_schedules"], runs_core.WEEKLY_SCHEDULES)
         self.assertIs(kwargs["persist_schedules_fn"], runs_core._persist_schedules)
+        self.assertEqual(kwargs["workspace_id"], "ws-1")
 
     def test_begin_run_pending_confirmation_delegates_to_run_service(self) -> None:
         run = {

@@ -56,6 +56,9 @@ class RunsCoreConnectorIntentBindingTests(unittest.TestCase):
         self.assertEqual(tool_node["config"]["action_id"], "send_message")
         self.assertEqual(tool_node["config"]["chat_id"], "chat-123")
         self.assertEqual(tool_node["config"]["text"], "certification probe one.")
+        self.assertEqual(_resolve_vault_mock.call_args.kwargs["connector_id"], "telegram_bot")
+        self.assertEqual(_resolve_vault_mock.call_args.kwargs["action_id"], "send_message")
+        self.assertEqual(_resolve_vault_mock.call_args.kwargs["allowed_fields"], ["chat_id", "bot_username"])
 
         precheck = runs_execution._compute_tool_policy_precheck(
             {

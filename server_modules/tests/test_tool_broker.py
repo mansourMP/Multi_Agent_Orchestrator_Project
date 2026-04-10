@@ -1,0 +1,317 @@
+import asyncio
+import unittest
+from unittest.mock import patch
+
+from server_modules.agent_manifest import AgentManifest, AgentManifestIdentity, AgentManifestSkillBinding
+from server_modules import egress_policy, safe_mode_service, tool_broker, tools_http
+
+
+def _manifest(*, skills: list[str] | None = None, connectors: list[str] | None = None) -> AgentManifest:
+    return AgentManifest(
+        manifest_id="manifest-parts-pro",
+        identity=AgentManifestIdentity(
+            name="Parts Pro",
+            role="Inventory Specialist",
+            archetype="support_specialist",
+            summary="Help customers find available parts.",
+        ),
+        skills=[AgentManifestSkillBinding(id=skill_id, enabled=True) for skill_id in (skills or ["inventory-tool"])],
+        connectors={
+            "requested": list(connectors or []),
+            "bound": list(connectors or []),
+        },
+    )
+
+
+class ToolBrokerTests(unittest.TestCase):
+    def tearDown(self) -> None:
+        safe_mode_service.reset_state_for_tests()
+
+    def test_verify_capability_token_rejects_expired_grant(self):
+        grant = tool_broker.issue_capability_token(
+            manifest=_manifest(),
+            tenant_id="tenant-1",
+            workspace_id="workspace-1",
+            runtime_mode="hosted_secure",
+            runtime_scope={"driver": "sandbox_exec", "workspace_kind": "ephemeral"},
+            ttl_seconds=1,
+        )
+
+        with self.assertRaises(tool_broker.ToolExecutionDeniedError) as raised:
+            tool_broker.verify_capability_token(
+                grant.token,
+                expected_manifest_id="manifest-parts-pro",
+                expected_tenant_id="tenant-1",
+                expected_workspace_id="workspace-1",
+                runtime_mode="hosted_secure",
+                now=grant.claims["expires_at"] + 1,
+            )
+
+        self.assertEqual(raised.exception.code, "token_expired")
+
+    def test_authorize_connector_action_rejects_missing_scope(self):
+        grant = tool_broker.issue_capability_token(
+            manifest=_manifest(skills=["inventory-tool"], connectors=["inventory"]),
+            tenant_id="tenant-1",
+            workspace_id="workspace-1",
+            runtime_mode="hosted_secure",
+            runtime_scope={"driver": "sandbox_exec", "workspace_kind": "ephemeral"},
+        )
+
+        with self.assertRaises(tool_broker.ToolExecutionDeniedError) as raised:
+            tool_broker.authorize_connector_action(
+                capability_token=grant.token,
+                manifest_id="manifest-parts-pro",
+                tenant_id="tenant-1",
+                workspace_id="workspace-1",
+                runtime_mode="hosted_secure",
+                connector_scope="email",
+                action_class="read",
+            )
+
+        self.assertEqual(raised.exception.code, "connector_scope_not_granted")
+
+    def test_execute_skill_rejects_unbound_skill(self):
+        async def _run() -> None:
+            grant = tool_broker.issue_capability_token(
+                manifest=_manifest(skills=["email-access"]),
+                tenant_id="tenant-1",
+                workspace_id="workspace-1",
+                runtime_mode="hosted_secure",
+                runtime_scope={"driver": "sandbox_exec", "workspace_kind": "ephemeral"},
+            )
+            with self.assertRaises(tool_broker.ToolExecutionDeniedError) as raised:
+                await tool_broker.execute_skill(
+                    capability_token=grant.token,
+                    manifest_id="manifest-parts-pro",
+                    tenant_id="tenant-1",
+                    workspace_id="workspace-1",
+                    runtime_mode="hosted_secure",
+                    skill_id="inventory-tool",
+                    goal="Do you have Tesla Model 3 wipers?",
+                    agent_label="Parts Pro",
+                    hard_context="",
+                    operational_policy="",
+                    seed_demo_if_empty=False,
+                )
+            self.assertEqual(raised.exception.code, "skill_not_granted")
+
+        asyncio.run(_run())
+
+    def test_execute_skill_allows_bound_inventory_skill(self):
+        async def _run() -> None:
+            grant = tool_broker.issue_capability_token(
+                manifest=_manifest(skills=["inventory-tool"]),
+                tenant_id="tenant-1",
+                workspace_id="workspace-1",
+                runtime_mode="hosted_secure",
+                runtime_scope={"driver": "sandbox_exec", "workspace_kind": "ephemeral"},
+            )
+            result = await tool_broker.execute_skill(
+                capability_token=grant.token,
+                manifest_id="manifest-parts-pro",
+                tenant_id="tenant-1",
+                workspace_id="workspace-1",
+                runtime_mode="hosted_secure",
+                skill_id="inventory-tool",
+                goal="Do you have Tesla Model 3 wipers?",
+                agent_label="Parts Pro",
+                hard_context="Use inventory only.",
+                operational_policy="Never invent stock.",
+                seed_demo_if_empty=True,
+            )
+            self.assertIn(result["status"], {"ok", "no_match"})
+            self.assertIn("steps", result)
+
+        asyncio.run(_run())
+
+    def test_authorize_connector_action_rejects_when_connector_is_disabled(self):
+        safe_mode_service.set_kill_switch(
+            scope="connector",
+            enabled=True,
+            workspace_id="workspace-1",
+            connector_id="inventory",
+            reason="incident",
+        )
+        grant = tool_broker.issue_capability_token(
+            manifest=_manifest(skills=["inventory-tool"], connectors=["inventory"]),
+            tenant_id="tenant-1",
+            workspace_id="workspace-1",
+            runtime_mode="hosted_secure",
+            runtime_scope={"driver": "sandbox_exec", "workspace_kind": "ephemeral"},
+        )
+
+        with self.assertRaises(tool_broker.ToolExecutionDeniedError) as raised:
+            tool_broker.authorize_connector_action(
+                capability_token=grant.token,
+                manifest_id="manifest-parts-pro",
+                tenant_id="tenant-1",
+                workspace_id="workspace-1",
+                runtime_mode="hosted_secure",
+                connector_scope="inventory",
+                action_class="read",
+            )
+
+        self.assertEqual(raised.exception.code, "connector_disabled")
+
+    def test_authorize_connector_action_rejects_when_connector_is_paused(self):
+        safe_mode_service.set_incident_control(
+            scope="connector",
+            mode="pause",
+            workspace_id="workspace-1",
+            connector_id="inventory",
+            reason="connector pause",
+        )
+        grant = tool_broker.issue_capability_token(
+            manifest=_manifest(skills=["inventory-tool"], connectors=["inventory"]),
+            tenant_id="tenant-1",
+            workspace_id="workspace-1",
+            runtime_mode="hosted_secure",
+            runtime_scope={"driver": "sandbox_exec", "workspace_kind": "ephemeral"},
+        )
+
+        with self.assertRaises(tool_broker.ToolExecutionDeniedError) as raised:
+            tool_broker.authorize_connector_action(
+                capability_token=grant.token,
+                manifest_id="manifest-parts-pro",
+                tenant_id="tenant-1",
+                workspace_id="workspace-1",
+                runtime_mode="hosted_secure",
+                connector_scope="inventory",
+                action_class="read",
+            )
+
+        self.assertEqual(raised.exception.code, "connector_paused")
+
+    def test_master_manifest_does_not_auto_bypass_approval_when_policy_is_guarded(self):
+        guarded_master = AgentManifest(
+            manifest_id="manifest-sage-guarded",
+            identity=AgentManifestIdentity(
+                name="Sage",
+                role="Master Agent",
+                archetype="master_os",
+                summary="Coordinate the system.",
+            ),
+            policy={"approval_mode": "guarded"},
+        )
+        grant = tool_broker.issue_capability_token(
+            manifest=guarded_master,
+            tenant_id="tenant-1",
+            workspace_id="workspace-1",
+            runtime_mode="hosted_secure",
+            runtime_scope={"driver": "sandbox_exec", "workspace_kind": "ephemeral"},
+        )
+
+        with self.assertRaises(tool_broker.ToolExecutionDeniedError) as raised:
+            tool_broker.authorize_connector_action(
+                capability_token=grant.token,
+                manifest_id="manifest-sage-guarded",
+                tenant_id="tenant-1",
+                workspace_id="workspace-1",
+                runtime_mode="hosted_secure",
+                connector_scope="email",
+                action_class="write",
+            )
+
+        self.assertEqual(raised.exception.code, "approval_required")
+
+    def test_execute_skill_returns_egress_denied_when_outbound_host_is_not_allowed(self):
+        async def _network_skill(**_kwargs):
+            return await tools_http.http_request(method="GET", url="https://example.com/data")
+
+        async def _run() -> None:
+            grant = tool_broker.issue_capability_token(
+                manifest=_manifest(skills=["web-search"], connectors=["web"]),
+                tenant_id="tenant-1",
+                workspace_id="workspace-1",
+                runtime_mode="hosted_secure",
+                runtime_scope={"driver": "sandbox_exec", "workspace_kind": "ephemeral"},
+            )
+            with patch("server_modules.skill_registry.execute_skill", new=_network_skill):
+                with self.assertRaises(tool_broker.ToolExecutionDeniedError) as raised:
+                    await tool_broker.execute_skill(
+                        capability_token=grant.token,
+                        manifest_id="manifest-parts-pro",
+                        tenant_id="tenant-1",
+                        workspace_id="workspace-1",
+                        runtime_mode="hosted_secure",
+                        skill_id="web-search",
+                        goal="Research this",
+                        agent_label="Parts Pro",
+                        hard_context="",
+                        operational_policy="",
+                        seed_demo_if_empty=False,
+                    )
+            self.assertEqual(raised.exception.code, "egress_denied")
+
+        asyncio.run(_run())
+
+    def test_execute_skill_inherits_outer_allowlisted_host_policy(self):
+        class _FakeResponse:
+            status_code = 200
+            headers = {"content-type": "application/json"}
+
+            async def aread(self) -> bytes:
+                return b'{"ok": true}'
+
+        class _FakeAsyncClient:
+            def __init__(self, **_kwargs):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return None
+
+            async def request(self, **_kwargs):
+                return _FakeResponse()
+
+        async def _network_skill(**_kwargs):
+            return await tools_http.http_request(method="GET", url="https://example.com/data")
+
+        async def _run() -> None:
+            grant = tool_broker.issue_capability_token(
+                manifest=_manifest(skills=["web-search"], connectors=["web"]),
+                tenant_id="tenant-1",
+                workspace_id="workspace-1",
+                runtime_mode="hosted_secure",
+                runtime_scope={"driver": "sandbox_exec", "workspace_kind": "ephemeral"},
+            )
+            outer_policy = egress_policy.build_egress_policy(
+                tenant_id="tenant-1",
+                workspace_id="workspace-1",
+                runtime_mode="hosted_secure",
+                runtime_scope={
+                    "network_policy": {
+                        "allow_outbound": True,
+                        "allowed_hosts": ["example.com"],
+                        "allowed_providers": [],
+                        "allow_private_hosts": False,
+                    }
+                },
+                allowed_action_classes=["read"],
+            )
+            with patch("server_modules.skill_registry.execute_skill", new=_network_skill):
+                with patch("server_modules.tools_http.httpx.AsyncClient", _FakeAsyncClient):
+                    with egress_policy.activate_egress_policy(outer_policy):
+                        result = await tool_broker.execute_skill(
+                            capability_token=grant.token,
+                            manifest_id="manifest-parts-pro",
+                            tenant_id="tenant-1",
+                            workspace_id="workspace-1",
+                            runtime_mode="hosted_secure",
+                            skill_id="web-search",
+                            goal="Research this",
+                            agent_label="Parts Pro",
+                            hard_context="",
+                            operational_policy="",
+                            seed_demo_if_empty=False,
+                        )
+            self.assertEqual(result["status_code"], 200)
+
+        asyncio.run(_run())
+
+
+if __name__ == "__main__":
+    unittest.main()

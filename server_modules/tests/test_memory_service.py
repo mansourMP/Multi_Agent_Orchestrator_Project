@@ -84,6 +84,7 @@ class MemoryServiceTests(unittest.TestCase):
             query="remember",
             bucket="session",
             workspace_id="default",
+            agent_install_id=None,
             profile_id="profile-1",
             project_id="project-1",
             session_key="session-1",
@@ -133,13 +134,49 @@ class MemoryServiceTests(unittest.TestCase):
         self.assertEqual(result["retention_days"], 14)
         self.assertTrue(str(result["expires_at"]).endswith("Z"))
 
+    def test_memory_search_scoped_hides_other_install_namespaces_by_default(self) -> None:
+        manager = type(
+            "Manager",
+            (),
+            {
+                "search_memory": lambda self, query, limit: [
+                    {"id": "shared", "text": "shared context", "metadata": {"bucket": "session", "workspace_id": "default"}},
+                    {
+                        "id": "install-a",
+                        "text": "specialist A context",
+                        "metadata": {"bucket": "session", "workspace_id": "default", "agent_install_id": "install-a"},
+                    },
+                    {
+                        "id": "install-b",
+                        "text": "specialist B context",
+                        "metadata": {"bucket": "session", "workspace_id": "default", "agent_install_id": "install-b"},
+                    },
+                ]
+            },
+        )()
+
+        with patch.object(memory_service.runtime_memory, "_memory_manager", return_value=manager), patch.object(
+            memory_service,
+            "_runtime_utc_now",
+            return_value=datetime(2026, 4, 4, tzinfo=timezone.utc),
+        ):
+            items = memory_service._memory_search_scoped(
+                "context",
+                bucket="session",
+                workspace_id="default",
+                agent_install_id="install-a",
+                k=5,
+            )
+
+        self.assertEqual([item["id"] for item in items], ["shared", "install-a"])
+
     def test_hydrate_run_memory_context_uses_canonical_memory_service_search(self) -> None:
         run = {
             "logs": object(),
             "context": {
                 "workspace_id": "default",
                 "user_goal": "Find customer migration status",
-                "metadata": {"profile_id": "profile-1"},
+                "metadata": {"profile_id": "profile-1", "active_agent_install_id": "install-specialist"},
             },
             "memory_trace": {"enabled": True, "reads": [], "writes": [], "last_error": None, "updated_at": None},
         }
@@ -172,6 +209,7 @@ class MemoryServiceTests(unittest.TestCase):
             memory_service._hydrate_run_memory_context("run-1", run)
 
         scoped_mock.assert_called()
+        self.assertEqual(scoped_mock.call_args.kwargs["agent_install_id"], "install-specialist")
         self.assertEqual(run["context"]["metadata"]["memory_context"]["count"], 1)
         self.assertEqual(run["memory_trace"]["reads"][0]["bucket"], "profile")
         emit_log_mock.assert_called_once()
@@ -191,7 +229,11 @@ class MemoryServiceTests(unittest.TestCase):
             "context": {
                 "workspace_id": "default",
                 "user_goal": "Complete customer migration",
-                "metadata": {"profile_id": "profile-1", "project_id": "project-1"},
+                "metadata": {
+                    "profile_id": "profile-1",
+                    "project_id": "project-1",
+                    "active_agent_install_id": "install-specialist",
+                },
             },
             "memory_trace": {"enabled": True, "reads": [], "writes": [], "last_error": None, "updated_at": None},
         }
@@ -236,8 +278,35 @@ class MemoryServiceTests(unittest.TestCase):
             memory_service._persist_run_memory("run-1", run)
 
         self.assertEqual(len(writes), 3)
+        self.assertTrue(all(metadata.get("agent_install_id") == "install-specialist" for _text, metadata in writes))
         self.assertEqual(run["memory_trace"]["writes"][-1]["bucket"], "profile")
         emit_log_mock.assert_called_once()
+
+    def test_direct_chat_workspace_context_text_reads_install_namespace_when_requested(self) -> None:
+        workspace_context.write_workspace_context_file("SOUL.md", "Shared soul.\n")
+        workspace_context.write_workspace_context_file(
+            "SOUL.md",
+            "Specialist soul.\n",
+            workspace_id="default",
+            agent_install_id="install-specialist",
+        )
+        memory_service.save_memory("default", "shared_key", "shared value")
+        memory_service.save_memory("default", "private_key", "private value", agent_install_id="install-specialist")
+        memory_service.save_daily_log("default", "Shared log entry.")
+        memory_service.save_daily_log("default", "Private log entry.", agent_install_id="install-specialist")
+
+        text = memory_service.direct_chat_workspace_context_text(
+            "default",
+            memory_query="private",
+            agent_install_id="install-specialist",
+        )
+
+        self.assertIn("Specialist soul.", text)
+        self.assertNotIn("Shared soul.", text)
+        self.assertIn("private value", text)
+        self.assertNotIn("shared value", text)
+        self.assertIn("Private log entry.", text)
+        self.assertNotIn("Shared log entry.", text)
 
     def test_direct_chat_workspace_context_text_collects_context_logs_and_memory(self) -> None:
         workspace_context.write_workspace_context_file("SOUL.md", "Stay concise.\n")

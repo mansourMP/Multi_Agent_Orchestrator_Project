@@ -18,8 +18,16 @@ def _normalize_workspace_token(workspace_id: str) -> str:
     return token or "default"
 
 
-def _transcript_dir(workspace_id: str) -> Path:
+def _normalize_agent_token(agent_install_id: str) -> str:
+    token = re.sub(r"[^A-Za-z0-9_.-]+", "-", str(agent_install_id or "").strip()).strip("-")
+    return token or "install"
+
+
+def _transcript_dir(workspace_id: str, agent_install_id: str | None = None) -> Path:
     path = _TRANSCRIPTS_ROOT / _normalize_workspace_token(workspace_id)
+    normalized_agent_install_id = str(agent_install_id or "").strip()
+    if normalized_agent_install_id:
+        path = path / "agents" / _normalize_agent_token(normalized_agent_install_id)
     path.mkdir(parents=True, exist_ok=True)
     return path
 
@@ -66,9 +74,65 @@ def build_transcript_summary(
     return "\n".join(lines).strip()
 
 
+def _latest_message_by_role(messages: List[Dict[str, Any]], role: str) -> str:
+    normalized_role = str(role or "").strip().lower()
+    for item in reversed(list(messages or [])):
+        if not isinstance(item, dict):
+            continue
+        if str(item.get("role") or "").strip().lower() != normalized_role:
+            continue
+        content = _compact_line(item.get("content"), limit=420)
+        if content:
+            return content
+    return ""
+
+
+def list_session_transcript_summaries(
+    *,
+    workspace_id: str,
+    agent_install_id: str | None = None,
+    limit: int = 5,
+) -> List[Dict[str, Any]]:
+    transcript_dir = _transcript_dir(workspace_id, agent_install_id=agent_install_id)
+    safe_limit = max(1, min(int(limit or 5), 20))
+    out: List[Dict[str, Any]] = []
+    transcript_files = sorted(transcript_dir.glob("*.jsonl"), reverse=True)
+    for transcript_path in transcript_files:
+        try:
+            lines = transcript_path.read_text(encoding="utf-8").splitlines()
+        except Exception:
+            continue
+        for raw_line in reversed(lines):
+            if len(out) >= safe_limit:
+                return out
+            try:
+                payload = json.loads(raw_line)
+            except Exception:
+                continue
+            messages = [dict(item) for item in list(payload.get("messages") or []) if isinstance(item, dict)]
+            summary = build_transcript_summary(
+                messages=messages,
+                user_message=_latest_message_by_role(messages, "user"),
+                assistant_reply=_latest_message_by_role(messages, "assistant"),
+            )
+            out.append(
+                {
+                    "path": str(transcript_path),
+                    "timestamp": str(payload.get("timestamp") or "").strip() or None,
+                    "thread_id": str(payload.get("thread_id") or "").strip() or None,
+                    "provider": str(payload.get("provider") or "").strip() or None,
+                    "model": str(payload.get("model") or "").strip() or None,
+                    "message_count": len(messages),
+                    "summary": summary,
+                }
+            )
+    return out
+
+
 def save_session_transcript(
     *,
     workspace_id: str,
+    agent_install_id: str | None = None,
     thread_id: str,
     provider: Optional[str],
     model: Optional[str],
@@ -78,10 +142,11 @@ def save_session_transcript(
 ) -> Dict[str, Any]:
     now = _utc_now()
     day_token = now.strftime("%Y-%m-%d")
-    transcript_path = _transcript_dir(workspace_id) / f"{day_token}.jsonl"
+    transcript_path = _transcript_dir(workspace_id, agent_install_id=agent_install_id) / f"{day_token}.jsonl"
     payload = {
         "timestamp": now.isoformat().replace("+00:00", "Z"),
         "workspace_id": _normalize_workspace_token(workspace_id),
+        "agent_install_id": str(agent_install_id or "").strip() or None,
         "thread_id": str(thread_id or "").strip() or None,
         "provider": str(provider or "").strip() or None,
         "model": str(model or "").strip() or None,
@@ -97,7 +162,7 @@ def save_session_transcript(
     )
     if summary:
         try:
-            save_daily_log(workspace_id, summary)
+            save_daily_log(workspace_id, summary, agent_install_id=agent_install_id)
         except Exception:
             pass
     return {

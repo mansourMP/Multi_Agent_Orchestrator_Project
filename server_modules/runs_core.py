@@ -361,7 +361,7 @@ def _run_weekly_scheduler_forever():
     )
 
 
-def trigger_pending_heartbeat_schedules() -> Dict[str, Any]:
+def trigger_pending_heartbeat_schedules(*, workspace_id: Optional[str] = None) -> Dict[str, Any]:
     return run_service.trigger_pending_heartbeat_schedules(
         schedules_lock=SCHEDULES_LOCK,
         weekly_schedules=WEEKLY_SCHEDULES,
@@ -371,6 +371,7 @@ def trigger_pending_heartbeat_schedules() -> Dict[str, Any]:
         persist_schedules_fn=_persist_schedules,
         utc_now_fn=lambda: datetime.now(timezone.utc),
         utc_now_iso_fn=lambda: datetime.utcnow().isoformat() + "Z",
+        workspace_id=workspace_id,
     )
 
 
@@ -657,7 +658,16 @@ def _recognize_telegram_send_intent(
     if not credential_id:
         return None
     try:
-        secret = resolve_vault_credential(credential_id, workspace_id)
+        secret = resolve_vault_credential(
+            credential_id,
+            workspace_id,
+            connector_id="telegram_bot",
+            action_id="send_message",
+            tool_name="send_message",
+            purpose="connector_write_intent",
+            actor_type="runtime",
+            allowed_fields=["chat_id", "bot_username"],
+        )
     except Exception:
         return None
     chat_id = str(secret.get("chat_id") or "").strip()

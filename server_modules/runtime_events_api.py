@@ -4,7 +4,8 @@ from datetime import datetime, timezone
 import threading
 from typing import Any, Dict, List, Optional
 
-from server_modules.api_contract import ApiNotificationListResponse
+from server_modules import activity_ledger_service
+from server_modules.api_contract import ApiActivityListResponse, ApiNotificationListResponse
 
 
 _NOTIFICATION_READ_STATE_LOCK = threading.Lock()
@@ -363,7 +364,7 @@ def register_inbox_routes(app) -> None:
 
     @app.post("/notifications/devices", dependencies=[Depends(require_api_key)])
     async def register_notification_device(body: Optional[Dict[str, Any]] = None, current_user=Depends(require_api_key)):
-        from server_modules import notification_service
+        from server_modules import control_plane_repository, notification_service
 
         payload = body if isinstance(body, dict) else {}
         workspace_id = str(payload.get("workspace_id") or "").strip()
@@ -376,6 +377,7 @@ def register_inbox_routes(app) -> None:
         if not push_token:
             raise HTTPException(status_code=400, detail="push_token is required.")
         capabilities = payload.get("capabilities")
+        workspace = await control_plane_repository.get_workspace_by_id(workspace_id)
         return notification_service.register_notification_device(
             current_user=current_user,
             workspace_id=workspace_id,
@@ -386,6 +388,45 @@ def register_inbox_routes(app) -> None:
             device_name=str(payload.get("device_name") or "").strip(),
             app_id=str(payload.get("app_id") or "").strip(),
             capabilities=capabilities if isinstance(capabilities, list) else None,
+            workspace=workspace,
+        )
+
+    @app.get("/activity/timeline", dependencies=[Depends(require_api_key)], response_model=ApiActivityListResponse)
+    async def get_activity_timeline(
+        workspace_id: Optional[str] = None,
+        tenant_id: Optional[str] = None,
+        limit: int = 80,
+        event_class: Optional[str] = None,
+        detail_level: Optional[str] = None,
+        actor_type: Optional[str] = None,
+        actor_id: Optional[str] = None,
+        install_id: Optional[str] = None,
+        app_id: Optional[str] = None,
+        run_id: Optional[str] = None,
+        thread_id: Optional[str] = None,
+        current_user=Depends(require_api_key),
+    ):
+        from server_modules.auth import enforce_workspace_access, workspace_tenant_id
+
+        resolved_workspace_id = enforce_workspace_access(
+            current_user,
+            workspace_id,
+            tenant_id=tenant_id,
+            minimum_role="viewer",
+        )
+        resolved_tenant_id = str(tenant_id or "").strip() or workspace_tenant_id(current_user, resolved_workspace_id)
+        return await activity_ledger_service.list_activity_timeline_payload(
+            tenant_id=resolved_tenant_id,
+            workspace_id=resolved_workspace_id,
+            limit=limit,
+            event_class=event_class,
+            detail_level=detail_level,
+            actor_type=actor_type,
+            actor_id=actor_id,
+            install_id=install_id,
+            app_id=app_id,
+            run_id=run_id,
+            thread_id=thread_id,
         )
 
     @app.get("/events/inbox/sessions", dependencies=[Depends(require_api_key)])

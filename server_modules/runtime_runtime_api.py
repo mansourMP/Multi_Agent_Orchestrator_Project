@@ -46,9 +46,20 @@ class RuntimeRegisterPayload(BaseModel):
     execution_targets: List[str] = Field(default_factory=list)
     instance_id: Optional[str] = None
     capability_digest: Optional[str] = None
+    prewarm_state: Optional[str] = None
+    warm_pool: Optional[str] = None
     current_run_id: Optional[str] = None
     note: Optional[str] = None
     permission_probe: Dict[str, Dict[str, Any]] = Field(default_factory=dict)
+    runtime_role: Optional[str] = None
+    install_id: Optional[str] = None
+    specialist_key: Optional[str] = None
+    summary_channel: Optional[str] = None
+    artifact_channel: Optional[str] = None
+    local_private_memory_only: Optional[bool] = None
+    summary_text: Optional[str] = None
+    artifacts: Optional[List[Dict[str, Any]]] = None
+    health_state: Optional[str] = None
 
 
 class RuntimeHeartbeatPayload(BaseModel):
@@ -57,6 +68,34 @@ class RuntimeHeartbeatPayload(BaseModel):
     current_run_id: Optional[str] = None
     note: Optional[str] = None
     permission_probe: Dict[str, Dict[str, Any]] = Field(default_factory=dict)
+    runtime_role: Optional[str] = None
+    install_id: Optional[str] = None
+    specialist_key: Optional[str] = None
+    summary_channel: Optional[str] = None
+    artifact_channel: Optional[str] = None
+    local_private_memory_only: Optional[bool] = None
+    summary_text: Optional[str] = None
+    artifacts: Optional[List[Dict[str, Any]]] = None
+    health_state: Optional[str] = None
+    lifecycle_reason: Optional[str] = None
+
+
+class LocalClusterLifecyclePayload(BaseModel):
+    session_token: Optional[str] = None
+    instance_id: Optional[str] = None
+    current_run_id: Optional[str] = None
+    note: Optional[str] = None
+    reason: Optional[str] = None
+    permission_probe: Dict[str, Dict[str, Any]] = Field(default_factory=dict)
+    runtime_role: Optional[str] = None
+    install_id: Optional[str] = None
+    specialist_key: Optional[str] = None
+    summary_channel: Optional[str] = None
+    artifact_channel: Optional[str] = None
+    local_private_memory_only: Optional[bool] = None
+    summary_text: Optional[str] = None
+    artifacts: Optional[List[Dict[str, Any]]] = None
+    health_state: Optional[str] = None
 
 
 class MachineEnrollPayload(BaseModel):
@@ -294,6 +333,9 @@ def _runtime_summary_from_worker_item(item: Dict[str, Any]) -> Dict[str, Any]:
         "machine_id": str(item.get("machine_id") or item.get("runtime_id") or item.get("worker_id") or ""),
         "runtime_id": str(item.get("runtime_id") or item.get("worker_id") or ""),
         "runtime_type": str(item.get("runtime_type") or "local"),
+        "runtime_role": str(item.get("runtime_role") or "generic").strip().lower() or "generic",
+        "install_id": str(item.get("install_id") or "").strip() or None,
+        "specialist_key": str(item.get("specialist_key") or "").strip() or None,
         "display_name": str(item.get("display_name") or item.get("worker_id") or ""),
         "platform": item.get("platform"),
         "policy_mode": str(item.get("policy_mode") or "local_default"),
@@ -313,6 +355,25 @@ def _runtime_summary_from_worker_item(item: Dict[str, Any]) -> Dict[str, Any]:
         "note": item.get("note"),
         "permission_probe": item.get("permission_probe") if isinstance(item.get("permission_probe"), dict) else {},
         "permission_probe_updated_at": item.get("permission_probe_updated_at"),
+        "lifecycle_state": item.get("lifecycle_state") or "registered",
+        "lifecycle_state_updated_at": item.get("lifecycle_state_updated_at"),
+        "lifecycle_reason": item.get("lifecycle_reason"),
+        "started_at": item.get("started_at"),
+        "last_started_at": item.get("last_started_at"),
+        "stopped_at": item.get("stopped_at"),
+        "recovery_requested_at": item.get("recovery_requested_at"),
+        "last_recovered_at": item.get("last_recovered_at"),
+        "last_recovered_run_ids": list(item.get("last_recovered_run_ids") or []),
+        "last_resumed_run_ids": list(item.get("last_resumed_run_ids") or []),
+        "health_state": item.get("health_state") or "unknown",
+        "health_updated_at": item.get("health_updated_at"),
+        "summary_channel": item.get("summary_channel"),
+        "artifact_channel": item.get("artifact_channel"),
+        "local_private_memory_only": bool(item.get("local_private_memory_only", True)),
+        "last_summary": item.get("last_summary"),
+        "last_summary_at": item.get("last_summary_at"),
+        "last_artifacts": list(item.get("last_artifacts") or []),
+        "last_artifact_at": item.get("last_artifact_at"),
         "control_state": item.get("control_state") or "active",
         "control_state_updated_at": item.get("control_state_updated_at"),
         "suspended_at": item.get("suspended_at"),
@@ -326,7 +387,31 @@ def _runtime_summary_from_worker_item(item: Dict[str, Any]) -> Dict[str, Any]:
         "enrollment_updated_at": item.get("enrollment_updated_at"),
         "bootstrap_error": item.get("bootstrap_error"),
         "machine_enrollment_scope": item.get("machine_enrollment_scope") or "workspace",
+        "prewarm_state": item.get("prewarm_state"),
+        "warm_pool": item.get("warm_pool"),
+        "queue_shard": item.get("queue_shard"),
     }
+
+
+def _local_cluster_worker_payload(
+    payload: Optional[LocalClusterLifecyclePayload | RuntimeHeartbeatPayload],
+) -> local_queue.LocalWorkerHeartbeatPayload:
+    body = payload or LocalClusterLifecyclePayload()
+    return local_queue.LocalWorkerHeartbeatPayload(
+        current_run_id=body.current_run_id,
+        note=body.note,
+        permission_probe=dict(body.permission_probe or {}),
+        runtime_role=body.runtime_role,
+        install_id=body.install_id,
+        specialist_key=body.specialist_key,
+        summary_channel=body.summary_channel,
+        artifact_channel=body.artifact_channel,
+        local_private_memory_only=body.local_private_memory_only,
+        summary_text=body.summary_text,
+        artifacts=body.artifacts,
+        health_state=body.health_state,
+        lifecycle_reason=getattr(body, "lifecycle_reason", None) or getattr(body, "reason", None),
+    )
 
 
 def _task_summary_from_local_claim(run: Dict[str, Any]) -> Dict[str, Any]:
@@ -826,7 +911,7 @@ def register_runtime_routes(app) -> None:
         if not runtime_token:
             raise HTTPException(status_code=400, detail="runtime_id is required.")
         body = payload or RuntimeRegisterPayload()
-        registration = local_queue._upsert_runtime_registration(
+        registration = local_queue.handle_register_local_cluster_runtime(
             runtime_token,
             runtime_type=body.runtime_type,
             display_name=body.display_name,
@@ -836,28 +921,40 @@ def register_runtime_routes(app) -> None:
             execution_targets=body.execution_targets or ["local"],
             instance_id=body.instance_id,
             capability_digest=body.capability_digest,
+            prewarm_state=body.prewarm_state,
+            warm_pool=body.warm_pool,
             permission_probe=body.permission_probe,
+            runtime_role=body.runtime_role,
+            install_id=body.install_id,
+            specialist_key=body.specialist_key,
+            summary_channel=body.summary_channel,
+            artifact_channel=body.artifact_channel,
+            local_private_memory_only=body.local_private_memory_only,
+            note=body.note,
+            summary_text=body.summary_text,
+            artifacts=body.artifacts,
+            health_state=body.health_state,
         )
-        heartbeat = local_queue.LocalWorkerHeartbeatPayload(
-            current_run_id=body.current_run_id,
-            note=body.note or "runtime_registered",
-            permission_probe=body.permission_probe,
-        )
-        local_queue.handle_heartbeat_local_worker(runtime_token, heartbeat)
-        status_payload = local_queue.handle_get_local_workers_status()
-        items = status_payload.get("items") if isinstance(status_payload.get("items"), list) else []
-        item = next(
-            (
-                _runtime_summary_from_worker_item(candidate)
-                for candidate in items
-                if isinstance(candidate, dict)
-                and str(candidate.get("runtime_id") or candidate.get("worker_id") or "").strip() == runtime_token
+        runtime = local_queue.handle_start_local_runtime(
+            runtime_token,
+            local_queue.LocalWorkerHeartbeatPayload(
+                current_run_id=body.current_run_id,
+                note=body.note or "runtime_registered",
+                permission_probe=body.permission_probe,
+                runtime_role=body.runtime_role,
+                install_id=body.install_id,
+                specialist_key=body.specialist_key,
+                summary_channel=body.summary_channel,
+                artifact_channel=body.artifact_channel,
+                local_private_memory_only=body.local_private_memory_only,
+                summary_text=body.summary_text,
+                artifacts=body.artifacts,
+                health_state=body.health_state,
             ),
-            None,
         )
         return {
             "ok": True,
-            "runtime": item,
+            "runtime": _runtime_summary_from_worker_item(runtime.get("runtime") or {}),
             "session_token": registration.get("session_token"),
             "machine_id": registration.get("machine_id") or runtime_token,
             "instance_id": registration.get("instance_id"),
@@ -872,18 +969,120 @@ def register_runtime_routes(app) -> None:
             raise HTTPException(status_code=400, detail="runtime_id is required.")
         body = payload or RuntimeHeartbeatPayload()
         local_queue._assert_runtime_session(runtime_token, body.session_token, instance_id=body.instance_id)
-        local_payload = local_queue.LocalWorkerHeartbeatPayload(
-            current_run_id=body.current_run_id,
-            note=body.note or "runtime_heartbeat",
-            permission_probe=body.permission_probe,
-        )
-        result = local_queue.handle_heartbeat_local_worker(runtime_token, local_payload)
+        local_payload = _local_cluster_worker_payload(body)
+        if not str(local_payload.note or "").strip():
+            local_payload.note = "runtime_heartbeat"
+        result = local_queue.handle_heartbeat_local_runtime(runtime_token, local_payload)
         return {
             "ok": True,
             "runtime_id": runtime_token,
             "current_task_id": result.get("current_run_id"),
             "last_seen_at": result.get("last_seen_at"),
+            "runtime": _runtime_summary_from_worker_item(result.get("runtime") or {}),
         }
+
+    @app.post("/runtime/local-cluster/{runtime_id}/register", dependencies=[Depends(require_api_key)])
+    async def register_local_cluster_runtime(runtime_id: str, payload: Optional[RuntimeRegisterPayload] = None):
+        runtime_token = str(runtime_id or "").strip()
+        if not runtime_token:
+            raise HTTPException(status_code=400, detail="runtime_id is required.")
+        body = payload or RuntimeRegisterPayload()
+        result = local_queue.handle_register_local_cluster_runtime(
+            runtime_token,
+            runtime_type=body.runtime_type,
+            display_name=body.display_name,
+            platform=body.platform,
+            policy_mode=body.policy_mode,
+            capabilities=body.capabilities,
+            execution_targets=body.execution_targets or ["local_companion"],
+            instance_id=body.instance_id,
+            capability_digest=body.capability_digest,
+            prewarm_state=body.prewarm_state,
+            warm_pool=body.warm_pool,
+            permission_probe=body.permission_probe,
+            runtime_role=body.runtime_role,
+            install_id=body.install_id,
+            specialist_key=body.specialist_key,
+            summary_channel=body.summary_channel,
+            artifact_channel=body.artifact_channel,
+            local_private_memory_only=body.local_private_memory_only,
+            note=body.note,
+            summary_text=body.summary_text,
+            artifacts=body.artifacts,
+            health_state=body.health_state,
+        )
+        result["runtime"] = _runtime_summary_from_worker_item(result.get("runtime") or {})
+        return result
+
+    @app.post("/runtime/local-cluster/{runtime_id}/start", dependencies=[Depends(require_api_key)])
+    async def start_local_cluster_runtime(runtime_id: str, payload: Optional[LocalClusterLifecyclePayload] = None):
+        runtime_token = str(runtime_id or "").strip()
+        if not runtime_token:
+            raise HTTPException(status_code=400, detail="runtime_id is required.")
+        body = payload or LocalClusterLifecyclePayload()
+        local_queue._assert_runtime_session(runtime_token, body.session_token, instance_id=body.instance_id)
+        result = local_queue.handle_start_local_runtime(runtime_token, _local_cluster_worker_payload(body))
+        result["runtime"] = _runtime_summary_from_worker_item(result.get("runtime") or {})
+        return result
+
+    @app.get("/runtime/local-cluster/{runtime_id}/health", dependencies=[Depends(require_api_key)])
+    async def get_local_cluster_runtime_health(runtime_id: str):
+        runtime_token = str(runtime_id or "").strip()
+        if not runtime_token:
+            raise HTTPException(status_code=400, detail="runtime_id is required.")
+        result = local_queue.handle_get_local_runtime_health(runtime_token)
+        result["runtime"] = _runtime_summary_from_worker_item(result.get("runtime") or {})
+        return result
+
+    @app.post("/runtime/local-cluster/{runtime_id}/heartbeat", dependencies=[Depends(require_api_key)])
+    async def heartbeat_local_cluster_runtime(runtime_id: str, payload: Optional[LocalClusterLifecyclePayload] = None):
+        runtime_token = str(runtime_id or "").strip()
+        if not runtime_token:
+            raise HTTPException(status_code=400, detail="runtime_id is required.")
+        body = payload or LocalClusterLifecyclePayload()
+        local_queue._assert_runtime_session(runtime_token, body.session_token, instance_id=body.instance_id)
+        result = local_queue.handle_heartbeat_local_runtime(runtime_token, _local_cluster_worker_payload(body))
+        result["runtime"] = _runtime_summary_from_worker_item(result.get("runtime") or {})
+        return result
+
+    @app.post("/runtime/local-cluster/{runtime_id}/stop", dependencies=[Depends(require_api_key)])
+    async def stop_local_cluster_runtime(runtime_id: str, payload: Optional[LocalClusterLifecyclePayload] = None):
+        runtime_token = str(runtime_id or "").strip()
+        if not runtime_token:
+            raise HTTPException(status_code=400, detail="runtime_id is required.")
+        body = payload or LocalClusterLifecyclePayload()
+        local_queue._assert_runtime_session(runtime_token, body.session_token, instance_id=body.instance_id)
+        result = local_queue.handle_stop_local_runtime(
+            runtime_token,
+            reason=body.reason,
+            note=body.note,
+            summary_text=body.summary_text,
+            artifacts=body.artifacts,
+            health_state=body.health_state,
+        )
+        result["runtime"] = _runtime_summary_from_worker_item(result.get("runtime") or {})
+        return result
+
+    @app.post("/runtime/local-cluster/{runtime_id}/revoke", dependencies=[Depends(require_api_key)])
+    async def revoke_local_cluster_runtime(runtime_id: str, payload: Optional[LocalClusterLifecyclePayload] = None):
+        runtime_token = str(runtime_id or "").strip()
+        if not runtime_token:
+            raise HTTPException(status_code=400, detail="runtime_id is required.")
+        body = payload or LocalClusterLifecyclePayload()
+        result = local_queue.handle_revoke_local_runtime(runtime_token, reason=body.reason)
+        result["machine"] = _runtime_summary_from_worker_item(result.get("machine") or {})
+        return result
+
+    @app.post("/runtime/local-cluster/{runtime_id}/recover", dependencies=[Depends(require_api_key)])
+    async def recover_local_cluster_runtime(runtime_id: str, payload: Optional[LocalClusterLifecyclePayload] = None):
+        runtime_token = str(runtime_id or "").strip()
+        if not runtime_token:
+            raise HTTPException(status_code=400, detail="runtime_id is required.")
+        body = payload or LocalClusterLifecyclePayload()
+        local_queue._assert_runtime_session(runtime_token, body.session_token, instance_id=body.instance_id)
+        result = local_queue.handle_recover_local_runtime(runtime_token, _local_cluster_worker_payload(body))
+        result["runtime"] = _runtime_summary_from_worker_item(result.get("runtime") or {})
+        return result
 
     @app.get("/runtime/runtimes/{runtime_id}/control/stream", dependencies=[Depends(require_api_key)])
     async def stream_runtime_control(

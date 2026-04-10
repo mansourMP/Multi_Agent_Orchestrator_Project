@@ -287,6 +287,276 @@ CREATE TABLE IF NOT EXISTS workspace_inventory_items (
     UNIQUE(tenant_id, workspace_id, sku)
 );
 
+CREATE TABLE IF NOT EXISTS agent_manifests (
+    id TEXT PRIMARY KEY,
+    tenant_id TEXT NOT NULL,
+    workspace_id TEXT NOT NULL,
+    agent_install_id TEXT NOT NULL REFERENCES workspace_agent_installs(id) ON DELETE CASCADE,
+    manifest_id TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'draft',
+    manifest JSONB NOT NULL DEFAULT '{}'::jsonb,
+    metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE(agent_install_id),
+    UNIQUE(tenant_id, workspace_id, manifest_id)
+);
+
+CREATE TABLE IF NOT EXISTS agent_bible_versions (
+    id TEXT PRIMARY KEY,
+    tenant_id TEXT NOT NULL,
+    workspace_id TEXT NOT NULL,
+    agent_install_id TEXT NOT NULL REFERENCES workspace_agent_installs(id) ON DELETE CASCADE,
+    version_number INTEGER NOT NULL,
+    bible_text TEXT NOT NULL DEFAULT '',
+    bible_sections JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_by_user_id TEXT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE(agent_install_id, version_number)
+);
+
+CREATE TABLE IF NOT EXISTS agent_skill_bindings (
+    id TEXT PRIMARY KEY,
+    tenant_id TEXT NOT NULL,
+    workspace_id TEXT NOT NULL,
+    agent_install_id TEXT NOT NULL REFERENCES workspace_agent_installs(id) ON DELETE CASCADE,
+    skill_id TEXT NOT NULL,
+    enabled BOOLEAN NOT NULL DEFAULT TRUE,
+    metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE(agent_install_id, skill_id)
+);
+
+CREATE TABLE IF NOT EXISTS agent_connector_bindings (
+    id TEXT PRIMARY KEY,
+    tenant_id TEXT NOT NULL,
+    workspace_id TEXT NOT NULL,
+    agent_install_id TEXT NOT NULL REFERENCES workspace_agent_installs(id) ON DELETE CASCADE,
+    connector_key TEXT NOT NULL,
+    enabled BOOLEAN NOT NULL DEFAULT TRUE,
+    binding JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE(agent_install_id, connector_key)
+);
+
+CREATE TABLE IF NOT EXISTS agent_channel_bindings (
+    id TEXT PRIMARY KEY,
+    tenant_id TEXT NOT NULL,
+    workspace_id TEXT NOT NULL,
+    agent_install_id TEXT NOT NULL REFERENCES workspace_agent_installs(id) ON DELETE CASCADE,
+    channel_key TEXT NOT NULL,
+    enabled BOOLEAN NOT NULL DEFAULT TRUE,
+    binding JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE(agent_install_id, channel_key)
+);
+
+CREATE TABLE IF NOT EXISTS agent_runtime_profiles (
+    id TEXT PRIMARY KEY,
+    tenant_id TEXT NOT NULL,
+    workspace_id TEXT NOT NULL,
+    agent_install_id TEXT NOT NULL REFERENCES workspace_agent_installs(id) ON DELETE CASCADE,
+    runtime_profile_id TEXT NULL REFERENCES runtime_profiles(id) ON DELETE SET NULL,
+    runtime_mode TEXT NOT NULL DEFAULT 'hosted_secure',
+    metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE(agent_install_id)
+);
+
+CREATE TABLE IF NOT EXISTS personal_context_events (
+    id TEXT PRIMARY KEY,
+    tenant_id TEXT NOT NULL,
+    workspace_id TEXT NOT NULL,
+    source_app TEXT NOT NULL,
+    event_type TEXT NOT NULL,
+    entity_id TEXT NOT NULL,
+    summary TEXT NOT NULL DEFAULT '',
+    payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+    priority INTEGER NOT NULL DEFAULT 50,
+    scope JSONB NOT NULL DEFAULT '{}'::jsonb,
+    seen_by_sage_at TIMESTAMPTZ NULL,
+    metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+    status TEXT NOT NULL DEFAULT 'active',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS agent_scheduler_wake_requests (
+    id TEXT PRIMARY KEY,
+    tenant_id TEXT NOT NULL,
+    workspace_id TEXT NOT NULL,
+    master_agent_install_id TEXT NULL REFERENCES workspace_agent_installs(id) ON DELETE SET NULL,
+    trigger_kind TEXT NOT NULL,
+    source TEXT NOT NULL,
+    requested_by TEXT NOT NULL DEFAULT 'system',
+    reason TEXT NOT NULL DEFAULT '',
+    summary TEXT NOT NULL DEFAULT '',
+    payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+    policy JSONB NOT NULL DEFAULT '{}'::jsonb,
+    approval_required BOOLEAN NOT NULL DEFAULT FALSE,
+    status TEXT NOT NULL DEFAULT 'pending',
+    denial_reason TEXT NULL,
+    due_at TIMESTAMPTZ NOT NULL,
+    claimed_at TIMESTAMPTZ NULL,
+    executed_at TIMESTAMPTZ NULL,
+    metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS agent_channel_events (
+    id TEXT PRIMARY KEY,
+    tenant_id TEXT NOT NULL,
+    workspace_id TEXT NOT NULL,
+    channel_key TEXT NOT NULL,
+    endpoint_key TEXT NOT NULL,
+    session_key TEXT NOT NULL,
+    thread_id TEXT NULL REFERENCES agent_threads(id) ON DELETE SET NULL,
+    responder_install_id TEXT NULL REFERENCES workspace_agent_installs(id) ON DELETE SET NULL,
+    direction TEXT NOT NULL,
+    event_type TEXT NOT NULL,
+    message_id TEXT NULL,
+    parent_event_id TEXT NULL,
+    run_id TEXT NULL,
+    actor JSONB NOT NULL DEFAULT '{}'::jsonb,
+    text TEXT NOT NULL DEFAULT '',
+    payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+    metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+    status TEXT NOT NULL DEFAULT 'logged',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS agent_secret_access_events (
+    id TEXT PRIMARY KEY,
+    tenant_id TEXT NOT NULL,
+    workspace_id TEXT NOT NULL,
+    secret_kind TEXT NOT NULL,
+    credential_id TEXT NULL,
+    provider_id TEXT NULL,
+    connector_id TEXT NULL,
+    action_id TEXT NULL,
+    tool_name TEXT NULL,
+    run_id TEXT NULL,
+    actor JSONB NOT NULL DEFAULT '{}'::jsonb,
+    allowed_fields JSONB NOT NULL DEFAULT '[]'::jsonb,
+    metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+    status TEXT NOT NULL DEFAULT 'allowed',
+    denial_code TEXT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS agent_egress_events (
+    id TEXT PRIMARY KEY,
+    tenant_id TEXT NOT NULL,
+    workspace_id TEXT NOT NULL,
+    agent_install_id TEXT NULL REFERENCES workspace_agent_installs(id) ON DELETE SET NULL,
+    run_id TEXT NULL,
+    runtime_mode TEXT NULL,
+    tool_name TEXT NULL,
+    provider_id TEXT NULL,
+    connector_scope TEXT NULL,
+    action_class TEXT NOT NULL DEFAULT 'read',
+    request_method TEXT NOT NULL DEFAULT 'GET',
+    request_url TEXT NOT NULL,
+    request_host TEXT NULL,
+    metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+    status TEXT NOT NULL DEFAULT 'allowed',
+    denial_code TEXT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS agent_channel_execution_leases (
+    id TEXT PRIMARY KEY,
+    tenant_id TEXT NOT NULL,
+    workspace_id TEXT NOT NULL,
+    responder_install_id TEXT NULL REFERENCES workspace_agent_installs(id) ON DELETE CASCADE,
+    thread_id TEXT NOT NULL REFERENCES agent_threads(id) ON DELETE CASCADE,
+    session_key TEXT NOT NULL,
+    channel_key TEXT NOT NULL,
+    endpoint_key TEXT NOT NULL,
+    metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+    acquired_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    expires_at TIMESTAMPTZ NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS security_control_states (
+    id TEXT PRIMARY KEY,
+    tenant_id TEXT NOT NULL,
+    workspace_id TEXT NOT NULL,
+    scope_type TEXT NOT NULL,
+    control_kind TEXT NOT NULL DEFAULT 'kill_switch',
+    scope_key TEXT NOT NULL,
+    agent_install_id TEXT NULL REFERENCES workspace_agent_installs(id) ON DELETE CASCADE,
+    channel_key TEXT NULL,
+    endpoint_key TEXT NULL,
+    connector_id TEXT NULL,
+    credential_id TEXT NULL,
+    enabled BOOLEAN NOT NULL DEFAULT TRUE,
+    status TEXT NOT NULL DEFAULT 'active',
+    reason TEXT NOT NULL DEFAULT '',
+    metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_by_user_id TEXT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE(tenant_id, workspace_id, scope_type, control_kind, scope_key)
+);
+
+CREATE TABLE IF NOT EXISTS security_control_events (
+    id TEXT PRIMARY KEY,
+    tenant_id TEXT NOT NULL,
+    workspace_id TEXT NOT NULL,
+    control_state_id TEXT NULL REFERENCES security_control_states(id) ON DELETE SET NULL,
+    scope_type TEXT NOT NULL,
+    control_kind TEXT NOT NULL DEFAULT 'kill_switch',
+    action TEXT NOT NULL,
+    scope_key TEXT NOT NULL,
+    agent_install_id TEXT NULL REFERENCES workspace_agent_installs(id) ON DELETE SET NULL,
+    channel_key TEXT NULL,
+    endpoint_key TEXT NULL,
+    connector_id TEXT NULL,
+    credential_id TEXT NULL,
+    reason TEXT NOT NULL DEFAULT '',
+    actor_user_id TEXT NULL,
+    metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS activity_ledger_events (
+    id TEXT PRIMARY KEY,
+    tenant_id TEXT NOT NULL,
+    workspace_id TEXT NOT NULL,
+    actor_type TEXT NOT NULL,
+    actor_id TEXT NOT NULL,
+    install_id TEXT NULL REFERENCES workspace_agent_installs(id) ON DELETE SET NULL,
+    app_id TEXT NULL,
+    run_id TEXT NULL,
+    thread_id TEXT NULL REFERENCES agent_threads(id) ON DELETE SET NULL,
+    session_key TEXT NULL,
+    channel TEXT NULL,
+    direction TEXT NULL,
+    event_class TEXT NOT NULL,
+    detail_level TEXT NOT NULL DEFAULT 'feed_summary',
+    action TEXT NULL,
+    trace_id TEXT NULL,
+    title TEXT NOT NULL DEFAULT '',
+    summary TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'logged',
+    review_required BOOLEAN NOT NULL DEFAULT FALSE,
+    artifacts JSONB NOT NULL DEFAULT '[]'::jsonb,
+    payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+    metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
 ALTER TABLE agent_threads
     ADD COLUMN IF NOT EXISTS master_agent_install_id TEXT NULL;
 
@@ -328,6 +598,57 @@ CREATE INDEX IF NOT EXISTS idx_workspace_agent_installs_compiled_workflow ON wor
 CREATE INDEX IF NOT EXISTS idx_workspace_inventory_items_scope ON workspace_inventory_items(tenant_id, workspace_id, category);
 CREATE INDEX IF NOT EXISTS idx_workspace_inventory_items_vehicle ON workspace_inventory_items(tenant_id, workspace_id, make, model, year_start, year_end);
 CREATE INDEX IF NOT EXISTS idx_workspace_inventory_items_product_name ON workspace_inventory_items(tenant_id, workspace_id, product_name);
+CREATE INDEX IF NOT EXISTS idx_agent_manifests_scope ON agent_manifests(tenant_id, workspace_id, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_agent_bible_versions_install_number ON agent_bible_versions(tenant_id, workspace_id, agent_install_id, version_number DESC);
+CREATE INDEX IF NOT EXISTS idx_agent_skill_bindings_install ON agent_skill_bindings(tenant_id, workspace_id, agent_install_id, enabled);
+CREATE INDEX IF NOT EXISTS idx_agent_connector_bindings_install ON agent_connector_bindings(tenant_id, workspace_id, agent_install_id, enabled);
+CREATE INDEX IF NOT EXISTS idx_agent_channel_bindings_install ON agent_channel_bindings(tenant_id, workspace_id, agent_install_id, enabled);
+CREATE INDEX IF NOT EXISTS idx_agent_runtime_profiles_install ON agent_runtime_profiles(tenant_id, workspace_id, agent_install_id);
+CREATE INDEX IF NOT EXISTS idx_personal_context_events_scope_created ON personal_context_events(tenant_id, workspace_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_personal_context_events_unseen ON personal_context_events(tenant_id, workspace_id, seen_by_sage_at, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_personal_context_events_type_source ON personal_context_events(tenant_id, workspace_id, event_type, source_app, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_personal_context_events_entity ON personal_context_events(tenant_id, workspace_id, entity_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_agent_scheduler_wake_requests_scope_due ON agent_scheduler_wake_requests(tenant_id, workspace_id, status, due_at ASC);
+CREATE INDEX IF NOT EXISTS idx_agent_scheduler_wake_requests_master ON agent_scheduler_wake_requests(tenant_id, workspace_id, master_agent_install_id, due_at ASC);
+CREATE INDEX IF NOT EXISTS idx_agent_scheduler_wake_requests_trigger ON agent_scheduler_wake_requests(tenant_id, workspace_id, trigger_kind, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_agent_channel_events_scope_created ON agent_channel_events(tenant_id, workspace_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_agent_channel_events_session ON agent_channel_events(tenant_id, workspace_id, channel_key, endpoint_key, session_key, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_agent_channel_events_responder ON agent_channel_events(tenant_id, workspace_id, responder_install_id, created_at DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_agent_channel_events_inbound_message
+    ON agent_channel_events(tenant_id, workspace_id, channel_key, endpoint_key, direction, session_key, message_id)
+    WHERE direction = 'inbound' AND message_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_agent_secret_access_events_scope_created ON agent_secret_access_events(tenant_id, workspace_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_agent_secret_access_events_run ON agent_secret_access_events(tenant_id, workspace_id, run_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_agent_secret_access_events_credential ON agent_secret_access_events(tenant_id, workspace_id, credential_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_agent_egress_events_scope_created ON agent_egress_events(tenant_id, workspace_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_agent_egress_events_run ON agent_egress_events(tenant_id, workspace_id, run_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_agent_egress_events_install ON agent_egress_events(tenant_id, workspace_id, agent_install_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_agent_egress_events_host ON agent_egress_events(tenant_id, workspace_id, request_host, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_agent_channel_execution_leases_workspace ON agent_channel_execution_leases(tenant_id, workspace_id, expires_at);
+CREATE INDEX IF NOT EXISTS idx_agent_channel_execution_leases_responder ON agent_channel_execution_leases(tenant_id, workspace_id, responder_install_id, expires_at);
+CREATE INDEX IF NOT EXISTS idx_security_control_states_scope ON security_control_states(tenant_id, workspace_id, scope_type, control_kind, enabled, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_security_control_states_agent ON security_control_states(tenant_id, workspace_id, agent_install_id, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_security_control_states_channel ON security_control_states(tenant_id, workspace_id, channel_key, endpoint_key, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_security_control_states_connector ON security_control_states(tenant_id, workspace_id, connector_id, credential_id, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_security_control_events_scope ON security_control_events(tenant_id, workspace_id, scope_type, action, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_security_control_events_state ON security_control_events(tenant_id, workspace_id, control_state_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_security_control_events_actor ON security_control_events(tenant_id, workspace_id, actor_user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_activity_ledger_events_scope_created ON activity_ledger_events(tenant_id, workspace_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_activity_ledger_events_event_class ON activity_ledger_events(tenant_id, workspace_id, event_class, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_activity_ledger_events_actor ON activity_ledger_events(tenant_id, workspace_id, actor_type, actor_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_activity_ledger_events_run ON activity_ledger_events(tenant_id, workspace_id, run_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_activity_ledger_events_install ON activity_ledger_events(tenant_id, workspace_id, install_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_activity_ledger_events_app ON activity_ledger_events(tenant_id, workspace_id, app_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_activity_ledger_events_feed_query ON activity_ledger_events(tenant_id, workspace_id, detail_level, action, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_activity_ledger_events_session ON activity_ledger_events(tenant_id, workspace_id, channel, session_key, created_at DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_agent_channel_execution_leases_active_thread
+    ON agent_channel_execution_leases(tenant_id, workspace_id, thread_id);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_agent_channel_bindings_active_inbound_owner
+    ON agent_channel_bindings(tenant_id, workspace_id, channel_key, lower((binding->>'endpoint_key')))
+    WHERE enabled = TRUE
+      AND channel_key IN ('telegram', 'whatsapp', 'email', 'phone', 'web_chat')
+      AND lower(COALESCE(binding->>'is_inbound_owner', 'false')) = 'true'
+      AND NULLIF(lower(COALESCE(binding->>'endpoint_key', '')), '') IS NOT NULL;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_turns_request_role
     ON agent_turns(tenant_id, workspace_id, thread_id, role, request_id)
     WHERE request_id IS NOT NULL;
@@ -1227,22 +1548,39 @@ async def list_agent_turns(
     *,
     tenant_id: str,
     workspace_id: str,
+    active_agent_install_id: Optional[str] = None,
     limit: int = 200,
 ) -> List[Dict[str, Any]]:
     async with _scoped_connection(tenant_id=tenant_id, workspace_id=workspace_id) as connection:
         if connection is None:
             return []
-        rows = await connection.fetch(
-            """
-            SELECT *
-            FROM agent_turns
-            WHERE thread_id = $1
-            ORDER BY created_at ASC
-            LIMIT $2
-            """,
-            str(thread_id or "").strip(),
-            max(1, int(limit or 200)),
-        )
+        resolved_install_id = str(active_agent_install_id or "").strip()
+        if resolved_install_id:
+            rows = await connection.fetch(
+                """
+                SELECT *
+                FROM agent_turns
+                WHERE thread_id = $1
+                  AND (active_agent_install_id = $2 OR active_agent_install_id IS NULL OR active_agent_install_id = '')
+                ORDER BY created_at ASC
+                LIMIT $3
+                """,
+                str(thread_id or "").strip(),
+                resolved_install_id,
+                max(1, int(limit or 200)),
+            )
+        else:
+            rows = await connection.fetch(
+                """
+                SELECT *
+                FROM agent_turns
+                WHERE thread_id = $1
+                ORDER BY created_at ASC
+                LIMIT $2
+                """,
+                str(thread_id or "").strip(),
+                max(1, int(limit or 200)),
+            )
     return [dict(row) for row in rows]
 
 
@@ -1251,6 +1589,7 @@ async def get_agent_thread(
     *,
     tenant_id: str,
     workspace_id: str,
+    active_agent_install_id: Optional[str] = None,
     include_turns: bool = True,
 ) -> Optional[Dict[str, Any]]:
     async with _scoped_connection(tenant_id=tenant_id, workspace_id=workspace_id) as connection:
@@ -1273,6 +1612,7 @@ async def get_agent_thread(
             str(thread_id or "").strip(),
             tenant_id=tenant_id,
             workspace_id=workspace_id,
+            active_agent_install_id=active_agent_install_id,
         )
     return payload
 
@@ -1282,6 +1622,7 @@ async def list_agent_threads(
     workspace_id: str,
     tenant_id: str,
     owner_user_id: Optional[str] = None,
+    active_agent_install_id: Optional[str] = None,
     include_turns: bool = False,
     limit: int = 50,
 ) -> List[Dict[str, Any]]:
@@ -1318,5 +1659,1096 @@ async def list_agent_threads(
                 str(item.get("id") or "").strip(),
                 tenant_id=resolved_tenant_id,
                 workspace_id=resolved_workspace_id,
+                active_agent_install_id=active_agent_install_id,
             )
     return items
+
+
+async def append_agent_channel_event(
+    *,
+    tenant_id: str,
+    workspace_id: str,
+    channel_key: str,
+    endpoint_key: str,
+    session_key: str,
+    direction: str,
+    event_type: str,
+    thread_id: Optional[str] = None,
+    responder_install_id: Optional[str] = None,
+    message_id: Optional[str] = None,
+    parent_event_id: Optional[str] = None,
+    run_id: Optional[str] = None,
+    actor: Optional[Dict[str, Any]] = None,
+    text: str = "",
+    payload: Optional[Dict[str, Any]] = None,
+    metadata: Optional[Dict[str, Any]] = None,
+    status: str = "logged",
+    event_id: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    resolved_tenant_id = _require_scope_token(tenant_id, "tenant_id")
+    resolved_workspace_id = _require_scope_token(workspace_id, "workspace_id")
+    resolved_channel_key = str(channel_key or "").strip().lower()
+    resolved_endpoint_key = str(endpoint_key or "").strip().lower()
+    resolved_session_key = str(session_key or "").strip()
+    if not resolved_channel_key or not resolved_endpoint_key or not resolved_session_key:
+        return None
+    resolved_event_id = str(event_id or f"cevt_{uuid.uuid4().hex[:16]}").strip()
+    now_ts = _utc_now_ts()
+    resolved_direction = str(direction or "").strip().lower() or "system"
+    resolved_message_id = str(message_id or "").strip() or None
+    async with _scoped_connection(tenant_id=resolved_tenant_id, workspace_id=resolved_workspace_id) as connection:
+        if connection is None:
+            return None
+        row = await connection.fetchrow(
+            """
+            INSERT INTO agent_channel_events (
+                id, tenant_id, workspace_id, channel_key, endpoint_key, session_key,
+                thread_id, responder_install_id, direction, event_type, message_id, parent_event_id,
+                run_id, actor, text, payload, metadata, status, created_at, updated_at
+            ) VALUES (
+                $1, $2, $3, $4, $5, $6,
+                $7, $8, $9, $10, $11, $12,
+                $13, $14::jsonb, $15, $16::jsonb, $17::jsonb, $18, $19::timestamptz, $19::timestamptz
+            )
+            ON CONFLICT (tenant_id, workspace_id, channel_key, endpoint_key, direction, session_key, message_id)
+                WHERE direction = 'inbound' AND message_id IS NOT NULL
+            DO UPDATE SET updated_at = agent_channel_events.updated_at
+            RETURNING *
+            """,
+            resolved_event_id,
+            resolved_tenant_id,
+            resolved_workspace_id,
+            resolved_channel_key,
+            resolved_endpoint_key,
+            resolved_session_key,
+            str(thread_id or "").strip() or None,
+            str(responder_install_id or "").strip() or None,
+            resolved_direction,
+            str(event_type or "").strip().lower() or "message",
+            resolved_message_id,
+            str(parent_event_id or "").strip() or None,
+            str(run_id or "").strip() or None,
+            _to_json(actor, default={}),
+            str(text or ""),
+            _to_json(payload, default={}),
+            _to_json(metadata, default={}),
+            str(status or "logged").strip().lower() or "logged",
+            now_ts,
+        )
+    if row is None:
+        return None
+    item = dict(row)
+    if resolved_direction == "inbound" and resolved_message_id:
+        item["_duplicate_hit"] = str(item.get("id") or "").strip() != resolved_event_id
+    return item
+
+
+async def append_personal_context_event(
+    *,
+    tenant_id: str,
+    workspace_id: str,
+    source_app: str,
+    event_type: str,
+    entity_id: str,
+    summary: str,
+    payload: Optional[Dict[str, Any]] = None,
+    priority: int = 50,
+    scope: Optional[Dict[str, Any]] = None,
+    metadata: Optional[Dict[str, Any]] = None,
+    seen_by_sage_at: Optional[str] = None,
+    status: str = "active",
+    event_id: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    resolved_tenant_id = _require_scope_token(tenant_id, "tenant_id")
+    resolved_workspace_id = _require_scope_token(workspace_id, "workspace_id")
+    resolved_source_app = str(source_app or "").strip().lower()
+    resolved_event_type = str(event_type or "").strip().lower()
+    resolved_entity_id = str(entity_id or "").strip()
+    if not resolved_source_app or not resolved_event_type or not resolved_entity_id:
+        return None
+    resolved_event_id = str(event_id or f"pctx_{uuid.uuid4().hex[:16]}").strip()
+    now_ts = _utc_now_ts()
+    resolved_seen_at = _coerce_timestamptz(seen_by_sage_at)
+    async with _scoped_connection(tenant_id=resolved_tenant_id, workspace_id=resolved_workspace_id) as connection:
+        if connection is None:
+            return None
+        await connection.execute(
+            """
+            INSERT INTO personal_context_events (
+                id, tenant_id, workspace_id, source_app, event_type, entity_id, summary,
+                payload, priority, scope, seen_by_sage_at, metadata, status, created_at, updated_at
+            ) VALUES (
+                $1, $2, $3, $4, $5, $6, $7,
+                $8::jsonb, $9, $10::jsonb, $11::timestamptz, $12::jsonb, $13, $14::timestamptz, $14::timestamptz
+            )
+            """,
+            resolved_event_id,
+            resolved_tenant_id,
+            resolved_workspace_id,
+            resolved_source_app,
+            resolved_event_type,
+            resolved_entity_id,
+            str(summary or "").strip(),
+            _to_json(payload, default={}),
+            max(0, min(100, int(priority or 0))),
+            _to_json(scope, default={}),
+            resolved_seen_at,
+            _to_json(metadata, default={}),
+            str(status or "active").strip().lower() or "active",
+            now_ts,
+        )
+        row = await connection.fetchrow(
+            "SELECT * FROM personal_context_events WHERE id = $1 LIMIT 1",
+            resolved_event_id,
+        )
+    return dict(row) if row is not None else None
+
+
+async def append_agent_scheduler_wake_request(
+    *,
+    tenant_id: str,
+    workspace_id: str,
+    master_agent_install_id: Optional[str] = None,
+    trigger_kind: str,
+    source: str,
+    requested_by: str = "system",
+    reason: str = "",
+    summary: str = "",
+    payload: Optional[Dict[str, Any]] = None,
+    policy: Optional[Dict[str, Any]] = None,
+    approval_required: bool = False,
+    status: str = "pending",
+    denial_reason: Optional[str] = None,
+    due_at: Any,
+    claimed_at: Any = None,
+    executed_at: Any = None,
+    metadata: Optional[Dict[str, Any]] = None,
+    wake_id: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    resolved_tenant_id = _require_scope_token(tenant_id, "tenant_id")
+    resolved_workspace_id = _require_scope_token(workspace_id, "workspace_id")
+    resolved_trigger_kind = str(trigger_kind or "").strip().lower()
+    resolved_source = str(source or "").strip().lower()
+    if not resolved_trigger_kind or not resolved_source:
+        return None
+    resolved_due_at = _coerce_timestamptz(due_at)
+    if resolved_due_at is None:
+        return None
+    resolved_wake_id = str(wake_id or f"wake_{uuid.uuid4().hex[:16]}").strip()
+    now_ts = _utc_now_ts()
+    async with _scoped_connection(tenant_id=resolved_tenant_id, workspace_id=resolved_workspace_id) as connection:
+        if connection is None:
+            return None
+        await connection.execute(
+            """
+            INSERT INTO agent_scheduler_wake_requests (
+                id, tenant_id, workspace_id, master_agent_install_id, trigger_kind, source,
+                requested_by, reason, summary, payload, policy, approval_required, status, denial_reason,
+                due_at, claimed_at, executed_at, metadata, created_at, updated_at
+            ) VALUES (
+                $1, $2, $3, $4, $5, $6,
+                $7, $8, $9, $10::jsonb, $11::jsonb, $12, $13, $14,
+                $15::timestamptz, $16::timestamptz, $17::timestamptz, $18::jsonb, $19::timestamptz, $19::timestamptz
+            )
+            """,
+            resolved_wake_id,
+            resolved_tenant_id,
+            resolved_workspace_id,
+            str(master_agent_install_id or "").strip() or None,
+            resolved_trigger_kind,
+            resolved_source,
+            str(requested_by or "system").strip().lower() or "system",
+            str(reason or ""),
+            str(summary or ""),
+            _to_json(payload, default={}),
+            _to_json(policy, default={}),
+            bool(approval_required),
+            str(status or "pending").strip().lower() or "pending",
+            str(denial_reason or "").strip() or None,
+            resolved_due_at,
+            _coerce_timestamptz(claimed_at),
+            _coerce_timestamptz(executed_at),
+            _to_json(metadata, default={}),
+            now_ts,
+        )
+        row = await connection.fetchrow(
+            "SELECT * FROM agent_scheduler_wake_requests WHERE id = $1 LIMIT 1",
+            resolved_wake_id,
+        )
+    return dict(row) if row is not None else None
+
+
+async def append_agent_secret_access_event(
+    *,
+    tenant_id: str,
+    workspace_id: str,
+    secret_kind: str,
+    credential_id: Optional[str] = None,
+    provider_id: Optional[str] = None,
+    connector_id: Optional[str] = None,
+    action_id: Optional[str] = None,
+    tool_name: Optional[str] = None,
+    run_id: Optional[str] = None,
+    actor: Optional[Dict[str, Any]] = None,
+    allowed_fields: Optional[List[str]] = None,
+    metadata: Optional[Dict[str, Any]] = None,
+    status: str = "allowed",
+    denial_code: Optional[str] = None,
+    event_id: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    resolved_tenant_id = _require_scope_token(tenant_id, "tenant_id")
+    resolved_workspace_id = _require_scope_token(workspace_id, "workspace_id")
+    resolved_secret_kind = str(secret_kind or "").strip().lower()
+    if not resolved_secret_kind:
+        return None
+    resolved_event_id = str(event_id or f"sevt_{uuid.uuid4().hex[:16]}").strip()
+    now_ts = _utc_now_ts()
+    normalized_allowed_fields = [
+        str(item or "").strip()
+        for item in list(allowed_fields or [])
+        if str(item or "").strip()
+    ]
+    async with _scoped_connection(tenant_id=resolved_tenant_id, workspace_id=resolved_workspace_id) as connection:
+        if connection is None:
+            return None
+        await connection.execute(
+            """
+            INSERT INTO agent_secret_access_events (
+                id, tenant_id, workspace_id, secret_kind, credential_id, provider_id, connector_id,
+                action_id, tool_name, run_id, actor, allowed_fields, metadata, status, denial_code,
+                created_at, updated_at
+            ) VALUES (
+                $1, $2, $3, $4, $5, $6, $7,
+                $8, $9, $10, $11::jsonb, $12::jsonb, $13::jsonb, $14, $15,
+                $16::timestamptz, $16::timestamptz
+            )
+            """,
+            resolved_event_id,
+            resolved_tenant_id,
+            resolved_workspace_id,
+            resolved_secret_kind,
+            str(credential_id or "").strip() or None,
+            str(provider_id or "").strip().lower() or None,
+            str(connector_id or "").strip().lower() or None,
+            str(action_id or "").strip().lower() or None,
+            str(tool_name or "").strip().lower() or None,
+            str(run_id or "").strip() or None,
+            _to_json(actor, default={}),
+            _to_json(normalized_allowed_fields, default=[]),
+            _to_json(metadata, default={}),
+            str(status or "allowed").strip().lower() or "allowed",
+            str(denial_code or "").strip().lower() or None,
+            now_ts,
+        )
+        row = await connection.fetchrow(
+            "SELECT * FROM agent_secret_access_events WHERE id = $1 LIMIT 1",
+            resolved_event_id,
+        )
+    return dict(row) if row is not None else None
+
+
+async def append_agent_egress_event(
+    *,
+    tenant_id: str,
+    workspace_id: str,
+    agent_install_id: Optional[str] = None,
+    run_id: Optional[str] = None,
+    runtime_mode: Optional[str] = None,
+    tool_name: Optional[str] = None,
+    provider_id: Optional[str] = None,
+    connector_scope: Optional[str] = None,
+    action_class: str = "read",
+    request_method: str = "GET",
+    request_url: str,
+    request_host: Optional[str] = None,
+    metadata: Optional[Dict[str, Any]] = None,
+    status: str = "allowed",
+    denial_code: Optional[str] = None,
+    event_id: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    resolved_tenant_id = _require_scope_token(tenant_id, "tenant_id")
+    resolved_workspace_id = _require_scope_token(workspace_id, "workspace_id")
+    resolved_request_url = str(request_url or "").strip()
+    if not resolved_request_url:
+        return None
+    resolved_event_id = str(event_id or f"eevt_{uuid.uuid4().hex[:16]}").strip()
+    now_ts = _utc_now_ts()
+    async with _scoped_connection(tenant_id=resolved_tenant_id, workspace_id=resolved_workspace_id) as connection:
+        if connection is None:
+            return None
+        await connection.execute(
+            """
+            INSERT INTO agent_egress_events (
+                id, tenant_id, workspace_id, agent_install_id, run_id, runtime_mode, tool_name,
+                provider_id, connector_scope, action_class, request_method, request_url, request_host,
+                metadata, status, denial_code, created_at, updated_at
+            ) VALUES (
+                $1, $2, $3, $4, $5, $6, $7,
+                $8, $9, $10, $11, $12, $13,
+                $14::jsonb, $15, $16, $17::timestamptz, $17::timestamptz
+            )
+            """,
+            resolved_event_id,
+            resolved_tenant_id,
+            resolved_workspace_id,
+            str(agent_install_id or "").strip() or None,
+            str(run_id or "").strip() or None,
+            str(runtime_mode or "").strip().lower() or None,
+            str(tool_name or "").strip().lower() or None,
+            str(provider_id or "").strip().lower() or None,
+            str(connector_scope or "").strip().lower() or None,
+            str(action_class or "read").strip().lower() or "read",
+            str(request_method or "GET").strip().upper() or "GET",
+            resolved_request_url,
+            str(request_host or "").strip().lower() or None,
+            _to_json(metadata, default={}),
+            str(status or "allowed").strip().lower() or "allowed",
+            str(denial_code or "").strip().lower() or None,
+            now_ts,
+        )
+        row = await connection.fetchrow(
+            "SELECT * FROM agent_egress_events WHERE id = $1 LIMIT 1",
+            resolved_event_id,
+        )
+    return dict(row) if row is not None else None
+
+
+async def append_activity_ledger_event(
+    *,
+    tenant_id: str,
+    workspace_id: str,
+    actor_type: str,
+    actor_id: str,
+    event_class: str,
+    detail_level: str = "feed_summary",
+    install_id: Optional[str] = None,
+    app_id: Optional[str] = None,
+    run_id: Optional[str] = None,
+    thread_id: Optional[str] = None,
+    session_key: Optional[str] = None,
+    channel: Optional[str] = None,
+    direction: Optional[str] = None,
+    action: Optional[str] = None,
+    trace_id: Optional[str] = None,
+    title: str = "",
+    summary: str = "",
+    status: str = "logged",
+    review_required: bool = False,
+    artifacts: Optional[List[Dict[str, Any]]] = None,
+    payload: Optional[Dict[str, Any]] = None,
+    metadata: Optional[Dict[str, Any]] = None,
+    event_id: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    resolved_tenant_id = _require_scope_token(tenant_id, "tenant_id")
+    resolved_workspace_id = _require_scope_token(workspace_id, "workspace_id")
+    resolved_actor_type = str(actor_type or "").strip().lower() or "system"
+    resolved_actor_id = str(actor_id or "").strip() or resolved_actor_type
+    resolved_event_class = str(event_class or "").strip().lower()
+    if not resolved_event_class:
+        return None
+    resolved_event_id = str(event_id or f"aevt_{uuid.uuid4().hex[:16]}").strip()
+    normalized_artifacts = [
+        dict(item)
+        for item in list(artifacts or [])
+        if isinstance(item, dict)
+    ]
+    now_ts = _utc_now_ts()
+    async with _scoped_connection(tenant_id=resolved_tenant_id, workspace_id=resolved_workspace_id) as connection:
+        if connection is None:
+            return None
+        await connection.execute(
+            """
+            INSERT INTO activity_ledger_events (
+                id, tenant_id, workspace_id, actor_type, actor_id, install_id, app_id,
+                run_id, thread_id, session_key, channel, direction, event_class, detail_level,
+                action, trace_id, title, summary, status, review_required, artifacts, payload, metadata,
+                created_at, updated_at
+            ) VALUES (
+                $1, $2, $3, $4, $5, $6, $7,
+                $8, $9, $10, $11, $12, $13, $14,
+                $15, $16, $17, $18, $19, $20, $21::jsonb, $22::jsonb, $23::jsonb,
+                $24::timestamptz, $24::timestamptz
+            )
+            ON CONFLICT (id) DO UPDATE SET
+                summary = EXCLUDED.summary,
+                status = EXCLUDED.status,
+                review_required = EXCLUDED.review_required,
+                artifacts = EXCLUDED.artifacts,
+                payload = EXCLUDED.payload,
+                metadata = EXCLUDED.metadata,
+                updated_at = EXCLUDED.updated_at
+            """,
+            resolved_event_id,
+            resolved_tenant_id,
+            resolved_workspace_id,
+            resolved_actor_type,
+            resolved_actor_id,
+            str(install_id or "").strip() or None,
+            str(app_id or "").strip() or None,
+            str(run_id or "").strip() or None,
+            str(thread_id or "").strip() or None,
+            str(session_key or "").strip() or None,
+            str(channel or "").strip().lower() or None,
+            str(direction or "").strip().lower() or None,
+            resolved_event_class,
+            str(detail_level or "feed_summary").strip().lower() or "feed_summary",
+            str(action or "").strip().lower() or None,
+            str(trace_id or "").strip() or None,
+            str(title or ""),
+            str(summary or ""),
+            str(status or "logged").strip().lower() or "logged",
+            bool(review_required),
+            _to_json(normalized_artifacts, default=[]),
+            _to_json(payload, default={}),
+            _to_json(metadata, default={}),
+            now_ts,
+        )
+        row = await connection.fetchrow(
+            "SELECT * FROM activity_ledger_events WHERE id = $1 LIMIT 1",
+            resolved_event_id,
+        )
+    return dict(row) if row is not None else None
+
+
+async def list_agent_scheduler_wake_requests(
+    *,
+    tenant_id: str,
+    workspace_id: str,
+    status: Optional[str] = None,
+    trigger_kind: Optional[str] = None,
+    due_before: Any = None,
+    limit: int = 100,
+) -> List[Dict[str, Any]]:
+    resolved_tenant_id = _require_scope_token(tenant_id, "tenant_id")
+    resolved_workspace_id = _require_scope_token(workspace_id, "workspace_id")
+    conditions = ["tenant_id = $1", "workspace_id = $2"]
+    params: List[Any] = [resolved_tenant_id, resolved_workspace_id]
+    if status:
+        params.append(str(status or "").strip().lower())
+        conditions.append(f"status = ${len(params)}")
+    if trigger_kind:
+        params.append(str(trigger_kind or "").strip().lower())
+        conditions.append(f"trigger_kind = ${len(params)}")
+    resolved_due_before = _coerce_timestamptz(due_before)
+    if resolved_due_before is not None:
+        params.append(resolved_due_before)
+        conditions.append(f"due_at <= ${len(params)}::timestamptz")
+    params.append(max(1, int(limit or 100)))
+    async with _scoped_connection(tenant_id=resolved_tenant_id, workspace_id=resolved_workspace_id) as connection:
+        if connection is None:
+            return []
+        rows = await connection.fetch(
+            f"""
+            SELECT *
+            FROM agent_scheduler_wake_requests
+            WHERE {' AND '.join(conditions)}
+            ORDER BY due_at ASC, created_at ASC
+            LIMIT ${len(params)}
+            """,
+            *params,
+        )
+    return [dict(row) for row in rows]
+
+
+async def list_activity_ledger_events(
+    *,
+    tenant_id: str,
+    workspace_id: str,
+    event_classes: Optional[List[str]] = None,
+    detail_levels: Optional[List[str]] = None,
+    actor_type: Optional[str] = None,
+    actor_id: Optional[str] = None,
+    install_id: Optional[str] = None,
+    app_id: Optional[str] = None,
+    run_id: Optional[str] = None,
+    thread_id: Optional[str] = None,
+    channel: Optional[str] = None,
+    direction: Optional[str] = None,
+    session_key: Optional[str] = None,
+    action: Optional[str] = None,
+    trace_id: Optional[str] = None,
+    status: Optional[str] = None,
+    limit: int = 100,
+) -> List[Dict[str, Any]]:
+    resolved_tenant_id = _require_scope_token(tenant_id, "tenant_id")
+    resolved_workspace_id = _require_scope_token(workspace_id, "workspace_id")
+    conditions = ["tenant_id = $1", "workspace_id = $2"]
+    params: List[Any] = [resolved_tenant_id, resolved_workspace_id]
+    normalized_event_classes = [
+        str(item or "").strip().lower()
+        for item in list(event_classes or [])
+        if str(item or "").strip()
+    ]
+    if normalized_event_classes:
+        params.append(normalized_event_classes)
+        conditions.append(f"event_class = ANY(${len(params)}::text[])")
+    normalized_detail_levels = [
+        str(item or "").strip().lower()
+        for item in list(detail_levels or [])
+        if str(item or "").strip()
+    ]
+    if normalized_detail_levels:
+        params.append(normalized_detail_levels)
+        conditions.append(f"detail_level = ANY(${len(params)}::text[])")
+    if actor_type:
+        params.append(str(actor_type or "").strip().lower())
+        conditions.append(f"actor_type = ${len(params)}")
+    if actor_id:
+        params.append(str(actor_id or "").strip())
+        conditions.append(f"actor_id = ${len(params)}")
+    if install_id:
+        params.append(str(install_id or "").strip())
+        conditions.append(f"install_id = ${len(params)}")
+    if app_id:
+        params.append(str(app_id or "").strip())
+        conditions.append(f"app_id = ${len(params)}")
+    if run_id:
+        params.append(str(run_id or "").strip())
+        conditions.append(f"run_id = ${len(params)}")
+    if thread_id:
+        params.append(str(thread_id or "").strip())
+        conditions.append(f"thread_id = ${len(params)}")
+    if channel:
+        params.append(str(channel or "").strip().lower())
+        conditions.append(f"channel = ${len(params)}")
+    if direction:
+        params.append(str(direction or "").strip().lower())
+        conditions.append(f"direction = ${len(params)}")
+    if session_key:
+        params.append(str(session_key or "").strip())
+        conditions.append(f"session_key = ${len(params)}")
+    if action:
+        params.append(str(action or "").strip().lower())
+        conditions.append(f"action = ${len(params)}")
+    if trace_id:
+        params.append(str(trace_id or "").strip())
+        conditions.append(f"trace_id = ${len(params)}")
+    if status:
+        params.append(str(status or "").strip().lower())
+        conditions.append(f"status = ${len(params)}")
+    params.append(max(1, int(limit or 100)))
+    async with _scoped_connection(tenant_id=resolved_tenant_id, workspace_id=resolved_workspace_id) as connection:
+        if connection is None:
+            return []
+        rows = await connection.fetch(
+            f"""
+            SELECT *
+            FROM activity_ledger_events
+            WHERE {' AND '.join(conditions)}
+            ORDER BY created_at DESC
+            LIMIT ${len(params)}
+            """,
+            *params,
+        )
+    return [dict(row) for row in rows]
+
+
+async def count_agent_scheduler_wake_requests_since(
+    *,
+    tenant_id: str,
+    workspace_id: str,
+    since: Any,
+    trigger_kind: Optional[str] = None,
+) -> int:
+    resolved_tenant_id = _require_scope_token(tenant_id, "tenant_id")
+    resolved_workspace_id = _require_scope_token(workspace_id, "workspace_id")
+    resolved_since = _coerce_timestamptz(since)
+    if resolved_since is None:
+        return 0
+    conditions = [
+        "tenant_id = $1",
+        "workspace_id = $2",
+        "created_at >= $3::timestamptz",
+        "status <> 'denied'",
+    ]
+    params: List[Any] = [resolved_tenant_id, resolved_workspace_id, resolved_since]
+    if trigger_kind:
+        params.append(str(trigger_kind or "").strip().lower())
+        conditions.append(f"trigger_kind = ${len(params)}")
+    async with _scoped_connection(tenant_id=resolved_tenant_id, workspace_id=resolved_workspace_id) as connection:
+        if connection is None:
+            return 0
+        value = await connection.fetchval(
+            f"""
+            SELECT COUNT(*)
+            FROM agent_scheduler_wake_requests
+            WHERE {' AND '.join(conditions)}
+            """,
+            *params,
+        )
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+async def claim_due_agent_scheduler_wake_requests(
+    *,
+    tenant_id: str,
+    workspace_id: str,
+    due_before: Any,
+    limit: int = 10,
+) -> List[Dict[str, Any]]:
+    resolved_tenant_id = _require_scope_token(tenant_id, "tenant_id")
+    resolved_workspace_id = _require_scope_token(workspace_id, "workspace_id")
+    resolved_due_before = _coerce_timestamptz(due_before)
+    if resolved_due_before is None:
+        return []
+    now_ts = _utc_now_ts()
+    async with _scoped_connection(tenant_id=resolved_tenant_id, workspace_id=resolved_workspace_id) as connection:
+        if connection is None:
+            return []
+        rows = await connection.fetch(
+            """
+            WITH candidates AS (
+                SELECT id
+                FROM agent_scheduler_wake_requests
+                WHERE tenant_id = $1
+                  AND workspace_id = $2
+                  AND status = 'pending'
+                  AND due_at <= $3::timestamptz
+                ORDER BY due_at ASC, created_at ASC
+                LIMIT $4
+                FOR UPDATE SKIP LOCKED
+            )
+            UPDATE agent_scheduler_wake_requests wake
+               SET status = 'claimed',
+                   claimed_at = $5::timestamptz,
+                   updated_at = $5::timestamptz
+              FROM candidates
+             WHERE wake.id = candidates.id
+            RETURNING wake.*
+            """,
+            resolved_tenant_id,
+            resolved_workspace_id,
+            resolved_due_before,
+            max(1, int(limit or 10)),
+            now_ts,
+        )
+    return [dict(row) for row in rows]
+
+
+async def update_agent_scheduler_wake_request_status(
+    *,
+    tenant_id: str,
+    workspace_id: str,
+    wake_id: str,
+    status: str,
+    denial_reason: Optional[str] = None,
+    metadata_patch: Optional[Dict[str, Any]] = None,
+) -> Optional[Dict[str, Any]]:
+    resolved_tenant_id = _require_scope_token(tenant_id, "tenant_id")
+    resolved_workspace_id = _require_scope_token(workspace_id, "workspace_id")
+    resolved_wake_id = str(wake_id or "").strip()
+    if not resolved_wake_id:
+        return None
+    now_ts = _utc_now_ts()
+    async with _scoped_connection(tenant_id=resolved_tenant_id, workspace_id=resolved_workspace_id) as connection:
+        if connection is None:
+            return None
+        existing = await connection.fetchrow(
+            "SELECT * FROM agent_scheduler_wake_requests WHERE id = $1 LIMIT 1",
+            resolved_wake_id,
+        )
+        if existing is None:
+            return None
+        current_metadata = _coerce_dict(existing.get("metadata"))
+        next_metadata = {**current_metadata, **_coerce_dict(metadata_patch)}
+        executed_at = now_ts if str(status or "").strip().lower() in {"executed", "completed", "failed", "skipped", "denied"} else existing.get("executed_at")
+        await connection.execute(
+            """
+            UPDATE agent_scheduler_wake_requests
+               SET status = $4,
+                   denial_reason = $5,
+                   executed_at = $6::timestamptz,
+                   metadata = $7::jsonb,
+                   updated_at = $8::timestamptz
+             WHERE id = $1
+               AND tenant_id = $2
+               AND workspace_id = $3
+            """,
+            resolved_wake_id,
+            resolved_tenant_id,
+            resolved_workspace_id,
+            str(status or "").strip().lower() or "pending",
+            str(denial_reason or "").strip() or None,
+            executed_at,
+            _to_json(next_metadata, default={}),
+            now_ts,
+        )
+        row = await connection.fetchrow(
+            "SELECT * FROM agent_scheduler_wake_requests WHERE id = $1 LIMIT 1",
+            resolved_wake_id,
+        )
+    return dict(row) if row is not None else None
+
+
+async def list_personal_context_events(
+    *,
+    tenant_id: str,
+    workspace_id: str,
+    source_app: Optional[str] = None,
+    event_type: Optional[str] = None,
+    unseen_only: bool = False,
+    limit: int = 100,
+) -> List[Dict[str, Any]]:
+    resolved_tenant_id = _require_scope_token(tenant_id, "tenant_id")
+    resolved_workspace_id = _require_scope_token(workspace_id, "workspace_id")
+    conditions = ["tenant_id = $1", "workspace_id = $2"]
+    params: List[Any] = [resolved_tenant_id, resolved_workspace_id]
+    if source_app:
+        params.append(str(source_app or "").strip().lower())
+        conditions.append(f"source_app = ${len(params)}")
+    if event_type:
+        params.append(str(event_type or "").strip().lower())
+        conditions.append(f"event_type = ${len(params)}")
+    if unseen_only:
+        conditions.append("seen_by_sage_at IS NULL")
+    params.append(max(1, int(limit or 100)))
+    async with _scoped_connection(tenant_id=resolved_tenant_id, workspace_id=resolved_workspace_id) as connection:
+        if connection is None:
+            return []
+        rows = await connection.fetch(
+            f"""
+            SELECT *
+            FROM personal_context_events
+            WHERE {' AND '.join(conditions)}
+            ORDER BY created_at DESC
+            LIMIT ${len(params)}
+            """,
+            *params,
+        )
+    return [dict(row) for row in rows]
+
+
+async def mark_personal_context_events_seen_by_sage(
+    *,
+    tenant_id: str,
+    workspace_id: str,
+    event_ids: Optional[List[str]] = None,
+    mark_all: bool = False,
+    seen_at: Optional[str] = None,
+) -> Dict[str, Any]:
+    resolved_tenant_id = _require_scope_token(tenant_id, "tenant_id")
+    resolved_workspace_id = _require_scope_token(workspace_id, "workspace_id")
+    normalized_ids = [
+        str(item or "").strip()
+        for item in list(event_ids or [])
+        if str(item or "").strip()
+    ]
+    if not mark_all and not normalized_ids:
+        return {"status": "ok", "marked_count": 0, "marked_ids": [], "seen_by_sage_at": None}
+    resolved_seen_at = _coerce_timestamptz(seen_at) or _utc_now_ts()
+    async with _scoped_connection(tenant_id=resolved_tenant_id, workspace_id=resolved_workspace_id) as connection:
+        if connection is None:
+            return {"status": "ok", "marked_count": 0, "marked_ids": [], "seen_by_sage_at": None}
+        if mark_all:
+            rows = await connection.fetch(
+                """
+                UPDATE personal_context_events
+                   SET seen_by_sage_at = $3::timestamptz,
+                       updated_at = $3::timestamptz
+                 WHERE tenant_id = $1
+                   AND workspace_id = $2
+                   AND seen_by_sage_at IS NULL
+                RETURNING id
+                """,
+                resolved_tenant_id,
+                resolved_workspace_id,
+                resolved_seen_at,
+            )
+        else:
+            rows = await connection.fetch(
+                """
+                UPDATE personal_context_events
+                   SET seen_by_sage_at = $4::timestamptz,
+                       updated_at = $4::timestamptz
+                 WHERE tenant_id = $1
+                   AND workspace_id = $2
+                   AND id = ANY($3::text[])
+                RETURNING id
+                """,
+                resolved_tenant_id,
+                resolved_workspace_id,
+                normalized_ids,
+                resolved_seen_at,
+            )
+    marked_ids = [str(row.get("id") or "").strip() for row in rows if str(row.get("id") or "").strip()]
+    return {
+        "status": "ok",
+        "marked_count": len(marked_ids),
+        "marked_ids": marked_ids,
+        "seen_by_sage_at": resolved_seen_at.isoformat().replace("+00:00", "Z"),
+    }
+
+
+async def list_agent_channel_events(
+    *,
+    tenant_id: str,
+    workspace_id: str,
+    channel_key: Optional[str] = None,
+    endpoint_key: Optional[str] = None,
+    session_key: Optional[str] = None,
+    responder_install_id: Optional[str] = None,
+    limit: int = 100,
+) -> List[Dict[str, Any]]:
+    resolved_tenant_id = _require_scope_token(tenant_id, "tenant_id")
+    resolved_workspace_id = _require_scope_token(workspace_id, "workspace_id")
+    conditions = ["tenant_id = $1", "workspace_id = $2"]
+    params: List[Any] = [resolved_tenant_id, resolved_workspace_id]
+    if channel_key:
+        params.append(str(channel_key or "").strip().lower())
+        conditions.append(f"channel_key = ${len(params)}")
+    if endpoint_key:
+        params.append(str(endpoint_key or "").strip().lower())
+        conditions.append(f"endpoint_key = ${len(params)}")
+    if session_key:
+        params.append(str(session_key or "").strip())
+        conditions.append(f"session_key = ${len(params)}")
+    if responder_install_id:
+        params.append(str(responder_install_id or "").strip())
+        conditions.append(f"responder_install_id = ${len(params)}")
+    params.append(max(1, int(limit or 100)))
+    async with _scoped_connection(tenant_id=resolved_tenant_id, workspace_id=resolved_workspace_id) as connection:
+        if connection is None:
+            return []
+        rows = await connection.fetch(
+            f"""
+            SELECT *
+            FROM agent_channel_events
+            WHERE {' AND '.join(conditions)}
+            ORDER BY created_at DESC
+            LIMIT ${len(params)}
+            """,
+            *params,
+        )
+    return [dict(row) for row in rows]
+
+
+async def upsert_security_control_state(
+    *,
+    tenant_id: str,
+    workspace_id: str,
+    scope_type: str,
+    control_kind: str = "kill_switch",
+    scope_key: str,
+    enabled: bool,
+    status: str = "active",
+    reason: str = "",
+    metadata: Optional[Dict[str, Any]] = None,
+    agent_install_id: Optional[str] = None,
+    channel_key: Optional[str] = None,
+    endpoint_key: Optional[str] = None,
+    connector_id: Optional[str] = None,
+    credential_id: Optional[str] = None,
+    created_by_user_id: Optional[str] = None,
+    action: Optional[str] = None,
+    state_id: Optional[str] = None,
+    event_id: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    resolved_tenant_id = _require_scope_token(tenant_id, "tenant_id")
+    resolved_workspace_id = _require_scope_token(workspace_id, "workspace_id")
+    resolved_scope_type = str(scope_type or "").strip().lower()
+    resolved_control_kind = str(control_kind or "kill_switch").strip().lower() or "kill_switch"
+    resolved_scope_key = str(scope_key or "").strip().lower()
+    if not resolved_scope_type or not resolved_scope_key:
+        return None
+    resolved_state_id = str(state_id or f"sctl_{uuid.uuid4().hex[:16]}").strip()
+    resolved_event_id = str(event_id or f"scev_{uuid.uuid4().hex[:16]}").strip()
+    resolved_status = str(status or "active").strip().lower() or "active"
+    resolved_action = str(action or "").strip().lower() or ("enabled" if enabled else "disabled")
+    now_ts = _utc_now_ts()
+
+    async with _scoped_connection(tenant_id=resolved_tenant_id, workspace_id=resolved_workspace_id) as connection:
+        if connection is None:
+            return None
+        await connection.execute(
+            """
+            INSERT INTO security_control_states (
+                id, tenant_id, workspace_id, scope_type, control_kind, scope_key,
+                agent_install_id, channel_key, endpoint_key, connector_id, credential_id,
+                enabled, status, reason, metadata, created_by_user_id, created_at, updated_at
+            ) VALUES (
+                $1, $2, $3, $4, $5, $6,
+                $7, $8, $9, $10, $11,
+                $12, $13, $14, $15::jsonb, $16, $17::timestamptz, $17::timestamptz
+            )
+            ON CONFLICT (tenant_id, workspace_id, scope_type, control_kind, scope_key)
+            DO UPDATE SET
+                agent_install_id = EXCLUDED.agent_install_id,
+                channel_key = EXCLUDED.channel_key,
+                endpoint_key = EXCLUDED.endpoint_key,
+                connector_id = EXCLUDED.connector_id,
+                credential_id = EXCLUDED.credential_id,
+                enabled = EXCLUDED.enabled,
+                status = EXCLUDED.status,
+                reason = EXCLUDED.reason,
+                metadata = EXCLUDED.metadata,
+                created_by_user_id = COALESCE(EXCLUDED.created_by_user_id, security_control_states.created_by_user_id),
+                updated_at = EXCLUDED.updated_at
+            """,
+            resolved_state_id,
+            resolved_tenant_id,
+            resolved_workspace_id,
+            resolved_scope_type,
+            resolved_control_kind,
+            resolved_scope_key,
+            str(agent_install_id or "").strip() or None,
+            str(channel_key or "").strip().lower() or None,
+            str(endpoint_key or "").strip().lower() or None,
+            str(connector_id or "").strip().lower() or None,
+            str(credential_id or "").strip() or None,
+            bool(enabled),
+            resolved_status,
+            str(reason or "").strip(),
+            _to_json(metadata, default={}),
+            str(created_by_user_id or "").strip() or None,
+            now_ts,
+        )
+        row = await connection.fetchrow(
+            """
+            SELECT *
+            FROM security_control_states
+            WHERE tenant_id = $1
+              AND workspace_id = $2
+              AND scope_type = $3
+              AND control_kind = $4
+              AND scope_key = $5
+            LIMIT 1
+            """,
+            resolved_tenant_id,
+            resolved_workspace_id,
+            resolved_scope_type,
+            resolved_control_kind,
+            resolved_scope_key,
+        )
+        if row is None:
+            return None
+        resolved_row = dict(row)
+        await connection.execute(
+            """
+            INSERT INTO security_control_events (
+                id, tenant_id, workspace_id, control_state_id, scope_type, control_kind, action, scope_key,
+                agent_install_id, channel_key, endpoint_key, connector_id, credential_id,
+                reason, actor_user_id, metadata, created_at
+            ) VALUES (
+                $1, $2, $3, $4, $5, $6, $7, $8,
+                $9, $10, $11, $12, $13,
+                $14, $15, $16::jsonb, $17::timestamptz
+            )
+            """,
+            resolved_event_id,
+            resolved_tenant_id,
+            resolved_workspace_id,
+            str(resolved_row.get("id") or "").strip() or None,
+            resolved_scope_type,
+            resolved_control_kind,
+            resolved_action,
+            resolved_scope_key,
+            str(agent_install_id or "").strip() or None,
+            str(channel_key or "").strip().lower() or None,
+            str(endpoint_key or "").strip().lower() or None,
+            str(connector_id or "").strip().lower() or None,
+            str(credential_id or "").strip() or None,
+            str(reason or "").strip(),
+            str(created_by_user_id or "").strip() or None,
+            _to_json(metadata, default={}),
+            now_ts,
+        )
+    return resolved_row
+
+
+async def list_security_control_states(
+    *,
+    tenant_id: str,
+    workspace_id: str,
+    scope_types: Optional[List[str]] = None,
+    control_kind: Optional[str] = None,
+    active_only: bool = False,
+    limit: int = 500,
+) -> List[Dict[str, Any]]:
+    resolved_tenant_id = _require_scope_token(tenant_id, "tenant_id")
+    resolved_workspace_id = _require_scope_token(workspace_id, "workspace_id")
+    normalized_scope_types = [
+        str(item or "").strip().lower()
+        for item in list(scope_types or [])
+        if str(item or "").strip()
+    ]
+    conditions = ["tenant_id = $1", "workspace_id = $2"]
+    params: List[Any] = [resolved_tenant_id, resolved_workspace_id]
+    if normalized_scope_types:
+        params.append(normalized_scope_types)
+        conditions.append(f"scope_type = ANY(${len(params)}::text[])")
+    if control_kind:
+        params.append(str(control_kind or "").strip().lower())
+        conditions.append(f"control_kind = ${len(params)}")
+    if active_only:
+        conditions.append("enabled = TRUE")
+    params.append(max(1, int(limit or 500)))
+    async with _scoped_connection(tenant_id=resolved_tenant_id, workspace_id=resolved_workspace_id) as connection:
+        if connection is None:
+            return []
+        rows = await connection.fetch(
+            f"""
+            SELECT *
+            FROM security_control_states
+            WHERE {' AND '.join(conditions)}
+            ORDER BY updated_at DESC, created_at DESC
+            LIMIT ${len(params)}
+            """,
+            *params,
+        )
+    return [dict(row) for row in rows]
+
+
+async def list_security_control_events(
+    *,
+    tenant_id: str,
+    workspace_id: str,
+    scope_types: Optional[List[str]] = None,
+    actions: Optional[List[str]] = None,
+    limit: int = 200,
+) -> List[Dict[str, Any]]:
+    resolved_tenant_id = _require_scope_token(tenant_id, "tenant_id")
+    resolved_workspace_id = _require_scope_token(workspace_id, "workspace_id")
+    normalized_scope_types = [
+        str(item or "").strip().lower()
+        for item in list(scope_types or [])
+        if str(item or "").strip()
+    ]
+    normalized_actions = [
+        str(item or "").strip().lower()
+        for item in list(actions or [])
+        if str(item or "").strip()
+    ]
+    conditions = ["tenant_id = $1", "workspace_id = $2"]
+    params: List[Any] = [resolved_tenant_id, resolved_workspace_id]
+    if normalized_scope_types:
+        params.append(normalized_scope_types)
+        conditions.append(f"scope_type = ANY(${len(params)}::text[])")
+    if normalized_actions:
+        params.append(normalized_actions)
+        conditions.append(f"action = ANY(${len(params)}::text[])")
+    params.append(max(1, int(limit or 200)))
+    async with _scoped_connection(tenant_id=resolved_tenant_id, workspace_id=resolved_workspace_id) as connection:
+        if connection is None:
+            return []
+        rows = await connection.fetch(
+            f"""
+            SELECT *
+            FROM security_control_events
+            WHERE {' AND '.join(conditions)}
+            ORDER BY created_at DESC
+            LIMIT ${len(params)}
+            """,
+            *params,
+        )
+    return [dict(row) for row in rows]
+
+
+async def clear_security_control_state_for_tests() -> None:
+    async with _scoped_connection(bypass_rls=True) as connection:
+        if connection is None:
+            return
+        await connection.execute("DELETE FROM security_control_events")
+        await connection.execute("DELETE FROM security_control_states")

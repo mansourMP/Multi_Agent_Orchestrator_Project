@@ -58,6 +58,28 @@ class SessionTranscriptStoreTests(unittest.TestCase):
         self.assertIn("Continue the runtime refactor.", recent_logs)
         self.assertIn("Moved transcript logging behind the memory service.", recent_logs)
 
+    def test_save_session_transcript_isolates_install_namespace(self) -> None:
+        result = session_transcript_store.save_session_transcript(
+            workspace_id="default",
+            agent_install_id="install-specialist",
+            thread_id="thread-2",
+            provider="openai",
+            model="gpt-test",
+            messages=[{"role": "user", "content": "Private specialist context."}],
+            user_message="Continue the specialist flow.",
+            assistant_reply="Stored inside the specialist transcript namespace.",
+        )
+
+        transcript_path = Path(result["path"])
+        self.assertTrue(transcript_path.exists())
+        self.assertIn("/agents/install-specialist/", transcript_path.as_posix())
+
+        shared_logs = memory_service.get_recent_logs("default", days=7)
+        install_logs = memory_service.get_recent_logs("default", days=7, agent_install_id="install-specialist")
+
+        self.assertNotIn("Continue the specialist flow.", shared_logs)
+        self.assertIn("Continue the specialist flow.", install_logs)
+
 
 if __name__ == "__main__":
     unittest.main()

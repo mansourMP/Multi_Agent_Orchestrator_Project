@@ -25,7 +25,10 @@ def _schedule_workspace_or_404(schedule_id: str) -> str:
         schedule = core.WEEKLY_SCHEDULES.get(schedule_id)
         if not isinstance(schedule, dict):
             raise HTTPException(status_code=404, detail="Schedule not found")
-        return str(schedule.get("workspace_id") or "default").strip() or "default"
+        workspace_id = str(schedule.get("workspace_id") or "").strip()
+        if not workspace_id:
+            raise HTTPException(status_code=409, detail="Schedule scope is invalid")
+        return workspace_id
 
 
 async def list_weekly_schedules(request: Request, current_user=Depends(require_api_key)):

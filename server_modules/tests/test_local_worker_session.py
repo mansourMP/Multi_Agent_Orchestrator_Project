@@ -1,5 +1,6 @@
 import importlib.util
 import json
+import hashlib
 import shutil
 import sys
 import tempfile
@@ -124,7 +125,10 @@ class LocalWorkerSessionTests(TestCase):
         previous_registry = dict(registry)
         try:
             registry.clear()
-            with patch.object(local_queue, "_persist_local_runtime_state", return_value=None):
+            with (
+                patch.object(local_queue, "_persist_local_runtime_state", return_value=None),
+                patch.object(local_queue.run_state_repository, "sync_upsert_fleet_worker", return_value=None),
+            ):
                 registration = local_queue._upsert_runtime_registration(
                     "worker-claim",
                     runtime_type="local",
@@ -153,3 +157,32 @@ class LocalWorkerSessionTests(TestCase):
         finally:
             registry.clear()
             registry.update(previous_registry)
+
+    def test_assert_runtime_session_hydrates_worker_from_durable_registry(self):
+        local_queue._init()
+        registry = local_queue._server.LOCAL_WORKER_REGISTRY
+        previous_registry = dict(registry)
+        try:
+            registry.clear()
+            with (
+                patch.object(local_queue, "_persist_local_runtime_state", return_value=None),
+                patch.object(local_queue.run_state_repository, "sync_get_fleet_worker", return_value={
+                    "worker_id": "worker-hydrated",
+                    "runtime_id": "worker-hydrated",
+                    "machine_id": "worker-hydrated",
+                    "instance_id": "instance-1",
+                    "session_token_hash": hashlib.sha256(b"good").hexdigest(),
+                    "lease_seconds": 30,
+                }),
+                patch.object(local_queue.run_state_repository, "sync_upsert_fleet_worker", return_value=None),
+            ):
+                verified = local_queue._assert_runtime_session(
+                    "worker-hydrated",
+                    "good",
+                    instance_id="instance-1",
+                )
+        finally:
+            registry.clear()
+            registry.update(previous_registry)
+
+        self.assertEqual(verified["runtime_id"], "worker-hydrated")

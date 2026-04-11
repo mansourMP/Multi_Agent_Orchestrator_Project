@@ -24,7 +24,6 @@ import {
   readAccountShellSnapshot,
   writeAccountShellSnapshot,
 } from '@/lib/shell/account-shell-storage';
-import { getWorkspaceMembership } from '@/lib/shell/workspace-membership-model';
 
 type AccountShellContextValue = {
   state: AccountShellState;
@@ -138,12 +137,4 @@ export function useAccountShell(): AccountShellContextValue {
     throw new Error('useAccountShell must be used inside AccountShellProvider');
   }
   return context;
-}
-
-export function useSelectedWorkspaceMembership() {
-  const {
-    state: { selectedWorkspaceId, workspaceMembershipIndex },
-  } = useAccountShell();
-
-  return getWorkspaceMembership(workspaceMembershipIndex, selectedWorkspaceId);
 }

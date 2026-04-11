@@ -1,5 +1,8 @@
 import type { ReactNode } from 'react';
 
+import { loadWorkspaceBootstrap } from '@/lib/workspace/server-workspace-bootstrap';
+import { WorkspaceBoundary } from '@/lib/workspace/workspace-boundary';
+
 export default async function WorkspaceRouteLayout({
   children,
   params,
@@ -8,10 +11,11 @@ export default async function WorkspaceRouteLayout({
   params: Promise<{ workspaceId: string }>;
 }) {
   const { workspaceId } = await params;
+  const bootstrap = await loadWorkspaceBootstrap(workspaceId);
 
   return (
-    <div data-workspace-route={workspaceId}>
+    <WorkspaceBoundary workspaceId={workspaceId} bootstrap={bootstrap}>
       {children}
-    </div>
+    </WorkspaceBoundary>
   );
 }

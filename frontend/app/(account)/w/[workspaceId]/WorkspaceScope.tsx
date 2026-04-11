@@ -3,7 +3,8 @@
 import { useEffect } from 'react';
 import { usePathname } from 'next/navigation';
 
-import { useAccountShell, useSelectedWorkspaceMembership } from '@/lib/shell/account-shell-context';
+import { useAccountShell } from '@/lib/shell/account-shell-context';
+import { useWorkspaceBoundary } from '@/lib/workspace/workspace-boundary';
 
 export function WorkspaceScope({
   workspaceId,
@@ -16,8 +17,7 @@ export function WorkspaceScope({
 }) {
   const pathname = usePathname();
   const { actions, state } = useAccountShell();
-  const selectedMembership = useSelectedWorkspaceMembership();
-  const membership = state.workspaceMembershipIndex[workspaceId] ?? null;
+  const { boundaryKey, bootstrap, shellProfileId } = useWorkspaceBoundary();
 
   useEffect(() => {
     if (pathname) {
@@ -57,9 +57,13 @@ export function WorkspaceScope({
             surface,
             pathname,
             workspaceId,
+            boundaryKey,
+            shellProfileId,
             routeDerivedWorkspaceId: state.selectedWorkspaceId,
-            membership,
-            selectedMembership,
+            membershipFromBoundary: bootstrap.membership,
+            workspaceFromBoundary: bootstrap.workspace,
+            shellHints: bootstrap.shellHints,
+            runtime: bootstrap.runtime,
           },
           null,
           2,

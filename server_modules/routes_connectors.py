@@ -20,6 +20,18 @@ from server_modules.schemas import ConnectorCreate, ConnectorDocumentCreateReque
 router = APIRouter()
 admin_deps = [Depends(require_admin_api_key)]
 
+
+def _human_admin_connector_execution_context(current_user: Optional[dict], *, workspace_id: str, purpose: str) -> Dict[str, Optional[str]]:
+    payload = dict(current_user or {})
+    return {
+        "execution_path": actions.EXECUTION_PATH_HUMAN_ADMIN_ROUTE,
+        "tenant_id": str(payload.get("tenant_id") or "").strip() or None,
+        "workspace_id": str(workspace_id or "").strip() or None,
+        "actor_type": "user",
+        "actor_id": str(payload.get("user_id") or payload.get("email") or "").strip() or None,
+        "purpose": str(purpose or "").strip().lower() or "human_admin_connector_route",
+    }
+
 async def provider_profiles(
     request: Request,
     body: Optional[ProviderProfileUpsertRequest] = None,
@@ -60,6 +72,19 @@ async def provider_profiles_health(
     return await core.provider_profiles_health(workspace_id=workspace_id)
 
 
+async def providers_catalog(
+    request: Request,
+    current_user=Depends(require_api_key),
+):
+    workspace_id = enforce_workspace_access(
+        current_user,
+        request.query_params.get("workspace_id"),
+        minimum_role="owner",
+        capability_id="connectors.manage",
+    )
+    return await core.list_providers(workspace_id=workspace_id)
+
+
 async def providers_health_check(
     request: Request,
     current_user=Depends(require_api_key),
@@ -89,6 +114,26 @@ async def providers_health_check(
         if state == "ok" or provider_id not in results:
             results[provider_id] = state
     return results
+
+
+async def whatsapp_twilio_webhook(request: Request):
+    # This route stays public because Twilio authenticates through the webhook secret boundary.
+    return await actions.whatsapp_twilio_webhook(request)
+
+
+async def telegram_webhook(request: Request, connector_id: str):
+    # This route stays public because Telegram authenticates through the webhook secret boundary.
+    return await actions.telegram_webhook(request, connector_id)
+
+
+async def discord_webhook(request: Request):
+    # This route stays public because Discord signs requests at the edge.
+    return await actions.discord_webhook(request)
+
+
+async def github_webhook(request: Request):
+    # This route stays public because GitHub signs requests at the edge.
+    return await actions.github_events_webhook(request)
 
 
 async def update_tool_contract(
@@ -144,6 +189,11 @@ async def browse_microsoft_connector_drive(
         connector_id=connector_id,
         workspace_id=workspace_id,
         path=request.query_params.get("path"),
+        execution_context=_human_admin_connector_execution_context(
+            current_user,
+            workspace_id=workspace_id,
+            purpose="human_admin_connector_browse_drive",
+        ),
     )
 
 
@@ -163,6 +213,11 @@ async def browse_google_connector_drive(
         connector_id=connector_id,
         workspace_id=workspace_id,
         path=request.query_params.get("path"),
+        execution_context=_human_admin_connector_execution_context(
+            current_user,
+            workspace_id=workspace_id,
+            purpose="human_admin_connector_browse_drive",
+        ),
     )
 
 
@@ -182,6 +237,11 @@ async def create_google_connector_document(
         connector_id=connector_id,
         body=body,
         workspace_id=workspace_id,
+        execution_context=_human_admin_connector_execution_context(
+            current_user,
+            workspace_id=workspace_id,
+            purpose="human_admin_connector_create_document",
+        ),
     )
 
 
@@ -201,6 +261,11 @@ async def create_google_connector_spreadsheet(
         connector_id=connector_id,
         body=body,
         workspace_id=workspace_id,
+        execution_context=_human_admin_connector_execution_context(
+            current_user,
+            workspace_id=workspace_id,
+            purpose="human_admin_connector_create_spreadsheet",
+        ),
     )
 
 
@@ -338,7 +403,7 @@ router.add_api_route("/providers/profiles/health", provider_profiles_health, met
 router.add_api_route("/tools/contracts", core.get_tool_contracts, methods=['GET'], dependencies=[Depends(require_api_key)])
 router.add_api_route("/tools/contracts/{tool_id}", update_tool_contract, methods=['PUT'], dependencies=admin_deps)
 router.add_api_route("/tools/policy/evaluate", core.evaluate_tools_policy, methods=['POST'], dependencies=[Depends(require_api_key)])
-router.add_api_route("/providers", core.list_providers, methods=['GET'], dependencies=[Depends(require_api_key)])
+router.add_api_route("/providers", providers_catalog, methods=['GET'])
 router.add_api_route("/providers/anthropic/local-cli/status", core.get_anthropic_local_cli_status, methods=['GET'], dependencies=admin_deps)
 router.add_api_route("/providers/anthropic/local-cli/login", core.start_anthropic_local_cli_login, methods=['POST'], dependencies=admin_deps)
 router.add_api_route("/providers/gemini/local-cli/status", core.get_gemini_local_cli_status, methods=['GET'], dependencies=admin_deps)
@@ -354,10 +419,11 @@ router.add_api_route("/connectors/vault/{connector_id}/microsoft-drive", browse_
 router.add_api_route("/connectors/vault/{connector_id}/google-drive", browse_google_connector_drive, methods=['GET'])
 router.add_api_route("/connectors/vault/{connector_id}/google-doc", create_google_connector_document, methods=['POST'])
 router.add_api_route("/connectors/vault/{connector_id}/google-sheet", create_google_connector_spreadsheet, methods=['POST'])
-router.add_api_route("/channels/whatsapp/twilio/webhook", actions.whatsapp_twilio_webhook, methods=['POST'], dependencies=[Depends(require_api_key)])
+router.add_api_route("/channels/whatsapp/twilio/webhook", whatsapp_twilio_webhook, methods=['POST'])
+router.add_api_route("/channels/telegram/webhook/{connector_id}", telegram_webhook, methods=['POST'])
 router.add_api_route("/channels/slack/events", actions.slack_events_webhook, methods=['POST'])
-router.add_api_route("/channels/github/webhook", actions.github_events_webhook, methods=['POST'])
-router.add_api_route("/connectors/discord/webhook", actions.discord_webhook, methods=['POST'])
+router.add_api_route("/channels/github/webhook", github_webhook, methods=['POST'])
+router.add_api_route("/connectors/discord/webhook", discord_webhook, methods=['POST'])
 router.add_api_route("/channels/telegram/autopilot/status", actions.telegram_autopilot_status, methods=['GET'], dependencies=[Depends(require_api_key)])
 router.add_api_route("/channels/whatsapp/autopilot/status", actions.whatsapp_autopilot_status, methods=['GET'], dependencies=[Depends(require_api_key)])
 router.add_api_route("/channels/autopilot/profiles", actions.list_autopilot_profiles, methods=['GET'], dependencies=[Depends(require_api_key)])

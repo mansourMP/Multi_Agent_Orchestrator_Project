@@ -6,7 +6,7 @@ import {
   issueDesktopControlPlaneAuthHandoff,
   sanitizeReturnTo,
 } from '@/lib/server/controlPlaneSession';
-import { buildDesktopSignInCompletionPath, resolveControlPlaneBackendUrl } from '@/lib/server/controlPlaneAuthRouting';
+import { buildDesktopSignInCompletionPath, resolveControlPlaneAuthUrl } from '@/lib/server/controlPlaneAuthRouting';
 
 export const dynamic = 'force-dynamic';
 
@@ -34,7 +34,7 @@ export async function POST(request: NextRequest) {
 
   let signupResponse: Response;
   try {
-    signupResponse = await fetch(`${resolveControlPlaneBackendUrl()}/auth/signup`, {
+    signupResponse = await fetch(resolveControlPlaneAuthUrl('signup'), {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',

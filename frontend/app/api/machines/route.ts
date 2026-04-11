@@ -4,6 +4,7 @@ import {
   requireControlPlaneRole,
   requireControlPlaneSession,
   requireControlPlaneWorkspaceAccess,
+  resolveRuntimeWorkspaceId,
 } from '@/lib/server/controlPlaneSession';
 import { runtimeJsonRequest } from '@/lib/server/runtimeControlPlane';
 
@@ -16,7 +17,10 @@ export async function GET(request: NextRequest) {
   if (authFailure) return authFailure;
   const roleFailure = await requireControlPlaneRole(request, 'viewer');
   if (roleFailure) return roleFailure;
-  const workspaceId = String(request.nextUrl.searchParams.get('workspace_id') || 'default').trim() || 'default';
+  const workspaceId = await resolveRuntimeWorkspaceId(
+    request,
+    String(request.nextUrl.searchParams.get('workspace_id') || 'default').trim() || 'default',
+  );
   const workspaceFailure = await requireControlPlaneWorkspaceAccess(
     request,
     workspaceId,
@@ -51,6 +55,7 @@ export async function POST(request: NextRequest) {
   } catch {
     workspaceId = 'default';
   }
+  workspaceId = await resolveRuntimeWorkspaceId(request, workspaceId);
   const workspaceFailure = await requireControlPlaneWorkspaceAccess(
     request,
     workspaceId,

@@ -1,6 +1,6 @@
 import type { NextRequest } from 'next/server';
 import { enforceBffRouteGuard } from '@/lib/server/bffRouteGuard';
-import { requireControlPlaneSession } from '@/lib/server/controlPlaneSession';
+import { requireControlPlaneSession, resolveRuntimeWorkspaceId } from '@/lib/server/controlPlaneSession';
 import { runtimeJsonRequest } from '@/lib/server/runtimeControlPlane';
 
 export const dynamic = 'force-dynamic';
@@ -20,12 +20,13 @@ export async function GET(request: NextRequest) {
   if (rejection) return rejection;
   const authFailure = await requireControlPlaneSession(request);
   if (authFailure) return authFailure;
+  const workspaceId = await resolveRuntimeWorkspaceId(request, 'default');
 
   try {
     const [health, runtimes, approvals] = await Promise.all([
       runtimeJsonRequest('/health', { method: 'GET' }),
       runtimeJsonRequest('/runtime/runtimes/status', { method: 'GET' }),
-      runtimeJsonRequest('/approvals?limit=12&workspace_id=default', { method: 'GET' }),
+      runtimeJsonRequest(`/approvals?limit=12&workspace_id=${encodeURIComponent(workspaceId)}`, { method: 'GET' }),
     ]);
 
     const runtimesPayload = runtimes.payload && typeof runtimes.payload === 'object'

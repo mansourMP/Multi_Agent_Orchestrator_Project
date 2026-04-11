@@ -7,6 +7,7 @@ import {
   requireControlPlaneRole,
   requireControlPlaneSession,
   requireControlPlaneWorkspaceAccess,
+  resolveRuntimeWorkspaceId,
 } from '@/lib/server/controlPlaneSession';
 import { runtimeJsonRequest } from '@/lib/server/runtimeControlPlane';
 
@@ -34,7 +35,11 @@ async function stampSessionOwnerBody(request: NextRequest, rawBody: string): Pro
 
   const ownerUserId = String((await getControlPlaneSession(request))?.sub || '').trim();
   const identity = await getAdminBrowserIdentity(request);
-  const workspaceId = String(parsed.workspace_id || 'default').trim() || 'default';
+  const requestedWorkspaceId = String(parsed.workspace_id || 'default').trim() || 'default';
+  const workspaceId = await resolveRuntimeWorkspaceId(request, requestedWorkspaceId);
+  const tenantId = workspaceId === requestedWorkspaceId
+    ? String(parsed.tenant_id || 'default').trim() || 'default'
+    : 'default';
   let masterAgentInstallId = String((parsed.metadata as { master_agent_install_id?: unknown } | undefined)?.master_agent_install_id || '').trim();
   if (!masterAgentInstallId) {
     try {
@@ -60,6 +65,8 @@ async function stampSessionOwnerBody(request: NextRequest, rawBody: string): Pro
 
   return JSON.stringify({
     ...parsed,
+    tenant_id: tenantId,
+    workspace_id: workspaceId,
     metadata,
   });
 }

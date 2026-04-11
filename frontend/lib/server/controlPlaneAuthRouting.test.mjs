@@ -5,6 +5,9 @@ import {
   buildBrowserVisibleControlPlaneAuthStartPath,
   buildDesktopSignInCompletionPath,
   buildSignInErrorPath,
+  resolveControlPlaneAuthServiceKind,
+  resolveControlPlaneAuthServiceUrl,
+  resolveControlPlaneAuthUrl,
   resolveControlPlaneAuthStartUrl,
   resolveControlPlaneBackendUrl,
 } from './controlPlaneAuthRouting.js';
@@ -20,6 +23,28 @@ test('resolveControlPlaneBackendUrl preserves explicit control-plane API env val
   );
 });
 
+test('resolveControlPlaneBackendUrl prefers an explicit control-plane backend URL and normalizes bare origins', () => {
+  assert.equal(
+    resolveControlPlaneBackendUrl({
+      ORION_CONTROL_PLANE_BACKEND_URL: 'http://127.0.0.1:8080',
+      NEXT_PUBLIC_API_URL: 'http://127.0.0.1:8001',
+      BACKEND_PUBLIC_ORIGIN: 'http://localhost:4000',
+    }),
+    'http://127.0.0.1:8080/api/v1',
+  );
+});
+
+test('resolveControlPlaneBackendUrl falls back to the backend public origin when the public API points at runtime', () => {
+  assert.equal(
+    resolveControlPlaneBackendUrl({
+      NEXT_PUBLIC_API_URL: 'http://127.0.0.1:8001',
+      ORION_API_URL: 'http://127.0.0.1:8001',
+      BACKEND_PUBLIC_ORIGIN: 'http://127.0.0.1:8080',
+    }),
+    'http://127.0.0.1:8080/api/v1',
+  );
+});
+
 test('resolveControlPlaneAuthStartUrl builds backend auth start routes', () => {
   assert.equal(
     resolveControlPlaneAuthStartUrl('google', { NEXT_PUBLIC_API_URL: 'http://127.0.0.1:8080/api/v1' }),
@@ -29,6 +54,24 @@ test('resolveControlPlaneAuthStartUrl builds backend auth start routes', () => {
     resolveControlPlaneAuthStartUrl('apple', {}),
     'http://localhost:4000/api/v1/auth/apple',
   );
+});
+
+test('runtime auth is the default auth service when no control-plane backend is configured', () => {
+  assert.equal(resolveControlPlaneAuthServiceKind({}), 'runtime');
+  assert.equal(resolveControlPlaneAuthServiceUrl({}), 'http://127.0.0.1:8001');
+  assert.equal(resolveControlPlaneAuthUrl('login', {}), 'http://127.0.0.1:8001/auth/login');
+  assert.equal(resolveControlPlaneAuthUrl('signup', {}), 'http://127.0.0.1:8001/auth/register');
+});
+
+test('explicit control-plane backend keeps auth proxying on the backend surface', () => {
+  const env = {
+    ORION_CONTROL_PLANE_BACKEND_URL: 'http://127.0.0.1:8080',
+    NEXT_PUBLIC_ORION_API_URL: 'http://127.0.0.1:8001',
+  };
+
+  assert.equal(resolveControlPlaneAuthServiceKind(env), 'backend');
+  assert.equal(resolveControlPlaneAuthServiceUrl(env), 'http://127.0.0.1:8080/api/v1');
+  assert.equal(resolveControlPlaneAuthUrl('signup', env), 'http://127.0.0.1:8080/api/v1/auth/signup');
 });
 
 test('buildBrowserVisibleControlPlaneAuthStartPath keeps browser auth on the control-plane surface', () => {

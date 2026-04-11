@@ -4,6 +4,7 @@ import {
   requireControlPlaneRole,
   requireControlPlaneSession,
   requireControlPlaneWorkspaceAccess,
+  resolveRuntimeWorkspaceId,
 } from '@/lib/server/controlPlaneSession';
 import { runtimeJsonRequest } from '@/lib/server/runtimeControlPlane';
 
@@ -25,6 +26,7 @@ export async function POST(request: NextRequest) {
   } catch {
     workspaceId = 'default';
   }
+  workspaceId = await resolveRuntimeWorkspaceId(request, workspaceId);
   const workspaceFailure = await requireControlPlaneWorkspaceAccess(
     request,
     workspaceId,

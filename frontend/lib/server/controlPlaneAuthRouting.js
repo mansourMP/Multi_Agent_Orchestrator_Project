@@ -1,4 +1,5 @@
 const DEFAULT_CONTROL_PLANE_BACKEND_ORIGIN = 'http://localhost:4000';
+const DEFAULT_RUNTIME_AUTH_ORIGIN = 'http://127.0.0.1:8001';
 const CONTROL_PLANE_AUTH_PROVIDERS = new Set(['google', 'apple']);
 
 function trimTrailingSlash(value) {
@@ -25,6 +26,20 @@ function normalizeControlPlaneBackendUrl(raw) {
     return trimTrailingSlash(parsed.toString());
   } catch {
     return fallback;
+  }
+}
+
+function normalizeOriginUrl(raw, fallback = DEFAULT_RUNTIME_AUTH_ORIGIN) {
+  const candidate = String(raw || '').trim();
+  const value = candidate || fallback;
+  try {
+    const parsed = new URL(value);
+    parsed.pathname = '';
+    parsed.search = '';
+    parsed.hash = '';
+    return trimTrailingSlash(parsed.toString());
+  } catch {
+    return trimTrailingSlash(fallback);
   }
 }
 
@@ -70,6 +85,51 @@ export function resolveControlPlaneBackendUrl(env = process.env) {
   }
 
   return normalizeControlPlaneBackendUrl('');
+}
+
+function resolveControlPlaneAuthService(env = process.env) {
+  const explicit = String(env?.ORION_CONTROL_PLANE_BACKEND_URL || '').trim();
+  if (explicit) {
+    return { kind: 'backend', baseUrl: normalizeControlPlaneBackendUrl(explicit) };
+  }
+
+  const nextPublicApi = String(env?.NEXT_PUBLIC_API_URL || '').trim();
+  if (nextPublicApi && !runtimeLikeCandidate(nextPublicApi, env)) {
+    return { kind: 'backend', baseUrl: normalizeControlPlaneBackendUrl(nextPublicApi) };
+  }
+
+  const backendOrigin = String(env?.BACKEND_PUBLIC_ORIGIN || env?.BACKEND_PUBLIC_HOST || '').trim();
+  if (backendOrigin) {
+    return { kind: 'backend', baseUrl: normalizeControlPlaneBackendUrl(backendOrigin) };
+  }
+
+  const runtimeOrigin = [
+    env?.ORION_API_URL,
+    env?.NEXT_PUBLIC_ORION_API_URL,
+    env?.NEXT_PUBLIC_API_URL,
+  ].find((value) => String(value || '').trim());
+
+  return {
+    kind: 'runtime',
+    baseUrl: normalizeOriginUrl(runtimeOrigin, DEFAULT_RUNTIME_AUTH_ORIGIN),
+  };
+}
+
+export function resolveControlPlaneAuthServiceKind(env = process.env) {
+  return resolveControlPlaneAuthService(env).kind;
+}
+
+export function resolveControlPlaneAuthServiceUrl(env = process.env) {
+  return resolveControlPlaneAuthService(env).baseUrl;
+}
+
+export function resolveControlPlaneAuthUrl(path, env = process.env) {
+  const config = resolveControlPlaneAuthService(env);
+  const normalizedPath = String(path || '').trim().replace(/^\/+/, '');
+  const mappedPath = config.kind === 'runtime' && normalizedPath === 'signup'
+    ? 'register'
+    : normalizedPath;
+  return `${config.baseUrl}/auth/${mappedPath}`;
 }
 
 export function resolveControlPlaneAuthStartUrl(provider, env = process.env) {

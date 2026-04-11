@@ -5,7 +5,10 @@ import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from
 import type { NextRequest } from 'next/server';
 import { NextResponse } from 'next/server';
 import { API_BASE } from '@/lib/config';
-import { resolveControlPlaneBackendUrl } from '@/lib/server/controlPlaneAuthRouting';
+import {
+  resolveControlPlaneAuthServiceKind,
+  resolveControlPlaneAuthUrl,
+} from '@/lib/server/controlPlaneAuthRouting';
 import { readServerRuntimeKey } from '@/lib/server/runtimeControlPlane';
 
 const CONTROL_PLANE_ADMIN_COOKIE = 'orion_cp_admin';
@@ -30,6 +33,7 @@ type ControlPlaneWorkspaceCapabilityPolicy = {
 };
 
 type ControlPlaneWorkspaceAccess = {
+  tenantId?: string;
   role: ControlPlaneRole;
   capabilities: ControlPlaneWorkspaceCapabilityPolicy;
   dangerousActionClasses: ControlPlaneWorkspaceCapabilityPolicy;
@@ -46,6 +50,10 @@ type ControlPlaneSessionPayload = {
   role: ControlPlaneRole;
   admin: boolean;
   workspaceAccess?: Record<string, ControlPlaneWorkspaceAccess>;
+  currentWorkspaceId?: string;
+  defaultWorkspaceId?: string;
+  currentTenantId?: string;
+  defaultTenantId?: string;
 };
 
 type ControlPlaneIdentity = {
@@ -55,6 +63,10 @@ type ControlPlaneIdentity = {
   role: ControlPlaneRole;
   admin: boolean;
   workspaceAccess?: Record<string, ControlPlaneWorkspaceAccess>;
+  currentWorkspaceId?: string;
+  defaultWorkspaceId?: string;
+  currentTenantId?: string;
+  defaultTenantId?: string;
 };
 
 type PendingControlPlaneOauth = {
@@ -107,6 +119,7 @@ function normalizeWorkspaceAccess(value: unknown): Record<string, ControlPlaneWo
     if (!workspaceId || !rawEntry || typeof rawEntry !== 'object' || Array.isArray(rawEntry)) continue;
     const entry = rawEntry as Record<string, unknown>;
     out[workspaceId] = {
+      tenantId: String(entry.tenantId ?? entry.tenant_id ?? '').trim() || undefined,
       role: normalizeControlPlaneRole(entry.role, 'viewer'),
       capabilities: normalizeWorkspaceCapabilityPolicy(entry.capabilities),
       dangerousActionClasses: normalizeWorkspaceCapabilityPolicy(entry.dangerousActionClasses ?? entry.dangerous_action_classes),
@@ -114,6 +127,62 @@ function normalizeWorkspaceAccess(value: unknown): Record<string, ControlPlaneWo
     };
   }
   return out;
+}
+
+function normalizeOptionalToken(value: unknown): string | undefined {
+  const token = String(value || '').trim();
+  return token || undefined;
+}
+
+function deriveWorkspaceIdentity(
+  workspaceAccess: Record<string, ControlPlaneWorkspaceAccess> | undefined,
+  currentWorkspaceId?: string,
+  defaultWorkspaceId?: string,
+  currentTenantId?: string,
+  defaultTenantId?: string,
+) {
+  const normalizedWorkspaceAccess = normalizeWorkspaceAccess(workspaceAccess);
+  const accessibleWorkspaceIds = Object.keys(normalizedWorkspaceAccess);
+  const resolvedDefaultWorkspaceId =
+    (defaultWorkspaceId && normalizedWorkspaceAccess[defaultWorkspaceId] ? defaultWorkspaceId : undefined)
+    || accessibleWorkspaceIds[0]
+    || defaultWorkspaceId;
+  const resolvedCurrentWorkspaceId =
+    (currentWorkspaceId && normalizedWorkspaceAccess[currentWorkspaceId] ? currentWorkspaceId : undefined)
+    || resolvedDefaultWorkspaceId
+    || currentWorkspaceId;
+  const resolvedDefaultTenantId =
+    (resolvedDefaultWorkspaceId && normalizedWorkspaceAccess[resolvedDefaultWorkspaceId]?.tenantId)
+    || defaultTenantId;
+  const resolvedCurrentTenantId =
+    (resolvedCurrentWorkspaceId && normalizedWorkspaceAccess[resolvedCurrentWorkspaceId]?.tenantId)
+    || currentTenantId
+    || resolvedDefaultTenantId;
+  return {
+    workspaceAccess: normalizedWorkspaceAccess,
+    currentWorkspaceId: resolvedCurrentWorkspaceId,
+    defaultWorkspaceId: resolvedDefaultWorkspaceId,
+    currentTenantId: resolvedCurrentTenantId,
+    defaultTenantId: resolvedDefaultTenantId,
+  };
+}
+
+function resolveSessionWorkspaceId(
+  parsed: Pick<ControlPlaneSessionPayload, 'workspaceAccess' | 'currentWorkspaceId' | 'defaultWorkspaceId' | 'currentTenantId' | 'defaultTenantId'> | null | undefined,
+  workspaceId: string,
+): string {
+  const requestedWorkspaceId = String(workspaceId || '').trim() || 'default';
+  const identity = deriveWorkspaceIdentity(
+    parsed?.workspaceAccess,
+    normalizeOptionalToken(parsed?.currentWorkspaceId),
+    normalizeOptionalToken(parsed?.defaultWorkspaceId),
+    normalizeOptionalToken(parsed?.currentTenantId),
+    normalizeOptionalToken(parsed?.defaultTenantId),
+  );
+  if (requestedWorkspaceId !== 'default') {
+    return identity.workspaceAccess[requestedWorkspaceId] ? requestedWorkspaceId : requestedWorkspaceId;
+  }
+  return identity.currentWorkspaceId || identity.defaultWorkspaceId || requestedWorkspaceId;
 }
 
 function trustedDesktopSessionPayload(request: NextRequest): ControlPlaneSessionPayload | null {
@@ -129,6 +198,10 @@ function trustedDesktopSessionPayload(request: NextRequest): ControlPlaneSession
     role: identity.role,
     admin: identity.admin,
     workspaceAccess: identity.workspaceAccess,
+    currentWorkspaceId: identity.currentWorkspaceId,
+    defaultWorkspaceId: identity.defaultWorkspaceId,
+    currentTenantId: identity.currentTenantId,
+    defaultTenantId: identity.defaultTenantId,
   };
 }
 
@@ -404,9 +477,11 @@ async function verifyBearerSignature(token: string): Promise<Response | null> {
   return null;
 }
 
-async function fetchRuntimeRole(token: string): Promise<Pick<ControlPlaneIdentity, 'email' | 'role' | 'admin' | 'workspaceAccess'> | null> {
+async function fetchRuntimeRole(
+  token: string,
+): Promise<Pick<ControlPlaneIdentity, 'email' | 'role' | 'admin' | 'workspaceAccess' | 'currentWorkspaceId' | 'defaultWorkspaceId' | 'currentTenantId' | 'defaultTenantId'> | null> {
   try {
-    const response = await fetch(`${resolveControlPlaneBackendUrl()}/auth/me`, {
+    const response = await fetch(resolveControlPlaneAuthUrl('me'), {
       method: 'GET',
       headers: {
         Authorization: `Bearer ${token}`,
@@ -416,8 +491,13 @@ async function fetchRuntimeRole(token: string): Promise<Pick<ControlPlaneIdentit
     if (!response.ok) return null;
     const payload = (await response.json().catch(() => null)) as {
       user?: { email?: string | null; role?: string | null; is_admin?: boolean | null } | null;
+      current_workspace_id?: string | null;
+      default_workspace_id?: string | null;
+      current_tenant_id?: string | null;
+      default_tenant_id?: string | null;
       workspace_access?: Array<{
         workspace_id?: string | null;
+        tenant_id?: string | null;
         role?: string | null;
         capabilities?: { allow?: string[]; deny?: string[] } | null;
         dangerous_action_classes?: { allow?: string[]; deny?: string[] } | null;
@@ -432,17 +512,29 @@ async function fetchRuntimeRole(token: string): Promise<Pick<ControlPlaneIdentit
       const workspaceId = String(item?.workspace_id || '').trim();
       if (!workspaceId) continue;
       workspaceAccess[workspaceId] = {
+        tenantId: String(item?.tenant_id || '').trim() || undefined,
         role: normalizeControlPlaneRole(item?.role, role),
         capabilities: normalizeWorkspaceCapabilityPolicy(item?.capabilities),
         dangerousActionClasses: normalizeWorkspaceCapabilityPolicy(item?.dangerous_action_classes),
         trustedOwnerMachineIds: normalizeTokenList(item?.trusted_owner_machine_ids),
       };
     }
+    const workspaceIdentity = deriveWorkspaceIdentity(
+      workspaceAccess,
+      normalizeOptionalToken(payload?.current_workspace_id),
+      normalizeOptionalToken(payload?.default_workspace_id),
+      normalizeOptionalToken(payload?.current_tenant_id),
+      normalizeOptionalToken(payload?.default_tenant_id),
+    );
     return {
       email: String(user.email || '').trim().toLowerCase() || null,
       role,
       admin: role === 'owner',
-      workspaceAccess,
+      workspaceAccess: workspaceIdentity.workspaceAccess,
+      currentWorkspaceId: workspaceIdentity.currentWorkspaceId,
+      defaultWorkspaceId: workspaceIdentity.defaultWorkspaceId,
+      currentTenantId: workspaceIdentity.currentTenantId,
+      defaultTenantId: workspaceIdentity.defaultTenantId,
     };
   } catch {
     return null;
@@ -464,6 +556,10 @@ async function verifyAdminBearerIdentity(token: string): Promise<ControlPlaneIde
       role,
       admin: role === 'owner',
       workspaceAccess: resolved?.workspaceAccess,
+      currentWorkspaceId: resolved?.currentWorkspaceId,
+      defaultWorkspaceId: resolved?.defaultWorkspaceId,
+      currentTenantId: resolved?.currentTenantId,
+      defaultTenantId: resolved?.defaultTenantId,
     };
   }
   if (resolved) {
@@ -474,6 +570,10 @@ async function verifyAdminBearerIdentity(token: string): Promise<ControlPlaneIde
       role: resolved.role,
       admin: resolved.admin,
       workspaceAccess: resolved.workspaceAccess,
+      currentWorkspaceId: resolved.currentWorkspaceId,
+      defaultWorkspaceId: resolved.defaultWorkspaceId,
+      currentTenantId: resolved.currentTenantId,
+      defaultTenantId: resolved.defaultTenantId,
     };
   }
   return Response.json({ detail: 'Invalid bearer token.' }, { status: 401 });
@@ -554,7 +654,18 @@ async function decodeSession(token: string, request: NextRequest): Promise<Contr
   if (!['bearer', 'trusted_local'].includes(String(parsed.authType || '').trim())) return null;
   parsed.role = normalizeControlPlaneRole(parsed.role, parsed.admin ? 'owner' : 'member');
   parsed.admin = parsed.role === 'owner';
-  parsed.workspaceAccess = normalizeWorkspaceAccess(parsed.workspaceAccess);
+  const workspaceIdentity = deriveWorkspaceIdentity(
+    parsed.workspaceAccess,
+    normalizeOptionalToken(parsed.currentWorkspaceId),
+    normalizeOptionalToken(parsed.defaultWorkspaceId),
+    normalizeOptionalToken(parsed.currentTenantId),
+    normalizeOptionalToken(parsed.defaultTenantId),
+  );
+  parsed.workspaceAccess = workspaceIdentity.workspaceAccess;
+  parsed.currentWorkspaceId = workspaceIdentity.currentWorkspaceId;
+  parsed.defaultWorkspaceId = workspaceIdentity.defaultWorkspaceId;
+  parsed.currentTenantId = workspaceIdentity.currentTenantId;
+  parsed.defaultTenantId = workspaceIdentity.defaultTenantId;
   return parsed;
 }
 
@@ -585,12 +696,17 @@ export function getTrustedDesktopIdentity(request: NextRequest): ControlPlaneIde
     admin: true,
     workspaceAccess: {
       default: {
+        tenantId: 'default',
         role: 'owner',
         capabilities: { allow: ['*'], deny: [] },
         dangerousActionClasses: { allow: ['*'], deny: [] },
         trustedOwnerMachineIds: [],
       },
     },
+    currentWorkspaceId: 'default',
+    defaultWorkspaceId: 'default',
+    currentTenantId: 'default',
+    defaultTenantId: 'default',
   };
 }
 
@@ -604,6 +720,13 @@ export async function issueAdminBrowserIdentityResponse(
 
   const claims = parseBearerClaims(bearerToken);
   if (claims instanceof Response) return claims;
+  const workspaceIdentity = deriveWorkspaceIdentity(
+    identity.workspaceAccess,
+    normalizeOptionalToken(identity.currentWorkspaceId),
+    normalizeOptionalToken(identity.defaultWorkspaceId),
+    normalizeOptionalToken(identity.currentTenantId),
+    normalizeOptionalToken(identity.defaultTenantId),
+  );
   const now = Math.floor(Date.now() / 1000);
   const tokenMaxAge = Number.isFinite(claims.exp) && claims.exp > now
     ? Math.max(60, claims.exp - now)
@@ -637,7 +760,11 @@ export async function issueAdminBrowserIdentityResponse(
     authType: identity.authType,
     role: identity.role,
     admin: identity.admin,
-    workspaceAccess: identity.workspaceAccess,
+    workspaceAccess: workspaceIdentity.workspaceAccess,
+    currentWorkspaceId: workspaceIdentity.currentWorkspaceId,
+    defaultWorkspaceId: workspaceIdentity.defaultWorkspaceId,
+    currentTenantId: workspaceIdentity.currentTenantId,
+    defaultTenantId: workspaceIdentity.defaultTenantId,
   };
   const sessionToken = await encodeSession(sessionPayload);
   response.cookies.set({
@@ -678,6 +805,13 @@ export async function issueControlPlaneSessionResponse(
   request: NextRequest,
   identity: ControlPlaneIdentity,
 ): Promise<NextResponse> {
+  const workspaceIdentity = deriveWorkspaceIdentity(
+    identity.workspaceAccess,
+    normalizeOptionalToken(identity.currentWorkspaceId),
+    normalizeOptionalToken(identity.defaultWorkspaceId),
+    normalizeOptionalToken(identity.currentTenantId),
+    normalizeOptionalToken(identity.defaultTenantId),
+  );
   const payload: ControlPlaneSessionPayload = {
     v: 1,
     exp: Math.floor(Date.now() / 1000) + CONTROL_PLANE_SESSION_TTL_SECONDS,
@@ -687,7 +821,11 @@ export async function issueControlPlaneSessionResponse(
     authType: identity.authType,
     role: identity.role,
     admin: identity.admin,
-    workspaceAccess: identity.workspaceAccess,
+    workspaceAccess: workspaceIdentity.workspaceAccess,
+    currentWorkspaceId: workspaceIdentity.currentWorkspaceId,
+    defaultWorkspaceId: workspaceIdentity.defaultWorkspaceId,
+    currentTenantId: workspaceIdentity.currentTenantId,
+    defaultTenantId: workspaceIdentity.defaultTenantId,
   };
   const token = await encodeSession(payload);
   const response = NextResponse.json({ ok: true, expires_in: CONTROL_PLANE_SESSION_TTL_SECONDS, role: identity.role });
@@ -735,7 +873,7 @@ export async function requireControlPlaneWorkspaceAccess(
   if (!parsed) {
     return Response.json({ detail: 'Control-plane session required.' }, { status: 401 });
   }
-  const workspaceToken = String(workspaceId || '').trim() || 'default';
+  const workspaceToken = resolveSessionWorkspaceId(parsed, workspaceId);
   const workspaceAccess = normalizeWorkspaceAccess(parsed.workspaceAccess);
   const workspaceEntry = workspaceAccess[workspaceToken];
   const effectiveRole = workspaceEntry?.role || (parsed.admin ? 'owner' : null);
@@ -784,13 +922,21 @@ export async function requireControlPlaneWorkspaceAccess(
   return null;
 }
 
+export async function resolveRuntimeWorkspaceId(
+  request: NextRequest,
+  workspaceId: string,
+): Promise<string> {
+  const parsed = await getControlPlaneSession(request);
+  return resolveSessionWorkspaceId(parsed, workspaceId);
+}
+
 export function controlPlaneAuthProviders(): ControlPlaneAuthProviders {
   return localControlPlaneAuthProviders();
 }
 
 export async function fetchControlPlaneAuthProviders(): Promise<ControlPlaneAuthProviders> {
   try {
-    const response = await fetch(`${resolveControlPlaneBackendUrl()}/auth/providers`, {
+    const response = await fetch(resolveControlPlaneAuthUrl('providers'), {
       method: 'GET',
       cache: 'no-store',
     });
@@ -806,6 +952,13 @@ export async function fetchControlPlaneAuthProviders(): Promise<ControlPlaneAuth
     }
   } catch {
     // Fall back to the frontend runtime view when the backend auth service is unavailable.
+  }
+  if (resolveControlPlaneAuthServiceKind() === 'runtime') {
+    return {
+      email: { enabled: true },
+      google: { enabled: false },
+      apple: { enabled: false },
+    };
   }
   return localControlPlaneAuthProviders();
 }

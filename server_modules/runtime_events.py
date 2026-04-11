@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 import time
 import uuid
 from typing import Any, Callable, Dict, List, Optional
@@ -267,6 +268,190 @@ def channel_event_matches(
     return True
 
 
+def _list_durable_channel_events(
+    *,
+    allowed_workspace_ids: Optional[set[str]] = None,
+    workspace_id: Optional[str] = None,
+    tenant_id: Optional[str] = None,
+    channel: Optional[str] = None,
+    session_key: Optional[str] = None,
+    direction: Optional[str] = None,
+    action: Optional[str] = None,
+    run_id: Optional[str] = None,
+    trace_id: Optional[str] = None,
+    since_ts: Optional[float] = None,
+    since_id: Optional[str] = None,
+    limit: int = 100,
+) -> List[Dict[str, Any]]:
+    parse_ts = _require_configured(_parse_utc_ts, "_parse_utc_ts")
+    normalize_ws = _require_configured(_normalize_workspace_id, "_normalize_workspace_id")
+    clauses: List[str] = []
+    params: List[Any] = []
+    if workspace_id:
+        clauses.append("workspace_id = ?")
+        params.append(normalize_ws(workspace_id))
+    normalized_allowed = sorted(
+        {
+            str(item or "").strip()
+            for item in (allowed_workspace_ids or set())
+            if str(item or "").strip()
+        }
+    )
+    if allowed_workspace_ids is not None:
+        if not normalized_allowed:
+            return []
+        placeholders = ", ".join("?" for _ in normalized_allowed)
+        clauses.append(f"workspace_id IN ({placeholders})")
+        params.extend(normalized_allowed)
+    if channel:
+        clauses.append("channel = ?")
+        params.append(str(channel).strip().lower())
+    if session_key:
+        clauses.append("session_key = ?")
+        params.append(str(session_key).strip())
+    if direction:
+        clauses.append("direction = ?")
+        params.append(str(direction).strip().lower())
+    if action:
+        clauses.append("action = ?")
+        params.append(str(action).strip().lower())
+    if run_id:
+        clauses.append("run_id = ?")
+        params.append(str(run_id).strip())
+    if trace_id:
+        clauses.append("trace_id = ?")
+        params.append(str(trace_id).strip())
+    if since_ts is not None:
+        if str(since_id or "").strip():
+            clauses.append("(sort_ts > ? OR (sort_ts = ? AND id > ?))")
+            params.extend([float(since_ts), float(since_ts), str(since_id or "").strip()])
+        else:
+            clauses.append("sort_ts > ?")
+            params.append(float(since_ts))
+
+    query = "SELECT id, ts, event_json FROM channel_events"
+    if clauses:
+        query += " WHERE " + " AND ".join(clauses)
+    query += " ORDER BY sort_ts DESC, id DESC LIMIT ?"
+    params.append(max(1, int(limit or 100)))
+
+    with sqlite3.connect(str(ORION_RUNTIME_STATE_DB)) as conn:
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(query, tuple(params)).fetchall()
+    out: List[Dict[str, Any]] = []
+    for row in rows:
+        try:
+            payload = json.loads(row["event_json"])
+        except Exception:
+            continue
+        if not isinstance(payload, dict):
+            continue
+        item = dict(payload)
+        item["id"] = str(item.get("id") or row["id"] or "").strip()
+        item["ts"] = str(item.get("ts") or row["ts"] or "").strip()
+        if not item["id"]:
+            continue
+        if parse_ts(item.get("ts")) is None:
+            continue
+        if not channel_event_matches(
+            item=item,
+            workspace_id=workspace_id,
+            tenant_id=tenant_id,
+            channel=channel,
+            session_key=session_key,
+            direction=direction,
+            action=action,
+            run_id=run_id,
+            trace_id=trace_id,
+        ):
+            continue
+        out.append(item)
+    return out
+
+
+def _resolve_durable_channel_event_cursor(
+    *,
+    event_id: str,
+    allowed_workspace_ids: Optional[set[str]] = None,
+    workspace_id: Optional[str] = None,
+    tenant_id: Optional[str] = None,
+    channel: Optional[str] = None,
+    session_key: Optional[str] = None,
+    direction: Optional[str] = None,
+    action: Optional[str] = None,
+    run_id: Optional[str] = None,
+    trace_id: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    parse_ts = _require_configured(_parse_utc_ts, "_parse_utc_ts")
+    normalize_ws = _require_configured(_normalize_workspace_id, "_normalize_workspace_id")
+    clauses: List[str] = ["id = ?"]
+    params: List[Any] = [str(event_id or "").strip()]
+    if workspace_id:
+        clauses.append("workspace_id = ?")
+        params.append(normalize_ws(workspace_id))
+    normalized_allowed = sorted(
+        {
+            str(item or "").strip()
+            for item in (allowed_workspace_ids or set())
+            if str(item or "").strip()
+        }
+    )
+    if allowed_workspace_ids is not None:
+        if not normalized_allowed:
+            return None
+        placeholders = ", ".join("?" for _ in normalized_allowed)
+        clauses.append(f"workspace_id IN ({placeholders})")
+        params.extend(normalized_allowed)
+    if channel:
+        clauses.append("channel = ?")
+        params.append(str(channel).strip().lower())
+    if session_key:
+        clauses.append("session_key = ?")
+        params.append(str(session_key).strip())
+    if direction:
+        clauses.append("direction = ?")
+        params.append(str(direction).strip().lower())
+    if action:
+        clauses.append("action = ?")
+        params.append(str(action).strip().lower())
+    if run_id:
+        clauses.append("run_id = ?")
+        params.append(str(run_id).strip())
+    if trace_id:
+        clauses.append("trace_id = ?")
+        params.append(str(trace_id).strip())
+    query = "SELECT id, ts, event_json FROM channel_events WHERE " + " AND ".join(clauses) + " LIMIT 1"
+    with sqlite3.connect(str(ORION_RUNTIME_STATE_DB)) as conn:
+        conn.row_factory = sqlite3.Row
+        row = conn.execute(query, tuple(params)).fetchone()
+    if row is None:
+        return None
+    try:
+        payload = json.loads(row["event_json"])
+    except Exception:
+        return None
+    if not isinstance(payload, dict):
+        return None
+    item = dict(payload)
+    item["id"] = str(item.get("id") or row["id"] or "").strip()
+    item["ts"] = str(item.get("ts") or row["ts"] or "").strip()
+    if not item["id"] or parse_ts(item.get("ts")) is None:
+        return None
+    if not channel_event_matches(
+        item=item,
+        workspace_id=workspace_id,
+        tenant_id=tenant_id,
+        channel=channel,
+        session_key=session_key,
+        direction=direction,
+        action=action,
+        run_id=run_id,
+        trace_id=trace_id,
+    ):
+        return None
+    return item
+
+
 def iter_channel_events_stream(
     *,
     allowed_workspace_ids: Optional[set[str]] = None,
@@ -307,43 +492,10 @@ def iter_channel_events_stream(
             yield {"event": "done", "data": json.dumps({"reason": "timeout", "ts": utc_now_iso()}, ensure_ascii=True)}
             break
 
-        with CHANNEL_EVENTS_LOCK:
-            snapshot = list(CHANNEL_EVENTS)
-
-        candidates: List[Dict[str, Any]] = []
-        if cursor_id:
-            cursor_index = -1
-            for idx, item in enumerate(snapshot):
-                if str(item.get("id") or "").strip() == cursor_id:
-                    cursor_index = idx
-                    break
-            if cursor_index > 0:
-                candidates = snapshot[:cursor_index]
-            elif cursor_index < 0 and snapshot:
-                # Cursor likely rolled out due retention limit; re-anchor on head.
-                cursor_id = str(snapshot[0].get("id") or cursor_id).strip()
-                cursor_ts = parse_ts(snapshot[0].get("ts")) or cursor_ts
-        elif cursor_ts is not None:
-            for item in snapshot:
-                ts_value = parse_ts(item.get("ts"))
-                if ts_value is None:
-                    continue
-                if ts_value > cursor_ts:
-                    candidates.append(item)
-        elif backlog_once:
-            candidates = snapshot[:safe_limit]
-            backlog_once = False
-        elif snapshot:
-            # Seed cursor to "now" to stream only fresh events by default.
-            cursor_id = str(snapshot[0].get("id") or "").strip()
-            cursor_ts = parse_ts(snapshot[0].get("ts")) or cursor_ts
-
-        filtered = [
-            item
-            for item in candidates
-            if allowed_workspace_ids is None or str(item.get("workspace_id") or "").strip() in allowed_workspace_ids
-            if channel_event_matches(
-                item=item,
+        if cursor_id and cursor_ts is None:
+            cursor_item = _resolve_durable_channel_event_cursor(
+                event_id=cursor_id,
+                allowed_workspace_ids=allowed_workspace_ids,
                 workspace_id=workspace_id,
                 tenant_id=tenant_id,
                 channel=channel,
@@ -353,7 +505,55 @@ def iter_channel_events_stream(
                 run_id=run_id,
                 trace_id=trace_id,
             )
-        ]
+            if cursor_item is not None:
+                cursor_ts = parse_ts(cursor_item.get("ts"))
+
+        if backlog_once:
+            filtered = _list_durable_channel_events(
+                allowed_workspace_ids=allowed_workspace_ids,
+                workspace_id=workspace_id,
+                tenant_id=tenant_id,
+                channel=channel,
+                session_key=session_key,
+                direction=direction,
+                action=action,
+                run_id=run_id,
+                trace_id=trace_id,
+                limit=safe_limit,
+            )
+            backlog_once = False
+        elif cursor_ts is not None:
+            filtered = _list_durable_channel_events(
+                allowed_workspace_ids=allowed_workspace_ids,
+                workspace_id=workspace_id,
+                tenant_id=tenant_id,
+                channel=channel,
+                session_key=session_key,
+                direction=direction,
+                action=action,
+                run_id=run_id,
+                trace_id=trace_id,
+                since_ts=cursor_ts,
+                since_id=cursor_id,
+                limit=safe_limit,
+            )
+        else:
+            filtered = _list_durable_channel_events(
+                allowed_workspace_ids=allowed_workspace_ids,
+                workspace_id=workspace_id,
+                tenant_id=tenant_id,
+                channel=channel,
+                session_key=session_key,
+                direction=direction,
+                action=action,
+                run_id=run_id,
+                trace_id=trace_id,
+                limit=1,
+            )
+            if filtered:
+                cursor_id = str(filtered[0].get("id") or "").strip()
+                cursor_ts = parse_ts(filtered[0].get("ts")) or cursor_ts
+                filtered = []
 
         if filtered:
             emit_items = list(reversed(filtered[:safe_limit]))

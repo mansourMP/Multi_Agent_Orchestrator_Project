@@ -1,3 +1,4 @@
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -375,6 +376,100 @@ class NotificationServiceTests(unittest.TestCase):
                 )
 
             self.assertEqual(record_mock.call_count, 1)
+
+    def test_iter_notifications_stream_replays_bounded_backlog_from_durable_store(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            db_path = Path(tempdir) / "runtime-state.sqlite3"
+            runtime_state_store.init_runtime_state_db(db_path)
+            for notification_id, ts in (
+                ("notif-1", "2026-04-08T00:00:00Z"),
+                ("notif-2", "2026-04-08T00:01:00Z"),
+                ("notif-3", "2026-04-08T00:02:00Z"),
+            ):
+                runtime_state_store.upsert_notification(
+                    db_path,
+                    {
+                        "id": notification_id,
+                        "ts": ts,
+                        "tenant_id": "tenant-1",
+                        "workspace_id": "workspace-1",
+                        "channel": "runtime",
+                        "direction": "system",
+                        "event_type": "notification",
+                        "action": "run_completed",
+                        "title": notification_id,
+                        "text": notification_id,
+                        "session_key": f"run:{notification_id}",
+                        "session_id": f"run:{notification_id}",
+                    },
+                )
+
+            iterator = notification_service.iter_notifications_stream(
+                reader_key="user:user-1",
+                tenant_id="tenant-1",
+                workspace_id="workspace-1",
+                include_backlog=True,
+                limit=3,
+                db_path=db_path,
+            )
+            with patch(
+                "server_modules.notification_service.activity_ledger_service.list_notification_feed_items_sync",
+                return_value=[],
+            ):
+                events = [next(iterator), next(iterator), next(iterator)]
+            iterator.close()
+
+            self.assertEqual(
+                [json.loads(event["data"])["id"] for event in events],
+                ["notif-1", "notif-2", "notif-3"],
+            )
+
+    def test_iter_notifications_stream_resumes_from_since_id_with_bounded_cursor(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            db_path = Path(tempdir) / "runtime-state.sqlite3"
+            runtime_state_store.init_runtime_state_db(db_path)
+            for notification_id, ts in (
+                ("notif-1", "2026-04-08T00:00:00Z"),
+                ("notif-2", "2026-04-08T00:01:00Z"),
+                ("notif-3", "2026-04-08T00:02:00Z"),
+            ):
+                runtime_state_store.upsert_notification(
+                    db_path,
+                    {
+                        "id": notification_id,
+                        "ts": ts,
+                        "tenant_id": "tenant-1",
+                        "workspace_id": "workspace-1",
+                        "channel": "runtime",
+                        "direction": "system",
+                        "event_type": "notification",
+                        "action": "run_completed",
+                        "title": notification_id,
+                        "text": notification_id,
+                        "session_key": f"run:{notification_id}",
+                        "session_id": f"run:{notification_id}",
+                    },
+                )
+
+            iterator = notification_service.iter_notifications_stream(
+                reader_key="user:user-1",
+                tenant_id="tenant-1",
+                workspace_id="workspace-1",
+                since_id="notif-2",
+                limit=3,
+                db_path=db_path,
+            )
+            with patch(
+                "server_modules.notification_service.activity_ledger_service.list_notification_feed_items_sync",
+                return_value=[],
+            ), patch(
+                "server_modules.notification_service.activity_ledger_service.get_notification_feed_item_sync",
+                return_value=None,
+            ):
+                event = next(iterator)
+            iterator.close()
+
+            self.assertEqual(json.loads(event["data"])["id"], "notif-3")
 
 
 if __name__ == "__main__":

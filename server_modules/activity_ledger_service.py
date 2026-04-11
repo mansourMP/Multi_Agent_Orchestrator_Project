@@ -364,6 +364,8 @@ async def list_notification_feed_items(
     action: Optional[str] = None,
     run_id: Optional[str] = None,
     trace_id: Optional[str] = None,
+    since_ts: Optional[str] = None,
+    since_id: Optional[str] = None,
     limit: int = 100,
 ) -> List[Dict[str, Any]]:
     rows = await control_plane_repository.list_activity_ledger_events(
@@ -376,6 +378,8 @@ async def list_notification_feed_items(
         action=str(action or "").strip().lower() or None,
         run_id=str(run_id or "").strip() or None,
         trace_id=str(trace_id or "").strip() or None,
+        since_created_at=since_ts,
+        since_id=str(since_id or "").strip() or None,
         limit=max(1, int(limit or 100)),
     )
     return [_project_notification_item(row) for row in rows]
@@ -383,6 +387,26 @@ async def list_notification_feed_items(
 
 def list_notification_feed_items_sync(**kwargs: Any) -> List[Dict[str, Any]]:
     return list(_run_coro_sync(list_notification_feed_items(**kwargs)) or [])
+
+
+async def get_notification_feed_item(
+    *,
+    tenant_id: str,
+    workspace_id: str,
+    notification_id: str,
+) -> Optional[Dict[str, Any]]:
+    row = await control_plane_repository.get_activity_ledger_event(
+        tenant_id=tenant_id,
+        workspace_id=workspace_id,
+        event_id=notification_id,
+    )
+    if not row:
+        return None
+    return _project_notification_item(row)
+
+
+def get_notification_feed_item_sync(**kwargs: Any) -> Optional[Dict[str, Any]]:
+    return _run_coro_sync(get_notification_feed_item(**kwargs))
 
 
 async def list_activity_timeline_payload(

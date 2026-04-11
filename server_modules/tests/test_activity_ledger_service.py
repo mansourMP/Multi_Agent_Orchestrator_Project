@@ -44,6 +44,25 @@ class ActivityLedgerServiceTests(unittest.TestCase):
         self.assertEqual(items[0]["metadata"]["detail_level"], "feed_summary")
         self.assertEqual(items[0]["session_key"], "run:run-1")
 
+    def test_list_notification_feed_items_forwards_cursor_filters(self) -> None:
+        repo_mock = AsyncMock(return_value=[])
+        with patch(
+            "server_modules.activity_ledger_service.control_plane_repository.list_activity_ledger_events",
+            new=repo_mock,
+        ):
+            asyncio.run(
+                activity_ledger_service.list_notification_feed_items(
+                    tenant_id="tenant-1",
+                    workspace_id="workspace-1",
+                    since_ts="2026-04-10T09:00:00Z",
+                    since_id="aevt-1",
+                    limit=25,
+                )
+            )
+
+        self.assertEqual(repo_mock.await_args.kwargs["since_created_at"], "2026-04-10T09:00:00Z")
+        self.assertEqual(repo_mock.await_args.kwargs["since_id"], "aevt-1")
+
     def test_list_activity_timeline_payload_includes_artifacts_and_review_summary(self) -> None:
         created_at = datetime(2026, 4, 10, 9, 0, tzinfo=timezone.utc)
         with patch(

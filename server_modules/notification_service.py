@@ -5,6 +5,7 @@ import json
 import logging
 import os
 from pathlib import Path
+import sqlite3
 import time
 from typing import Any, Dict, Iterable, List, Mapping, Optional
 from urllib import error as urllib_error
@@ -372,6 +373,235 @@ def _merge_notification_sources(
         )
     )
     return out
+
+
+def _notification_item_matches(
+    item: Dict[str, Any],
+    *,
+    tenant_id: Optional[str] = None,
+    workspace_id: Optional[str] = None,
+    channel: Optional[str] = None,
+    session_key: Optional[str] = None,
+    direction: Optional[str] = None,
+    action: Optional[str] = None,
+    run_id: Optional[str] = None,
+    trace_id: Optional[str] = None,
+) -> bool:
+    if tenant_id and str(item.get("tenant_id") or "").strip() != str(tenant_id or "").strip():
+        return False
+    if workspace_id and str(item.get("workspace_id") or "").strip() != str(workspace_id or "").strip():
+        return False
+    if channel and str(item.get("channel") or "").strip().lower() != str(channel or "").strip().lower():
+        return False
+    if session_key and str(item.get("session_key") or "").strip() != str(session_key or "").strip():
+        return False
+    if direction and str(item.get("direction") or "").strip().lower() != str(direction or "").strip().lower():
+        return False
+    if action and str(item.get("action") or "").strip().lower() != str(action or "").strip().lower():
+        return False
+    if run_id and str(item.get("run_id") or "").strip() != str(run_id or "").strip():
+        return False
+    if trace_id and str(item.get("trace_id") or "").strip() != str(trace_id or "").strip():
+        return False
+    return True
+
+
+def _runtime_notification_query_ids(
+    *,
+    db_path: Path,
+    tenant_id: Optional[str] = None,
+    workspace_id: Optional[str] = None,
+    allowed_workspace_ids: Optional[set[str]] = None,
+    channel: Optional[str] = None,
+    session_key: Optional[str] = None,
+    direction: Optional[str] = None,
+    action: Optional[str] = None,
+    run_id: Optional[str] = None,
+    trace_id: Optional[str] = None,
+    since_ts: Optional[float] = None,
+    since_id: Optional[str] = None,
+    limit: int = 100,
+) -> List[str]:
+    clauses: List[str] = []
+    params: List[Any] = []
+    if str(tenant_id or "").strip():
+        clauses.append("tenant_id = ?")
+        params.append(str(tenant_id or "").strip())
+    if str(workspace_id or "").strip():
+        clauses.append("workspace_id = ?")
+        params.append(str(workspace_id or "").strip())
+    normalized_allowed = sorted(
+        {
+            str(item or "").strip()
+            for item in (allowed_workspace_ids or set())
+            if str(item or "").strip()
+        }
+    )
+    if allowed_workspace_ids is not None:
+        if not normalized_allowed:
+            return []
+        placeholders = ", ".join("?" for _ in normalized_allowed)
+        clauses.append(f"workspace_id IN ({placeholders})")
+        params.extend(normalized_allowed)
+    if str(channel or "").strip():
+        clauses.append("channel = ?")
+        params.append(str(channel or "").strip().lower())
+    if str(session_key or "").strip():
+        clauses.append("session_key = ?")
+        params.append(str(session_key or "").strip())
+    if str(direction or "").strip():
+        clauses.append("direction = ?")
+        params.append(str(direction or "").strip().lower())
+    if str(action or "").strip():
+        clauses.append("action = ?")
+        params.append(str(action or "").strip().lower())
+    if str(run_id or "").strip():
+        clauses.append("run_id = ?")
+        params.append(str(run_id or "").strip())
+    if str(trace_id or "").strip():
+        clauses.append("trace_id = ?")
+        params.append(str(trace_id or "").strip())
+    if since_ts is not None:
+        if str(since_id or "").strip():
+            clauses.append("(sort_ts > ? OR (sort_ts = ? AND id > ?))")
+            params.extend([float(since_ts), float(since_ts), str(since_id or "").strip()])
+        else:
+            clauses.append("sort_ts > ?")
+            params.append(float(since_ts))
+
+    query = "SELECT id FROM notifications"
+    if clauses:
+        query += " WHERE " + " AND ".join(clauses)
+    query += " ORDER BY sort_ts DESC, id DESC LIMIT ?"
+    params.append(max(1, int(limit or 100)))
+
+    with sqlite3.connect(str(db_path)) as conn:
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(query, tuple(params)).fetchall()
+    return [str(row["id"] or "").strip() for row in rows if str(row["id"] or "").strip()]
+
+
+def _list_runtime_notifications_since(
+    *,
+    db_path: Path,
+    reader_key: str,
+    tenant_id: Optional[str] = None,
+    workspace_id: Optional[str] = None,
+    allowed_workspace_ids: Optional[set[str]] = None,
+    channel: Optional[str] = None,
+    session_key: Optional[str] = None,
+    direction: Optional[str] = None,
+    action: Optional[str] = None,
+    run_id: Optional[str] = None,
+    trace_id: Optional[str] = None,
+    since_ts: Optional[float] = None,
+    since_id: Optional[str] = None,
+    limit: int = 100,
+) -> List[Dict[str, Any]]:
+    notification_ids = _runtime_notification_query_ids(
+        db_path=db_path,
+        tenant_id=tenant_id,
+        workspace_id=workspace_id,
+        allowed_workspace_ids=allowed_workspace_ids,
+        channel=channel,
+        session_key=session_key,
+        direction=direction,
+        action=action,
+        run_id=run_id,
+        trace_id=trace_id,
+        since_ts=since_ts,
+        since_id=since_id,
+        limit=limit,
+    )
+    if not notification_ids:
+        return []
+    items = runtime_state_store.list_notifications_by_ids(
+        db_path,
+        reader_key=reader_key,
+        notification_ids=notification_ids,
+    )
+    by_id = {
+        str(item.get("id") or "").strip(): item
+        for item in items
+        if isinstance(item, dict) and str(item.get("id") or "").strip()
+    }
+    return [dict(by_id[item_id]) for item_id in notification_ids if item_id in by_id]
+
+
+def _resolve_runtime_notification_cursor(
+    *,
+    db_path: Path,
+    notification_id: str,
+    tenant_id: Optional[str] = None,
+    workspace_id: Optional[str] = None,
+    allowed_workspace_ids: Optional[set[str]] = None,
+    channel: Optional[str] = None,
+    session_key: Optional[str] = None,
+    direction: Optional[str] = None,
+    action: Optional[str] = None,
+    run_id: Optional[str] = None,
+    trace_id: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    clauses = ["id = ?"]
+    params: List[Any] = [str(notification_id or "").strip()]
+    if str(tenant_id or "").strip():
+        clauses.append("tenant_id = ?")
+        params.append(str(tenant_id or "").strip())
+    if str(workspace_id or "").strip():
+        clauses.append("workspace_id = ?")
+        params.append(str(workspace_id or "").strip())
+    normalized_allowed = sorted(
+        {
+            str(item or "").strip()
+            for item in (allowed_workspace_ids or set())
+            if str(item or "").strip()
+        }
+    )
+    if allowed_workspace_ids is not None:
+        if not normalized_allowed:
+            return None
+        placeholders = ", ".join("?" for _ in normalized_allowed)
+        clauses.append(f"workspace_id IN ({placeholders})")
+        params.extend(normalized_allowed)
+    if str(channel or "").strip():
+        clauses.append("channel = ?")
+        params.append(str(channel or "").strip().lower())
+    if str(session_key or "").strip():
+        clauses.append("session_key = ?")
+        params.append(str(session_key or "").strip())
+    if str(direction or "").strip():
+        clauses.append("direction = ?")
+        params.append(str(direction or "").strip().lower())
+    if str(action or "").strip():
+        clauses.append("action = ?")
+        params.append(str(action or "").strip().lower())
+    if str(run_id or "").strip():
+        clauses.append("run_id = ?")
+        params.append(str(run_id or "").strip())
+    if str(trace_id or "").strip():
+        clauses.append("trace_id = ?")
+        params.append(str(trace_id or "").strip())
+    query = "SELECT created_at FROM notifications WHERE " + " AND ".join(clauses) + " LIMIT 1"
+    with sqlite3.connect(str(db_path)) as conn:
+        conn.row_factory = sqlite3.Row
+        row = conn.execute(query, tuple(params)).fetchone()
+    if row is None:
+        return None
+    created_at = str(row["created_at"] or "").strip()
+    return {"id": str(notification_id or "").strip(), "ts": created_at}
+
+
+def _newest_notification_item(items: Iterable[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    candidates = [dict(item) for item in items if isinstance(item, dict) and str(item.get("id") or "").strip()]
+    if not candidates:
+        return None
+    candidates.sort(
+        key=lambda item: (
+            -(_parse_ts(item.get("ts")) or 0.0),
+            str(item.get("id") or ""),
+        )
+    )
+    return candidates[0]
 
 
 def list_notification_payload(
@@ -786,6 +1016,8 @@ def iter_notifications_stream(
     next_heartbeat = started_mono + safe_heartbeat
     runtime_db = _ensure_runtime_state_db(db_path)
     ledger_enabled = bool(str(workspace_id or "").strip())
+    resolved_workspace_id = str(workspace_id or "").strip() or None
+    resolved_tenant_id = str(tenant_id or "").strip() or None
 
     while True:
         now_mono = time.monotonic()
@@ -793,79 +1025,189 @@ def iter_notifications_stream(
             yield {"event": "done", "data": json.dumps({"reason": "timeout", "ts": _utc_now_iso()}, ensure_ascii=True)}
             break
 
-        filtered: List[Dict[str, Any]] = []
-        if ledger_enabled:
-            try:
-                filtered = _merge_read_state(
-                    items=_workspace_filtered_items(
-                        activity_ledger_service.list_notification_feed_items_sync(
-                            tenant_id=str(tenant_id or "").strip() or "default",
-                            workspace_id=str(workspace_id or "").strip(),
-                            channel=str(channel or "").strip(),
-                            session_key=str(session_key or "").strip(),
-                            direction=str(direction or "").strip(),
-                            action=str(action or "").strip(),
-                            run_id=str(run_id or "").strip(),
-                            trace_id=str(trace_id or "").strip(),
-                            limit=max(safe_limit, 300),
-                        ),
+        if cursor_id and cursor_ts is None:
+            runtime_cursor = _resolve_runtime_notification_cursor(
+                db_path=runtime_db,
+                notification_id=cursor_id,
+                tenant_id=resolved_tenant_id,
+                workspace_id=resolved_workspace_id,
+                allowed_workspace_ids=allowed_workspace_ids,
+                channel=channel,
+                session_key=session_key,
+                direction=direction,
+                action=action,
+                run_id=run_id,
+                trace_id=trace_id,
+            )
+            if runtime_cursor:
+                cursor_ts = _parse_ts(runtime_cursor.get("ts"))
+            elif ledger_enabled:
+                try:
+                    ledger_cursor = activity_ledger_service.get_notification_feed_item_sync(
+                        tenant_id=resolved_tenant_id or "default",
+                        workspace_id=resolved_workspace_id or "default",
+                        notification_id=cursor_id,
+                    )
+                except Exception:
+                    ledger_cursor = None
+                if ledger_cursor and (
+                    allowed_workspace_ids is None
+                    or str(ledger_cursor.get("workspace_id") or "").strip() in allowed_workspace_ids
+                ):
+                    if _workspace_filtered_items(
+                        [ledger_cursor],
                         allowed_workspaces=allowed_workspace_ids,
-                        requested_workspace_id=str(workspace_id or "").strip() or None,
-                    ),
-                    reader_key=reader_key,
-                    db_path=runtime_db,
-                )
-            except Exception:
-                filtered = []
-        snapshot = runtime_state_store.list_notifications(
-            runtime_db,
-            reader_key=reader_key,
-            tenant_id=str(tenant_id or "").strip(),
-            workspace_id=str(workspace_id or "").strip(),
-            channel=str(channel or "").strip(),
-            session_key=str(session_key or "").strip(),
-            direction=str(direction or "").strip(),
-            action=str(action or "").strip(),
-            run_id=str(run_id or "").strip(),
-            trace_id=str(trace_id or "").strip(),
-            limit=max(safe_limit, 300),
-        )
-        runtime_filtered = _workspace_filtered_items(
-            snapshot,
-            allowed_workspaces=allowed_workspace_ids,
-            requested_workspace_id=str(workspace_id or "").strip() or None,
-        )
-        if filtered:
-            filtered = _merge_notification_sources(
-                primary_items=filtered,
-                secondary_items=runtime_filtered,
+                        requested_workspace_id=resolved_workspace_id,
+                    ) and _notification_item_matches(
+                        ledger_cursor,
+                        tenant_id=resolved_tenant_id,
+                        workspace_id=resolved_workspace_id,
+                        channel=channel,
+                        session_key=session_key,
+                        direction=direction,
+                        action=action,
+                        run_id=run_id,
+                        trace_id=trace_id,
+                    ):
+                        cursor_ts = _parse_ts(ledger_cursor.get("ts"))
+
+        candidates: List[Dict[str, Any]] = []
+        if backlog_once:
+            runtime_items = _list_runtime_notifications_since(
+                db_path=runtime_db,
+                reader_key=reader_key,
+                tenant_id=resolved_tenant_id,
+                workspace_id=resolved_workspace_id,
+                allowed_workspace_ids=allowed_workspace_ids,
+                channel=channel,
+                session_key=session_key,
+                direction=direction,
+                action=action,
+                run_id=run_id,
+                trace_id=trace_id,
+                limit=safe_limit,
+            )
+            ledger_items: List[Dict[str, Any]] = []
+            if ledger_enabled:
+                try:
+                    ledger_items = _merge_read_state(
+                        items=_workspace_filtered_items(
+                            activity_ledger_service.list_notification_feed_items_sync(
+                                tenant_id=resolved_tenant_id or "default",
+                                workspace_id=resolved_workspace_id or "default",
+                                channel=str(channel or "").strip(),
+                                session_key=str(session_key or "").strip(),
+                                direction=str(direction or "").strip(),
+                                action=str(action or "").strip(),
+                                run_id=str(run_id or "").strip(),
+                                trace_id=str(trace_id or "").strip(),
+                                limit=safe_limit,
+                            ),
+                            allowed_workspaces=allowed_workspace_ids,
+                            requested_workspace_id=resolved_workspace_id,
+                        ),
+                        reader_key=reader_key,
+                        db_path=runtime_db,
+                    )
+                except Exception:
+                    ledger_items = []
+            candidates = (
+                _merge_notification_sources(primary_items=ledger_items, secondary_items=runtime_items)
+                if ledger_items
+                else runtime_items
+            )
+            backlog_once = False
+        elif cursor_ts is not None:
+            runtime_items = _list_runtime_notifications_since(
+                db_path=runtime_db,
+                reader_key=reader_key,
+                tenant_id=resolved_tenant_id,
+                workspace_id=resolved_workspace_id,
+                allowed_workspace_ids=allowed_workspace_ids,
+                channel=channel,
+                session_key=session_key,
+                direction=direction,
+                action=action,
+                run_id=run_id,
+                trace_id=trace_id,
+                since_ts=cursor_ts,
+                since_id=cursor_id,
+                limit=safe_limit,
+            )
+            ledger_items = []
+            if ledger_enabled:
+                try:
+                    ledger_items = _merge_read_state(
+                        items=_workspace_filtered_items(
+                            activity_ledger_service.list_notification_feed_items_sync(
+                                tenant_id=resolved_tenant_id or "default",
+                                workspace_id=resolved_workspace_id or "default",
+                                channel=str(channel or "").strip(),
+                                session_key=str(session_key or "").strip(),
+                                direction=str(direction or "").strip(),
+                                action=str(action or "").strip(),
+                                run_id=str(run_id or "").strip(),
+                                trace_id=str(trace_id or "").strip(),
+                                since_ts=datetime.fromtimestamp(cursor_ts, tz=timezone.utc).isoformat().replace("+00:00", "Z"),
+                                since_id=cursor_id,
+                                limit=safe_limit,
+                            ),
+                            allowed_workspaces=allowed_workspace_ids,
+                            requested_workspace_id=resolved_workspace_id,
+                        ),
+                        reader_key=reader_key,
+                        db_path=runtime_db,
+                    )
+                except Exception:
+                    ledger_items = []
+            candidates = (
+                _merge_notification_sources(primary_items=ledger_items, secondary_items=runtime_items)
+                if ledger_items
+                else runtime_items
             )
         else:
-            filtered = runtime_filtered
-        candidates: List[Dict[str, Any]] = []
-        if cursor_id:
-            cursor_index = -1
-            for idx, item in enumerate(filtered):
-                if str(item.get("id") or "").strip() == cursor_id:
-                    cursor_index = idx
-                    break
-            if cursor_index > 0:
-                candidates = filtered[:cursor_index]
-            elif cursor_index < 0 and filtered:
-                cursor_id = str(filtered[0].get("id") or cursor_id).strip()
-                cursor_ts = _parse_ts(filtered[0].get("ts")) or cursor_ts
-        elif cursor_ts is not None:
-            candidates = [
-                item
-                for item in filtered
-                if (_parse_ts(item.get("ts")) or 0.0) > cursor_ts
-            ]
-        elif backlog_once:
-            candidates = filtered[:safe_limit]
-            backlog_once = False
-        elif filtered:
-            cursor_id = str(filtered[0].get("id") or "").strip()
-            cursor_ts = _parse_ts(filtered[0].get("ts")) or cursor_ts
+            head_candidates: List[Dict[str, Any]] = []
+            head_candidates.extend(
+                _list_runtime_notifications_since(
+                    db_path=runtime_db,
+                    reader_key=reader_key,
+                    tenant_id=resolved_tenant_id,
+                    workspace_id=resolved_workspace_id,
+                    allowed_workspace_ids=allowed_workspace_ids,
+                    channel=channel,
+                    session_key=session_key,
+                    direction=direction,
+                    action=action,
+                    run_id=run_id,
+                    trace_id=trace_id,
+                    limit=1,
+                )
+            )
+            if ledger_enabled:
+                try:
+                    head_candidates.extend(
+                        _workspace_filtered_items(
+                            activity_ledger_service.list_notification_feed_items_sync(
+                                tenant_id=resolved_tenant_id or "default",
+                                workspace_id=resolved_workspace_id or "default",
+                                channel=str(channel or "").strip(),
+                                session_key=str(session_key or "").strip(),
+                                direction=str(direction or "").strip(),
+                                action=str(action or "").strip(),
+                                run_id=str(run_id or "").strip(),
+                                trace_id=str(trace_id or "").strip(),
+                                limit=1,
+                            ),
+                            allowed_workspaces=allowed_workspace_ids,
+                            requested_workspace_id=resolved_workspace_id,
+                        )
+                    )
+                except Exception:
+                    pass
+            newest = _newest_notification_item(head_candidates)
+            if newest:
+                cursor_id = str(newest.get("id") or "").strip()
+                cursor_ts = _parse_ts(newest.get("ts")) or cursor_ts
 
         if candidates:
             emit_items = list(reversed(candidates[:safe_limit]))

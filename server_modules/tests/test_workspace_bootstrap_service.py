@@ -78,10 +78,10 @@ async def test_build_workspace_bootstrap_composes_canonical_payload(monkeypatch:
             },
         }
 
-    async def fake_list_runtime_targets(*, tenant_id: str, workspace_id: str):
+    async def fake_list_runtime_targets(*, tenant_id: str, workspace_id: str, include_snapshot_version: bool = False):
         assert tenant_id == "tenant-1"
         assert workspace_id == "ws-1"
-        return {
+        payload = {
             "deployment_mode": "hybrid",
             "targets": [
                 {
@@ -98,6 +98,9 @@ async def test_build_workspace_bootstrap_composes_canonical_payload(monkeypatch:
                 },
             ],
         }
+        if include_snapshot_version:
+            payload["_snapshot_version"] = "runtime-targets:v1"
+        return payload
 
     monkeypatch.setattr(
         workspace_bootstrap_service.control_plane_repository,
@@ -150,3 +153,92 @@ async def test_build_workspace_bootstrap_denies_unauthorized_workspace():
 
     assert excinfo.value.status_code == 403
     assert "Workspace is not accessible for this user." in str(excinfo.value.detail)
+
+
+@pytest.mark.anyio
+async def test_build_workspace_bootstrap_reuses_cached_payload_for_identical_versions(monkeypatch: pytest.MonkeyPatch):
+    workspace_bootstrap_service._WORKSPACE_BOOTSTRAP_CACHE.clear()
+
+    async def fake_get_user_bundle_by_id(user_id: str):
+        return {
+            "user": {
+                "id": user_id,
+                "email": "user@example.com",
+                "name": "Mansur",
+            },
+            "memberships": [
+                {
+                    "workspace_id": "ws-1",
+                    "role": "member",
+                    "updated_at": 1712000000,
+                    "workspace_name": "Personal Workspace",
+                }
+            ],
+        }
+
+    async def fake_get_workspace_by_id(workspace_id: str):
+        return {
+            "workspace_id": workspace_id,
+            "tenant_id": "tenant-1",
+            "name": "Personal Workspace",
+            "workspace_type": "personal",
+            "updated_at": "2026-04-12T00:00:00Z",
+            "metadata": {"billing": {"plan_id": "personal"}},
+        }
+
+    assemble_calls = {"count": 0}
+
+    async def fake_list_runtime_targets(*, tenant_id: str, workspace_id: str, include_snapshot_version: bool = False):
+        payload = {
+            "deployment_mode": "hybrid",
+            "targets": [
+                {
+                    "target_id": "cloud_default",
+                    "label": "Cloud Default",
+                    "online": True,
+                    "default_for_workspace": True,
+                }
+            ],
+        }
+        if include_snapshot_version:
+            payload["_snapshot_version"] = "runtime-targets:v1"
+        return payload
+
+    original_builder = workspace_bootstrap_service._build_workspace_bootstrap_payload
+
+    def counting_builder(**kwargs):
+        assemble_calls["count"] += 1
+        return original_builder(**kwargs)
+
+    monkeypatch.setattr(
+        workspace_bootstrap_service.control_plane_repository,
+        "get_user_bundle_by_id",
+        fake_get_user_bundle_by_id,
+    )
+    monkeypatch.setattr(
+        workspace_bootstrap_service.control_plane_repository,
+        "get_workspace_by_id",
+        fake_get_workspace_by_id,
+    )
+    monkeypatch.setattr(
+        workspace_bootstrap_service.runtime_attachment_service,
+        "list_workspace_runtime_targets",
+        fake_list_runtime_targets,
+    )
+    monkeypatch.setattr(
+        workspace_bootstrap_service,
+        "_build_workspace_bootstrap_payload",
+        counting_builder,
+    )
+
+    first = await workspace_bootstrap_service.build_workspace_bootstrap(
+        current_user=_current_user(),
+        workspace_id="ws-1",
+    )
+    second = await workspace_bootstrap_service.build_workspace_bootstrap(
+        current_user=_current_user(),
+        workspace_id="ws-1",
+    )
+
+    assert first == second
+    assert assemble_calls["count"] == 1

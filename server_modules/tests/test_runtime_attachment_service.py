@@ -7,6 +7,78 @@ from server_modules import entitlements_service, hybrid_policy_service, runtime_
 
 
 class RuntimeAttachmentServiceTests(unittest.TestCase):
+    def test_list_workspace_runtime_attachments_reads_profiles_without_hot_path_seeding(self) -> None:
+        runtime_attachment_service._RUNTIME_ATTACHMENTS_CACHE.clear()
+        with (
+            patch(
+                "server_modules.runtime_attachment_service.agent_registry_repository.list_runtime_profiles",
+                new=AsyncMock(
+                    return_value=[
+                        {
+                            "id": "profile-cloud",
+                            "slug": "empyralis-cloud",
+                            "label": "Empyralis Cloud",
+                            "runtime_class": "cloud_worker",
+                            "status": "active",
+                        }
+                    ]
+                ),
+            ) as profiles_mock,
+            patch(
+                "server_modules.runtime_attachment_service.run_state_repository.list_fleet_workers",
+                new=AsyncMock(return_value=[]),
+            ),
+        ):
+            inventory = asyncio.run(
+                runtime_attachment_service.list_workspace_runtime_attachments(
+                    tenant_id="tenant-1",
+                    workspace_id="workspace-1",
+                )
+            )
+
+        self.assertEqual(inventory["deployment_mode"], "cloud_only")
+        self.assertEqual(profiles_mock.await_args.kwargs["seed_if_missing"], False)
+
+    def test_list_workspace_runtime_targets_reuses_snapshot_for_identical_inventory(self) -> None:
+        runtime_attachment_service._RUNTIME_TARGETS_CACHE.clear()
+        inventory = {
+            "tenant_id": "tenant-1",
+            "workspace_id": "workspace-1",
+            "_snapshot_version": "runtime-snapshot-1",
+            "deployment_mode": "hybrid",
+            "attachments": [
+                {
+                    "attachment_id": "managed_cloud:profile-cloud",
+                    "attachment_kind": "managed_cloud",
+                    "online": True,
+                    "healthy": True,
+                    "supports_runtime_modes": ["hosted_secure"],
+                }
+            ],
+        }
+
+        with patch(
+            "server_modules.runtime_attachment_service.build_workspace_runtime_targets",
+            wraps=runtime_attachment_service.build_workspace_runtime_targets,
+        ) as build_mock:
+            first = asyncio.run(
+                runtime_attachment_service.list_workspace_runtime_targets(
+                    tenant_id="tenant-1",
+                    workspace_id="workspace-1",
+                    inventory=inventory,
+                )
+            )
+            second = asyncio.run(
+                runtime_attachment_service.list_workspace_runtime_targets(
+                    tenant_id="tenant-1",
+                    workspace_id="workspace-1",
+                    inventory=inventory,
+                )
+            )
+
+        self.assertEqual(first["default_target_id"], second["default_target_id"])
+        self.assertEqual(build_mock.call_count, 1)
+
     def test_list_workspace_runtime_attachments_reports_hybrid_topology(self) -> None:
         runtime_profiles = [
             {

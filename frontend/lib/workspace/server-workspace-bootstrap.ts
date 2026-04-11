@@ -18,7 +18,7 @@ export async function loadWorkspaceBootstrap(workspaceId: string): Promise<Works
 
   const response = await fetch(url, {
     method: 'GET',
-    cache: 'no-store',
+    next: { revalidate: 30 },
     headers: {
       accept: 'application/json',
       ...(cookieHeader ? { cookie: cookieHeader } : {}),

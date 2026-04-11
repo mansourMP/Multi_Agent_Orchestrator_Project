@@ -11,14 +11,31 @@ import {
   type WorkspaceBootstrapPayload,
   createWorkspaceBoundaryKey,
 } from '@/lib/workspace/workspace-bootstrap';
+import {
+  buildRouteManifest,
+  deriveShellProfile,
+  hasWorkspaceCapability,
+  type WorkspaceRouteId,
+  type WorkspaceRouteManifest,
+  type WorkspaceShellProfile,
+} from '@/lib/workspace/workspace-shell';
 import { WorkspaceServicesProvider } from '@/lib/workspace/workspace-services';
 
 export type WorkspaceBoundaryState = {
   workspaceId: string;
   boundaryKey: string;
   shellProfileId: string;
+  shellProfile: WorkspaceShellProfile;
+  routeManifest: WorkspaceRouteManifest;
   bootstrap: WorkspaceBootstrapPayload;
+  hasCapability: (capability: string) => boolean;
+  canAccessRoute: (routeId: WorkspaceRouteId) => boolean;
 };
+
+type WorkspaceBoundaryInstanceProps = Omit<
+  WorkspaceBoundaryState,
+  'hasCapability' | 'canAccessRoute'
+>;
 
 const WorkspaceBoundaryContext = createContext<WorkspaceBoundaryState | null>(null);
 
@@ -30,8 +47,14 @@ export function WorkspaceBoundary({
   workspaceId: string;
   bootstrap: WorkspaceBootstrapPayload;
 }>) {
-  const boundaryKey = createWorkspaceBoundaryKey(workspaceId, bootstrap);
-  const shellProfileId = bootstrap.shellHints.preferredProfile;
+  const shellProfile = deriveShellProfile(bootstrap);
+  const routeManifest = buildRouteManifest(shellProfile, bootstrap);
+  const shellProfileId = shellProfile.id;
+  const boundaryKey = createWorkspaceBoundaryKey(
+    workspaceId,
+    bootstrap.membership.version,
+    shellProfileId,
+  );
 
   return (
     <WorkspaceBoundaryInstance
@@ -39,6 +62,8 @@ export function WorkspaceBoundary({
       workspaceId={workspaceId}
       boundaryKey={boundaryKey}
       shellProfileId={shellProfileId}
+      shellProfile={shellProfile}
+      routeManifest={routeManifest}
       bootstrap={bootstrap}
     >
       {children}
@@ -50,17 +75,23 @@ function WorkspaceBoundaryInstance({
   workspaceId,
   boundaryKey,
   shellProfileId,
+  shellProfile,
+  routeManifest,
   bootstrap,
   children,
-}: PropsWithChildren<WorkspaceBoundaryState>) {
+}: PropsWithChildren<WorkspaceBoundaryInstanceProps>) {
   const value = useMemo<WorkspaceBoundaryState>(
     () => ({
       workspaceId,
       boundaryKey,
       shellProfileId,
+      shellProfile,
+      routeManifest,
       bootstrap,
+      hasCapability: (capability) => hasWorkspaceCapability(bootstrap, capability),
+      canAccessRoute: (routeId) => Boolean(routeManifest.routeIndex[routeId]),
     }),
-    [bootstrap, boundaryKey, shellProfileId, workspaceId],
+    [bootstrap, boundaryKey, routeManifest, shellProfile, shellProfileId, workspaceId],
   );
 
   return (
@@ -84,4 +115,12 @@ export function useWorkspaceBoundary(): WorkspaceBoundaryState {
     throw new Error('useWorkspaceBoundary must be used inside WorkspaceBoundary.');
   }
   return value;
+}
+
+export function useWorkspaceCapability(capability: string): boolean {
+  return useWorkspaceBoundary().hasCapability(capability);
+}
+
+export function useWorkspaceRouteManifest(): WorkspaceRouteManifest {
+  return useWorkspaceBoundary().routeManifest;
 }

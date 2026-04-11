@@ -178,7 +178,8 @@ export function parseWorkspaceBootstrapPayload(payload: unknown): WorkspaceBoots
 
 export function createWorkspaceBoundaryKey(
   workspaceId: string,
-  payload: Pick<WorkspaceBootstrapPayload, 'membership' | 'shellHints'>,
+  membershipVersion: string,
+  shellProfileId: string,
 ): string {
-  return `${workspaceId}:${payload.membership.version}:${payload.shellHints.preferredProfile}`;
+  return `${workspaceId}:${membershipVersion}:${shellProfileId}`;
 }

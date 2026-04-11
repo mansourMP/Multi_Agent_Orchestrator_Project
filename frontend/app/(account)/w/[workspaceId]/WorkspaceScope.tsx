@@ -6,6 +6,7 @@ import { usePathname } from 'next/navigation';
 import { useAccountShell } from '@/lib/shell/account-shell-context';
 import { useWorkspaceBoundary } from '@/lib/workspace/workspace-boundary';
 import { useWorkspaceServices } from '@/lib/workspace/workspace-services';
+import type { WorkspaceRouteId } from '@/lib/workspace/workspace-shell';
 
 export function WorkspaceScope({
   workspaceId,
@@ -13,13 +14,22 @@ export function WorkspaceScope({
   routeKind,
 }: {
   workspaceId: string;
-  surface: string;
+  surface: WorkspaceRouteId | 'workspace_root';
   routeKind: 'workspace_root' | 'workspace_surface';
 }) {
   const pathname = usePathname();
   const { actions, state } = useAccountShell();
-  const { boundaryKey, bootstrap, shellProfileId } = useWorkspaceBoundary();
+  const {
+    boundaryKey,
+    bootstrap,
+    shellProfile,
+    shellProfileId,
+    routeManifest,
+    hasCapability,
+    canAccessRoute,
+  } = useWorkspaceBoundary();
   const services = useWorkspaceServices();
+  const routeId = surface === 'workspace_root' ? null : surface;
 
   useEffect(() => {
     if (pathname) {
@@ -61,10 +71,20 @@ export function WorkspaceScope({
             workspaceId,
             boundaryKey,
             shellProfileId,
+            shellProfile,
             routeDerivedWorkspaceId: state.selectedWorkspaceId,
             membershipFromBoundary: bootstrap.membership,
             workspaceFromBoundary: bootstrap.workspace,
             shellHints: bootstrap.shellHints,
+            routeManifest,
+            routeAllowed: routeId ? canAccessRoute(routeId) : true,
+            capabilitySnapshot: {
+              documentWorkstation: hasCapability('document_workstation_enabled'),
+              workspaceAdmin: hasCapability('workspace_admin_enabled'),
+              billingRead: hasCapability('billing_read_enabled'),
+              routingRead: hasCapability('routing_read_enabled'),
+              artifacts: hasCapability('artifacts_enabled'),
+            },
             runtime: bootstrap.runtime,
             serviceSnapshot: services.snapshot(),
           },

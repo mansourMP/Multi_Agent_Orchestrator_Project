@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 
 import { useAccountShell } from '@/lib/shell/account-shell-context';
 import { useWorkspaceBoundary } from '@/lib/workspace/workspace-boundary';
+import { resolveRouteIdFromHref } from '@/lib/workspace/workspace-shell';
 
 export function WorkspaceHomeRedirect({
   workspaceId,
@@ -13,9 +14,18 @@ export function WorkspaceHomeRedirect({
 }) {
   const router = useRouter();
   const { actions, state } = useAccountShell();
-  const { bootstrap, boundaryKey, shellProfileId } = useWorkspaceBoundary();
-  const fallbackRoute = bootstrap.shellHints.defaultRoute ?? `/w/${workspaceId}/chat`;
-  const nextRoute = actions.resolveWorkspaceHref(workspaceId) ?? fallbackRoute;
+  const {
+    boundaryKey,
+    routeManifest,
+    shellProfileId,
+    shellProfile,
+    canAccessRoute,
+  } = useWorkspaceBoundary();
+  const rememberedRoute = actions.resolveWorkspaceHref(workspaceId);
+  const rememberedRouteId = resolveRouteIdFromHref(workspaceId, rememberedRoute);
+  const nextRoute =
+    (rememberedRouteId && canAccessRoute(rememberedRouteId) ? rememberedRoute : null)
+    ?? routeManifest.defaultRoute;
 
   useEffect(() => {
     router.replace(nextRoute);
@@ -26,6 +36,11 @@ export function WorkspaceHomeRedirect({
       boundaryKey={boundaryKey}
       workspaceId={workspaceId}
       nextRoute={nextRoute}
+      defaultRoute={routeManifest.defaultRoute}
+      rememberedRoute={rememberedRoute}
+      rememberedRouteId={rememberedRouteId}
+      routeAllowed={rememberedRouteId ? canAccessRoute(rememberedRouteId) : false}
+      shellProfileLabel={shellProfile.label}
       shellProfileId={shellProfileId}
       routeWorkspaceId={state.selectedWorkspaceId}
     />
@@ -34,12 +49,22 @@ export function WorkspaceHomeRedirect({
 
 function WorkspaceScopeRedirectMessage({
   boundaryKey,
+  defaultRoute,
+  rememberedRoute,
+  rememberedRouteId,
+  routeAllowed,
+  shellProfileLabel,
   workspaceId,
   nextRoute,
   shellProfileId,
   routeWorkspaceId,
 }: {
   boundaryKey: string;
+  defaultRoute: string;
+  rememberedRoute: string | null;
+  rememberedRouteId: string | null;
+  routeAllowed: boolean;
+  shellProfileLabel: string;
   workspaceId: string;
   nextRoute: string;
   shellProfileId: string;
@@ -66,6 +91,21 @@ function WorkspaceScopeRedirectMessage({
       </p>
       <p style={{ margin: 0 }}>
         Shell profile: <code>{shellProfileId}</code>
+      </p>
+      <p style={{ margin: 0 }}>
+        Shell label: <code>{shellProfileLabel}</code>
+      </p>
+      <p style={{ margin: 0 }}>
+        Default route: <code>{defaultRoute}</code>
+      </p>
+      <p style={{ margin: 0 }}>
+        Remembered route: <code>{rememberedRoute ?? 'null'}</code>
+      </p>
+      <p style={{ margin: 0 }}>
+        Remembered route id: <code>{rememberedRouteId ?? 'null'}</code>
+      </p>
+      <p style={{ margin: 0 }}>
+        Remembered route allowed: <code>{String(routeAllowed)}</code>
       </p>
       <p style={{ margin: 0 }}>
         Route workspace id: <code>{routeWorkspaceId ?? 'null'}</code>

@@ -15,6 +15,8 @@ class AutopilotApprovalService:
         utc_now_iso: Callable[[], str],
         send_message: Callable[..., Any],
         ensure_workspace_approvals_access: Optional[Callable[[str], Any]] = None,
+        runtime_approvals_list: Optional[Callable[..., Dict[str, Any]]] = None,
+        runtime_approval_resolve: Optional[Callable[..., Dict[str, Any]]] = None,
     ) -> None:
         self.default_chat_prefix = str(default_chat_prefix or "").strip()
         self.cognitive_module = cognitive_module
@@ -24,6 +26,76 @@ class AutopilotApprovalService:
         self.utc_now_iso = utc_now_iso
         self.send_message = send_message
         self.ensure_workspace_approvals_access = ensure_workspace_approvals_access
+        self.runtime_approvals_list = runtime_approvals_list
+        self.runtime_approval_resolve = runtime_approval_resolve
+
+    def _load_runtime_approvals_list(self) -> Callable[..., Dict[str, Any]]:
+        if callable(self.runtime_approvals_list):
+            return self.runtime_approvals_list
+        from server_modules import runtime_run_approval_service
+
+        return lambda limit, workspace_id=None: {
+            "ok": True,
+            **runtime_run_approval_service.list_pending_approvals_payload(
+                workspace_id=workspace_id,
+                limit=limit,
+            ),
+        }
+
+    def _load_runtime_approval_resolve(self) -> Callable[..., Dict[str, Any]]:
+        if callable(self.runtime_approval_resolve):
+            return self.runtime_approval_resolve
+        from server_modules import runtime_run_approval_service
+
+        return lambda event_id, approved, note, workspace_id=None: {
+            "ok": True,
+            **runtime_run_approval_service.resolve_standalone_approval_with_runtime_defaults(
+                str(event_id or "").strip(),
+                payload={
+                    "approval_id": str(event_id or "").strip(),
+                    "resolution": "approved" if bool(approved) else "rejected",
+                    "actor": "connector",
+                    "reason": str(note or ""),
+                },
+            ),
+        }
+
+    def _fallback_cognitive_approvals_list(self, limit: int) -> Dict[str, Any]:
+        mod = self.cognitive_module()
+        if mod is None:
+            return {"ok": False, "error": "cognitive_daemon_unavailable"}
+        conf = self.cognitive_defaults()
+        items = mod.list_pending_approvals(
+            db_path=conf["db_path"],
+            niche_id=conf["niche_id"],
+            limit=max(1, min(20, int(limit))),
+        )
+        return {"ok": True, "items": items, "count": len(items)}
+
+    def _fallback_cognitive_approval_resolve(self, event_id: str, approved: bool, note: str) -> Dict[str, Any]:
+        mod = self.cognitive_module()
+        if mod is None:
+            return {"ok": False, "error": "cognitive_daemon_unavailable"}
+        conf = self.cognitive_defaults()
+        out = mod.resolve_event_approval(
+            db_path=conf["db_path"],
+            event_id=str(event_id or "").strip(),
+            approved=bool(approved),
+            note=str(note or "").strip(),
+        )
+        return out if isinstance(out, dict) else {"ok": False, "error": "invalid_resolve_response"}
+
+    def _normalize_approval_item(self, item: Dict[str, Any]) -> Dict[str, Any]:
+        payload = dict(item or {})
+        approval_id = str(payload.get("approval_id") or payload.get("event_id") or "").strip()
+        if approval_id:
+            payload.setdefault("approval_id", approval_id)
+            payload.setdefault("event_id", approval_id)
+        payload.setdefault("summary", str(payload.get("prompt") or "Approval required.").strip())
+        payload.setdefault("objective_id", str(payload.get("run_id") or "").strip())
+        payload.setdefault("objective_title", str(payload.get("action") or "").strip())
+        payload.setdefault("risk_level", str(payload.get("status") or "unknown").strip() or "unknown")
+        return payload
 
     def approvals_list(self, limit: int = 5, workspace_id: Optional[str] = None) -> Dict[str, Any]:
         if workspace_id and callable(self.ensure_workspace_approvals_access):
@@ -31,19 +103,19 @@ class AutopilotApprovalService:
                 self.ensure_workspace_approvals_access(str(workspace_id or "").strip())
             except Exception as exc:
                 return {"ok": False, "error": getattr(exc, "detail", str(exc) or "approvals_unavailable")}
-        mod = self.cognitive_module()
-        if mod is None:
-            return {"ok": False, "error": "cognitive_daemon_unavailable"}
-        conf = self.cognitive_defaults()
         try:
-            items = mod.list_pending_approvals(
-                db_path=conf["db_path"],
-                niche_id=conf["niche_id"],
-                limit=max(1, min(20, int(limit))),
-            )
-            return {"ok": True, "items": items, "count": len(items)}
+            payload = self._load_runtime_approvals_list()(limit=max(1, min(20, int(limit))), workspace_id=workspace_id)
+            items = payload.get("items") if isinstance(payload.get("items"), list) else []
+            normalized_items = [
+                self._normalize_approval_item(item)
+                for item in items
+                if isinstance(item, dict)
+            ]
+            return {"ok": bool(payload.get("ok", True)), "items": normalized_items, "count": len(normalized_items)}
         except Exception as exc:
             return {"ok": False, "error": str(exc)}
+        except BaseException:
+            raise
 
     def approval_resolve(
         self,
@@ -57,23 +129,30 @@ class AutopilotApprovalService:
                 self.ensure_workspace_approvals_access(str(workspace_id or "").strip())
             except Exception as exc:
                 return {"ok": False, "error": getattr(exc, "detail", str(exc) or "approvals_unavailable")}
-        mod = self.cognitive_module()
-        if mod is None:
-            return {"ok": False, "error": "cognitive_daemon_unavailable"}
-        conf = self.cognitive_defaults()
         try:
-            out = mod.resolve_event_approval(
-                db_path=conf["db_path"],
+            payload = self._load_runtime_approval_resolve()(
                 event_id=str(event_id or "").strip(),
                 approved=bool(approved),
                 note=str(note or "").strip(),
+                workspace_id=workspace_id,
             )
-            return out if isinstance(out, dict) else {"ok": False, "error": "invalid_resolve_response"}
+            if not isinstance(payload, dict):
+                return {"ok": False, "error": "invalid_resolve_response"}
+            normalized = dict(payload)
+            approval_id = str(normalized.get("approval_id") or normalized.get("event_id") or event_id or "").strip()
+            if approval_id:
+                normalized.setdefault("approval_id", approval_id)
+                normalized.setdefault("event_id", approval_id)
+            normalized.setdefault("status", str(normalized.get("resolution") or ("approved" if approved else "rejected")).strip())
+            normalized.setdefault("ok", True)
+            return normalized
         except Exception as exc:
             return {"ok": False, "error": str(exc)}
+        except BaseException:
+            raise
 
     def pending_approval_event_id(self, item: Dict[str, Any]) -> str:
-        return str(item.get("event_id") or "").strip()
+        return str(item.get("event_id") or item.get("approval_id") or "").strip()
 
     def approvals_text(self, payload: Dict[str, Any], prefix: str = "") -> str:
         if not bool(payload.get("ok")):
@@ -111,7 +190,7 @@ class AutopilotApprovalService:
         if not bool(payload.get("ok")):
             reason = str(payload.get("error") or "approval update failed")
             return f"Approval update failed: {reason}"
-        event_id = str(payload.get("event_id") or "").strip()
+        event_id = str(payload.get("event_id") or payload.get("approval_id") or "").strip()
         short_id = event_id[:8] if event_id else "unknown"
         status = str(payload.get("status") or "").strip() or ("pending" if approved else "failed")
         if approved:

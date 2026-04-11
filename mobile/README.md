@@ -12,8 +12,16 @@ Implemented in this phase:
 - workspace-scoped mobile service bundles for transport, query, realtime, persistence, and teardown
 - accountId + workspaceId namespacing for mobile persistence and cache state
 - explicit cloud-first, platform-first session handling with no direct LAN/runtime-first dependency
+- workspace-scoped surface controllers for:
+  - account/session
+  - tenant switching
+  - chat
+  - runs and approvals
+  - notifications
+  - artifacts
+- degraded-mode honesty for cloud failure with cached workspace fallbacks where appropriate
 
 Not rebuilt yet:
 - React Native / Expo UI
 - mobile visuals and layouts
-- feature screens beyond the architecture proof tests
+- polished feature screens beyond the architecture proof tests

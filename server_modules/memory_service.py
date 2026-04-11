@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 import hashlib
 import json
 import sqlite3
@@ -344,6 +344,202 @@ def workspace_memory_snapshot(workspace_id: str, *, agent_install_id: str | None
         agent_install_id=normalized_agent_install_id,
         entries=entries,
         text=get_memory(normalized_workspace_id, agent_install_id=normalized_agent_install_id or None),
+    )
+
+
+def workspace_sidecar_dir(workspace_id: str, sidecar_name: str) -> Path:
+    root = Path(_workspace_memory_store._MEMORY_DIR)
+    root.mkdir(parents=True, exist_ok=True)
+    workspace_token = _workspace_memory_store._normalize_workspace_token(_normalize_workspace_id(workspace_id))
+    normalized_sidecar = str(sidecar_name or "").strip().lower() or "sidecar"
+    path = root / workspace_token / normalized_sidecar
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def _summary_bridge_dir(workspace_id: str) -> Path:
+    return workspace_sidecar_dir(workspace_id, "hybrid_summary_bridge")
+
+
+def _summary_bridge_log_path(workspace_id: str) -> Path:
+    return _summary_bridge_dir(workspace_id) / "payloads.jsonl"
+
+
+def _read_summary_bridge_records(workspace_id: str) -> List[Dict[str, Any]]:
+    path = _summary_bridge_log_path(workspace_id)
+    if not path.exists():
+        return []
+    items: List[Dict[str, Any]] = []
+    try:
+        raw_lines = path.read_text(encoding="utf-8").splitlines()
+    except Exception:
+        return []
+    for line in raw_lines:
+        if not str(line or "").strip():
+            continue
+        try:
+            payload = json.loads(line)
+        except Exception:
+            continue
+        if isinstance(payload, dict):
+            items.append(dict(payload))
+    return items
+
+
+def publish_hybrid_summary_bridge_payload(
+    workspace_id: str,
+    *,
+    payload_class: str,
+    summary: str,
+    items: Optional[List[Dict[str, Any]]] = None,
+    memory_layer: Optional[str] = None,
+    agent_install_id: str | None = None,
+    run_id: str | None = None,
+    source_runtime_mode: str = "local_secure",
+    last_safe: bool = False,
+    allowed_payload_classes: Optional[List[str]] = None,
+) -> Dict[str, Any]:
+    from server_modules import hybrid_policy_service
+
+    record_payload = hybrid_policy_service.build_summary_bridge_payload_record(
+        payload_class=payload_class,
+        summary=summary,
+        items=items,
+        memory_layer=memory_layer,
+        agent_install_id=agent_install_id,
+        run_id=run_id,
+        source_runtime_mode=source_runtime_mode,
+        last_safe=last_safe,
+        allowed_payload_classes=allowed_payload_classes,
+    )
+    created_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    record_id = hashlib.sha1(
+        json.dumps(
+            {
+                "workspace_id": _normalize_workspace_id(workspace_id),
+                "payload_class": record_payload["payload_class"],
+                "summary": record_payload["summary"],
+                "agent_install_id": record_payload.get("agent_install_id"),
+                "run_id": record_payload.get("run_id"),
+                "created_at": created_at,
+            },
+            sort_keys=True,
+        ).encode("utf-8")
+    ).hexdigest()[:16]
+    record = {
+        "record_id": record_id,
+        "workspace_id": _normalize_workspace_id(workspace_id),
+        "created_at": created_at,
+        **record_payload,
+    }
+    path = _summary_bridge_log_path(workspace_id)
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(record, sort_keys=True) + "\n")
+    return record
+
+
+def list_hybrid_summary_bridge_payloads(
+    workspace_id: str,
+    *,
+    payload_classes: Optional[List[str]] = None,
+    agent_install_id: str | None = None,
+    last_safe_only: bool = False,
+    limit: int = 10,
+) -> List[Dict[str, Any]]:
+    from server_modules import hybrid_policy_service
+
+    records = _read_summary_bridge_records(workspace_id)
+    allowed = set(hybrid_policy_service.normalize_summary_bridge_payload_classes(payload_classes or []))
+    normalized_agent_install_id = str(agent_install_id or "").strip() or None
+    items: List[Dict[str, Any]] = []
+    for record in records:
+        payload_class = str(record.get("payload_class") or "").strip()
+        if payload_class not in hybrid_policy_service.SUMMARY_BRIDGE_ALLOWED_PAYLOADS:
+            continue
+        if allowed and payload_class not in allowed:
+            continue
+        record_agent_install_id = str(record.get("agent_install_id") or "").strip() or None
+        if normalized_agent_install_id is not None and record_agent_install_id != normalized_agent_install_id:
+            continue
+        if last_safe_only and not bool(record.get("last_safe")):
+            continue
+        items.append(dict(record))
+    items.sort(key=lambda item: str(item.get("created_at") or ""), reverse=True)
+    safe_limit = max(1, min(int(limit or 10), 50))
+    return items[:safe_limit]
+
+
+def hybrid_summary_bridge_status(
+    workspace_id: str,
+    *,
+    payload_classes: Optional[List[str]] = None,
+    agent_install_id: str | None = None,
+) -> Dict[str, Any]:
+    from server_modules import hybrid_policy_service
+
+    records = list_hybrid_summary_bridge_payloads(
+        workspace_id,
+        payload_classes=payload_classes,
+        agent_install_id=agent_install_id,
+        limit=100,
+    )
+    return hybrid_policy_service.summarize_summary_bridge_records(
+        records,
+        payload_classes=payload_classes,
+    )
+
+
+def shared_operational_board_access_contract() -> Dict[str, Any]:
+    return {
+        "default_access": "permissioned_shared_read",
+        "permission_tiers": ["read", "propose_update", "publish_update"],
+        "published_entries_visible_by_default": True,
+        "private_memory_import_allowed": False,
+    }
+
+
+def artifacts_history_access_contract() -> Dict[str, Any]:
+    return {
+        "default_access": "explicit_artifact_exchange",
+        "cross_install_exchange_mode": "artifacts_only",
+        "raw_private_memory_embeds_allowed": False,
+        "shared_board_publish_required_for_workspace_visibility": True,
+    }
+
+
+def list_shared_operational_board_entries(
+    workspace_id: str,
+    *,
+    actor_permission: str = "read",
+    include_proposed: bool = False,
+    entry_kind: Optional[str] = None,
+    limit: int = 50,
+) -> List[Dict[str, Any]]:
+    from server_modules import shared_operational_board_service
+
+    return shared_operational_board_service.list_shared_operational_board_entries(
+        workspace_id,
+        actor_permission=actor_permission,
+        include_proposed=include_proposed,
+        entry_kind=entry_kind,
+        limit=limit,
+    )
+
+
+def get_shared_operational_board_history(
+    workspace_id: str,
+    entry_id: str,
+    *,
+    actor_permission: str = "read",
+    include_proposed: bool = False,
+) -> List[Dict[str, Any]]:
+    from server_modules import shared_operational_board_service
+
+    return shared_operational_board_service.get_shared_operational_board_history(
+        workspace_id,
+        entry_id,
+        actor_permission=actor_permission,
+        include_proposed=include_proposed,
     )
 
 

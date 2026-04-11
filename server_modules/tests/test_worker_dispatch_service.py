@@ -166,12 +166,16 @@ class WorkerDispatchServiceTests(unittest.TestCase):
         events = []
         statuses = []
         persisted = []
+        runtime_state_persisted = []
         seen = []
         run = {
             "status": "running_local",
             "logs": queue.Queue(),
             "context": {"metadata": {}},
+            "machine_lease_id": "lease-1",
+            "local_worker_id": "worker-1",
         }
+        claimed_runs = {"run-1": {"worker_id": "worker-1", "machine_id": "machine-1", "lease_id": "lease-1"}}
 
         result = worker_dispatch_service.complete_local_run(
             "run-1",
@@ -181,19 +185,24 @@ class WorkerDispatchServiceTests(unittest.TestCase):
             usage_masked={"tokens": 10},
             runs_by_id={"run-1": run},
             local_queue_lock=threading.Lock(),
-            claimed_runs={"run-1": {"worker_id": "worker-1"}},
+            claimed_runs=claimed_runs,
             emit_log_fn=lambda logs, level, message, **kwargs: events.append((level, message, kwargs)),
             mark_local_worker_seen_fn=lambda worker_id, run_id, status, note=None: seen.append(
                 (worker_id, run_id, status, note)
             ),
             set_run_status_fn=lambda run_id, status: statuses.append((run_id, status)),
             persist_run_memory_fn=lambda run_id, payload: persisted.append((run_id, payload["result"])),
+            persist_local_runtime_state_fn=lambda: runtime_state_persisted.append(True),
         )
 
         self.assertEqual(result["status"], "ok")
         self.assertEqual(run["usage_masked"], {"tokens": 10})
+        self.assertEqual(claimed_runs, {})
+        self.assertIsNone(run["machine_lease_id"])
+        self.assertIsNone(run["local_worker_id"])
         self.assertEqual(statuses, [("run-1", "completed")])
         self.assertEqual(persisted, [("run-1", "Completed locally")])
+        self.assertEqual(runtime_state_persisted, [True])
         self.assertEqual(seen, [("worker-1", None, "idle", "completed_run")])
         self.assertEqual(events[1][2]["event"], "run_complete")
 
@@ -245,6 +254,7 @@ class WorkerDispatchServiceTests(unittest.TestCase):
         events = []
         statuses = []
         seen = []
+        runtime_state_persisted = []
         run = {
             "status": "running_local",
             "logs": queue.Queue(),
@@ -258,6 +268,7 @@ class WorkerDispatchServiceTests(unittest.TestCase):
             "interrupt_runtime_id": "worker-1",
             "interrupt_machine_id": "machine-1",
         }
+        claimed_runs = {"run-1": {"worker_id": "worker-1", "machine_id": "machine-1", "lease_id": "lease-1"}}
 
         result = worker_dispatch_service.fail_local_run(
             "run-1",
@@ -265,19 +276,22 @@ class WorkerDispatchServiceTests(unittest.TestCase):
             error=None,
             runs_by_id={"run-1": run},
             local_queue_lock=threading.Lock(),
-            claimed_runs={"run-1": {"worker_id": "worker-1", "machine_id": "machine-1", "lease_id": "lease-1"}},
+            claimed_runs=claimed_runs,
             emit_log_fn=lambda logs, level, message, **kwargs: events.append((level, message, kwargs)),
             mark_local_worker_seen_fn=lambda worker_id, run_id, status, note=None: seen.append(
                 (worker_id, run_id, status, note)
             ),
             set_run_status_fn=lambda run_id, status: statuses.append((run_id, status)),
+            persist_local_runtime_state_fn=lambda: runtime_state_persisted.append(True),
         )
 
         self.assertEqual(result["status"], "ok")
         self.assertEqual(run["result"], "Operator stop")
+        self.assertEqual(claimed_runs, {})
         self.assertIsNone(run["machine_lease_id"])
         self.assertIsNone(run["local_worker_id"])
         self.assertEqual(statuses, [("run-1", "failed")])
+        self.assertEqual(runtime_state_persisted, [True])
         self.assertEqual(seen, [("worker-1", None, "idle", "failed_run")])
         self.assertEqual(events[0][2]["event"], "run_interrupted")
 

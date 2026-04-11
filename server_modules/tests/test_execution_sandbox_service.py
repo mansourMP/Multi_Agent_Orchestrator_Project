@@ -34,6 +34,10 @@ class ExecutionSandboxServiceTests(unittest.TestCase):
         self.assertFalse(scope["host_mounts_allowed"])
         self.assertFalse(scope["docker_socket_exposed"])
         self.assertTrue(scope["network_policy"]["hooks_ready"])
+        self.assertEqual(scope["state_layer_policy"]["local_private_memory_access"], "cloud_safe_summaries_only")
+        self.assertFalse(scope["state_layer_policy"]["cross_install_private_memory_allowed"])
+        self.assertFalse(scope["state_layer_policy"]["specialist_to_captain_private_access"])
+        self.assertEqual(scope["state_layer_policy"]["artifacts_history"]["cross_install_exchange_mode"], "artifacts_only")
 
     def test_runtime_scope_for_local_secure_uses_approved_folders_and_apps(self):
         scope = execution_sandbox_service.runtime_scope(
@@ -57,6 +61,8 @@ class ExecutionSandboxServiceTests(unittest.TestCase):
             ["/Users/mansur/Documents/Empyralis", "/Users/mansur/Desktop"],
         )
         self.assertEqual(scope["approved_applications"], ["Mail", "Safari"])
+        self.assertEqual(scope["state_layer_policy"]["local_private_memory_access"], "allowed_locally")
+        self.assertFalse(scope["state_layer_policy"]["specialist_private_memory"]["cross_install_allowed"])
 
     def test_execute_hosted_customer_turn_routes_through_worker_and_attaches_sandbox_metadata(self):
         async def _run() -> dict:

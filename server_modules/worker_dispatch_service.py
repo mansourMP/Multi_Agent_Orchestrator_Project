@@ -179,6 +179,7 @@ def complete_local_run(
     mark_local_worker_seen_fn: Callable[..., Any],
     set_run_status_fn: Callable[[str, str], Any],
     persist_run_memory_fn: Callable[[str, Dict[str, Any]], Any],
+    persist_local_runtime_state_fn: Optional[Callable[[], Any]] = None,
 ) -> Dict[str, Any]:
     run = runs_by_id.get(run_id)
     if not isinstance(run, dict):
@@ -217,10 +218,21 @@ def complete_local_run(
     if not resolved_text:
         resolved_text = "Local companion run completed."
     run["result"] = resolved_text
+    machine_lease_service.clear_active_machine_lease_binding(run)
 
     emit_log_fn(run["logs"], "info", resolved_text, event="local_result", data=result_data if isinstance(result_data, dict) else None)
     emit_log_fn(run["logs"], "info", "Run completed by Local Companion.", event="run_complete")
-    if resolved_worker:
+    release = machine_lease_service.release_machine_lease_claim(
+        run_id,
+        worker_id=resolved_worker or worker_id,
+        local_queue_lock=local_queue_lock,
+        claimed_runs=claimed_runs,
+        persist_local_runtime_state_fn=persist_local_runtime_state_fn,
+        mark_local_worker_seen_fn=mark_local_worker_seen_fn,
+        status_hint="idle",
+        note="completed_run",
+    )
+    if not bool(release.get("released")) and resolved_worker:
         mark_local_worker_seen_fn(resolved_worker, None, "idle", note="completed_run")
     set_run_status_fn(run_id, "completed")
     try:
@@ -364,6 +376,7 @@ def fail_local_run(
     emit_log_fn: Callable[..., Any],
     mark_local_worker_seen_fn: Callable[..., Any],
     set_run_status_fn: Callable[[str, str], Any],
+    persist_local_runtime_state_fn: Optional[Callable[[], Any]] = None,
 ) -> Dict[str, Any]:
     run = runs_by_id.get(run_id)
     if not isinstance(run, dict):
@@ -406,7 +419,18 @@ def fail_local_run(
         else None,
     )
     if resolved_worker:
-        mark_local_worker_seen_fn(resolved_worker, None, "idle", note="failed_run")
+        release = machine_lease_service.release_machine_lease_claim(
+            run_id,
+            worker_id=resolved_worker,
+            local_queue_lock=local_queue_lock,
+            claimed_runs=claimed_runs,
+            persist_local_runtime_state_fn=persist_local_runtime_state_fn,
+            mark_local_worker_seen_fn=mark_local_worker_seen_fn,
+            status_hint="idle",
+            note="failed_run",
+        )
+        if not bool(release.get("released")):
+            mark_local_worker_seen_fn(resolved_worker, None, "idle", note="failed_run")
     set_run_status_fn(run_id, "failed")
     run["logs"].put(None)
     return {"status": "ok", "run_id": run_id}

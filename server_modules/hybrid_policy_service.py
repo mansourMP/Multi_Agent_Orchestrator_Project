@@ -40,6 +40,41 @@ SUMMARY_BRIDGE_FORBIDDEN_PAYLOADS = [
     "full_local_specialist_internals",
     "raw_private_file_content_without_explicit_share",
 ]
+SUMMARY_BRIDGE_ALLOWED_RUNTIME_MODES = ("local_secure", "privileged_device")
+SUMMARY_BRIDGE_LOCAL_SOURCE_LAYERS = (
+    "episodic_memory",
+    "notes_documents_retrieval",
+    "specialist_scoped_memory",
+    "local_private_memory",
+)
+SUMMARY_BRIDGE_ALLOWED_ITEM_FIELDS = {
+    "kind",
+    "label",
+    "summary",
+    "status",
+    "artifact_id",
+    "marker_id",
+    "memory_key",
+    "path_hint",
+    "source_count",
+}
+SUMMARY_BRIDGE_FORBIDDEN_ITEM_FIELDS = {
+    "content",
+    "raw_content",
+    "raw_text",
+    "full_text",
+    "full_content",
+    "messages",
+    "transcript",
+    "memory_snapshot",
+    "entries",
+    "workspace_context",
+    "file_bytes",
+    "base64",
+}
+SUMMARY_BRIDGE_MAX_SUMMARY_CHARS = 1200
+SUMMARY_BRIDGE_MAX_ITEM_SUMMARY_CHARS = 320
+SUMMARY_BRIDGE_MAX_ITEMS = 8
 MEMORY_LAYER_SYNC_RULES: Dict[str, Dict[str, Any]] = {
     "profile_memory": {
         "default_sync_class": "local_only",
@@ -109,6 +144,225 @@ def _normalize_sync_class(value: Any) -> str | None:
         return None
     token = SYNC_CLASS_ALIASES.get(token, token)
     return token if token in SYNC_CLASSES else None
+
+
+def _compact_summary_text(value: Any, *, limit: int) -> str:
+    token = " ".join(str(value or "").strip().split())
+    if len(token) <= limit:
+        return token
+    return token[: limit - 1].rstrip() + "…"
+
+
+def normalize_summary_bridge_payload_classes(value: Any) -> List[str]:
+    return [
+        token
+        for token in _list_strings(value)
+        if token in SUMMARY_BRIDGE_ALLOWED_PAYLOADS
+    ]
+
+
+def validate_summary_bridge_payload_class(
+    payload_class: Any,
+    *,
+    allowed_payload_classes: Iterable[str] | None = None,
+) -> str:
+    token = str(payload_class or "").strip()
+    if token in SUMMARY_BRIDGE_FORBIDDEN_PAYLOADS:
+        raise HybridPolicyError(
+            reason="summary_bridge_payload_not_allowed",
+            message=f"Summary bridge payloads are not allowed: {token}.",
+            policy_state={
+                "payload_class": token,
+                "allowed_payloads": list(SUMMARY_BRIDGE_ALLOWED_PAYLOADS),
+            },
+        )
+    if token not in SUMMARY_BRIDGE_ALLOWED_PAYLOADS:
+        raise HybridPolicyError(
+            reason="summary_bridge_payload_not_allowed",
+            message=f"Summary bridge payloads are not allowed: {token or 'unknown'}.",
+            policy_state={
+                "payload_class": token or None,
+                "allowed_payloads": list(SUMMARY_BRIDGE_ALLOWED_PAYLOADS),
+            },
+        )
+    allowed = normalize_summary_bridge_payload_classes(list(allowed_payload_classes or []))
+    if allowed and token not in allowed:
+        raise HybridPolicyError(
+            reason="summary_bridge_payload_not_enabled",
+            message=f"Summary bridge payload class '{token}' is not enabled by policy.",
+            policy_state={
+                "payload_class": token,
+                "allowed_payload_classes": allowed,
+            },
+        )
+    return token
+
+
+def _sanitize_summary_bridge_item(item: Any) -> Dict[str, Any]:
+    if not isinstance(item, dict):
+        raise HybridPolicyError(
+            reason="summary_bridge_payload_shape_rejected",
+            message="Summary bridge items must be objects.",
+        )
+    item_keys = set(item)
+    forbidden = sorted(key for key in item_keys if key in SUMMARY_BRIDGE_FORBIDDEN_ITEM_FIELDS)
+    if forbidden:
+        raise HybridPolicyError(
+            reason="summary_bridge_payload_shape_rejected",
+            message=f"Summary bridge items may not include raw-content fields: {', '.join(forbidden)}.",
+            policy_state={"forbidden_fields": forbidden},
+        )
+    unknown = sorted(key for key in item_keys if key not in SUMMARY_BRIDGE_ALLOWED_ITEM_FIELDS)
+    if unknown:
+        raise HybridPolicyError(
+            reason="summary_bridge_payload_shape_rejected",
+            message=f"Summary bridge items contain unsupported fields: {', '.join(unknown)}.",
+            policy_state={"unsupported_fields": unknown},
+        )
+    normalized: Dict[str, Any] = {}
+    for key in ("kind", "label", "status", "artifact_id", "marker_id", "memory_key", "path_hint"):
+        token = str(item.get(key) or "").strip()
+        if token:
+            normalized[key] = token
+    summary = _compact_summary_text(item.get("summary"), limit=SUMMARY_BRIDGE_MAX_ITEM_SUMMARY_CHARS)
+    if summary:
+        normalized["summary"] = summary
+    if item.get("source_count") is not None:
+        try:
+            source_count = int(item.get("source_count") or 0)
+        except Exception as error:
+            raise HybridPolicyError(
+                reason="summary_bridge_payload_shape_rejected",
+                message="Summary bridge item source_count must be an integer.",
+            ) from error
+        if source_count < 0:
+            raise HybridPolicyError(
+                reason="summary_bridge_payload_shape_rejected",
+                message="Summary bridge item source_count must be zero or greater.",
+            )
+        normalized["source_count"] = source_count
+    if not normalized.get("summary") and not normalized.get("label"):
+        raise HybridPolicyError(
+            reason="summary_bridge_payload_shape_rejected",
+            message="Summary bridge items require at least a label or summary.",
+        )
+    return normalized
+
+
+def build_summary_bridge_payload_record(
+    *,
+    payload_class: Any,
+    summary: Any,
+    items: Any = None,
+    memory_layer: Any = None,
+    agent_install_id: Any = None,
+    run_id: Any = None,
+    source_runtime_mode: Any = None,
+    last_safe: bool = False,
+    allowed_payload_classes: Iterable[str] | None = None,
+) -> Dict[str, Any]:
+    resolved_payload_class = validate_summary_bridge_payload_class(
+        payload_class,
+        allowed_payload_classes=allowed_payload_classes,
+    )
+    resolved_summary = _compact_summary_text(summary, limit=SUMMARY_BRIDGE_MAX_SUMMARY_CHARS)
+    if not resolved_summary:
+        raise HybridPolicyError(
+            reason="summary_bridge_payload_invalid",
+            message="Summary bridge payloads require a non-empty summary.",
+        )
+    runtime_mode = str(source_runtime_mode or "").strip().lower()
+    if runtime_mode not in SUMMARY_BRIDGE_ALLOWED_RUNTIME_MODES:
+        raise HybridPolicyError(
+            reason="summary_bridge_runtime_not_local",
+            message="Summary bridge payloads may be published only from approved local runtime modes.",
+            policy_state={
+                "source_runtime_mode": runtime_mode or None,
+                "allowed_runtime_modes": list(SUMMARY_BRIDGE_ALLOWED_RUNTIME_MODES),
+            },
+        )
+    resolved_memory_layer = str(memory_layer or "").strip()
+    if resolved_memory_layer:
+        if resolved_memory_layer not in unified_memory_service.MEMORY_LAYER_SPECS:
+            raise HybridPolicyError(
+                reason="summary_bridge_payload_invalid",
+                message=f"Unknown summary bridge memory layer: {resolved_memory_layer}.",
+                policy_state={"memory_layer": resolved_memory_layer},
+            )
+        if resolved_memory_layer not in SUMMARY_BRIDGE_LOCAL_SOURCE_LAYERS:
+            raise HybridPolicyError(
+                reason="summary_bridge_payload_invalid",
+                message=f"Summary bridge memory layer '{resolved_memory_layer}' is not allowed for cloud-safe publish.",
+                policy_state={"memory_layer": resolved_memory_layer},
+            )
+    elif resolved_payload_class == "bounded_local_private_summaries":
+        resolved_memory_layer = "local_private_memory"
+    normalized_items = [
+        _sanitize_summary_bridge_item(item)
+        for item in list(items or [])[:SUMMARY_BRIDGE_MAX_ITEMS]
+    ]
+    if resolved_payload_class in {"artifact_summaries", "pending_review_markers", "selected_memory_update_summaries"} and not normalized_items:
+        raise HybridPolicyError(
+            reason="summary_bridge_payload_invalid",
+            message=f"Summary bridge payload class '{resolved_payload_class}' requires at least one summarized item.",
+            policy_state={"payload_class": resolved_payload_class},
+        )
+    resolved_agent_install_id = str(agent_install_id or "").strip() or None
+    resolved_run_id = str(run_id or "").strip() or None
+    if resolved_payload_class == "specialist_outcome_summaries" and not (resolved_agent_install_id or resolved_run_id):
+        raise HybridPolicyError(
+            reason="summary_bridge_payload_invalid",
+            message="Specialist outcome summaries require an agent_install_id or run_id.",
+            policy_state={"payload_class": resolved_payload_class},
+        )
+    return {
+        "payload_class": resolved_payload_class,
+        "summary": resolved_summary,
+        "items": normalized_items,
+        "memory_layer": resolved_memory_layer or None,
+        "agent_install_id": resolved_agent_install_id,
+        "run_id": resolved_run_id,
+        "source_runtime_mode": runtime_mode,
+        "last_safe": bool(last_safe),
+    }
+
+
+def summarize_summary_bridge_records(
+    records: Iterable[Dict[str, Any]],
+    *,
+    payload_classes: Iterable[str] | None = None,
+) -> Dict[str, Any]:
+    allowed = set(normalize_summary_bridge_payload_classes(list(payload_classes or [])))
+    normalized_records = [
+        dict(item)
+        for item in records
+        if isinstance(item, dict)
+        and str(item.get("payload_class") or "").strip() in SUMMARY_BRIDGE_ALLOWED_PAYLOADS
+        and (not allowed or str(item.get("payload_class") or "").strip() in allowed)
+    ]
+    latest_published_at = max(
+        [str(item.get("created_at") or "").strip() for item in normalized_records if str(item.get("created_at") or "").strip()],
+        default=None,
+    )
+    last_safe_records = [item for item in normalized_records if bool(item.get("last_safe"))]
+    latest_last_safe_at = max(
+        [str(item.get("created_at") or "").strip() for item in last_safe_records if str(item.get("created_at") or "").strip()],
+        default=None,
+    )
+    available_payload_classes = sorted(
+        {
+            str(item.get("payload_class") or "").strip()
+            for item in normalized_records
+            if str(item.get("payload_class") or "").strip()
+        }
+    )
+    return {
+        "record_count": len(normalized_records),
+        "available_payload_classes": available_payload_classes,
+        "last_safe_summary_available": bool(last_safe_records),
+        "latest_published_at": latest_published_at,
+        "latest_last_safe_at": latest_last_safe_at,
+    }
 
 
 def _strictest_sync_class(classes: Iterable[str]) -> str:
@@ -355,6 +609,9 @@ def evaluate_hybrid_runtime_policy(
             "payload_classes": summary_payload_classes,
             "allowed_payload_classes": list(SUMMARY_BRIDGE_ALLOWED_PAYLOADS),
             "forbidden_payload_classes": list(SUMMARY_BRIDGE_FORBIDDEN_PAYLOADS),
+            "publisher_runtime_modes": list(SUMMARY_BRIDGE_ALLOWED_RUNTIME_MODES),
+            "ingestion_target_layer": "cloud_synced_memory",
+            "transport": "publish_ingest_summary_only",
             "last_safe_summary_available": bool(policy.get("last_safe_summary_available")),
         },
         "placement": placement,

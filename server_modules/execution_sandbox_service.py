@@ -70,6 +70,12 @@ _SCRUBBED_ENV_PREFIXES = (
     "OPENAI_",
     "SSH_",
 )
+STATE_LAYER_IDS = (
+    "captain_private_memory",
+    "specialist_private_memory",
+    "shared_operational_board",
+    "artifacts_history",
+)
 
 
 class HostedSecureSandboxError(RuntimeError):
@@ -89,6 +95,35 @@ def _list_strings(value: Any) -> list[str]:
         if token:
             items.append(token)
     return items
+
+
+def state_layer_policy(*, runtime_mode: str) -> Dict[str, Any]:
+    normalized_mode = str(runtime_mode or "").strip().lower() or "hosted_secure"
+    local_private_access = "cloud_safe_summaries_only" if normalized_mode == "hosted_secure" else "allowed_locally"
+    return {
+        "layer_ids": list(STATE_LAYER_IDS),
+        "captain_private_memory": {
+            "default_access": "captain_only",
+            "specialists_allowed": False,
+        },
+        "specialist_private_memory": {
+            "default_access": "owning_install_only",
+            "cross_install_allowed": False,
+            "captain_raw_access_by_default": False,
+        },
+        "shared_operational_board": {
+            "default_access": "permissioned_shared_read",
+            "write_requires_permission_tier": True,
+        },
+        "artifacts_history": {
+            "default_access": "explicit_artifact_exchange",
+            "cross_install_exchange_mode": "artifacts_only",
+            "raw_private_memory_embeds_allowed": False,
+        },
+        "local_private_memory_access": local_private_access,
+        "cross_install_private_memory_allowed": False,
+        "specialist_to_captain_private_access": False,
+    }
 
 
 def hosted_secure_driver() -> str:
@@ -162,6 +197,7 @@ def runtime_scope(
                 "allowed_providers": _list_strings(network_policy.get("allowed_providers")) or list(DEFAULT_NETWORK_POLICY["allowed_providers"]),
                 "hooks_ready": bool(network_policy.get("hooks_ready", True)),
             },
+            "state_layer_policy": state_layer_policy(runtime_mode=normalized_mode),
         }
 
     network_policy = {
@@ -186,6 +222,7 @@ def runtime_scope(
             "allowed_providers": _list_strings(network_policy.get("allowed_providers")) or list(DEFAULT_NETWORK_POLICY["allowed_providers"]),
             "hooks_ready": bool(network_policy.get("hooks_ready", True)),
         },
+        "state_layer_policy": state_layer_policy(runtime_mode=normalized_mode),
         "requires_explicit_approval": normalized_mode == "privileged_device",
     }
 

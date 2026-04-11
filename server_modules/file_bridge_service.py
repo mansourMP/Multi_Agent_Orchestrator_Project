@@ -13,6 +13,7 @@ from server_modules import artifact_service, execution_sandbox_service, outbox_s
 FILE_BRIDGE_MODE_EXPORT_BRIDGE = "export_bridge"
 FILE_BRIDGE_MODE_SYNC_FOLDER = "sync_folder"
 FILE_BRIDGE_MODE_PRIVILEGED_DEVICE = "privileged_device"
+SUPPORTED_CONNECTOR_ARTIFACT_CLASSES = {"api_connector", "browser_connector", "media_generation_connector"}
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
@@ -37,6 +38,20 @@ def _safe_token(value: Any, *, default: str) -> str:
 def _safe_file_name(value: Any, *, default: str) -> str:
     token = re.sub(r"[^A-Za-z0-9._-]+", "-", str(value or "").strip()).strip("-.")
     return token or default
+
+
+def connector_artifact_bridge_contract(connector_class: str, *, surface_role: Optional[str] = None) -> Dict[str, Any]:
+    normalized_class = str(connector_class or "").strip().lower()
+    if normalized_class not in SUPPORTED_CONNECTOR_ARTIFACT_CLASSES:
+        raise FileBridgeValidationError(f"Unsupported connector artifact class '{connector_class}'.")
+    normalized_surface_role = str(surface_role or "").strip().lower() or "deep_application_connector"
+    return {
+        "connector_class": normalized_class,
+        "default_bridge_mode": FILE_BRIDGE_MODE_EXPORT_BRIDGE,
+        "managed_export_required": normalized_class == "media_generation_connector",
+        "sync_folder_allowed": normalized_surface_role != "channel_shell",
+        "channel_shell_direct_export_allowed": False,
+    }
 
 
 def _coerce_dict(value: Any) -> Dict[str, Any]:

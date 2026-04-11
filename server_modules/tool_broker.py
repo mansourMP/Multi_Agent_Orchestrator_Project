@@ -15,8 +15,15 @@ from server_modules import egress_policy, safe_mode_service, skill_registry
 
 
 ToolActionClass = Literal["read", "write", "execute"]
+ConnectorExecutionClass = Literal["api_connector", "browser_connector", "media_generation_connector"]
 _ACTION_CLASS_ORDER = {"read": 0, "write": 1, "execute": 2}
 _SUPPORTED_RUNTIME_MODES = {"hosted_secure", "local_secure", "privileged_device"}
+_SUPPORTED_CONNECTOR_CLASSES = {"api_connector", "browser_connector", "media_generation_connector"}
+_CONNECTOR_CLASS_ALLOWED_ACTIONS = {
+    "api_connector": {"read", "write"},
+    "browser_connector": {"read", "write", "execute"},
+    "media_generation_connector": {"write", "execute"},
+}
 _TOKEN_VERSION = "empyralis.tool-grant.v1"
 DEFAULT_CAPABILITY_TOKEN_TTL_SECONDS = 120
 MASTER_SCOPE_WILDCARD = "*"
@@ -56,6 +63,13 @@ def _normalize_action_class(action_class: Any) -> ToolActionClass:
     token = _normalize_token(action_class)
     if token not in _ACTION_CLASS_ORDER:
         raise ToolExecutionDeniedError("invalid_action_class", f"Unsupported action class '{action_class}'.")
+    return token  # type: ignore[return-value]
+
+
+def _normalize_connector_class(connector_class: Any) -> ConnectorExecutionClass:
+    token = _normalize_token(connector_class)
+    if token not in _SUPPORTED_CONNECTOR_CLASSES:
+        raise ToolExecutionDeniedError("invalid_connector_class", f"Unsupported connector class '{connector_class}'.")
     return token  # type: ignore[return-value]
 
 
@@ -131,6 +145,7 @@ def issue_capability_token(
     ttl_seconds: int = DEFAULT_CAPABILITY_TOKEN_TTL_SECONDS,
 ) -> CapabilityGrant:
     normalized_runtime_mode = _normalize_runtime_mode(runtime_mode)
+    normalized_runtime_scope = _coerce_dict(runtime_scope)
     issued_at = int(time.time())
     expires_at = issued_at + max(int(ttl_seconds or DEFAULT_CAPABILITY_TOKEN_TTL_SECONDS), 1)
     skill_ids = (
@@ -149,8 +164,9 @@ def issue_capability_token(
         "runtime_mode": normalized_runtime_mode,
         "runtime_constraints": {
             "mode": normalized_runtime_mode,
-            "driver": str(_coerce_dict(runtime_scope).get("driver") or "").strip() or None,
-            "workspace_kind": str(_coerce_dict(runtime_scope).get("workspace_kind") or "").strip() or None,
+            "driver": str(normalized_runtime_scope.get("driver") or "").strip() or None,
+            "workspace_kind": str(normalized_runtime_scope.get("workspace_kind") or "").strip() or None,
+            "state_layer_policy": _coerce_dict(normalized_runtime_scope.get("state_layer_policy")),
         },
         "tenant_id": str(tenant_id or "").strip(),
         "workspace_id": str(workspace_id or "").strip(),
@@ -400,6 +416,7 @@ def authorize_connector_action(
     runtime_mode: str,
     connector_scope: str,
     action_class: ToolActionClass,
+    connector_class: str | None = None,
     approval_required: bool | None = None,
 ) -> Dict[str, Any]:
     claims = verify_capability_token(
@@ -411,6 +428,12 @@ def authorize_connector_action(
     )
     _require_runtime_security_controls(claims)
     normalized_action_class = _normalize_action_class(action_class)
+    normalized_connector_class = _normalize_connector_class(connector_class) if connector_class is not None else None
+    if normalized_connector_class is not None and normalized_action_class not in _CONNECTOR_CLASS_ALLOWED_ACTIONS[normalized_connector_class]:
+        raise ToolExecutionDeniedError(
+            "connector_action_not_supported_for_class",
+            f"{normalized_action_class} actions are not allowed for {normalized_connector_class}.",
+        )
     _require_action_class(claims, normalized_action_class)
     _require_connector_scopes(claims, (_normalize_token(connector_scope),))
     if bool(approval_required if approval_required is not None else normalized_action_class != "read") and not bool(claims.get("approval_granted")):

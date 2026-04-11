@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
-from server_modules import memory_service, session_transcript_store, unified_memory_service, workspace_context
+from server_modules import memory_service, session_transcript_store, shared_operational_board_service, unified_memory_service, workspace_context
 
 
 class UnifiedMemoryServiceTests(unittest.TestCase):
@@ -89,6 +89,7 @@ class UnifiedMemoryServiceTests(unittest.TestCase):
         self.assertEqual(payload["audience"], "sage")
         self.assertEqual(payload["layer_order"], list(unified_memory_service.UNIFIED_MEMORY_LAYER_ORDER))
         self.assertIn("profile_memory", payload["layers"])
+        self.assertIn("shared_operational_board", payload["layers"])
         self.assertIn("cloud_synced_memory", payload["layers"])
         self.assertIn("Prefers concise daily summaries.", payload["layers"]["profile_memory"]["items"][0]["text"])
         self.assertEqual(payload["layers"]["app_event_history"]["summary"]["count"], 1)
@@ -97,6 +98,89 @@ class UnifiedMemoryServiceTests(unittest.TestCase):
         self.assertTrue(any(item["path"] == "knowledge/notes.md" for item in snippets))
         self.assertIn("local_private_memory", payload["boundary_map"]["never_sync_by_default"])
         self.assertIn("app_event_history", payload["boundary_map"]["cloud_synced_by_default"])
+        self.assertIn("shared_operational_board", payload["boundary_map"]["workspace_shared_by_default"])
+
+    def test_build_sage_memory_payload_ingests_hybrid_summary_bridge_records_only_into_cloud_synced_layer(self) -> None:
+        memory_service.publish_hybrid_summary_bridge_payload(
+            "default",
+            payload_class="artifact_summaries",
+            summary="Research specialist finished a local summary draft.",
+            items=[
+                {
+                    "kind": "artifact",
+                    "label": "Draft",
+                    "summary": "Draft summary ready for review.",
+                    "artifact_id": "artifact-1",
+                }
+            ],
+            agent_install_id="install-research",
+            run_id="run-1",
+            source_runtime_mode="local_secure",
+            last_safe=True,
+        )
+
+        with patch(
+            "server_modules.unified_memory_service.personal_context_engine.list_events",
+            new=AsyncMock(return_value=[]),
+        ):
+            payload = asyncio.run(
+                unified_memory_service.build_sage_memory_payload(
+                    tenant_id="tenant-1",
+                    workspace_id="default",
+                )
+            )
+
+        cloud_items = payload["layers"]["cloud_synced_memory"]["items"]
+        bridge_items = [item for item in cloud_items if item.get("source") == "hybrid_summary_bridge"]
+        self.assertEqual(len(bridge_items), 1)
+        self.assertEqual(bridge_items[0]["payload_class"], "artifact_summaries")
+        self.assertEqual(bridge_items[0]["items"][0]["artifact_id"], "artifact-1")
+        self.assertEqual(payload["layers"]["cloud_synced_memory"]["summary"]["hybrid_summary_bridge_count"], 1)
+        self.assertTrue(payload["layers"]["cloud_synced_memory"]["summary"]["last_safe_summary_available"])
+        self.assertEqual(payload["layers"]["local_private_memory"]["items"][0]["source"], "workspace_context_files")
+        self.assertFalse(payload["state_layer_model"]["artifacts_history"]["raw_private_memory_embeds_allowed"])
+
+    def test_build_specialist_memory_payload_exposes_published_shared_board_without_private_leakage(self) -> None:
+        workspace_context.write_workspace_context_file(
+            "USER.md",
+            "# User Profile\n\n- Owner private profile.\n",
+        )
+        asyncio.run(
+            shared_operational_board_service.write_shared_operational_board_entry(
+                "default",
+                tenant_id="tenant-1",
+                actor_permission="publish_update",
+                action="publish_update",
+                actor={"type": "user", "id": "owner-1", "role": "owner"},
+                entry_kind="sop_playbook",
+                title="Refund playbook",
+                body="Use the refund checklist and confirm account email before issuing a credit.",
+            )
+        )
+
+        with patch(
+            "server_modules.unified_memory_service.personal_context_engine.list_events",
+            new=AsyncMock(return_value=[]),
+        ):
+            payload = asyncio.run(
+                unified_memory_service.build_specialist_memory_payload(
+                    tenant_id="tenant-1",
+                    workspace_id="default",
+                    agent_install_id="install-research",
+                )
+            )
+
+        board_layer = payload["layers"]["shared_operational_board"]
+        self.assertTrue(board_layer["accessible"])
+        self.assertEqual(board_layer["items"][0]["title"], "Refund playbook")
+        self.assertIn("refund checklist", board_layer["items"][0]["body"])
+        self.assertNotIn("Owner private profile.", str(board_layer["items"]))
+        self.assertTrue(payload["state_layer_model"]["shared_operational_board"]["accessible"])
+        self.assertEqual(
+            payload["state_layer_model"]["shared_operational_board"]["permission_tiers"],
+            ["read", "propose_update", "publish_update"],
+        )
+        self.assertFalse(payload["state_layer_model"]["artifacts_history"]["raw_private_memory_embeds_allowed"])
 
     def test_build_specialist_memory_payload_keeps_owner_profile_hidden_by_default(self) -> None:
         workspace_context.write_workspace_context_file(
@@ -149,6 +233,36 @@ class UnifiedMemoryServiceTests(unittest.TestCase):
         self.assertEqual([entry["key"] for entry in snapshot["entries"]], ["install_fact"])
         self.assertEqual(payload["layers"]["local_private_memory"]["items"], [])
         self.assertEqual(payload["layers"]["app_event_history"]["summary"]["count"], 1)
+        self.assertFalse(payload["state_layer_model"]["captain_private_memory"]["accessible"])
+        self.assertTrue(payload["state_layer_model"]["specialist_private_memory"]["accessible"])
+        self.assertFalse(payload["state_layer_model"]["specialist_private_memory"]["cross_install_allowed"])
+
+    def test_build_sage_memory_payload_rejects_specialist_viewer_for_captain_private_memory(self) -> None:
+        with self.assertRaises(PermissionError) as ctx:
+            asyncio.run(
+                unified_memory_service.build_sage_memory_payload(
+                    tenant_id="tenant-1",
+                    workspace_id="default",
+                    viewer_role="specialist",
+                    viewer_install_id="install-research",
+                )
+            )
+
+        self.assertIn("Captain private memory", str(ctx.exception))
+
+    def test_build_specialist_memory_payload_rejects_cross_specialist_private_access(self) -> None:
+        with self.assertRaises(PermissionError) as ctx:
+            asyncio.run(
+                unified_memory_service.build_specialist_memory_payload(
+                    tenant_id="tenant-1",
+                    workspace_id="default",
+                    agent_install_id="install-research",
+                    viewer_role="specialist",
+                    viewer_install_id="install-other",
+                )
+            )
+
+        self.assertIn("another specialist's private memory", str(ctx.exception))
 
     def test_search_unified_memory_documents_finds_notebook_and_knowledge_sources(self) -> None:
         notes_dir = memory_service._workspace_memory_store._memory_notebook_dir("default")

@@ -1,7 +1,18 @@
+import os
+import sys
+import threading
+import time
+
+try:
+    import resource
+except Exception:  # pragma: no cover - platform dependent
+    resource = None
+
 from server_modules import runtime_config as config
 from server_modules import shared as shared
 from server_modules import runtime_common as common
 from server_modules import runs_core as runs_core
+from server_modules import provider_profiles as provider_profiles_service
 from server_modules.health_diagnostics import _build_cognitive_operator_policy, _runtime_skills_snapshot
 from server_modules.memory_service import runtime_memory_search, runtime_memory_upsert
 
@@ -9,6 +20,8 @@ globals().update({key: value for key, value in vars(config).items() if not key.s
 globals().update({key: value for key, value in vars(shared).items() if not key.startswith("__")})
 globals().update({key: value for key, value in vars(common).items() if not key.startswith("__")})
 globals().update({key: value for key, value in vars(runs_core).items() if not key.startswith("__")})
+
+_PROCESS_STARTED_AT_MONOTONIC = time.monotonic()
 
 def _runtime_contract_payload() -> Dict[str, Any]:
     return build_runtime_contract_payload(
@@ -97,6 +110,150 @@ def _direct_chat_session_manager_snapshot() -> Dict[str, Any]:
             "error": str(exc).strip() or "session_manager_unavailable",
         }
 
+
+def _process_runtime_snapshot() -> Dict[str, Any]:
+    snapshot: Dict[str, Any] = {
+        "pid": os.getpid(),
+        "uptime_seconds": round(max(0.0, time.monotonic() - _PROCESS_STARTED_AT_MONOTONIC), 3),
+        "thread_count": threading.active_count(),
+        "open_fd_count": None,
+        "max_rss_bytes": None,
+        "measurement_scope": "live_since_process_start",
+    }
+    try:
+        snapshot["open_fd_count"] = len(os.listdir("/dev/fd"))
+    except Exception:
+        snapshot["open_fd_count"] = None
+    if resource is not None:
+        try:
+            usage = resource.getrusage(resource.RUSAGE_SELF)
+            max_rss = int(getattr(usage, "ru_maxrss", 0) or 0)
+            if max_rss > 0:
+                snapshot["max_rss_bytes"] = max_rss if sys.platform == "darwin" else max_rss * 1024
+        except Exception:
+            snapshot["max_rss_bytes"] = None
+    return snapshot
+
+
+def _database_runtime_snapshot() -> Dict[str, Any]:
+    try:
+        from server_modules import db as runtime_db
+    except Exception:
+        return {
+            "dsn_configured": False,
+            "postgres_pool_max_size": None,
+            "active_pool_count": 0,
+            "sqlite_status": "unknown",
+            "measurement_scope": "live_since_process_start",
+        }
+    pools = getattr(runtime_db, "_POOLS_BY_LOOP", {}) or {}
+    return {
+        "dsn_configured": bool(runtime_db.configured_database_url()),
+        "postgres_pool_max_size": int(runtime_db.configured_postgres_pool_max_size()),
+        "active_pool_count": len(pools),
+        "sqlite_status": runtime_db.sqlite_health_status(),
+        "measurement_scope": "live_since_process_start",
+    }
+
+
+def _provider_profile_runtime_readiness(workspace_id: str = "default") -> Dict[str, Any]:
+    requested_workspace_id = str(workspace_id or "default").strip() or "default"
+    return provider_profiles_service.build_provider_runtime_truth(requested_workspace_id)
+
+
+def _provider_backpressure_summary(provider_profile_health: Dict[str, Any]) -> Dict[str, Any]:
+    providers_raw = provider_profile_health.get("providers_by_id")
+    if not isinstance(providers_raw, dict):
+        providers_list = provider_profile_health.get("providers") if isinstance(provider_profile_health.get("providers"), list) else []
+        providers_raw = {
+            str(item.get("id") or ""): item
+            for item in providers_list
+            if isinstance(item, dict) and str(item.get("id") or "").strip()
+        }
+    providers = providers_raw if isinstance(providers_raw, dict) else {}
+    rate_limited = []
+    cooling = []
+    disabled = []
+    for provider_id, payload in providers.items():
+        if not isinstance(payload, dict):
+            continue
+        item = {
+            "provider": provider_id,
+            "state": str(payload.get("state") or "").strip() or None,
+            "failure_class": str(payload.get("failure_class") or "").strip() or None,
+            "retry_after_seconds": payload.get("retry_after_seconds"),
+        }
+        if bool(payload.get("backpressure")):
+            rate_limited.append(item)
+        elif str(payload.get("state") or "") == "degraded":
+            cooling.append(item)
+        elif str(payload.get("state") or "") in {"configured", "setup_required", "unavailable"}:
+            disabled.append(item)
+    if rate_limited:
+        state = "backpressure"
+        summary = "Provider rate limiting is active; runtime should cool down and retry later."
+    elif cooling:
+        state = "cooldown"
+        summary = "Provider failures are cooling down; runtime should prefer queued or alternate paths."
+    elif disabled and not providers:
+        state = "unavailable"
+        summary = "No provider profiles are available."
+    elif disabled and len(disabled) == len(providers):
+        state = "unavailable"
+        summary = "All provider profiles are disabled."
+    else:
+        state = "healthy"
+        summary = "Provider capacity is within the current baseline."
+    retry_after_seconds = None
+    all_retry_after = [item.get("retry_after_seconds") for item in [*rate_limited, *cooling] if item.get("retry_after_seconds") is not None]
+    if all_retry_after:
+        retry_after_seconds = min(int(item) for item in all_retry_after)
+    return {
+        "state": state,
+        "summary": summary,
+        "rate_limited_profiles": rate_limited,
+        "cooldown_profiles": cooling,
+        "disabled_profiles": disabled,
+        "retry_after_seconds": retry_after_seconds,
+    }
+
+
+def _scale_safety_baseline_payload(
+    *,
+    provider_profile_health: Dict[str, Any],
+    direct_chat_session_manager: Dict[str, Any],
+) -> Dict[str, Any]:
+    from server_modules import local_queue
+
+    local_queue_baseline = local_queue.build_local_scale_safety_baseline()
+    provider_backpressure = _provider_backpressure_summary(provider_profile_health)
+    return {
+        "durable_intake": {
+            "queueing": "enabled",
+            "run_timeout_seconds": ORION_RUN_TIMEOUT_SECONDS,
+            "max_retries": ORION_MAX_RETRIES,
+            "retry_backoff_seconds": ORION_RETRY_BACKOFF_SECONDS,
+        },
+        "local_queue": local_queue_baseline,
+        "provider_backpressure": provider_backpressure,
+        "control_plane_limits": {
+            "rate_limit_per_minute": CONTROL_PLANE_RATE_LIMIT_PER_MINUTE,
+            "rate_limit_burst": CONTROL_PLANE_RATE_LIMIT_BURST,
+        },
+        "process_runtime": _process_runtime_snapshot(),
+        "database_runtime": _database_runtime_snapshot(),
+        "direct_chat_runtime": {
+            "queue_depth": int(((direct_chat_session_manager.get("turns") or {}).get("queue_depth") or 0)),
+            "active_turns": int(((direct_chat_session_manager.get("turns") or {}).get("active") or 0)),
+        },
+        "failure_mode_contract": {
+            "queued_state_instead_of_collapse": True,
+            "provider_cooldown_on_failures": True,
+            "dead_letter_tracking": True,
+        },
+    }
+
+
 async def health():
     runtime_contract = _runtime_contract_payload()
     openai_key, openai_env_source = _openai_env_bearer_with_source()
@@ -109,6 +266,10 @@ async def health():
         openai_project_id=OPENAI_PROJECT_ID,
         resolve_default_vault_credential=resolve_default_vault_credential,
         provider_adapters=PROVIDER_ADAPTERS,
+    )
+    provider_profile_health = provider_profiles_service.build_provider_runtime_truth(
+        "default",
+        openai_probe=openai_probe,
     )
 
     runtime_valid = not ORION_ENGINE_VALIDATION_ERRORS
@@ -130,7 +291,22 @@ async def health():
     memory_snapshot = _memory_health_snapshot()
     runtime_skills = _runtime_skills_snapshot()
     direct_chat_session_manager = _direct_chat_session_manager_snapshot()
-    ok = bool(openai_probe["openai_key_valid"]) and runtime_valid
+    auth_mode = str(ORION_AUTH_MODE or "").strip().lower()
+    cloud_provider_ready = bool(openai_probe["openai_key_valid"])
+    cloud_provider_source = "openai_probe" if cloud_provider_ready else "none"
+    if not cloud_provider_ready and auth_mode == "codex" and bool(provider_profile_health.get("codex_profile_ready")):
+        cloud_provider_ready = True
+        cloud_provider_source = "provider_profile:openai-codex"
+    elif not cloud_provider_ready and auth_mode == "openai" and bool(provider_profile_health.get("openai_profile_ready")):
+        cloud_provider_ready = True
+        cloud_provider_source = "provider_profile:openai"
+    ok = bool(cloud_provider_ready) and runtime_valid
+    scale_safety_baseline = _scale_safety_baseline_payload(
+        provider_profile_health=provider_profile_health,
+        direct_chat_session_manager=direct_chat_session_manager,
+    )
+    process_runtime = _process_runtime_snapshot()
+    database_runtime = _database_runtime_snapshot()
     return {
         "ok": ok,
         "runtime_api_version": ORION_RUNTIME_API_VERSION,
@@ -148,6 +324,12 @@ async def health():
         "openai_credential_source": openai_probe["openai_credential_source"],
         "openai_status": openai_probe["openai_status"],
         "openai_error": openai_probe["openai_error"],
+        "cloud_provider_ready": cloud_provider_ready,
+        "cloud_provider_source": cloud_provider_source,
+        "provider_profile_health": provider_profile_health,
+        "process_runtime": process_runtime,
+        "database_runtime": database_runtime,
+        "scale_safety_baseline": scale_safety_baseline,
         "engines": list(ENGINE_REGISTRY.keys()),
         "providers": list(PROVIDER_ADAPTERS.keys()),
         "codex_model": CODEX_MODEL,

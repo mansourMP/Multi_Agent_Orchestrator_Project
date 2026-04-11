@@ -32,6 +32,7 @@ def _install_payload() -> dict:
             "allowed_connector_scopes": ["workspace", "install"],
         },
         "metadata": {
+            "specialist_mode": "owner_test",
             "agent_manifest": {
                 "manifest_id": "manifest-support",
                 "identity": {
@@ -151,6 +152,9 @@ class SpecialistServiceTests(unittest.TestCase):
             )
 
         self.assertEqual(contract["service_kind"], "business_specialist")
+        self.assertEqual(contract["operating_mode"]["mode"], "owner_test")
+        self.assertFalse(contract["operating_mode"]["prompt_editable"])
+        self.assertEqual(contract["operating_mode"]["response_audience"], "owner_operator_preview")
         self.assertFalse(contract["separation_contract"]["inherits_sage_memory_by_default"])
         self.assertTrue(contract["runtime_policy"]["same_runtime_capability_as_platform"])
         self.assertEqual(contract["runtime_policy"]["selection_status"], "ready")
@@ -163,6 +167,9 @@ class SpecialistServiceTests(unittest.TestCase):
         self.assertEqual(contract["artifact_scope"]["review_required_count"], 1)
         self.assertEqual(contract["sage_orchestration"]["summary_channel"]["item_count"], 1)
         self.assertEqual(contract["sage_orchestration"]["artifact_channel"]["recent_artifacts"][0]["name"], "refund-response.md")
+        summary = specialist_service._projection_summary(contract)
+        self.assertEqual(summary["specialist_mode"], "owner_test")
+        self.assertFalse(summary["mode_contract"]["config_editable"])
 
     def test_build_specialist_service_contract_surfaces_runtime_block_without_broadening_scope(self) -> None:
         with (

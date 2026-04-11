@@ -11,6 +11,42 @@ class ProviderValidationMessageTests(unittest.TestCase):
     def setUp(self):
         provider_profiles._init()
 
+    def test_classify_profile_failure_marks_rate_limits_as_retryable_backpressure(self):
+        result = provider_profiles.classify_profile_failure("429 Rate limit exceeded for this token.")
+
+        self.assertEqual(result["failure_class"], "rate_limited")
+        self.assertTrue(result["retryable"])
+        self.assertTrue(result["backpressure"])
+        self.assertGreaterEqual(result["cooldown_seconds"], 30)
+
+    def test_classify_profile_failure_marks_auth_errors_as_non_retryable(self):
+        result = provider_profiles.classify_profile_failure("401 Unauthorized API key.")
+
+        self.assertEqual(result["failure_class"], "auth")
+        self.assertFalse(result["retryable"])
+        self.assertFalse(result["backpressure"])
+        self.assertGreaterEqual(result["cooldown_seconds"], 60)
+
+    def test_resolve_provider_adapter_keeps_openai_direct_for_codex_token_credentials(self):
+        resolved_provider, adapter_key, adapter = provider_profiles.resolve_provider_adapter(
+            "openai",
+            {"oauth_token": "token-123", "account_id": "acct-123", "credential_type": "codex_token"},
+        )
+
+        self.assertEqual(resolved_provider, "openai")
+        self.assertEqual(adapter_key, "openai")
+        self.assertIsInstance(adapter, provider_profiles.OpenAIAdapter)
+
+    def test_resolve_provider_adapter_uses_codex_transport_when_explicitly_selected(self):
+        resolved_provider, adapter_key, adapter = provider_profiles.resolve_provider_adapter(
+            "openai-codex",
+            {"oauth_token": "token-123", "account_id": "acct-123", "credential_type": "codex_token"},
+        )
+
+        self.assertEqual(resolved_provider, "openai-codex")
+        self.assertEqual(adapter_key, "openai-codex")
+        self.assertIsInstance(adapter, provider_profiles.OpenAICodexAdapter)
+
     @patch("server_modules.provider_profiles.http_json_request")
     def test_openai_oauth_token_validate_uses_standard_api_probe(self, http_json_request_mock):
         http_json_request_mock.return_value = {
@@ -73,6 +109,22 @@ class ProviderValidationMessageTests(unittest.TestCase):
         self.assertEqual(result["status"], 429)
         self.assertFalse(result["ok"])
         self.assertIn("Rate limit exceeded", result["message"])
+
+    @patch("server_modules.provider_profiles._load_openai_codex_transport")
+    def test_openai_codex_generate_uses_codex_transport(self, load_transport_mock):
+        worker_llm = MagicMock()
+        worker_llm.openai_codex_backend_text.return_value = ("READY", {"prompt_tokens": 1}, "gpt-5.4", "")
+        load_transport_mock.return_value = worker_llm
+
+        result = provider_profiles.OpenAICodexAdapter().generate(
+            "system",
+            "user",
+            "gpt-5.4",
+            {"oauth_token": "token-123", "account_id": "acct-123", "credential_type": "codex_token"},
+        )
+
+        self.assertEqual(result, "READY")
+        worker_llm.openai_codex_backend_text.assert_called_once()
 
 
 class CredentialVaultFlowTests(unittest.IsolatedAsyncioTestCase):

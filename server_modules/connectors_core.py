@@ -1,6 +1,7 @@
 from server_modules import runtime_config as config
 from server_modules import shared as shared
 from server_modules import runtime_common as common
+from server_modules import provider_profiles as provider_profiles_service
 from server_modules.model_router import list_model_aliases
 
 globals().update({key: value for key, value in vars(config).items() if not key.startswith("__")})
@@ -157,21 +158,16 @@ async def delete_provider_profile(profile_id: str):
 
 async def provider_profiles_health(workspace_id: Optional[str] = None):
     requested_ws = _normalize_workspace_id(workspace_id) or "default"
-    with PROFILES_LOCK:
-        profiles = [dict(item) for item in PROVIDER_PROFILES.values() if isinstance(item, dict)]
-    summary = {"healthy": 0, "cooldown": 0, "disabled": 0, "total": 0}
-    items: List[Dict[str, Any]] = []
-    for profile in profiles:
-        if str(profile.get("workspace_id") or "default").strip() != requested_ws:
-            continue
-        item = _serialize_profile(profile)
-        health = str(item.get("health") or "disabled")
-        if health not in summary:
-            health = "disabled"
-        summary[health] += 1
-        summary["total"] += 1
-        items.append(item)
-    return {"summary": summary, "items": items}
+    projection = provider_profiles_service.build_provider_runtime_truth(requested_ws)
+    return {
+        "workspace_id": projection.get("workspace_id"),
+        "summary": projection.get("summary"),
+        "items": projection.get("items"),
+        "providers": projection.get("providers"),
+        "providers_by_id": projection.get("providers_by_id"),
+        "openai_profile_ready": projection.get("openai_profile_ready"),
+        "codex_profile_ready": projection.get("codex_profile_ready"),
+    }
 
 async def get_tool_contracts():
     items: List[Dict[str, Any]] = []
@@ -231,21 +227,14 @@ async def evaluate_tools_policy(body: ToolPolicyEvaluateRequest):
         "tool_policy": tool_policy_snapshot(metadata),
     }
 
-async def list_providers():
-    providers = []
-    for provider_id, info in PROVIDER_CATALOG.items():
-        if bool(info.get("hidden")):
-            continue
-        providers.append({
-            "id": provider_id,
-            "label": info.get("label", provider_id),
-            "auth": info.get("auth", []),
-            "auth_modes": info.get("auth_modes", []),
-            "default_auth_mode": info.get("default_auth_mode"),
-            "default_model": info.get("default_model"),
-            "note": info.get("note"),
-        })
-    return {"providers": providers}
+async def list_providers(workspace_id: Optional[str] = None):
+    requested_ws = _normalize_workspace_id(workspace_id) or "default"
+    projection = provider_profiles_service.build_provider_runtime_truth(requested_ws)
+    return {
+        "workspace_id": projection.get("workspace_id"),
+        "summary": projection.get("summary"),
+        "providers": projection.get("providers"),
+    }
 
 async def get_anthropic_local_cli_status():
     if not shutil.which("claude"):

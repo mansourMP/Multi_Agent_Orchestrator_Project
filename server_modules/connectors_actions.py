@@ -1,13 +1,18 @@
+from typing import Any, Dict, List, Optional
+
 from server_modules import runtime_config as config
+from server_modules import secrets_broker, tool_broker
 from server_modules import shared as shared
 from server_modules import runtime_common as common
 from server_modules.connectors.github_connector import (
     parse_inbound_event as github_parse_inbound_event,
+    request_signature_header as github_request_signature_header,
     verify_request_signature as github_verify_request_signature,
 )
 from server_modules.connectors.discord_connector import (
     dispatch_inbound_event as discord_dispatch_inbound_event,
     event_matches_connector as discord_event_matches_connector,
+    interaction_signature_headers as discord_interaction_signature_headers,
     parse_inbound_event as discord_parse_inbound_event,
     verify_interaction_signature as discord_verify_interaction_signature,
 )
@@ -27,13 +32,421 @@ globals().update({key: value for key, value in vars(config).items() if not key.s
 globals().update({key: value for key, value in vars(shared).items() if not key.startswith("__")})
 globals().update({key: value for key, value in vars(common).items() if not key.startswith("__")})
 
+
+CONNECTOR_CLASS_API = "api_connector"
+CONNECTOR_CLASS_BROWSER = "browser_connector"
+CONNECTOR_CLASS_MEDIA = "media_generation_connector"
+SUPPORTED_CONNECTOR_CLASSES = {
+    CONNECTOR_CLASS_API,
+    CONNECTOR_CLASS_BROWSER,
+    CONNECTOR_CLASS_MEDIA,
+}
+EXECUTION_PATH_HUMAN_ADMIN_ROUTE = "human_admin_route"
+EXECUTION_PATH_BROKERED_RUNTIME = "brokered_runtime"
+EXECUTION_PATH_PUBLIC_WEBHOOK = "public_webhook"
+SUPPORTED_CONNECTOR_EXECUTION_PATHS = {
+    EXECUTION_PATH_HUMAN_ADMIN_ROUTE,
+    EXECUTION_PATH_BROKERED_RUNTIME,
+    EXECUTION_PATH_PUBLIC_WEBHOOK,
+}
+CONNECTOR_SURFACE_DEEP_APP = "deep_application_connector"
+CONNECTOR_SURFACE_CHANNEL_SHELL = "channel_shell"
+
+_CONNECTOR_CLASS_DEFAULTS: Dict[str, Dict[str, Any]] = {
+    CONNECTOR_CLASS_API: {
+        "capability_patterns": [
+            "list_records",
+            "read_record",
+            "search_records",
+            "create_record",
+            "update_record",
+            "delete_record",
+            "send_message",
+            "sync_webhook_ingress",
+        ],
+        "allowed_secret_fields": ["access_token"],
+        "fallback_connectors": [CONNECTOR_CLASS_BROWSER],
+    },
+    CONNECTOR_CLASS_BROWSER: {
+        "capability_patterns": [
+            "navigate_surface",
+            "interactive_auth",
+            "scrape_page",
+            "form_fill",
+            "upload_file",
+            "interactive_review",
+        ],
+        "allowed_secret_fields": [],
+        "fallback_connectors": [],
+    },
+    CONNECTOR_CLASS_MEDIA: {
+        "capability_patterns": [
+            "generate_image",
+            "edit_image",
+            "generate_video",
+            "render_asset",
+            "upscale_asset",
+            "variation_asset",
+        ],
+        "allowed_secret_fields": ["access_token", "api_key"],
+        "fallback_connectors": [],
+    },
+}
+_CONNECTOR_CONTRACT_OVERRIDES: Dict[str, Dict[str, Any]] = {
+    "google_workspace": {
+        "connector_class": CONNECTOR_CLASS_API,
+        "surface_role": CONNECTOR_SURFACE_DEEP_APP,
+        "preferred_execution": CONNECTOR_CLASS_API,
+        "capability_patterns": ["browse_drive", "create_document", "create_spreadsheet"],
+        "allowed_secret_fields": ["access_token"],
+        "actions": {
+            "browse_drive": {"action_class": "read", "approval_required": False},
+            "create_document": {"action_class": "write", "approval_required": True},
+            "create_spreadsheet": {"action_class": "write", "approval_required": True},
+        },
+    },
+    "microsoft_365": {
+        "connector_class": CONNECTOR_CLASS_API,
+        "surface_role": CONNECTOR_SURFACE_DEEP_APP,
+        "preferred_execution": CONNECTOR_CLASS_API,
+        "capability_patterns": ["browse_drive", "read_mail", "create_calendar_event"],
+        "allowed_secret_fields": ["access_token"],
+        "actions": {
+            "browse_drive": {"action_class": "read", "approval_required": False},
+        },
+    },
+    "github": {
+        "connector_class": CONNECTOR_CLASS_API,
+        "surface_role": CONNECTOR_SURFACE_DEEP_APP,
+        "preferred_execution": CONNECTOR_CLASS_API,
+        "capability_patterns": ["read_repo", "create_issue", "create_pr", "dispatch_webhook"],
+        "allowed_secret_fields": ["personal_access_token", "app_id", "installation_id", "private_key_pem"],
+    },
+    "notion": {
+        "connector_class": CONNECTOR_CLASS_API,
+        "surface_role": CONNECTOR_SURFACE_DEEP_APP,
+        "preferred_execution": CONNECTOR_CLASS_API,
+        "capability_patterns": ["read_page", "search_workspace", "create_page", "update_page"],
+        "allowed_secret_fields": ["integration_token", "access_token"],
+    },
+    "linear": {
+        "connector_class": CONNECTOR_CLASS_API,
+        "surface_role": CONNECTOR_SURFACE_DEEP_APP,
+        "preferred_execution": CONNECTOR_CLASS_API,
+        "capability_patterns": ["read_issue", "search_issue", "create_issue", "update_issue"],
+        "allowed_secret_fields": ["api_key", "access_token"],
+    },
+    "s3": {
+        "connector_class": CONNECTOR_CLASS_API,
+        "surface_role": CONNECTOR_SURFACE_DEEP_APP,
+        "preferred_execution": CONNECTOR_CLASS_API,
+        "capability_patterns": ["list_bucket", "read_object", "upload_object", "delete_object"],
+        "allowed_secret_fields": ["aws_access_key_id", "aws_secret_access_key", "region"],
+    },
+    "dropbox": {
+        "connector_class": CONNECTOR_CLASS_API,
+        "surface_role": CONNECTOR_SURFACE_DEEP_APP,
+        "preferred_execution": CONNECTOR_CLASS_API,
+        "capability_patterns": ["list_folder", "read_file", "upload_file", "delete_file"],
+        "allowed_secret_fields": ["access_token"],
+    },
+    "smtp": {
+        "connector_class": CONNECTOR_CLASS_API,
+        "surface_role": CONNECTOR_SURFACE_DEEP_APP,
+        "preferred_execution": CONNECTOR_CLASS_API,
+        "capability_patterns": ["draft_email", "send_email"],
+        "allowed_secret_fields": ["host", "port", "username", "password", "use_tls"],
+    },
+    "telegram_bot": {
+        "connector_class": CONNECTOR_CLASS_API,
+        "surface_role": CONNECTOR_SURFACE_CHANNEL_SHELL,
+        "preferred_execution": CONNECTOR_CLASS_API,
+        "capability_patterns": ["receive_channel_message", "send_channel_message", "sync_channel_state"],
+        "allowed_secret_fields": ["bot_token", "chat_id"],
+    },
+    "whatsapp_twilio": {
+        "connector_class": CONNECTOR_CLASS_API,
+        "surface_role": CONNECTOR_SURFACE_CHANNEL_SHELL,
+        "preferred_execution": CONNECTOR_CLASS_API,
+        "capability_patterns": ["receive_channel_message", "send_channel_message", "sync_channel_state"],
+        "allowed_secret_fields": ["account_sid", "auth_token", "from_number", "to_number"],
+    },
+    "slack": {
+        "connector_class": CONNECTOR_CLASS_API,
+        "surface_role": CONNECTOR_SURFACE_CHANNEL_SHELL,
+        "preferred_execution": CONNECTOR_CLASS_API,
+        "capability_patterns": ["receive_channel_message", "send_channel_message", "sync_channel_state"],
+        "allowed_secret_fields": ["bot_token", "user_token", "team_id", "team_name"],
+    },
+    "discord_bot": {
+        "connector_class": CONNECTOR_CLASS_API,
+        "surface_role": CONNECTOR_SURFACE_CHANNEL_SHELL,
+        "preferred_execution": CONNECTOR_CLASS_API,
+        "capability_patterns": ["receive_channel_message", "send_channel_message", "sync_channel_state"],
+        "allowed_secret_fields": ["bot_token", "channel_id", "guild_id"],
+    },
+    "browser_automation": {
+        "connector_class": CONNECTOR_CLASS_BROWSER,
+        "surface_role": CONNECTOR_SURFACE_DEEP_APP,
+        "preferred_execution": CONNECTOR_CLASS_BROWSER,
+        "capability_patterns": ["navigate_surface", "interactive_auth", "scrape_page", "form_fill", "interactive_review"],
+    },
+    "remote_browser": {
+        "connector_class": CONNECTOR_CLASS_BROWSER,
+        "surface_role": CONNECTOR_SURFACE_DEEP_APP,
+        "preferred_execution": CONNECTOR_CLASS_BROWSER,
+        "capability_patterns": ["navigate_surface", "interactive_auth", "scrape_page", "form_fill", "interactive_review"],
+    },
+    "openai_image": {
+        "connector_class": CONNECTOR_CLASS_MEDIA,
+        "surface_role": CONNECTOR_SURFACE_DEEP_APP,
+        "preferred_execution": CONNECTOR_CLASS_MEDIA,
+        "capability_patterns": ["generate_image", "edit_image", "variation_asset"],
+        "allowed_secret_fields": ["access_token", "api_key"],
+    },
+    "runway_video": {
+        "connector_class": CONNECTOR_CLASS_MEDIA,
+        "surface_role": CONNECTOR_SURFACE_DEEP_APP,
+        "preferred_execution": CONNECTOR_CLASS_MEDIA,
+        "capability_patterns": ["generate_video", "render_asset"],
+        "allowed_secret_fields": ["access_token", "api_key"],
+    },
+}
+
+
+def _normalize_connector_token(value: Any) -> str:
+    return str(value or "").strip().lower()
+
+
+def _normalize_connector_class(value: Any) -> str:
+    token = _normalize_connector_token(value)
+    if token not in SUPPORTED_CONNECTOR_CLASSES:
+        raise HTTPException(status_code=400, detail=f"Unsupported connector class '{value}'.")
+    return token
+
+
+def _ordered_unique_tokens(values: Any) -> List[str]:
+    if not isinstance(values, list):
+        return []
+    ordered: List[str] = []
+    seen: set[str] = set()
+    for item in values:
+        token = str(item or "").strip().lower()
+        if not token or token in seen:
+            continue
+        seen.add(token)
+        ordered.append(token)
+    return ordered
+
+
+def _default_connector_class_for_id(connector_id: str) -> str:
+    token = _normalize_connector_token(connector_id)
+    if token in {"browser_automation", "remote_browser"}:
+        return CONNECTOR_CLASS_BROWSER
+    if token in {"openai_image", "openai_video", "replicate_image", "runway_video", "veo_video"}:
+        return CONNECTOR_CLASS_MEDIA
+    return CONNECTOR_CLASS_API
+
+
+def connector_contract(connector_id: str) -> Dict[str, Any]:
+    token = _normalize_connector_token(connector_id)
+    if not token:
+        raise HTTPException(status_code=400, detail="connector_id is required.")
+    catalog_entry = CONNECTOR_CATALOG.get(token, {})
+    override = dict(_CONNECTOR_CONTRACT_OVERRIDES.get(token, {}))
+    connector_class = _normalize_connector_class(override.get("connector_class") or _default_connector_class_for_id(token))
+    class_defaults = _CONNECTOR_CLASS_DEFAULTS[connector_class]
+    label = str(override.get("label") or catalog_entry.get("label") or token.replace("_", " ").title()).strip()
+    surface_role = str(
+        override.get("surface_role")
+        or (
+            CONNECTOR_SURFACE_CHANNEL_SHELL
+            if token in {"telegram_bot", "whatsapp_twilio", "slack", "discord_bot", "wechat_work"}
+            else CONNECTOR_SURFACE_DEEP_APP
+        )
+    ).strip() or CONNECTOR_SURFACE_DEEP_APP
+    preferred_execution = _normalize_connector_class(override.get("preferred_execution") or connector_class)
+    fallback_connectors = _ordered_unique_tokens(list(class_defaults.get("fallback_connectors") or []) + list(override.get("fallback_connectors") or []))
+    capability_patterns = _ordered_unique_tokens(list(class_defaults.get("capability_patterns") or []) + list(override.get("capability_patterns") or []))
+    allowed_secret_fields = _ordered_unique_tokens(
+        list(override.get("allowed_secret_fields") or [])
+        or list(catalog_entry.get("auth") or [])
+        or list(class_defaults.get("allowed_secret_fields") or [])
+    )
+    action_contracts = {
+        str(action_id).strip().lower(): dict(payload)
+        for action_id, payload in dict(override.get("actions") or {}).items()
+        if str(action_id).strip()
+    }
+    return {
+        "connector_id": token,
+        "label": label,
+        "connector_class": connector_class,
+        "surface_role": surface_role,
+        "preferred_execution": preferred_execution,
+        "fallback_connectors": fallback_connectors,
+        "capability_patterns": capability_patterns,
+        "allowed_secret_fields": allowed_secret_fields,
+        "requires_brokered_runtime_for_agent_execution": True,
+        "allows_human_admin_route": True,
+        "actions": action_contracts,
+    }
+
+
+def connector_action_contract(connector_id: str, action_id: str) -> Dict[str, Any]:
+    contract = connector_contract(connector_id)
+    action_token = _normalize_connector_token(action_id).replace("-", "_")
+    explicit = dict(contract.get("actions", {}).get(action_token) or {})
+    if not explicit:
+        if action_token.startswith(("browse", "list", "get", "read", "search", "fetch")):
+            explicit = {"action_class": "read", "approval_required": False}
+        elif contract["connector_class"] == CONNECTOR_CLASS_BROWSER and action_token.startswith(
+            ("navigate", "authenticate", "scrape", "form", "interactive", "upload", "click", "type")
+        ):
+            explicit = {"action_class": "execute", "approval_required": True}
+        elif contract["connector_class"] == CONNECTOR_CLASS_MEDIA:
+            explicit = {"action_class": "execute", "approval_required": True}
+        else:
+            explicit = {"action_class": "write", "approval_required": True}
+    action_class = str(explicit.get("action_class") or "read").strip().lower() or "read"
+    capability_pattern = str(explicit.get("capability_pattern") or action_token).strip().lower() or action_token
+    return {
+        "connector_id": contract["connector_id"],
+        "connector_class": contract["connector_class"],
+        "surface_role": contract["surface_role"],
+        "action_id": action_token,
+        "action_class": action_class,
+        "approval_required": bool(explicit.get("approval_required", action_class != "read")),
+        "capability_pattern": capability_pattern,
+    }
+
+
+def _normalized_execution_context(execution_context: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    payload = dict(execution_context or {})
+    execution_path = _normalize_connector_token(payload.get("execution_path"))
+    if execution_path not in SUPPORTED_CONNECTOR_EXECUTION_PATHS:
+        execution_path = ""
+    payload["execution_path"] = execution_path or None
+    return payload
+
+
+def _authorize_connector_execution(
+    *,
+    connector_id: str,
+    action_id: str,
+    workspace_id: Optional[str],
+    execution_context: Optional[Dict[str, Any]],
+) -> Dict[str, Any]:
+    contract = connector_contract(connector_id)
+    action = connector_action_contract(connector_id, action_id)
+    context = _normalized_execution_context(execution_context)
+    execution_path = str(context.get("execution_path") or "").strip().lower()
+    if execution_path == EXECUTION_PATH_HUMAN_ADMIN_ROUTE:
+        return {
+            "contract": contract,
+            "action": action,
+            "execution_path": execution_path,
+            "broker_claims": None,
+            "context": context,
+        }
+    if execution_path == EXECUTION_PATH_BROKERED_RUNTIME:
+        required = {
+            "capability_token": str(context.get("capability_token") or "").strip(),
+            "manifest_id": str(context.get("manifest_id") or "").strip(),
+            "tenant_id": str(context.get("tenant_id") or "").strip(),
+            "workspace_id": str(context.get("workspace_id") or workspace_id or "").strip(),
+            "runtime_mode": str(context.get("runtime_mode") or "").strip(),
+        }
+        missing = [key for key, value in required.items() if not value]
+        if missing:
+            raise HTTPException(
+                status_code=400,
+                detail=f"brokered runtime connector execution is missing required context: {', '.join(missing)}.",
+            )
+        try:
+            claims = tool_broker.authorize_connector_action(
+                capability_token=required["capability_token"],
+                manifest_id=required["manifest_id"],
+                tenant_id=required["tenant_id"],
+                workspace_id=required["workspace_id"],
+                runtime_mode=required["runtime_mode"],
+                connector_scope=contract["connector_id"],
+                connector_class=contract["connector_class"],
+                action_class=action["action_class"],
+                approval_required=action["approval_required"],
+            )
+        except tool_broker.ToolExecutionDeniedError as exc:
+            raise HTTPException(status_code=403, detail=exc.detail) from exc
+        return {
+            "contract": contract,
+            "action": action,
+            "execution_path": execution_path,
+            "broker_claims": claims,
+            "context": context,
+        }
+    raise HTTPException(
+        status_code=403,
+        detail="Direct connector execution is not allowed. Use an authenticated owner route or a brokered runtime path.",
+    )
+
+
+def _resolve_connector_secret_for_execution(
+    *,
+    credential_id: str,
+    connector_id: str,
+    action_id: str,
+    workspace_id: Optional[str],
+    execution_context: Optional[Dict[str, Any]],
+) -> tuple[Dict[str, Any], Dict[str, Any]]:
+    authorization = _authorize_connector_execution(
+        connector_id=connector_id,
+        action_id=action_id,
+        workspace_id=workspace_id,
+        execution_context=execution_context,
+    )
+    contract = authorization["contract"]
+    context = authorization["context"]
+    resolved_workspace_id = str(context.get("workspace_id") or workspace_id or "").strip() or workspace_id
+    actor_type = str(context.get("actor_type") or ("user" if authorization["execution_path"] == EXECUTION_PATH_HUMAN_ADMIN_ROUTE else "runtime")).strip().lower()
+    actor_id = str(context.get("actor_id") or "").strip() or None
+    try:
+        secret = secrets_broker.resolve_connector_secret(
+            load_vault,
+            _openssl_decrypt,
+            tenant_id=str(context.get("tenant_id") or "").strip() or None,
+            workspace_id=resolved_workspace_id,
+            credential_id=credential_id,
+            connector_id=contract["connector_id"],
+            connector_class=contract["connector_class"],
+            action_id=action_id,
+            tool_name=str(context.get("tool_name") or f"{contract['connector_id']}.{action_id}").strip().lower(),
+            run_id=str(context.get("run_id") or "").strip() or None,
+            runtime_mode=str(context.get("runtime_mode") or "").strip() or None,
+            allowed_fields=list(contract.get("allowed_secret_fields") or []),
+            actor_type=actor_type,
+            actor_id=actor_id,
+            purpose=str(context.get("purpose") or "connector_action_execution").strip().lower() or "connector_action_execution",
+        )
+    except secrets_broker.SecretAccessDeniedError as exc:
+        raise HTTPException(status_code=403, detail=exc.detail) from exc
+    return authorization, secret
+
 async def browse_microsoft_connector_drive(
     connector_id: str,
     workspace_id: Optional[str] = None,
     path: Optional[str] = None,
+    execution_context: Optional[Dict[str, Any]] = None,
 ):
     try:
-        secret = resolve_vault_credential(connector_id, workspace_id)
+        _, secret = _resolve_connector_secret_for_execution(
+            credential_id=connector_id,
+            connector_id="microsoft_365",
+            action_id="browse_drive",
+            workspace_id=workspace_id,
+            execution_context=execution_context,
+        )
+    except HTTPException:
+        raise
     except Exception as exc:
         raise HTTPException(status_code=404, detail=str(exc))
 
@@ -59,9 +472,18 @@ async def browse_google_connector_drive(
     connector_id: str,
     workspace_id: Optional[str] = None,
     path: Optional[str] = None,
+    execution_context: Optional[Dict[str, Any]] = None,
 ):
     try:
-        secret = resolve_vault_credential(connector_id, workspace_id)
+        _, secret = _resolve_connector_secret_for_execution(
+            credential_id=connector_id,
+            connector_id="google_workspace",
+            action_id="browse_drive",
+            workspace_id=workspace_id,
+            execution_context=execution_context,
+        )
+    except HTTPException:
+        raise
     except Exception as exc:
         raise HTTPException(status_code=404, detail=str(exc))
 
@@ -86,9 +508,18 @@ async def create_google_connector_document(
     connector_id: str,
     body: Optional[ConnectorDocumentCreateRequest] = None,
     workspace_id: Optional[str] = None,
+    execution_context: Optional[Dict[str, Any]] = None,
 ):
     try:
-        secret = resolve_vault_credential(connector_id, workspace_id)
+        _, secret = _resolve_connector_secret_for_execution(
+            credential_id=connector_id,
+            connector_id="google_workspace",
+            action_id="create_document",
+            workspace_id=workspace_id,
+            execution_context=execution_context,
+        )
+    except HTTPException:
+        raise
     except Exception as exc:
         raise HTTPException(status_code=404, detail=str(exc))
 
@@ -117,9 +548,18 @@ async def create_google_connector_spreadsheet(
     connector_id: str,
     body: Optional[ConnectorSpreadsheetCreateRequest] = None,
     workspace_id: Optional[str] = None,
+    execution_context: Optional[Dict[str, Any]] = None,
 ):
     try:
-        secret = resolve_vault_credential(connector_id, workspace_id)
+        _, secret = _resolve_connector_secret_for_execution(
+            credential_id=connector_id,
+            connector_id="google_workspace",
+            action_id="create_spreadsheet",
+            workspace_id=workspace_id,
+            execution_context=execution_context,
+        )
+    except HTTPException:
+        raise
     except Exception as exc:
         raise HTTPException(status_code=404, detail=str(exc))
 
@@ -148,6 +588,9 @@ async def create_google_connector_spreadsheet(
 
 async def whatsapp_twilio_webhook(request: Request):
     return await handle_whatsapp_twilio_webhook(request)
+
+async def telegram_webhook(request: Request, connector_id: str):
+    return await handle_telegram_webhook(request, connector_id)
 
 async def telegram_autopilot_status():
     return await handle_telegram_autopilot_status()
@@ -385,13 +828,32 @@ def _discord_candidate_public_keys(rows: List[Dict[str, Any]]) -> List[str]:
     return candidates
 
 
+def _github_candidate_webhook_secrets(rows: List[Dict[str, Any]]) -> List[str]:
+    secrets: List[str] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        row_id = str(row.get("id") or "").strip()
+        if not row_id:
+            continue
+        try:
+            credentials = resolve_vault_credential(row_id, _normalize_workspace_id(row.get("workspace_id")))
+        except Exception:
+            continue
+        webhook_secret = str(credentials.get("webhook_secret") or "").strip()
+        if webhook_secret and webhook_secret not in secrets:
+            secrets.append(webhook_secret)
+    return secrets
+
+
 async def discord_webhook(request: Request):
     raw_body = await request.body()
     headers = dict(request.headers.items())
     try:
-        payload = json.loads(raw_body.decode("utf-8")) if raw_body else {}
-        if not isinstance(payload, dict):
-            payload = {}
+        verification_headers = discord_interaction_signature_headers(headers)
+        if not verification_headers["signature"] or not verification_headers["timestamp"]:
+            raise HTTPException(status_code=401, detail="Discord request signature headers are required.")
+
         vault = load_vault()
         items = vault.get("credentials", [])
         if not isinstance(items, list):
@@ -401,15 +863,20 @@ async def discord_webhook(request: Request):
             for item in items
             if isinstance(item, dict) and str(item.get("provider") or "").strip().lower() == "discord_bot"
         ]
-        signature = str(headers.get("x-signature-ed25519") or headers.get("X-Signature-Ed25519") or "").strip()
-        if signature:
-            public_keys = _discord_candidate_public_keys(discord_rows)
-            if not public_keys:
-                raise HTTPException(status_code=400, detail="Discord interaction public key is not configured.")
-            if not any(discord_verify_interaction_signature(headers, raw_body, key) for key in public_keys):
-                raise HTTPException(status_code=401, detail="Discord request signature is invalid.")
+        public_keys = _discord_candidate_public_keys(discord_rows)
+        if not public_keys:
+            raise HTTPException(status_code=503, detail="Discord interaction public key is not configured.")
+        if not any(discord_verify_interaction_signature(headers, raw_body, key) for key in public_keys):
+            raise HTTPException(status_code=401, detail="Discord request signature is invalid.")
 
-        parsed = discord_parse_inbound_event(payload, event_type=str(headers.get("x-discord-event") or "").strip())
+        payload = json.loads(raw_body.decode("utf-8")) if raw_body else {}
+        if not isinstance(payload, dict):
+            payload = {}
+
+        parsed = discord_parse_inbound_event(
+            payload,
+            event_type=str(headers.get("x-discord-event") or headers.get("X-Discord-Event") or "").strip(),
+        )
         if parsed.get("kind") == "ping":
             return {"type": 1}
 
@@ -485,9 +952,6 @@ async def github_events_webhook(request: Request):
     raw_body = await request.body()
     headers = dict(request.headers.items())
     try:
-        payload = json.loads(raw_body.decode("utf-8")) if raw_body else {}
-        if not isinstance(payload, dict):
-            payload = {}
         vault = load_vault()
         items = vault.get("credentials", [])
         if not isinstance(items, list):
@@ -497,21 +961,19 @@ async def github_events_webhook(request: Request):
             for item in items
             if isinstance(item, dict) and str(item.get("provider") or "").strip().lower() == "github"
         ]
-        secrets: List[str] = []
-        for item in github_rows:
-            item_id = str(item.get("id") or "").strip()
-            if not item_id:
-                continue
-            try:
-                secret = resolve_vault_credential(item_id, _normalize_workspace_id(item.get("workspace_id")))
-            except Exception:
-                continue
-            webhook_secret = str(secret.get("webhook_secret") or "").strip()
-            if webhook_secret:
-                secrets.append(webhook_secret)
-        if secrets and not any(github_verify_request_signature(headers, raw_body, secret) for secret in secrets):
+        secrets = _github_candidate_webhook_secrets(github_rows)
+        if not secrets:
+            raise HTTPException(status_code=503, detail="GitHub webhook is not configured: no webhook secret is available.")
+
+        if not github_request_signature_header(headers):
+            raise HTTPException(status_code=401, detail="GitHub webhook signature header is required.")
+
+        if not any(github_verify_request_signature(headers, raw_body, secret) for secret in secrets):
             raise HTTPException(status_code=401, detail="GitHub webhook signature is invalid.")
 
+        payload = json.loads(raw_body.decode("utf-8")) if raw_body else {}
+        if not isinstance(payload, dict):
+            payload = {}
         parsed = github_parse_inbound_event(
             payload,
             event_type=str(headers.get("x-github-event") or headers.get("X-GitHub-Event") or "").strip(),

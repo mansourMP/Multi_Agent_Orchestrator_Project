@@ -107,6 +107,27 @@ class SecretsBrokerTests(unittest.TestCase):
         self.assertTrue(audit_mock.called)
         self.assertEqual(audit_mock.await_args.kwargs["status"], "denied")
 
+    def test_resolve_connector_secret_audits_connector_class_metadata(self):
+        with patch(
+            "server_modules.secrets_broker.control_plane_repository.append_agent_secret_access_event",
+            new=AsyncMock(return_value={"id": "sevt-class"}),
+        ) as audit_mock:
+            secret = secrets_broker.resolve_connector_secret(
+                _load_vault,
+                lambda encrypted: encrypted,
+                tenant_id="tenant-1",
+                workspace_id="workspace-1",
+                credential_id="cred-telegram",
+                connector_id="telegram_bot",
+                connector_class="api_connector",
+                tool_name="send_message",
+                action_id="send_message",
+                allowed_fields=["chat_id"],
+            )
+
+        self.assertEqual(secret["chat_id"], "chat-123")
+        self.assertEqual(audit_mock.await_args.kwargs["metadata"]["connector_class"], "api_connector")
+
     def test_resolve_provider_secret_supports_default_provider_resolution(self):
         with patch(
             "server_modules.secrets_broker.control_plane_repository.append_agent_secret_access_event",

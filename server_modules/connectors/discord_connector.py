@@ -587,9 +587,18 @@ def add_reaction(
     }
 
 
+def interaction_signature_headers(headers: Dict[str, Any]) -> Dict[str, str]:
+    raw_headers = headers if isinstance(headers, dict) else dict(headers or {})
+    return {
+        "signature": str(raw_headers.get("x-signature-ed25519") or raw_headers.get("X-Signature-Ed25519") or "").strip(),
+        "timestamp": str(raw_headers.get("x-signature-timestamp") or raw_headers.get("X-Signature-Timestamp") or "").strip(),
+    }
+
+
 def verify_interaction_signature(headers: Dict[str, Any], raw_body: bytes, public_key: str) -> bool:
-    signature = str(headers.get("x-signature-ed25519") or headers.get("X-Signature-Ed25519") or "").strip()
-    timestamp = str(headers.get("x-signature-timestamp") or headers.get("X-Signature-Timestamp") or "").strip()
+    verification_headers = interaction_signature_headers(headers)
+    signature = verification_headers["signature"]
+    timestamp = verification_headers["timestamp"]
     normalized_key = str(public_key or "").strip()
     if not signature or not timestamp or not normalized_key:
         return False
@@ -599,7 +608,7 @@ def verify_interaction_signature(headers: Dict[str, Any], raw_body: bytes, publi
         verify_key = VerifyKey(bytes.fromhex(normalized_key))
         verify_key.verify(timestamp.encode("utf-8") + bytes(raw_body), bytes.fromhex(signature))
         return True
-    except BadSignatureError:
+    except (BadSignatureError, TypeError, ValueError):
         return False
 
 
@@ -798,12 +807,16 @@ def dispatch_inbound_event(
     create_run_fn: Optional[DiscordCreateRun] = None,
     run_start_request_class: Optional[DiscordRunStartRequestFactory] = None,
     start_run_request: Optional[DiscordStartRunRequest] = None,
+    resolve_workspace_scope_fn: Optional[Callable[[Dict[str, Any]], str]] = None,
 ) -> Dict[str, Any]:
     from server_modules.agent_turn import bind_agent_turn_metadata, build_discord_turn_request
     from server_modules.run_service import build_run_start_request_from_turn
 
     metadata = connector_entry.get("metadata") if isinstance(connector_entry.get("metadata"), dict) else {}
-    workspace_id = str(connector_entry.get("workspace_id") or "default").strip() or "default"
+    if callable(resolve_workspace_scope_fn):
+        workspace_id = str(resolve_workspace_scope_fn(connector_entry) or "").strip() or "default"
+    else:
+        workspace_id = str(connector_entry.get("workspace_id") or "default").strip() or "default"
     trace_id = (
         str(parsed.get("interaction_id") or parsed.get("message_id") or "").strip()
         or uuid.uuid4().hex

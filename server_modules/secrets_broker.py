@@ -25,6 +25,7 @@ from server_modules.vault_helpers import (
 _TOKEN_VERSION = "empyralis.secret-grant.v1"
 DEFAULT_SECRET_GRANT_TTL_SECONDS = 30
 _SUPPORTED_SECRET_KINDS = {"connector_credential", "provider_credential"}
+_SUPPORTED_CONNECTOR_CLASSES = {"api_connector", "browser_connector", "media_generation_connector"}
 
 
 @dataclass(frozen=True)
@@ -67,6 +68,15 @@ def _normalize_secret_kind(secret_kind: Any) -> str:
     return token
 
 
+def _normalize_connector_class(connector_class: Any) -> Optional[str]:
+    token = _normalize_token(connector_class)
+    if not token:
+        return None
+    if token not in _SUPPORTED_CONNECTOR_CLASSES:
+        raise SecretAccessDeniedError("invalid_connector_class", f"Unsupported connector class '{connector_class}'.")
+    return token
+
+
 def _signing_secret() -> bytes:
     return str(
         os.getenv("EMPYRALIS_SECRETS_BROKER_SECRET")
@@ -98,6 +108,7 @@ def issue_connector_secret_grant(
     workspace_id: Optional[str],
     credential_id: str,
     connector_id: Optional[str] = None,
+    connector_class: Optional[str] = None,
     action_id: Optional[str] = None,
     tool_name: Optional[str] = None,
     run_id: Optional[str] = None,
@@ -119,6 +130,7 @@ def issue_connector_secret_grant(
         "credential_id": str(credential_id or "").strip(),
         "provider_id": None,
         "connector_id": str(connector_id or "").strip().lower() or None,
+        "connector_class": _normalize_connector_class(connector_class),
         "action_id": str(action_id or "").strip().lower() or None,
         "tool_name": str(tool_name or "").strip().lower() or None,
         "run_id": str(run_id or "").strip() or None,
@@ -269,12 +281,15 @@ def _append_secret_access_audit(claims: Dict[str, Any], *, status: str, denial_c
             credential_id=str(claims.get("credential_id") or "").strip() or None,
             provider_id=str(claims.get("provider_id") or "").strip().lower() or None,
             connector_id=str(claims.get("connector_id") or "").strip().lower() or None,
+            metadata={
+                **(metadata or {}),
+                "connector_class": str(claims.get("connector_class") or "").strip().lower() or None,
+            },
             action_id=str(claims.get("action_id") or "").strip().lower() or None,
             tool_name=str(claims.get("tool_name") or "").strip().lower() or None,
             run_id=str(claims.get("run_id") or "").strip() or None,
             actor=claims.get("actor") if isinstance(claims.get("actor"), dict) else {},
             allowed_fields=[str(item) for item in list(claims.get("allowed_fields") or [])],
-            metadata=metadata or {},
             status=status,
             denial_code=denial_code,
         )
@@ -312,6 +327,7 @@ def resolve_connector_secret(
     workspace_id: Optional[str],
     credential_id: str,
     connector_id: Optional[str] = None,
+    connector_class: Optional[str] = None,
     action_id: Optional[str] = None,
     tool_name: Optional[str] = None,
     run_id: Optional[str] = None,
@@ -327,6 +343,7 @@ def resolve_connector_secret(
         workspace_id=workspace_id,
         credential_id=credential_id,
         connector_id=connector_id,
+        connector_class=connector_class,
         action_id=action_id,
         tool_name=tool_name,
         run_id=run_id,

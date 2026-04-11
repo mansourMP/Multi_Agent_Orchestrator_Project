@@ -575,11 +575,16 @@ def list_commits(
     return [item for item in body[:safe_limit] if isinstance(item, dict)] if isinstance(body, list) else []
 
 
+def request_signature_header(headers: Dict[str, Any]) -> str:
+    raw_headers = headers if isinstance(headers, dict) else dict(headers or {})
+    return str(raw_headers.get("X-Hub-Signature-256") or raw_headers.get("x-hub-signature-256") or "").strip()
+
+
 def verify_request_signature(headers: Dict[str, Any], raw_body: bytes, secret: str) -> bool:
     normalized_secret = str(secret or "").strip()
+    signature = request_signature_header(headers)
     if not normalized_secret:
-        return True
-    signature = str(headers.get("X-Hub-Signature-256") or headers.get("x-hub-signature-256") or "").strip()
+        return False
     if not signature.startswith("sha256="):
         return False
     expected = "sha256=" + hmac.new(normalized_secret.encode("utf-8"), raw_body or b"", hashlib.sha256).hexdigest()

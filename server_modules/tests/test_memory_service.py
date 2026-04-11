@@ -36,6 +36,61 @@ class MemoryServiceTests(unittest.TestCase):
         self.assertIn("- preferred_editor: Neovim", snapshot.text)
         self.assertEqual(snapshot.as_payload()["workspace_id"], "default")
 
+    def test_publish_hybrid_summary_bridge_payload_persists_and_reports_last_safe_status(self) -> None:
+        record = memory_service.publish_hybrid_summary_bridge_payload(
+            "default",
+            payload_class="bounded_local_private_summaries",
+            summary="Local notes summarized into a cloud-safe snapshot.",
+            items=[
+                {
+                    "kind": "local_context",
+                    "label": "Notebook",
+                    "summary": "Two private notes were reduced into one safe summary.",
+                    "source_count": 2,
+                }
+            ],
+            memory_layer="local_private_memory",
+            source_runtime_mode="local_secure",
+            last_safe=True,
+        )
+
+        records = memory_service.list_hybrid_summary_bridge_payloads("default")
+        status = memory_service.hybrid_summary_bridge_status("default")
+
+        self.assertEqual(record["payload_class"], "bounded_local_private_summaries")
+        self.assertEqual(len(records), 1)
+        self.assertTrue(status["last_safe_summary_available"])
+        self.assertEqual(status["available_payload_classes"], ["bounded_local_private_summaries"])
+
+    def test_publish_hybrid_summary_bridge_payload_rejects_forbidden_shape(self) -> None:
+        with self.assertRaises(Exception) as error:
+            memory_service.publish_hybrid_summary_bridge_payload(
+                "default",
+                payload_class="artifact_summaries",
+                summary="Attempted unsafe publish.",
+                items=[
+                    {
+                        "label": "Artifact",
+                        "summary": "Unsafe raw artifact body.",
+                        "raw_content": "secret body",
+                    }
+                ],
+                source_runtime_mode="local_secure",
+            )
+
+        self.assertIn("raw-content fields", str(error.exception))
+
+    def test_publish_hybrid_summary_bridge_payload_rejects_disallowed_payload_class(self) -> None:
+        with self.assertRaises(Exception) as error:
+            memory_service.publish_hybrid_summary_bridge_payload(
+                "default",
+                payload_class="full_local_specialist_internals",
+                summary="Unsafe payload class.",
+                source_runtime_mode="local_secure",
+            )
+
+        self.assertIn("not allowed", str(error.exception))
+
     def test_query_memory_returns_matching_items_and_context_blocks(self) -> None:
         memory_service.save_memory("default", "timezone", "Asia/Shanghai")
         memory_service.save_memory("default", "favorite_drink", "tea")

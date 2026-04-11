@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any, Dict, List, Optional
 
 from server_modules import activity_ledger_service, runtime_attachment_service, unified_memory_service
+from server_modules import agent_registry_repository
 from server_modules.agent_specialist_repository import manifest_from_install_bundle
 
 
@@ -219,6 +220,19 @@ def _recent_artifacts_payload(timeline_payload: Dict[str, Any]) -> Dict[str, Any
     }
 
 
+def _specialist_mode_payload(install: Dict[str, Any]) -> Dict[str, Any]:
+    mode = agent_registry_repository.normalize_specialist_mode(
+        install.get("specialist_mode") or _dict(install.get("metadata")).get("specialist_mode"),
+        default=agent_registry_repository.DEFAULT_SPECIALIST_MODE,
+        strict=False,
+    ) or agent_registry_repository.DEFAULT_SPECIALIST_MODE
+    contract = agent_registry_repository.specialist_mode_contract(mode) or {}
+    return {
+        **contract,
+        "shared_board_access_posture": "not_modeled_yet",
+    }
+
+
 def _runtime_policy_payload(
     install: Dict[str, Any],
     *,
@@ -324,6 +338,7 @@ def _projection_summary(contract: Dict[str, Any]) -> Dict[str, Any]:
     identity = _dict(contract.get("identity"))
     runtime_policy = _dict(contract.get("runtime_policy"))
     memory_scope = _dict(contract.get("memory_scope"))
+    operating_mode = _dict(contract.get("operating_mode"))
     skill_scope = _dict(contract.get("skill_scope"))
     connector_scope = _dict(contract.get("connector_scope"))
     tool_scope = _dict(contract.get("tool_scope"))
@@ -333,6 +348,7 @@ def _projection_summary(contract: Dict[str, Any]) -> Dict[str, Any]:
         "install_id": _token(contract.get("install_id")),
         "label": _token(contract.get("label")),
         "service_kind": _token(contract.get("service_kind")) or "business_specialist",
+        "specialist_mode": _token(operating_mode.get("mode")),
         "identity": identity,
         "runtime_policy": {
             "runtime_mode": _token(runtime_policy.get("runtime_mode")),
@@ -345,6 +361,12 @@ def _projection_summary(contract: Dict[str, Any]) -> Dict[str, Any]:
             "enabled_skills": _list(skill_scope.get("enabled_skills")),
             "enabled_connectors": _list(connector_scope.get("enabled_connectors")),
             "enabled_tools": _list(tool_scope.get("enabled_tools")),
+        },
+        "mode_contract": {
+            "prompt_editable": bool(operating_mode.get("prompt_editable")),
+            "config_editable": bool(operating_mode.get("config_editable")),
+            "response_audience": _token(operating_mode.get("response_audience")),
+            "approval_behavior": _token(operating_mode.get("approval_behavior")),
         },
         "orchestration_channels": {
             "summary_item_count": int(_dict(orchestration.get("summary_channel")).get("item_count") or 0),
@@ -401,6 +423,7 @@ async def build_specialist_service_contract(
         "service_kind": "business_specialist",
         "install_id": install_id,
         "label": _token(payload.get("label")) or identity.get("name"),
+        "operating_mode": _specialist_mode_payload(payload),
         "identity": identity,
         "separation_contract": {
             "is_specialist_service": True,

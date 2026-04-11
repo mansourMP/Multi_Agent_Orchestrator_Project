@@ -49,6 +49,31 @@ class ToolBrokerTests(unittest.TestCase):
 
         self.assertEqual(raised.exception.code, "token_expired")
 
+    def test_issue_capability_token_carries_state_layer_policy_from_runtime_scope(self):
+        grant = tool_broker.issue_capability_token(
+            manifest=_manifest(),
+            tenant_id="tenant-1",
+            workspace_id="workspace-1",
+            runtime_mode="hosted_secure",
+            runtime_scope={
+                "driver": "sandbox_exec",
+                "workspace_kind": "ephemeral",
+                "state_layer_policy": {
+                    "cross_install_private_memory_allowed": False,
+                    "specialist_to_captain_private_access": False,
+                    "artifacts_history": {"cross_install_exchange_mode": "artifacts_only"},
+                },
+            },
+        )
+
+        constraints = grant.claims["runtime_constraints"]
+        self.assertFalse(constraints["state_layer_policy"]["cross_install_private_memory_allowed"])
+        self.assertFalse(constraints["state_layer_policy"]["specialist_to_captain_private_access"])
+        self.assertEqual(
+            constraints["state_layer_policy"]["artifacts_history"]["cross_install_exchange_mode"],
+            "artifacts_only",
+        )
+
     def test_authorize_connector_action_rejects_missing_scope(self):
         grant = tool_broker.issue_capability_token(
             manifest=_manifest(skills=["inventory-tool"], connectors=["inventory"]),
@@ -214,6 +239,40 @@ class ToolBrokerTests(unittest.TestCase):
             )
 
         self.assertEqual(raised.exception.code, "approval_required")
+
+    def test_authorize_connector_action_rejects_execute_for_api_connector_class(self):
+        master_manifest = AgentManifest(
+            manifest_id="manifest-sage-system",
+            identity=AgentManifestIdentity(
+                name="Sage",
+                role="Master Agent",
+                archetype="master_os",
+                summary="Coordinate the system.",
+            ),
+            connectors={"requested": ["google_workspace"], "bound": ["google_workspace"]},
+            policy={"approval_mode": "system"},
+        )
+        grant = tool_broker.issue_capability_token(
+            manifest=master_manifest,
+            tenant_id="tenant-1",
+            workspace_id="workspace-1",
+            runtime_mode="hosted_secure",
+            runtime_scope={"driver": "sandbox_exec", "workspace_kind": "ephemeral"},
+        )
+
+        with self.assertRaises(tool_broker.ToolExecutionDeniedError) as raised:
+            tool_broker.authorize_connector_action(
+                capability_token=grant.token,
+                manifest_id="manifest-sage-system",
+                tenant_id="tenant-1",
+                workspace_id="workspace-1",
+                runtime_mode="hosted_secure",
+                connector_scope="google_workspace",
+                connector_class="api_connector",
+                action_class="execute",
+            )
+
+        self.assertEqual(raised.exception.code, "connector_action_not_supported_for_class")
 
     def test_execute_skill_returns_egress_denied_when_outbound_host_is_not_allowed(self):
         async def _network_skill(**_kwargs):

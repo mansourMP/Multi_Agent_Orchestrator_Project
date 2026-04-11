@@ -7,8 +7,19 @@ class ConnectorsCoreTests(unittest.IsolatedAsyncioTestCase):
     async def test_list_providers_includes_openai_codex(self):
         result = await connectors_core.list_providers()
 
-        provider_ids = {item.get("id") for item in result.get("providers", [])}
+        providers = result.get("providers", [])
+        provider_ids = {item.get("id") for item in providers}
         self.assertIn("openai-codex", provider_ids)
+        self.assertNotIn("google_workspace", provider_ids)
+        openai_item = next(item for item in providers if item.get("id") == "openai")
+        self.assertEqual(openai_item.get("kind"), "provider")
+        self.assertIn(openai_item.get("state"), {"active", "configured", "setup_required", "unavailable", "degraded"})
+        self.assertEqual(openai_item.get("identity_owner"), "platform_account")
+        self.assertIn(
+            openai_item.get("connection_kind"),
+            {"workspace_provider_connection", "machine_local_capability", "runtime_environment"},
+        )
+        self.assertIn(openai_item.get("connection_scope"), {"workspace", "machine", "runtime"})
 
     async def test_list_connectors_includes_alias_entries(self):
         result = await connectors_core.list_connectors()

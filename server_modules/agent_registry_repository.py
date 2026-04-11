@@ -845,8 +845,10 @@ async def list_runtime_profiles(
     *,
     tenant_id: str,
     workspace_id: str,
+    seed_if_missing: bool = True,
 ) -> List[Dict[str, Any]]:
-    await ensure_workspace_agent_registry_seeded(tenant_id=tenant_id, workspace_id=workspace_id)
+    if bool(seed_if_missing):
+        await ensure_workspace_agent_registry_seeded(tenant_id=tenant_id, workspace_id=workspace_id)
     pool = await control_plane_repository.ensure_control_plane_schema()
     if pool is None:
         return []

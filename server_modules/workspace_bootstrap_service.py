@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import copy
+import json
 from typing import Any, Dict, List, Optional
 
 from fastapi import HTTPException
@@ -8,6 +10,9 @@ from server_modules import auth as auth_module
 from server_modules import control_plane_repository
 from server_modules import entitlements_service
 from server_modules import runtime_attachment_service
+
+_WORKSPACE_BOOTSTRAP_CACHE: Dict[str, Dict[str, Any]] = {}
+_WORKSPACE_BOOTSTRAP_CACHE_LIMIT = 128
 
 
 def _coerce_dict(value: Any) -> Dict[str, Any]:
@@ -61,6 +66,140 @@ def _runtime_target_kind(target_id: str) -> str:
     if target_id == "self_host_runtime":
         return "self_host_runtime"
     return "cloud_default"
+
+
+def _stable_json(value: Any) -> str:
+    return json.dumps(value, sort_keys=True, ensure_ascii=True, separators=(",", ":"), default=str)
+
+
+def _cache_store(cache: Dict[str, Dict[str, Any]], key: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+    if len(cache) >= _WORKSPACE_BOOTSTRAP_CACHE_LIMIT and key not in cache:
+        cache.clear()
+    cache[key] = copy.deepcopy(payload)
+    return copy.deepcopy(payload)
+
+
+def _workspace_record_version(workspace: Optional[Dict[str, Any]]) -> str:
+    record = _coerce_dict(workspace)
+    updated_at = str(record.get("updated_at") or "").strip()
+    if updated_at:
+        return updated_at
+    return _stable_json(
+        {
+            "workspace_id": str(record.get("workspace_id") or "").strip(),
+            "tenant_id": str(record.get("tenant_id") or "").strip(),
+            "name": str(record.get("name") or "").strip(),
+            "workspace_type": str(record.get("workspace_type") or record.get("kind") or "").strip(),
+            "metadata": _coerce_dict(record.get("metadata")),
+        }
+    )
+
+
+def _entitlement_state_version(entitlement_state: Any) -> str:
+    return _stable_json(
+        {
+            "plan": str(getattr(entitlement_state, "plan_id", "") or "").strip(),
+            "label": str(getattr(entitlement_state, "plan_label", "") or "").strip(),
+            "source": str(getattr(entitlement_state, "source", "") or "").strip(),
+            "entitlements": _coerce_dict(getattr(entitlement_state, "entitlements", {})),
+        }
+    )
+
+
+def _build_workspace_bootstrap_payload(
+    *,
+    current_user: Optional[Dict[str, Any]],
+    user: Dict[str, Any],
+    user_id: str,
+    membership_row: Optional[Dict[str, Any]],
+    role: str,
+    resolved_workspace_id: str,
+    tenant_id: str,
+    workspace_record: Optional[Dict[str, Any]],
+    entitlement_state: Any,
+    runtime_targets: Dict[str, Any],
+) -> Dict[str, Any]:
+    workspace_payload = _workspace_payload(
+        workspace_id=resolved_workspace_id,
+        tenant_id=tenant_id,
+        workspace=workspace_record,
+        workspace_name=str((membership_row or {}).get("workspace_name") or "").strip() or None,
+    )
+    capability_flags = entitlements_service.workspace_capability_flags(state=entitlement_state)
+    workspace_traits = _workspace_traits(
+        workspace=_coerce_dict(workspace_record),
+        role=role,
+        capabilities=capability_flags,
+    )
+    preferred_profile = _preferred_shell_profile(role=role, traits=workspace_traits)
+    default_route = _default_route(workspace_id=resolved_workspace_id, traits=workspace_traits)
+    identity_versions = _coerce_dict((current_user or {}).get("identity_versions"))
+    membership_version = (
+        f"{int(identity_versions.get('membership_version') or 1)}"
+        f":{int((membership_row or {}).get('updated_at') or 0)}"
+    )
+    capabilities = {
+        **capability_flags,
+        "workspace_admin_enabled": role in {"owner", "admin"},
+        "billing_read_enabled": role in {"owner", "admin"},
+        "billing_write_enabled": role in {"owner", "admin"},
+        "routing_read_enabled": role in {"owner", "admin"},
+        "routing_write_enabled": role in {"owner", "admin"},
+        "document_workstation_enabled": bool(workspace_traits.get("documentHeavy")),
+        "channel_pairing_enabled": (
+            role in {"member", "owner", "admin"}
+            and (
+                bool(capability_flags.get("telegram_channel_enabled"))
+                or bool(capability_flags.get("whatsapp_channel_enabled"))
+            )
+        ),
+    }
+    permissions = _membership_permissions(
+        role=role,
+        capabilities=capabilities,
+        traits=workspace_traits,
+    )
+
+    return {
+        "account": {
+            "id": str(user.get("id") or user_id).strip(),
+            "email": str(user.get("email") or (current_user or {}).get("email") or "").strip().lower(),
+            "displayName": str(user.get("name") or user.get("display_name") or "").strip() or None,
+        },
+        "workspace": workspace_payload,
+        "membership": {
+            "role": role,
+            "permissions": permissions,
+            "version": membership_version,
+        },
+        "capabilities": capabilities,
+        "entitlements": {
+            "plan": entitlement_state.plan_id,
+            "label": entitlement_state.plan_label,
+            "source": entitlement_state.source,
+            "flags": _entitlement_flags(entitlement_state.entitlements),
+            "limits": _entitlement_limits(entitlement_state.entitlements),
+        },
+        "workspaceTraits": workspace_traits,
+        "runtime": {
+            "deploymentMode": _normalized_deployment_mode(runtime_targets.get("deployment_mode")),
+            "runtimeTargets": [
+                {
+                    "id": str(item.get("target_id") or "").strip(),
+                    "label": str(item.get("label") or "").strip() or str(item.get("target_id") or "").strip(),
+                    "kind": _runtime_target_kind(str(item.get("target_id") or "").strip()),
+                    "online": bool(item.get("online")),
+                    "preferred": bool(item.get("default_for_workspace")),
+                }
+                for item in list(runtime_targets.get("targets") or [])
+                if str(item.get("target_id") or "").strip()
+            ],
+        },
+        "shellHints": {
+            "defaultRoute": default_route,
+            "preferredProfile": preferred_profile,
+        },
+    }
 
 
 def _workspace_traits(
@@ -240,97 +379,48 @@ async def build_workspace_bootstrap(
         (item for item in memberships if str(item.get("workspace_id") or "").strip() == resolved_workspace_id),
         None,
     )
-    workspace_entry = _coerce_dict(workspace_access.get(resolved_workspace_id))
     tenant_id = auth_module.workspace_tenant_id(current_user, resolved_workspace_id)
     role = auth_module.workspace_role(current_user, resolved_workspace_id) or "viewer"
     workspace_record = await control_plane_repository.get_workspace_by_id(resolved_workspace_id)
-    workspace_payload = _workspace_payload(
-        workspace_id=resolved_workspace_id,
-        tenant_id=tenant_id,
-        workspace=workspace_record,
-        workspace_name=str((membership_row or {}).get("workspace_name") or "").strip() or None,
-    )
 
     entitlement_state = entitlements_service.resolve_workspace_entitlement_state_for_workspace_id(
         workspace_id=resolved_workspace_id,
         workspace=workspace_record,
     )
-    capability_flags = entitlements_service.workspace_capability_flags(state=entitlement_state)
     runtime_targets = await runtime_attachment_service.list_workspace_runtime_targets(
         tenant_id=tenant_id,
         workspace_id=resolved_workspace_id,
+        include_snapshot_version=True,
     )
-    workspace_traits = _workspace_traits(
-        workspace=_coerce_dict(workspace_record),
-        role=role,
-        capabilities=capability_flags,
-    )
-    preferred_profile = _preferred_shell_profile(role=role, traits=workspace_traits)
-    default_route = _default_route(workspace_id=resolved_workspace_id, traits=workspace_traits)
     identity_versions = _coerce_dict((current_user or {}).get("identity_versions"))
     membership_version = (
         f"{int(identity_versions.get('membership_version') or 1)}"
         f":{int((membership_row or {}).get('updated_at') or 0)}"
     )
-    capabilities = {
-        **capability_flags,
-        "workspace_admin_enabled": role in {"owner", "admin"},
-        "billing_read_enabled": role in {"owner", "admin"},
-        "billing_write_enabled": role in {"owner", "admin"},
-        "routing_read_enabled": role in {"owner", "admin"},
-        "routing_write_enabled": role in {"owner", "admin"},
-        "document_workstation_enabled": bool(workspace_traits.get("documentHeavy")),
-        "channel_pairing_enabled": (
-            role in {"member", "owner", "admin"}
-            and (
-                bool(capability_flags.get("telegram_channel_enabled"))
-                or bool(capability_flags.get("whatsapp_channel_enabled"))
-            )
-        ),
-    }
-    permissions = _membership_permissions(
-        role=role,
-        capabilities=capabilities,
-        traits=workspace_traits,
+    cache_key = _stable_json(
+        {
+            "account_id": str(user.get("id") or user_id).strip(),
+            "workspace_id": resolved_workspace_id,
+            "tenant_id": tenant_id,
+            "membership_version": membership_version,
+            "workspace_version": _workspace_record_version(workspace_record),
+            "entitlements_version": _entitlement_state_version(entitlement_state),
+            "runtime_targets_version": str(runtime_targets.get("_snapshot_version") or "").strip(),
+        }
     )
-
-    return {
-        "account": {
-            "id": str(user.get("id") or user_id).strip(),
-            "email": str(user.get("email") or (current_user or {}).get("email") or "").strip().lower(),
-            "displayName": str(user.get("name") or user.get("display_name") or "").strip() or None,
-        },
-        "workspace": workspace_payload,
-        "membership": {
-            "role": role,
-            "permissions": permissions,
-            "version": membership_version,
-        },
-        "capabilities": capabilities,
-        "entitlements": {
-            "plan": entitlement_state.plan_id,
-            "label": entitlement_state.plan_label,
-            "source": entitlement_state.source,
-            "flags": _entitlement_flags(entitlement_state.entitlements),
-            "limits": _entitlement_limits(entitlement_state.entitlements),
-        },
-        "workspaceTraits": workspace_traits,
-        "runtime": {
-            "deploymentMode": _normalized_deployment_mode(runtime_targets.get("deployment_mode")),
-            "runtimeTargets": [
-                {
-                    "id": str(item.get("target_id") or "").strip(),
-                    "label": str(item.get("label") or "").strip() or str(item.get("target_id") or "").strip(),
-                    "kind": _runtime_target_kind(str(item.get("target_id") or "").strip()),
-                    "online": bool(item.get("online")),
-                    "preferred": bool(item.get("default_for_workspace")),
-                }
-                for item in list(runtime_targets.get("targets") or [])
-                if str(item.get("target_id") or "").strip()
-            ],
-        },
-        "shellHints": {
-            "defaultRoute": default_route,
-            "preferredProfile": preferred_profile,
-        },
-    }
+    cached_payload = _WORKSPACE_BOOTSTRAP_CACHE.get(cache_key)
+    if cached_payload is not None:
+        return copy.deepcopy(cached_payload)
+    payload = _build_workspace_bootstrap_payload(
+        current_user=current_user,
+        user=user,
+        user_id=user_id,
+        membership_row=membership_row,
+        role=role,
+        resolved_workspace_id=resolved_workspace_id,
+        tenant_id=tenant_id,
+        workspace_record=workspace_record,
+        entitlement_state=entitlement_state,
+        runtime_targets=runtime_targets,
+    )
+    return _cache_store(_WORKSPACE_BOOTSTRAP_CACHE, cache_key, payload)

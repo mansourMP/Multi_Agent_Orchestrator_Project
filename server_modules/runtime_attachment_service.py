@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import copy
+import json
 from datetime import datetime, timezone
 from typing import Any, Dict, Iterable, List, Optional
 
@@ -18,6 +20,9 @@ SUPPORTED_DEPLOYMENT_MODES = ("cloud_only", "local_only", "hybrid", "self_hosted
 SUPPORTED_ATTACHMENT_KINDS = ("managed_cloud", "local_companion", "self_hosted_business_node")
 SUPPORTED_RUNTIME_MODES = {"hosted_secure", "local_secure", "privileged_device"}
 SUPPORTED_RUNTIME_TARGET_IDS = ("cloud_default", "local_companion", "self_host_runtime")
+_RUNTIME_ATTACHMENTS_CACHE: Dict[str, Dict[str, Any]] = {}
+_RUNTIME_TARGETS_CACHE: Dict[str, Dict[str, Any]] = {}
+_RUNTIME_CACHE_LIMIT = 128
 
 TRUST_MODEL_MAP: dict[str, dict[str, Any]] = {
     "hosted_secure": {
@@ -103,6 +108,102 @@ def _list_strings(value: Any) -> List[str]:
         if token:
             out.append(token)
     return out
+
+
+def _stable_json(value: Any) -> str:
+    return json.dumps(value, sort_keys=True, ensure_ascii=True, separators=(",", ":"), default=str)
+
+
+def _clone_payload(value: Dict[str, Any]) -> Dict[str, Any]:
+    return copy.deepcopy(value)
+
+
+def _cache_store(cache: Dict[str, Dict[str, Any]], key: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+    if len(cache) >= _RUNTIME_CACHE_LIMIT and key not in cache:
+        cache.clear()
+    cache[key] = _clone_payload(payload)
+    return _clone_payload(payload)
+
+
+def _runtime_profile_snapshot_value(profile: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "id": str(profile.get("id") or "").strip(),
+        "slug": str(profile.get("slug") or "").strip(),
+        "status": str(profile.get("status") or "").strip(),
+        "runtime_class": str(profile.get("runtime_class") or "").strip(),
+        "runtime_id": str(profile.get("runtime_id") or "").strip(),
+        "machine_id": str(profile.get("machine_id") or "").strip(),
+        "supported_capabilities": list(profile.get("supported_capabilities") or []),
+        "updated_at": profile.get("updated_at"),
+        "last_seen_at": profile.get("last_seen_at"),
+    }
+
+
+def _fleet_worker_snapshot_value(worker: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "worker_id": str(worker.get("worker_id") or worker.get("runtime_id") or "").strip(),
+        "runtime_id": str(worker.get("runtime_id") or "").strip(),
+        "machine_id": str(worker.get("machine_id") or "").strip(),
+        "runtime_type": str(worker.get("runtime_type") or "").strip(),
+        "status": str(worker.get("status") or "").strip(),
+        "control_state": str(worker.get("control_state") or "").strip(),
+        "online": bool(worker.get("online")),
+        "last_seen_at": worker.get("last_seen_at") or worker.get("last_heartbeat_at"),
+        "capabilities": list(worker.get("capabilities") or []),
+        "execution_targets": list(worker.get("execution_targets") or []),
+    }
+
+
+def _runtime_inventory_snapshot_version(
+    *,
+    tenant_id: str,
+    workspace_id: str,
+    runtime_profiles: List[Dict[str, Any]],
+    fleet_workers: List[Dict[str, Any]],
+) -> str:
+    return _stable_json(
+        {
+            "tenant_id": str(tenant_id or "").strip(),
+            "workspace_id": str(workspace_id or "").strip(),
+            "runtime_profiles": [
+                _runtime_profile_snapshot_value(profile)
+                for profile in runtime_profiles
+                if isinstance(profile, dict)
+            ],
+            "fleet_workers": [
+                _fleet_worker_snapshot_value(worker)
+                for worker in fleet_workers
+                if isinstance(worker, dict)
+            ],
+        }
+    )
+
+
+def _inventory_snapshot_version(inventory: Dict[str, Any]) -> str:
+    if str(inventory.get("_snapshot_version") or "").strip():
+        return str(inventory.get("_snapshot_version") or "").strip()
+    return _stable_json(
+        {
+            "tenant_id": str(inventory.get("tenant_id") or "").strip(),
+            "workspace_id": str(inventory.get("workspace_id") or "").strip(),
+            "deployment_mode": str(inventory.get("deployment_mode") or "").strip(),
+            "attachments": [
+                {
+                    "attachment_id": str(item.get("attachment_id") or "").strip(),
+                    "attachment_kind": str(item.get("attachment_kind") or "").strip(),
+                    "runtime_profile_id": str(item.get("runtime_profile_id") or "").strip(),
+                    "runtime_id": str(item.get("runtime_id") or "").strip(),
+                    "machine_id": str(item.get("machine_id") or "").strip(),
+                    "status": str(item.get("status") or "").strip(),
+                    "control_state": str(item.get("control_state") or "").strip(),
+                    "online": bool(item.get("online")),
+                    "healthy": bool(item.get("healthy")),
+                }
+                for item in list(inventory.get("attachments") or [])
+                if isinstance(item, dict)
+            ],
+        }
+    )
 
 
 def _attachment_capability_match(attachment: Dict[str, Any], required_capabilities: List[str]) -> bool:
@@ -509,6 +610,7 @@ async def list_workspace_runtime_attachments(
     workspace_id: str,
     runtime_profiles: Optional[List[Dict[str, Any]]] = None,
     fleet_workers: Optional[List[Dict[str, Any]]] = None,
+    include_snapshot_version: bool = False,
 ) -> Dict[str, Any]:
     profiles = (
         [dict(item) for item in runtime_profiles if isinstance(item, dict)]
@@ -516,6 +618,7 @@ async def list_workspace_runtime_attachments(
         else await agent_registry_repository.list_runtime_profiles(
             tenant_id=tenant_id,
             workspace_id=workspace_id,
+            seed_if_missing=False,
         )
     )
     workers = (
@@ -526,6 +629,18 @@ async def list_workspace_runtime_attachments(
             workspace_id=workspace_id,
         )
     )
+    snapshot_version = _runtime_inventory_snapshot_version(
+        tenant_id=tenant_id,
+        workspace_id=workspace_id,
+        runtime_profiles=profiles,
+        fleet_workers=workers,
+    )
+    cached_inventory = _RUNTIME_ATTACHMENTS_CACHE.get(snapshot_version)
+    if cached_inventory is not None:
+        payload = _clone_payload(cached_inventory)
+        if include_snapshot_version:
+            payload["_snapshot_version"] = snapshot_version
+        return payload
     attachments: List[Dict[str, Any]] = []
     matched_worker_ids: set[str] = set()
 
@@ -592,7 +707,7 @@ async def list_workspace_runtime_attachments(
         )
     )
     deployment_mode = _deployment_mode(attachments)
-    return {
+    payload = {
         "tenant_id": tenant_id,
         "workspace_id": workspace_id,
         "deployment_mode": deployment_mode,
@@ -606,6 +721,10 @@ async def list_workspace_runtime_attachments(
             "specialist_scope_required": True,
         },
     }
+    cached_payload = _cache_store(_RUNTIME_ATTACHMENTS_CACHE, snapshot_version, payload)
+    if include_snapshot_version:
+        cached_payload["_snapshot_version"] = snapshot_version
+    return cached_payload
 
 
 async def list_workspace_runtime_targets(
@@ -615,18 +734,31 @@ async def list_workspace_runtime_targets(
     runtime_profiles: Optional[List[Dict[str, Any]]] = None,
     fleet_workers: Optional[List[Dict[str, Any]]] = None,
     inventory: Optional[Dict[str, Any]] = None,
+    include_snapshot_version: bool = False,
 ) -> Dict[str, Any]:
-    resolved_inventory = inventory or await list_workspace_runtime_attachments(
+    resolved_inventory = dict(inventory) if isinstance(inventory, dict) else await list_workspace_runtime_attachments(
         tenant_id=tenant_id,
         workspace_id=workspace_id,
         runtime_profiles=runtime_profiles,
         fleet_workers=fleet_workers,
+        include_snapshot_version=True,
     )
-    return build_workspace_runtime_targets(
+    snapshot_version = _inventory_snapshot_version(resolved_inventory)
+    cached_targets = _RUNTIME_TARGETS_CACHE.get(snapshot_version)
+    if cached_targets is not None:
+        payload = _clone_payload(cached_targets)
+        if include_snapshot_version:
+            payload["_snapshot_version"] = snapshot_version
+        return payload
+    payload = build_workspace_runtime_targets(
         tenant_id=tenant_id,
         workspace_id=workspace_id,
         inventory=resolved_inventory,
     )
+    cached_payload = _cache_store(_RUNTIME_TARGETS_CACHE, snapshot_version, payload)
+    if include_snapshot_version:
+        cached_payload["_snapshot_version"] = snapshot_version
+    return cached_payload
 
 
 async def resolve_install_runtime_plan(

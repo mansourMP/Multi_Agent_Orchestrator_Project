@@ -110,12 +110,17 @@ class TelegramRunDispatchServiceTests(unittest.TestCase):
         self.assertEqual(len(emitted), 1)
         self.assertEqual(emitted[0]["channel"], "telegram")
         self.assertEqual(emitted[0]["payload"]["pending_message_id"], "pending-1")
+        self.assertEqual(
+            emitted[0]["payload"]["delivery"]["provider_idempotency_key"],
+            "telegram:conn-1:chat-1:run-1:edit:pending-1",
+        )
 
     def test_deliver_final_response_edits_pending_message(self) -> None:
         service = self._make_service(include_meta=lambda: True)
         edited_messages = []
         sent_messages = []
         channel_events = []
+        connector_states = []
 
         result = service.deliver_final_response(
             bot_token="bot",
@@ -135,12 +140,21 @@ class TelegramRunDispatchServiceTests(unittest.TestCase):
             record_channel_event=lambda **kwargs: channel_events.append(kwargs),
             send_message=lambda *args, **kwargs: sent_messages.append((args, kwargs)) or "msg-2",
             edit_message=lambda *args, **kwargs: edited_messages.append((args, kwargs)) or True,
+            set_connector_state=lambda connector_id, payload: connector_states.append((connector_id, payload)),
+            provider_idempotency_key="telegram:conn-1:chat-1:run-1:edit:pending-1",
         )
 
         self.assertEqual(result["status"], "completed")
         self.assertEqual(len(edited_messages), 1)
         self.assertEqual(sent_messages, [])
         self.assertEqual(channel_events[0]["event_type"], "run_completed")
+        self.assertEqual(result["delivery"]["provider"], "telegram")
+        self.assertEqual(result["delivery"]["receipt"]["provider_message_id"], "pending-1")
+        self.assertEqual(connector_states[0][0], "conn-1")
+        self.assertEqual(
+            connector_states[0][1]["last_delivery_idempotency_key"],
+            "telegram:conn-1:chat-1:run-1:edit:pending-1",
+        )
 
 
 if __name__ == "__main__":

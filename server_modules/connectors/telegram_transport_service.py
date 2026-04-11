@@ -80,6 +80,7 @@ class TelegramTransportService:
         reply_markup: Optional[Dict[str, Any]] = None,
         trace_id: Optional[str] = None,
         source_event_id: Optional[str] = None,
+        idempotency_key: Optional[str] = None,
     ) -> str:
         payload = {
             "chat_id": chat_id,
@@ -111,7 +112,10 @@ class TelegramTransportService:
                 connector_id=str(connector_id or ""),
                 trace_id=resolved_trace_id,
                 source_event_id=str(source_event_id or "").strip(),
-                metadata={"transport": "telegram_sendMessage"},
+                metadata={
+                    "transport": "telegram_sendMessage",
+                    "provider_idempotency_key": str(idempotency_key or "").strip() or None,
+                },
             )
             raise
         sent = result if isinstance(result, dict) else {}
@@ -137,6 +141,9 @@ class TelegramTransportService:
                 "source_event_id": str(source_event_id or "").strip(),
                 "delivery_status": "sent",
                 "delivery_transport": "telegram_sendMessage",
+                "provider": "telegram",
+                "provider_message_id": sent_message_id or None,
+                "provider_idempotency_key": str(idempotency_key or "").strip() or None,
             },
         )
         return sent_message_id
@@ -171,6 +178,7 @@ class TelegramTransportService:
         reply_markup: Optional[Dict[str, Any]] = None,
         trace_id: Optional[str] = None,
         source_event_id: Optional[str] = None,
+        idempotency_key: Optional[str] = None,
     ) -> bool:
         message_token = str(message_id or "").strip()
         if not message_token:
@@ -206,7 +214,11 @@ class TelegramTransportService:
                 connector_id=str(connector_id or ""),
                 trace_id=resolved_trace_id,
                 source_event_id=str(source_event_id or "").strip(),
-                metadata={"transport": "telegram_editMessageText", "message_id": message_token},
+                metadata={
+                    "transport": "telegram_editMessageText",
+                    "message_id": message_token,
+                    "provider_idempotency_key": str(idempotency_key or "").strip() or None,
+                },
             )
             return False
         session_key = self.session_key(chat_id)
@@ -228,6 +240,9 @@ class TelegramTransportService:
                 "source_event_id": str(source_event_id or "").strip(),
                 "delivery_status": "sent",
                 "delivery_transport": "telegram_editMessageText",
+                "provider": "telegram",
+                "provider_message_id": message_token or None,
+                "provider_idempotency_key": str(idempotency_key or "").strip() or None,
             },
         )
         return True

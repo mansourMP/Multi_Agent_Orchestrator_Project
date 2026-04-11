@@ -49,6 +49,18 @@ class TelegramRunDispatchService:
         self.time_now = time_now
         self.sleep = sleep
 
+    def delivery_idempotency_key(
+        self,
+        *,
+        connector_id: str,
+        chat_id: str,
+        run_id: str,
+        pending_message_id: Optional[str],
+    ) -> str:
+        operation = "edit" if str(pending_message_id or "").strip() else "send"
+        pending_token = str(pending_message_id or "").strip() or "-"
+        return f"telegram:{connector_id}:{chat_id}:{run_id}:{operation}:{pending_token}"
+
     def run_reply_text(self, status: str, run_id: str, summary: str) -> str:
         cleaned_summary = self.humanize_run_summary(summary)
         if not self.include_run_meta():
@@ -200,6 +212,12 @@ class TelegramRunDispatchService:
         trace_id: str,
         source_event_id: str,
     ) -> None:
+        provider_idempotency_key = self.delivery_idempotency_key(
+            connector_id=connector_id,
+            chat_id=chat_id,
+            run_id=run_id,
+            pending_message_id=pending_message_id,
+        )
         self.emit_channel_run_delivery_event(
             channel="telegram",
             tenant_id="default",
@@ -214,6 +232,16 @@ class TelegramRunDispatchService:
                 "parent_message_id": str(inbound_message_id or "").strip() or None,
                 "action": str(action or "run").strip().lower() or "run",
                 "source_event_id": str(source_event_id or "").strip() or None,
+                "delivery": {
+                    "provider": "telegram",
+                    "transport": (
+                        "telegram_editMessageText"
+                        if str(pending_message_id or "").strip()
+                        else "telegram_sendMessage"
+                    ),
+                    "status": "pending",
+                    "provider_idempotency_key": provider_idempotency_key,
+                },
             },
         )
 
@@ -237,6 +265,8 @@ class TelegramRunDispatchService:
         record_channel_event: Callable[..., Any],
         send_message: Callable[..., str],
         edit_message: Callable[..., bool],
+        set_connector_state: Optional[Callable[[str, Dict[str, Any]], Any]] = None,
+        provider_idempotency_key: Optional[str] = None,
     ) -> Dict[str, Any]:
         resolved_status = str(status or "").strip().lower() or "completed"
         compact_summary = self.truncate_one_line(
@@ -244,6 +274,12 @@ class TelegramRunDispatchService:
             self.default_max_reply_chars,
         )
         final_reply = self.run_reply_text(resolved_status, run_id, compact_summary)
+        resolved_delivery_id = str(provider_idempotency_key or "").strip() or self.delivery_idempotency_key(
+            connector_id=connector_id,
+            chat_id=chat_id,
+            run_id=run_id,
+            pending_message_id=pending_message_id,
+        )
         record_channel_event(
             channel="telegram",
             direction="system",
@@ -260,9 +296,12 @@ class TelegramRunDispatchService:
                 "profile_id": profile.get("id"),
                 "trace_id": trace_id,
                 "source_event_id": source_event_id,
+                "provider_idempotency_key": resolved_delivery_id,
             },
         )
         edited = False
+        outbound_message_id = str(pending_message_id or "").strip() or None
+        delivery_transport = "telegram_editMessageText" if pending_message_id else "telegram_sendMessage"
         if pending_message_id:
             edited = edit_message(
                 bot_token=bot_token,
@@ -277,9 +316,10 @@ class TelegramRunDispatchService:
                 profile=profile,
                 trace_id=trace_id,
                 source_event_id=source_event_id,
+                idempotency_key=resolved_delivery_id,
             )
         if not edited:
-            send_message(
+            outbound_message_id = send_message(
                 bot_token=bot_token,
                 chat_id=chat_id,
                 text=final_reply,
@@ -291,12 +331,47 @@ class TelegramRunDispatchService:
                 profile=profile,
                 trace_id=trace_id,
                 source_event_id=source_event_id,
+                idempotency_key=resolved_delivery_id,
             )
+            delivery_transport = "telegram_sendMessage"
+        now_iso = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(int(self.time_now())))
+        if callable(set_connector_state):
+            set_connector_state(
+                connector_id,
+                {
+                    "workspace_id": workspace_id,
+                    "profile_id": profile.get("id"),
+                    "last_run_id": run_id,
+                    "last_action": action,
+                    "last_chat_id": chat_id,
+                    "last_error": None,
+                    "last_error_category": None,
+                    "last_error_at": None,
+                    "last_processed_at": now_iso,
+                    "last_outbound_message_id": outbound_message_id,
+                    "last_delivery_status": "edited" if edited else "sent",
+                    "last_delivery_receipt_at": now_iso,
+                    "last_delivery_idempotency_key": resolved_delivery_id,
+                    "last_delivery_transport": delivery_transport,
+                },
+            )
+        delivery = {
+            "provider": "telegram",
+            "transport": delivery_transport,
+            "status": "edited" if edited else "sent",
+            "provider_idempotency_key": resolved_delivery_id,
+            "receipt": {
+                "provider_message_id": outbound_message_id,
+                "accepted_at": now_iso,
+            },
+            "replay_safe": True,
+        }
         return {
             "status": resolved_status,
             "summary": compact_summary,
             "final_reply": final_reply,
             "edited": edited,
+            "delivery": delivery,
         }
 
     def dispatch_run_action(

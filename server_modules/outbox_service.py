@@ -359,6 +359,14 @@ def emit_channel_run_delivery_event(
     resolved_payload.setdefault("connector_id", connector_token)
     resolved_payload.setdefault("run_id", run_token)
     resolved_payload.setdefault("emitted_at", _utc_now_iso())
+    delivery = dict(resolved_payload.get("delivery") or {}) if isinstance(resolved_payload.get("delivery"), Mapping) else {}
+    delivery.setdefault("provider", channel_token)
+    delivery.setdefault("status", "pending")
+    delivery.setdefault(
+        "provider_idempotency_key",
+        str(idempotency_key or "").strip() or f"{channel_token}:{connector_token}:{run_token}",
+    )
+    resolved_payload["delivery"] = delivery
     return emit_runtime_event(
         event_type="channel_run_delivery",
         tenant_id=tenant_id,
@@ -539,6 +547,8 @@ def deliver_due_outbox_events_once(
                 "status": {
                     "undelivered_count": 0,
                     "poisoned_count": 0,
+                    "repeated_failure_count": 0,
+                    "stuck_count": 0,
                     "total_retry_count": 0,
                     "max_retry_count": 0,
                     "last_delivery_error": None,
@@ -616,6 +626,8 @@ def deliver_due_outbox_events_once(
         else {
             "undelivered_count": 0,
             "poisoned_count": 0,
+            "repeated_failure_count": 0,
+            "stuck_count": 0,
             "total_retry_count": 0,
             "max_retry_count": 0,
             "last_delivery_error": None,
@@ -688,6 +700,8 @@ def get_outbox_delivery_status(
         return {
             "undelivered_count": 0,
             "poisoned_count": 0,
+            "repeated_failure_count": 0,
+            "stuck_count": 0,
             "total_retry_count": 0,
             "max_retry_count": 0,
             "last_delivery_error": None,
@@ -698,6 +712,8 @@ def get_outbox_delivery_status(
         return {
             "undelivered_count": 0,
             "poisoned_count": 0,
+            "repeated_failure_count": 0,
+            "stuck_count": 0,
             "total_retry_count": 0,
             "max_retry_count": 0,
             "last_delivery_error": None,

@@ -43,7 +43,16 @@ class _TelegramRegistryStub:
         self.resolve_profile = lambda entry: {"id": "profile-1"}
         self.session_key_builder = lambda chat_id: f"tg:{chat_id}"
         self._dispatch = dispatch
-        self._state = type("State", (), {"get_connector_entry": staticmethod(lambda connector_id: {"id": connector_id})})()
+        self._state_store = {}
+        self._state = type(
+            "State",
+            (),
+            {
+                "get_connector_entry": staticmethod(lambda connector_id: {"id": connector_id}),
+                "connector_state": lambda inner_self, connector_id: self._state_store.setdefault(connector_id, {}),
+                "set_connector_state": lambda inner_self, connector_id, payload: self._state_store.setdefault(connector_id, {}).update(payload),
+            },
+        )()
 
     def telegram_run_dispatch_service(self):
         return self._dispatch
@@ -62,7 +71,16 @@ class _WhatsAppRegistryStub:
         }
         self.resolve_profile = lambda entry: {"id": "profile-1"}
         self._dispatch = dispatch
-        self._state = type("State", (), {"get_connector_entry": staticmethod(lambda connector_id: {"id": connector_id})})()
+        self._state_store = {}
+        self._state = type(
+            "State",
+            (),
+            {
+                "get_connector_entry": staticmethod(lambda connector_id: {"id": connector_id}),
+                "connector_state": lambda inner_self, connector_id: self._state_store.setdefault(connector_id, {}),
+                "set_connector_state": lambda inner_self, connector_id, payload: self._state_store.setdefault(connector_id, {}).update(payload),
+            },
+        )()
 
     def whatsapp_run_dispatch_service(self):
         return self._dispatch
@@ -131,6 +149,43 @@ class ChannelDeliveryOutboxServiceTests(unittest.TestCase):
         self.assertEqual(dispatch.calls[0], ("poll", "run-2", 240))
         self.assertEqual(dispatch.calls[1][0], "deliver")
         self.assertEqual(dispatch.calls[1][1]["reply_to_number"], "whatsapp:+200")
+
+    def test_telegram_delivery_skips_provider_resend_when_receipt_already_recorded(self) -> None:
+        dispatch = _TelegramDispatchStub({"ready": True, "status": "completed", "summary": "Done"})
+        registry = _TelegramRegistryStub(dispatch)
+        shell = _ShellStub(telegram_registry=registry)
+        event = OutboxEvent(
+            event_id="evt-3",
+            event_type="channel_run_delivery",
+            tenant_id="tenant-1",
+            workspace_id="ws-1",
+            run_id="run-3",
+            trace_id="trace-3",
+            payload={
+                "channel": "telegram",
+                "connector_id": "conn-3",
+                "chat_id": "chat-3",
+                "delivery": {
+                    "provider": "telegram",
+                    "status": "sent",
+                    "provider_idempotency_key": "telegram:conn-3:chat-3:run-3:send:-",
+                    "receipt": {"provider_message_id": "msg-3", "accepted_at": "2026-04-12T00:00:00Z"},
+                },
+            },
+        )
+
+        patched = []
+        with patch("server_modules.connectors.channel_delivery_outbox_service._connector_shell", return_value=shell):
+            with patch(
+                "server_modules.run_state_repository.sync_patch_outbox_event_payload",
+                side_effect=lambda event_id, payload_patch: patched.append((event_id, payload_patch)),
+            ):
+                delivered = deliver_channel_run_delivery_outbox_event(event)
+
+        self.assertTrue(delivered)
+        self.assertEqual(dispatch.calls, [])
+        self.assertEqual(patched[0][0], "evt-3")
+        self.assertTrue(patched[0][1]["delivery"]["replay_safe"])
 
 
 if __name__ == "__main__":

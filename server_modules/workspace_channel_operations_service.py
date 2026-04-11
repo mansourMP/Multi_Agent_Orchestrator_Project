@@ -40,6 +40,16 @@ def _normalize_channel_token(value: Any) -> str:
     return str(value or "").strip().lower()
 
 
+def _parse_utc_ts(value: Any) -> datetime | None:
+    token = str(value or "").strip()
+    if not token:
+        return None
+    try:
+        return datetime.fromisoformat(token.replace("Z", "+00:00"))
+    except Exception:
+        return None
+
+
 def _issue_severity(issue: Dict[str, Any]) -> str:
     token = str(issue.get("severity") or "").strip().lower()
     if token in {"setup_needed", "degraded"}:
@@ -181,16 +191,33 @@ def _workspace_dead_letters(*, workspace_id: str, limit: int) -> List[Dict[str, 
 
 def _workspace_pending_delivery_summary(items: List[Dict[str, Any]]) -> Dict[str, Any]:
     by_channel: Dict[str, int] = {}
+    poisoned_by_channel: Dict[str, int] = {}
     last_delivery_error: Dict[str, Any] | None = None
     retry_total = 0
     max_retry = 0
+    repeated_failure_count = 0
+    stuck_count = 0
+    with_receipt_count = 0
+    now = datetime.now(timezone.utc)
     for item in items:
         payload = _coerce_dict(item.get("payload"))
         channel = _normalize_channel_token(payload.get("channel")) or "unknown"
-        by_channel[channel] = by_channel.get(channel, 0) + 1
+        target_bucket = poisoned_by_channel if str(item.get("poisoned_at") or "").strip() else by_channel
+        target_bucket[channel] = target_bucket.get(channel, 0) + 1
         retry_count = int(item.get("retry_count") or 0)
         retry_total += retry_count
         max_retry = max(max_retry, retry_count)
+        if retry_count >= 3:
+            repeated_failure_count += 1
+        delivery = _coerce_dict(payload.get("delivery"))
+        if isinstance(delivery.get("receipt"), dict):
+            with_receipt_count += 1
+        next_attempt_at = _parse_utc_ts(item.get("next_attempt_at"))
+        last_attempted_at = _parse_utc_ts(item.get("last_attempted_at"))
+        created_at = _parse_utc_ts(item.get("created_at"))
+        reference = next_attempt_at or last_attempted_at or created_at
+        if not item.get("poisoned_at") and reference is not None and (now - reference).total_seconds() >= 60:
+            stuck_count += 1
         if not last_delivery_error and str(item.get("last_delivery_error") or "").strip():
             last_delivery_error = {
                 "event_id": str(item.get("event_id") or "").strip(),
@@ -199,10 +226,15 @@ def _workspace_pending_delivery_summary(items: List[Dict[str, Any]]) -> Dict[str
                 "retry_count": retry_count,
             }
     return {
-        "pending_count": len(items),
+        "pending_count": sum(by_channel.values()),
+        "poisoned_count": sum(poisoned_by_channel.values()),
         "retry_count_total": retry_total,
         "max_retry_count": max_retry,
         "pending_by_channel": by_channel,
+        "poisoned_by_channel": poisoned_by_channel,
+        "repeated_failure_count": repeated_failure_count,
+        "stuck_count": stuck_count,
+        "with_receipt_count": with_receipt_count,
         "last_delivery_error": last_delivery_error,
     }
 
@@ -257,9 +289,17 @@ async def build_workspace_channel_operations(
         older_than_seconds=0,
         limit=200,
     )
+    poisoned_outbox_items = await run_state_repository.list_poisoned_outbox_events(limit=200)
     workspace_pending_deliveries = [
         item
         for item in pending_outbox_items
+        if _normalize_workspace_token(item.get("workspace_id")) == resolved_workspace_id
+        and str(item.get("event_type") or "").strip() == "channel_run_delivery"
+        and _normalize_channel_token(_coerce_dict(item.get("payload")).get("channel")) in CHANNEL_PROVIDERS
+    ]
+    workspace_poisoned_deliveries = [
+        item
+        for item in poisoned_outbox_items
         if _normalize_workspace_token(item.get("workspace_id")) == resolved_workspace_id
         and str(item.get("event_type") or "").strip() == "channel_run_delivery"
         and _normalize_channel_token(_coerce_dict(item.get("payload")).get("channel")) in CHANNEL_PROVIDERS
@@ -283,8 +323,11 @@ async def build_workspace_channel_operations(
         },
         "delivery": {
             "runtime_summary": _coerce_dict(runtime_outbox_summary),
-            "workspace_summary": _workspace_pending_delivery_summary(workspace_pending_deliveries),
+            "workspace_summary": _workspace_pending_delivery_summary(
+                workspace_pending_deliveries + workspace_poisoned_deliveries
+            ),
             "pending": workspace_pending_deliveries,
+            "poisoned": workspace_poisoned_deliveries,
             "dead_letters": dead_letters,
         },
         "events": {

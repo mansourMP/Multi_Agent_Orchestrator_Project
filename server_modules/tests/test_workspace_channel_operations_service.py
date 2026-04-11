@@ -144,6 +144,25 @@ async def test_build_workspace_channel_operations_filters_runtime_state_by_works
             },
         ]
 
+    async def fake_poisoned_outbox_events(*, limit: int = 200):
+        assert limit == 200
+        return [
+            {
+                "event_id": "evt-poison",
+                "event_type": "channel_run_delivery",
+                "workspace_id": "ws-1",
+                "retry_count": 5,
+                "last_delivery_error": "telegram poisoned",
+                "last_attempted_at": "2026-04-12T08:40:00Z",
+                "poisoned_at": "2026-04-12T08:41:00Z",
+                "payload": {
+                    "channel": "telegram",
+                    "session_key": "chat-9",
+                    "delivery": {"receipt": {"provider_message_id": "msg-9"}},
+                },
+            }
+        ]
+
     dead_letter_file = tmp_path / "dead_letters.json"
     dead_letter_file.write_text(
         json.dumps(
@@ -189,6 +208,11 @@ async def test_build_workspace_channel_operations_filters_runtime_state_by_works
         workspace_channel_operations_service.run_state_repository,
         "list_undelivered_outbox_events",
         fake_undelivered_outbox_events,
+    )
+    monkeypatch.setattr(
+        workspace_channel_operations_service.run_state_repository,
+        "list_poisoned_outbox_events",
+        fake_poisoned_outbox_events,
     )
     monkeypatch.setattr(
         workspace_channel_operations_service.shared_module,
@@ -241,8 +265,13 @@ async def test_build_workspace_channel_operations_filters_runtime_state_by_works
     assert [item["id"] for item in payload["channels"]["telegram"]["connectors"]] == ["tg-ws-1"]
     assert payload["channels"]["whatsapp"]["workspace_status"] == "setup_needed"
     assert payload["delivery"]["workspace_summary"]["pending_count"] == 1
+    assert payload["delivery"]["workspace_summary"]["poisoned_count"] == 1
     assert payload["delivery"]["workspace_summary"]["pending_by_channel"] == {"telegram": 1}
+    assert payload["delivery"]["workspace_summary"]["poisoned_by_channel"] == {"telegram": 1}
+    assert payload["delivery"]["workspace_summary"]["repeated_failure_count"] == 1
+    assert payload["delivery"]["workspace_summary"]["with_receipt_count"] == 1
     assert payload["delivery"]["pending"][0]["event_id"] == "evt-1"
+    assert payload["delivery"]["poisoned"][0]["event_id"] == "evt-poison"
     assert payload["delivery"]["dead_letters"][0]["id"] == "dead-1"
     assert [item["id"] for item in payload["events"]["recent"]] == ["ev-1", "ev-2"]
     assert [item["id"] for item in payload["events"]["pairing_failures"]] == ["ev-1"]

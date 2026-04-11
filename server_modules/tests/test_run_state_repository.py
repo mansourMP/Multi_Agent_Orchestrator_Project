@@ -185,6 +185,8 @@ class RunStateRepositoryTests(unittest.IsolatedAsyncioTestCase):
                 {
                     "undelivered_count": 2,
                     "poisoned_count": 1,
+                    "repeated_failure_count": 1,
+                    "stuck_count": 1,
                     "total_retry_count": 5,
                     "max_retry_count": 3,
                 },
@@ -208,7 +210,44 @@ class RunStateRepositoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(any("UPDATE runtime_outbox" in query for query, _args in pool.execute_calls))
         self.assertEqual(status["undelivered_count"], 2)
         self.assertEqual(status["poisoned_count"], 1)
+        self.assertEqual(status["repeated_failure_count"], 1)
+        self.assertEqual(status["stuck_count"], 1)
         self.assertEqual(status["last_delivery_error"]["event_id"], "evt-1")
+
+    async def test_patch_outbox_event_payload_and_list_poisoned_events(self):
+        pool = _FakePool(
+            fetch_result=[
+                {
+                    "event_id": "evt-poison",
+                    "event_type": "channel_run_delivery",
+                    "tenant_id": "tenant-1",
+                    "workspace_id": "ws-1",
+                    "run_id": "run-1",
+                    "machine_id": None,
+                    "trace_id": "trace-1",
+                    "idempotency_key": "channel_run_delivery:telegram:conn-1:run-1",
+                    "payload": {"channel": "telegram", "delivery": {"status": "failed"}},
+                    "created_at": "2026-04-07T00:00:00Z",
+                    "delivered_at": None,
+                    "last_replayed_at": None,
+                    "retry_count": 5,
+                    "last_delivery_error": "boom",
+                    "last_attempted_at": "2026-04-07T00:05:00Z",
+                    "next_attempt_at": None,
+                    "poisoned_at": "2026-04-07T00:05:30Z",
+                }
+            ]
+        )
+        with patch("server_modules.run_state_repository.runtime_db.get_pool", return_value=pool):
+            await run_state_repository.patch_outbox_event_payload(
+                "evt-poison",
+                {"delivery": {"status": "sent", "receipt": {"provider_message_id": "msg-1"}}},
+            )
+            items = await run_state_repository.list_poisoned_outbox_events(limit=50)
+
+        self.assertTrue(any("payload = COALESCE(runtime_outbox.payload" in query for query, _args in pool.execute_calls))
+        self.assertEqual(items[0]["event_id"], "evt-poison")
+        self.assertEqual(items[0]["payload"]["delivery"]["status"], "failed")
 
     async def test_list_expired_local_claims_returns_joined_run_payloads(self):
         pool = _FakePool(

@@ -1386,6 +1386,29 @@ async def list_undelivered_outbox_events(
     return items
 
 
+async def patch_outbox_event_payload(event_id: str, payload_patch: Dict[str, Any]) -> None:
+    token = str(event_id or "").strip()
+    patch = dict(payload_patch or {}) if isinstance(payload_patch, dict) else {}
+    if not token or not patch:
+        return None
+    pool = await _require_pool(operation="patch_outbox_event_payload")
+    try:
+        await _ensure_runtime_outbox_table(pool)
+        await pool.execute(
+            """
+            UPDATE runtime_outbox
+            SET payload = COALESCE(runtime_outbox.payload, '{}'::jsonb) || $2::jsonb,
+                last_replayed_at = NOW()
+            WHERE event_id = $1
+            """,
+            token,
+            _json_payload(patch),
+        )
+    except Exception as exc:
+        raise RunStatePersistenceError(f"Postgres patch_outbox_event_payload failed for {token}: {exc}") from exc
+    return None
+
+
 async def mark_outbox_event_delivered(event_id: str) -> None:
     token = str(event_id or "").strip()
     if not token:
@@ -1451,12 +1474,88 @@ async def record_outbox_delivery_failure(
     return None
 
 
+async def list_poisoned_outbox_events(
+    *,
+    limit: int = 200,
+) -> list[Dict[str, Any]]:
+    pool = await runtime_db.get_pool()
+    if pool is None:
+        return []
+    try:
+        await _ensure_runtime_outbox_table(pool)
+        rows = await pool.fetch(
+            """
+            SELECT
+                event_id,
+                event_type,
+                tenant_id,
+                workspace_id,
+                run_id,
+                machine_id,
+                trace_id,
+                idempotency_key,
+                payload,
+                created_at,
+                delivered_at,
+                last_replayed_at,
+                retry_count,
+                last_delivery_error,
+                last_attempted_at,
+                next_attempt_at,
+                poisoned_at
+            FROM runtime_outbox
+            WHERE delivered_at IS NULL
+              AND poisoned_at IS NOT NULL
+            ORDER BY poisoned_at DESC, created_at DESC
+            LIMIT $1
+            """,
+            max(1, int(limit or 0)),
+        )
+    except Exception as exc:
+        LOGGER.warning("Postgres list_poisoned_outbox_events failed: %s", exc)
+        return []
+    items: list[Dict[str, Any]] = []
+    for row in rows or []:
+        payload = row["payload"]
+        if isinstance(payload, str):
+            try:
+                payload = json.loads(payload)
+            except Exception:
+                payload = {}
+        if not isinstance(payload, dict):
+            payload = {}
+        items.append(
+            {
+                "event_id": str(row["event_id"] or "").strip(),
+                "event_type": str(row["event_type"] or "").strip(),
+                "tenant_id": str(row["tenant_id"] or "").strip() or "default",
+                "workspace_id": str(row["workspace_id"] or "").strip() or "default",
+                "run_id": str(row["run_id"] or "").strip() or None,
+                "machine_id": str(row["machine_id"] or "").strip() or None,
+                "trace_id": str(row["trace_id"] or "").strip(),
+                "idempotency_key": str(row["idempotency_key"] or "").strip(),
+                "payload": payload,
+                "created_at": str(row["created_at"] or "").strip() or None,
+                "delivered_at": str(row["delivered_at"] or "").strip() or None,
+                "last_replayed_at": str(row["last_replayed_at"] or "").strip() or None,
+                "retry_count": int(row["retry_count"] or 0),
+                "last_delivery_error": str(row["last_delivery_error"] or "").strip() or None,
+                "last_attempted_at": str(row["last_attempted_at"] or "").strip() or None,
+                "next_attempt_at": str(row["next_attempt_at"] or "").strip() or None,
+                "poisoned_at": str(row["poisoned_at"] or "").strip() or None,
+            }
+        )
+    return items
+
+
 async def get_outbox_delivery_status() -> Dict[str, Any]:
     pool = await runtime_db.get_pool()
     if pool is None:
         return {
             "undelivered_count": 0,
             "poisoned_count": 0,
+            "repeated_failure_count": 0,
+            "stuck_count": 0,
             "total_retry_count": 0,
             "max_retry_count": 0,
             "last_delivery_error": None,
@@ -1468,6 +1567,15 @@ async def get_outbox_delivery_status() -> Dict[str, Any]:
             SELECT
                 COUNT(*) FILTER (WHERE delivered_at IS NULL AND poisoned_at IS NULL) AS undelivered_count,
                 COUNT(*) FILTER (WHERE delivered_at IS NULL AND poisoned_at IS NOT NULL) AS poisoned_count,
+                COUNT(*) FILTER (
+                    WHERE delivered_at IS NULL
+                      AND retry_count >= 3
+                ) AS repeated_failure_count,
+                COUNT(*) FILTER (
+                    WHERE delivered_at IS NULL
+                      AND poisoned_at IS NULL
+                      AND COALESCE(next_attempt_at, last_attempted_at, created_at) <= NOW() - INTERVAL '60 seconds'
+                ) AS stuck_count,
                 COALESCE(SUM(retry_count), 0) AS total_retry_count,
                 COALESCE(MAX(retry_count), 0) AS max_retry_count
             FROM runtime_outbox
@@ -1487,6 +1595,8 @@ async def get_outbox_delivery_status() -> Dict[str, Any]:
         return {
             "undelivered_count": 0,
             "poisoned_count": 0,
+            "repeated_failure_count": 0,
+            "stuck_count": 0,
             "total_retry_count": 0,
             "max_retry_count": 0,
             "last_delivery_error": None,
@@ -1494,6 +1604,8 @@ async def get_outbox_delivery_status() -> Dict[str, Any]:
     return {
         "undelivered_count": int(summary_row["undelivered_count"] if summary_row is not None else 0),
         "poisoned_count": int(summary_row["poisoned_count"] if summary_row is not None else 0),
+        "repeated_failure_count": int(summary_row["repeated_failure_count"] if summary_row is not None else 0),
+        "stuck_count": int(summary_row["stuck_count"] if summary_row is not None else 0),
         "total_retry_count": int(summary_row["total_retry_count"] if summary_row is not None else 0),
         "max_retry_count": int(summary_row["max_retry_count"] if summary_row is not None else 0),
         "last_delivery_error": (
@@ -1699,6 +1811,15 @@ def sync_mark_outbox_event_delivered(event_id: str) -> None:
     )
 
 
+def sync_patch_outbox_event_payload(event_id: str, payload_patch: Dict[str, Any]) -> None:
+    _run_sync(
+        lambda: patch_outbox_event_payload(event_id, payload_patch),
+        operation="sync_patch_outbox_event_payload",
+        fallback=None,
+        raise_on_error=True,
+    )
+
+
 def sync_record_outbox_delivery_failure(
     event_id: str,
     *,
@@ -1721,6 +1842,14 @@ def sync_record_outbox_delivery_failure(
     )
 
 
+def sync_list_poisoned_outbox_events(*, limit: int = 200) -> list[Dict[str, Any]]:
+    return _run_sync(
+        lambda: list_poisoned_outbox_events(limit=limit),
+        operation="sync_list_poisoned_outbox_events",
+        fallback=[],
+    )
+
+
 def sync_get_outbox_delivery_status() -> Dict[str, Any]:
     return _run_sync(
         get_outbox_delivery_status,
@@ -1728,6 +1857,8 @@ def sync_get_outbox_delivery_status() -> Dict[str, Any]:
         fallback={
             "undelivered_count": 0,
             "poisoned_count": 0,
+            "repeated_failure_count": 0,
+            "stuck_count": 0,
             "total_retry_count": 0,
             "max_retry_count": 0,
             "last_delivery_error": None,

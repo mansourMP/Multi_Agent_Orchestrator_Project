@@ -62,6 +62,11 @@ class OutboxServiceTests(unittest.TestCase):
         self.assertEqual(event.event_type, "channel_run_delivery")
         self.assertEqual(persisted[0]["payload"]["channel"], "telegram")
         self.assertEqual(persisted[0]["payload"]["connector_id"], "conn-1")
+        self.assertEqual(persisted[0]["payload"]["delivery"]["provider"], "telegram")
+        self.assertEqual(
+            persisted[0]["payload"]["delivery"]["provider_idempotency_key"],
+            "telegram:conn-1:run-1",
+        )
 
     def test_persist_local_runtime_state_builds_normalized_snapshot(self) -> None:
         captured = {}

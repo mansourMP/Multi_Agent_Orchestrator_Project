@@ -68,6 +68,7 @@ class WhatsAppRunDispatchServiceTests(unittest.TestCase):
             reply_to_number="whatsapp:+200",
             status="completed",
             summary="Run finished.",
+            provider_idempotency_key="whatsapp:conn-1:whatsapp:+200:run-1:message",
         )
 
         self.assertEqual(len(events), 2)
@@ -75,6 +76,11 @@ class WhatsAppRunDispatchServiceTests(unittest.TestCase):
         self.assertEqual(events[1]["event_type"], "run_completed")
         self.assertEqual(states[0][0], "conn-1")
         self.assertEqual(states[0][1]["last_error"], None)
+        self.assertEqual(
+            states[0][1]["last_delivery_idempotency_key"],
+            "whatsapp:conn-1:whatsapp:+200:run-1:message",
+        )
+        self.assertEqual(states[0][1]["last_outbound_message_sid"], "SM123")
 
     def test_deliver_final_response_dead_letters_send_failure(self) -> None:
         dead_letters = []
@@ -104,11 +110,16 @@ class WhatsAppRunDispatchServiceTests(unittest.TestCase):
                 reply_to_number="whatsapp:+400",
                 status="failed",
                 summary="twilio down",
+                provider_idempotency_key="whatsapp:conn-2:whatsapp:+400:run-2:message",
             )
 
         self.assertEqual(len(dead_letters), 1)
         self.assertEqual(events[0]["event_type"], "error")
         self.assertEqual(states[0][1]["last_error_category"], "network")
+        self.assertEqual(
+            states[0][1]["last_delivery_idempotency_key"],
+            "whatsapp:conn-2:whatsapp:+400:run-2:message",
+        )
         self.assertEqual(marked, ["twilio down"])
 
     def test_schedule_final_delivery_emits_outbox_event(self) -> None:
@@ -126,6 +137,10 @@ class WhatsAppRunDispatchServiceTests(unittest.TestCase):
         self.assertEqual(len(emitted), 1)
         self.assertEqual(emitted[0]["channel"], "whatsapp")
         self.assertEqual(emitted[0]["payload"]["reply_to_number"], "whatsapp:+200")
+        self.assertEqual(
+            emitted[0]["payload"]["delivery"]["provider_idempotency_key"],
+            "whatsapp:conn-1:whatsapp:+200:run-1:message",
+        )
 
 
 if __name__ == "__main__":

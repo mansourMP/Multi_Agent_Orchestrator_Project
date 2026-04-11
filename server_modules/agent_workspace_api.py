@@ -1121,6 +1121,61 @@ def _agent_workspace_status(
     return "idle", "standing by"
 
 
+def _list_workspace_live_runs_bounded(
+    *,
+    workspace_id: Optional[str] = None,
+    states: Optional[Set[str]] = None,
+    page_size: int = 200,
+) -> List[Dict[str, Any]]:
+    normalized_states = sorted(
+        {
+            str(state or "").strip().lower()
+            for state in (states or set())
+            if str(state or "").strip()
+        }
+    )
+    items: List[Dict[str, Any]] = []
+    offset = 0
+    safe_page_size = max(1, min(int(page_size), 500))
+    while True:
+        page = run_state_repository.sync_list_live_runs_page(
+            limit=safe_page_size,
+            offset=offset,
+            workspace_id=workspace_id,
+            states=normalized_states or None,
+        )
+        if not page:
+            break
+        items.extend(item for item in page if isinstance(item, dict))
+        if len(page) < safe_page_size:
+            break
+        offset += safe_page_size
+    return items
+
+
+def _list_workspace_pending_approvals_bounded(
+    *,
+    workspace_id: Optional[str] = None,
+    page_size: int = 200,
+) -> List[Dict[str, Any]]:
+    items: List[Dict[str, Any]] = []
+    offset = 0
+    safe_page_size = max(1, min(int(page_size), 500))
+    while True:
+        page = run_state_repository.sync_list_pending_approvals_page(
+            limit=safe_page_size,
+            offset=offset,
+            workspace_id=workspace_id,
+        )
+        if not page:
+            break
+        items.extend(item for item in page if isinstance(item, dict))
+        if len(page) < safe_page_size:
+            break
+        offset += safe_page_size
+    return items
+
+
 def register_agent_workspace_routes(app) -> None:
     import server as _server
 
@@ -1151,7 +1206,10 @@ def register_agent_workspace_routes(app) -> None:
         active_runs: List[Dict[str, Any]] = []
         pending_approvals: List[Dict[str, Any]] = []
         run_ids_for_workspace: Set[str] = set()
-        live_runs = run_state_repository.sync_list_live_runs()
+        live_runs = _list_workspace_live_runs_bounded(
+            workspace_id=workspace_filter,
+            states=active_statuses,
+        )
 
         for run in live_runs:
             if not isinstance(run, dict):
@@ -1181,22 +1239,20 @@ def register_agent_workspace_routes(app) -> None:
                     }
                 )
 
-            pending = run.get("pending_approval")
-            if status != "waiting_for_input" or not isinstance(pending, dict):
-                continue
-            approval_id = str(pending.get("approval_id") or "").strip()
-            if not approval_id:
-                continue
+        for approval in _list_workspace_pending_approvals_bounded(workspace_id=workspace_filter):
+            run_id = str(approval.get("run_id") or "").strip()
+            if run_id:
+                run_ids_for_workspace.add(run_id)
             pending_approvals.append(
                 {
                     "run_id": run_id,
-                    "approval_id": approval_id,
-                    "prompt": str(pending.get("prompt") or "Approval required."),
-                    "status": str(pending.get("status") or "pending").strip().lower() or "pending",
-                    "agent_role": str(metadata.get("agent_role") or "").strip() or None,
-                    "requested_at": pending.get("requested_at"),
-                    "expires_at": pending.get("expires_at"),
-                    "correlation_id": pending.get("correlation_id"),
+                    "approval_id": str(approval.get("approval_id") or "").strip(),
+                    "prompt": str(approval.get("prompt") or "Approval required."),
+                    "status": str(approval.get("status") or "pending").strip().lower() or "pending",
+                    "agent_role": str(approval.get("agent_role") or "").strip() or None,
+                    "requested_at": approval.get("requested_at"),
+                    "expires_at": approval.get("expires_at"),
+                    "correlation_id": approval.get("correlation_id"),
                 }
             )
 
@@ -1337,7 +1393,10 @@ def register_agent_workspace_routes(app) -> None:
         active_runs: List[Dict[str, Any]] = []
         pending_approvals: List[Dict[str, Any]] = []
         scoped_run_ids: Set[str] = set()
-        live_runs = run_state_repository.sync_list_live_runs()
+        live_runs = _list_workspace_live_runs_bounded(
+            workspace_id=workspace_filter,
+            states=active_statuses,
+        )
 
         for run in live_runs:
             if not isinstance(run, dict):
@@ -1356,23 +1415,27 @@ def register_agent_workspace_routes(app) -> None:
             status = str(snapshot.get("status") or "").strip().lower()
             if status in active_statuses:
                 active_runs.append(_summarize_history_item(snapshot))
-            pending = run.get("pending_approval")
-            if status == "waiting_for_input" and isinstance(pending, dict):
-                approval_id = str(pending.get("approval_id") or "").strip()
-                if approval_id:
-                    pending_approvals.append(
-                        {
-                            "run_id": run_id,
-                            "approval_id": approval_id,
-                            "prompt": str(pending.get("prompt") or "Approval required."),
-                            "status": str(pending.get("status") or "pending").strip().lower() or "pending",
-                            "agent_role": resolved_role or None,
-                            "agent_role_source": str(snapshot.get("agent_role_source") or "").strip() or None,
-                            "requested_at": pending.get("requested_at"),
-                            "expires_at": pending.get("expires_at"),
-                            "correlation_id": pending.get("correlation_id"),
-                        }
-                    )
+        for approval in _list_workspace_pending_approvals_bounded(workspace_id=workspace_filter):
+            run_id = str(approval.get("run_id") or "").strip()
+            approval_role = str(approval.get("agent_role") or "").strip().lower()
+            if target_role != "orchestrator" and approval_role != target_role:
+                continue
+            if run_id:
+                scoped_run_ids.add(run_id)
+            metadata = approval.get("metadata") if isinstance(approval.get("metadata"), dict) else {}
+            pending_approvals.append(
+                {
+                    "run_id": run_id,
+                    "approval_id": str(approval.get("approval_id") or "").strip(),
+                    "prompt": str(approval.get("prompt") or "Approval required."),
+                    "status": str(approval.get("status") or "pending").strip().lower() or "pending",
+                    "agent_role": approval_role or None,
+                    "agent_role_source": str(metadata.get("agent_role_source") or "").strip() or None,
+                    "requested_at": approval.get("requested_at"),
+                    "expires_at": approval.get("expires_at"),
+                    "correlation_id": approval.get("correlation_id"),
+                }
+            )
 
         queued_runs_all = queue_payload.get("queued_runs") if isinstance(queue_payload.get("queued_runs"), list) else []
         claimed_runs_all = queue_payload.get("claimed_runs") if isinstance(queue_payload.get("claimed_runs"), list) else []
@@ -1621,7 +1684,7 @@ def register_agent_workspace_routes(app) -> None:
                 break
 
         active_statuses = {"starting", "running", "running_local", "queued_local", "waiting_for_input"}
-        for run in run_state_repository.sync_list_live_runs():
+        for run in _list_workspace_live_runs_bounded(workspace_id=workspace_filter, states=active_statuses):
             if not isinstance(run, dict):
                 continue
             run_id = str(run.get("run_id") or "").strip()

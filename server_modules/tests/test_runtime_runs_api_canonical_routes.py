@@ -107,6 +107,7 @@ class RuntimeRunsApiCanonicalRouteTests(unittest.TestCase):
         original_privileged = runtime_runs_api._current_user_is_privileged
         original_extract_owner = runtime_runs_api._extract_run_owner_user_id
         original_list_live_runs = runtime_runs_api.run_state_repository.sync_list_live_runs
+        original_list_live_runs_page = runtime_runs_api.run_state_repository.sync_list_live_runs_page
         original_resolve_run_start_turn_request = runtime_runs_api.resolve_run_start_turn_request
         original_list_threads = runtime_runs_api.thread_service.list_threads
         original_get_thread = runtime_runs_api.thread_service.get_thread
@@ -141,6 +142,14 @@ class RuntimeRunsApiCanonicalRouteTests(unittest.TestCase):
                     "updated_at": "2026-04-06T10:10:00Z",
                 }
             ]
+            runtime_runs_api.run_state_repository.sync_list_live_runs_page = (
+                lambda limit=100, offset=0, workspace_id=None, states=None: [
+                    item
+                    for item in runtime_runs_api.run_state_repository.sync_list_live_runs()
+                    if (not workspace_id or str(item.get("workspace_id") or "") == str(workspace_id))
+                    and (not states or str(item.get("status") or "").lower() in {str(state).lower() for state in states})
+                ][offset : offset + limit]
+            )
             runtime_runs_api._late_server_export = lambda name: {
                 "runs": {
                     "run-live": {
@@ -431,6 +440,7 @@ class RuntimeRunsApiCanonicalRouteTests(unittest.TestCase):
             runtime_runs_api.thread_service.list_threads = original_list_threads
             runtime_runs_api.thread_service.get_thread = original_get_thread
             runtime_runs_api.run_state_repository.sync_list_live_runs = original_list_live_runs
+            runtime_runs_api.run_state_repository.sync_list_live_runs_page = original_list_live_runs_page
             if previous_server is None:
                 sys.modules.pop("server", None)
             else:
@@ -451,59 +461,63 @@ class RuntimeRunsApiCanonicalRouteTests(unittest.TestCase):
         original_refresh = runtime_runs_api._refresh_server_exports
         original_privileged = runtime_runs_api._current_user_is_privileged
         original_extract_owner = runtime_runs_api._extract_run_owner_user_id
-        original_list_live_runs = runtime_runs_api.run_state_repository.sync_list_live_runs
+        original_list_pending_approvals = runtime_runs_api.run_state_repository.sync_list_pending_approvals
+        original_list_pending_approvals_page = runtime_runs_api.run_state_repository.sync_list_pending_approvals_page
         try:
             runtime_runs_api.runtime_route_registration_service.register_runtime_run_routes_from_api = lambda *args, **kwargs: None
             runtime_runs_api._refresh_server_exports = lambda: fake_server
             runtime_runs_api._current_user_is_privileged = lambda current_user: False
             runtime_runs_api._extract_run_owner_user_id = lambda item: str(item.get("owner_user_id") or "")
-            runtime_runs_api.run_state_repository.sync_list_live_runs = lambda: [
+            runtime_runs_api.run_state_repository.sync_list_pending_approvals = lambda limit=100: [
                 {
+                    "approval_id": "approval-1",
                     "run_id": "run-pending",
                     "owner_user_id": "user-1",
                     "workspace_id": "default",
-                    "updated_at": "2026-04-06T10:00:00Z",
-                    "context": {
-                        "workspace_id": "default",
-                        "metadata": {"agent_role": "sage"},
+                    "status": "requested",
+                    "prompt": "Approve sending the summary by email.",
+                    "requested_at": "2026-04-06T10:00:00Z",
+                    "expires_at": "2026-04-06T10:05:00Z",
+                    "correlation_id": "corr-1",
+                    "target": "email",
+                    "actions": ["send_email"],
+                    "labels": ["email"],
+                    "capabilities": ["smtp.send"],
+                    "agent_role": "sage",
+                    "email_preview": {
+                        "recipient": "demo@example.com",
+                        "subject": "AI summary",
+                        "body_preview": "Top three paper findings.",
                     },
-                    "pending_confirmation": {
-                        "approval_id": "approval-1",
-                        "status": "waiting",
-                        "prompt": "Approve sending the summary by email.",
-                        "requested_at": "2026-04-06T10:00:00Z",
-                        "expires_at": "2026-04-06T10:05:00Z",
-                        "correlation_id": "corr-1",
-                        "metadata": {
-                            "kind": "email_review",
-                            "target": "email",
-                            "approval_actions": ["send_email"],
-                            "approval_labels": ["email"],
-                            "approval_capabilities": ["smtp.send"],
-                            "email_preview": {
-                                "recipient": "demo@example.com",
-                                "subject": "AI summary",
-                                "body_preview": "Top three paper findings.",
-                            },
+                    "metadata": {
+                        "kind": "email_review",
+                        "target": "email",
+                        "approval_actions": ["send_email"],
+                        "approval_labels": ["email"],
+                        "approval_capabilities": ["smtp.send"],
+                        "email_preview": {
+                            "recipient": "demo@example.com",
+                            "subject": "AI summary",
+                            "body_preview": "Top three paper findings.",
                         },
                     },
                 },
                 {
+                    "approval_id": "approval-2",
                     "run_id": "run-resolved",
                     "owner_user_id": "user-1",
                     "workspace_id": "default",
-                    "updated_at": "2026-04-06T10:01:00Z",
-                    "context": {
-                        "workspace_id": "default",
-                        "metadata": {"agent_role": "sage"},
-                    },
-                    "pending_confirmation": {
-                        "approval_id": "approval-2",
-                        "status": "resolved",
-                        "prompt": "Already handled.",
-                    },
+                    "status": "resolved",
+                    "prompt": "Already handled.",
                 },
             ]
+            runtime_runs_api.run_state_repository.sync_list_pending_approvals_page = (
+                lambda limit=100, offset=0, workspace_id=None: [
+                    item
+                    for item in runtime_runs_api.run_state_repository.sync_list_pending_approvals(limit=100)
+                    if (not workspace_id or str(item.get("workspace_id") or "") == str(workspace_id))
+                ][offset : offset + limit]
+            )
 
             app = _FakeApp()
             runtime_runs_api.register_run_routes(app)
@@ -519,7 +533,8 @@ class RuntimeRunsApiCanonicalRouteTests(unittest.TestCase):
             runtime_runs_api._refresh_server_exports = original_refresh
             runtime_runs_api._current_user_is_privileged = original_privileged
             runtime_runs_api._extract_run_owner_user_id = original_extract_owner
-            runtime_runs_api.run_state_repository.sync_list_live_runs = original_list_live_runs
+            runtime_runs_api.run_state_repository.sync_list_pending_approvals = original_list_pending_approvals
+            runtime_runs_api.run_state_repository.sync_list_pending_approvals_page = original_list_pending_approvals_page
             if previous_server is None:
                 sys.modules.pop("server", None)
             else:
@@ -624,10 +639,12 @@ class RuntimeRunsApiCanonicalRouteTests(unittest.TestCase):
         original_register = runtime_runs_api.runtime_route_registration_service.register_runtime_run_routes_from_api
         original_refresh = runtime_runs_api._refresh_server_exports
         original_list_live_runs = runtime_runs_api.run_state_repository.sync_list_live_runs
+        original_list_live_runs_page = runtime_runs_api.run_state_repository.sync_list_live_runs_page
         try:
             runtime_runs_api.runtime_route_registration_service.register_runtime_run_routes_from_api = lambda *args, **kwargs: None
             runtime_runs_api._refresh_server_exports = lambda: fake_server
             runtime_runs_api.run_state_repository.sync_list_live_runs = lambda: []
+            runtime_runs_api.run_state_repository.sync_list_live_runs_page = lambda limit=100, offset=0, workspace_id=None, states=None: []
 
             app = _FakeApp()
             runtime_runs_api.register_run_routes(app)
@@ -650,6 +667,7 @@ class RuntimeRunsApiCanonicalRouteTests(unittest.TestCase):
             runtime_runs_api.runtime_route_registration_service.register_runtime_run_routes_from_api = original_register
             runtime_runs_api._refresh_server_exports = original_refresh
             runtime_runs_api.run_state_repository.sync_list_live_runs = original_list_live_runs
+            runtime_runs_api.run_state_repository.sync_list_live_runs_page = original_list_live_runs_page
             if previous_server is None:
                 sys.modules.pop("server", None)
             else:

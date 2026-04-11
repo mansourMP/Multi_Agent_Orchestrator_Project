@@ -4,7 +4,7 @@ import threading
 from datetime import datetime, timezone
 from typing import Any, Optional
 
-from fastapi import Depends, Request
+from fastapi import Depends, HTTPException, Request
 from sse_starlette.sse import EventSourceResponse
 from server_modules.auth import (
     allowed_workspace_ids,
@@ -78,6 +78,7 @@ from server_modules.runtime_state_store import (
 from server_modules import runtime_heartbeat_service
 from server_modules import runtime_local_execution_approval_service
 from server_modules import runtime_route_registration_service
+from server_modules import runtime_run_approval_service
 from server_modules import runtime_run_access_service
 from server_modules import runtime_run_detail_service
 from server_modules import runtime_run_query_service
@@ -713,31 +714,37 @@ def register_run_routes(app) -> None:
                 turn_request=turn_request,
             )
 
-        if (
-            str(turn_request.execution_mode or "").strip().lower() == "sync"
-            and str(turn_request.response_mode or "").strip().lower() == "stream"
-        ):
-            turn_context_hints = model_to_dict(turn_request.context_hints)
-            return await build_agent_turn_stream_response(
-                current_user=current_user,
-                turn_request=turn_request,
-                last_event_id=request.headers.get("last-event-id") or turn_context_hints.get("last_event_id"),
-                services=_direct_chat_stream_response_services(),
-                chat_body=chat_body,
-                fallback_workspace_id=legacy_direct_resolution.workspace_id if legacy_direct_resolution else None,
-                fallback_thread_id=legacy_direct_resolution.thread_id if legacy_direct_resolution else None,
-                fallback_client_request_id=legacy_direct_resolution.client_request_id if legacy_direct_resolution else None,
-            )
+        try:
+            if (
+                str(turn_request.execution_mode or "").strip().lower() == "sync"
+                and str(turn_request.response_mode or "").strip().lower() == "stream"
+            ):
+                turn_context_hints = model_to_dict(turn_request.context_hints)
+                return await build_agent_turn_stream_response(
+                    current_user=current_user,
+                    turn_request=turn_request,
+                    last_event_id=request.headers.get("last-event-id") or turn_context_hints.get("last_event_id"),
+                    services=_direct_chat_stream_response_services(),
+                    chat_body=chat_body,
+                    fallback_workspace_id=legacy_direct_resolution.workspace_id if legacy_direct_resolution else None,
+                    fallback_thread_id=legacy_direct_resolution.thread_id if legacy_direct_resolution else None,
+                    fallback_client_request_id=legacy_direct_resolution.client_request_id if legacy_direct_resolution else None,
+                )
 
-        result = await execute_canonical_agent_turn(
-            turn_request=turn_request,
-            current_user=current_user,
-            run_execution_services=_run_execution_services(),
-            direct_chat_services=_direct_chat_execution_services(),
-            chat_body=chat_body,
-            run_request=run_request,
-        )
-        return normalize_agent_turn_result(result, turn_request=turn_request)
+            result = await execute_canonical_agent_turn(
+                turn_request=turn_request,
+                current_user=current_user,
+                run_execution_services=_run_execution_services(),
+                direct_chat_services=_direct_chat_execution_services(),
+                chat_body=chat_body,
+                run_request=run_request,
+            )
+            return normalize_agent_turn_result(result, turn_request=turn_request)
+        except session_service.SessionScopeViolationError as exc:
+            raise HTTPException(
+                status_code=409,
+                detail={"code": exc.code, "message": exc.detail},
+            ) from exc
 
     @app.get("/runs", dependencies=[Depends(viewer_dependency)], response_model=ApiRunListResponse)
     async def list_runs(
@@ -782,6 +789,12 @@ def register_run_routes(app) -> None:
             current_user=current_user,
             runs=_late_server_export("runs"),
             list_live_runs_fn=run_state_repository.sync_list_live_runs,
+            list_live_runs_page_fn=lambda page_limit, page_offset, page_workspace_id, page_states: run_state_repository.sync_list_live_runs_page(
+                limit=page_limit,
+                offset=page_offset,
+                workspace_id=page_workspace_id,
+                states=page_states,
+            ),
             run_history_lock=_late_server_export("RUN_HISTORY_LOCK"),
             run_history=_late_server_export("RUN_HISTORY"),
             serialize_run_snapshot=_late_server_export("_serialize_run_snapshot"),
@@ -805,129 +818,22 @@ def register_run_routes(app) -> None:
             if workspace_id
             else None
         )
-        entitlement_cache: dict[str, dict[str, Any]] = {}
-        if requested_workspace_id:
-            requested_entitlements = _workspace_entitlement_payload(entitlement_cache, requested_workspace_id)
-            requested_capabilities = (
-                requested_entitlements.get("capabilities")
-                if isinstance(requested_entitlements.get("capabilities"), dict)
-                else {}
-            )
-            if not bool(requested_capabilities.get("approvals_enabled")):
-                from fastapi import HTTPException
-
-                raise HTTPException(status_code=403, detail="Approvals are not included in this workspace plan.")
-        request_user_id = str((current_user or {}).get("user_id") or "").strip()
-        include_all = _current_user_is_privileged(current_user)
-        if not include_all and not request_user_id:
-            from fastapi import HTTPException
-
-            raise HTTPException(status_code=401, detail="Authenticated user id is required.")
-
-        items: list[dict[str, Any]] = []
-        for run in run_state_repository.sync_list_live_runs():
-            if not isinstance(run, dict):
-                continue
-            run_id = str(run.get("run_id") or "").strip()
-            if not run_id:
-                continue
-            if not include_all and _extract_run_owner_user_id(run) != request_user_id:
-                continue
-            context = run.get("context") if isinstance(run.get("context"), dict) else {}
-            metadata = context.get("metadata") if isinstance(context.get("metadata"), dict) else {}
-            run_workspace_id = str(
-                run.get("workspace_id")
-                or context.get("workspace_id")
-                or "default"
-            ).strip() or "default"
-            if requested_workspace_id and run_workspace_id != requested_workspace_id:
-                continue
-            if allowed_workspaces is not None and run_workspace_id not in allowed_workspaces:
-                continue
-            run_entitlements = _workspace_entitlement_payload(entitlement_cache, run_workspace_id)
-            run_capabilities = (
-                run_entitlements.get("capabilities")
-                if isinstance(run_entitlements.get("capabilities"), dict)
-                else {}
-            )
-            if not bool(run_capabilities.get("approvals_enabled")):
-                continue
-            pending = (
-                run.get("pending_confirmation")
-                if isinstance(run.get("pending_confirmation"), dict)
-                else run.get("pending_approval")
-                if isinstance(run.get("pending_approval"), dict)
-                else None
-            )
-            if not isinstance(pending, dict):
-                continue
-            approval_id = str(pending.get("approval_id") or "").strip()
-            if not approval_id:
-                continue
-            pending_status = str(pending.get("status") or "pending").strip().lower() or "pending"
-            if pending_status in {"resolved", "approved", "rejected", "expired", "cancelled", "canceled", "dismissed"}:
-                continue
-            pending_metadata = pending.get("metadata") if isinstance(pending.get("metadata"), dict) else {}
-            email_preview = pending_metadata.get("email_preview") if isinstance(pending_metadata.get("email_preview"), dict) else None
-            actions = pending.get("actions") if isinstance(pending.get("actions"), list) else pending_metadata.get("approval_actions")
-            labels = pending_metadata.get("approval_labels")
-            capabilities = pending_metadata.get("approval_capabilities")
-            prompt = str(pending.get("prompt") or pending.get("reason") or "Approval required.").strip()
-            items.append(
-                {
-                    "approval_id": approval_id,
-                    "run_id": run_id,
-                    "workspace_id": run_workspace_id,
-                    "owner_user_id": _extract_run_owner_user_id(run) or None,
-                    "status": pending_status,
-                    "action": (
-                        str(pending.get("action") or "").strip()
-                        or str(pending_metadata.get("kind") or "").strip()
-                        or str(metadata.get("agent_role") or "").strip()
-                        or "Approval"
-                    ),
-                    "summary": prompt,
-                    "prompt": prompt,
-                    "requested_at": pending.get("requested_at") or pending.get("created_at") or run.get("updated_at"),
-                    "expires_at": pending.get("expires_at"),
-                    "correlation_id": pending.get("correlation_id"),
-                    "scope": str(pending.get("scope") or "once").strip().lower() or "once",
-                    "reusable": bool(pending.get("reusable")),
-                    "consequence": (
-                        str(pending.get("consequence") or pending_metadata.get("consequence") or "").strip()
-                        or "This confirmation applies only to this pending step in this run. Later runs or later confirmation points will ask again."
-                    ),
-                    "actions": [
-                        str(item or "").strip()
-                        for item in (actions or [])
-                        if str(item or "").strip()
-                    ],
-                    "target": (
-                        str(
-                            pending.get("target")
-                            or pending_metadata.get("target")
-                            or pending_metadata.get("approval_target")
-                            or (email_preview or {}).get("recipient")
-                            or ""
-                        ).strip()
-                        or None
-                    ),
-                    "labels": [
-                        str(item or "").strip()
-                        for item in (labels or [])
-                        if str(item or "").strip()
-                    ],
-                    "capabilities": [
-                        str(item or "").strip()
-                        for item in (capabilities or [])
-                        if str(item or "").strip()
-                    ],
-                    "agent_role": str(metadata.get("agent_role") or "").strip() or None,
-                    "metadata": pending_metadata,
-                    "email_preview": email_preview,
-                }
-            )
-        items.sort(key=lambda item: str(item.get("requested_at") or ""), reverse=True)
+        payload = runtime_run_approval_service.list_pending_approvals_payload(
+            workspace_id=requested_workspace_id,
+            limit=100,
+            current_user=current_user,
+            allowed_workspace_ids=allowed_workspaces,
+            enforce_workspace_access_fn=enforce_workspace_access,
+            workspace_entitlement_payload_fn=_workspace_entitlement_payload,
+            current_user_is_privileged_fn=_current_user_is_privileged,
+            extract_run_owner_user_id_fn=_extract_run_owner_user_id,
+            list_pending_approvals_fn=lambda limit: run_state_repository.sync_list_pending_approvals_page(
+                limit=limit,
+                offset=0,
+                workspace_id=requested_workspace_id,
+            ),
+        )
+        items = list(payload.get("items") or [])
         return {
             "items": items,
             "pending": items,

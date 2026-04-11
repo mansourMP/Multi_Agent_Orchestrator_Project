@@ -4,6 +4,8 @@ from typing import Any, Callable
 
 from fastapi import HTTPException
 
+from server_modules import run_state_repository
+
 
 def build_run_detail_response_callbacks(
     *,
@@ -185,6 +187,7 @@ def build_run_list_response(
     extract_run_owner_user_id: Callable[[Any], str],
     summarize_history_item: Callable[[dict[str, Any]], dict[str, Any]],
     parse_utc_ts: Callable[[Any], Any],
+    list_live_runs_page_fn: Callable[[int, int, str | None, list[str] | None], list[dict[str, Any]]] | None = None,
 ) -> dict[str, Any]:
     safe_limit = max(1, min(int(limit), 200))
     safe_offset = max(0, int(offset))
@@ -201,7 +204,21 @@ def build_run_list_response(
     items: list[dict[str, Any]] = []
     seen_run_ids: set[str] = set()
 
-    live_runs = list_live_runs_fn() if callable(list_live_runs_fn) else run_state_repository.sync_list_live_runs()
+    live_runs: list[dict[str, Any]] = []
+    if callable(list_live_runs_page_fn):
+        page_size = max(safe_limit + safe_offset, 200)
+        page_offset = 0
+        requested_states = [str(status or "").strip().lower()] if str(status or "").strip() else None
+        while True:
+            page = list_live_runs_page_fn(page_size, page_offset, workspace_id, requested_states)
+            if not page:
+                break
+            live_runs.extend(page)
+            if len(page) < page_size:
+                break
+            page_offset += page_size
+    else:
+        live_runs = list_live_runs_fn() if callable(list_live_runs_fn) else run_state_repository.sync_list_live_runs()
     for run in live_runs:
         if not isinstance(run, dict):
             continue

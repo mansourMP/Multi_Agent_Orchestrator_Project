@@ -162,6 +162,42 @@ class AgentWorkspaceApiTests(unittest.TestCase):
         self.assertEqual(exc.exception.status_code, 403)
         self.assertEqual(exc.exception.detail, "Artifacts are not included in this workspace plan.")
 
+    def test_list_workspace_live_runs_bounded_pages_through_repository(self):
+        with patch.object(
+            agent_workspace_api.run_state_repository,
+            "sync_list_live_runs_page",
+            side_effect=[
+                [{"run_id": "run-1"}, {"run_id": "run-2"}],
+                [],
+            ],
+        ) as list_page:
+            items = agent_workspace_api._list_workspace_live_runs_bounded(
+                workspace_id="workspace-1",
+                states={"running"},
+                page_size=2,
+            )
+
+        self.assertEqual([item["run_id"] for item in items], ["run-1", "run-2"])
+        self.assertEqual(list_page.call_args_list[0].kwargs["workspace_id"], "workspace-1")
+        self.assertEqual(list_page.call_args_list[0].kwargs["states"], ["running"])
+
+    def test_list_workspace_pending_approvals_bounded_pages_through_repository(self):
+        with patch.object(
+            agent_workspace_api.run_state_repository,
+            "sync_list_pending_approvals_page",
+            side_effect=[
+                [{"approval_id": "approval-1"}, {"approval_id": "approval-2"}],
+                [],
+            ],
+        ) as list_page:
+            items = agent_workspace_api._list_workspace_pending_approvals_bounded(
+                workspace_id="workspace-1",
+                page_size=2,
+            )
+
+        self.assertEqual([item["approval_id"] for item in items], ["approval-1", "approval-2"])
+        self.assertEqual(list_page.call_args_list[0].kwargs["workspace_id"], "workspace-1")
+
 
 if __name__ == "__main__":
     unittest.main()

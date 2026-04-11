@@ -274,6 +274,66 @@ class RuntimeRunQueryServiceTests(unittest.TestCase):
         self.assertEqual(payload["items"][1]["run_id"], "run-archived")
         self.assertEqual(payload["items"][1]["source"], "history")
 
+    def test_build_run_list_response_supports_paged_live_run_queries(self):
+        runs = {}
+        history = [
+            {
+                "run_id": "run-history",
+                "status": "completed",
+                "workspace_id": "default",
+                "owner_user_id": "user-1",
+                "updated_at": "2026-04-06T08:00:00Z",
+                "created_at": "2026-04-06T07:55:00Z",
+            }
+        ]
+        pages = {
+            0: [
+                {
+                    "run_id": "run-live-1",
+                    "status": "running",
+                    "workspace_id": "default",
+                    "owner_user_id": "user-1",
+                    "updated_at": "2026-04-06T10:00:00Z",
+                    "created_at": "2026-04-06T09:55:00Z",
+                }
+            ],
+            200: [],
+        }
+        calls = []
+
+        payload = runtime_run_query_service.build_run_list_response(
+            limit=50,
+            offset=0,
+            workspace_id="default",
+            status=None,
+            pack_id=None,
+            current_user={"user_id": "user-1"},
+            runs=runs,
+            list_live_runs_fn=lambda: (_ for _ in ()).throw(AssertionError("full live run scan should not be used")),
+            run_history_lock=threading.Lock(),
+            run_history=history,
+            serialize_run_snapshot=lambda run_id, run: dict(run),
+            history_item_matches=lambda item, workspace_id, status, pack_id: (
+                (not workspace_id or item.get("workspace_id") == workspace_id)
+                and (not status or str(item.get("status") or "").lower() == str(status).lower())
+            ),
+            current_user_is_privileged=lambda current_user: False,
+            extract_run_owner_user_id=lambda item: str(item.get("owner_user_id") or ""),
+            summarize_history_item=lambda item: {
+                "run_id": item.get("run_id"),
+                "status": item.get("status"),
+                "updated_at": item.get("updated_at"),
+                "created_at": item.get("created_at"),
+            },
+            parse_utc_ts=lambda value: datetime.fromisoformat(str(value).replace("Z", "+00:00")) if value else None,
+            list_live_runs_page_fn=lambda limit, offset, workspace_id, states: calls.append((limit, offset, workspace_id, states)) or list(pages.get(offset, [])),
+        )
+
+        self.assertEqual(payload["count"], 2)
+        self.assertEqual([item["run_id"] for item in payload["items"]], ["run-live-1", "run-history"])
+        self.assertEqual(calls[0][1], 0)
+        self.assertEqual(calls[0][2], "default")
+
 
 if __name__ == "__main__":
     unittest.main()

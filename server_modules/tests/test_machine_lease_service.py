@@ -4,7 +4,20 @@ from datetime import datetime
 import queue
 from unittest.mock import patch
 
+from fastapi import HTTPException
 from server_modules import machine_lease_service
+
+
+def _capture_dispatched_operation(operations=None):
+    def _side_effect(awaitable, operation):
+        if isinstance(operations, list):
+            operations.append(operation)
+        close_fn = getattr(awaitable, "close", None)
+        if callable(close_fn):
+            close_fn()
+        return None
+
+    return _side_effect
 
 
 class MachineLeaseServiceTests(unittest.TestCase):
@@ -86,6 +99,70 @@ class MachineLeaseServiceTests(unittest.TestCase):
         self.assertEqual(verified["machine_id"], "runtime-1")
         self.assertEqual(registry["runtime-1"]["trust_state"], "verified")
 
+    def test_assert_machine_session_rejects_runtime_scope_drift(self) -> None:
+        registry = {
+            "runtime-1": {
+                "runtime_id": "runtime-1",
+                "machine_id": "runtime-1",
+                "instance_id": "instance-1",
+                "tenant_id": "tenant-1",
+                "workspace_id": "ws-1",
+                "runtime_type": "local_companion",
+                "runtime_role": "specialist",
+                "install_id": "install-a",
+                "specialist_key": "install-a",
+                "machine_enrollment_scope": "workspace",
+            }
+        }
+        machine_lease_service.issue_machine_session(
+            registry["runtime-1"],
+            token_factory=lambda _: "good",
+            hash_token_fn=lambda token: f"hash:{token}",
+            issued_at="2026-04-06T00:00:00Z",
+        )
+        registry["runtime-1"]["workspace_id"] = "ws-2"
+
+        with self.assertRaises(HTTPException) as exc:
+            machine_lease_service.assert_machine_session(
+                "runtime-1",
+                "good",
+                machine_registry=registry,
+                machine_registry_lock=threading.Lock(),
+                instance_id="instance-1",
+                hash_token_fn=lambda token: f"hash:{token}",
+                touch_machine_session_fn=lambda record: record.update({"trust_state": "verified"}),
+            )
+
+        self.assertEqual(exc.exception.status_code, 409)
+        self.assertEqual(exc.exception.detail, "runtime scope changed. Re-register this machine.")
+
+    def test_assert_machine_session_backfills_legacy_scope_binding(self) -> None:
+        registry = {
+            "runtime-1": {
+                "runtime_id": "runtime-1",
+                "machine_id": "runtime-1",
+                "instance_id": "instance-1",
+                "tenant_id": "tenant-1",
+                "workspace_id": "ws-1",
+                "runtime_type": "local_companion",
+                "session_token_hash": "hash:good",
+            }
+        }
+
+        verified = machine_lease_service.assert_machine_session(
+            "runtime-1",
+            "good",
+            machine_registry=registry,
+            machine_registry_lock=threading.Lock(),
+            instance_id="instance-1",
+            hash_token_fn=lambda token: f"hash:{token}",
+            touch_machine_session_fn=lambda record: record.update({"trust_state": "verified"}),
+        )
+
+        self.assertEqual(verified["workspace_id"], "ws-1")
+        self.assertEqual(registry["runtime-1"]["session_scope"]["workspace_id"], "ws-1")
+        self.assertTrue(str(registry["runtime-1"].get("session_scope_key") or "").strip())
+
     def test_claim_local_machine_lease_records_machine_and_lease_identity(self) -> None:
         pending = ["run-1"]
         claimed = {}
@@ -111,7 +188,7 @@ class MachineLeaseServiceTests(unittest.TestCase):
         repo_claims = []
         with patch(
             "server_modules.machine_lease_service.run_state_repository.dispatch_repository_call",
-            side_effect=lambda awaitable, operation: (repo_claims.append(operation), __import__("asyncio").run(awaitable)),
+            side_effect=_capture_dispatched_operation(repo_claims),
         ):
             claimed_run = machine_lease_service.claim_local_machine_lease(
                 "worker-1",
@@ -144,6 +221,64 @@ class MachineLeaseServiceTests(unittest.TestCase):
         self.assertEqual(seen, [("worker-1", "run-1", "busy", "claimed_local_run")])
         self.assertIn("claim_run:run-1", repo_claims)
 
+    def test_claim_local_machine_lease_skips_runs_outside_worker_workspace_scope(self) -> None:
+        pending = ["run-foreign", "run-local"]
+        claimed = {}
+        runs = {
+            "run-foreign": {
+                "status": "queued_local",
+                "context": {
+                    "workspace_id": "ws-2",
+                    "tenant_id": "tenant-1",
+                    "metadata": {"owner_user_id": "user-1"},
+                },
+            },
+            "run-local": {
+                "status": "queued_local",
+                "context": {
+                    "workspace_id": "ws-1",
+                    "tenant_id": "tenant-1",
+                    "metadata": {"owner_user_id": "user-1"},
+                },
+            },
+        }
+        worker_registry = {
+            "worker-1": {
+                "runtime_id": "worker-1",
+                "machine_id": "machine-1",
+                "tenant_id": "tenant-1",
+                "workspace_id": "ws-1",
+                "machine_enrollment_scope": "workspace",
+                "capabilities": [],
+            }
+        }
+
+        with patch(
+            "server_modules.machine_lease_service.run_state_repository.dispatch_repository_call",
+            side_effect=_capture_dispatched_operation(),
+        ):
+            claimed_run = machine_lease_service.claim_local_machine_lease(
+                "worker-1",
+                required_capabilities=[],
+                local_queue_lock=threading.Lock(),
+                pending_run_ids=pending,
+                claimed_runs=claimed,
+                worker_registry=worker_registry,
+                runs_by_id=runs,
+                lease_seconds=45,
+                cleanup_stale_local_claims_fn=lambda: None,
+                ordered_runtime_preferences_for_run_fn=lambda run: [],
+                best_online_preferred_runtime_fn=lambda ids: None,
+                required_capabilities_for_run_fn=lambda run: [],
+                normalize_capability_ids_fn=lambda items: [str(item).strip().lower() for item in (items or [])],
+                persist_local_runtime_state_fn=lambda: None,
+                mark_local_worker_seen_fn=lambda *args, **kwargs: None,
+                now_iso_fn=lambda: "2026-04-06T00:00:00Z",
+            )
+
+        self.assertEqual(claimed_run, "run-local")
+        self.assertEqual(pending, ["run-foreign"])
+
     def test_claim_local_machine_lease_balances_workspaces_and_specialists(self) -> None:
         pending = ["run-1", "run-2"]
         claimed = {
@@ -170,7 +305,7 @@ class MachineLeaseServiceTests(unittest.TestCase):
 
         with patch(
             "server_modules.machine_lease_service.run_state_repository.dispatch_repository_call",
-            side_effect=lambda awaitable, operation: __import__("asyncio").run(awaitable),
+            side_effect=_capture_dispatched_operation(),
         ):
             claimed_run = machine_lease_service.claim_local_machine_lease(
                 "worker-1",
@@ -213,7 +348,7 @@ class MachineLeaseServiceTests(unittest.TestCase):
 
         with patch(
             "server_modules.machine_lease_service.run_state_repository.dispatch_repository_call",
-            side_effect=lambda awaitable, operation: __import__("asyncio").run(awaitable),
+            side_effect=_capture_dispatched_operation(),
         ):
             claimed_run = machine_lease_service.claim_local_machine_lease(
                 "worker-1",
@@ -259,7 +394,7 @@ class MachineLeaseServiceTests(unittest.TestCase):
 
         with patch(
             "server_modules.machine_lease_service.run_state_repository.dispatch_repository_call",
-            side_effect=lambda awaitable, operation: __import__("asyncio").run(awaitable),
+            side_effect=_capture_dispatched_operation(),
         ):
             claimed_run = machine_lease_service.claim_local_machine_lease(
                 "worker-1",
@@ -302,7 +437,7 @@ class MachineLeaseServiceTests(unittest.TestCase):
 
         with patch(
             "server_modules.machine_lease_service.run_state_repository.dispatch_repository_call",
-            side_effect=lambda awaitable, operation: __import__("asyncio").run(awaitable),
+            side_effect=_capture_dispatched_operation(),
         ):
             claimed_run = machine_lease_service.claim_local_machine_lease(
                 "worker-1",
@@ -380,7 +515,7 @@ class MachineLeaseServiceTests(unittest.TestCase):
         repo_releases = []
         with patch(
             "server_modules.machine_lease_service.run_state_repository.dispatch_repository_call",
-            side_effect=lambda awaitable, operation: (repo_releases.append(operation), __import__("asyncio").run(awaitable)),
+            side_effect=_capture_dispatched_operation(repo_releases),
         ):
             result = machine_lease_service.release_machine_lease_claim(
                 "run-1",
@@ -401,6 +536,36 @@ class MachineLeaseServiceTests(unittest.TestCase):
         self.assertEqual(persisted, [True])
         self.assertEqual(seen, [("worker-1", None, "idle", "paused_waiting_for_input")])
         self.assertIn("release_claim:run-1", repo_releases)
+
+    def test_release_machine_lease_claim_rejects_stale_lease_id(self) -> None:
+        claimed = {
+            "run-1": {
+                "worker_id": "worker-1",
+                "machine_id": "machine-1",
+                "lease_id": "lease-new",
+            }
+        }
+
+        with patch(
+            "server_modules.machine_lease_service.run_state_repository.dispatch_repository_call",
+            side_effect=_capture_dispatched_operation(),
+        ) as dispatch_mock:
+            result = machine_lease_service.release_machine_lease_claim(
+                "run-1",
+                worker_id="worker-1",
+                lease_id="lease-old",
+                local_queue_lock=threading.Lock(),
+                claimed_runs=claimed,
+                persist_local_runtime_state_fn=lambda: None,
+                mark_local_worker_seen_fn=lambda *args, **kwargs: None,
+                status_hint="idle",
+                note="paused_waiting_for_input",
+            )
+
+        self.assertFalse(result["released"])
+        self.assertTrue(result["lease_mismatch"])
+        self.assertEqual(claimed["run-1"]["lease_id"], "lease-new")
+        dispatch_mock.assert_not_called()
 
     def test_cleanup_stale_machine_leases_moves_worker_offline_and_fails_run(self) -> None:
         claimed = {

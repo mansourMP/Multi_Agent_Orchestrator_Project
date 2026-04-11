@@ -157,6 +157,47 @@ class LocalQueueMachineControlTests(unittest.TestCase):
 
         self.assertEqual(len(cleanup_calls), 2)
 
+    def test_cleanup_stale_local_claims_releases_only_matching_lease(self) -> None:
+        original_server = local_queue._server
+        local_queue._server = SimpleNamespace(
+            _utc_now=lambda: datetime.fromisoformat("2026-04-08T10:00:00"),
+            LOCAL_QUEUE_LOCK=threading.Lock(),
+            LOCAL_PENDING_RUN_IDS=[],
+            LOCAL_CLAIMED_RUNS={"run-1": {"worker_id": "worker-1", "lease_id": "lease-new"}},
+            LOCAL_WORKER_REGISTRY={},
+            runs={"run-1": {"status": "running_local"}},
+            ORION_LOCAL_LEASE_SECONDS=30,
+            _parse_utc_ts=lambda value: datetime.fromisoformat(str(value).replace("Z", "")) if value else None,
+            _utc_now_iso=lambda: "2026-04-08T10:00:00Z",
+            emit_log=lambda *args, **kwargs: None,
+            set_run_status=lambda *args, **kwargs: None,
+        )
+        release_calls = []
+        remaining_claims = None
+        try:
+            with (
+                patch.object(local_queue.machine_lease_service, "cleanup_stale_machine_leases", return_value=[]),
+                patch.object(
+                    local_queue.run_state_repository,
+                    "sync_list_expired_local_claims",
+                    return_value=[{"run_id": "run-1", "worker_id": "worker-1", "lease_id": "lease-old"}],
+                ),
+                patch.object(
+                    local_queue.run_state_repository,
+                    "sync_release_claim",
+                    side_effect=lambda run_id, **kwargs: release_calls.append((run_id, kwargs.get("lease_id"))) or False,
+                ),
+                patch.object(local_queue.time, "monotonic", return_value=100.0),
+            ):
+                recovered = local_queue._cleanup_stale_local_claims()
+                remaining_claims = dict(local_queue._server.LOCAL_CLAIMED_RUNS)
+        finally:
+            local_queue._server = original_server
+
+        self.assertEqual(recovered, [])
+        self.assertEqual(release_calls, [("run-1", "lease-old")])
+        self.assertEqual(remaining_claims, {"run-1": {"worker_id": "worker-1", "lease_id": "lease-new"}})
+
     def test_handle_claim_local_run_avoids_full_queue_snapshot_when_idle(self) -> None:
         original_server = local_queue._server
         local_queue._server = SimpleNamespace(

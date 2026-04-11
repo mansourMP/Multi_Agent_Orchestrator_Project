@@ -1,6 +1,7 @@
 import importlib.util
 import json
 import hashlib
+import os
 import shutil
 import sys
 import tempfile
@@ -252,6 +253,132 @@ class LocalWorkerSessionTests(TestCase):
             registry.update(previous_registry)
 
         self.assertEqual(verified["runtime_id"], "worker-session")
+
+    def test_assert_runtime_session_rejects_workspace_scope_drift(self):
+        local_queue._init()
+        registry = local_queue._server.LOCAL_WORKER_REGISTRY
+        previous_registry = dict(registry)
+        try:
+            registry.clear()
+            registry["worker-scope"] = {
+                "tenant_id": "tenant-1",
+                "workspace_id": "ws-1",
+                "machine_enrollment_scope": "workspace",
+            }
+            with (
+                patch.object(local_queue, "_persist_local_runtime_state", return_value=None),
+                patch.object(local_queue.run_state_repository, "sync_upsert_fleet_worker", return_value=None),
+            ):
+                registration = local_queue._upsert_runtime_registration(
+                    "worker-scope",
+                    runtime_type="local_companion",
+                    display_name="Worker",
+                    platform="darwin",
+                    execution_targets=["local_companion"],
+                    instance_id="instance-scope",
+                    runtime_role="specialist",
+                    install_id="install-a",
+                )
+                registry["worker-scope"]["workspace_id"] = "ws-2"
+                with self.assertRaises(HTTPException) as exc:
+                    local_queue._assert_runtime_session(
+                        "worker-scope",
+                        registration["session_token"],
+                        instance_id="instance-scope",
+                    )
+        finally:
+            registry.clear()
+            registry.update(previous_registry)
+
+        self.assertEqual(exc.exception.status_code, 409)
+        self.assertEqual(exc.exception.detail, "runtime scope changed. Re-register this machine.")
+
+    def test_assert_runtime_session_shadow_mode_allows_scope_drift_for_rollback(self):
+        local_queue._init()
+        registry = local_queue._server.LOCAL_WORKER_REGISTRY
+        previous_registry = dict(registry)
+        previous_env = os.environ.get("ORION_ENFORCE_RUNTIME_SESSION_SCOPE")
+        try:
+            registry.clear()
+            registry["worker-shadow"] = {
+                "tenant_id": "tenant-1",
+                "workspace_id": "ws-1",
+                "machine_enrollment_scope": "workspace",
+            }
+            with (
+                patch.object(local_queue, "_persist_local_runtime_state", return_value=None),
+                patch.object(local_queue.run_state_repository, "sync_upsert_fleet_worker", return_value=None),
+            ):
+                registration = local_queue._upsert_runtime_registration(
+                    "worker-shadow",
+                    runtime_type="local_companion",
+                    display_name="Worker",
+                    platform="darwin",
+                    execution_targets=["local_companion"],
+                    instance_id="instance-shadow",
+                )
+                registry["worker-shadow"]["workspace_id"] = "ws-2"
+                with patch.dict(os.environ, {"ORION_ENFORCE_RUNTIME_SESSION_SCOPE": "0"}, clear=False):
+                    verified = local_queue._assert_runtime_session(
+                        "worker-shadow",
+                        registration["session_token"],
+                        instance_id="instance-shadow",
+                    )
+        finally:
+            if previous_env is None:
+                os.environ.pop("ORION_ENFORCE_RUNTIME_SESSION_SCOPE", None)
+            else:
+                os.environ["ORION_ENFORCE_RUNTIME_SESSION_SCOPE"] = previous_env
+            registry.clear()
+            registry.update(previous_registry)
+
+        self.assertEqual(verified["runtime_id"], "worker-shadow")
+        self.assertEqual(
+            registry["worker-shadow"]["session_scope_mismatch"]["current"]["workspace_id"],
+            "ws-2",
+        )
+
+    def test_assert_runtime_session_hydration_preserves_durable_scope_fields(self):
+        local_queue._init()
+        registry = local_queue._server.LOCAL_WORKER_REGISTRY
+        previous_registry = dict(registry)
+        try:
+            registry.clear()
+            registry["worker-hydrated"] = {
+                "worker_id": "worker-hydrated",
+                "runtime_id": "worker-hydrated",
+                "machine_id": "worker-hydrated",
+                "workspace_id": "stale-workspace",
+                "tenant_id": "stale-tenant",
+                "runtime_role": "generic",
+                "specialist_key": "stale-specialist",
+            }
+            with patch.object(
+                local_queue.run_state_repository,
+                "sync_get_fleet_worker",
+                return_value={
+                    "worker_id": "worker-hydrated",
+                    "runtime_id": "worker-hydrated",
+                    "machine_id": "worker-hydrated",
+                    "workspace_id": "durable-workspace",
+                    "tenant_id": "durable-tenant",
+                    "runtime_role": "specialist",
+                    "specialist_key": "install-a",
+                    "machine_enrollment_scope": "workspace",
+                    "instance_id": "instance-1",
+                    "session_token_hash": hashlib.sha256(b"good").hexdigest(),
+                    "lease_seconds": 30,
+                },
+            ):
+                hydrated = local_queue._hydrate_worker_from_durable_registry("worker-hydrated")
+        finally:
+            registry.clear()
+            registry.update(previous_registry)
+
+        self.assertEqual(hydrated["workspace_id"], "durable-workspace")
+        self.assertEqual(hydrated["tenant_id"], "durable-tenant")
+        self.assertEqual(hydrated["runtime_role"], "specialist")
+        self.assertEqual(hydrated["specialist_key"], "install-a")
 
     def test_bootstrap_enrolled_local_companion_runtime_marks_platform_relay_online(self):
         local_queue._init()

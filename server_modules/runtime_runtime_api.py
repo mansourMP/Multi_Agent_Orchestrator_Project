@@ -12,6 +12,7 @@ from fastapi import Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sse_starlette.sse import EventSourceResponse
+from starlette.concurrency import iterate_in_threadpool, run_in_threadpool
 
 from server_modules.auth import (
     allowed_workspace_ids,
@@ -26,6 +27,8 @@ from server_modules.runtime_common import require_api_key
 from server_modules import demo_workflows, local_queue, machine_capability_check
 from server_modules import outbox_service
 from server_modules import run_state_repository, runs_output, shared, telemetry
+from server_modules import entitlements_service
+from server_modules import security_audit_service
 
 SUPPORTED_STT_CONTENT_TYPES: Dict[str, str] = {
     "audio/webm": "input.webm",
@@ -60,6 +63,11 @@ class RuntimeRegisterPayload(BaseModel):
     summary_text: Optional[str] = None
     artifacts: Optional[List[Dict[str, Any]]] = None
     health_state: Optional[str] = None
+
+
+class RuntimeCompanionBootstrapPayload(RuntimeRegisterPayload):
+    runtime_type: str = "local_companion"
+    enrollment_token: str = Field(min_length=1)
 
 
 class RuntimeHeartbeatPayload(BaseModel):
@@ -109,6 +117,30 @@ class MachineEnrollPayload(BaseModel):
     capabilities: List[str] = Field(default_factory=list)
     execution_targets: List[str] = Field(default_factory=lambda: ["local_companion"])
     note: Optional[str] = None
+
+
+def _workspace_entitlement_payload(
+    cache: Dict[str, Dict[str, Any]],
+    workspace_id: str,
+) -> Dict[str, Any]:
+    token = str(workspace_id or "default").strip() or "default"
+    payload = cache.get(token)
+    if payload is None:
+        payload = entitlements_service.workspace_entitlement_payload_for_workspace_id(workspace_id=token)
+        cache[token] = payload
+    return payload
+
+
+def _ensure_advanced_features_access(workspace_id: str) -> None:
+    payload = entitlements_service.workspace_entitlement_payload_for_workspace_id(
+        workspace_id=str(workspace_id or "default").strip() or "default",
+    )
+    capabilities = payload.get("capabilities") if isinstance(payload.get("capabilities"), dict) else {}
+    if not bool(capabilities.get("advanced_features_enabled")):
+        raise HTTPException(
+            status_code=403,
+            detail="Advanced runtime controls are not included in this workspace plan.",
+        )
 
 
 class MachineEnrollmentStatePayload(BaseModel):
@@ -333,6 +365,7 @@ def _runtime_summary_from_worker_item(item: Dict[str, Any]) -> Dict[str, Any]:
         "machine_id": str(item.get("machine_id") or item.get("runtime_id") or item.get("worker_id") or ""),
         "runtime_id": str(item.get("runtime_id") or item.get("worker_id") or ""),
         "runtime_type": str(item.get("runtime_type") or "local"),
+        "connection_mode": str(item.get("connection_mode") or "direct_runtime_api").strip().lower() or "direct_runtime_api",
         "runtime_role": str(item.get("runtime_role") or "generic").strip().lower() or "generic",
         "install_id": str(item.get("install_id") or "").strip() or None,
         "specialist_key": str(item.get("specialist_key") or "").strip() or None,
@@ -646,6 +679,9 @@ def register_runtime_routes(app) -> None:
             if workspace_id
             else None
         )
+        entitlement_cache: Dict[str, Dict[str, Any]] = {}
+        if requested_workspace_id:
+            _ensure_advanced_features_access(requested_workspace_id)
         payload = runtime_status_payload()
         items = payload.get("items") if isinstance(payload.get("items"), list) else []
         allowed = allowed_workspace_ids(current_user)
@@ -660,6 +696,10 @@ def register_runtime_routes(app) -> None:
             if requested_workspace_id and item_workspace_id != requested_workspace_id:
                 continue
             if allowed is not None and item_workspace_id not in allowed:
+                continue
+            item_entitlements = _workspace_entitlement_payload(entitlement_cache, item_workspace_id)
+            item_capabilities = item_entitlements.get("capabilities") if isinstance(item_entitlements.get("capabilities"), dict) else {}
+            if not bool(item_capabilities.get("advanced_features_enabled")):
                 continue
             filtered.append(item)
         payload["items"] = filtered
@@ -688,6 +728,7 @@ def register_runtime_routes(app) -> None:
             minimum_role="member",
             capability_id="machines.manage",
         )
+        _ensure_advanced_features_access(workspace_id)
         tenant_id = workspace_tenant_id(current_user, workspace_id)
         enrollment_scope = workspace_machine_enrollment_scope(current_user, workspace_id)
         if enrollment_scope == "tenant" and workspace_role(current_user, workspace_id) != "owner":
@@ -709,6 +750,20 @@ def register_runtime_routes(app) -> None:
         )
         if workspace_role(current_user, workspace_id) == "owner":
             grant_workspace_owner_machine_trust(workspace_id, str(result.get("machine_id") or "").strip())
+        security_audit_service.emit_security_audit_event(
+            action="runtime_target.machine_enrolled",
+            tenant_id=tenant_id,
+            workspace_id=workspace_id,
+            current_user=current_user,
+            machine_id=str(result.get("machine_id") or body.machine_id or "").strip() or None,
+            trace_id=str(result.get("machine_id") or "").strip(),
+            idempotency_key=f"runtime_target.machine_enrolled:{workspace_id}:{str(result.get('machine_id') or body.machine_id or '').strip()}",
+            metadata={
+                "runtime_type": body.runtime_type,
+                "display_name": body.display_name,
+                "machine_enrollment_scope": enrollment_scope,
+            },
+        )
         return result
 
     @app.post("/machines/enrollment-intents", dependencies=[Depends(require_api_key)])
@@ -724,6 +779,7 @@ def register_runtime_routes(app) -> None:
             minimum_role="member",
             capability_id="machines.manage",
         )
+        _ensure_advanced_features_access(workspace_id)
         tenant_id = workspace_tenant_id(current_user, workspace_id)
         enrollment_scope = workspace_machine_enrollment_scope(current_user, workspace_id)
         if enrollment_scope == "tenant" and workspace_role(current_user, workspace_id) != "owner":
@@ -745,6 +801,20 @@ def register_runtime_routes(app) -> None:
         )
         if workspace_role(current_user, workspace_id) == "owner":
             grant_workspace_owner_machine_trust(workspace_id, str(result.get("machine_id") or "").strip())
+        security_audit_service.emit_security_audit_event(
+            action="runtime_target.machine_enrollment_intent_created",
+            tenant_id=tenant_id,
+            workspace_id=workspace_id,
+            current_user=current_user,
+            machine_id=str(result.get("machine_id") or body.machine_id or "").strip() or None,
+            trace_id=str(result.get("machine_id") or "").strip(),
+            idempotency_key=f"runtime_target.machine_enrollment_intent_created:{workspace_id}:{str(result.get('machine_id') or body.machine_id or '').strip()}",
+            metadata={
+                "runtime_type": body.runtime_type,
+                "display_name": body.display_name,
+                "machine_enrollment_scope": enrollment_scope,
+            },
+        )
         return result
 
     @app.post("/machines/{machine_id}/enrollment-state", dependencies=[Depends(require_api_key)])
@@ -783,8 +853,18 @@ def register_runtime_routes(app) -> None:
             minimum_role="member",
             capability_id="machines.manage",
         )
+        _ensure_advanced_features_access(workspace_id)
         result = local_queue.handle_delete_local_runtime(machine_id)
         revoke_workspace_owner_machine_trust(workspace_id, str(machine_id or "").strip())
+        security_audit_service.emit_security_audit_event(
+            action="runtime_target.machine_deleted",
+            tenant_id=str((machine or {}).get("tenant_id") or "default").strip() or "default",
+            workspace_id=workspace_id,
+            current_user=current_user,
+            machine_id=str(machine_id or "").strip() or None,
+            trace_id=str(machine_id or "").strip(),
+            idempotency_key=f"runtime_target.machine_deleted:{workspace_id}:{str(machine_id or '').strip()}",
+        )
         return result
 
     @app.post("/machines/{machine_id}/suspend", dependencies=[Depends(require_api_key)])
@@ -804,15 +884,27 @@ def register_runtime_routes(app) -> None:
             ),
             None,
         )
-        enforce_workspace_access(
+        workspace_id = enforce_workspace_access(
             current_user,
             (machine or {}).get("workspace_id") or "default",
             tenant_id=(machine or {}).get("tenant_id"),
             minimum_role="member",
             capability_id="machines.manage",
         )
+        _ensure_advanced_features_access(workspace_id)
         body = payload or MachineControlPayload()
-        return local_queue.handle_set_local_runtime_control(machine_id, action="suspend", reason=body.reason)
+        result = local_queue.handle_set_local_runtime_control(machine_id, action="suspend", reason=body.reason)
+        security_audit_service.emit_security_audit_event(
+            action="runtime_target.machine_suspended",
+            tenant_id=str((machine or {}).get("tenant_id") or "default").strip() or "default",
+            workspace_id=workspace_id,
+            current_user=current_user,
+            machine_id=str(machine_id or "").strip() or None,
+            trace_id=str(machine_id or "").strip(),
+            idempotency_key=f"runtime_target.machine_suspended:{workspace_id}:{str(machine_id or '').strip()}:{str(body.reason or '').strip()}",
+            metadata={"reason": str(body.reason or "").strip() or None},
+        )
+        return result
 
     @app.post("/machines/{machine_id}/resume", dependencies=[Depends(require_api_key)])
     async def resume_machine(
@@ -831,15 +923,27 @@ def register_runtime_routes(app) -> None:
             ),
             None,
         )
-        enforce_workspace_access(
+        workspace_id = enforce_workspace_access(
             current_user,
             (machine or {}).get("workspace_id") or "default",
             tenant_id=(machine or {}).get("tenant_id"),
             minimum_role="member",
             capability_id="machines.manage",
         )
+        _ensure_advanced_features_access(workspace_id)
         body = payload or MachineControlPayload()
-        return local_queue.handle_set_local_runtime_control(machine_id, action="resume", reason=body.reason)
+        result = local_queue.handle_set_local_runtime_control(machine_id, action="resume", reason=body.reason)
+        security_audit_service.emit_security_audit_event(
+            action="runtime_target.machine_resumed",
+            tenant_id=str((machine or {}).get("tenant_id") or "default").strip() or "default",
+            workspace_id=workspace_id,
+            current_user=current_user,
+            machine_id=str(machine_id or "").strip() or None,
+            trace_id=str(machine_id or "").strip(),
+            idempotency_key=f"runtime_target.machine_resumed:{workspace_id}:{str(machine_id or '').strip()}:{str(body.reason or '').strip()}",
+            metadata={"reason": str(body.reason or "").strip() or None},
+        )
+        return result
 
     @app.post("/machines/{machine_id}/hard-kill", dependencies=[Depends(require_api_key)])
     async def hard_kill_machine(
@@ -858,20 +962,32 @@ def register_runtime_routes(app) -> None:
             ),
             None,
         )
-        enforce_workspace_access(
+        workspace_id = enforce_workspace_access(
             current_user,
             (machine or {}).get("workspace_id") or "default",
             tenant_id=(machine or {}).get("tenant_id"),
             minimum_role="member",
             capability_id="machines.manage",
         )
+        _ensure_advanced_features_access(workspace_id)
         body = payload or MachineControlPayload()
         requested_by = str((current_user or {}).get("user_id") or (current_user or {}).get("auth_type") or "operator").strip() or "operator"
-        return local_queue.handle_request_local_runtime_hard_kill(
+        result = local_queue.handle_request_local_runtime_hard_kill(
             machine_id,
             reason=body.reason,
             requested_by=requested_by,
         )
+        security_audit_service.emit_security_audit_event(
+            action="runtime_target.machine_hard_killed",
+            tenant_id=str((machine or {}).get("tenant_id") or "default").strip() or "default",
+            workspace_id=workspace_id,
+            current_user=current_user,
+            machine_id=str(machine_id or "").strip() or None,
+            trace_id=str(machine_id or "").strip(),
+            idempotency_key=f"runtime_target.machine_hard_killed:{workspace_id}:{str(machine_id or '').strip()}:{requested_by}",
+            metadata={"reason": str(body.reason or "").strip() or None},
+        )
+        return result
 
     @app.post("/runs/{run_id}/hard-kill", dependencies=[Depends(require_api_key)])
     async def hard_kill_run(
@@ -899,11 +1015,22 @@ def register_runtime_routes(app) -> None:
             requested_by=requested_by,
         )
         result["workspace_id"] = workspace_id
+        security_audit_service.emit_security_audit_event(
+            action="runtime_target.run_hard_killed",
+            tenant_id=context.get("tenant_id") or metadata.get("tenant_id") or "default",
+            workspace_id=workspace_id,
+            current_user=current_user,
+            run_id=str(run_id),
+            machine_id=str(run.get("machine_id") or run.get("local_worker_id") or "").strip() or None,
+            trace_id=str(run_id),
+            idempotency_key=f"runtime_target.run_hard_killed:{workspace_id}:{str(run_id)}:{requested_by}",
+            metadata={"reason": str(body.reason or "").strip() or None},
+        )
         return result
 
     @app.get("/local/workers/status", dependencies=[Depends(require_api_key)])
     async def get_legacy_local_workers_status():
-        return legacy_local_workers_status_payload()
+        return await run_in_threadpool(legacy_local_workers_status_payload)
 
     @app.post("/runtime/runtimes/{runtime_id}/register", dependencies=[Depends(require_api_key)])
     async def register_runtime(runtime_id: str, payload: Optional[RuntimeRegisterPayload] = None):
@@ -911,35 +1038,19 @@ def register_runtime_routes(app) -> None:
         if not runtime_token:
             raise HTTPException(status_code=400, detail="runtime_id is required.")
         body = payload or RuntimeRegisterPayload()
-        registration = local_queue.handle_register_local_cluster_runtime(
-            runtime_token,
-            runtime_type=body.runtime_type,
-            display_name=body.display_name,
-            platform=body.platform,
-            policy_mode=body.policy_mode,
-            capabilities=body.capabilities,
-            execution_targets=body.execution_targets or ["local"],
-            instance_id=body.instance_id,
-            capability_digest=body.capability_digest,
-            prewarm_state=body.prewarm_state,
-            warm_pool=body.warm_pool,
-            permission_probe=body.permission_probe,
-            runtime_role=body.runtime_role,
-            install_id=body.install_id,
-            specialist_key=body.specialist_key,
-            summary_channel=body.summary_channel,
-            artifact_channel=body.artifact_channel,
-            local_private_memory_only=body.local_private_memory_only,
-            note=body.note,
-            summary_text=body.summary_text,
-            artifacts=body.artifacts,
-            health_state=body.health_state,
-        )
-        runtime = local_queue.handle_start_local_runtime(
-            runtime_token,
-            local_queue.LocalWorkerHeartbeatPayload(
-                current_run_id=body.current_run_id,
-                note=body.note or "runtime_registered",
+        def _register_runtime() -> tuple[Dict[str, Any], Dict[str, Any]]:
+            registration = local_queue.handle_register_local_cluster_runtime(
+                runtime_token,
+                runtime_type=body.runtime_type,
+                display_name=body.display_name,
+                platform=body.platform,
+                policy_mode=body.policy_mode,
+                capabilities=body.capabilities,
+                execution_targets=body.execution_targets or ["local"],
+                instance_id=body.instance_id,
+                capability_digest=body.capability_digest,
+                prewarm_state=body.prewarm_state,
+                warm_pool=body.warm_pool,
                 permission_probe=body.permission_probe,
                 runtime_role=body.runtime_role,
                 install_id=body.install_id,
@@ -947,11 +1058,31 @@ def register_runtime_routes(app) -> None:
                 summary_channel=body.summary_channel,
                 artifact_channel=body.artifact_channel,
                 local_private_memory_only=body.local_private_memory_only,
+                note=body.note,
                 summary_text=body.summary_text,
                 artifacts=body.artifacts,
                 health_state=body.health_state,
-            ),
-        )
+            )
+            runtime = local_queue.handle_start_local_runtime(
+                runtime_token,
+                local_queue.LocalWorkerHeartbeatPayload(
+                    current_run_id=body.current_run_id,
+                    note=body.note or "runtime_registered",
+                    permission_probe=body.permission_probe,
+                    runtime_role=body.runtime_role,
+                    install_id=body.install_id,
+                    specialist_key=body.specialist_key,
+                    summary_channel=body.summary_channel,
+                    artifact_channel=body.artifact_channel,
+                    local_private_memory_only=body.local_private_memory_only,
+                    summary_text=body.summary_text,
+                    artifacts=body.artifacts,
+                    health_state=body.health_state,
+                ),
+            )
+            return registration, runtime
+
+        registration, runtime = await run_in_threadpool(_register_runtime)
         return {
             "ok": True,
             "runtime": _runtime_summary_from_worker_item(runtime.get("runtime") or {}),
@@ -962,17 +1093,68 @@ def register_runtime_routes(app) -> None:
             "session_issued_at": registration.get("session_issued_at"),
         }
 
-    @app.post("/runtime/runtimes/{runtime_id}/heartbeat", dependencies=[Depends(require_api_key)])
+    @app.post("/runtime/companions/{runtime_id}/bootstrap")
+    async def bootstrap_runtime_companion(runtime_id: str, payload: RuntimeCompanionBootstrapPayload):
+        runtime_token = str(runtime_id or "").strip()
+        if not runtime_token:
+            raise HTTPException(status_code=400, detail="runtime_id is required.")
+        body = payload
+
+        def _bootstrap_runtime() -> Dict[str, Any]:
+            return local_queue.handle_bootstrap_enrolled_local_companion_runtime(
+                runtime_token,
+                enrollment_token=body.enrollment_token,
+                runtime_type=body.runtime_type or "local_companion",
+                display_name=body.display_name,
+                platform=body.platform,
+                policy_mode=body.policy_mode,
+                capabilities=body.capabilities,
+                execution_targets=body.execution_targets or ["local_companion"],
+                instance_id=body.instance_id,
+                capability_digest=body.capability_digest,
+                prewarm_state=body.prewarm_state,
+                warm_pool=body.warm_pool,
+                permission_probe=body.permission_probe,
+                runtime_role=body.runtime_role,
+                install_id=body.install_id,
+                specialist_key=body.specialist_key,
+                summary_channel=body.summary_channel,
+                artifact_channel=body.artifact_channel,
+                local_private_memory_only=body.local_private_memory_only,
+                note=body.note,
+                current_run_id=body.current_run_id,
+                summary_text=body.summary_text,
+                artifacts=body.artifacts,
+                health_state=body.health_state,
+            )
+
+        result = await run_in_threadpool(_bootstrap_runtime)
+        return {
+            "ok": True,
+            "runtime": _runtime_summary_from_worker_item(result.get("runtime") or {}),
+            "session_token": result.get("session_token"),
+            "machine_id": result.get("machine_id") or runtime_token,
+            "instance_id": result.get("instance_id"),
+            "capability_digest": result.get("capability_digest"),
+            "session_issued_at": result.get("session_issued_at"),
+            "enrollment_bootstrap": True,
+            "connection_mode": result.get("connection_mode") or "platform_relay",
+        }
+
+    @app.post("/runtime/runtimes/{runtime_id}/heartbeat")
     async def heartbeat_runtime(runtime_id: str, payload: Optional[RuntimeHeartbeatPayload] = None):
         runtime_token = str(runtime_id or "").strip()
         if not runtime_token:
             raise HTTPException(status_code=400, detail="runtime_id is required.")
         body = payload or RuntimeHeartbeatPayload()
-        local_queue._assert_runtime_session(runtime_token, body.session_token, instance_id=body.instance_id)
         local_payload = _local_cluster_worker_payload(body)
         if not str(local_payload.note or "").strip():
             local_payload.note = "runtime_heartbeat"
-        result = local_queue.handle_heartbeat_local_runtime(runtime_token, local_payload)
+        def _heartbeat_runtime() -> Dict[str, Any]:
+            local_queue._assert_runtime_session(runtime_token, body.session_token, instance_id=body.instance_id)
+            return local_queue.handle_heartbeat_local_runtime(runtime_token, local_payload)
+
+        result = await run_in_threadpool(_heartbeat_runtime)
         return {
             "ok": True,
             "runtime_id": runtime_token,
@@ -987,7 +1169,8 @@ def register_runtime_routes(app) -> None:
         if not runtime_token:
             raise HTTPException(status_code=400, detail="runtime_id is required.")
         body = payload or RuntimeRegisterPayload()
-        result = local_queue.handle_register_local_cluster_runtime(
+        result = await run_in_threadpool(
+            local_queue.handle_register_local_cluster_runtime,
             runtime_token,
             runtime_type=body.runtime_type,
             display_name=body.display_name,
@@ -1014,14 +1197,17 @@ def register_runtime_routes(app) -> None:
         result["runtime"] = _runtime_summary_from_worker_item(result.get("runtime") or {})
         return result
 
-    @app.post("/runtime/local-cluster/{runtime_id}/start", dependencies=[Depends(require_api_key)])
+    @app.post("/runtime/local-cluster/{runtime_id}/start")
     async def start_local_cluster_runtime(runtime_id: str, payload: Optional[LocalClusterLifecyclePayload] = None):
         runtime_token = str(runtime_id or "").strip()
         if not runtime_token:
             raise HTTPException(status_code=400, detail="runtime_id is required.")
         body = payload or LocalClusterLifecyclePayload()
-        local_queue._assert_runtime_session(runtime_token, body.session_token, instance_id=body.instance_id)
-        result = local_queue.handle_start_local_runtime(runtime_token, _local_cluster_worker_payload(body))
+        def _start_runtime() -> Dict[str, Any]:
+            local_queue._assert_runtime_session(runtime_token, body.session_token, instance_id=body.instance_id)
+            return local_queue.handle_start_local_runtime(runtime_token, _local_cluster_worker_payload(body))
+
+        result = await run_in_threadpool(_start_runtime)
         result["runtime"] = _runtime_summary_from_worker_item(result.get("runtime") or {})
         return result
 
@@ -1030,36 +1216,42 @@ def register_runtime_routes(app) -> None:
         runtime_token = str(runtime_id or "").strip()
         if not runtime_token:
             raise HTTPException(status_code=400, detail="runtime_id is required.")
-        result = local_queue.handle_get_local_runtime_health(runtime_token)
+        result = await run_in_threadpool(local_queue.handle_get_local_runtime_health, runtime_token)
         result["runtime"] = _runtime_summary_from_worker_item(result.get("runtime") or {})
         return result
 
-    @app.post("/runtime/local-cluster/{runtime_id}/heartbeat", dependencies=[Depends(require_api_key)])
+    @app.post("/runtime/local-cluster/{runtime_id}/heartbeat")
     async def heartbeat_local_cluster_runtime(runtime_id: str, payload: Optional[LocalClusterLifecyclePayload] = None):
         runtime_token = str(runtime_id or "").strip()
         if not runtime_token:
             raise HTTPException(status_code=400, detail="runtime_id is required.")
         body = payload or LocalClusterLifecyclePayload()
-        local_queue._assert_runtime_session(runtime_token, body.session_token, instance_id=body.instance_id)
-        result = local_queue.handle_heartbeat_local_runtime(runtime_token, _local_cluster_worker_payload(body))
+        def _heartbeat_local_cluster_runtime() -> Dict[str, Any]:
+            local_queue._assert_runtime_session(runtime_token, body.session_token, instance_id=body.instance_id)
+            return local_queue.handle_heartbeat_local_runtime(runtime_token, _local_cluster_worker_payload(body))
+
+        result = await run_in_threadpool(_heartbeat_local_cluster_runtime)
         result["runtime"] = _runtime_summary_from_worker_item(result.get("runtime") or {})
         return result
 
-    @app.post("/runtime/local-cluster/{runtime_id}/stop", dependencies=[Depends(require_api_key)])
+    @app.post("/runtime/local-cluster/{runtime_id}/stop")
     async def stop_local_cluster_runtime(runtime_id: str, payload: Optional[LocalClusterLifecyclePayload] = None):
         runtime_token = str(runtime_id or "").strip()
         if not runtime_token:
             raise HTTPException(status_code=400, detail="runtime_id is required.")
         body = payload or LocalClusterLifecyclePayload()
-        local_queue._assert_runtime_session(runtime_token, body.session_token, instance_id=body.instance_id)
-        result = local_queue.handle_stop_local_runtime(
-            runtime_token,
-            reason=body.reason,
-            note=body.note,
-            summary_text=body.summary_text,
-            artifacts=body.artifacts,
-            health_state=body.health_state,
-        )
+        def _stop_runtime() -> Dict[str, Any]:
+            local_queue._assert_runtime_session(runtime_token, body.session_token, instance_id=body.instance_id)
+            return local_queue.handle_stop_local_runtime(
+                runtime_token,
+                reason=body.reason,
+                note=body.note,
+                summary_text=body.summary_text,
+                artifacts=body.artifacts,
+                health_state=body.health_state,
+            )
+
+        result = await run_in_threadpool(_stop_runtime)
         result["runtime"] = _runtime_summary_from_worker_item(result.get("runtime") or {})
         return result
 
@@ -1069,22 +1261,25 @@ def register_runtime_routes(app) -> None:
         if not runtime_token:
             raise HTTPException(status_code=400, detail="runtime_id is required.")
         body = payload or LocalClusterLifecyclePayload()
-        result = local_queue.handle_revoke_local_runtime(runtime_token, reason=body.reason)
+        result = await run_in_threadpool(local_queue.handle_revoke_local_runtime, runtime_token, reason=body.reason)
         result["machine"] = _runtime_summary_from_worker_item(result.get("machine") or {})
         return result
 
-    @app.post("/runtime/local-cluster/{runtime_id}/recover", dependencies=[Depends(require_api_key)])
+    @app.post("/runtime/local-cluster/{runtime_id}/recover")
     async def recover_local_cluster_runtime(runtime_id: str, payload: Optional[LocalClusterLifecyclePayload] = None):
         runtime_token = str(runtime_id or "").strip()
         if not runtime_token:
             raise HTTPException(status_code=400, detail="runtime_id is required.")
         body = payload or LocalClusterLifecyclePayload()
-        local_queue._assert_runtime_session(runtime_token, body.session_token, instance_id=body.instance_id)
-        result = local_queue.handle_recover_local_runtime(runtime_token, _local_cluster_worker_payload(body))
+        def _recover_runtime() -> Dict[str, Any]:
+            local_queue._assert_runtime_session(runtime_token, body.session_token, instance_id=body.instance_id)
+            return local_queue.handle_recover_local_runtime(runtime_token, _local_cluster_worker_payload(body))
+
+        result = await run_in_threadpool(_recover_runtime)
         result["runtime"] = _runtime_summary_from_worker_item(result.get("runtime") or {})
         return result
 
-    @app.get("/runtime/runtimes/{runtime_id}/control/stream", dependencies=[Depends(require_api_key)])
+    @app.get("/runtime/runtimes/{runtime_id}/control/stream")
     async def stream_runtime_control(
         runtime_id: str,
         session_token: Optional[str] = None,
@@ -1100,32 +1295,37 @@ def register_runtime_routes(app) -> None:
         local_queue._assert_runtime_session(runtime_token, session_token, instance_id=instance_id)
         safe_heartbeat = max(1.0, min(float(heartbeat_seconds), 60.0))
         return EventSourceResponse(
-            local_queue.iter_runtime_control_stream(
-                runtime_token,
-                since_sequence=max(0, int(since_sequence or 0)),
-                include_backlog=bool(include_backlog),
-                heartbeat_seconds=safe_heartbeat,
-                timeout_seconds=max(safe_heartbeat, min(float(timeout_seconds or 30.0), 300.0)),
+            iterate_in_threadpool(
+                local_queue.iter_runtime_control_stream(
+                    runtime_token,
+                    since_sequence=max(0, int(since_sequence or 0)),
+                    include_backlog=bool(include_backlog),
+                    heartbeat_seconds=safe_heartbeat,
+                    timeout_seconds=max(safe_heartbeat, min(float(timeout_seconds or 30.0), 300.0)),
+                )
             ),
             ping=max(3, int(safe_heartbeat)),
         )
 
-    @app.post("/runtime/tasks/claim", dependencies=[Depends(require_api_key)])
+    @app.post("/runtime/tasks/claim")
     async def claim_runtime_task(body: Optional[RuntimeTaskClaimRequest] = None):
         payload = body or RuntimeTaskClaimRequest()
         runtime_token = str(payload.runtime_id or "").strip()
         if not runtime_token:
             raise HTTPException(status_code=400, detail="runtime_id is required.")
-        local_queue._assert_runtime_session(runtime_token, payload.session_token, instance_id=payload.instance_id)
         requested_target = str(payload.execution_target or "local").strip().lower()
         if requested_target not in {"local", "local_companion"}:
             raise HTTPException(status_code=400, detail="Only local execution_target is supported by this runtime bridge.")
-        result = local_queue.handle_claim_local_run(
-            local_queue.LocalRunClaimRequest(
-                worker_id=runtime_token,
-                required_capabilities=list(payload.required_capabilities or []),
+        def _claim_task() -> Dict[str, Any]:
+            local_queue._assert_runtime_session(runtime_token, payload.session_token, instance_id=payload.instance_id)
+            return local_queue.handle_claim_local_run(
+                local_queue.LocalRunClaimRequest(
+                    worker_id=runtime_token,
+                    required_capabilities=list(payload.required_capabilities or []),
+                )
             )
-        )
+
+        result = await run_in_threadpool(_claim_task)
         run = result.get("run") if isinstance(result.get("run"), dict) else None
         return {
             "ok": True,
@@ -1133,71 +1333,86 @@ def register_runtime_routes(app) -> None:
             "task": _task_summary_from_local_claim(run) if isinstance(run, dict) else None,
         }
 
-    @app.post("/runtime/tasks/{task_id}/heartbeat", dependencies=[Depends(require_api_key)])
+    @app.post("/runtime/tasks/{task_id}/heartbeat")
     async def heartbeat_runtime_task(task_id: uuid.UUID, payload: Optional[RuntimeTaskHeartbeatPayload] = None):
         body = payload or RuntimeTaskHeartbeatPayload()
         runtime_token = str(body.runtime_id or "").strip()
-        local_queue._assert_runtime_session(runtime_token, body.session_token, instance_id=body.instance_id)
         local_payload = local_queue.LocalRunHeartbeatPayload(
             worker_id=runtime_token or None,
             note=body.note or "runtime_task_heartbeat",
             event=(dict(body.event) if isinstance(body.event, dict) else None),
         )
-        result = local_queue.handle_heartbeat_local_run(task_id, local_payload)
+        def _heartbeat_task() -> Dict[str, Any]:
+            local_queue._assert_runtime_session(runtime_token, body.session_token, instance_id=body.instance_id)
+            return local_queue.handle_heartbeat_local_run(task_id, local_payload)
+
+        result = await run_in_threadpool(_heartbeat_task)
         return {
             "ok": True,
             "task_id": str(task_id),
             "last_heartbeat_at": result.get("last_heartbeat_at"),
         }
 
-    @app.post("/runtime/tasks/{task_id}/control-state", dependencies=[Depends(require_api_key)])
+    @app.post("/runtime/tasks/{task_id}/control-state")
     async def get_runtime_task_control_state(task_id: uuid.UUID, payload: Optional[RuntimeTaskControlStatePayload] = None):
         body = payload or RuntimeTaskControlStatePayload()
         runtime_token = str(body.runtime_id or "").strip()
-        local_queue._assert_runtime_session(runtime_token, body.session_token, instance_id=body.instance_id)
-        result = local_queue.handle_get_local_run_control_state(
-            task_id,
-            local_queue.LocalRunControlStatePayload(worker_id=runtime_token or None),
-        )
+        def _get_control_state() -> Dict[str, Any]:
+            local_queue._assert_runtime_session(runtime_token, body.session_token, instance_id=body.instance_id)
+            return local_queue.handle_get_local_run_control_state(
+                task_id,
+                local_queue.LocalRunControlStatePayload(worker_id=runtime_token or None),
+            )
+
+        result = await run_in_threadpool(_get_control_state)
         return {"ok": True, "task_id": str(task_id), **result}
 
-    @app.post("/runtime/tasks/{task_id}/complete", dependencies=[Depends(require_api_key)])
+    @app.post("/runtime/tasks/{task_id}/complete")
     async def complete_runtime_task(task_id: uuid.UUID, payload: RuntimeTaskCompletePayload):
-        local_queue._assert_runtime_session(str(payload.runtime_id or "").strip(), payload.session_token, instance_id=payload.instance_id)
-        result = local_queue.handle_complete_local_run(
-            task_id,
-            local_queue.LocalRunCompletePayload(
-                worker_id=(str(payload.runtime_id or "").strip() or None),
-                result_text=payload.result_text,
-                result_data=payload.result_data,
-                usage_masked=payload.usage_masked,
-            ),
-        )
+        def _complete_task() -> Dict[str, Any]:
+            local_queue._assert_runtime_session(str(payload.runtime_id or "").strip(), payload.session_token, instance_id=payload.instance_id)
+            return local_queue.handle_complete_local_run(
+                task_id,
+                local_queue.LocalRunCompletePayload(
+                    worker_id=(str(payload.runtime_id or "").strip() or None),
+                    result_text=payload.result_text,
+                    result_data=payload.result_data,
+                    usage_masked=payload.usage_masked,
+                ),
+            )
+
+        result = await run_in_threadpool(_complete_task)
         return {"ok": True, "task_id": str(task_id), **result}
 
-    @app.post("/runtime/tasks/{task_id}/pause", dependencies=[Depends(require_api_key)])
+    @app.post("/runtime/tasks/{task_id}/pause")
     async def pause_runtime_task(task_id: uuid.UUID, payload: RuntimeTaskPausePayload):
-        local_queue._assert_runtime_session(str(payload.runtime_id or "").strip(), payload.session_token, instance_id=payload.instance_id)
-        result = local_queue.handle_pause_local_run(
-            task_id,
-            local_queue.LocalRunPausePayload(
-                worker_id=(str(payload.runtime_id or "").strip() or None),
-                result_text=payload.result_text,
-                result_data=payload.result_data,
-                browser_checkpoint=payload.browser_checkpoint,
-                wait_reason=payload.wait_reason,
-            ),
-        )
+        def _pause_task() -> Dict[str, Any]:
+            local_queue._assert_runtime_session(str(payload.runtime_id or "").strip(), payload.session_token, instance_id=payload.instance_id)
+            return local_queue.handle_pause_local_run(
+                task_id,
+                local_queue.LocalRunPausePayload(
+                    worker_id=(str(payload.runtime_id or "").strip() or None),
+                    result_text=payload.result_text,
+                    result_data=payload.result_data,
+                    browser_checkpoint=payload.browser_checkpoint,
+                    wait_reason=payload.wait_reason,
+                ),
+            )
+
+        result = await run_in_threadpool(_pause_task)
         return {"ok": True, "task_id": str(task_id), **result}
 
-    @app.post("/runtime/tasks/{task_id}/fail", dependencies=[Depends(require_api_key)])
+    @app.post("/runtime/tasks/{task_id}/fail")
     async def fail_runtime_task(task_id: uuid.UUID, payload: RuntimeTaskFailPayload):
-        local_queue._assert_runtime_session(str(payload.runtime_id or "").strip(), payload.session_token, instance_id=payload.instance_id)
-        result = local_queue.handle_fail_local_run(
-            task_id,
-            local_queue.LocalRunFailPayload(
-                worker_id=(str(payload.runtime_id or "").strip() or None),
-                error=payload.error,
-            ),
-        )
+        def _fail_task() -> Dict[str, Any]:
+            local_queue._assert_runtime_session(str(payload.runtime_id or "").strip(), payload.session_token, instance_id=payload.instance_id)
+            return local_queue.handle_fail_local_run(
+                task_id,
+                local_queue.LocalRunFailPayload(
+                    worker_id=(str(payload.runtime_id or "").strip() or None),
+                    error=payload.error,
+                ),
+            )
+
+        result = await run_in_threadpool(_fail_task)
         return {"ok": True, "task_id": str(task_id), **result}

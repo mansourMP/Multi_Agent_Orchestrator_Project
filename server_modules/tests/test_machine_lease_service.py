@@ -8,6 +8,25 @@ from server_modules import machine_lease_service
 
 
 class MachineLeaseServiceTests(unittest.TestCase):
+    def test_build_machine_presence_record_clears_stale_run_binding_when_worker_is_idle(self) -> None:
+        record = machine_lease_service.build_machine_presence_record(
+            previous_record={
+                "runtime_id": "worker-1",
+                "machine_id": "machine-1",
+                "current_run_id": "run-stale",
+                "status": "busy",
+            },
+            machine_id="worker-1",
+            current_run_id=None,
+            status_hint="idle",
+            lease_seconds=30,
+            now_iso="2026-04-11T00:00:00Z",
+            note="idle_poll",
+        )
+
+        self.assertIsNone(record["current_run_id"])
+        self.assertEqual(record["status"], "idle")
+
     def test_build_runtime_registration_record_sets_machine_identity(self) -> None:
         record = machine_lease_service.build_runtime_registration_record(
             "runtime-1",
@@ -176,6 +195,176 @@ class MachineLeaseServiceTests(unittest.TestCase):
         self.assertEqual(pending, ["run-1"])
         self.assertEqual(claimed["run-2"]["metadata"]["contention_strategy"], "workspace_specialist_weighted_fifo")
         self.assertEqual(claimed["run-2"]["metadata"]["queue_partition"], "ws-2::install-b")
+
+    def test_claim_local_machine_lease_prioritizes_exact_preferred_runtime_match(self) -> None:
+        pending = ["run-generic", "run-pinned"]
+        claimed = {}
+        runs = {
+            "run-generic": {
+                "status": "queued_local",
+                "context": {"workspace_id": "default", "metadata": {}},
+            },
+            "run-pinned": {
+                "status": "queued_local",
+                "context": {"workspace_id": "default", "metadata": {"machine_target": "worker-1"}},
+            },
+        }
+        worker_registry = {"worker-1": {"runtime_id": "worker-1", "machine_id": "machine-1", "capabilities": []}}
+
+        with patch(
+            "server_modules.machine_lease_service.run_state_repository.dispatch_repository_call",
+            side_effect=lambda awaitable, operation: __import__("asyncio").run(awaitable),
+        ):
+            claimed_run = machine_lease_service.claim_local_machine_lease(
+                "worker-1",
+                required_capabilities=[],
+                local_queue_lock=threading.Lock(),
+                pending_run_ids=pending,
+                claimed_runs=claimed,
+                worker_registry=worker_registry,
+                runs_by_id=runs,
+                lease_seconds=45,
+                cleanup_stale_local_claims_fn=lambda: None,
+                ordered_runtime_preferences_for_run_fn=lambda run: ["worker-1"] if run is runs["run-pinned"] else [],
+                best_online_preferred_runtime_fn=lambda ids: ids[0] if ids else None,
+                required_capabilities_for_run_fn=lambda run: [],
+                normalize_capability_ids_fn=lambda items: [str(item).strip().lower() for item in (items or [])],
+                persist_local_runtime_state_fn=lambda: None,
+                mark_local_worker_seen_fn=lambda *args, **kwargs: None,
+                now_iso_fn=lambda: "2026-04-06T00:00:00Z",
+            )
+
+        self.assertEqual(claimed_run, "run-pinned")
+        self.assertEqual(pending, ["run-generic"])
+
+    def test_claim_local_machine_lease_uses_in_memory_preferred_runtime_match_without_callback(self) -> None:
+        pending = ["run-pinned"]
+        claimed = {}
+        runs = {
+            "run-pinned": {
+                "status": "queued_local",
+                "context": {"workspace_id": "default", "metadata": {"machine_target": "worker-1"}},
+            },
+        }
+        worker_registry = {
+            "worker-1": {
+                "runtime_id": "worker-1",
+                "machine_id": "machine-1",
+                "capabilities": [],
+                "status": "idle",
+                "last_seen_at": "2026-04-06T00:00:00Z",
+                "lease_seconds": 45,
+            }
+        }
+
+        with patch(
+            "server_modules.machine_lease_service.run_state_repository.dispatch_repository_call",
+            side_effect=lambda awaitable, operation: __import__("asyncio").run(awaitable),
+        ):
+            claimed_run = machine_lease_service.claim_local_machine_lease(
+                "worker-1",
+                required_capabilities=[],
+                local_queue_lock=threading.Lock(),
+                pending_run_ids=pending,
+                claimed_runs=claimed,
+                worker_registry=worker_registry,
+                runs_by_id=runs,
+                lease_seconds=45,
+                cleanup_stale_local_claims_fn=lambda: None,
+                ordered_runtime_preferences_for_run_fn=lambda run: ["worker-1"],
+                best_online_preferred_runtime_fn=lambda ids: (_ for _ in ()).throw(
+                    AssertionError("preferred runtime callback should not be called under queue lock")
+                ),
+                required_capabilities_for_run_fn=lambda run: [],
+                normalize_capability_ids_fn=lambda items: [str(item).strip().lower() for item in (items or [])],
+                persist_local_runtime_state_fn=lambda: None,
+                mark_local_worker_seen_fn=lambda *args, **kwargs: None,
+                now_iso_fn=lambda: "2026-04-06T00:00:00Z",
+                parse_utc_ts_fn=lambda value: datetime.fromisoformat(str(value).replace("Z", "")) if value else None,
+                now_fn=lambda: datetime.fromisoformat("2026-04-06T00:00:05"),
+            )
+
+        self.assertEqual(claimed_run, "run-pinned")
+        self.assertEqual(pending, [])
+
+    def test_claim_local_machine_lease_prunes_orphaned_queue_ids_and_claims_next_valid_run(self) -> None:
+        pending = ["ghost-run", "run-1"]
+        claimed = {}
+        persisted = []
+        seen = []
+        runs = {
+            "run-1": {
+                "status": "queued_local",
+                "context": {"workspace_id": "default", "metadata": {"owner_user_id": "user-1"}},
+            }
+        }
+        worker_registry = {"worker-1": {"runtime_id": "worker-1", "machine_id": "machine-1", "capabilities": []}}
+
+        with patch(
+            "server_modules.machine_lease_service.run_state_repository.dispatch_repository_call",
+            side_effect=lambda awaitable, operation: __import__("asyncio").run(awaitable),
+        ):
+            claimed_run = machine_lease_service.claim_local_machine_lease(
+                "worker-1",
+                required_capabilities=[],
+                local_queue_lock=threading.Lock(),
+                pending_run_ids=pending,
+                claimed_runs=claimed,
+                worker_registry=worker_registry,
+                runs_by_id=runs,
+                lease_seconds=45,
+                cleanup_stale_local_claims_fn=lambda: None,
+                ordered_runtime_preferences_for_run_fn=lambda run: [],
+                best_online_preferred_runtime_fn=lambda ids: None,
+                required_capabilities_for_run_fn=lambda run: [],
+                normalize_capability_ids_fn=lambda items: [str(item).strip().lower() for item in (items or [])],
+                persist_local_runtime_state_fn=lambda: persisted.append(True),
+                mark_local_worker_seen_fn=lambda worker_id, run_id, status, note=None: seen.append(
+                    (worker_id, run_id, status, note)
+                ),
+                now_iso_fn=lambda: "2026-04-06T00:00:00Z",
+            )
+
+        self.assertEqual(claimed_run, "run-1")
+        self.assertEqual(pending, [])
+        self.assertEqual(claimed["run-1"]["machine_id"], "machine-1")
+        self.assertEqual(persisted, [True])
+        self.assertEqual(seen, [("worker-1", "run-1", "busy", "claimed_local_run")])
+
+    def test_claim_local_machine_lease_marks_suspended_worker_idle_after_lock_release(self) -> None:
+        local_lock = threading.Lock()
+        seen = []
+
+        claimed_run = machine_lease_service.claim_local_machine_lease(
+            "worker-1",
+            required_capabilities=[],
+            local_queue_lock=local_lock,
+            pending_run_ids=["run-1"],
+            claimed_runs={},
+            worker_registry={"worker-1": {"runtime_id": "worker-1", "control_state": "suspended"}},
+            runs_by_id={"run-1": {"status": "queued_local"}},
+            lease_seconds=45,
+            cleanup_stale_local_claims_fn=lambda: None,
+            ordered_runtime_preferences_for_run_fn=lambda run: [],
+            best_online_preferred_runtime_fn=lambda ids: None,
+            required_capabilities_for_run_fn=lambda run: [],
+            normalize_capability_ids_fn=lambda items: [str(item).strip().lower() for item in (items or [])],
+            persist_local_runtime_state_fn=lambda: None,
+            mark_local_worker_seen_fn=lambda worker_id, run_id, status, note=None: seen.append(
+                (
+                    worker_id,
+                    run_id,
+                    status,
+                    note,
+                    local_lock.acquire(blocking=False),
+                )
+            )
+            or (local_lock.release() if seen and seen[-1][-1] else None),
+            now_iso_fn=lambda: "2026-04-06T00:00:00Z",
+        )
+
+        self.assertIsNone(claimed_run)
+        self.assertEqual(seen, [("worker-1", None, "idle", "idle_machine_suspended", True)])
 
     def test_release_machine_lease_claim_releases_and_marks_worker_idle(self) -> None:
         claimed = {

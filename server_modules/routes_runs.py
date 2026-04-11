@@ -7,6 +7,7 @@ from server_modules.runtime_common import require_admin_api_key, require_api_key
 from server_modules.runtime_models import (
     CronSchedulePatchRequest,
     CronScheduleUpsertRequest,
+    LocalQueueCleanupRequest,
     WeeklySchedulePatchRequest,
     WeeklyScheduleUpsertRequest,
 )
@@ -103,6 +104,18 @@ async def get_local_run_queue(request: Request, current_user=Depends(require_api
         raise HTTPException(status_code=400, detail="limit must be an integer.")
     return await core.get_local_run_queue(workspace_id=workspace_id, limit=limit)
 
+
+async def cleanup_local_run_queue(body: LocalQueueCleanupRequest, current_user=Depends(require_api_key)):
+    body.validate_fields()
+    workspace_id = enforce_workspace_access(current_user, body.workspace_id, minimum_role="member")
+    return await core.cleanup_local_run_queue(
+        workspace_id=workspace_id,
+        older_than_seconds=body.older_than_seconds,
+        limit=body.limit,
+        dry_run=body.dry_run,
+        reason=body.reason,
+    )
+
 router.add_api_route("/cognitive/approvals", history.list_cognitive_approvals, methods=['GET'], dependencies=[Depends(require_api_key)])
 router.add_api_route("/cognitive/approvals/{event_id}/resolve", history.resolve_cognitive_approval, methods=['POST'], dependencies=[Depends(require_api_key)])
 router.add_api_route("/approvals/audit", history.get_approval_audit, methods=['GET'], dependencies=[Depends(require_api_key)])
@@ -122,3 +135,4 @@ router.add_api_route("/schedules/weekly/{schedule_id}/run-now", trigger_weekly_s
 router.add_api_route("/metrics", core.get_runtime_metrics, methods=['GET'], dependencies=[Depends(require_api_key)])
 router.add_api_route("/kpis", core.get_runtime_kpis, methods=['GET'], dependencies=[Depends(require_api_key)])
 router.add_api_route("/runs/queue/local", get_local_run_queue, methods=['GET'])
+router.add_api_route("/runs/queue/local/cleanup", cleanup_local_run_queue, methods=['POST'])

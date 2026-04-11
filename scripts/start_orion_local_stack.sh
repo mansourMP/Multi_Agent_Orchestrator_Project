@@ -24,12 +24,12 @@ ORION_HOST="${ORION_HOST:-127.0.0.1}"
 # Example: ORION_BIND_HOST=0.0.0.0 ORION_HOST=192.168.1.10
 ORION_BIND_HOST="${ORION_BIND_HOST:-${ORION_HOST}}"
 ORION_PORT="${ORION_PORT:-8001}"
-BACKEND_PORT="${BACKEND_PORT:-8080}"
+BACKEND_PORT="${BACKEND_PORT:-4000}"
 FRONTEND_HOST="${FRONTEND_HOST:-127.0.0.1}"
 FRONTEND_PORT="${FRONTEND_PORT:-3000}"
-BACKEND_MODE="${BACKEND_MODE:-auto}" # auto|dist|dev|skip
+BACKEND_MODE="${BACKEND_MODE:-skip}" # auto|dist|dev|skip (legacy Nest sidecar is off-path by default)
 START_RUNTIME="${START_RUNTIME:-1}"   # 1|0
-START_BACKEND="${START_BACKEND:-1}"   # 1|0
+START_BACKEND="${START_BACKEND:-0}"   # 1|0 (legacy Nest sidecar only; not part of the default launch path)
 START_FRONTEND="${START_FRONTEND:-1}" # 1|0
 START_WORKER="${START_WORKER:-1}"     # 1|0
 START_OPS_DAEMON="${START_OPS_DAEMON:-1}" # 1|0
@@ -95,6 +95,21 @@ configured_runtime_worker_count() {
   echo "1"
 }
 
+default_control_plane_database_url() {
+  printf "file:%s" "${ROOT_DIR}/backend/prisma/dev.db"
+}
+
+control_plane_database_url() {
+  local raw="${DATABASE_URL:-}"
+  local trimmed
+  trimmed="$(printf "%s" "${raw}" | tr -d '[:space:]')"
+  if [[ -n "${trimmed}" && "${trimmed}" == file:* ]]; then
+    printf "%s" "${trimmed}"
+    return
+  fi
+  default_control_plane_database_url
+}
+
 EXISTING_RUNTIME_KEY="$(load_existing_runtime_key)"
 RUNTIME_KEY_RAW="${1:-${RUNTIME_KEY:-${EMPYRALIS_API_KEY:-${ORION_API_KEY:-${EXISTING_RUNTIME_KEY:-}}}}}"
 RUNTIME_KEY="$(printf "%s" "${RUNTIME_KEY_RAW}" | tr -d '[:space:]')"
@@ -113,6 +128,12 @@ if [[ "${JWT_SECRET_VALUE}" != "${JWT_SECRET_RAW}" ]]; then
   echo "Warning: JWT secret contained whitespace and was normalized."
 fi
 ORION_API_URL="http://${ORION_HOST}:${ORION_PORT}"
+ORION_WS_URL="ws://${ORION_HOST}:${ORION_PORT}"
+ORION_HEALTH_HOST="${ORION_BIND_HOST}"
+if [[ -z "${ORION_HEALTH_HOST}" || "${ORION_HEALTH_HOST}" == "0.0.0.0" || "${ORION_HEALTH_HOST}" == "::" || "${ORION_HEALTH_HOST}" == "*" ]]; then
+  ORION_HEALTH_HOST="127.0.0.1"
+fi
+ORION_HEALTH_URL="http://${ORION_HEALTH_HOST}:${ORION_PORT}"
 BACKEND_URL="http://127.0.0.1:${BACKEND_PORT}"
 BACKEND_HEALTH_URL="${BACKEND_URL}/api/v1/health"
 BACKEND_EFFECTIVE_MODE=""
@@ -326,6 +347,33 @@ fail_service_startup() {
   echo "${name} failed to start: ${reason}"
   echo "Check log: $(service_log_path "${name}")"
   exit 1
+}
+
+bootstrap_node_toolchain_path() {
+  if command -v node >/dev/null 2>&1 && command -v npm >/dev/null 2>&1; then
+    return 0
+  fi
+
+  local candidate
+  local -a candidates=(
+    "${HOME}/.local/node-v20.20.2/bin"
+    "/opt/homebrew/bin"
+    "/usr/local/bin"
+  )
+
+  shopt -s nullglob
+  for candidate in "${HOME}"/.local/node-*/bin "${HOME}"/.nvm/versions/node/*/bin; do
+    candidates+=("${candidate}")
+  done
+  shopt -u nullglob
+
+  for candidate in "${candidates[@]}"; do
+    if [[ -x "${candidate}/node" && -x "${candidate}/npm" ]]; then
+      export PATH="${candidate}:${PATH}"
+      return 0
+    fi
+  done
+  return 1
 }
 
 wait_pid_file_alive() {
@@ -559,15 +607,25 @@ start_backend() {
   BACKEND_EFFECTIVE_MODE="${mode}"
 
   if [[ "${mode}" == "skip" ]]; then
-    echo "Skipping backend startup (BACKEND_MODE=skip)."
+    echo "Skipping legacy control-plane backend startup (BACKEND_MODE=skip)."
     return 0
   fi
 
-  echo "Starting backend on 127.0.0.1:${BACKEND_PORT} (mode=${mode}) ..."
+  echo "Starting legacy control-plane backend on 127.0.0.1:${BACKEND_PORT} (mode=${mode}) ..."
   (
+    if [[ "${mode}" == "dist" ]]; then
+      command -v node >/dev/null 2>&1 || bootstrap_node_toolchain_path || fail_service_startup "backend" "node is not on PATH"
+    else
+      command -v npm >/dev/null 2>&1 || bootstrap_node_toolchain_path || fail_service_startup "backend" "npm is not on PATH"
+    fi
     export ORION_API_KEY="${RUNTIME_KEY}"
     export RUNTIME_KEY="${RUNTIME_KEY}"
     export ORION_API_URL="${ORION_API_URL}"
+    export PORT="${BACKEND_PORT}"
+    export DATABASE_URL="$(control_plane_database_url)"
+    export BACKEND_PUBLIC_ORIGIN="${BACKEND_URL}"
+    export FRONTEND_AUTH_ORIGIN="http://${FRONTEND_HOST}:${FRONTEND_PORT}"
+    export FRONTEND_ORIGINS="http://${FRONTEND_HOST}:${FRONTEND_PORT},http://localhost:${FRONTEND_PORT}"
     export JWT_SECRET="${JWT_SECRET_VALUE}"
     export ORION_JWT_SECRET="${JWT_SECRET_VALUE}"
     if [[ "${mode}" == "dist" ]]; then
@@ -588,8 +646,26 @@ start_backend() {
 start_frontend() {
   echo "Starting frontend on ${FRONTEND_HOST}:${FRONTEND_PORT} ..."
   (
-    export EMPYRALIS_TAURI_DESKTOP=1
+    command -v npm >/dev/null 2>&1 || bootstrap_node_toolchain_path || fail_service_startup "frontend" "npm is not on PATH"
+    local control_plane_backend_url="${ORION_CONTROL_PLANE_BACKEND_URL:-}"
+    local control_plane_backend_origin="${BACKEND_PUBLIC_ORIGIN:-}"
+    if [[ -z "${control_plane_backend_url}" && "${BACKEND_EFFECTIVE_MODE:-skip}" != "skip" ]]; then
+      control_plane_backend_url="${BACKEND_URL}/api/v1"
+    fi
+    if [[ -z "${control_plane_backend_origin}" && "${BACKEND_EFFECTIVE_MODE:-skip}" != "skip" ]]; then
+      control_plane_backend_origin="${BACKEND_URL}"
+    fi
+    export EMPYRALIS_TAURI_DESKTOP="${EMPYRALIS_TAURI_DESKTOP:-0}"
+    export NEXT_PUBLIC_API_URL="${ORION_API_URL}"
     export NEXT_PUBLIC_ORION_API_URL="${ORION_API_URL}"
+    export NEXT_PUBLIC_WS_URL="${ORION_WS_URL}"
+    if [[ -n "${control_plane_backend_url}" ]]; then
+      export ORION_CONTROL_PLANE_BACKEND_URL="${control_plane_backend_url}"
+    fi
+    if [[ -n "${control_plane_backend_origin}" ]]; then
+      export BACKEND_PUBLIC_ORIGIN="${control_plane_backend_origin}"
+    fi
+    export FRONTEND_ORIGINS="http://${FRONTEND_HOST}:${FRONTEND_PORT},http://localhost:${FRONTEND_PORT}"
     export JWT_SECRET="${JWT_SECRET_VALUE}"
     export ORION_JWT_SECRET="${JWT_SECRET_VALUE}"
     spawn_detached "${PID_DIR}/frontend.pid" "${LOG_DIR}/frontend.log" "${ROOT_DIR}/frontend" \
@@ -664,7 +740,7 @@ record_pid_from_port() {
 
 verify_stack_running() {
   if [[ "${START_RUNTIME}" == "1" ]]; then
-    if ! wait_http_ok "${ORION_API_URL}/health" 10 0.3; then
+    if ! wait_http_ok "${ORION_HEALTH_URL}/health" 10 0.3; then
       fail_service_startup "runtime" "health endpoint did not stay ready"
     fi
     assert_service_running "runtime" "${ORION_PORT}"
@@ -713,7 +789,7 @@ fi
 
 if [[ "${START_RUNTIME}" == "1" ]]; then
   start_runtime
-  if ! wait_http_ok "${ORION_API_URL}/health" 50 0.4; then
+  if ! wait_http_ok "${ORION_HEALTH_URL}/health" 50 0.4; then
     fail_service_startup "runtime" "health endpoint did not become ready"
   fi
   record_pid_from_port "runtime" "${ORION_PORT}"
@@ -749,7 +825,7 @@ if [[ "${START_BACKEND}" == "1" ]]; then
   record_pid_from_port "backend" "${BACKEND_PORT}"
 else
   BACKEND_EFFECTIVE_MODE="skip"
-  echo "Skipping backend startup (START_BACKEND=0)."
+  echo "Skipping legacy control-plane backend startup (START_BACKEND=0)."
 fi
 if [[ "${START_FRONTEND}" == "1" ]]; then
   start_frontend
@@ -777,9 +853,15 @@ verify_stack_running
 echo
 echo "Empyralis local stack is up."
 echo "Runtime:  ${ORION_API_URL}"
-echo "Backend:  http://127.0.0.1:${BACKEND_PORT}"
 echo "Frontend: http://${FRONTEND_HOST}:${FRONTEND_PORT}"
-echo "Modes:    runtime=${START_RUNTIME} backend=${BACKEND_EFFECTIVE_MODE:-skip} frontend=${START_FRONTEND} worker=${START_WORKER} telegram_autopilot=${TELEGRAM_AUTOPILOT_ENABLED} whatsapp_autopilot=${WHATSAPP_AUTOPILOT_ENABLED}"
+if [[ "${BACKEND_EFFECTIVE_MODE:-skip}" == "skip" ]]; then
+  echo "Legacy backend: disabled by default (broken Nest sidecar is off the active launch path)"
+  echo "Legacy backend opt-in: START_BACKEND=1 BACKEND_MODE=auto bash scripts/start_orion_local_stack.sh"
+else
+  echo "Legacy backend: http://127.0.0.1:${BACKEND_PORT} (mode=${BACKEND_EFFECTIVE_MODE})"
+fi
+echo "Modes:    runtime=${START_RUNTIME} legacy_backend=${BACKEND_EFFECTIVE_MODE:-skip} frontend=${START_FRONTEND} worker=${START_WORKER} telegram_autopilot=${TELEGRAM_AUTOPILOT_ENABLED} whatsapp_autopilot=${WHATSAPP_AUTOPILOT_ENABLED}"
+echo "Launch path: runtime + frontend + worker are active; the Nest control-plane sidecar is optional/manual until repaired"
 echo "Telegram: profile=${TELEGRAM_AUTOPILOT_PROFILE}"
 echo "Telegram: engine=${TELEGRAM_AUTOPILOT_ENGINE}"
 echo "Telegram: prefix_required=${TELEGRAM_AUTOPILOT_REQUIRE_PREFIX}"
@@ -809,7 +891,9 @@ echo
 echo "Logs:"
 echo "  bash ${LOGS_STACK_HELPER}"
 echo "  tail -f ${LOG_DIR}/runtime.log"
-echo "  tail -f ${LOG_DIR}/backend.log"
+if [[ "${BACKEND_EFFECTIVE_MODE:-skip}" != "skip" ]]; then
+  echo "  tail -f ${LOG_DIR}/backend.log"
+fi
 echo "  tail -f ${LOG_DIR}/frontend.log"
 echo "  tail -f ${LOG_DIR}/worker.log"
 echo

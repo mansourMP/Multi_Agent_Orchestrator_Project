@@ -4,6 +4,7 @@ import uuid
 from datetime import timedelta
 from dataclasses import dataclass, field
 import logging
+import threading
 from typing import Any, Callable, Dict, List, Mapping, Optional
 
 from fastapi import HTTPException
@@ -43,18 +44,26 @@ def _dispatch_claim_repository_write(
     ttl_seconds: int,
     trace_id: Optional[str],
 ) -> None:
-    try:
-        run_state_repository.dispatch_repository_call(
-            run_state_repository.claim_run(
-                run_id=run_id,
-                worker_id=worker_id,
-                ttl=max(1, int(ttl_seconds or 0)),
-                trace_id=str(trace_id or "").strip(),
-            ),
-            operation=f"claim_run:{run_id}",
-        )
-    except Exception as exc:
-        LOGGER.warning("Failed to dispatch repository claim write for %s: %s", run_id, exc)
+    def _worker() -> None:
+        try:
+            run_state_repository.dispatch_repository_call(
+                run_state_repository.claim_run(
+                    run_id=run_id,
+                    worker_id=worker_id,
+                    ttl=max(1, int(ttl_seconds or 0)),
+                    trace_id=str(trace_id or "").strip(),
+                ),
+                operation=f"claim_run:{run_id}",
+            )
+        except Exception as exc:
+            LOGGER.warning("Failed to dispatch repository claim write for %s: %s", run_id, exc)
+
+    thread = threading.Thread(
+        target=_worker,
+        name=f"claim-write-{str(run_id or 'run')[:12]}",
+        daemon=True,
+    )
+    thread.start()
 
 
 def _dispatch_release_repository_write(run_id: str) -> None:
@@ -82,14 +91,16 @@ def build_machine_presence_record(
     normalized_machine_id = str(machine_id or "").strip()
     if not normalized_machine_id:
         return record
+    normalized_status = str(status_hint or previous.get("status") or "idle").strip().lower() or "idle"
+    clears_run_binding = current_run_id is None and normalized_status in {"idle", "offline", "stopped", "recovering"}
     record.update(
         {
             "worker_id": normalized_machine_id,
             "runtime_id": str(previous.get("runtime_id") or normalized_machine_id).strip() or normalized_machine_id,
             "machine_id": str(previous.get("machine_id") or normalized_machine_id).strip() or normalized_machine_id,
             "last_seen_at": now_iso,
-            "status": status_hint or str(previous.get("status") or "idle"),
-            "current_run_id": current_run_id if current_run_id is not None else previous.get("current_run_id"),
+            "status": normalized_status,
+            "current_run_id": None if clears_run_binding else (current_run_id if current_run_id is not None else previous.get("current_run_id")),
             "lease_seconds": int(previous.get("lease_seconds") or lease_seconds),
             "note": str(previous.get("note") or ""),
         }
@@ -365,6 +376,49 @@ def _count_pending_by_scope(
     return workspace_counts, specialist_counts
 
 
+def _worker_is_online_for_claim(
+    record: Mapping[str, Any],
+    *,
+    now_dt: Optional[Any],
+    parse_utc_ts_fn: Optional[Callable[[Any], Any]],
+) -> bool:
+    lifecycle_state = str(record.get("lifecycle_state") or "").strip().lower()
+    if lifecycle_state in {"stopped", "recovering"}:
+        return False
+    control_state = str(record.get("control_state") or "active").strip().lower() or "active"
+    if control_state in {"interrupting", "suspended", "revoked"}:
+        return False
+    status = str(record.get("status") or "idle").strip().lower() or "idle"
+    if status in {"offline", "stopped", "recovering"}:
+        return False
+    if now_dt is None or not callable(parse_utc_ts_fn):
+        return True
+    seen_at = parse_utc_ts_fn(record.get("last_seen_at"))
+    if seen_at is None:
+        return status not in {"offline", "stopped"}
+    lease_seconds = max(1, int(record.get("lease_seconds") or 30))
+    return now_dt <= seen_at + timedelta(seconds=lease_seconds)
+
+
+def _best_online_preferred_runtime_from_registry(
+    preferred_runtime_ids: List[str],
+    *,
+    worker_registry: Mapping[str, Any],
+    now_dt: Optional[Any],
+    parse_utc_ts_fn: Optional[Callable[[Any], Any]],
+) -> Optional[str]:
+    for runtime_id in preferred_runtime_ids:
+        token = str(runtime_id or "").strip()
+        if not token:
+            continue
+        record = worker_registry.get(token)
+        if not isinstance(record, Mapping):
+            continue
+        if _worker_is_online_for_claim(record, now_dt=now_dt, parse_utc_ts_fn=parse_utc_ts_fn):
+            return token
+    return None
+
+
 def claim_local_machine_lease(
     worker_id: str,
     *,
@@ -392,6 +446,7 @@ def claim_local_machine_lease(
     deferred_run_ids: List[str] = []
     capability_filtered = False
     state_changed = False
+    deferred_worker_presence: Optional[tuple[str, Optional[str], str, str]] = None
 
     with local_queue_lock:
         worker_state = (
@@ -413,131 +468,138 @@ def claim_local_machine_lease(
             or worker_id
         ).strip() or str(worker_id or "").strip()
         if worker_control_state in {"interrupting", "suspended", "revoked"}:
-            mark_local_worker_seen_fn(
+            deferred_worker_presence = (
                 worker_id,
                 None,
                 "idle",
-                note=f"idle_machine_{worker_control_state}",
+                f"idle_machine_{worker_control_state}",
             )
-            return None
-        pending_snapshot = list(pending_run_ids)
-        pending_workspace_counts, pending_specialist_counts = _count_pending_by_scope(
-            pending_run_ids=pending_snapshot,
-            runs_by_id=runs_by_id,
-        )
-        active_workspace_counts, active_specialist_counts = _count_claims_by_scope(
-            claimed_runs=claimed_runs,
-            runs_by_id=runs_by_id,
-        )
-        now_dt = now_fn() if callable(now_fn) else None
-        eligible: List[Dict[str, Any]] = []
-        remaining_pending: List[str] = []
-        for queue_index, run_id in enumerate(pending_snapshot):
-            run = runs_by_id.get(run_id)
-            if not isinstance(run, dict):
-                continue
-            status = str(run.get("status") or "").strip().lower()
-            if status not in {"queued_local", "starting"}:
-                continue
-            metadata = _metadata_for_run(run)
-            retry_due_at = metadata.get("local_queue_next_retry_at")
-            if retry_due_at and now_dt is not None and callable(parse_utc_ts_fn):
-                due_at = parse_utc_ts_fn(retry_due_at)
-                if due_at is not None and now_dt < due_at:
+        if deferred_worker_presence is None:
+            pending_snapshot = list(pending_run_ids)
+            pending_workspace_counts, pending_specialist_counts = _count_pending_by_scope(
+                pending_run_ids=pending_snapshot,
+                runs_by_id=runs_by_id,
+            )
+            active_workspace_counts, active_specialist_counts = _count_claims_by_scope(
+                claimed_runs=claimed_runs,
+                runs_by_id=runs_by_id,
+            )
+            now_dt = now_fn() if callable(now_fn) else None
+            eligible: List[Dict[str, Any]] = []
+            remaining_pending: List[str] = []
+            for queue_index, run_id in enumerate(pending_snapshot):
+                run = runs_by_id.get(run_id)
+                if not isinstance(run, dict):
+                    continue
+                status = str(run.get("status") or "").strip().lower()
+                if status not in {"queued_local", "starting"}:
+                    continue
+                metadata = _metadata_for_run(run)
+                retry_due_at = metadata.get("local_queue_next_retry_at")
+                if retry_due_at and now_dt is not None and callable(parse_utc_ts_fn):
+                    due_at = parse_utc_ts_fn(retry_due_at)
+                    if due_at is not None and now_dt < due_at:
+                        deferred_run_ids.append(run_id)
+                        remaining_pending.append(run_id)
+                        capability_filtered = True
+                        continue
+                preferred_runtime_ids = ordered_runtime_preferences_for_run_fn(run)
+                preferred_runtime_id = _best_online_preferred_runtime_from_registry(
+                    preferred_runtime_ids,
+                    worker_registry=worker_registry,
+                    now_dt=now_dt,
+                    parse_utc_ts_fn=parse_utc_ts_fn,
+                )
+                if preferred_runtime_id and preferred_runtime_id != worker_id:
                     deferred_run_ids.append(run_id)
                     remaining_pending.append(run_id)
                     capability_filtered = True
                     continue
-            preferred_runtime_ids = ordered_runtime_preferences_for_run_fn(run)
-            preferred_runtime_id = best_online_preferred_runtime_fn(preferred_runtime_ids)
-            if preferred_runtime_id and preferred_runtime_id != worker_id:
-                deferred_run_ids.append(run_id)
+                preferred_match_rank = 0 if preferred_runtime_id and preferred_runtime_id == worker_id else 1
+                run_required_capabilities = required_capabilities_for_run_fn(run)
+                required_capability_set = set(run_required_capabilities)
+                if run_required_capabilities and not required_capability_set.issubset(worker_capability_set):
+                    deferred_run_ids.append(run_id)
+                    remaining_pending.append(run_id)
+                    capability_filtered = True
+                    continue
+                if (
+                    requested_capability_filter
+                    and run_required_capabilities
+                    and not required_capability_set.issubset(requested_capability_filter)
+                ):
+                    deferred_run_ids.append(run_id)
+                    remaining_pending.append(run_id)
+                    capability_filtered = True
+                    continue
+                scope = _run_scope_from_payload(run)
+                retry_count = max(0, int(metadata.get("local_queue_retry_count") or 0))
+                eligible.append(
+                    {
+                        "queue_index": queue_index,
+                        "run_id": run_id,
+                        "run": run,
+                        "required_capabilities": run_required_capabilities,
+                        "scope": scope,
+                        "score": (
+                            preferred_match_rank,
+                            active_workspace_counts.get(scope["workspace_id"], 0),
+                            active_specialist_counts.get(scope["specialist_key"], 0),
+                            pending_workspace_counts.get(scope["workspace_id"], 0),
+                            pending_specialist_counts.get(scope["specialist_key"], 0),
+                            retry_count,
+                            queue_index,
+                        ),
+                    }
+                )
                 remaining_pending.append(run_id)
-                capability_filtered = True
-                continue
-            run_required_capabilities = required_capabilities_for_run_fn(run)
-            required_capability_set = set(run_required_capabilities)
-            if run_required_capabilities and not required_capability_set.issubset(worker_capability_set):
-                deferred_run_ids.append(run_id)
-                remaining_pending.append(run_id)
-                capability_filtered = True
-                continue
-            if (
-                requested_capability_filter
-                and run_required_capabilities
-                and not required_capability_set.issubset(requested_capability_filter)
-            ):
-                deferred_run_ids.append(run_id)
-                remaining_pending.append(run_id)
-                capability_filtered = True
-                continue
-            scope = _run_scope_from_payload(run)
-            retry_count = max(0, int(metadata.get("local_queue_retry_count") or 0))
-            eligible.append(
-                {
-                    "queue_index": queue_index,
-                    "run_id": run_id,
-                    "run": run,
-                    "required_capabilities": run_required_capabilities,
-                    "scope": scope,
-                    "score": (
-                        active_workspace_counts.get(scope["workspace_id"], 0),
-                        active_specialist_counts.get(scope["specialist_key"], 0),
-                        pending_workspace_counts.get(scope["workspace_id"], 0),
-                        pending_specialist_counts.get(scope["specialist_key"], 0),
-                        retry_count,
-                        queue_index,
-                    ),
-                }
-            )
-            remaining_pending.append(run_id)
-        if eligible:
-            chosen = min(eligible, key=lambda item: item["score"])
-            claimed_run_id = str(chosen["run_id"] or "").strip()
-            run = chosen["run"]
-            run_required_capabilities = list(chosen["required_capabilities"] or [])
-            scope = dict(chosen["scope"] or {})
-            now_iso = now_iso_fn()
-            context = run.get("context") if isinstance(run.get("context"), dict) else {}
-            metadata = context.get("metadata") if isinstance(context.get("metadata"), dict) else {}
-            workspace_id = str(scope.get("workspace_id") or "").strip()
-            actor_id = str(
-                metadata.get("owner_user_id")
-                or metadata.get("user_id")
-                or context.get("user_id")
-                or ""
-            ).strip()
-            claim_record = build_machine_lease_record(
-                machine_id=machine_id,
-                run_id=claimed_run_id,
-                workspace_id=workspace_id,
-                actor_id=actor_id,
-                ttl_seconds=lease_seconds,
-                claimed_at=now_iso,
-                capabilities_requested=run_required_capabilities,
-                capabilities_granted=[
-                    capability
-                    for capability in run_required_capabilities
-                    if capability in worker_capability_set
-                ],
-                metadata={
-                    "runtime_id": worker_id,
-                    "contention_strategy": "workspace_specialist_weighted_fifo",
-                    "tenant_id": scope.get("tenant_id"),
-                    "specialist_key": scope.get("specialist_key"),
-                    "queue_partition": build_queue_partition_key(
-                        str(scope.get("workspace_id") or "").strip(),
-                        str(scope.get("specialist_key") or "").strip(),
-                    ),
-                },
-                lease_id_factory=lease_id_factory,
-            )
-            claimed_runs[claimed_run_id] = claim_record
-            pending_run_ids[:] = [run_id for run_id in remaining_pending if run_id != claimed_run_id]
-            state_changed = True
-        elif remaining_pending != pending_snapshot:
-            pending_run_ids[:] = remaining_pending
-            state_changed = True
+            if eligible:
+                chosen = min(eligible, key=lambda item: item["score"])
+                claimed_run_id = str(chosen["run_id"] or "").strip()
+                run = chosen["run"]
+                run_required_capabilities = list(chosen["required_capabilities"] or [])
+                scope = dict(chosen["scope"] or {})
+                now_iso = now_iso_fn()
+                context = run.get("context") if isinstance(run.get("context"), dict) else {}
+                metadata = context.get("metadata") if isinstance(context.get("metadata"), dict) else {}
+                workspace_id = str(scope.get("workspace_id") or "").strip()
+                actor_id = str(
+                    metadata.get("owner_user_id")
+                    or metadata.get("user_id")
+                    or context.get("user_id")
+                    or ""
+                ).strip()
+                claim_record = build_machine_lease_record(
+                    machine_id=machine_id,
+                    run_id=claimed_run_id,
+                    workspace_id=workspace_id,
+                    actor_id=actor_id,
+                    ttl_seconds=lease_seconds,
+                    claimed_at=now_iso,
+                    capabilities_requested=run_required_capabilities,
+                    capabilities_granted=[
+                        capability
+                        for capability in run_required_capabilities
+                        if capability in worker_capability_set
+                    ],
+                    metadata={
+                        "runtime_id": worker_id,
+                        "contention_strategy": "workspace_specialist_weighted_fifo",
+                        "tenant_id": scope.get("tenant_id"),
+                        "specialist_key": scope.get("specialist_key"),
+                        "queue_partition": build_queue_partition_key(
+                            str(scope.get("workspace_id") or "").strip(),
+                            str(scope.get("specialist_key") or "").strip(),
+                        ),
+                    },
+                    lease_id_factory=lease_id_factory,
+                )
+                claimed_runs[claimed_run_id] = claim_record
+                pending_run_ids[:] = [run_id for run_id in remaining_pending if run_id != claimed_run_id]
+                state_changed = True
+            elif remaining_pending != pending_snapshot:
+                pending_run_ids[:] = remaining_pending
+                state_changed = True
 
     if state_changed:
         persist_local_runtime_state_fn()
@@ -556,6 +618,8 @@ def claim_local_machine_lease(
             trace_id=claim_trace_id,
         )
         mark_local_worker_seen_fn(worker_id, claimed_run_id, "busy", note="claimed_local_run")
+    elif deferred_worker_presence is not None:
+        mark_local_worker_seen_fn(*deferred_worker_presence)
     else:
         mark_local_worker_seen_fn(
             worker_id,

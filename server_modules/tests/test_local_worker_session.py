@@ -33,10 +33,11 @@ class LocalWorkerSessionTests(TestCase):
     def tearDown(self) -> None:
         shutil.rmtree(self._tmpdir, ignore_errors=True)
 
-    def _client(self):
+    def _client(self, *, api_key: str = "key", enrollment_token: str = ""):
         return worker_runtime.RuntimeClient(
             base_url="http://runtime",
-            api_key="key",
+            api_key=api_key,
+            enrollment_token=enrollment_token,
             session_root=Path(self._tmpdir) / "sessions",
         )
 
@@ -65,6 +66,39 @@ class LocalWorkerSessionTests(TestCase):
         self.assertEqual(client.runtime_instance_id, "instance-1")
         self.assertEqual(persisted["session_token"], "session-1")
         self.assertEqual(persisted["instance_id"], "instance-1")
+
+    def test_worker_can_bootstrap_with_enrollment_token_without_runtime_api_key(self):
+        client = self._client(api_key="", enrollment_token="enroll-1")
+        captured = {}
+
+        def fake_request(method, path, payload=None):
+            captured["method"] = method
+            captured["path"] = path
+            captured["payload"] = dict(payload or {})
+            return {
+                "ok": True,
+                "session_token": "session-1",
+                "instance_id": "instance-1",
+                "connection_mode": "platform_relay",
+            }
+
+        with patch.object(client, "_request", side_effect=fake_request):
+            result = client.bootstrap_runtime_session(
+                "worker-1",
+                runtime_type="local_companion",
+                display_name="Worker",
+                platform="darwin",
+                capabilities=["filesystem.read_write"],
+                execution_targets=["local_companion"],
+                instance_id="instance-1",
+            )
+
+        self.assertEqual(captured["method"], "POST")
+        self.assertEqual(captured["path"], "/runtime/companions/worker-1/bootstrap")
+        self.assertEqual(captured["payload"]["enrollment_token"], "enroll-1")
+        self.assertEqual(result["session_token"], "session-1")
+        self.assertEqual(client.runtime_session_token, "session-1")
+        self.assertEqual(client.runtime_instance_id, "instance-1")
 
     def test_worker_token_persists_across_restart(self):
         first_client = self._client()
@@ -186,3 +220,74 @@ class LocalWorkerSessionTests(TestCase):
             registry.update(previous_registry)
 
         self.assertEqual(verified["runtime_id"], "worker-hydrated")
+
+    def test_assert_runtime_session_does_not_persist_or_sync_on_every_request(self):
+        local_queue._init()
+        registry = local_queue._server.LOCAL_WORKER_REGISTRY
+        previous_registry = dict(registry)
+        try:
+            registry.clear()
+            with (
+                patch.object(local_queue, "_persist_local_runtime_state") as mock_persist,
+                patch.object(local_queue, "_sync_durable_fleet_worker") as mock_sync,
+                patch.object(local_queue.run_state_repository, "sync_upsert_fleet_worker", return_value=None),
+            ):
+                registration = local_queue._upsert_runtime_registration(
+                    "worker-session",
+                    runtime_type="local",
+                    display_name="Worker",
+                    platform="darwin",
+                    execution_targets=["local"],
+                    instance_id="instance-session",
+                )
+                mock_persist.reset_mock()
+                mock_sync.reset_mock()
+                verified = local_queue._assert_runtime_session(
+                    "worker-session",
+                    registration["session_token"],
+                    instance_id="instance-session",
+                )
+        finally:
+            registry.clear()
+            registry.update(previous_registry)
+
+        self.assertEqual(verified["runtime_id"], "worker-session")
+
+    def test_bootstrap_enrolled_local_companion_runtime_marks_platform_relay_online(self):
+        local_queue._init()
+        registry = local_queue._server.LOCAL_WORKER_REGISTRY
+        previous_registry = dict(registry)
+        try:
+            registry.clear()
+            with (
+                patch.object(local_queue, "_persist_local_runtime_state", return_value=None),
+                patch.object(local_queue, "_sync_durable_fleet_worker", return_value=None),
+                patch.object(local_queue, "_emit_machine_outbox_event", return_value=None),
+            ):
+                intent = local_queue.create_machine_enrollment_intent(
+                    tenant_id="default",
+                    workspace_id="default",
+                    machine_id="worker-remote",
+                    display_name="Remote Worker",
+                    runtime_type="local_companion",
+                    execution_targets=["local_companion"],
+                )
+                result = local_queue.handle_bootstrap_enrolled_local_companion_runtime(
+                    "worker-remote",
+                    enrollment_token=intent["token"],
+                    display_name="Remote Worker",
+                    platform="darwin",
+                    execution_targets=["local_companion"],
+                    instance_id="instance-remote",
+                )
+                status = local_queue.handle_get_local_runtime_status("worker-remote")
+        finally:
+            registry.clear()
+            registry.update(previous_registry)
+
+        runtime = status.get("runtime") if isinstance(status.get("runtime"), dict) else {}
+        self.assertTrue(str(result.get("session_token") or "").strip())
+        self.assertEqual(runtime.get("runtime_type"), "local_companion")
+        self.assertEqual(runtime.get("connection_mode"), "platform_relay")
+        self.assertTrue(bool(runtime.get("online")))
+        self.assertEqual(runtime.get("enrollment_state"), "healthy")

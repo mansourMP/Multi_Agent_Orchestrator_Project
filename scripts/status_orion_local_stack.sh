@@ -19,6 +19,14 @@ port_for_service() {
   esac
 }
 
+service_label() {
+  local name="$1"
+  case "${name}" in
+    backend) echo "backend (legacy optional)" ;;
+    *) echo "${name}" ;;
+  esac
+}
+
 collect_descendants() {
   local parent="$1"
   local children
@@ -45,6 +53,8 @@ port_listener_pids() {
 
 show_pid_state() {
   local name="$1"
+  local label
+  label="$(service_label "${name}")"
   local file="${PID_DIR}/${name}.pid"
   local fallback_port
   fallback_port="$(port_for_service "${name}")"
@@ -55,17 +65,17 @@ show_pid_state() {
       if [[ -n "${port_pids}" ]]; then
         local compact
         compact="$(echo "${port_pids}" | tr '\n' ' ' | xargs)"
-        echo "${name}: running (detected via port ${fallback_port}: ${compact})"
+        echo "${label}: running (detected via port ${fallback_port}: ${compact})"
         return
       fi
     fi
-    echo "${name}: not tracked"
+    echo "${label}: not tracked"
     return
   fi
   local pid
   pid="$(cat "${file}" 2>/dev/null || true)"
   if [[ -z "${pid}" ]]; then
-    echo "${name}: pid file empty"
+    echo "${label}: pid file empty"
     return
   fi
   if kill -0 "${pid}" 2>/dev/null; then
@@ -74,9 +84,9 @@ show_pid_state() {
     local descendants
     descendants="$(collect_descendants "${pid}" | tr '\n' ' ' | xargs || true)"
     if [[ -n "${descendants}" ]]; then
-      echo "${name}: running (pid ${pid}, children: ${descendants})"
+      echo "${label}: running (pid ${pid}, children: ${descendants})"
     else
-      echo "${name}: running (pid ${pid})"
+      echo "${label}: running (pid ${pid})"
     fi
     if [[ -n "${cmd}" ]]; then
       echo "  cmd: ${cmd}"
@@ -88,11 +98,11 @@ show_pid_state() {
       if [[ -n "${port_pids}" ]]; then
         local compact
         compact="$(echo "${port_pids}" | tr '\n' ' ' | xargs)"
-        echo "${name}: running (pid file stale ${pid}; detected via port ${fallback_port}: ${compact})"
+        echo "${label}: running (pid file stale ${pid}; detected via port ${fallback_port}: ${compact})"
         return
       fi
     fi
-    echo "${name}: stale pid file (${pid})"
+    echo "${label}: stale pid file (${pid})"
   fi
 }
 
@@ -101,6 +111,7 @@ show_pid_state "runtime"
 show_pid_state "backend"
 show_pid_state "frontend"
 show_pid_state "worker"
+echo "Note: backend (legacy optional) is not part of the default launch path."
 
 if [[ -f "${DESKTOP_SHELL_PID_FILE}" ]]; then
   desktop_pid="$(cat "${DESKTOP_SHELL_PID_FILE}" 2>/dev/null || true)"
@@ -118,12 +129,16 @@ fi
 echo
 echo "Ports:"
 for port in 8001 4000 3000; do
+  label=""
+  if [[ "${port}" == "4000" ]]; then
+    label=" (legacy backend)"
+  fi
   pids="$(port_listener_pids "${port}")"
   if [[ -n "${pids}" ]]; then
     compact="$(echo "${pids}" | tr '\n' ' ' | xargs)"
-    echo "  ${port}: in use (${compact})"
+    echo "  ${port}${label}: in use (${compact})"
   else
-    echo "  ${port}: free"
+    echo "  ${port}${label}: free"
   fi
 done
 

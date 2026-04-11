@@ -646,6 +646,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Empyralis Local Worker v0")
     parser.add_argument("--runtime-url", default="http://127.0.0.1:8001", help="Empyralis runtime base URL")
     parser.add_argument("--api-key", default="", help="Runtime API key (or set ORION_API_KEY/RUNTIME_KEY)")
+    parser.add_argument("--enrollment-token", default="", help="Machine enrollment token for platform-relay bootstrap")
     parser.add_argument("--worker-id", default="", help="Stable worker ID")
     parser.add_argument("--poll-seconds", type=float, default=2.0, help="Claim polling interval")
     parser.add_argument("--idle-heartbeat-seconds", type=float, default=10.0, help="Idle heartbeat interval")
@@ -656,6 +657,7 @@ def main() -> int:
     args = parser.parse_args()
 
     api_key = (args.api_key or "").strip()
+    enrollment_token = (args.enrollment_token or os.getenv("ORION_MACHINE_ENROLLMENT_TOKEN") or "").strip()
     if not api_key:
         api_key = (
             os.getenv("ORION_API_KEY")
@@ -663,15 +665,15 @@ def main() -> int:
             or os.getenv("CREW_API_KEY")
             or ""
         ).strip()
-    if not api_key:
-        print("Missing runtime API key. Use --api-key or export ORION_API_KEY.", file=sys.stderr)
+    if not api_key and not enrollment_token:
+        print("Missing runtime API key or machine enrollment token.", file=sys.stderr)
         return 2
 
     worker_id = (args.worker_id or "").strip()
     if not worker_id:
         host = socket.gethostname().split(".")[0]
         worker_id = f"empyralis-local-{host}-{uuid.uuid4().hex[:6]}"
-    client = RuntimeClient(base_url=args.runtime_url, api_key=api_key)
+    client = RuntimeClient(base_url=args.runtime_url, api_key=api_key, enrollment_token=enrollment_token)
     client.load_runtime_session(worker_id)
     runtime_instance_id = client.runtime_instance_id or f"{socket.gethostname().split('.')[0]}:{os.getpid()}:{uuid.uuid4().hex[:8]}"
     verbose = not args.quiet
@@ -680,6 +682,7 @@ def main() -> int:
         print(f"Empyralis Local Worker v0")
         print(f"Runtime: {ensure_trailing_slashless(args.runtime_url)}")
         print(f"Worker:  {worker_id}")
+        print(f"Auth:    {'platform-relay bootstrap' if enrollment_token else 'runtime api key'}")
         print(f"Registered tools: {registered_local_worker_tool_names()}")
 
     try:

@@ -1,6 +1,9 @@
 import unittest
 from unittest.mock import patch
 
+from fastapi import FastAPI, HTTPException
+from fastapi.testclient import TestClient
+
 from server_modules import runtime_runtime_api
 
 
@@ -129,7 +132,8 @@ class RuntimeRuntimeApiTests(unittest.TestCase):
 
     @patch("server_modules.local_queue.handle_enroll_local_runtime")
     @patch("server_modules.runtime_runtime_api.grant_workspace_owner_machine_trust")
-    def test_register_runtime_routes_exposes_machine_enroll(self, mock_grant_trust, mock_enroll):
+    @patch("server_modules.runtime_runtime_api.security_audit_service.emit_security_audit_event")
+    def test_register_runtime_routes_exposes_machine_enroll(self, mock_audit, mock_grant_trust, mock_enroll):
         app = _FakeApp()
         runtime_runtime_api.register_runtime_routes(app)
         mock_enroll.return_value = {"ok": True, "machine_id": "machine-1"}
@@ -147,6 +151,7 @@ class RuntimeRuntimeApiTests(unittest.TestCase):
         self.assertEqual(mock_enroll.call_args.kwargs["workspace_id"], "default")
         self.assertEqual(mock_enroll.call_args.kwargs["machine_enrollment_scope"], "workspace")
         mock_grant_trust.assert_called_once_with("default", "machine-1")
+        mock_audit.assert_called_once()
 
     @patch("server_modules.runtime_runtime_api.runtime_reliability_payload")
     def test_register_runtime_routes_exposes_runtime_reliability(self, mock_reliability_payload):
@@ -162,7 +167,8 @@ class RuntimeRuntimeApiTests(unittest.TestCase):
 
     @patch("server_modules.local_queue.create_machine_enrollment_intent")
     @patch("server_modules.runtime_runtime_api.grant_workspace_owner_machine_trust")
-    def test_register_runtime_routes_exposes_machine_enrollment_intent(self, mock_grant_trust, mock_create_intent):
+    @patch("server_modules.runtime_runtime_api.security_audit_service.emit_security_audit_event")
+    def test_register_runtime_routes_exposes_machine_enrollment_intent(self, mock_audit, mock_grant_trust, mock_create_intent):
         app = _FakeApp()
         runtime_runtime_api.register_runtime_routes(app)
         mock_create_intent.return_value = {"ok": True, "machine_id": "machine-1", "token": "tok"}
@@ -180,6 +186,27 @@ class RuntimeRuntimeApiTests(unittest.TestCase):
         self.assertEqual(mock_create_intent.call_args.kwargs["workspace_id"], "default")
         self.assertEqual(mock_create_intent.call_args.kwargs["machine_enrollment_scope"], "workspace")
         mock_grant_trust.assert_called_once_with("default", "machine-1")
+        mock_audit.assert_called_once()
+
+    @patch("server_modules.runtime_runtime_api.entitlements_service.workspace_entitlement_payload_for_workspace_id")
+    def test_machine_enroll_rejects_free_workspace_plan(self, mock_entitlements):
+        app = _FakeApp()
+        runtime_runtime_api.register_runtime_routes(app)
+        mock_entitlements.return_value = {
+            "capabilities": {"advanced_features_enabled": False},
+        }
+        handler = app.routes[("POST", "/machines/enroll")]
+
+        with self.assertRaises(HTTPException) as exc:
+            self._run_async(
+                handler(
+                    runtime_runtime_api.MachineEnrollPayload(display_name="Machine 1", workspace_id="default"),
+                    current_user=self._current_user(),
+                )
+            )
+
+        self.assertEqual(exc.exception.status_code, 403)
+        self.assertEqual(exc.exception.detail, "Advanced runtime controls are not included in this workspace plan.")
 
     @patch("server_modules.local_queue.complete_machine_bootstrap")
     def test_register_runtime_routes_exposes_machine_bootstrap_complete(self, mock_complete):
@@ -192,6 +219,48 @@ class RuntimeRuntimeApiTests(unittest.TestCase):
 
         self.assertEqual(result["machine_id"], "machine-1")
         mock_complete.assert_called_once_with("machine-1", enrollment_token="tok")
+
+    @patch("server_modules.runtime_runtime_api.run_in_threadpool", side_effect=lambda fn, *args, **kwargs: fn(*args, **kwargs))
+    @patch("server_modules.local_queue.handle_bootstrap_enrolled_local_companion_runtime")
+    def test_companion_bootstrap_route_accepts_enrollment_token_without_api_key(self, mock_bootstrap, mock_run_in_threadpool):
+        app = FastAPI()
+        runtime_runtime_api.register_runtime_routes(app)
+        mock_bootstrap.return_value = {
+            "ok": True,
+            "runtime_id": "worker-1",
+            "machine_id": "worker-1",
+            "session_token": "session-1",
+            "instance_id": "instance-1",
+            "capability_digest": "abcd1234",
+            "session_issued_at": "2026-04-11T00:00:00Z",
+            "connection_mode": "platform_relay",
+            "runtime": {
+                "runtime_id": "worker-1",
+                "machine_id": "worker-1",
+                "runtime_type": "local_companion",
+                "connection_mode": "platform_relay",
+                "display_name": "Remote Worker",
+                "online": True,
+            },
+        }
+
+        with TestClient(app) as client:
+            response = client.post(
+                "/runtime/companions/worker-1/bootstrap",
+                json={
+                    "enrollment_token": "tok",
+                    "display_name": "Remote Worker",
+                    "runtime_type": "local_companion",
+                    "execution_targets": ["local_companion"],
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["session_token"], "session-1")
+        self.assertEqual(payload["connection_mode"], "platform_relay")
+        mock_run_in_threadpool.assert_called_once()
+        self.assertEqual(mock_bootstrap.call_args.kwargs["enrollment_token"], "tok")
 
     @patch("server_modules.local_queue.handle_heartbeat_local_run")
     @patch("server_modules.local_queue._assert_runtime_session")
@@ -219,6 +288,130 @@ class RuntimeRuntimeApiTests(unittest.TestCase):
         self.assertEqual(payload.event["event"], "computer_action")
         self.assertEqual(payload.event["data"]["label"], "Clicking search field")
         mock_assert_session.assert_called_once()
+
+    @patch("server_modules.runtime_runtime_api.run_in_threadpool", side_effect=lambda fn, *args, **kwargs: fn(*args, **kwargs))
+    @patch("server_modules.local_queue.handle_heartbeat_local_runtime")
+    @patch("server_modules.local_queue._assert_runtime_session")
+    def test_runtime_heartbeat_route_offloads_runtime_session_and_heartbeat_to_threadpool(
+        self,
+        mock_assert_session,
+        mock_heartbeat,
+        mock_run_in_threadpool,
+    ):
+        app = _FakeApp()
+        runtime_runtime_api.register_runtime_routes(app)
+        mock_heartbeat.return_value = {
+            "ok": True,
+            "current_run_id": "run-1",
+            "last_seen_at": "2026-04-11T00:00:00Z",
+            "runtime": {"runtime_id": "worker-1", "health_state": "healthy"},
+        }
+        handler = app.routes[("POST", "/runtime/runtimes/{runtime_id}/heartbeat")]
+
+        result = self._run_async(
+            handler(
+                "worker-1",
+                runtime_runtime_api.RuntimeHeartbeatPayload(
+                    session_token="sess",
+                    instance_id="inst",
+                    note="still alive",
+                    health_state="healthy",
+                ),
+            )
+        )
+
+        self.assertEqual(result["runtime"]["health_state"], "healthy")
+        mock_run_in_threadpool.assert_called_once()
+        mock_assert_session.assert_called_once_with("worker-1", "sess", instance_id="inst")
+        payload = mock_heartbeat.call_args.args[1]
+        self.assertEqual(payload.note, "still alive")
+        self.assertEqual(payload.health_state, "healthy")
+
+    @patch("server_modules.runtime_runtime_api.run_in_threadpool", side_effect=lambda fn, *args, **kwargs: fn(*args, **kwargs))
+    @patch("server_modules.local_queue.handle_claim_local_run")
+    @patch("server_modules.local_queue._assert_runtime_session")
+    def test_runtime_task_claim_route_offloads_session_and_claim_to_threadpool(
+        self,
+        mock_assert_session,
+        mock_claim,
+        mock_run_in_threadpool,
+    ):
+        app = _FakeApp()
+        runtime_runtime_api.register_runtime_routes(app)
+        mock_claim.return_value = {
+            "ok": True,
+            "worker_id": "worker-1",
+            "run": {
+                "run_id": "run-1",
+                "status": "running_local",
+                "created_at": "2026-04-11T00:00:00Z",
+                "lease_seconds": 45,
+                "machine_id": "worker-1",
+                "machine_lease_id": "lease-1",
+                "context": {"user_goal": "Research topic", "metadata": {"policy_mode": "local_default"}},
+            },
+        }
+        handler = app.routes[("POST", "/runtime/tasks/claim")]
+
+        result = self._run_async(
+            handler(
+                runtime_runtime_api.RuntimeTaskClaimRequest(
+                    runtime_id="worker-1",
+                    session_token="sess",
+                    instance_id="inst",
+                    execution_target="local",
+                    required_capabilities=["shell.execute"],
+                )
+            )
+        )
+
+        self.assertEqual(result["task"]["task_id"], "run-1")
+        mock_run_in_threadpool.assert_called_once()
+        mock_assert_session.assert_called_once_with("worker-1", "sess", instance_id="inst")
+        claim_request = mock_claim.call_args.args[0]
+        self.assertEqual(claim_request.worker_id, "worker-1")
+        self.assertEqual(claim_request.required_capabilities, ["shell.execute"])
+
+    @patch("server_modules.runtime_runtime_api.run_in_threadpool", side_effect=lambda fn, *args, **kwargs: fn(*args, **kwargs))
+    @patch("server_modules.local_queue.handle_claim_local_run")
+    @patch("server_modules.local_queue._assert_runtime_session")
+    def test_runtime_task_claim_route_accepts_runtime_session_without_api_key(
+        self,
+        mock_assert_session,
+        mock_claim,
+        mock_run_in_threadpool,
+    ):
+        app = FastAPI()
+        runtime_runtime_api.register_runtime_routes(app)
+        mock_claim.return_value = {
+            "ok": True,
+            "worker_id": "worker-1",
+            "run": {
+                "run_id": "run-1",
+                "status": "running_local",
+                "created_at": "2026-04-11T00:00:00Z",
+                "lease_seconds": 45,
+                "machine_id": "worker-1",
+                "machine_lease_id": "lease-1",
+                "context": {"user_goal": "Use remote companion"},
+            },
+        }
+
+        with TestClient(app) as client:
+            response = client.post(
+                "/runtime/tasks/claim",
+                json={
+                    "runtime_id": "worker-1",
+                    "session_token": "sess",
+                    "instance_id": "inst",
+                    "execution_target": "local_companion",
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["task"]["task_id"], "run-1")
+        mock_run_in_threadpool.assert_called_once()
+        mock_assert_session.assert_called_once_with("worker-1", "sess", instance_id="inst")
 
     @patch("server_modules.local_queue.handle_get_local_run_control_state")
     @patch("server_modules.local_queue._assert_runtime_session")
@@ -248,7 +441,8 @@ class RuntimeRuntimeApiTests(unittest.TestCase):
     @patch("server_modules.local_queue.handle_delete_local_runtime")
     @patch("server_modules.runtime_runtime_api.local_queue.handle_get_local_workers_status")
     @patch("server_modules.runtime_runtime_api.revoke_workspace_owner_machine_trust")
-    def test_register_runtime_routes_exposes_machine_delete(self, mock_revoke_trust, mock_status, mock_delete):
+    @patch("server_modules.runtime_runtime_api.security_audit_service.emit_security_audit_event")
+    def test_register_runtime_routes_exposes_machine_delete(self, mock_audit, mock_revoke_trust, mock_status, mock_delete):
         app = _FakeApp()
         runtime_runtime_api.register_runtime_routes(app)
         mock_delete.return_value = {"ok": True, "machine_id": "machine-1", "revoked": True, "deleted": False}
@@ -263,10 +457,12 @@ class RuntimeRuntimeApiTests(unittest.TestCase):
         self.assertTrue(result["revoked"])
         mock_delete.assert_called_once_with("machine-1")
         mock_revoke_trust.assert_called_once_with("default", "machine-1")
+        mock_audit.assert_called_once()
 
     @patch("server_modules.local_queue.handle_set_local_runtime_control")
     @patch("server_modules.runtime_runtime_api.local_queue.handle_get_local_workers_status")
-    def test_register_runtime_routes_exposes_machine_suspend(self, mock_status, mock_control):
+    @patch("server_modules.runtime_runtime_api.security_audit_service.emit_security_audit_event")
+    def test_register_runtime_routes_exposes_machine_suspend(self, mock_audit, mock_status, mock_control):
         app = _FakeApp()
         runtime_runtime_api.register_runtime_routes(app)
         mock_control.return_value = {"ok": True, "machine_id": "machine-1", "action": "suspend"}
@@ -286,10 +482,12 @@ class RuntimeRuntimeApiTests(unittest.TestCase):
 
         self.assertEqual(result["action"], "suspend")
         mock_control.assert_called_once_with("machine-1", action="suspend", reason="Maintenance")
+        mock_audit.assert_called_once()
 
     @patch("server_modules.local_queue.handle_set_local_runtime_control")
     @patch("server_modules.runtime_runtime_api.local_queue.handle_get_local_workers_status")
-    def test_register_runtime_routes_exposes_machine_resume(self, mock_status, mock_control):
+    @patch("server_modules.runtime_runtime_api.security_audit_service.emit_security_audit_event")
+    def test_register_runtime_routes_exposes_machine_resume(self, mock_audit, mock_status, mock_control):
         app = _FakeApp()
         runtime_runtime_api.register_runtime_routes(app)
         mock_control.return_value = {"ok": True, "machine_id": "machine-1", "action": "resume"}
@@ -309,10 +507,12 @@ class RuntimeRuntimeApiTests(unittest.TestCase):
 
         self.assertEqual(result["action"], "resume")
         mock_control.assert_called_once_with("machine-1", action="resume", reason="Recovered")
+        mock_audit.assert_called_once()
 
     @patch("server_modules.local_queue.handle_request_local_runtime_hard_kill")
     @patch("server_modules.runtime_runtime_api.local_queue.handle_get_local_workers_status")
-    def test_register_runtime_routes_exposes_machine_hard_kill(self, mock_status, mock_hard_kill):
+    @patch("server_modules.runtime_runtime_api.security_audit_service.emit_security_audit_event")
+    def test_register_runtime_routes_exposes_machine_hard_kill(self, mock_audit, mock_status, mock_hard_kill):
         app = _FakeApp()
         runtime_runtime_api.register_runtime_routes(app)
         mock_hard_kill.return_value = {"ok": True, "machine_id": "machine-1", "event": {"event": "hard_kill"}}
@@ -332,9 +532,11 @@ class RuntimeRuntimeApiTests(unittest.TestCase):
 
         self.assertEqual(result["machine_id"], "machine-1")
         mock_hard_kill.assert_called_once_with("machine-1", reason="Operator stop", requested_by="owner-1")
+        mock_audit.assert_called_once()
 
     @patch("server_modules.local_queue.handle_request_local_run_hard_kill")
-    def test_register_runtime_routes_exposes_run_hard_kill(self, mock_hard_kill):
+    @patch("server_modules.runtime_runtime_api.security_audit_service.emit_security_audit_event")
+    def test_register_runtime_routes_exposes_run_hard_kill(self, mock_audit, mock_hard_kill):
         app = _FakeApp()
         runtime_runtime_api.register_runtime_routes(app)
         mock_hard_kill.return_value = {"ok": True, "run_id": "00000000-0000-0000-0000-000000000001"}
@@ -369,15 +571,19 @@ class RuntimeRuntimeApiTests(unittest.TestCase):
             reason="Operator stop",
             requested_by="owner-1",
         )
+        mock_audit.assert_called_once()
 
     @patch("server_modules.runtime_runtime_api.EventSourceResponse", side_effect=lambda iterator, ping: _FakeEventSourceResponse(iterator, ping))
+    @patch("server_modules.runtime_runtime_api.iterate_in_threadpool")
     @patch("server_modules.local_queue.iter_runtime_control_stream")
     @patch("server_modules.local_queue._assert_runtime_session")
-    def test_runtime_control_stream_route_forwards_runtime_session(self, mock_assert_session, mock_iter_stream, _mock_event_source):
+    def test_runtime_control_stream_route_forwards_runtime_session(self, mock_assert_session, mock_iter_stream, mock_iterate_in_threadpool, _mock_event_source):
         app = _FakeApp()
         runtime_runtime_api.register_runtime_routes(app)
         stream_marker = iter([{"event": "hard_kill"}])
+        threaded_stream_marker = object()
         mock_iter_stream.return_value = stream_marker
+        mock_iterate_in_threadpool.return_value = threaded_stream_marker
         handler = app.routes[("GET", "/runtime/runtimes/{runtime_id}/control/stream")]
 
         result = self._run_async(
@@ -393,10 +599,11 @@ class RuntimeRuntimeApiTests(unittest.TestCase):
         )
 
         self.assertIsInstance(result, _FakeEventSourceResponse)
-        self.assertEqual(result.iterator, stream_marker)
+        self.assertIs(result.iterator, threaded_stream_marker)
         self.assertEqual(result.ping, 4)
         mock_assert_session.assert_called_once_with("worker-1", "sess", instance_id="inst")
         mock_iter_stream.assert_called_once()
+        mock_iterate_in_threadpool.assert_called_once_with(stream_marker)
         kwargs = mock_iter_stream.call_args.kwargs
         self.assertEqual(kwargs["since_sequence"], 4)
         self.assertTrue(kwargs["include_backlog"])

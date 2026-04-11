@@ -26,12 +26,17 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Print local runtime, worker, and queue status.")
     parser.add_argument("--base-url", required=True, help="Runtime base URL, for example http://127.0.0.1:8001")
     parser.add_argument("--api-key", required=True, help="Runtime API key")
+    parser.add_argument(
+        "--workspace-id",
+        default="default",
+        help="Workspace id for queue status checks. Defaults to default.",
+    )
     args = parser.parse_args()
 
     checks = [
         ("health", "/health"),
         ("workers", "/local/workers/status"),
-        ("queue", "/runs/queue/local"),
+        ("queue", f"/runs/queue/local?workspace_id={args.workspace_id}"),
     ]
 
     for title, path in checks:

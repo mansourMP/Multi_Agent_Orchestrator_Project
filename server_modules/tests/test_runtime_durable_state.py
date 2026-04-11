@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
 
-from server_modules import run_state_repository, runs_core, runs_engine, runs_execution, runs_output, runtime_runs_api, shared
+from server_modules import outbox_service, run_state_repository, runs_core, runs_engine, runs_execution, runs_output, runtime_runs_api, shared
 from server_modules.runtime_state_store import (
     init_runtime_state_db,
     load_local_runtime_state,
@@ -151,6 +151,22 @@ class RuntimeDurableStateTests(unittest.TestCase):
         self.assertIsInstance(restored["input_queue"], queue.Queue)
         self.assertEqual(runs_core.LOCAL_PENDING_RUN_IDS, [])
 
+    def test_load_live_runtime_state_prunes_orphaned_local_queue_cache(self):
+        outbox_service.persist_local_runtime_state(
+            db_path=self.db_path,
+            pending_run_ids=["orphan-run"],
+            claimed_runs={"ghost-run": {"worker_id": "worker-1", "claimed_at": "2026-04-10T00:00:00Z"}},
+            runtime_registrations={"worker-1": {"status": "busy", "current_run_id": "ghost-run"}},
+        )
+
+        runs_core._load_live_runtime_state()
+
+        self.assertEqual(runs_core.LOCAL_PENDING_RUN_IDS, [])
+        self.assertEqual(runs_core.LOCAL_CLAIMED_RUNS, {})
+        local_state = load_local_runtime_state(self.db_path)
+        self.assertEqual(local_state["pending_run_ids"], [])
+        self.assertEqual(local_state["claimed_runs"], {})
+
     @patch("server_modules.runs_engine._append_approval_audit")
     def test_wait_for_human_response_consumes_resolved_confirmation_after_restart(self, audit_mock):
         run_id = "run-resume-1"
@@ -215,6 +231,75 @@ class RuntimeDurableStateTests(unittest.TestCase):
         self.assertIsNone(stored_run["pending_approval"])
         self.assertFalse(stored_run.get("_resume_after_confirmation_scheduled"))
         self.assertGreaterEqual(audit_mock.call_count, 2)
+
+    @patch("server_modules.runs_core._append_approval_audit")
+    def test_wait_for_human_response_consumes_resume_confirmation_token(self, audit_mock):
+        run_id = "run-resume-token-1"
+        log_queue: queue.Queue = queue.Queue()
+        run = {
+            "run_id": run_id,
+            "status": "waiting_for_input",
+            "engine": "orion",
+            "logs": log_queue,
+            "input_queue": queue.Queue(),
+            "thread_id": None,
+            "context": {"workspace_id": "default", "metadata": {}},
+            "created_at": "2026-03-29T00:00:00Z",
+            "updated_at": "2026-03-29T00:01:00Z",
+            "result": None,
+            "result_data": None,
+            "events": [],
+            "tool_policy_audit": [],
+            "memory_trace": {
+                "enabled": False,
+                "reads": [],
+                "writes": [],
+                "last_error": None,
+                "updated_at": "2026-03-29T00:01:00Z",
+            },
+            "pending_confirmation": {
+                "approval_id": "approval-token-1",
+                "correlation_id": "run:resume:approval-token-1",
+                "status": "waiting",
+                "scope": "once",
+                "reusable": False,
+                "prompt": "Confirm send",
+            },
+            "pending_approval": {
+                "approval_id": "approval-token-1",
+                "correlation_id": "run:resume:approval-token-1",
+                "status": "waiting",
+                "scope": "once",
+                "reusable": False,
+                "prompt": "Confirm send",
+            },
+            "_resume_confirmation_token": {
+                "approval_id": "approval-token-1",
+                "correlation_id": "run:resume:approval-token-1",
+                "prompt": "Confirm send",
+                "decision": "approve",
+                "note": "restored standalone approval",
+                "resolved_at": "2026-03-29T00:01:30Z",
+                "scope": "once",
+                "reusable": False,
+            },
+            "_event_seq": 0,
+        }
+        runs_core.runs[run_id] = run
+        runs_engine.runs[run_id] = run
+        runs_execution.runs[run_id] = run
+        stored_run = runs_core.runs[run_id]
+        runs_core.RUN_QUEUE_INDEX[id(log_queue)] = run_id
+        runs_engine.RUN_QUEUE_INDEX[id(log_queue)] = run_id
+        runs_execution.RUN_QUEUE_INDEX[id(log_queue)] = run_id
+
+        response = runs_engine.wait_for_human_response(run_id, "Confirm send")
+
+        self.assertTrue(response["approved"])
+        self.assertEqual(stored_run["status"], "executing")
+        self.assertIsNone(stored_run["pending_confirmation"])
+        self.assertIsNone(stored_run["pending_approval"])
+        self.assertNotIn("_resume_confirmation_token", stored_run)
 
     @patch("server_modules.runtime_runs_api.threading.Thread")
     @patch("server_modules.runtime_runs_api._late_server_export")

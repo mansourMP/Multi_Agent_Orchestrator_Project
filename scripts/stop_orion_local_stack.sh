@@ -90,13 +90,13 @@ stop_pid_file "ops-daemon"
 pkill -f "scripts/orion_local_worker.py" 2>/dev/null || true
 pkill -f "scripts/run_local_worker.sh" 2>/dev/null || true
 pkill -f "scripts/orion_ops_daemon.py" 2>/dev/null || true
-# Cleanup orphan backend/frontend dev processes from this repo that can leak file descriptors.
+# Cleanup orphan legacy-backend/frontend dev processes from this repo that can leak file descriptors.
 pkill -f "${ROOT_DIR}/backend/node_modules/.bin/nest start --watch" 2>/dev/null || true
 pkill -f "${ROOT_DIR}/frontend/node_modules/.bin/next dev" 2>/dev/null || true
 
 # Final guard: make sure well-known ports are clear even if pid files were stale.
 kill_port_if_busy "frontend" 3000
-kill_port_if_busy "backend" 4000
+kill_port_if_busy "legacy-backend" 4000
 kill_port_if_busy "runtime" 8001
 kill_port_if_busy "ops-daemon" 8787
 

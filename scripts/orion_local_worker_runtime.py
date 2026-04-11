@@ -195,11 +195,13 @@ class RuntimeClient:
         self,
         base_url: str,
         api_key: str,
+        enrollment_token: str = "",
         timeout_seconds: int = 20,
         session_root: Optional[Any] = None,
     ):
         self.base_url = ensure_trailing_slashless(base_url)
         self.api_key = api_key
+        self.enrollment_token = str(enrollment_token or "").strip()
         self.timeout_seconds = timeout_seconds
         self.runtime_session_token: Optional[str] = None
         self.runtime_instance_id: Optional[str] = None
@@ -338,21 +340,19 @@ class RuntimeClient:
                 raise
             self.runtime_session_token = None
             self.clear_runtime_session(runtime_id)
-            self.register_runtime(
-                runtime_id,
-                runtime_type=str(registration.get("runtime_type") or "local"),
-                display_name=str(registration.get("display_name") or "") or None,
-                platform=str(registration.get("platform") or "") or None,
-                capabilities=list(registration.get("capabilities") or []),
-                execution_targets=list(registration.get("execution_targets") or []),
-                instance_id=str(registration.get("instance_id") or "") or None,
-            )
+            self._bootstrap_registration(registration)
             return fn()
+
+    def _auth_headers(self) -> Dict[str, str]:
+        headers: Dict[str, str] = {}
+        if str(self.api_key or "").strip():
+            headers["X-API-Key"] = str(self.api_key or "").strip()
+        return headers
 
     def _request(self, method: str, path: str, payload: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         url = f"{self.base_url}{path}"
         body = None
-        headers = {"X-API-Key": self.api_key}
+        headers = self._auth_headers()
         if payload is not None:
             body = json.dumps(payload).encode("utf-8")
             headers["Content-Type"] = "application/json"
@@ -406,7 +406,7 @@ class RuntimeClient:
             url=url,
             method="GET",
             headers={
-                "X-API-Key": self.api_key,
+                **self._auth_headers(),
                 "Accept": "text/event-stream",
                 "Cache-Control": "no-cache",
             },
@@ -449,6 +449,8 @@ class RuntimeClient:
         instance_id: Optional[str] = None,
         permission_probe: Optional[Dict[str, Dict[str, Any]]] = None,
     ) -> Dict[str, Any]:
+        if not str(self.api_key or "").strip():
+            raise RuntimeError("Runtime API key is required for direct runtime registration.")
         registration = self._remember_registration(
             runtime_id,
             runtime_type=runtime_type,
@@ -486,6 +488,91 @@ class RuntimeClient:
                 raise
             self.heartbeat_worker(runtime_id, None, "runtime_registered")
             return {"ok": True, "runtime_id": runtime_id, "legacy": True}
+
+    def bootstrap_companion_runtime(
+        self,
+        runtime_id: str,
+        *,
+        runtime_type: str = "local_companion",
+        display_name: Optional[str] = None,
+        platform: Optional[str] = None,
+        policy_mode: str = "local_default",
+        capabilities: Optional[list[str]] = None,
+        execution_targets: Optional[list[str]] = None,
+        instance_id: Optional[str] = None,
+        permission_probe: Optional[Dict[str, Dict[str, Any]]] = None,
+    ) -> Dict[str, Any]:
+        if not self.enrollment_token:
+            raise RuntimeError("Machine enrollment token is required for companion bootstrap.")
+        registration = self._remember_registration(
+            runtime_id,
+            runtime_type=runtime_type,
+            display_name=display_name,
+            platform=platform,
+            policy_mode=policy_mode,
+            capabilities=capabilities,
+            execution_targets=execution_targets,
+            instance_id=instance_id,
+        )
+        effective_instance_id = str(registration.get("instance_id") or runtime_id).strip() or runtime_id
+        payload: Dict[str, Any] = {
+            "enrollment_token": self.enrollment_token,
+            "runtime_type": runtime_type,
+            "display_name": display_name,
+            "platform": platform,
+            "policy_mode": policy_mode,
+            "capabilities": capabilities or [],
+            "execution_targets": execution_targets or ["local_companion"],
+            "instance_id": effective_instance_id,
+            "capability_digest": self._capability_digest(capabilities),
+            "note": "companion_platform_relay_boot",
+        }
+        if isinstance(permission_probe, dict) and permission_probe:
+            payload["permission_probe"] = permission_probe
+        result = self._request("POST", f"/runtime/companions/{runtime_id}/bootstrap", payload)
+        self.runtime_session_token = str(result.get("session_token") or "").strip() or None
+        self.runtime_instance_id = str(result.get("instance_id") or effective_instance_id).strip() or effective_instance_id
+        registration["instance_id"] = self.runtime_instance_id
+        self._registration = registration
+        self._persist_runtime_session(runtime_id)
+        return result
+
+    def _bootstrap_registration(self, registration: Dict[str, Any]) -> Dict[str, Any]:
+        runtime_id = str(registration.get("runtime_id") or "").strip()
+        if not runtime_id:
+            raise RuntimeError("runtime_id is required for runtime bootstrap.")
+        execution_targets = list(registration.get("execution_targets") or [])
+        runtime_type = str(registration.get("runtime_type") or "local").strip() or "local"
+        permission_probe = (
+            dict(registration.get("permission_probe"))
+            if isinstance(registration.get("permission_probe"), dict)
+            else None
+        )
+        if self.enrollment_token and (
+            runtime_type == "local_companion" or "local_companion" in execution_targets
+        ):
+            return self.bootstrap_companion_runtime(
+                runtime_id,
+                runtime_type=runtime_type,
+                display_name=str(registration.get("display_name") or "") or None,
+                platform=str(registration.get("platform") or "") or None,
+                policy_mode=str(registration.get("policy_mode") or "local_default"),
+                capabilities=list(registration.get("capabilities") or []),
+                execution_targets=execution_targets or ["local_companion"],
+                instance_id=str(registration.get("instance_id") or "") or None,
+                permission_probe=permission_probe,
+            )
+        return self.register_runtime(
+            runtime_id,
+            runtime_type=runtime_type,
+            display_name=str(registration.get("display_name") or "") or None,
+            platform=str(registration.get("platform") or "") or None,
+            policy_mode=str(registration.get("policy_mode") or "local_default"),
+            capabilities=list(registration.get("capabilities") or []),
+            execution_targets=execution_targets or ["local"],
+            instance_id=str(registration.get("instance_id") or "") or None,
+            permission_probe=permission_probe,
+        )
 
     def bootstrap_runtime_session(
         self,
@@ -526,17 +613,12 @@ class RuntimeClient:
                     raise
                 self.runtime_session_token = None
                 self.clear_runtime_session(runtime_id)
-        result = self.register_runtime(
-            runtime_id,
-            runtime_type=str(registration.get("runtime_type") or "local"),
-            display_name=str(registration.get("display_name") or "") or None,
-            platform=str(registration.get("platform") or "") or None,
-            policy_mode=str(registration.get("policy_mode") or "local_default"),
-            capabilities=list(registration.get("capabilities") or []),
-            execution_targets=list(registration.get("execution_targets") or ["local"]),
-            instance_id=str(registration.get("instance_id") or "") or None,
-            permission_probe=permission_probe,
-        )
+        if isinstance(permission_probe, dict) and permission_probe:
+            registration = {
+                **registration,
+                "permission_probe": dict(permission_probe),
+            }
+        result = self._bootstrap_registration(registration)
         if self.runtime_session_token or bool(result.get("legacy")):
             result["resumed"] = False
             return result

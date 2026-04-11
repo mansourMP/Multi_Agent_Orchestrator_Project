@@ -23,7 +23,11 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
             include: {
                 memberships: {
                     include: {
-                        organization: true,
+                        organization: {
+                            include: {
+                                workspaces: true,
+                            },
+                        },
                     },
                 },
             },

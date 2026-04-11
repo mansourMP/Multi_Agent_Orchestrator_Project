@@ -156,6 +156,68 @@ function serializeAuthenticatedUser(user: any) {
     };
 }
 
+function normalizeWorkspaceRole(value: unknown): 'owner' | 'member' | 'viewer' {
+    const token = String(value || '').trim().toLowerCase();
+    if (token === 'owner' || token === 'admin') return 'owner';
+    if (token === 'viewer') return 'viewer';
+    return 'member';
+}
+
+function highestWorkspaceRole(user: any): 'owner' | 'member' | 'viewer' {
+    const roles = Array.isArray(user?.memberships) ? user.memberships : [];
+    if (roles.some((item: any) => normalizeWorkspaceRole(item?.role) === 'owner')) return 'owner';
+    if (roles.some((item: any) => normalizeWorkspaceRole(item?.role) === 'member')) return 'member';
+    return 'viewer';
+}
+
+function serializeWorkspaceAccess(user: any) {
+    const entries = new Map<string, {
+        workspace_id: string;
+        role: 'owner' | 'member' | 'viewer';
+        capabilities: { allow: string[]; deny: string[] };
+        dangerous_action_classes: { allow: string[]; deny: string[] };
+        trusted_owner_machine_ids: string[];
+    }>();
+
+    for (const membership of Array.isArray(user?.memberships) ? user.memberships : []) {
+        const role = normalizeWorkspaceRole(membership?.role);
+        const organization = membership?.organization;
+        const workspaces = Array.isArray(organization?.workspaces) ? organization.workspaces : [];
+        for (const workspace of workspaces) {
+            const workspaceId = String(workspace?.id || '').trim();
+            if (!workspaceId || entries.has(workspaceId)) continue;
+            entries.set(workspaceId, {
+                workspace_id: workspaceId,
+                role,
+                capabilities: {
+                    allow: role === 'owner' ? ['*'] : [],
+                    deny: [],
+                },
+                dangerous_action_classes: {
+                    allow: role === 'owner' ? ['*'] : [],
+                    deny: [],
+                },
+                trusted_owner_machine_ids: [],
+            });
+        }
+    }
+
+    return Array.from(entries.values());
+}
+
+function serializeCurrentUserPayload(user: any, accountAccess: any) {
+    const role = highestWorkspaceRole(user);
+    return {
+        user: {
+            ...serializeAuthenticatedUser(user),
+            role,
+            is_admin: role === 'owner',
+        },
+        workspace_access: serializeWorkspaceAccess(user),
+        account_access: accountAccess,
+    };
+}
+
 class UpdateProfileDto {
     name?: string;
     avatar_url?: string;
@@ -330,10 +392,10 @@ export class AuthController {
     @Get('me')
     @UseGuards(JwtAuthGuard)
     async getCurrentUser(@CurrentUser() user: any) {
-        return {
-            user: serializeAuthenticatedUser(user),
-            account_access: await this.authService.getAccountAccess(user.id, user.email),
-        };
+        return serializeCurrentUserPayload(
+            user,
+            await this.authService.getAccountAccess(user.id, user.email),
+        );
     }
 
     @Patch('me')
@@ -343,10 +405,7 @@ export class AuthController {
             name: typeof body?.name === 'string' ? body.name : undefined,
             avatarUrl: typeof body?.avatar_url === 'string' ? body.avatar_url : undefined,
         });
-        return {
-            user: serializeAuthenticatedUser(updated.user),
-            account_access: updated.accountAccess,
-        };
+        return serializeCurrentUserPayload(updated.user, updated.accountAccess);
     }
 
     @Get('access')

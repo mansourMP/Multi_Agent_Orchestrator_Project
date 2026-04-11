@@ -13,9 +13,12 @@ import time
 import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+from urllib.parse import urlparse
 
 from fastapi import Header, HTTPException, Request
 from server_modules import control_plane_repository
+from server_modules import entitlements_service
+from server_modules import security_audit_service
 from server_modules.direct_tool_config_service import run_async_tool_call
 from server_modules.jwt_secret import resolve_jwt_secret
 
@@ -29,6 +32,8 @@ LOGIN_RATE_LIMIT_BUCKETS: Dict[str, list[float]] = {}
 USER_RATE_LIMIT_LOCK = threading.Lock()
 USER_RATE_LIMIT_BUCKETS: Dict[str, list[float]] = {}
 JWT_EXP_SECONDS = int(os.getenv("ORION_JWT_EXP_SECONDS", "3600"))
+MOBILE_JWT_EXP_SECONDS = int(os.getenv("ORION_MOBILE_JWT_EXP_SECONDS", str(60 * 60 * 24 * 30)))
+MOBILE_REFRESH_EXP_SECONDS = int(os.getenv("ORION_MOBILE_REFRESH_EXP_SECONDS", str(60 * 60 * 24 * 180)))
 ORION_PUBLIC_REGISTRATION_ENABLED = str(os.getenv("ORION_PUBLIC_REGISTRATION_ENABLED", "0")).strip().lower() in {"1", "true", "yes", "on"}
 ORION_ADMIN_USER_IDS = {item.strip() for item in str(os.getenv("ORION_ADMIN_USER_IDS", "")).split(",") if item.strip()}
 ORION_ADMIN_EMAILS = {item.strip().lower() for item in str(os.getenv("ORION_ADMIN_EMAILS", "")).split(",") if item.strip()}
@@ -53,6 +58,289 @@ def public_registration_enabled() -> bool:
     if raw is None:
         return bool(ORION_PUBLIC_REGISTRATION_ENABLED)
     return str(raw).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def auth_provider_options() -> dict[str, dict[str, bool]]:
+    google_enabled = bool(
+        str(os.getenv("GOOGLE_CLIENT_ID", "")).strip()
+        and str(os.getenv("GOOGLE_CLIENT_SECRET", "")).strip()
+    )
+    backend_public_origin = str(os.getenv("BACKEND_PUBLIC_ORIGIN", "") or os.getenv("BACKEND_PUBLIC_HOST", "")).strip()
+    apple_enabled = False
+    if backend_public_origin:
+        try:
+            parsed = urlparse(backend_public_origin)
+            hostname = str(parsed.hostname or "").strip().lower()
+            apple_enabled = parsed.scheme == "https" and hostname not in {"localhost", "127.0.0.1", "::1"} and bool(
+                str(os.getenv("APPLE_CLIENT_ID", "")).strip()
+                and str(os.getenv("APPLE_TEAM_ID", "")).strip()
+                and str(os.getenv("APPLE_KEY_ID", "")).strip()
+                and str(os.getenv("APPLE_PRIVATE_KEY", "")).strip()
+            )
+        except Exception:
+            apple_enabled = False
+    return {
+        "email": {"enabled": True},
+        "google": {"enabled": google_enabled},
+        "apple": {"enabled": apple_enabled},
+    }
+
+
+def _resolve_auth_session_ttl_seconds(channel: Any, ttl_seconds: Optional[int] = None) -> int:
+    if ttl_seconds is not None:
+        return max(int(ttl_seconds), 60)
+    normalized_channel = _normalize_auth_session_channel(channel, default="web")
+    if normalized_channel == "mobile":
+        return max(int(MOBILE_JWT_EXP_SECONDS), 60)
+    return max(int(JWT_EXP_SECONDS), 60)
+
+
+def _resolve_authenticated_workspace_id(
+    requested_workspace_id: Optional[str],
+    workspace_access: dict[str, dict[str, Any]],
+) -> str:
+    requested = _normalize_workspace_token(requested_workspace_id, default="")
+    entries = _workspace_access_entries(workspace_access)
+    if requested:
+        for entry in entries:
+            if _normalize_workspace_token(entry.get("workspace_id"), default="") == requested:
+                return requested
+    default_entry = _default_workspace_entry(workspace_access)
+    if isinstance(default_entry, dict) and str(default_entry.get("workspace_id") or "").strip():
+        return _normalize_workspace_token(default_entry.get("workspace_id"), default="default")
+    return requested or "default"
+
+
+def _workspace_access_entries(value: Any) -> list[dict[str, Any]]:
+    if isinstance(value, dict):
+        raw_items = list(value.values())
+    elif isinstance(value, list):
+        raw_items = list(value)
+    else:
+        raw_items = []
+    entries: list[dict[str, Any]] = []
+    seen_workspace_ids: set[str] = set()
+    for raw_entry in raw_items:
+        if not isinstance(raw_entry, dict):
+            continue
+        workspace_id = _normalize_workspace_token(raw_entry.get("workspace_id"), default="")
+        if not workspace_id or workspace_id in seen_workspace_ids:
+            continue
+        entry = dict(raw_entry)
+        entry["workspace_id"] = workspace_id
+        tenant_id = _normalize_tenant_token(entry.get("tenant_id"), default="")
+        if tenant_id:
+            entry["tenant_id"] = tenant_id
+        entries.append(entry)
+        seen_workspace_ids.add(workspace_id)
+    return entries
+
+
+def _default_workspace_entry(workspace_access: Any) -> Optional[dict[str, Any]]:
+    entries = _workspace_access_entries(workspace_access)
+    if not entries:
+        return None
+    return entries[0]
+
+
+def _workspace_entry_for_id(workspace_access: Any, workspace_id: Optional[str]) -> Optional[dict[str, Any]]:
+    token = _normalize_workspace_token(workspace_id, default="")
+    if not token:
+        return None
+    for entry in _workspace_access_entries(workspace_access):
+        if _normalize_workspace_token(entry.get("workspace_id"), default="") == token:
+            return entry
+    return None
+
+
+def _workspace_identity_projection(
+    workspace_access: Any,
+    *,
+    requested_workspace_id: Optional[str] = None,
+) -> dict[str, Any]:
+    default_entry = _default_workspace_entry(workspace_access)
+    default_workspace_id = _normalize_workspace_token(
+        (default_entry or {}).get("workspace_id"),
+        default="",
+    ) or None
+    current_workspace_id = _resolve_authenticated_workspace_id(
+        requested_workspace_id,
+        {
+            _normalize_workspace_token(entry.get("workspace_id"), default=""): entry
+            for entry in _workspace_access_entries(workspace_access)
+        },
+    )
+    current_entry = _workspace_entry_for_id(workspace_access, current_workspace_id) or default_entry
+    return {
+        "default_workspace_id": default_workspace_id,
+        "default_tenant_id": _normalize_tenant_token((default_entry or {}).get("tenant_id"), default="") or None,
+        "current_workspace_id": _normalize_workspace_token(current_workspace_id, default="") or default_workspace_id,
+        "current_tenant_id": _normalize_tenant_token((current_entry or {}).get("tenant_id"), default="") or None,
+    }
+
+
+def _resolve_workspace_token_for_current_user(
+    current_user: Optional[Dict[str, Any]],
+    workspace_id: Optional[str],
+) -> str:
+    token = _normalize_workspace_token(workspace_id, default="")
+    if token and token != "default":
+        return token
+    workspace_access = workspace_access_map(current_user)
+    if workspace_access:
+        return _resolve_authenticated_workspace_id(token or "default", workspace_access)
+    return token or "default"
+
+
+def _workspace_entitlement_projection(
+    workspace_access: Any,
+    *,
+    current_workspace_id: Optional[str] = None,
+    default_workspace_id: Optional[str] = None,
+) -> dict[str, Any]:
+    entries = _workspace_access_entries(workspace_access)
+    workspace_entitlements: dict[str, dict[str, Any]] = {}
+    for entry in entries:
+        workspace_id = _normalize_workspace_token(entry.get("workspace_id"), default="")
+        if not workspace_id:
+            continue
+        try:
+            workspace_entitlements[workspace_id] = entitlements_service.workspace_entitlement_payload_for_workspace_id(
+                workspace_id=workspace_id,
+            )
+        except Exception:
+            workspace_entitlements[workspace_id] = entitlements_service.workspace_entitlement_payload()
+    resolved_current_workspace_id = _normalize_workspace_token(current_workspace_id, default="")
+    resolved_default_workspace_id = _normalize_workspace_token(default_workspace_id, default="")
+    current_workspace_entitlements = (
+        workspace_entitlements.get(resolved_current_workspace_id)
+        or workspace_entitlements.get(resolved_default_workspace_id)
+        or (next(iter(workspace_entitlements.values())) if workspace_entitlements else None)
+    )
+    default_workspace_entitlements = (
+        workspace_entitlements.get(resolved_default_workspace_id)
+        or current_workspace_entitlements
+    )
+    return {
+        "workspace_entitlements": workspace_entitlements,
+        "current_workspace_entitlements": current_workspace_entitlements,
+        "default_workspace_entitlements": default_workspace_entitlements,
+    }
+
+
+def _issue_authenticated_user_payload(
+    user: dict[str, Any],
+    *,
+    role: str,
+    workspace_access: dict[str, dict[str, Any]],
+    channel: Any = "web",
+    device_id: Optional[str] = None,
+    device_name: Optional[str] = None,
+    device_platform: Optional[str] = None,
+    workspace_id: Optional[str] = None,
+    auth_flow: str,
+    session_ttl_seconds: Optional[int] = None,
+    enterprise_security: Optional[dict[str, Any]] = None,
+) -> dict[str, Any]:
+    user_id = str(user.get("id") or "").strip()
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Invalid user record.")
+
+    normalized_channel = _normalize_auth_session_channel(channel, default="web")
+    resolved_workspace_access = list(workspace_access.values())
+    resolved_tenant_access = list(tenant_access_map({"workspace_access": workspace_access}).values())
+    resolved_workspace_id = _resolve_authenticated_workspace_id(workspace_id, workspace_access)
+    workspace_identity = _workspace_identity_projection(
+        workspace_access,
+        requested_workspace_id=resolved_workspace_id,
+    )
+    if normalized_channel == "mobile":
+        workspace_record = _control_plane_call(control_plane_repository.get_workspace_by_id(resolved_workspace_id))
+        try:
+            entitlements_service.enforce_mobile_app_access(workspace=workspace_record if isinstance(workspace_record, dict) else None)
+        except entitlements_service.EntitlementError as exc:
+            raise HTTPException(status_code=403, detail=exc.message) from exc
+    effective_device_id = str(device_id or "").strip() or None
+    device_link = None
+    if effective_device_id:
+        device_link = upsert_user_device_link(
+            user_id,
+            device_id=effective_device_id,
+            workspace_id=resolved_workspace_id,
+            channel=normalized_channel,
+            display_name=str(device_name or "").strip() or None,
+            platform=str(device_platform or "").strip() or None,
+            trust_state="verified",
+            status="active",
+            session_binding_required=True,
+            metadata={
+                "auth_flow": auth_flow,
+                "workspace_id": resolved_workspace_id,
+            },
+        )
+
+    resolved_ttl_seconds = _resolve_auth_session_ttl_seconds(normalized_channel, session_ttl_seconds)
+    token = issue_token(
+        user_id,
+        email=str(user.get("email") or ""),
+        role=role,
+        workspace_access=resolved_workspace_access,
+        channel=normalized_channel,
+        device_id=effective_device_id,
+        trust_state=(device_link or {}).get("trust_state"),
+        session_metadata={
+            "auth_flow": auth_flow,
+            "workspace_id": resolved_workspace_id,
+            "device_platform": str(device_platform or "").strip() or None,
+            "device_name": str(device_name or "").strip() or None,
+        },
+        ttl_seconds=resolved_ttl_seconds,
+    )
+    token_payload = _decode_token_payload(token)
+    auth_session = get_auth_session(str(token_payload.get("sid") or "").strip())
+    session_recovery = None
+    if normalized_channel == "mobile" and auth_session:
+        session_recovery = issue_auth_session_refresh_token(
+            str(auth_session.get("session_id") or "").strip(),
+            user_id=user_id,
+        )
+    payload = _auth_payload_for_user(
+        user,
+        role=role,
+        token=token,
+        workspace_access=resolved_workspace_access,
+        current_workspace_id=workspace_identity.get("current_workspace_id"),
+        default_workspace_id=workspace_identity.get("default_workspace_id"),
+        current_tenant_id=workspace_identity.get("current_tenant_id"),
+        default_tenant_id=workspace_identity.get("default_tenant_id"),
+        tenant_access=resolved_tenant_access,
+        enterprise_security=enterprise_security,
+        auth_session=auth_session,
+        device_link=device_link,
+        identity_versions=load_user_identity_versions(user_id),
+        session_recovery=session_recovery,
+    )
+    if auth_flow in {"login", "register", "refresh"}:
+        session_id = str((auth_session or {}).get("session_id") or "").strip()
+        security_audit_service.emit_security_audit_event(
+            action=f"auth.{auth_flow}",
+            tenant_id=payload.get("current_tenant_id"),
+            workspace_id=payload.get("current_workspace_id"),
+            actor_user_id=user_id,
+            actor_email=str(user.get("email") or "").strip().lower() or None,
+            actor_auth_type="bearer",
+            channel=normalized_channel,
+            trace_id=session_id,
+            idempotency_key=f"auth.{auth_flow}:{session_id or user_id}",
+            metadata={
+                "device_id": effective_device_id,
+                "device_name": str(device_name or "").strip() or None,
+                "device_platform": str(device_platform or "").strip() or None,
+                "session_id": session_id or None,
+                "session_family_id": str((auth_session or {}).get("session_family_id") or "").strip() or None,
+            },
+        )
+    return payload
 
 
 def normalize_rbac_role(value: Any, *, default: str = "member") -> str:
@@ -234,7 +522,7 @@ def current_user_role(current_user: Optional[Dict[str, Any]], *, default: str = 
     if bool(current_user.get("is_admin")):
         return "owner"
     auth_type = str(current_user.get("auth_type") or "").strip().lower()
-    if auth_type in {"api_key", "disabled"}:
+    if auth_type == "api_key":
         return "owner"
     return normalize_rbac_role(current_user.get("role"), default=default)
 
@@ -275,6 +563,29 @@ def _orion_api_key() -> str:
 def _orion_auth_required() -> bool:
     raw = os.getenv("ORION_AUTH_REQUIRED")
     return (str(raw).strip() != "0") if raw is not None else True
+
+
+def _environment_is_production() -> bool:
+    return str(os.getenv("ENV") or "").strip().lower() in {"prod", "production"}
+
+
+def _local_dev_auth_role() -> str:
+    return normalize_rbac_role(os.getenv("ORION_LOCAL_DEV_AUTH_ROLE"), default="member")
+
+
+def _local_dev_workspace_ids() -> list[str]:
+    raw = os.getenv("ORION_LOCAL_DEV_WORKSPACE_IDS")
+    if raw is None:
+        return ["default"]
+    return _normalize_workspace_ids_claim(raw)
+
+
+def _local_dev_user_id() -> str:
+    return str(os.getenv("ORION_LOCAL_DEV_USER_ID") or "local-dev").strip() or "local-dev"
+
+
+def _local_dev_email() -> str:
+    return str(os.getenv("ORION_LOCAL_DEV_EMAIL") or "local-dev@empyralis.local").strip().lower() or "local-dev@empyralis.local"
 
 
 def _jwt_secret() -> str:
@@ -489,6 +800,21 @@ def _connect_auth_db() -> sqlite3.Connection:
         )
         """
     )
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS auth_session_refresh_tokens (
+            session_id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            token_hash TEXT NOT NULL,
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL,
+            expires_at INTEGER NOT NULL,
+            rotated_at INTEGER,
+            revoked_at INTEGER,
+            revoked_reason TEXT
+        )
+        """
+    )
     existing_columns = {
         str(row[1]).strip().lower()
         for row in connection.execute("PRAGMA table_info(users)").fetchall()
@@ -578,6 +904,9 @@ def _connect_auth_db() -> sqlite3.Connection:
     )
     connection.execute(
         "CREATE INDEX IF NOT EXISTS idx_user_devices_user ON user_devices(user_id, status, channel, workspace_id)"
+    )
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS idx_auth_refresh_tokens_user ON auth_session_refresh_tokens(user_id, expires_at DESC)"
     )
     connection.commit()
     return connection
@@ -789,6 +1118,190 @@ def _device_link_from_row(row: Any) -> dict[str, Any]:
     }
 
 
+def _auth_session_recovery_from_row(row: Any) -> dict[str, Any]:
+    if row is None:
+        return {}
+    expires_at = int(row["expires_at"]) if row["expires_at"] is not None else None
+    revoked_at = int(row["revoked_at"]) if row["revoked_at"] is not None else None
+    return {
+        "session_id": str(row["session_id"] or "").strip(),
+        "user_id": str(row["user_id"] or "").strip(),
+        "issued_at": int(row["created_at"]) if row["created_at"] is not None else None,
+        "updated_at": int(row["updated_at"]) if row["updated_at"] is not None else None,
+        "refresh_expires_at": expires_at,
+        "rotated_at": int(row["rotated_at"]) if row["rotated_at"] is not None else None,
+        "revoked_at": revoked_at,
+        "revoked_reason": str(row["revoked_reason"] or "").strip() or None,
+        "active": revoked_at is None and (expires_at is None or expires_at > int(time.time())),
+    }
+
+
+def _hash_auth_session_refresh_secret(session_id: str, secret: str) -> str:
+    signing_input = f"{str(session_id or '').strip()}.{str(secret or '').strip()}".encode("utf-8")
+    digest = hmac.new(_jwt_secret().encode("utf-8"), signing_input, hashlib.sha256).digest()
+    return _b64url_encode(digest)
+
+
+def _encode_auth_session_refresh_token(session_id: str, secret: str) -> str:
+    return f"esr_{str(session_id or '').strip()}.{str(secret or '').strip()}"
+
+
+def _decode_auth_session_refresh_token(refresh_token: str) -> tuple[str, str]:
+    token = str(refresh_token or "").strip()
+    if not token.startswith("esr_") or "." not in token:
+        raise HTTPException(status_code=401, detail="Refresh token is invalid.")
+    raw = token[4:]
+    session_id, secret = raw.split(".", 1)
+    clean_session_id = str(session_id or "").strip()
+    clean_secret = str(secret or "").strip()
+    if not clean_session_id or not clean_secret:
+        raise HTTPException(status_code=401, detail="Refresh token is invalid.")
+    return clean_session_id, clean_secret
+
+
+def _upsert_auth_session_refresh_token_locked(
+    connection: sqlite3.Connection,
+    *,
+    session_id: str,
+    user_id: str,
+    token_hash: str,
+    expires_at: int,
+    now_ts: Optional[int] = None,
+    rotated_at: Optional[int] = None,
+    revoked_at: Optional[int] = None,
+    revoked_reason: Optional[str] = None,
+) -> dict[str, Any]:
+    clean_session_id = str(session_id or "").strip()
+    clean_user_id = str(user_id or "").strip()
+    if not clean_session_id or not clean_user_id:
+        return {}
+    ts = int(now_ts or time.time())
+    existing = connection.execute(
+        "SELECT created_at FROM auth_session_refresh_tokens WHERE session_id = ? LIMIT 1",
+        (clean_session_id,),
+    ).fetchone()
+    created_at = int(existing["created_at"]) if existing is not None and existing["created_at"] is not None else ts
+    connection.execute(
+        """
+        INSERT OR REPLACE INTO auth_session_refresh_tokens (
+            session_id,
+            user_id,
+            token_hash,
+            created_at,
+            updated_at,
+            expires_at,
+            rotated_at,
+            revoked_at,
+            revoked_reason
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            clean_session_id,
+            clean_user_id,
+            str(token_hash or "").strip(),
+            created_at,
+            ts,
+            int(expires_at),
+            int(rotated_at) if rotated_at is not None else None,
+            int(revoked_at) if revoked_at is not None else None,
+            str(revoked_reason or "").strip() or None,
+        ),
+    )
+    row = connection.execute(
+        "SELECT * FROM auth_session_refresh_tokens WHERE session_id = ? LIMIT 1",
+        (clean_session_id,),
+    ).fetchone()
+    return _auth_session_recovery_from_row(row)
+
+
+def _get_auth_session_refresh_token_locked(
+    connection: sqlite3.Connection,
+    session_id: str,
+) -> dict[str, Any]:
+    clean_session_id = str(session_id or "").strip()
+    if not clean_session_id:
+        return {}
+    row = connection.execute(
+        "SELECT * FROM auth_session_refresh_tokens WHERE session_id = ? LIMIT 1",
+        (clean_session_id,),
+    ).fetchone()
+    return _auth_session_recovery_from_row(row)
+
+
+def _revoke_auth_session_refresh_tokens_locked(
+    connection: sqlite3.Connection,
+    session_ids: list[str],
+    *,
+    reason: Optional[str] = None,
+    now_ts: Optional[int] = None,
+) -> None:
+    clean_session_ids = [str(item or "").strip() for item in session_ids if str(item or "").strip()]
+    if not clean_session_ids:
+        return
+    ts = int(now_ts or time.time())
+    placeholders = ",".join("?" for _ in clean_session_ids)
+    connection.execute(
+        f"""
+        UPDATE auth_session_refresh_tokens
+        SET updated_at = ?,
+            revoked_at = ?,
+            revoked_reason = ?
+        WHERE session_id IN ({placeholders}) AND revoked_at IS NULL
+        """,
+        (ts, ts, str(reason or "").strip() or "Session recovery revoked.", *clean_session_ids),
+    )
+
+
+def issue_auth_session_refresh_token(
+    session_id: str,
+    *,
+    user_id: Optional[str] = None,
+    ttl_seconds: Optional[int] = None,
+) -> dict[str, Any]:
+    clean_session_id = str(session_id or "").strip()
+    if not clean_session_id:
+        raise HTTPException(status_code=400, detail="session_id is required.")
+    resolved_ttl = max(int(ttl_seconds or MOBILE_REFRESH_EXP_SECONDS), 60)
+    secret = secrets.token_urlsafe(48)
+    token_hash = _hash_auth_session_refresh_secret(clean_session_id, secret)
+    refresh_token = _encode_auth_session_refresh_token(clean_session_id, secret)
+    with AUTH_LOCK:
+        with _connect_auth_db() as connection:
+            session_row = connection.execute(
+                "SELECT session_id, user_id, status FROM auth_sessions WHERE session_id = ? LIMIT 1",
+                (clean_session_id,),
+            ).fetchone()
+            if session_row is None:
+                raise HTTPException(status_code=404, detail="Auth session not found.")
+            if _normalize_auth_session_status(session_row["status"]) != "active":
+                raise HTTPException(status_code=401, detail="Auth session is no longer active.")
+            resolved_user_id = str(user_id or session_row["user_id"] or "").strip()
+            ts = int(time.time())
+            record = _upsert_auth_session_refresh_token_locked(
+                connection,
+                session_id=clean_session_id,
+                user_id=resolved_user_id,
+                token_hash=token_hash,
+                expires_at=ts + resolved_ttl,
+                now_ts=ts,
+                rotated_at=ts,
+            )
+            connection.commit()
+    return {
+        **record,
+        "refresh_token": refresh_token,
+    }
+
+
+def get_auth_session_recovery(session_id: str) -> dict[str, Any]:
+    clean_session_id = str(session_id or "").strip()
+    if not clean_session_id:
+        return {}
+    with AUTH_LOCK:
+        with _connect_auth_db() as connection:
+            return _get_auth_session_refresh_token_locked(connection, clean_session_id)
+
+
 def _upsert_auth_session_locked(
     connection: sqlite3.Connection,
     *,
@@ -965,6 +1478,12 @@ def revoke_auth_session(session_id: str, *, reason: Optional[str] = None) -> dic
                 """,
                 (ts, ts, str(reason or "").strip() or "Session revoked.", clean_session_id),
             )
+            _revoke_auth_session_refresh_tokens_locked(
+                connection,
+                [clean_session_id],
+                reason=reason or "Session revoked.",
+                now_ts=ts,
+            )
             row = connection.execute(
                 "SELECT * FROM auth_sessions WHERE session_id = ? LIMIT 1",
                 (clean_session_id,),
@@ -988,9 +1507,15 @@ def revoke_user_auth_sessions(
             ts = int(time.time())
             params: list[Any] = [ts, ts, str(reason or "").strip() or "User sessions revoked.", clean_user_id]
             where = "user_id = ?"
+            session_query = "SELECT session_id FROM auth_sessions WHERE user_id = ? AND status = 'active'"
+            session_params: list[Any] = [clean_user_id]
             if clean_device_id:
                 where += " AND device_id = ?"
                 params.append(clean_device_id)
+                session_query += " AND device_id = ?"
+                session_params.append(clean_device_id)
+            session_rows = connection.execute(session_query, tuple(session_params)).fetchall()
+            session_ids = [str(row["session_id"] or "").strip() for row in session_rows if row is not None and str(row["session_id"] or "").strip()]
             cursor = connection.execute(
                 f"""
                 UPDATE auth_sessions
@@ -1002,6 +1527,12 @@ def revoke_user_auth_sessions(
                 WHERE {where} AND status = 'active'
                 """,
                 tuple(params),
+            )
+            _revoke_auth_session_refresh_tokens_locked(
+                connection,
+                session_ids,
+                reason=reason or "User sessions revoked.",
+                now_ts=ts,
             )
             connection.commit()
             return int(cursor.rowcount or 0)
@@ -1254,20 +1785,9 @@ def _list_workspace_memberships(user_id: str) -> list[dict[str, Any]]:
     if not clean_user_id:
         return []
     pg_rows = _control_plane_call(control_plane_repository.list_workspace_memberships_for_user(clean_user_id))
-    if isinstance(pg_rows, list) and pg_rows:
+    if isinstance(pg_rows, list):
         return [dict(row) for row in pg_rows if isinstance(row, dict)]
-    with AUTH_LOCK:
-        with _connect_auth_db() as connection:
-            rows = connection.execute(
-                """
-                SELECT user_id, workspace_id, role, created_at, updated_at
-                FROM workspace_memberships
-                WHERE user_id = ?
-                ORDER BY workspace_id ASC
-                """,
-                (clean_user_id,),
-            ).fetchall()
-    return [dict(row) for row in rows]
+    return []
 
 
 def _write_workspace_registry(
@@ -1298,17 +1818,18 @@ def _write_workspace_registry(
 def ensure_workspace_tenant_binding(workspace_id: str, tenant_id: Optional[str] = None) -> dict[str, Any]:
     clean_workspace_id = _require_workspace_token(workspace_id, detail="workspace_id is required for tenant binding.", status_code=400)
     clean_tenant_id = _require_tenant_token(tenant_id, detail="tenant_id is required for tenant binding.", status_code=400)
-    ts = int(time.time())
-    with AUTH_LOCK:
-        with _connect_auth_db() as connection:
-            _write_workspace_registry(
-                connection,
-                workspace_id=clean_workspace_id,
-                tenant_id=clean_tenant_id,
-                now_ts=ts,
-            )
-            connection.commit()
-    return {"workspace_id": clean_workspace_id, "tenant_id": clean_tenant_id}
+    binding = _control_plane_call(
+        control_plane_repository.ensure_workspace_tenant_binding(
+            workspace_id=clean_workspace_id,
+            tenant_id=clean_tenant_id,
+        )
+    )
+    if not isinstance(binding, dict):
+        raise HTTPException(status_code=500, detail="Workspace tenant binding could not be persisted.")
+    return {
+        "workspace_id": _normalize_workspace_token(binding.get("workspace_id"), default=clean_workspace_id),
+        "tenant_id": _normalize_tenant_token(binding.get("tenant_id"), default=clean_tenant_id),
+    }
 
 
 def tenant_id_for_workspace(workspace_id: str) -> str:
@@ -1319,23 +1840,7 @@ def tenant_id_for_workspace(workspace_id: str) -> str:
     pg_tenant_id = _control_plane_call(control_plane_repository.tenant_id_for_workspace(clean_workspace_id))
     if isinstance(pg_tenant_id, str) and pg_tenant_id.strip():
         return _require_tenant_token(pg_tenant_id, detail="Workspace is not bound to a valid tenant.")
-    with AUTH_LOCK:
-        with _connect_auth_db() as connection:
-            row = connection.execute(
-                """
-                SELECT tenant_id
-                FROM workspace_registry
-                WHERE workspace_id = ?
-                LIMIT 1
-                """,
-                (clean_workspace_id,),
-            ).fetchone()
-            if row is None:
-                raise HTTPException(status_code=403, detail=f"Workspace '{clean_workspace_id}' is not bound to a tenant.")
-            tenant_id = _normalize_tenant_token(row["tenant_id"], default="")
-            if not tenant_id:
-                raise HTTPException(status_code=403, detail=f"Workspace '{clean_workspace_id}' is not bound to a valid tenant.")
-            return tenant_id
+    raise HTTPException(status_code=403, detail=f"Workspace '{clean_workspace_id}' is not bound to a tenant.")
 
 
 def upsert_workspace_membership(user_id: str, workspace_id: str, role: str) -> dict[str, Any]:
@@ -1344,58 +1849,26 @@ def upsert_workspace_membership(user_id: str, workspace_id: str, role: str) -> d
         raise HTTPException(status_code=400, detail="user_id is required.")
     clean_workspace_id = _require_workspace_token(workspace_id, detail="workspace_id is required.", status_code=400)
     clean_role = normalize_rbac_role(role, default="member")
-    ts = int(time.time())
-    user_email = ""
-    user_name = None
+    user = _find_user_by_id(clean_user_id)
+    if user is None:
+        raise HTTPException(status_code=404, detail="User not found.")
+    user_email = str(user.get("email") or "").strip().lower()
+    user_name = str(user.get("name") or "").strip() or None
+    if not user_email:
+        raise HTTPException(status_code=400, detail="User is missing a valid email address.")
     resolved_tenant_id = tenant_id_for_workspace(clean_workspace_id)
-    with AUTH_LOCK:
-        with _connect_auth_db() as connection:
-            user_row = connection.execute(
-                "SELECT email, name FROM users WHERE id = ? LIMIT 1",
-                (clean_user_id,),
-            ).fetchone()
-            registry_row = connection.execute(
-                """
-                SELECT tenant_id
-                FROM workspace_registry
-                WHERE workspace_id = ?
-                LIMIT 1
-                """,
-                (clean_workspace_id,),
-            ).fetchone()
-            if registry_row is not None:
-                resolved_tenant_id = _require_tenant_token(
-                    registry_row["tenant_id"],
-                    detail=f"Workspace '{clean_workspace_id}' is not bound to a valid tenant.",
-                )
-            _write_workspace_registry(
-                connection,
-                workspace_id=clean_workspace_id,
-                tenant_id=resolved_tenant_id,
-                now_ts=ts,
-            )
-            _write_workspace_membership(
-                connection,
-                user_id=clean_user_id,
-                workspace_id=clean_workspace_id,
-                role=clean_role,
-                now_ts=ts,
-            )
-            connection.commit()
-            if user_row is not None:
-                user_email = str(user_row["email"] or "").strip().lower()
-                user_name = str(user_row["name"] or "").strip() or None
-    if user_email:
-        _control_plane_call(
-            control_plane_repository.ensure_workspace_membership(
-                user_id=clean_user_id,
-                email=user_email,
-                display_name=user_name,
-                tenant_id=resolved_tenant_id,
-                workspace_id=clean_workspace_id,
-                role=clean_role,
-            )
+    stored = _control_plane_call(
+        control_plane_repository.ensure_workspace_membership(
+            user_id=clean_user_id,
+            email=user_email,
+            display_name=user_name,
+            tenant_id=resolved_tenant_id,
+            workspace_id=clean_workspace_id,
+            role=clean_role,
         )
+    )
+    if not isinstance(stored, dict):
+        raise HTTPException(status_code=500, detail="Workspace membership could not be persisted.")
     _bump_user_identity_versions(clean_user_id, membership=True)
     return {"user_id": clean_user_id, "workspace_id": clean_workspace_id, "role": clean_role}
 
@@ -1405,15 +1878,14 @@ def remove_workspace_membership(user_id: str, workspace_id: str) -> dict[str, An
     clean_workspace_id = _require_workspace_token(workspace_id, detail="workspace_id is required.", status_code=400)
     if not clean_user_id:
         raise HTTPException(status_code=400, detail="user_id is required.")
-    removed = False
-    with AUTH_LOCK:
-        with _connect_auth_db() as connection:
-            cursor = connection.execute(
-                "DELETE FROM workspace_memberships WHERE user_id = ? AND workspace_id = ?",
-                (clean_user_id, clean_workspace_id),
+    removed = bool(
+        _control_plane_call(
+            control_plane_repository.remove_workspace_membership(
+                user_id=clean_user_id,
+                workspace_id=clean_workspace_id,
             )
-            removed = int(cursor.rowcount or 0) > 0
-            connection.commit()
+        )
+    )
     if removed:
         _bump_user_identity_versions(clean_user_id, membership=True)
         revoke_user_auth_sessions(
@@ -1518,23 +1990,9 @@ def _workspace_policy_from_row(row: Any, workspace_id: str, *, tenant_id: Option
 
 def load_workspace_policy(workspace_id: str) -> dict[str, Any]:
     clean_workspace_id = _require_workspace_token(workspace_id)
+    resolved_tenant_id = tenant_id_for_workspace(clean_workspace_id)
     with AUTH_LOCK:
         with _connect_auth_db() as connection:
-            registry_row = connection.execute(
-                """
-                SELECT tenant_id
-                FROM workspace_registry
-                WHERE workspace_id = ?
-                LIMIT 1
-                """,
-                (clean_workspace_id,),
-            ).fetchone()
-            if registry_row is None:
-                raise HTTPException(status_code=403, detail=f"Workspace '{clean_workspace_id}' is not bound to a tenant.")
-            resolved_tenant_id = _require_tenant_token(
-                registry_row["tenant_id"],
-                detail=f"Workspace '{clean_workspace_id}' is not bound to a valid tenant.",
-            )
             row = connection.execute(
                 """
                 SELECT
@@ -2269,27 +2727,24 @@ def _ensure_user_identity_boundary_records(user_id: str) -> None:
     if not clean_user_id:
         return
     ts = int(time.time())
+    user = _find_user_by_id(clean_user_id)
+    if user is None:
+        return
+    email = str(user.get("email") or "").strip().lower() or None
+    identity = (
+        _control_plane_call(control_plane_repository.get_local_auth_identity_by_email(email))
+        if email
+        else None
+    )
+    password_hash = str((identity or {}).get("password_hash") or "").strip()
     with AUTH_LOCK:
         with _connect_auth_db() as connection:
             _ensure_user_identity_versions_locked(connection, clean_user_id)
-            user_row = connection.execute(
-                """
-                SELECT id, email, password_hash
-                FROM users
-                WHERE id = ?
-                LIMIT 1
-                """,
-                (clean_user_id,),
-            ).fetchone()
-            if user_row is None:
-                return
             any_method = connection.execute(
                 "SELECT COUNT(1) AS count FROM user_auth_methods WHERE user_id = ?",
                 (clean_user_id,),
             ).fetchone()
             has_auth_methods = int(any_method["count"]) > 0 if any_method is not None else False
-            password_hash = str(user_row["password_hash"] or "").strip()
-            email = str(user_row["email"] or "").strip().lower() or None
             security_row = connection.execute(
                 """
                 SELECT auth_provider, sso_subject, external_id, provisioning_source
@@ -2381,13 +2836,23 @@ def _auth_payload_for_user(
     role: str,
     token: Optional[str] = None,
     workspace_access: Optional[list[dict[str, Any]]] = None,
+    current_workspace_id: Optional[str] = None,
+    default_workspace_id: Optional[str] = None,
+    current_tenant_id: Optional[str] = None,
+    default_tenant_id: Optional[str] = None,
     tenant_access: Optional[list[dict[str, Any]]] = None,
     enterprise_security: Optional[dict[str, Any]] = None,
     auth_session: Optional[dict[str, Any]] = None,
     device_link: Optional[dict[str, Any]] = None,
     identity_versions: Optional[dict[str, Any]] = None,
+    session_recovery: Optional[dict[str, Any]] = None,
 ) -> dict[str, Any]:
     user_id = str(user.get("id") or "").strip()
+    entitlement_projection = _workspace_entitlement_projection(
+        workspace_access,
+        current_workspace_id=current_workspace_id,
+        default_workspace_id=default_workspace_id,
+    )
     payload: dict[str, Any] = {
         "ok": True,
         "user": _public_user_payload(user, role=role),
@@ -2397,6 +2862,14 @@ def _auth_payload_for_user(
         payload["token"] = token
     if workspace_access is not None:
         payload["workspace_access"] = workspace_access
+    if current_workspace_id is not None:
+        payload["current_workspace_id"] = current_workspace_id
+    if default_workspace_id is not None:
+        payload["default_workspace_id"] = default_workspace_id
+    if current_tenant_id is not None:
+        payload["current_tenant_id"] = current_tenant_id
+    if default_tenant_id is not None:
+        payload["default_tenant_id"] = default_tenant_id
     if tenant_access is not None:
         payload["tenant_access"] = tenant_access
     if enterprise_security is not None:
@@ -2407,6 +2880,14 @@ def _auth_payload_for_user(
         payload["device_link"] = device_link
     if identity_versions is not None:
         payload["identity_versions"] = identity_versions
+    if session_recovery is not None:
+        payload["session_recovery"] = session_recovery
+    if entitlement_projection["workspace_entitlements"]:
+        payload["workspace_entitlements"] = entitlement_projection["workspace_entitlements"]
+    if entitlement_projection["current_workspace_entitlements"] is not None:
+        payload["current_workspace_entitlements"] = entitlement_projection["current_workspace_entitlements"]
+    if entitlement_projection["default_workspace_entitlements"] is not None:
+        payload["default_workspace_entitlements"] = entitlement_projection["default_workspace_entitlements"]
     return payload
 
 
@@ -2556,7 +3037,7 @@ def user_identity_boundary(user_id: str) -> dict[str, Any]:
             "auth_methods": "Account access methods are separate from AI provider capabilities.",
             "provider_connections": "Linked providers add capability only and can be revoked without deleting the Empyralis account.",
             "devices": "Linked devices are scoped to the Empyralis account and can be revoked without rotating account identity.",
-            "auth_sessions": "Bearer sessions are short-lived, channel-scoped, and can be revoked independently of the account.",
+            "auth_sessions": "Bearer sessions are refreshable, device-bound, channel-scoped, and can be revoked independently of the account.",
             "machine_enrollment": "Machine enrollment is a separate execution boundary and does not define account ownership.",
         },
     }
@@ -2605,42 +3086,26 @@ def provision_user_account(
     if not normalized_workspace_roles:
         raise HTTPException(status_code=400, detail="At least one workspace role is required for admin provisioning.")
     created_at = int(time.time())
+    user_id = str((_find_user_by_email(email_token) or {}).get("id") or "").strip() or str(uuid.uuid4())
     _control_plane_workspace_roles = dict(normalized_workspace_roles)
+    for workspace_id, role in _control_plane_workspace_roles.items():
+        stored = _control_plane_call(
+            control_plane_repository.ensure_workspace_membership(
+                user_id=user_id,
+                email=email_token,
+                display_name=str(name or "").strip() or None,
+                tenant_id=resolved_tenant_id,
+                workspace_id=workspace_id,
+                role=role,
+                provider=str(auth_provider or "external_identity").strip().lower() or "external_identity",
+                subject=str(sso_subject or external_id or email_token).strip() or email_token,
+            )
+        )
+        if not isinstance(stored, dict):
+            raise HTTPException(status_code=500, detail="Provisioned user could not be persisted.")
     with AUTH_LOCK:
         with _connect_auth_db() as connection:
-            existing = connection.execute(
-                "SELECT id, email, name, avatar_url, password_hash, created_at FROM users WHERE lower(email) = lower(?)",
-                (email_token,),
-            ).fetchone()
-            if existing is None:
-                user_id = str(uuid.uuid4())
-                password_hash = _hash_password(secrets.token_urlsafe(32))
-                connection.execute(
-                    "INSERT INTO users (id, email, name, password_hash, created_at) VALUES (?, ?, ?, ?, ?)",
-                    (user_id, email_token, str(name or "").strip() or None, password_hash, created_at),
-                )
-            else:
-                user_id = str(existing["id"] or "").strip()
-                next_name = str(name or "").strip() or str(existing["name"] or "").strip() or None
-                connection.execute(
-                    "UPDATE users SET name = ? WHERE id = ?",
-                    (next_name, user_id),
-                )
             _ensure_user_identity_versions_locked(connection, user_id, now_ts=created_at)
-            for workspace_id, role in normalized_workspace_roles.items():
-                _write_workspace_registry(
-                    connection,
-                    workspace_id=workspace_id,
-                    tenant_id=resolved_tenant_id,
-                    now_ts=created_at,
-                )
-                _write_workspace_membership(
-                    connection,
-                    user_id=user_id,
-                    workspace_id=workspace_id,
-                    role=role,
-                    now_ts=created_at,
-                )
             current_security_row = connection.execute(
                 """
                 SELECT
@@ -2717,22 +3182,9 @@ def provision_user_account(
                         "identity_role": "account_access",
                     },
                     now_ts=created_at,
-                )
+                    )
             connection.commit()
     _bump_user_identity_versions(user_id, membership=True, auth=True)
-    for workspace_id, role in _control_plane_workspace_roles.items():
-        _control_plane_call(
-            control_plane_repository.ensure_workspace_membership(
-                user_id=user_id,
-                email=email_token,
-                display_name=str(name or "").strip() or None,
-                tenant_id=resolved_tenant_id,
-                workspace_id=workspace_id,
-                role=role,
-                provider=str(auth_provider or "external_identity").strip().lower() or "external_identity",
-                subject=str(sso_subject or external_id or email_token).strip() or email_token,
-            )
-        )
     user = _find_user_by_id(user_id)
     if user is None:
         raise HTTPException(status_code=500, detail="Provisioned user was not persisted.")
@@ -2744,10 +3196,15 @@ def provision_user_account(
         is_admin=False,
         workspace_ids=list(normalized_workspace_roles.keys()),
     )
+    workspace_identity = _workspace_identity_projection(workspace_access)
     return _auth_payload_for_user(
         user,
         role="member",
         workspace_access=list(workspace_access.values()),
+        current_workspace_id=workspace_identity.get("current_workspace_id"),
+        default_workspace_id=workspace_identity.get("default_workspace_id"),
+        current_tenant_id=workspace_identity.get("current_tenant_id"),
+        default_tenant_id=workspace_identity.get("default_tenant_id"),
         tenant_access=list(tenant_access_map({"workspace_access": workspace_access}).values()),
         enterprise_security=load_user_enterprise_security(user_id),
         identity_versions=load_user_identity_versions(user_id),
@@ -2767,9 +3224,9 @@ def _effective_workspace_access(
     workspace_dangerous_claim: Any = None,
     workspace_trusted_machines_claim: Any = None,
 ) -> dict[str, dict[str, Any]]:
-    if auth_type in {"api_key", "disabled"}:
+    if auth_type == "api_key":
         return {}
-    if is_admin and auth_type not in {"bearer"}:
+    if is_admin and auth_type not in {"bearer", "local_dev"}:
         return {}
     membership_roles = {
         _normalize_workspace_token(item.get("workspace_id")): normalize_rbac_role(item.get("role"), default="viewer")
@@ -2851,6 +3308,75 @@ def _effective_workspace_access(
     return access
 
 
+def _build_local_dev_user() -> Dict[str, Any]:
+    role = _local_dev_auth_role()
+    user_id = _local_dev_user_id()
+    email = _local_dev_email()
+    workspace_ids = _local_dev_workspace_ids()
+    workspace_roles = {workspace_id: role for workspace_id in workspace_ids}
+    workspace_access: dict[str, dict[str, Any]] = {}
+    for workspace_id in sorted({item for item in workspace_ids if str(item).strip()}):
+        try:
+            tenant_id = tenant_id_for_workspace(workspace_id)
+        except HTTPException:
+            tenant_id = _require_tenant_token(
+                _normalize_tenant_token(os.getenv("ORION_LOCAL_DEV_TENANT_ID") or f"tenant_{workspace_id}", default=""),
+                detail=f"Local-dev tenant scope for workspace '{workspace_id}' is invalid.",
+            )
+        tenant_policy = load_tenant_policy(tenant_id)
+        try:
+            workspace_policy = load_workspace_policy(workspace_id)
+        except HTTPException:
+            workspace_policy = _workspace_policy_from_row(None, workspace_id, tenant_id=tenant_id)
+        capability_policy = _resolve_inherited_allow_deny(
+            tenant_policy.get("capabilities"),
+            workspace_policy.get("capabilities"),
+        )
+        dangerous_policy = _resolve_inherited_allow_deny(
+            tenant_policy.get("dangerous_action_classes"),
+            workspace_policy.get("dangerous_action_classes"),
+        )
+        connector_policy = _resolve_inherited_allow_deny(
+            tenant_policy.get("connectors"),
+            workspace_policy.get("connectors"),
+        )
+        workspace_access[workspace_id] = {
+            "workspace_id": workspace_id,
+            "tenant_id": tenant_id,
+            "tenant_role": role,
+            "role": role,
+            "capabilities": _normalize_workspace_capability_policy(capability_policy),
+            "tenant_capabilities": _normalize_workspace_capability_policy(tenant_policy.get("capabilities")),
+            "workspace_capabilities": _normalize_workspace_capability_policy(workspace_policy.get("capabilities")),
+            "dangerous_action_classes": _normalize_workspace_dangerous_policy(dangerous_policy),
+            "tenant_dangerous_action_classes": _normalize_workspace_dangerous_policy(tenant_policy.get("dangerous_action_classes")),
+            "workspace_dangerous_action_classes": _normalize_workspace_dangerous_policy(workspace_policy.get("dangerous_action_classes")),
+            "connectors": _normalize_connector_permission_policy(connector_policy),
+            "tenant_connectors": _normalize_connector_permission_policy(tenant_policy.get("connectors")),
+            "workspace_connectors": _normalize_connector_permission_policy(workspace_policy.get("connectors")),
+            "machine_enrollment_scope": _normalize_machine_enrollment_scope(
+                workspace_policy.get("machine_enrollment_scope") or tenant_policy.get("machine_enrollment_scope"),
+                default="workspace",
+            ),
+            "trusted_owner_machine_ids": _normalize_distinct_tokens(workspace_policy.get("trusted_owner_machine_ids")),
+            "owner_user_id": user_id,
+            "owner_email": email,
+        }
+    return {
+        "user_id": user_id,
+        "auth_type": "local_dev",
+        "email": email,
+        "tenant_ids": [entry.get("tenant_id") for entry in workspace_access.values() if isinstance(entry, dict)],
+        "workspace_ids": workspace_ids,
+        "workspace_roles": workspace_roles,
+        "workspace_access": workspace_access,
+        "tenant_access": tenant_access_map({"workspace_access": workspace_access}),
+        "role": role,
+        "is_admin": role == "owner",
+        "local_dev": True,
+    }
+
+
 def _hash_password(password: str, *, salt: Optional[bytes] = None) -> str:
     salt_bytes = salt or secrets.token_bytes(16)
     digest = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt_bytes, 100_000)
@@ -2871,14 +3397,6 @@ def _find_user_by_email(email: str) -> Optional[Dict[str, Any]]:
     pg_user = _control_plane_call(control_plane_repository.get_user_by_email(email_token))
     if isinstance(pg_user, dict):
         return pg_user
-    with AUTH_LOCK:
-        with _connect_auth_db() as connection:
-            row = connection.execute(
-                "SELECT id, email, name, avatar_url, password_hash, created_at FROM users WHERE lower(email) = lower(?)",
-                (email_token,),
-            ).fetchone()
-        if row is not None:
-            return dict(row)
     return None
 
 
@@ -2889,14 +3407,6 @@ def _find_user_by_id(user_id: str) -> Optional[Dict[str, Any]]:
     pg_user = _control_plane_call(control_plane_repository.get_user_by_id(user_token))
     if isinstance(pg_user, dict):
         return pg_user
-    with AUTH_LOCK:
-        with _connect_auth_db() as connection:
-            row = connection.execute(
-                "SELECT id, email, name, avatar_url, password_hash, created_at FROM users WHERE id = ?",
-                (user_token,),
-            ).fetchone()
-        if row is not None:
-            return dict(row)
     return None
 
 
@@ -3109,7 +3619,7 @@ def allowed_workspace_ids(user: Optional[Dict[str, Any]]) -> Optional[set[str]]:
     auth_type = str(user.get("auth_type") or "").strip().lower()
     if auth_type == "api_key":
         return None
-    if bool(user.get("is_admin")) and auth_type != "bearer":
+    if bool(user.get("is_admin")) and auth_type not in {"bearer", "local_dev"}:
         return None
     access = workspace_access_map(user)
     if access:
@@ -3125,7 +3635,7 @@ def allowed_tenant_ids(user: Optional[Dict[str, Any]]) -> Optional[set[str]]:
     auth_type = str(user.get("auth_type") or "").strip().lower()
     if auth_type == "api_key":
         return None
-    if bool(user.get("is_admin")) and auth_type != "bearer":
+    if bool(user.get("is_admin")) and auth_type not in {"bearer", "local_dev"}:
         return None
     access = tenant_access_map(user)
     if access:
@@ -3233,11 +3743,11 @@ def workspace_role(current_user: Optional[Dict[str, Any]], workspace_id: Optiona
     if not isinstance(current_user, dict):
         return None
     auth_type = str(current_user.get("auth_type") or "").strip().lower()
-    if auth_type in {"api_key", "disabled"}:
+    if auth_type == "api_key":
         return "owner"
     if auth_type != "bearer" and bool(current_user.get("is_admin")):
         return "owner"
-    token = _normalize_workspace_token(workspace_id)
+    token = _resolve_workspace_token_for_current_user(current_user, workspace_id)
     entry = workspace_access_map(current_user).get(token)
     if isinstance(entry, dict):
         return normalize_rbac_role(entry.get("role"), default="viewer")
@@ -3245,7 +3755,7 @@ def workspace_role(current_user: Optional[Dict[str, Any]], workspace_id: Optiona
 
 
 def workspace_tenant_id(current_user: Optional[Dict[str, Any]], workspace_id: Optional[str]) -> str:
-    token = _require_workspace_token(workspace_id)
+    token = _require_workspace_token(_resolve_workspace_token_for_current_user(current_user, workspace_id))
     entry = workspace_access_map(current_user).get(token)
     if isinstance(entry, dict):
         return _require_tenant_token(entry.get("tenant_id"), detail=f"Workspace '{token}' is not bound to a valid tenant.")
@@ -3256,7 +3766,7 @@ def tenant_role(current_user: Optional[Dict[str, Any]], tenant_id: Optional[str]
     if not isinstance(current_user, dict):
         return None
     auth_type = str(current_user.get("auth_type") or "").strip().lower()
-    if auth_type in {"api_key", "disabled"}:
+    if auth_type == "api_key":
         return "owner"
     if auth_type != "bearer" and bool(current_user.get("is_admin")):
         return "owner"
@@ -3268,7 +3778,7 @@ def tenant_role(current_user: Optional[Dict[str, Any]], tenant_id: Optional[str]
 
 
 def workspace_capability_policy(current_user: Optional[Dict[str, Any]], workspace_id: Optional[str]) -> dict[str, list[str]]:
-    token = _normalize_workspace_token(workspace_id)
+    token = _resolve_workspace_token_for_current_user(current_user, workspace_id)
     entry = workspace_access_map(current_user).get(token)
     if not isinstance(entry, dict):
         return {"allow": [], "deny": []}
@@ -3276,7 +3786,7 @@ def workspace_capability_policy(current_user: Optional[Dict[str, Any]], workspac
 
 
 def workspace_dangerous_action_policy(current_user: Optional[Dict[str, Any]], workspace_id: Optional[str]) -> dict[str, list[str]]:
-    token = _normalize_workspace_token(workspace_id)
+    token = _resolve_workspace_token_for_current_user(current_user, workspace_id)
     entry = workspace_access_map(current_user).get(token)
     if not isinstance(entry, dict):
         return {"allow": [], "deny": []}
@@ -3284,7 +3794,7 @@ def workspace_dangerous_action_policy(current_user: Optional[Dict[str, Any]], wo
 
 
 def workspace_trusted_owner_machine_ids(current_user: Optional[Dict[str, Any]], workspace_id: Optional[str]) -> list[str]:
-    token = _normalize_workspace_token(workspace_id)
+    token = _resolve_workspace_token_for_current_user(current_user, workspace_id)
     entry = workspace_access_map(current_user).get(token)
     if not isinstance(entry, dict):
         return []
@@ -3292,7 +3802,7 @@ def workspace_trusted_owner_machine_ids(current_user: Optional[Dict[str, Any]], 
 
 
 def workspace_connector_policy(current_user: Optional[Dict[str, Any]], workspace_id: Optional[str]) -> dict[str, list[str]]:
-    token = _normalize_workspace_token(workspace_id)
+    token = _resolve_workspace_token_for_current_user(current_user, workspace_id)
     entry = workspace_access_map(current_user).get(token)
     if not isinstance(entry, dict):
         return {"allow": [], "deny": []}
@@ -3300,7 +3810,7 @@ def workspace_connector_policy(current_user: Optional[Dict[str, Any]], workspace
 
 
 def workspace_machine_enrollment_scope(current_user: Optional[Dict[str, Any]], workspace_id: Optional[str]) -> str:
-    token = _normalize_workspace_token(workspace_id)
+    token = _resolve_workspace_token_for_current_user(current_user, workspace_id)
     entry = workspace_access_map(current_user).get(token)
     if not isinstance(entry, dict):
         return "workspace"
@@ -3353,7 +3863,7 @@ def build_workspace_authorization_metadata(
     machine_id: Optional[str] = None,
     connector_id: Optional[str] = None,
 ) -> dict[str, Any]:
-    token = _normalize_workspace_token(workspace_id)
+    token = _resolve_workspace_token_for_current_user(current_user, workspace_id)
     resolved_tenant_id = workspace_tenant_id(current_user, token)
     trusted_owner_machine_ids = workspace_trusted_owner_machine_ids(current_user, token)
     clean_machine_id = str(machine_id or "").strip().lower() or None
@@ -3401,7 +3911,7 @@ def enforce_workspace_access(
     capability_id: Optional[str] = None,
     connector_id: Optional[str] = None,
 ) -> str:
-    token = _normalize_workspace_token(workspace_id)
+    token = _resolve_workspace_token_for_current_user(current_user, workspace_id)
     resolved_tenant_id = workspace_tenant_id(current_user, token)
     requested_tenant_id = _normalize_tenant_token(tenant_id) if tenant_id is not None else resolved_tenant_id
     if requested_tenant_id != resolved_tenant_id:
@@ -3495,12 +4005,25 @@ def limit_public_requests(request: Request) -> None:
     )
 
 
-def register_user(email: str, password: str, *, name: Optional[str] = None) -> Dict[str, Any]:
+def register_user(
+    email: str,
+    password: str,
+    *,
+    name: Optional[str] = None,
+    channel: Any = "web",
+    device_id: Optional[str] = None,
+    device_name: Optional[str] = None,
+    device_platform: Optional[str] = None,
+    workspace_id: Optional[str] = None,
+    session_ttl_seconds: Optional[int] = None,
+) -> Dict[str, Any]:
     email_token = str(email or "").strip().lower()
     if not email_token or "@" not in email_token:
         raise HTTPException(status_code=400, detail="Valid email is required.")
     if not isinstance(password, str) or len(password) < 8:
         raise HTTPException(status_code=400, detail="Password must be at least 8 characters.")
+    if _find_user_by_email(email_token) is not None:
+        raise HTTPException(status_code=409, detail="User already exists.")
     user_id = str(uuid.uuid4())
     created_at = int(time.time())
     user_name = str(name or "").strip() or None
@@ -3536,16 +4059,6 @@ def register_user(email: str, password: str, *, name: Optional[str] = None) -> D
     workspace_ids = list(workspace_roles.keys())
     with AUTH_LOCK:
         with _connect_auth_db() as connection:
-            existing = connection.execute(
-                "SELECT id FROM users WHERE lower(email) = lower(?)",
-                (email_token,),
-            ).fetchone()
-            if existing is not None:
-                raise HTTPException(status_code=409, detail="User already exists.")
-            connection.execute(
-                "INSERT INTO users (id, email, name, password_hash, created_at) VALUES (?, ?, ?, ?, ?)",
-                (user_id, email_token, user_name, password_hash, created_at),
-            )
             connection.execute(
                 """
                 INSERT OR REPLACE INTO user_enterprise_security (
@@ -3580,58 +4093,43 @@ def register_user(email: str, password: str, *, name: Optional[str] = None) -> D
                 now_ts=created_at,
             )
             _ensure_user_identity_versions_locked(connection, user_id, now_ts=created_at)
-            for workspace_id, role in workspace_roles.items():
-                resolved_tenant_id = next(iter(tenant_ids), "") or tenant_id_for_workspace(workspace_id)
-                _write_workspace_registry(
-                    connection,
-                    workspace_id=workspace_id,
-                    tenant_id=resolved_tenant_id,
-                    now_ts=created_at,
-                )
-                _write_workspace_membership(
-                    connection,
-                    user_id=user_id,
-                    workspace_id=workspace_id,
-                    role=role,
-                    now_ts=created_at,
-                )
             connection.commit()
+    user = _find_user_by_id(user_id)
+    if user is None:
+        raise HTTPException(status_code=500, detail="Registered user was not persisted.")
     workspace_access = _effective_workspace_access(
         user_id=user_id,
-        email=email_token,
+        email=str(user.get("email") or "").strip().lower() or email_token,
         role="owner",
         auth_type="bearer",
         is_admin=False,
         workspace_ids=workspace_ids,
     )
-    tenant_access = tenant_access_map({"workspace_access": workspace_access})
-    token = issue_token(
-        user_id,
-        email=email_token,
+    return _issue_authenticated_user_payload(
+        user,
         role="owner",
-        workspace_access=list(workspace_access.values()),
-        channel="web",
-        session_metadata={"auth_flow": "register"},
-    )
-    token_payload = _decode_token_payload(token)
-    auth_session = get_auth_session(str(token_payload.get("sid") or "").strip())
-    return _auth_payload_for_user(
-        {
-            "id": user_id,
-            "email": email_token,
-            "name": user_name,
-            "avatar_url": None,
-        },
-        role="owner",
-        token=token,
-        workspace_access=list(workspace_access.values()),
-        tenant_access=list(tenant_access.values()),
-        auth_session=auth_session,
-        identity_versions=load_user_identity_versions(user_id),
+        workspace_access=workspace_access,
+        channel=channel,
+        device_id=device_id,
+        device_name=device_name,
+        device_platform=device_platform,
+        workspace_id=workspace_id,
+        auth_flow="register",
+        session_ttl_seconds=session_ttl_seconds,
     )
 
 
-def login_user(email: str, password: str) -> Dict[str, Any]:
+def login_user(
+    email: str,
+    password: str,
+    *,
+    channel: Any = "web",
+    device_id: Optional[str] = None,
+    device_name: Optional[str] = None,
+    device_platform: Optional[str] = None,
+    workspace_id: Optional[str] = None,
+    session_ttl_seconds: Optional[int] = None,
+) -> Dict[str, Any]:
     user = _find_user_by_email(email)
     identity = _control_plane_call(control_plane_repository.get_local_auth_identity_by_email(email))
     password_hash = str((user or {}).get("password_hash") or (identity or {}).get("password_hash") or "")
@@ -3671,26 +4169,197 @@ def login_user(email: str, password: str) -> Dict[str, Any]:
         is_admin=effective_role == "owner",
         workspace_ids=workspace_ids,
     )
-    tenant_access = tenant_access_map({"workspace_access": workspace_access})
+    return _issue_authenticated_user_payload(
+        user,
+        role=effective_role,
+        workspace_access=workspace_access,
+        channel=channel,
+        device_id=device_id,
+        device_name=device_name,
+        device_platform=device_platform,
+        workspace_id=workspace_id,
+        auth_flow="login",
+        session_ttl_seconds=session_ttl_seconds,
+        enterprise_security=load_user_enterprise_security(user_id),
+    )
+
+
+def refresh_authenticated_session(
+    refresh_token: str,
+    *,
+    device_id: Optional[str] = None,
+    device_name: Optional[str] = None,
+    device_platform: Optional[str] = None,
+    workspace_id: Optional[str] = None,
+    session_ttl_seconds: Optional[int] = None,
+) -> Dict[str, Any]:
+    clean_session_id, clean_secret = _decode_auth_session_refresh_token(refresh_token)
+    expected_hash = _hash_auth_session_refresh_secret(clean_session_id, clean_secret)
+
+    with AUTH_LOCK:
+        with _connect_auth_db() as connection:
+            refresh_row = connection.execute(
+                "SELECT * FROM auth_session_refresh_tokens WHERE session_id = ? LIMIT 1",
+                (clean_session_id,),
+            ).fetchone()
+            if refresh_row is None:
+                raise HTTPException(status_code=401, detail="Refresh token is invalid.")
+            refresh_record = _auth_session_recovery_from_row(refresh_row)
+            if str(refresh_row["token_hash"] or "").strip() != expected_hash:
+                raise HTTPException(status_code=401, detail="Refresh token is invalid.")
+            if refresh_record.get("revoked_at") is not None:
+                raise HTTPException(status_code=401, detail="Refresh token is no longer active.")
+            refresh_expires_at = int(refresh_record.get("refresh_expires_at") or 0)
+            if refresh_expires_at and refresh_expires_at <= int(time.time()):
+                raise HTTPException(status_code=401, detail="Refresh token has expired.")
+
+            session_row = connection.execute(
+                "SELECT * FROM auth_sessions WHERE session_id = ? LIMIT 1",
+                (clean_session_id,),
+            ).fetchone()
+            if session_row is None:
+                raise HTTPException(status_code=401, detail="Auth session is invalid.")
+            session_record = _auth_session_from_row(session_row)
+            if str(session_record.get("status") or "").strip().lower() != "active":
+                raise HTTPException(status_code=401, detail="Auth session is no longer active.")
+
+            effective_device_id = str(device_id or session_record.get("device_id") or "").strip() or None
+            device_record = None
+            if effective_device_id:
+                device_row = connection.execute(
+                    "SELECT * FROM user_devices WHERE device_id = ? LIMIT 1",
+                    (effective_device_id,),
+                ).fetchone()
+                if device_row is None:
+                    raise HTTPException(status_code=401, detail="Refresh token device is not linked.")
+                device_record = _device_link_from_row(device_row)
+                if str(device_record.get("user_id") or "").strip() != str(session_record.get("user_id") or "").strip():
+                    raise HTTPException(status_code=401, detail="Refresh token device owner mismatch.")
+                if str(device_record.get("status") or "").strip().lower() != "active":
+                    raise HTTPException(status_code=401, detail="Refresh token device is not active.")
+                if str(device_record.get("trust_state") or "").strip().lower() == "revoked":
+                    raise HTTPException(status_code=401, detail="Refresh token device trust was revoked.")
+                if bool(device_record.get("session_binding_required")) and str(session_record.get("device_id") or "").strip() != effective_device_id:
+                    raise HTTPException(status_code=401, detail="Refresh token is not bound to the active device.")
+
+    user_id = str(session_record.get("user_id") or "").strip()
+    user = _find_user_by_id(user_id)
+    if user is None:
+        raise HTTPException(status_code=404, detail="User not found.")
+    membership_rows = _list_workspace_memberships(user_id)
+    effective_role = "viewer"
+    for item in membership_rows:
+        candidate_role = normalize_rbac_role((item or {}).get("role"), default="viewer")
+        if RBAC_ROLE_ORDER[candidate_role] > RBAC_ROLE_ORDER[effective_role]:
+            effective_role = candidate_role
+    workspace_access = _effective_workspace_access(
+        user_id=user_id,
+        email=str(user.get("email") or "").strip().lower() or None,
+        role=effective_role,
+        auth_type="bearer",
+        is_admin=effective_role == "owner",
+        workspace_ids=[
+            _normalize_workspace_token(item.get("workspace_id"))
+            for item in membership_rows
+            if isinstance(item, dict) and str(item.get("workspace_id") or "").strip()
+        ],
+    )
+    if not workspace_access:
+        raise HTTPException(status_code=403, detail="Authenticated user does not have workspace access.")
+
+    resolved_workspace_id = _resolve_authenticated_workspace_id(workspace_id, workspace_access)
+    effective_device_id = str(device_id or session_record.get("device_id") or "").strip() or None
+    if effective_device_id:
+        device_record = upsert_user_device_link(
+            user_id,
+            device_id=effective_device_id,
+            workspace_id=resolved_workspace_id,
+            channel=session_record.get("channel") or "mobile",
+            display_name=str(device_name or (device_record or {}).get("display_name") or "").strip() or None,
+            platform=str(device_platform or (device_record or {}).get("platform") or "").strip() or None,
+            trust_state="verified",
+            status="active",
+            session_binding_required=True,
+            metadata={
+                **dict((device_record or {}).get("metadata") or {}),
+                "auth_flow": "refresh",
+                "workspace_id": resolved_workspace_id,
+            },
+        )
+
     token = issue_token(
         user_id,
-        email=str(user.get("email") or ""),
+        email=str(user.get("email") or "").strip().lower() or None,
         role=effective_role,
-        workspace_access=list(workspace_access.values()),
-        channel="web",
-        session_metadata={"auth_flow": "login"},
+        workspace_access=workspace_access,
+        channel=session_record.get("channel") or "mobile",
+        device_id=effective_device_id,
+        runtime_id=session_record.get("runtime_id"),
+        trust_state=(device_record or {}).get("trust_state"),
+        session_id=clean_session_id,
+        session_family_id=session_record.get("session_family_id") or clean_session_id,
+        session_metadata={
+            **dict(session_record.get("metadata") or {}),
+            "auth_flow": "refresh",
+            "workspace_id": resolved_workspace_id,
+            "device_name": str(device_name or "").strip() or None,
+            "device_platform": str(device_platform or "").strip() or None,
+            "workspace_ids": [item.get("workspace_id") for item in workspace_access if isinstance(item, dict)],
+            "role": effective_role,
+        },
+        ttl_seconds=session_ttl_seconds,
     )
     token_payload = _decode_token_payload(token)
     auth_session = get_auth_session(str(token_payload.get("sid") or "").strip())
+    session_recovery = issue_auth_session_refresh_token(
+        str(auth_session.get("session_id") or "").strip(),
+        user_id=user_id,
+    )
+    workspace_identity = _workspace_identity_projection(
+        workspace_access,
+        requested_workspace_id=resolved_workspace_id,
+    )
     return _auth_payload_for_user(
         user,
         role=effective_role,
         token=token,
-        workspace_access=list(workspace_access.values()),
-        tenant_access=list(tenant_access.values()),
+        workspace_access=workspace_access,
+        current_workspace_id=workspace_identity.get("current_workspace_id"),
+        default_workspace_id=workspace_identity.get("default_workspace_id"),
+        current_tenant_id=workspace_identity.get("current_tenant_id"),
+        default_tenant_id=workspace_identity.get("default_tenant_id"),
+        tenant_access=list(tenant_access_map({"workspace_access": workspace_access}).values()),
+        enterprise_security=load_user_enterprise_security(user_id),
         auth_session=auth_session,
+        device_link=device_record,
         identity_versions=load_user_identity_versions(user_id),
+        session_recovery=session_recovery,
     )
+
+
+def list_authenticated_user_devices(current_user: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    user_id = _current_bearer_user_id(current_user)
+    current_device_id = str((current_user or {}).get("device_id") or ((current_user or {}).get("device_link") or {}).get("device_id") or "").strip() or None
+    devices = list_user_device_links(user_id)
+    return {
+        "ok": True,
+        "current_device_id": current_device_id,
+        "devices": devices,
+    }
+
+
+def revoke_authenticated_user_device(current_user: Optional[Dict[str, Any]], device_id: str) -> Dict[str, Any]:
+    user_id = _current_bearer_user_id(current_user)
+    clean_device_id = str(device_id or "").strip()
+    if not clean_device_id:
+        raise HTTPException(status_code=400, detail="device_id is required.")
+    revoked = revoke_user_device_link(user_id, clean_device_id, reason="User revoked the linked device.")
+    return {
+        "ok": True,
+        "current_device_id": str((current_user or {}).get("device_id") or "").strip() or None,
+        "revoked_current_device": clean_device_id == str((current_user or {}).get("device_id") or "").strip(),
+        "device": revoked,
+    }
 
 
 def _current_bearer_user_id(current_user: Optional[Dict[str, Any]]) -> str:
@@ -3709,15 +4378,29 @@ def get_authenticated_user_profile(current_user: Optional[Dict[str, Any]]) -> Di
     if user is None:
         raise HTTPException(status_code=404, detail="User not found.")
     role = current_user_role(current_user)
+    resolved_workspace_access = workspace_access_map(current_user)
+    workspace_identity = _workspace_identity_projection(
+        resolved_workspace_access,
+        requested_workspace_id=_normalize_workspace_token((current_user or {}).get("workspace_id"), default=""),
+    )
+    auth_session = dict(current_user.get("auth_session") or {}) or None
+    session_recovery = None
+    if auth_session:
+        session_recovery = get_auth_session_recovery(str(auth_session.get("session_id") or "").strip()) or None
     return _auth_payload_for_user(
         user,
         role=role,
-        workspace_access=list(workspace_access_map(current_user).values()),
+        workspace_access=list(resolved_workspace_access.values()),
+        current_workspace_id=workspace_identity.get("current_workspace_id"),
+        default_workspace_id=workspace_identity.get("default_workspace_id"),
+        current_tenant_id=workspace_identity.get("current_tenant_id"),
+        default_tenant_id=workspace_identity.get("default_tenant_id"),
         tenant_access=list(tenant_access_map(current_user).values()),
         enterprise_security=enterprise_status_for_user(current_user),
-        auth_session=dict(current_user.get("auth_session") or {}) or None,
+        auth_session=auth_session,
         device_link=dict(current_user.get("device_link") or {}) or None,
         identity_versions=dict(current_user.get("identity_versions") or {}) or None,
+        session_recovery=session_recovery,
     )
 
 
@@ -3730,27 +4413,17 @@ def update_authenticated_user_profile(
     user_id = _current_bearer_user_id(current_user)
     next_name = str(name or "").strip() or None
     next_avatar_url = str(avatar_url or "").strip() or None
-    with AUTH_LOCK:
-        with _connect_auth_db() as connection:
-            existing = connection.execute(
-                "SELECT id, email, name, avatar_url FROM users WHERE id = ?",
-                (user_id,),
-            ).fetchone()
-            if existing is None:
-                raise HTTPException(status_code=404, detail="User not found.")
-            connection.execute(
-                "UPDATE users SET name = ?, avatar_url = ? WHERE id = ?",
-                (next_name, next_avatar_url, user_id),
-            )
-            row = connection.execute(
-                "SELECT id, email, name, avatar_url FROM users WHERE id = ?",
-                (user_id,),
-            ).fetchone()
-            connection.commit()
-    if row is None:
+    updated_user = _control_plane_call(
+        control_plane_repository.update_user_profile(
+            user_id=user_id,
+            display_name=next_name,
+            avatar_url=next_avatar_url,
+        )
+    )
+    if not isinstance(updated_user, dict):
         raise HTTPException(status_code=404, detail="User not found.")
     role = current_user_role(current_user)
-    return {"ok": True, "user": _public_user_payload(dict(row), role=role)}
+    return {"ok": True, "user": _public_user_payload(updated_user, role=role)}
 
 
 def get_current_user(
@@ -3759,11 +4432,13 @@ def get_current_user(
     x_api_key: Optional[str] = Header(default=None, alias="X-API-Key"),
 ) -> Dict[str, Any]:
     if not _orion_auth_required():
-        user = {"user_id": "anonymous", "auth_type": "disabled", "role": "owner", "is_admin": True}
+        if _environment_is_production():
+            raise HTTPException(status_code=503, detail="Auth cannot be disabled in production.")
+        user = _build_local_dev_user()
         _enforce_window_limit(
             buckets=USER_RATE_LIMIT_BUCKETS,
             lock=USER_RATE_LIMIT_LOCK,
-            key="user:anonymous",
+            key=f"user:{str(user.get('user_id') or 'local-dev').strip() or 'local-dev'}",
             limit=60,
         )
         return user

@@ -11,6 +11,8 @@ from fastapi import FastAPI
 from fastapi import HTTPException
 
 import server_modules.auth as auth_module
+import server_modules.control_plane_repository as control_plane_repository_module
+import server_modules.db as db_module
 import server_modules.jwt_secret as jwt_secret_module
 import server_modules.routes_auth as routes_auth_module
 
@@ -19,11 +21,16 @@ def _reload_auth(monkeypatch: pytest.MonkeyPatch, tmp_path, extra_env: dict[str,
     state_home = tmp_path / "state"
     monkeypatch.setenv("EMPYRALIS_STATE_HOME", str(state_home))
     monkeypatch.delenv("EMPYRALIS_JWT_SECRET_FILE", raising=False)
+    monkeypatch.delenv("DATABASE_URL", raising=False)
     for key in ("ORION_JWT_SECRET", "JWT_SECRET", "ORION_API_KEY", "RUNTIME_KEY"):
         monkeypatch.delenv(key, raising=False)
     for key, value in (extra_env or {}).items():
         monkeypatch.setenv(key, value)
 
+    runtime_db = importlib.reload(db_module)
+    runtime_db._POOLS_BY_LOOP.clear()
+    runtime_db._ENV_DSN_LOADED = True
+    importlib.reload(control_plane_repository_module)
     jwt_secret = importlib.reload(jwt_secret_module)
     auth = importlib.reload(auth_module)
     auth.USER_RATE_LIMIT_BUCKETS.clear()
@@ -78,6 +85,23 @@ def test_google_oauth_flow(monkeypatch: pytest.MonkeyPatch, tmp_path):
     assert auth.verify_token(created["token"]) == created["user"]["id"]
 
 
+def test_register_and_login_emit_security_audit(monkeypatch: pytest.MonkeyPatch, tmp_path):
+    auth, _, _ = _reload_auth(monkeypatch, tmp_path)
+    emitted: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        auth.security_audit_service,
+        "emit_security_audit_event",
+        lambda **kwargs: emitted.append(kwargs) or None,
+    )
+
+    created = auth.register_user("audit@example.com", "password-123", name="Audit User")
+    logged_in = auth.login_user("audit@example.com", "password-123")
+
+    assert created["user"]["email"] == "audit@example.com"
+    assert logged_in["user"]["email"] == "audit@example.com"
+    assert [item["action"] for item in emitted] == ["auth.register", "auth.login"]
+
+
 def test_session_persistence(monkeypatch: pytest.MonkeyPatch, tmp_path):
     auth, _, _ = _reload_auth(monkeypatch, tmp_path)
     created = auth.register_user("persist@example.com", "password-123", name="Persisted User")
@@ -106,6 +130,19 @@ def test_register_user_exposes_empyralis_identity_boundary(monkeypatch: pytest.M
     assert boundary["provider_connections"] == []
     assert boundary["summary"]["linked_provider_count"] == 0
     assert boundary["summary"]["has_recovery_method"] is True
+
+
+def test_register_user_assigns_real_default_workspace_identity(monkeypatch: pytest.MonkeyPatch, tmp_path):
+    auth, _, _ = _reload_auth(monkeypatch, tmp_path)
+    created = auth.register_user("workspace.identity@example.com", "password-123", name="Workspace Identity", workspace_id="default")
+
+    workspace_entry = created["workspace_access"][0]
+
+    assert created["default_workspace_id"] == workspace_entry["workspace_id"]
+    assert created["current_workspace_id"] == workspace_entry["workspace_id"]
+    assert created["default_workspace_id"] != "default"
+    assert created["current_tenant_id"] == workspace_entry["tenant_id"]
+    assert created["default_tenant_id"] == workspace_entry["tenant_id"]
 
 
 def test_expired_token_rejected(monkeypatch: pytest.MonkeyPatch, tmp_path):
@@ -141,6 +178,18 @@ def test_workspace_membership_scope_and_viewer_role(monkeypatch: pytest.MonkeyPa
         auth.enforce_workspace_access(current_user, finance_workspace_id, minimum_role="member")
     with pytest.raises(HTTPException):
         auth.enforce_workspace_access(current_user, "secret-lab", minimum_role="viewer")
+
+
+def test_default_workspace_alias_resolves_to_personal_workspace_for_bearer_user(monkeypatch: pytest.MonkeyPatch, tmp_path):
+    auth, _, _ = _reload_auth(monkeypatch, tmp_path)
+    created = auth.register_user("workspace.alias@example.com", "password-123", name="Alias User")
+    workspace_id = created["workspace_access"][0]["workspace_id"]
+    tenant_id = created["workspace_access"][0]["tenant_id"]
+    current_user = auth.get_current_user(_Request(), authorization=f"Bearer {created['token']}")
+
+    assert auth.workspace_role(current_user, "default") == "owner"
+    assert auth.workspace_tenant_id(current_user, "default") == tenant_id
+    assert auth.enforce_workspace_access(current_user, "default", minimum_role="viewer") == workspace_id
 
 
 def test_workspace_capability_policy_denies_local_capability(monkeypatch: pytest.MonkeyPatch, tmp_path):
@@ -410,6 +459,228 @@ def test_authenticated_profile_includes_identity_boundary(monkeypatch: pytest.Mo
     assert profile["identity_boundary"]["auth_methods"][0]["provider"] == "empyralis_password"
     assert profile["auth_session"]["session_id"] == created["auth_session"]["session_id"]
     assert profile["identity_versions"]["membership_version"] >= 1
+    assert profile["current_workspace_entitlements"]["plan_id"] == "personal"
+    assert profile["current_workspace_entitlements"]["capabilities"]["mobile_app_enabled"] is True
+
+
+def test_authenticated_profile_update_persists_through_control_plane_authority(monkeypatch: pytest.MonkeyPatch, tmp_path):
+    auth, _, _ = _reload_auth(monkeypatch, tmp_path)
+    created = auth.register_user("profile.update@example.com", "password-123", name="Before Name")
+    current_user = auth.get_current_user(_Request(), authorization=f"Bearer {created['token']}")
+
+    updated = auth.update_authenticated_user_profile(
+        current_user,
+        name="After Name",
+        avatar_url="https://example.com/avatar.png",
+    )
+    logged_in = auth.login_user("profile.update@example.com", "password-123")
+
+    assert updated["user"]["name"] == "After Name"
+    assert updated["user"]["avatar_url"] == "https://example.com/avatar.png"
+    assert logged_in["user"]["name"] == "After Name"
+    assert logged_in["user"]["avatar_url"] == "https://example.com/avatar.png"
+
+
+def test_mobile_register_user_rejects_free_workspace_plan(monkeypatch: pytest.MonkeyPatch, tmp_path):
+    auth, _, _ = _reload_auth(monkeypatch, tmp_path)
+
+    def _deny_mobile_access(*, workspace=None, install=None):
+        raise auth.entitlements_service.EntitlementDeniedError(
+            reason="mobile_app_unavailable",
+            message="Mobile app access is available on paid plans only. Use web or Telegram/WhatsApp on the free plan.",
+            entitlement_state={},
+        )
+
+    monkeypatch.setattr(auth.entitlements_service, "enforce_mobile_app_access", _deny_mobile_access)
+
+    with pytest.raises(HTTPException) as exc:
+        auth.register_user(
+            "mobile.free@example.com",
+            "password-123",
+            name="Mobile Free",
+            channel="mobile",
+            device_id="iphone-free",
+            workspace_id="default",
+        )
+
+    assert exc.value.status_code == 403
+    assert exc.value.detail == "Mobile app access is available on paid plans only. Use web or Telegram/WhatsApp on the free plan."
+
+
+def test_mobile_register_user_issues_device_bound_session(monkeypatch: pytest.MonkeyPatch, tmp_path):
+    auth, _, _ = _reload_auth(monkeypatch, tmp_path, {"ORION_MOBILE_JWT_EXP_SECONDS": "7200"})
+
+    created = auth.register_user(
+        "mobile.register@example.com",
+        "password-123",
+        name="Mobile Register",
+        channel="mobile",
+        device_id="iphone-1",
+        device_name="Mansur iPhone",
+        device_platform="ios",
+        workspace_id="default",
+    )
+
+    token_payload = auth._decode_token_payload(created["token"])
+
+    assert token_payload["channel"] == "mobile"
+    assert token_payload["device_id"] == "iphone-1"
+    assert int(token_payload["exp"]) - int(token_payload["iat"]) == 7200
+    assert created["auth_session"]["channel"] == "mobile"
+    assert created["auth_session"]["device_id"] == "iphone-1"
+    assert created["device_link"]["device_id"] == "iphone-1"
+    assert created["device_link"]["platform"] == "ios"
+    assert created["current_workspace_id"] == created["workspace_access"][0]["workspace_id"]
+    assert created["default_workspace_id"] == created["workspace_access"][0]["workspace_id"]
+    assert created["current_workspace_id"] != "default"
+    assert created["session_recovery"]["refresh_token"].startswith("esr_")
+    assert created["session_recovery"]["refresh_expires_at"] > created["auth_session"]["expires_at"]
+
+
+def test_mobile_login_user_issues_persistent_workspace_scoped_session(monkeypatch: pytest.MonkeyPatch, tmp_path):
+    auth, _, _ = _reload_auth(monkeypatch, tmp_path, {"ORION_MOBILE_JWT_EXP_SECONDS": "5400"})
+    created = auth.register_user("mobile.login@example.com", "password-123", name="Mobile Login")
+    workspace_id = created["workspace_access"][0]["workspace_id"]
+
+    logged_in = auth.login_user(
+        "mobile.login@example.com",
+        "password-123",
+        channel="mobile",
+        device_id="pixel-9",
+        device_name="Pixel 9",
+        device_platform="android",
+        workspace_id=workspace_id,
+    )
+    token_payload = auth._decode_token_payload(logged_in["token"])
+
+    assert token_payload["channel"] == "mobile"
+    assert token_payload["device_id"] == "pixel-9"
+    assert int(token_payload["exp"]) - int(token_payload["iat"]) == 5400
+    assert logged_in["auth_session"]["channel"] == "mobile"
+    assert logged_in["device_link"]["workspace_id"] == workspace_id
+    assert any(item["workspace_id"] == workspace_id for item in logged_in["workspace_access"])
+    assert logged_in["current_workspace_id"] == workspace_id
+    assert logged_in["default_workspace_id"] == workspace_id
+    assert logged_in["session_recovery"]["refresh_token"].startswith("esr_")
+    assert logged_in["session_recovery"]["refresh_expires_at"] > logged_in["auth_session"]["expires_at"]
+
+
+def test_mobile_refresh_session_rotates_bearer_without_repairing(monkeypatch: pytest.MonkeyPatch, tmp_path):
+    auth, _, _ = _reload_auth(
+        monkeypatch,
+        tmp_path,
+        {"ORION_MOBILE_JWT_EXP_SECONDS": "3600", "ORION_MOBILE_REFRESH_EXP_SECONDS": "86400"},
+    )
+    created = auth.register_user(
+        "mobile.refresh@example.com",
+        "password-123",
+        name="Mobile Refresh",
+        channel="mobile",
+        device_id="iphone-refresh",
+        device_name="Mansur iPhone",
+        device_platform="ios",
+        workspace_id="default",
+    )
+
+    refreshed = auth.refresh_authenticated_session(
+        created["session_recovery"]["refresh_token"],
+        device_id="iphone-refresh",
+        device_name="Mansur iPhone",
+        device_platform="ios",
+        workspace_id=created["workspace_access"][0]["workspace_id"],
+    )
+
+    assert refreshed["token"] != created["token"]
+    assert refreshed["auth_session"]["session_id"] == created["auth_session"]["session_id"]
+    assert refreshed["device_link"]["device_id"] == "iphone-refresh"
+    assert refreshed["session_recovery"]["refresh_token"] != created["session_recovery"]["refresh_token"]
+    current_user = auth.get_current_user(_Request(), authorization=f"Bearer {refreshed['token']}")
+    assert current_user["device_id"] == "iphone-refresh"
+
+
+def test_stale_mobile_bearer_can_be_recovered_with_refresh(monkeypatch: pytest.MonkeyPatch, tmp_path):
+    auth, _, _ = _reload_auth(monkeypatch, tmp_path)
+    created = auth.register_user(
+        "mobile.stale@example.com",
+        "password-123",
+        name="Mobile Stale",
+        channel="mobile",
+        device_id="iphone-stale",
+        device_name="Mansur iPhone",
+        device_platform="ios",
+        workspace_id="default",
+    )
+    workspace_id = created["workspace_access"][0]["workspace_id"]
+    tenant_id = created["workspace_access"][0]["tenant_id"]
+    extra_workspace_id = f"ops-{tmp_path.name}"
+    auth.ensure_workspace_tenant_binding(extra_workspace_id, tenant_id)
+    auth.upsert_workspace_membership(created["user"]["id"], extra_workspace_id, "viewer")
+
+    with pytest.raises(HTTPException) as exc:
+        auth.get_current_user(_Request(), authorization=f"Bearer {created['token']}")
+
+    assert exc.value.detail == "Bearer token is stale and must be refreshed."
+
+    refreshed = auth.refresh_authenticated_session(
+        created["session_recovery"]["refresh_token"],
+        device_id="iphone-stale",
+        workspace_id=workspace_id,
+    )
+    current_user = auth.get_current_user(_Request(), authorization=f"Bearer {refreshed['token']}")
+    assert current_user["user_id"] == created["user"]["id"]
+
+
+def test_removed_workspace_membership_revokes_old_bearer_and_drops_access(monkeypatch: pytest.MonkeyPatch, tmp_path):
+    auth, _, _ = _reload_auth(monkeypatch, tmp_path)
+    created = auth.register_user("membership.remove@example.com", "password-123", name="Removal User")
+    user_id = created["user"]["id"]
+    home_workspace_id = created["workspace_access"][0]["workspace_id"]
+    home_tenant_id = created["workspace_access"][0]["tenant_id"]
+    extra_workspace_id = f"ops-{tmp_path.name}"
+    auth.ensure_workspace_tenant_binding(extra_workspace_id, home_tenant_id)
+    auth.upsert_workspace_membership(user_id, extra_workspace_id, "viewer")
+    token = auth.login_user("membership.remove@example.com", "password-123")["token"]
+
+    removed = auth.remove_workspace_membership(user_id, extra_workspace_id)
+
+    assert removed["removed"] is True
+    with pytest.raises(HTTPException) as exc:
+        auth.get_current_user(_Request(), authorization=f"Bearer {token}")
+
+    assert exc.value.detail == "Bearer token is stale and must be refreshed."
+    relogged = auth.login_user("membership.remove@example.com", "password-123")
+    relogged_user = auth.get_current_user(_Request(), authorization=f"Bearer {relogged['token']}")
+    assert auth.enforce_workspace_access(relogged_user, home_workspace_id, minimum_role="viewer") == home_workspace_id
+    with pytest.raises(HTTPException):
+        auth.enforce_workspace_access(relogged_user, extra_workspace_id, minimum_role="viewer")
+
+
+def test_revoked_device_link_blocks_refresh_recovery(monkeypatch: pytest.MonkeyPatch, tmp_path):
+    auth, _, _ = _reload_auth(monkeypatch, tmp_path)
+    created = auth.register_user(
+        "mobile.revoked@example.com",
+        "password-123",
+        name="Mobile Revoked",
+        channel="mobile",
+        device_id="iphone-revoked",
+        device_name="Mansur iPhone",
+        device_platform="ios",
+        workspace_id="default",
+    )
+    auth.revoke_user_device_link(created["user"]["id"], "iphone-revoked", reason="manual revoke")
+
+    with pytest.raises(HTTPException) as exc:
+        auth.refresh_authenticated_session(
+            created["session_recovery"]["refresh_token"],
+            device_id="iphone-revoked",
+        )
+
+    assert exc.value.status_code == 401
+    assert exc.value.detail in {
+        "Auth session is no longer active.",
+        "Refresh token is no longer active.",
+        "Refresh token device is not active.",
+    }
 
 
 
@@ -448,6 +719,170 @@ async def test_auth_status_returns_authenticated_payload(monkeypatch: pytest.Mon
         "authenticated": True,
         "user": {"id": "user-1", "email": "user@example.com"},
     }
+
+
+@pytest.mark.anyio
+async def test_auth_signup_alias_forwards_to_register(monkeypatch: pytest.MonkeyPatch):
+    captured: dict[str, object] = {}
+
+    async def fake_register(body):
+        captured["body"] = body
+        return {"ok": True, "token": "alias-token"}
+
+    monkeypatch.setattr(routes_auth_module, "register", fake_register)
+
+    body = routes_auth_module.AuthRegisterRequest(
+        name="Alias User",
+        email="alias@example.com",
+        password="password-123",
+    )
+    payload = await routes_auth_module.signup(body)
+
+    assert payload == {"ok": True, "token": "alias-token"}
+    assert captured["body"] == body
+
+
+@pytest.mark.anyio
+async def test_auth_providers_route_returns_runtime_auth_options(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(
+        routes_auth_module,
+        "auth_provider_options",
+        lambda: {
+            "email": {"enabled": True},
+            "google": {"enabled": False},
+            "apple": {"enabled": False},
+        },
+    )
+
+    payload = await routes_auth_module.auth_providers()
+
+    assert payload == {
+        "email": {"enabled": True},
+        "google": {"enabled": False},
+        "apple": {"enabled": False},
+    }
+
+
+@pytest.mark.anyio
+async def test_auth_refresh_route_forwards_to_refresh_handler(monkeypatch: pytest.MonkeyPatch):
+    captured: dict[str, object] = {}
+
+    def fake_refresh(refresh_token, **kwargs):
+        captured["refresh_token"] = refresh_token
+        captured["kwargs"] = kwargs
+        return {"ok": True, "token": "next-token"}
+
+    monkeypatch.setattr(routes_auth_module, "refresh_authenticated_session", fake_refresh)
+    app = _build_auth_test_app()
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        response = await client.post(
+            "/api/v1/auth/refresh",
+            json={
+                "refresh_token": "esr_session.secret",
+                "device_id": "iphone-1",
+                "device_name": "Mansur iPhone",
+                "device_platform": "ios",
+                "workspace_id": "default",
+            },
+        )
+
+    assert response.status_code == 200
+    assert response.json()["token"] == "next-token"
+    assert captured["refresh_token"] == "esr_session.secret"
+    assert captured["kwargs"] == {
+        "device_id": "iphone-1",
+        "device_name": "Mansur iPhone",
+        "device_platform": "ios",
+        "workspace_id": "default",
+        "session_ttl_seconds": None,
+    }
+
+
+@pytest.mark.anyio
+async def test_auth_devices_routes_list_and_revoke(monkeypatch: pytest.MonkeyPatch):
+    app = _build_auth_test_app()
+    app.dependency_overrides[routes_auth_module.get_current_user] = lambda: {
+        "auth_type": "bearer",
+        "user_id": "user-1",
+        "device_id": "iphone-1",
+    }
+    monkeypatch.setattr(
+        routes_auth_module,
+        "list_authenticated_user_devices",
+        lambda current_user: {
+            "ok": True,
+            "current_device_id": "iphone-1",
+            "devices": [{"device_id": "iphone-1", "status": "active"}],
+        },
+    )
+    monkeypatch.setattr(
+        routes_auth_module,
+        "revoke_authenticated_user_device",
+        lambda current_user, device_id: {
+            "ok": True,
+            "revoked_current_device": device_id == "iphone-1",
+            "device": {"device_id": device_id, "status": "revoked"},
+        },
+    )
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        list_response = await client.get("/api/v1/auth/devices")
+        revoke_response = await client.delete("/api/v1/auth/devices/iphone-1")
+
+    assert list_response.status_code == 200
+    assert list_response.json()["current_device_id"] == "iphone-1"
+    assert revoke_response.status_code == 200
+    assert revoke_response.json()["device"]["device_id"] == "iphone-1"
+
+
+@pytest.mark.anyio
+async def test_auth_channel_pairing_routes_forward_to_service(monkeypatch: pytest.MonkeyPatch):
+    app = _build_auth_test_app()
+    app.dependency_overrides[routes_auth_module.get_current_user] = lambda: {
+        "auth_type": "bearer",
+        "user_id": "user-1",
+        "email": "user@example.com",
+    }
+    monkeypatch.setattr(
+        routes_auth_module,
+        "create_authenticated_channel_pairing_intent",
+        lambda current_user, **kwargs: {"ok": True, "intent": {"provider": kwargs["provider"], "pairing_code": "EMP-ABCD-EFGH"}},
+    )
+    monkeypatch.setattr(
+        routes_auth_module,
+        "list_authenticated_channel_links",
+        lambda current_user, **kwargs: {"ok": True, "links": [{"link_id": "chl-1", "provider": "telegram"}]},
+    )
+    monkeypatch.setattr(
+        routes_auth_module,
+        "revoke_authenticated_channel_link",
+        lambda current_user, **kwargs: {"ok": True, "link": {"link_id": kwargs["link_id"], "status": "revoked"}},
+    )
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        create_response = await client.post(
+            "/api/v1/auth/channel-pairing/intents",
+            json={
+                "provider": "telegram",
+                "workspace_id": "default",
+                "scopes": ["chat"],
+            },
+        )
+        list_response = await client.get("/api/v1/auth/channel-pairing/links")
+        revoke_response = await client.post(
+            "/api/v1/auth/channel-pairing/links/chl-1/revoke",
+            json={"confirm": True},
+        )
+
+    assert create_response.status_code == 200
+    assert create_response.json()["intent"]["provider"] == "telegram"
+    assert list_response.status_code == 200
+    assert list_response.json()["links"][0]["link_id"] == "chl-1"
+    assert revoke_response.status_code == 200
+    assert revoke_response.json()["link"]["status"] == "revoked"
 
 
 @pytest.mark.anyio

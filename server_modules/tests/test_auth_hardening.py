@@ -6,6 +6,7 @@ from fastapi import HTTPException
 from starlette.requests import Request
 
 from server_modules import auth, runtime_common
+from server_modules import routes_connectors
 
 
 def _request(path: str = "/test", query_string: bytes = b"") -> Request:
@@ -28,6 +29,13 @@ class AuthHardeningTests(unittest.TestCase):
     def setUp(self):
         auth.USER_RATE_LIMIT_BUCKETS.clear()
         auth.LOGIN_RATE_LIMIT_BUCKETS.clear()
+
+    def test_get_current_user_rejects_missing_auth_when_enabled(self):
+        request = _request()
+        with patch.dict(os.environ, {"ORION_AUTH_REQUIRED": "1"}, clear=False):
+            with self.assertRaises(HTTPException) as ctx:
+                auth.get_current_user(request=request)
+        self.assertEqual(ctx.exception.status_code, 401)
 
     def test_auth_remains_required_when_api_key_is_configured(self):
         with patch.dict(os.environ, {"ORION_API_KEY": "secret"}, clear=False):
@@ -67,6 +75,70 @@ class AuthHardeningTests(unittest.TestCase):
         self.assertTrue(result["is_admin"])
         self.assertEqual(result["role"], "owner")
 
+    def test_require_api_key_returns_scoped_local_dev_identity_when_auth_disabled(self):
+        request = _request()
+        with patch.dict(os.environ, {"ORION_AUTH_REQUIRED": "0"}, clear=False):
+            user = runtime_common.require_api_key(request=request)
+        self.assertEqual(user["auth_type"], "local_dev")
+        self.assertEqual(user["user_id"], "local-dev")
+        self.assertEqual(user["role"], "member")
+        self.assertFalse(user["is_admin"])
+        self.assertEqual(user["workspace_ids"], ["default"])
+        self.assertEqual(auth.current_user_role(user), "member")
+
+    def test_auth_disabled_fails_closed_in_production(self):
+        request = _request()
+        with patch.dict(os.environ, {"ORION_AUTH_REQUIRED": "0", "ENV": "production"}, clear=False):
+            with self.assertRaises(HTTPException) as ctx:
+                runtime_common.require_api_key(request=request)
+        self.assertEqual(ctx.exception.status_code, 503)
+
+    def test_require_member_api_key_accepts_local_dev_member_identity(self):
+        request = _request()
+        with patch.dict(os.environ, {"ORION_AUTH_REQUIRED": "0"}, clear=False):
+            user = runtime_common.require_member_api_key(request=request)
+        self.assertEqual(user["auth_type"], "local_dev")
+        self.assertEqual(user["role"], "member")
+        self.assertFalse(user["is_admin"])
+
+    def test_require_api_key_respects_local_dev_identity_overrides(self):
+        request = _request()
+        with patch.dict(
+            os.environ,
+            {
+                "ORION_AUTH_REQUIRED": "0",
+                "ORION_LOCAL_DEV_AUTH_ROLE": "viewer",
+                "ORION_LOCAL_DEV_USER_ID": "dev-user-1",
+                "ORION_LOCAL_DEV_EMAIL": "Dev.User@Example.com",
+            },
+            clear=False,
+        ):
+            user = runtime_common.require_api_key(request=request)
+        self.assertEqual(user["auth_type"], "local_dev")
+        self.assertEqual(user["user_id"], "dev-user-1")
+        self.assertEqual(user["email"], "dev.user@example.com")
+        self.assertEqual(user["role"], "viewer")
+        self.assertFalse(user["is_admin"])
+
+    def test_require_admin_api_key_blocks_local_dev_member_identity(self):
+        request = _request()
+        with patch.dict(os.environ, {"ORION_AUTH_REQUIRED": "0"}, clear=False):
+            with self.assertRaises(HTTPException) as ctx:
+                runtime_common.require_admin_api_key(request=request)
+        self.assertEqual(ctx.exception.status_code, 403)
+
+    def test_require_admin_api_key_allows_explicit_local_dev_owner_identity(self):
+        request = _request()
+        with patch.dict(
+            os.environ,
+            {"ORION_AUTH_REQUIRED": "0", "ORION_LOCAL_DEV_AUTH_ROLE": "owner", "ORION_LOCAL_DEV_WORKSPACE_IDS": "default"},
+            clear=False,
+        ):
+            user = runtime_common.require_admin_api_key(request=request)
+        self.assertEqual(user["auth_type"], "local_dev")
+        self.assertEqual(user["role"], "owner")
+        self.assertTrue(user["is_admin"])
+
     def test_require_admin_access_blocks_non_admin_bearer_identity(self):
         request = _request()
         with patch("server_modules.auth.get_current_user", return_value={"user_id": "user-1", "auth_type": "bearer", "email": "user@example.com"}):
@@ -95,6 +167,39 @@ class AuthHardeningTests(unittest.TestCase):
             user = auth.get_current_user(request=request, authorization=f"Bearer {token}")
         self.assertEqual(user["role"], "owner")
         self.assertTrue(user["is_admin"])
+
+
+class ConnectorRouteAuthHardeningTests(unittest.IsolatedAsyncioTestCase):
+    async def test_credentials_vault_route_blocks_default_local_dev_member(self):
+        request = _request(path="/credentials/vault", query_string=b"workspace_id=default")
+        with patch.dict(os.environ, {"ORION_AUTH_REQUIRED": "0"}, clear=False):
+            current_user = runtime_common.require_api_key(request=request)
+            with self.assertRaises(HTTPException) as ctx:
+                await routes_connectors.list_credentials_vault(request=request, current_user=current_user)
+        self.assertEqual(ctx.exception.status_code, 403)
+
+    async def test_credentials_vault_route_allows_explicit_scoped_local_dev_owner(self):
+        request = _request(path="/credentials/vault", query_string=b"workspace_id=default")
+        with (
+            patch.dict(
+                os.environ,
+                {"ORION_AUTH_REQUIRED": "0", "ORION_LOCAL_DEV_AUTH_ROLE": "owner", "ORION_LOCAL_DEV_WORKSPACE_IDS": "default"},
+                clear=False,
+            ),
+            patch("server_modules.routes_connectors.core.list_credentials_vault", return_value={"items": []}) as list_mock,
+        ):
+            current_user = runtime_common.require_api_key(request=request)
+            result = await routes_connectors.list_credentials_vault(request=request, current_user=current_user)
+        self.assertEqual(result, {"items": []})
+        list_mock.assert_called_once_with(workspace_id="default")
+
+    async def test_credentials_vault_route_rejects_unscoped_local_dev_workspace(self):
+        request = _request(path="/credentials/vault", query_string=b"workspace_id=other")
+        with patch.dict(os.environ, {"ORION_AUTH_REQUIRED": "0"}, clear=False):
+            current_user = runtime_common.require_api_key(request=request)
+            with self.assertRaises(HTTPException) as ctx:
+                await routes_connectors.list_credentials_vault(request=request, current_user=current_user)
+        self.assertEqual(ctx.exception.status_code, 403)
 
 
 if __name__ == "__main__":

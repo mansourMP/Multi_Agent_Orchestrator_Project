@@ -165,7 +165,11 @@ export class AuthService {
             include: {
                 memberships: {
                     include: {
-                        organization: true,
+                        organization: {
+                            include: {
+                                workspaces: true,
+                            },
+                        },
                     },
                 },
             },

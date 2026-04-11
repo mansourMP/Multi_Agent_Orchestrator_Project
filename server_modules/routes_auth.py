@@ -1,12 +1,14 @@
-from typing import Optional
+from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from server_modules.auth import (
+    auth_provider_options,
     enterprise_status_for_user,
     ensure_public_registration_enabled,
     get_authenticated_user_profile,
+    list_authenticated_user_devices,
     get_current_user,
     limit_login_requests,
     limit_public_requests,
@@ -14,9 +16,16 @@ from server_modules.auth import (
     load_tenant_enterprise_settings,
     provision_user_account,
     register_user,
+    refresh_authenticated_session,
     require_admin_access,
+    revoke_authenticated_user_device,
     upsert_tenant_enterprise_settings,
     update_authenticated_user_profile,
+)
+from server_modules.channel_pairing_service import (
+    create_authenticated_channel_pairing_intent,
+    list_authenticated_channel_links,
+    revoke_authenticated_channel_link,
 )
 from server_modules.profile_api import register_profile_routes
 from server_modules.schemas import AuthLoginRequest, AuthRegisterRequest
@@ -35,6 +44,29 @@ def _require_tenant_id(value: Optional[str]) -> str:
 class AuthMePatchRequest(BaseModel):
     name: Optional[str] = None
     avatar_url: Optional[str] = None
+
+
+class AuthRefreshRequest(BaseModel):
+    refresh_token: str
+    device_id: Optional[str] = None
+    device_name: Optional[str] = None
+    device_platform: Optional[str] = None
+    workspace_id: Optional[str] = None
+    session_ttl_seconds: Optional[int] = None
+
+
+class ChannelPairingIntentCreateRequest(BaseModel):
+    provider: str
+    workspace_id: Optional[str] = None
+    scopes: Optional[list[str]] = None
+    ttl_seconds: Optional[int] = None
+    allow_relink: Optional[bool] = None
+    metadata: Optional[dict[str, Any]] = None
+
+
+class ChannelLinkRevokeRequest(BaseModel):
+    confirm: bool = False
+    reason: Optional[str] = None
 
 
 class EnterpriseSsoConfigPatchRequest(BaseModel):
@@ -81,12 +113,41 @@ class AdminProvisionUserRequest(BaseModel):
 
 @router.post("/auth/login", dependencies=[Depends(limit_login_requests)])
 async def login(body: AuthLoginRequest):
-    return login_user(body.email, body.password)
+    return login_user(
+        body.email,
+        body.password,
+        channel=body.channel,
+        device_id=body.device_id,
+        device_name=body.device_name,
+        device_platform=body.device_platform,
+        workspace_id=body.workspace_id,
+        session_ttl_seconds=body.session_ttl_seconds,
+    )
 
 
 @router.post("/auth/register", dependencies=[Depends(limit_public_requests), Depends(ensure_public_registration_enabled)])
 async def register(body: AuthRegisterRequest):
-    return register_user(body.email, body.password, name=body.name)
+    return register_user(
+        body.email,
+        body.password,
+        name=body.name,
+        channel=body.channel,
+        device_id=body.device_id,
+        device_name=body.device_name,
+        device_platform=body.device_platform,
+        workspace_id=body.workspace_id,
+        session_ttl_seconds=body.session_ttl_seconds,
+    )
+
+
+@router.post("/auth/signup", dependencies=[Depends(limit_public_requests), Depends(ensure_public_registration_enabled)])
+async def signup(body: AuthRegisterRequest):
+    return await register(body)
+
+
+@router.get("/auth/providers")
+async def auth_providers():
+    return auth_provider_options()
 
 
 @router.get("/auth/me")
@@ -99,6 +160,73 @@ async def auth_status(current_user=Depends(get_current_user)):
     profile = get_authenticated_user_profile(current_user)
     user = profile.get("user") if isinstance(profile, dict) else None
     return {"authenticated": True, "user": user}
+
+
+@router.post("/auth/refresh")
+async def refresh_session(body: AuthRefreshRequest):
+    return refresh_authenticated_session(
+        body.refresh_token,
+        device_id=body.device_id,
+        device_name=body.device_name,
+        device_platform=body.device_platform,
+        workspace_id=body.workspace_id,
+        session_ttl_seconds=body.session_ttl_seconds,
+    )
+
+
+@router.get("/auth/devices")
+async def auth_devices(current_user=Depends(get_current_user)):
+    return list_authenticated_user_devices(current_user)
+
+
+@router.delete("/auth/devices/{device_id}")
+async def auth_revoke_device(device_id: str, current_user=Depends(get_current_user)):
+    return revoke_authenticated_user_device(current_user, device_id)
+
+
+@router.post("/auth/channel-pairing/intents")
+async def create_channel_pairing_intent(
+    body: ChannelPairingIntentCreateRequest,
+    current_user=Depends(get_current_user),
+):
+    return create_authenticated_channel_pairing_intent(
+        current_user,
+        provider=body.provider,
+        workspace_id=body.workspace_id,
+        scopes=body.scopes,
+        ttl_seconds=body.ttl_seconds,
+        allow_relink=bool(body.allow_relink),
+        metadata=body.metadata,
+    )
+
+
+@router.get("/auth/channel-pairing/links")
+async def auth_channel_links(
+    provider: Optional[str] = None,
+    workspace_id: Optional[str] = None,
+    include_revoked: bool = False,
+    current_user=Depends(get_current_user),
+):
+    return list_authenticated_channel_links(
+        current_user,
+        provider=provider,
+        workspace_id=workspace_id,
+        include_revoked=include_revoked,
+    )
+
+
+@router.post("/auth/channel-pairing/links/{link_id}/revoke")
+async def auth_revoke_channel_link(
+    link_id: str,
+    body: ChannelLinkRevokeRequest,
+    current_user=Depends(get_current_user),
+):
+    return revoke_authenticated_channel_link(
+        current_user,
+        link_id=link_id,
+        confirm=body.confirm,
+        reason=body.reason,
+    )
 
 
 @router.get("/auth/enterprise/status")

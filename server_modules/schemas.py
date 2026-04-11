@@ -84,6 +84,12 @@ class ConnectorCreate(ConnectorUpsertRequest):
 class AuthLoginRequest(BaseModel):
     email: str
     password: str
+    channel: Optional[str] = None
+    device_id: Optional[str] = None
+    device_name: Optional[str] = None
+    device_platform: Optional[str] = None
+    workspace_id: Optional[str] = None
+    session_ttl_seconds: Optional[int] = None
 
 
 class AuthRegisterRequest(AuthLoginRequest):

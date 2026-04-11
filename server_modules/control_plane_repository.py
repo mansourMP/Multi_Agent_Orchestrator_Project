@@ -3,11 +3,16 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import re
+import sqlite3
+import threading
+import time
 import uuid
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from server_modules import db as runtime_db
@@ -17,6 +22,11 @@ LOGGER = logging.getLogger(__name__)
 
 _SCHEMA_READY = False
 _SCHEMA_LOCK: asyncio.Lock = asyncio.Lock()
+EMPYRALIS_STATE_HOME = Path(
+    os.getenv("EMPYRALIS_STATE_HOME", str(Path.home() / ".empyralis" / "state"))
+).expanduser()
+LOCAL_IDENTITY_DB_FILE = (EMPYRALIS_STATE_HOME / "auth" / "users.db").expanduser()
+_LOCAL_IDENTITY_LOCK = threading.Lock()
 
 _CONTROL_PLANE_SESSION_SCOPE_SQL = """
 SELECT
@@ -867,6 +877,131 @@ def _to_json(value: Any, *, default: Any) -> str:
     return json.dumps(payload, ensure_ascii=False, separators=(",", ":"), default=str)
 
 
+def _connect_local_identity_db() -> sqlite3.Connection:
+    LOCAL_IDENTITY_DB_FILE.parent.mkdir(parents=True, exist_ok=True)
+    connection = sqlite3.connect(LOCAL_IDENTITY_DB_FILE)
+    connection.row_factory = sqlite3.Row
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS users (
+            id TEXT PRIMARY KEY,
+            email TEXT NOT NULL UNIQUE,
+            name TEXT,
+            avatar_url TEXT,
+            password_hash TEXT NOT NULL,
+            created_at INTEGER NOT NULL
+        )
+        """
+    )
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS workspace_memberships (
+            user_id TEXT NOT NULL,
+            workspace_id TEXT NOT NULL,
+            role TEXT NOT NULL,
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL,
+            PRIMARY KEY (user_id, workspace_id)
+        )
+        """
+    )
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS workspace_registry (
+            workspace_id TEXT PRIMARY KEY,
+            tenant_id TEXT NOT NULL,
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL
+        )
+        """
+    )
+    user_columns = {
+        str(row["name"] or "").strip()
+        for row in connection.execute("PRAGMA table_info(users)").fetchall()
+    }
+    if "avatar_url" not in user_columns:
+        connection.execute("ALTER TABLE users ADD COLUMN avatar_url TEXT")
+    return connection
+
+
+def _local_user_row(connection: sqlite3.Connection, *, user_id: Optional[str] = None, email: Optional[str] = None) -> Optional[sqlite3.Row]:
+    if user_id is not None:
+        return connection.execute(
+            """
+            SELECT
+                u.id,
+                u.email,
+                u.name,
+                u.avatar_url,
+                u.password_hash,
+                u.created_at,
+                wm.workspace_id,
+                wr.tenant_id
+            FROM users u
+            LEFT JOIN workspace_memberships wm ON wm.user_id = u.id
+            LEFT JOIN workspace_registry wr ON wr.workspace_id = wm.workspace_id
+            WHERE u.id = ?
+            ORDER BY wm.created_at ASC, wm.workspace_id ASC
+            LIMIT 1
+            """,
+            (str(user_id or "").strip(),),
+        ).fetchone()
+    return connection.execute(
+        """
+        SELECT
+            u.id,
+            u.email,
+            u.name,
+            u.avatar_url,
+            u.password_hash,
+            u.created_at,
+            wm.workspace_id,
+            wr.tenant_id
+        FROM users u
+        LEFT JOIN workspace_memberships wm ON wm.user_id = u.id
+        LEFT JOIN workspace_registry wr ON wr.workspace_id = wm.workspace_id
+        WHERE lower(u.email) = lower(?)
+        ORDER BY wm.created_at ASC, wm.workspace_id ASC
+        LIMIT 1
+        """,
+        (str(email or "").strip().lower(),),
+    ).fetchone()
+
+
+def _local_workspace_membership_rows(connection: sqlite3.Connection, user_id: str) -> List[Dict[str, Any]]:
+    rows = connection.execute(
+        """
+        SELECT
+            wm.user_id,
+            wm.workspace_id,
+            wm.role,
+            wm.created_at,
+            wm.updated_at,
+            wr.tenant_id
+        FROM workspace_memberships wm
+        LEFT JOIN workspace_registry wr ON wr.workspace_id = wm.workspace_id
+        WHERE wm.user_id = ?
+        ORDER BY wm.created_at ASC, wm.workspace_id ASC
+        """,
+        (str(user_id or "").strip(),),
+    ).fetchall()
+    return [
+        {
+            "id": f"{row['user_id']}:{row['workspace_id']}",
+            "tenant_id": str(row["tenant_id"] or "").strip() or None,
+            "workspace_id": str(row["workspace_id"] or "").strip(),
+            "user_id": str(row["user_id"] or "").strip(),
+            "role": str(row["role"] or "").strip() or "member",
+            "status": "active",
+            "metadata": {},
+            "created_at": int(row["created_at"]) if row["created_at"] is not None else None,
+            "updated_at": int(row["updated_at"]) if row["updated_at"] is not None else None,
+            "workspace_name": None,
+        }
+        for row in rows
+    ]
+
+
 async def ensure_control_plane_schema() -> Any:
     global _SCHEMA_READY
     pool = await runtime_db.get_pool()
@@ -936,7 +1071,8 @@ def _user_row_to_dict(row: Any) -> Optional[Dict[str, Any]]:
     if row is None:
         return None
     payload = dict(row)
-    payload["name"] = str(payload.get("display_name") or "").strip() or None
+    payload["email"] = str(payload.get("email") or "").strip().lower()
+    payload["name"] = str(payload.get("display_name") or payload.get("name") or "").strip() or None
     return payload
 
 
@@ -969,7 +1105,47 @@ async def create_local_password_account(
 
     async with _scoped_connection(bypass_rls=True) as connection:
         if connection is None:
-            return None
+            created_at_ts = int(time.time())
+            with _LOCAL_IDENTITY_LOCK:
+                with _connect_local_identity_db() as fallback:
+                    existing_user = _local_user_row(fallback, email=normalized_email)
+                    if existing_user is not None:
+                        return await get_user_bundle_by_id(str(existing_user["id"]))
+                    fallback.execute(
+                        """
+                        INSERT INTO users (id, email, name, avatar_url, password_hash, created_at)
+                        VALUES (?, ?, ?, NULL, ?, ?)
+                        """,
+                        (resolved_user_id, normalized_email, display_label or None, password_hash, created_at_ts),
+                    )
+                    fallback.execute(
+                        """
+                        INSERT OR REPLACE INTO workspace_registry (
+                            workspace_id, tenant_id, created_at, updated_at
+                        ) VALUES (?, ?, COALESCE((SELECT created_at FROM workspace_registry WHERE workspace_id = ?), ?), ?)
+                        """,
+                        (resolved_workspace_id, resolved_tenant_id, resolved_workspace_id, created_at_ts, created_at_ts),
+                    )
+                    fallback.execute(
+                        """
+                        INSERT OR REPLACE INTO workspace_memberships (
+                            user_id, workspace_id, role, created_at, updated_at
+                        ) VALUES (
+                            ?, ?, ?, COALESCE((SELECT created_at FROM workspace_memberships WHERE user_id = ? AND workspace_id = ?), ?), ?
+                        )
+                        """,
+                        (
+                            resolved_user_id,
+                            resolved_workspace_id,
+                            str(role or "owner").strip().lower() or "owner",
+                            resolved_user_id,
+                            resolved_workspace_id,
+                            created_at_ts,
+                            created_at_ts,
+                        ),
+                    )
+                    fallback.commit()
+            return await get_user_bundle_by_id(resolved_user_id)
         existing_user = await connection.fetchrow(
             """
             SELECT id, tenant_id, workspace_id, email, display_name, avatar_url, status, metadata, created_at, updated_at
@@ -1066,6 +1242,7 @@ async def ensure_workspace_membership(
     subject: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
     created_at = _utc_now_ts()
+    created_at_ts = int(time.time())
     resolved_user_id = str(user_id or uuid.uuid4()).strip() or str(uuid.uuid4())
     normalized_email = str(email or "").strip().lower()
     resolved_tenant_id = str(tenant_id or "").strip()
@@ -1076,7 +1253,71 @@ async def ensure_workspace_membership(
 
     async with _scoped_connection(bypass_rls=True) as connection:
         if connection is None:
-            return None
+            with _LOCAL_IDENTITY_LOCK:
+                with _connect_local_identity_db() as fallback:
+                    existing_user = _local_user_row(fallback, user_id=resolved_user_id) or _local_user_row(
+                        fallback,
+                        email=normalized_email,
+                    )
+                    effective_user_id = (
+                        str(existing_user["id"] or "").strip()
+                        if existing_user is not None
+                        else resolved_user_id
+                    )
+                    existing_password_hash = (
+                        str(existing_user["password_hash"] or "").strip()
+                        if existing_user is not None
+                        else ""
+                    )
+                    fallback.execute(
+                        """
+                        INSERT OR REPLACE INTO workspace_registry (
+                            workspace_id, tenant_id, created_at, updated_at
+                        ) VALUES (?, ?, COALESCE((SELECT created_at FROM workspace_registry WHERE workspace_id = ?), ?), ?)
+                        """,
+                        (resolved_workspace_id, resolved_tenant_id, resolved_workspace_id, created_at_ts, created_at_ts),
+                    )
+                    fallback.execute(
+                        """
+                        INSERT INTO users (id, email, name, avatar_url, password_hash, created_at)
+                        VALUES (?, ?, ?, NULL, ?, ?)
+                        ON CONFLICT(id) DO UPDATE SET
+                            email = excluded.email,
+                            name = COALESCE(excluded.name, users.name),
+                            avatar_url = COALESCE(users.avatar_url, excluded.avatar_url),
+                            password_hash = CASE
+                                WHEN excluded.password_hash <> '' THEN excluded.password_hash
+                                ELSE users.password_hash
+                            END
+                        """,
+                        (
+                            effective_user_id,
+                            normalized_email,
+                            display_label or None,
+                            str(password_hash or existing_password_hash or "").strip(),
+                            created_at_ts,
+                        ),
+                    )
+                    fallback.execute(
+                        """
+                        INSERT OR REPLACE INTO workspace_memberships (
+                            user_id, workspace_id, role, created_at, updated_at
+                        ) VALUES (
+                            ?, ?, ?, COALESCE((SELECT created_at FROM workspace_memberships WHERE user_id = ? AND workspace_id = ?), ?), ?
+                        )
+                        """,
+                        (
+                            effective_user_id,
+                            resolved_workspace_id,
+                            str(role or "member").strip().lower() or "member",
+                            effective_user_id,
+                            resolved_workspace_id,
+                            created_at_ts,
+                            created_at_ts,
+                        ),
+                    )
+                    fallback.commit()
+            return await get_user_bundle_by_id(effective_user_id)
         workspace_row = await connection.fetchrow(
             "SELECT id, tenant_id, workspace_id, slug, name FROM workspaces WHERE workspace_id = $1 LIMIT 1",
             resolved_workspace_id,
@@ -1179,7 +1420,10 @@ async def ensure_workspace_membership(
 async def get_user_by_email(email: str) -> Optional[Dict[str, Any]]:
     async with _scoped_connection(bypass_rls=True) as connection:
         if connection is None:
-            return None
+            with _LOCAL_IDENTITY_LOCK:
+                with _connect_local_identity_db() as fallback:
+                    row = _local_user_row(fallback, email=str(email or "").strip().lower())
+            return _user_row_to_dict(row)
         row = await connection.fetchrow(
             """
             SELECT id, tenant_id, workspace_id, email, display_name, avatar_url, status, metadata, created_at, updated_at
@@ -1195,7 +1439,10 @@ async def get_user_by_email(email: str) -> Optional[Dict[str, Any]]:
 async def get_user_by_id(user_id: str) -> Optional[Dict[str, Any]]:
     async with _scoped_connection(bypass_rls=True) as connection:
         if connection is None:
-            return None
+            with _LOCAL_IDENTITY_LOCK:
+                with _connect_local_identity_db() as fallback:
+                    row = _local_user_row(fallback, user_id=str(user_id or "").strip())
+            return _user_row_to_dict(row)
         row = await connection.fetchrow(
             """
             SELECT id, tenant_id, workspace_id, email, display_name, avatar_url, status, metadata, created_at, updated_at
@@ -1211,7 +1458,51 @@ async def get_user_by_id(user_id: str) -> Optional[Dict[str, Any]]:
 async def get_local_auth_identity_by_email(email: str) -> Optional[Dict[str, Any]]:
     async with _scoped_connection(bypass_rls=True) as connection:
         if connection is None:
-            return None
+            with _LOCAL_IDENTITY_LOCK:
+                with _connect_local_identity_db() as fallback:
+                    row = _local_user_row(fallback, email=str(email or "").strip().lower())
+                    if row is None:
+                        return None
+                    membership_row = fallback.execute(
+                        """
+                        SELECT wm.workspace_id, wr.tenant_id
+                        FROM workspace_memberships wm
+                        LEFT JOIN workspace_registry wr ON wr.workspace_id = wm.workspace_id
+                        WHERE wm.user_id = ?
+                        ORDER BY wm.created_at ASC, wm.workspace_id ASC
+                        LIMIT 1
+                        """,
+                        (str(row["id"] or "").strip(),),
+                    ).fetchone()
+            membership_workspace_id = (
+                str(membership_row["workspace_id"] or "").strip()
+                if membership_row is not None
+                else None
+            )
+            membership_tenant_id = (
+                str(membership_row["tenant_id"] or "").strip()
+                if membership_row is not None
+                else None
+            )
+            return {
+                "id": f"local-password:{row['id']}",
+                "tenant_id": membership_tenant_id or None,
+                "workspace_id": membership_workspace_id or None,
+                "user_id": str(row["id"] or "").strip(),
+                "provider": "empyralis_password",
+                "subject": str(row["email"] or "").strip().lower(),
+                "password_hash": str(row["password_hash"] or "").strip(),
+                "identity_role": "account_access",
+                "label": "Email and password",
+                "status": "active",
+                "is_primary": True,
+                "metadata": {},
+                "created_at": int(row["created_at"]) if row["created_at"] is not None else None,
+                "updated_at": int(row["created_at"]) if row["created_at"] is not None else None,
+                "email": str(row["email"] or "").strip().lower(),
+                "display_name": str(row["name"] or "").strip() or None,
+                "avatar_url": str(row["avatar_url"] or "").strip() or None,
+            }
         row = await connection.fetchrow(
             """
             SELECT
@@ -1246,7 +1537,9 @@ async def get_local_auth_identity_by_email(email: str) -> Optional[Dict[str, Any
 async def list_workspace_memberships_for_user(user_id: str) -> List[Dict[str, Any]]:
     async with _scoped_connection(bypass_rls=True) as connection:
         if connection is None:
-            return []
+            with _LOCAL_IDENTITY_LOCK:
+                with _connect_local_identity_db() as fallback:
+                    return _local_workspace_membership_rows(fallback, str(user_id or "").strip())
         rows = await connection.fetch(
             """
             SELECT
@@ -1273,7 +1566,32 @@ async def list_workspace_memberships_for_user(user_id: str) -> List[Dict[str, An
 async def get_workspace_by_id(workspace_id: str) -> Optional[Dict[str, Any]]:
     async with _scoped_connection(bypass_rls=True) as connection:
         if connection is None:
-            return None
+            with _LOCAL_IDENTITY_LOCK:
+                with _connect_local_identity_db() as fallback:
+                    row = fallback.execute(
+                        """
+                        SELECT workspace_id, tenant_id, created_at, updated_at
+                        FROM workspace_registry
+                        WHERE workspace_id = ?
+                        LIMIT 1
+                        """,
+                        (str(workspace_id or "").strip(),),
+                    ).fetchone()
+            if row is None:
+                return None
+            return {
+                "id": str(row["workspace_id"] or "").strip(),
+                "tenant_id": str(row["tenant_id"] or "").strip() or None,
+                "workspace_id": str(row["workspace_id"] or "").strip(),
+                "slug": str(row["workspace_id"] or "").strip(),
+                "name": str(row["workspace_id"] or "").strip(),
+                "workspace_type": "shared",
+                "status": "active",
+                "created_by_user_id": None,
+                "metadata": {},
+                "created_at": int(row["created_at"]) if row["created_at"] is not None else None,
+                "updated_at": int(row["updated_at"]) if row["updated_at"] is not None else None,
+            }
         row = await connection.fetchrow(
             """
             SELECT id, tenant_id, workspace_id, slug, name, workspace_type, status, created_by_user_id, metadata, created_at, updated_at
@@ -1287,10 +1605,166 @@ async def get_workspace_by_id(workspace_id: str) -> Optional[Dict[str, Any]]:
 
 
 async def tenant_id_for_workspace(workspace_id: str) -> Optional[str]:
-    workspace = await get_workspace_by_id(workspace_id)
-    if not isinstance(workspace, dict):
+    async with _scoped_connection(bypass_rls=True) as connection:
+        if connection is None:
+            with _LOCAL_IDENTITY_LOCK:
+                with _connect_local_identity_db() as fallback:
+                    row = fallback.execute(
+                        """
+                        SELECT tenant_id
+                        FROM workspace_registry
+                        WHERE workspace_id = ?
+                        LIMIT 1
+                        """,
+                        (str(workspace_id or "").strip(),),
+                    ).fetchone()
+            if row is None:
+                return None
+            return str(row["tenant_id"] or "").strip() or None
+        row = await connection.fetchrow(
+            """
+            SELECT tenant_id
+            FROM workspaces
+            WHERE workspace_id = $1
+            LIMIT 1
+            """,
+            str(workspace_id or "").strip(),
+        )
+    if row is None:
         return None
-    return str(workspace.get("tenant_id") or "").strip() or None
+    return str(row["tenant_id"] or "").strip() or None
+
+
+async def ensure_workspace_tenant_binding(
+    *,
+    workspace_id: str,
+    tenant_id: str,
+) -> Optional[Dict[str, Any]]:
+    resolved_workspace_id = str(workspace_id or "").strip()
+    resolved_tenant_id = str(tenant_id or "").strip()
+    if not resolved_workspace_id or not resolved_tenant_id:
+        return None
+    created_at = _utc_now_ts()
+    created_at_ts = int(time.time())
+    async with _scoped_connection(bypass_rls=True) as connection:
+        if connection is None:
+            with _LOCAL_IDENTITY_LOCK:
+                with _connect_local_identity_db() as fallback:
+                    fallback.execute(
+                        """
+                        INSERT OR REPLACE INTO workspace_registry (
+                            workspace_id, tenant_id, created_at, updated_at
+                        ) VALUES (?, ?, COALESCE((SELECT created_at FROM workspace_registry WHERE workspace_id = ?), ?), ?)
+                        """,
+                        (resolved_workspace_id, resolved_tenant_id, resolved_workspace_id, created_at_ts, created_at_ts),
+                    )
+                    fallback.commit()
+            return {"workspace_id": resolved_workspace_id, "tenant_id": resolved_tenant_id}
+        await connection.execute(
+            """
+            INSERT INTO tenants (
+                id, tenant_id, workspace_id, slug, name, status, created_by_user_id, metadata, created_at, updated_at
+            ) VALUES ($1, $2, $3, $4, $5, 'active', NULL, '{}'::jsonb, $6::timestamptz, $6::timestamptz)
+            ON CONFLICT (id) DO UPDATE SET
+                workspace_id = EXCLUDED.workspace_id,
+                updated_at = EXCLUDED.updated_at
+            """,
+            resolved_tenant_id,
+            resolved_tenant_id,
+            resolved_workspace_id,
+            _slugify(resolved_tenant_id, resolved_tenant_id),
+            resolved_tenant_id,
+            created_at,
+        )
+        await connection.execute(
+            """
+            INSERT INTO workspaces (
+                id, tenant_id, workspace_id, slug, name, workspace_type, status, created_by_user_id, metadata, created_at, updated_at
+            ) VALUES ($1, $2, $3, $4, $5, 'shared', 'active', NULL, '{}'::jsonb, $6::timestamptz, $6::timestamptz)
+            ON CONFLICT (workspace_id) DO UPDATE SET
+                tenant_id = EXCLUDED.tenant_id,
+                updated_at = EXCLUDED.updated_at
+            """,
+            resolved_workspace_id,
+            resolved_tenant_id,
+            resolved_workspace_id,
+            _slugify(resolved_workspace_id, resolved_workspace_id),
+            resolved_workspace_id,
+            created_at,
+        )
+    return {"workspace_id": resolved_workspace_id, "tenant_id": resolved_tenant_id}
+
+
+async def remove_workspace_membership(
+    *,
+    user_id: str,
+    workspace_id: str,
+) -> bool:
+    resolved_user_id = str(user_id or "").strip()
+    resolved_workspace_id = str(workspace_id or "").strip()
+    if not resolved_user_id or not resolved_workspace_id:
+        return False
+    async with _scoped_connection(bypass_rls=True) as connection:
+        if connection is None:
+            with _LOCAL_IDENTITY_LOCK:
+                with _connect_local_identity_db() as fallback:
+                    cursor = fallback.execute(
+                        "DELETE FROM workspace_memberships WHERE user_id = ? AND workspace_id = ?",
+                        (resolved_user_id, resolved_workspace_id),
+                    )
+                    fallback.commit()
+            return int(cursor.rowcount or 0) > 0
+        status = await connection.execute(
+            """
+            DELETE FROM workspace_memberships
+            WHERE user_id = $1 AND workspace_id = $2
+            """,
+            resolved_user_id,
+            resolved_workspace_id,
+        )
+    return status.endswith("DELETE 1")
+
+
+async def update_user_profile(
+    *,
+    user_id: str,
+    display_name: Optional[str] = None,
+    avatar_url: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    resolved_user_id = str(user_id or "").strip()
+    if not resolved_user_id:
+        return None
+    next_name = str(display_name or "").strip() or None
+    next_avatar_url = str(avatar_url or "").strip() or None
+    updated_at = _utc_now_ts()
+    async with _scoped_connection(bypass_rls=True) as connection:
+        if connection is None:
+            with _LOCAL_IDENTITY_LOCK:
+                with _connect_local_identity_db() as fallback:
+                    existing = _local_user_row(fallback, user_id=resolved_user_id)
+                    if existing is None:
+                        return None
+                    fallback.execute(
+                        "UPDATE users SET name = ?, avatar_url = ? WHERE id = ?",
+                        (next_name, next_avatar_url, resolved_user_id),
+                    )
+                    fallback.commit()
+            return await get_user_by_id(resolved_user_id)
+        row = await connection.fetchrow(
+            """
+            UPDATE users
+            SET display_name = $2,
+                avatar_url = $3,
+                updated_at = $4::timestamptz
+            WHERE id = $1
+            RETURNING id, tenant_id, workspace_id, email, display_name, avatar_url, status, metadata, created_at, updated_at
+            """,
+            resolved_user_id,
+            next_name,
+            next_avatar_url,
+            updated_at,
+        )
+    return _user_row_to_dict(row)
 
 
 async def get_user_bundle_by_id(user_id: str) -> Optional[Dict[str, Any]]:

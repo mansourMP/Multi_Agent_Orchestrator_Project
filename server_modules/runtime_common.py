@@ -244,11 +244,14 @@ def require_api_key(
 ):
     from server_modules.auth import get_current_user
 
-    return get_current_user(
+    user = get_current_user(
         request=request,
         authorization=authorization,
         x_api_key=x_api_key,
     )
+    if not isinstance(user, dict):
+        raise HTTPException(status_code=401, detail="Authentication required.")
+    return user
 
 
 def require_viewer_api_key(
@@ -268,12 +271,15 @@ def require_member_api_key(
     authorization: Optional[str] = Header(default=None, alias="Authorization"),
     x_api_key: Optional[str] = Header(default=None, alias="X-API-Key"),
 ):
-    from server_modules.auth import require_member_access
+    from server_modules.auth import enforce_minimum_role
 
-    return require_member_access(
-        request=request,
-        authorization=authorization,
-        x_api_key=x_api_key,
+    return enforce_minimum_role(
+        require_api_key(
+            request=request,
+            authorization=authorization,
+            x_api_key=x_api_key,
+        ),
+        "member",
     )
 
 
@@ -282,12 +288,15 @@ def require_admin_api_key(
     authorization: Optional[str] = Header(default=None, alias="Authorization"),
     x_api_key: Optional[str] = Header(default=None, alias="X-API-Key"),
 ):
-    from server_modules.auth import require_admin_access
+    from server_modules.auth import enforce_minimum_role
 
-    return require_admin_access(
-        request=request,
-        authorization=authorization,
-        x_api_key=x_api_key,
+    return enforce_minimum_role(
+        require_api_key(
+            request=request,
+            authorization=authorization,
+            x_api_key=x_api_key,
+        ),
+        "owner",
     )
 
 def http_json_request(

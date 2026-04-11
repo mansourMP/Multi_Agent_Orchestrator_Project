@@ -7,6 +7,11 @@ from sentry_sdk.integrations.sqlalchemy import SqlalchemyIntegration
 from contextlib import asynccontextmanager
 import uvicorn
 
+from server_modules.logging_config import configure_logging
+
+
+configure_logging()
+
 sentry_sdk.init(
     dsn=os.environ.get("SENTRY_DSN", ""),
     integrations=[FastApiIntegration(), SqlalchemyIntegration()],
@@ -175,11 +180,11 @@ def _runtime_cli_args() -> argparse.Namespace:
         default="server:app",
         help="Compatibility positional accepted from uvicorn-style launchers.",
     )
-    parser.add_argument("--host", default=os.getenv("ORION_RUNTIME_HOST", "127.0.0.1"))
+    parser.add_argument("--host", default=os.getenv("ORION_RUNTIME_HOST") or os.getenv("HOST") or "127.0.0.1")
     parser.add_argument(
         "--port",
         type=int,
-        default=int(os.getenv("ORION_RUNTIME_PORT", "8001")),
+        default=int(os.getenv("PORT") or os.getenv("ORION_RUNTIME_PORT") or "8001"),
     )
     parser.add_argument("--reload", action="store_true", help="Enable reload when launched as a script.")
     args = parser.parse_args()

@@ -1,0 +1,69 @@
+databases:
+  - name: empyralis-postgres
+    plan: starter
+
+services:
+  - type: web
+    name: empyralis-runtime
+    runtime: docker
+    dockerfilePath: ./Dockerfile.runtime
+    plan: starter
+    autoDeploy: false
+    healthCheckPath: /health
+    disk:
+      name: empyralis-state
+      mountPath: /var/data/empyralis
+      sizeGB: 10
+    envVars:
+      - key: PORT
+        value: "8001"
+      - key: ORION_RUNTIME_HOST
+        value: "0.0.0.0"
+      - key: ORION_ENV
+        value: production
+      - key: ORION_LOG_FORMAT
+        value: json
+      - key: ORION_PUBLIC_REGISTRATION_ENABLED
+        value: "1"
+      - key: EMPYRALIS_STATE_HOME
+        value: /var/data/empyralis/state
+      - key: DATABASE_URL
+        fromDatabase:
+          name: empyralis-postgres
+          property: connectionString
+      - key: ORION_API_KEY
+        generateValue: true
+      - key: ORION_JWT_SECRET
+        generateValue: true
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: SENTRY_DSN
+        sync: false
+      - key: FRONTEND_ORIGINS
+        sync: false
+      - key: ORION_WHATSAPP_AUTOPILOT_PUBLIC_BASE_URL
+        sync: false
+  - type: web
+    name: empyralis-web
+    runtime: docker
+    dockerContext: ./frontend
+    dockerfilePath: ./frontend/Dockerfile
+    plan: starter
+    autoDeploy: false
+    healthCheckPath: /
+    envVars:
+      - key: PORT
+        value: "3000"
+      - key: NEXT_PUBLIC_API_URL
+        sync: false
+      - key: NEXT_PUBLIC_ORION_API_URL
+        sync: false
+      - key: NEXT_PUBLIC_WS_URL
+        sync: false
+      - key: NEXT_PUBLIC_SENTRY_DSN
+        sync: false
+

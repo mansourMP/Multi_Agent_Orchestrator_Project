@@ -11,6 +11,7 @@ import {
   type WorkspaceBootstrapPayload,
   createWorkspaceBoundaryKey,
 } from '@/lib/workspace/workspace-bootstrap';
+import { WorkspaceServicesProvider } from '@/lib/workspace/workspace-services';
 
 export type WorkspaceBoundaryState = {
   workspaceId: string;
@@ -64,13 +65,15 @@ function WorkspaceBoundaryInstance({
 
   return (
     <WorkspaceBoundaryContext.Provider value={value}>
-      <div
-        data-workspace-boundary={boundaryKey}
-        data-workspace-id={workspaceId}
-        data-shell-profile={shellProfileId}
-      >
-        {children}
-      </div>
+      <WorkspaceServicesProvider boundaryKey={boundaryKey} bootstrap={bootstrap}>
+        <div
+          data-workspace-boundary={boundaryKey}
+          data-workspace-id={workspaceId}
+          data-shell-profile={shellProfileId}
+        >
+          {children}
+        </div>
+      </WorkspaceServicesProvider>
     </WorkspaceBoundaryContext.Provider>
   );
 }

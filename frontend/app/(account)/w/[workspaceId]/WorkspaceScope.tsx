@@ -5,6 +5,7 @@ import { usePathname } from 'next/navigation';
 
 import { useAccountShell } from '@/lib/shell/account-shell-context';
 import { useWorkspaceBoundary } from '@/lib/workspace/workspace-boundary';
+import { useWorkspaceServices } from '@/lib/workspace/workspace-services';
 
 export function WorkspaceScope({
   workspaceId,
@@ -18,6 +19,7 @@ export function WorkspaceScope({
   const pathname = usePathname();
   const { actions, state } = useAccountShell();
   const { boundaryKey, bootstrap, shellProfileId } = useWorkspaceBoundary();
+  const services = useWorkspaceServices();
 
   useEffect(() => {
     if (pathname) {
@@ -64,6 +66,7 @@ export function WorkspaceScope({
             workspaceFromBoundary: bootstrap.workspace,
             shellHints: bootstrap.shellHints,
             runtime: bootstrap.runtime,
+            serviceSnapshot: services.snapshot(),
           },
           null,
           2,

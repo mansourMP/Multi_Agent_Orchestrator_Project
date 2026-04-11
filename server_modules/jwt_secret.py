@@ -29,14 +29,6 @@ def _explicit_secret() -> str:
     return ""
 
 
-def _legacy_seed_secret() -> str:
-    for key in ("ORION_API_KEY", "RUNTIME_KEY"):
-        secret = _normalize_secret(os.getenv(key))
-        if secret:
-            return secret
-    return ""
-
-
 def _read_secret_file(path: Path) -> str:
     try:
         return _normalize_secret(path.read_text(encoding="utf-8"))
@@ -74,12 +66,6 @@ def resolve_jwt_secret() -> str:
             _JWT_SECRET_CACHE = persisted
             return persisted
 
-        seeded = _legacy_seed_secret()
-        if seeded:
-            _JWT_SECRET_CACHE = _write_secret_file(JWT_SECRET_FILE, seeded)
-            return _JWT_SECRET_CACHE
-
         generated = secrets.token_urlsafe(48)
         _JWT_SECRET_CACHE = _write_secret_file(JWT_SECRET_FILE, generated)
         return _JWT_SECRET_CACHE
-

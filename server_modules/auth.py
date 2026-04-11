@@ -565,8 +565,12 @@ def _orion_auth_required() -> bool:
     return (str(raw).strip() != "0") if raw is not None else True
 
 
+def _resolved_environment() -> str:
+    return str(os.getenv("ORION_ENV") or os.getenv("ENV") or "").strip().lower()
+
+
 def _environment_is_production() -> bool:
-    return str(os.getenv("ENV") or "").strip().lower() in {"prod", "production"}
+    return _resolved_environment() in {"prod", "production"}
 
 
 def _local_dev_auth_role() -> str:

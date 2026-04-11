@@ -26,6 +26,7 @@ _TOKEN_VERSION = "empyralis.secret-grant.v1"
 DEFAULT_SECRET_GRANT_TTL_SECONDS = 30
 _SUPPORTED_SECRET_KINDS = {"connector_credential", "provider_credential"}
 _SUPPORTED_CONNECTOR_CLASSES = {"api_connector", "browser_connector", "media_generation_connector"}
+_LOCAL_ENV_TOKENS = {"", "dev", "development", "local", "test", "testing"}
 
 
 @dataclass(frozen=True)
@@ -77,12 +78,25 @@ def _normalize_connector_class(connector_class: Any) -> Optional[str]:
     return token
 
 
+def _resolved_environment() -> str:
+    return str(os.getenv("ORION_ENV") or os.getenv("ENV") or "").strip().lower()
+
+
+def _environment_requires_explicit_secret() -> bool:
+    return _resolved_environment() not in _LOCAL_ENV_TOKENS
+
+
 def _signing_secret() -> bytes:
-    return str(
+    secret = str(
         os.getenv("EMPYRALIS_SECRETS_BROKER_SECRET")
         or os.getenv("EMPYRALIS_TOOL_BROKER_SECRET")
-        or "empyralis-dev-secrets-broker-secret"
-    ).encode("utf-8")
+        or ""
+    ).strip()
+    if secret:
+        return secret.encode("utf-8")
+    if _environment_requires_explicit_secret():
+        raise RuntimeError("EMPYRALIS_SECRETS_BROKER_SECRET or EMPYRALIS_TOOL_BROKER_SECRET is required.")
+    return b"empyralis-dev-secrets-broker-secret"
 
 
 def _b64encode(raw: bytes) -> str:

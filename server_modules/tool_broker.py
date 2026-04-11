@@ -27,6 +27,7 @@ _CONNECTOR_CLASS_ALLOWED_ACTIONS = {
 _TOKEN_VERSION = "empyralis.tool-grant.v1"
 DEFAULT_CAPABILITY_TOKEN_TTL_SECONDS = 120
 MASTER_SCOPE_WILDCARD = "*"
+_LOCAL_ENV_TOKENS = {"", "dev", "development", "local", "test", "testing"}
 
 
 @dataclass(frozen=True)
@@ -85,11 +86,25 @@ def _ordered_unique(values: list[str]) -> list[str]:
     return ordered
 
 
+def _resolved_environment() -> str:
+    return str(os.getenv("ORION_ENV") or os.getenv("ENV") or "").strip().lower()
+
+
+def _environment_requires_explicit_secret() -> bool:
+    return _resolved_environment() not in _LOCAL_ENV_TOKENS
+
+
 def _signing_secret() -> bytes:
-    return str(
+    secret = str(
         os.getenv("EMPYRALIS_TOOL_BROKER_SECRET")
-        or "empyralis-dev-tool-broker-secret"
-    ).encode("utf-8")
+        or os.getenv("EMPYRALIS_SECRETS_BROKER_SECRET")
+        or ""
+    ).strip()
+    if secret:
+        return secret.encode("utf-8")
+    if _environment_requires_explicit_secret():
+        raise RuntimeError("EMPYRALIS_TOOL_BROKER_SECRET or EMPYRALIS_SECRETS_BROKER_SECRET is required.")
+    return b"empyralis-dev-tool-broker-secret"
 
 
 def _b64encode(raw: bytes) -> str:

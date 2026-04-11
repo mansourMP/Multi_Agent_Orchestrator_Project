@@ -6,6 +6,7 @@ Extracted from server.py to reduce hotspot size.
 from __future__ import annotations
 
 import hashlib
+import os
 import threading
 import time
 import uuid
@@ -59,6 +60,19 @@ _TRANSIENT_WORKER_NOTES = {
     "runtime_registered",
     "runtime_session_resume",
 }
+_DURABLE_RUNTIME_SCOPE_FIELDS = (
+    "tenant_id",
+    "workspace_id",
+    "runtime_type",
+    "runtime_role",
+    "install_id",
+    "specialist_key",
+    "instance_id",
+    "capability_digest",
+    "machine_enrollment_scope",
+    "session_scope",
+    "session_scope_key",
+)
 
 
 def _init():
@@ -652,11 +666,16 @@ def _dispatch_touch_claim_heartbeat(
     note: Optional[str] = None,
     progress: bool = False,
 ) -> None:
+    with _server.LOCAL_QUEUE_LOCK:
+        claim = _server.LOCAL_CLAIMED_RUNS.get(run_id) if isinstance(_server.LOCAL_CLAIMED_RUNS.get(run_id), dict) else {}
+        lease_id = str((claim or {}).get("lease_id") or "").strip() or None
+
     def _worker() -> None:
         try:
             run_state_repository.sync_touch_claim_heartbeat(
                 run_id,
                 worker_id,
+                lease_id=lease_id,
                 note=note,
                 progress=progress,
             )
@@ -686,6 +705,9 @@ def _hydrate_worker_from_durable_registry(worker_id: str) -> Optional[Dict[str, 
         existing = _server.LOCAL_WORKER_REGISTRY.get(token) if isinstance(_server.LOCAL_WORKER_REGISTRY.get(token), dict) else {}
         merged = dict(record)
         merged.update(existing)
+        for field in _DURABLE_RUNTIME_SCOPE_FIELDS:
+            if field in record:
+                merged[field] = record[field]
         _server.LOCAL_WORKER_REGISTRY[token] = merged
     return dict(merged)
 
@@ -719,6 +741,10 @@ def _merged_worker_registry_snapshot() -> Dict[str, Dict[str, Any]]:
                 continue
             base = dict(merged.get(worker_id) or {})
             base.update(dict(record))
+            durable = merged.get(worker_id) if isinstance(merged.get(worker_id), dict) else {}
+            for field in _DURABLE_RUNTIME_SCOPE_FIELDS:
+                if field in durable:
+                    base[field] = durable[field]
             merged[worker_id] = base
     return merged
 
@@ -1181,6 +1207,7 @@ def _assert_runtime_session(runtime_id: str, session_token: Optional[str], *, in
         instance_id=instance_id,
         hash_token_fn=lambda token: hashlib.sha256(token.encode("utf-8")).hexdigest(),
         touch_machine_session_fn=_touch_runtime_session,
+        enforce_scope=str(os.getenv("ORION_ENFORCE_RUNTIME_SESSION_SCOPE", "1")).strip().lower() not in {"0", "false", "no", "off"},
     )
     return next_record
 
@@ -1242,7 +1269,6 @@ def _upsert_runtime_registration(
             normalize_policy_mode_fn=_server.normalize_policy_mode,
             capability_digest_fn=_capability_digest,
         )
-        session = _issue_runtime_session(record)
         _apply_runtime_identity_fields(
             record,
             runtime_role=runtime_role,
@@ -1252,6 +1278,7 @@ def _upsert_runtime_registration(
             artifact_channel=artifact_channel,
             local_private_memory_only=local_private_memory_only,
         )
+        session = _issue_runtime_session(record)
         _set_runtime_lifecycle_state(
             record,
             lifecycle_state or str(record.get("lifecycle_state") or "registered"),
@@ -1843,7 +1870,12 @@ def recover_expired_worker_leases_on_startup() -> List[str]:
         run_id = str(item.get("run_id") or "").strip()
         if not run_id:
             continue
-        run_state_repository.sync_release_claim(run_id)
+        released = run_state_repository.sync_release_claim(
+            run_id,
+            lease_id=str(item.get("lease_id") or "").strip() or None,
+        )
+        if not released:
+            continue
         with _server.LOCAL_QUEUE_LOCK:
             _server.LOCAL_CLAIMED_RUNS.pop(run_id, None)
         run = _server.runs.get(run_id)

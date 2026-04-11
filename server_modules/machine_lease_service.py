@@ -37,10 +37,65 @@ class MachineLease:
     metadata: Dict[str, Any] = field(default_factory=dict)
 
 
+def _normalize_machine_enrollment_scope(value: Any, *, default: str = "workspace") -> str:
+    token = str(value or "").strip().lower()
+    if token in {"workspace", "tenant", "global"}:
+        return token
+    return default
+
+
+def _runtime_session_scope(record: Mapping[str, Any]) -> Dict[str, str]:
+    return {
+        "tenant_id": str(record.get("tenant_id") or "default").strip() or "default",
+        "workspace_id": str(record.get("workspace_id") or "default").strip() or "default",
+        "runtime_type": str(record.get("runtime_type") or "local").strip() or "local",
+        "runtime_role": str(record.get("runtime_role") or "generic").strip().lower() or "generic",
+        "install_id": str(record.get("install_id") or "").strip(),
+        "specialist_key": str(record.get("specialist_key") or "").strip(),
+        "instance_id": str(record.get("instance_id") or "").strip(),
+        "capability_digest": str(record.get("capability_digest") or "").strip(),
+        "machine_enrollment_scope": _normalize_machine_enrollment_scope(record.get("machine_enrollment_scope")),
+    }
+
+
+def _runtime_session_scope_key(scope: Mapping[str, Any]) -> str:
+    return "|".join(
+        [
+            str(scope.get("tenant_id") or "default").strip() or "default",
+            str(scope.get("workspace_id") or "default").strip() or "default",
+            str(scope.get("runtime_type") or "local").strip() or "local",
+            str(scope.get("runtime_role") or "generic").strip().lower() or "generic",
+            str(scope.get("install_id") or "").strip(),
+            str(scope.get("specialist_key") or "").strip(),
+            str(scope.get("instance_id") or "").strip(),
+            str(scope.get("capability_digest") or "").strip(),
+            _normalize_machine_enrollment_scope(scope.get("machine_enrollment_scope")),
+        ]
+    )
+
+
+def _worker_runtime_scope_allows_run(record: Mapping[str, Any], run_scope: Mapping[str, Any]) -> bool:
+    if not isinstance(record, Mapping) or not record:
+        return True
+    worker_tenant = str(record.get("tenant_id") or "default").strip() or "default"
+    worker_workspace = str(record.get("workspace_id") or "default").strip() or "default"
+    enrollment_scope = _normalize_machine_enrollment_scope(record.get("machine_enrollment_scope"))
+    run_tenant = str(run_scope.get("tenant_id") or "default").strip() or "default"
+    run_workspace = str(run_scope.get("workspace_id") or "default").strip() or "default"
+    if enrollment_scope == "global":
+        return True
+    if worker_tenant != run_tenant:
+        return False
+    if enrollment_scope == "tenant":
+        return True
+    return worker_workspace == run_workspace
+
+
 def _dispatch_claim_repository_write(
     *,
     run_id: str,
     worker_id: str,
+    lease_id: Optional[str],
     ttl_seconds: int,
     trace_id: Optional[str],
 ) -> None:
@@ -52,6 +107,7 @@ def _dispatch_claim_repository_write(
                     worker_id=worker_id,
                     ttl=max(1, int(ttl_seconds or 0)),
                     trace_id=str(trace_id or "").strip(),
+                    lease_id=str(lease_id or "").strip() or None,
                 ),
                 operation=f"claim_run:{run_id}",
             )
@@ -66,10 +122,10 @@ def _dispatch_claim_repository_write(
     thread.start()
 
 
-def _dispatch_release_repository_write(run_id: str) -> None:
+def _dispatch_release_repository_write(run_id: str, *, lease_id: Optional[str] = None) -> None:
     try:
         run_state_repository.dispatch_repository_call(
-            run_state_repository.release_claim(run_id),
+            run_state_repository.release_claim(run_id, lease_id=str(lease_id or "").strip() or None),
             operation=f"release_claim:{run_id}",
         )
     except Exception as exc:
@@ -212,6 +268,9 @@ def issue_machine_session(
     record["session_token_hash"] = hash_token_fn(token)
     record["session_issued_at"] = issued_at
     record["session_last_authenticated_at"] = issued_at
+    session_scope = _runtime_session_scope(record)
+    record["session_scope"] = dict(session_scope)
+    record["session_scope_key"] = _runtime_session_scope_key(session_scope)
     record["trust_state"] = "verified"
     return {
         "session_token": token,
@@ -233,6 +292,7 @@ def assert_machine_session(
     instance_id: Optional[str],
     hash_token_fn: Callable[[str], str],
     touch_machine_session_fn: Callable[[Dict[str, Any]], None],
+    enforce_scope: bool = True,
 ) -> Dict[str, Any]:
     runtime_token = str(machine_id or "").strip()
     if not runtime_token:
@@ -257,6 +317,27 @@ def assert_machine_session(
         provided_instance = str(instance_id or "").strip()
         if expected_instance and provided_instance and expected_instance != provided_instance:
             raise HTTPException(status_code=409, detail="runtime instance changed. Re-register this machine.")
+        current_scope = _runtime_session_scope(record)
+        expected_scope_key = str(record.get("session_scope_key") or "").strip()
+        if not expected_scope_key:
+            expected_scope = record.get("session_scope") if isinstance(record.get("session_scope"), Mapping) else None
+            if isinstance(expected_scope, Mapping):
+                expected_scope_key = _runtime_session_scope_key(expected_scope)
+                record["session_scope_key"] = expected_scope_key
+            else:
+                record["session_scope"] = dict(current_scope)
+                record["session_scope_key"] = _runtime_session_scope_key(current_scope)
+                expected_scope_key = str(record.get("session_scope_key") or "").strip()
+        current_scope_key = _runtime_session_scope_key(current_scope)
+        if expected_scope_key != current_scope_key:
+            record["session_scope_mismatch"] = {
+                "expected": dict(record.get("session_scope")) if isinstance(record.get("session_scope"), Mapping) else {},
+                "current": dict(current_scope),
+            }
+            if enforce_scope:
+                raise HTTPException(status_code=409, detail="runtime scope changed. Re-register this machine.")
+        else:
+            record.pop("session_scope_mismatch", None)
         touch_machine_session_fn(record)
         machine_registry[runtime_token] = record
         return dict(record)
@@ -533,6 +614,11 @@ def claim_local_machine_lease(
                     capability_filtered = True
                     continue
                 scope = _run_scope_from_payload(run)
+                if not _worker_runtime_scope_allows_run(worker_state, scope):
+                    deferred_run_ids.append(run_id)
+                    remaining_pending.append(run_id)
+                    capability_filtered = True
+                    continue
                 retry_count = max(0, int(metadata.get("local_queue_retry_count") or 0))
                 eligible.append(
                     {
@@ -614,6 +700,7 @@ def claim_local_machine_lease(
         _dispatch_claim_repository_write(
             run_id=claimed_run_id,
             worker_id=worker_id,
+            lease_id=str(claim.get("lease_id") or "").strip() or None,
             ttl_seconds=int(claim.get("lease_seconds") or lease_seconds),
             trace_id=claim_trace_id,
         )
@@ -671,6 +758,7 @@ def release_machine_lease_claim(
     run_id: str,
     *,
     worker_id: Optional[str],
+    lease_id: Optional[str] = None,
     local_queue_lock: Any,
     claimed_runs: Dict[str, Dict[str, Any]],
     persist_local_runtime_state_fn: Optional[Callable[[], Any]] = None,
@@ -681,8 +769,16 @@ def release_machine_lease_claim(
     with local_queue_lock:
         claim = claimed_runs.get(run_id)
         incoming_worker = str(worker_id or "").strip()
+        incoming_lease = str(lease_id or "").strip()
         if isinstance(claim, dict) and incoming_worker and incoming_worker != str(claim.get("worker_id")):
             raise HTTPException(status_code=403, detail="Worker does not own this local run.")
+        if isinstance(claim, dict) and incoming_lease and incoming_lease != str(claim.get("lease_id") or ""):
+            return {
+                "claim": dict(claim),
+                "resolved_worker": incoming_worker or str(claim.get("worker_id") or "").strip(),
+                "released": False,
+                "lease_mismatch": True,
+            }
         resolved_worker = incoming_worker or (
             str(claim.get("worker_id") or "").strip() if isinstance(claim, dict) else ""
         )
@@ -692,7 +788,7 @@ def release_machine_lease_claim(
     if released and callable(persist_local_runtime_state_fn):
         persist_local_runtime_state_fn()
     if released:
-        _dispatch_release_repository_write(run_id)
+        _dispatch_release_repository_write(run_id, lease_id=str((released_claim or {}).get("lease_id") or "").strip() or None)
     if resolved_worker and callable(mark_local_worker_seen_fn) and status_hint:
         mark_local_worker_seen_fn(resolved_worker, None, status_hint, note=note or None)
     return {
@@ -711,14 +807,17 @@ def reconcile_machine_lease_release(
     sync_local_runtime_state_snapshot_fn: Callable[[], Any],
 ) -> bool:
     changed = False
+    released_claim: Optional[Dict[str, Any]] = None
     with local_queue_lock:
         if run_id in local_pending_run_ids:
             local_pending_run_ids[:] = [rid for rid in local_pending_run_ids if rid != run_id]
             changed = True
-        if local_claimed_runs.pop(run_id, None) is not None:
+        popped = local_claimed_runs.pop(run_id, None)
+        if isinstance(popped, dict):
+            released_claim = dict(popped)
             changed = True
     if changed:
-        _dispatch_release_repository_write(run_id)
+        _dispatch_release_repository_write(run_id, lease_id=str((released_claim or {}).get("lease_id") or "").strip() or None)
         sync_local_runtime_state_snapshot_fn()
     return changed
 
@@ -735,17 +834,23 @@ def reconcile_recovered_machine_leases(
     if not recovered_set:
         return False
     changed = False
+    released_claims: Dict[str, Dict[str, Any]] = {}
     with local_queue_lock:
         next_pending = [run_id for run_id in local_pending_run_ids if run_id not in recovered_set]
         if next_pending != list(local_pending_run_ids):
             local_pending_run_ids[:] = next_pending
             changed = True
         for run_id in recovered_set:
-            if local_claimed_runs.pop(run_id, None) is not None:
+            popped = local_claimed_runs.pop(run_id, None)
+            if isinstance(popped, dict):
+                released_claims[run_id] = dict(popped)
                 changed = True
     if changed:
         for run_id in recovered_set:
-            _dispatch_release_repository_write(run_id)
+            _dispatch_release_repository_write(
+                run_id,
+                lease_id=str((released_claims.get(run_id) or {}).get("lease_id") or "").strip() or None,
+            )
         persist_local_runtime_state_fn()
     return changed
 
@@ -792,7 +897,7 @@ def cleanup_stale_machine_leases(
             machine_id = str(claim.get("machine_id") or worker_id or "").strip() or None
             claimed_runs.pop(run_id, None)
             changed = True
-            _dispatch_release_repository_write(run_id)
+            _dispatch_release_repository_write(run_id, lease_id=str(claim.get("lease_id") or "").strip() or None)
             if worker_id:
                 worker_state = (
                     worker_registry.get(worker_id)

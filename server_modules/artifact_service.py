@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import json
 import mimetypes
 import os
@@ -9,7 +9,7 @@ from pathlib import Path
 import re
 import shutil
 import time
-from typing import Any, Dict, Mapping, Optional
+from typing import Any, Dict, List, Mapping, Optional
 from urllib.parse import urlparse
 import uuid
 
@@ -30,12 +30,17 @@ ARTIFACT_URI_SCHEME = "artifact"
 FILESYSTEM_ARTIFACT_STORAGE_BACKEND = "filesystem_object_store"
 S3_ARTIFACT_STORAGE_BACKEND = "s3_compatible_object_store"
 ARTIFACT_STORAGE_BACKEND = FILESYSTEM_ARTIFACT_STORAGE_BACKEND
+ARTIFACT_AUTHORITY_SCOPE = "artifact_records_and_objects_only"
 DEFAULT_RETENTION_POLICY = {
     "mode": "default",
     "retention_days": None,
     "expires_at": None,
     "policy_status": "placeholder",
 }
+
+# Artifact storage is authoritative only for artifact object/blob storage and
+# canonical artifact records. It is not a source of truth for runtime sessions,
+# live runs, approvals, outbox delivery, or local claim ownership.
 
 
 def _utc_now_iso() -> str:
@@ -728,3 +733,166 @@ def resolve_artifact_content_path(
     except Exception:
         return None
     return candidate if candidate.exists() and candidate.is_file() else None
+
+
+def _iter_artifact_record_payloads() -> List[Dict[str, Any]]:
+    items: List[Dict[str, Any]] = []
+    for path in sorted(_artifact_records_root().glob("*.json")):
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        if isinstance(payload, dict):
+            items.append(payload)
+    return items
+
+
+def _artifact_payload_matches_scope(
+    payload: Mapping[str, Any],
+    *,
+    tenant_id: Optional[str] = None,
+    workspace_id: Optional[str] = None,
+    run_id: Optional[str] = None,
+) -> bool:
+    if not isinstance(payload, Mapping):
+        return False
+    if str(tenant_id or "").strip() and str(payload.get("tenant_id") or "").strip() != str(tenant_id or "").strip():
+        return False
+    if str(workspace_id or "").strip() and str(payload.get("workspace_id") or "").strip() != str(workspace_id or "").strip():
+        return False
+    if str(run_id or "").strip() and str(payload.get("run_id") or "").strip() != str(run_id or "").strip():
+        return False
+    return True
+
+
+def list_artifact_records(
+    *,
+    tenant_id: Optional[str] = None,
+    workspace_id: Optional[str] = None,
+    run_id: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    return [
+        dict(item)
+        for item in _iter_artifact_record_payloads()
+        if _artifact_payload_matches_scope(
+            item,
+            tenant_id=tenant_id,
+            workspace_id=workspace_id,
+            run_id=run_id,
+        )
+    ]
+
+
+def build_artifact_backup_manifest() -> Dict[str, Any]:
+    return {
+        "store_id": "artifact_store",
+        "authority_scope": ARTIFACT_AUTHORITY_SCOPE,
+        "storage_backend": configured_artifact_storage_backend(),
+        "records_root": str(_artifact_records_root()),
+        "objects_root": str(_artifact_objects_root()),
+        "cache_root": str(_artifact_cache_root()),
+        "export_fn": "server_modules.artifact_service.export_artifact_scope",
+        "retention_plan_fn": "server_modules.artifact_service.plan_artifact_retention",
+        "restore_rehearsal": "server_modules.artifact_service.rehearse_artifact_restore",
+    }
+
+
+def export_artifact_scope(
+    *,
+    tenant_id: Optional[str] = None,
+    workspace_id: Optional[str] = None,
+    run_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    records = list_artifact_records(tenant_id=tenant_id, workspace_id=workspace_id, run_id=run_id)
+    return {
+        "tenant_id": str(tenant_id or "").strip() or None,
+        "workspace_id": str(workspace_id or "").strip() or None,
+        "run_id": str(run_id or "").strip() or None,
+        "record_count": len(records),
+        "records": records,
+    }
+
+
+def _parse_iso_timestamp(value: Any) -> Optional[datetime]:
+    token = str(value or "").strip()
+    if not token:
+        return None
+    try:
+        return datetime.fromisoformat(token.replace("Z", "+00:00")).astimezone(timezone.utc)
+    except Exception:
+        return None
+
+
+def _artifact_retention_deadline(payload: Mapping[str, Any]) -> Optional[datetime]:
+    retention = payload.get("retention")
+    if not isinstance(retention, Mapping):
+        retention = {}
+    explicit_expires_at = _parse_iso_timestamp(retention.get("expires_at"))
+    if explicit_expires_at is not None:
+        return explicit_expires_at
+    retention_days = retention.get("retention_days")
+    if isinstance(retention_days, int) and retention_days > 0:
+        created_at = _parse_iso_timestamp(payload.get("created_at"))
+        if created_at is not None:
+            return created_at + timedelta(days=int(retention_days))
+    return None
+
+
+def plan_artifact_retention(
+    *,
+    now_iso: Optional[str] = None,
+    tenant_id: Optional[str] = None,
+    workspace_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    now_dt = _parse_iso_timestamp(now_iso) or datetime.now(timezone.utc)
+    expired: List[Dict[str, Any]] = []
+    retained: List[Dict[str, Any]] = []
+    for payload in list_artifact_records(tenant_id=tenant_id, workspace_id=workspace_id):
+        deadline = _artifact_retention_deadline(payload)
+        item = {
+            "artifact_id": str(payload.get("artifact_id") or "").strip(),
+            "run_id": str(payload.get("run_id") or "").strip() or None,
+            "tenant_id": str(payload.get("tenant_id") or "").strip() or None,
+            "workspace_id": str(payload.get("workspace_id") or "").strip() or None,
+            "expires_at": deadline.isoformat().replace("+00:00", "Z") if deadline is not None else None,
+            "retention": dict(payload.get("retention") or {}),
+        }
+        if deadline is not None and deadline <= now_dt:
+            expired.append(item)
+        else:
+            retained.append(item)
+    return {
+        "evaluated_at": now_dt.isoformat().replace("+00:00", "Z"),
+        "tenant_id": str(tenant_id or "").strip() or None,
+        "workspace_id": str(workspace_id or "").strip() or None,
+        "expired_candidates": expired,
+        "expired_count": len(expired),
+        "retained_count": len(retained),
+    }
+
+
+def rehearse_artifact_restore(
+    *,
+    tenant_id: Optional[str] = None,
+    workspace_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    records = list_artifact_records(tenant_id=tenant_id, workspace_id=workspace_id)
+    checked_ids: List[str] = []
+    missing_content_ids: List[str] = []
+    for payload in records:
+        reference = str(payload.get("uri") or payload.get("artifact_id") or "").strip()
+        artifact_id = str(payload.get("artifact_id") or "").strip()
+        if not reference or not artifact_id:
+            continue
+        checked_ids.append(artifact_id)
+        if resolve_artifact_content_path(reference) is None:
+            missing_content_ids.append(artifact_id)
+    return {
+        "ok": len(missing_content_ids) == 0,
+        "store_id": "artifact_store",
+        "tenant_id": str(tenant_id or "").strip() or None,
+        "workspace_id": str(workspace_id or "").strip() or None,
+        "checked_count": len(checked_ids),
+        "checked_ids": checked_ids,
+        "missing_content_ids": missing_content_ids,
+    }

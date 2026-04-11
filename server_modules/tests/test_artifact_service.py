@@ -173,3 +173,88 @@ class ArtifactServiceTests(TestCase):
             self.assertIsNotNone(target)
             self.assertEqual(target.read_text(encoding="utf-8"), "hello from s3 backend")
             self.assertIn(("empyralis-artifacts", metadata["object_key"]), fake_client.objects)
+
+    def test_export_artifact_scope_filters_records_by_workspace(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            store_root = Path(tempdir) / "object-store"
+            with patch.dict(os.environ, {"EMPYRALIS_OBJECT_STORAGE_ROOT": str(store_root)}, clear=False):
+                artifact_service.store_artifact_bytes(
+                    b"one",
+                    run_id="run-1",
+                    kind="report",
+                    file_name="one.txt",
+                    tenant_id="tenant-1",
+                    workspace_id="workspace-a",
+                )
+                artifact_service.store_artifact_bytes(
+                    b"two",
+                    run_id="run-2",
+                    kind="report",
+                    file_name="two.txt",
+                    tenant_id="tenant-1",
+                    workspace_id="workspace-b",
+                )
+
+                export_payload = artifact_service.export_artifact_scope(
+                    tenant_id="tenant-1",
+                    workspace_id="workspace-a",
+                )
+
+        self.assertEqual(export_payload["record_count"], 1)
+        self.assertEqual(export_payload["records"][0]["workspace_id"], "workspace-a")
+
+    def test_plan_artifact_retention_marks_expired_records(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            store_root = Path(tempdir) / "object-store"
+            with patch.dict(os.environ, {"EMPYRALIS_OBJECT_STORAGE_ROOT": str(store_root)}, clear=False):
+                artifact_service.store_artifact_bytes(
+                    b"expired",
+                    run_id="run-1",
+                    kind="report",
+                    file_name="expired.txt",
+                    tenant_id="tenant-1",
+                    workspace_id="workspace-1",
+                    retention_days=1,
+                    created_at="2026-04-01T00:00:00Z",
+                )
+                artifact_service.store_artifact_bytes(
+                    b"active",
+                    run_id="run-2",
+                    kind="report",
+                    file_name="active.txt",
+                    tenant_id="tenant-1",
+                    workspace_id="workspace-1",
+                    retention_days=30,
+                    created_at="2026-04-12T00:00:00Z",
+                )
+
+                plan = artifact_service.plan_artifact_retention(
+                    tenant_id="tenant-1",
+                    workspace_id="workspace-1",
+                    now_iso="2026-04-12T00:00:00Z",
+                )
+
+        self.assertEqual(plan["expired_count"], 1)
+        self.assertEqual(plan["retained_count"], 1)
+        self.assertEqual(plan["expired_candidates"][0]["run_id"], "run-1")
+
+    def test_rehearse_artifact_restore_reports_ok_for_stored_files(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            store_root = Path(tempdir) / "object-store"
+            with patch.dict(os.environ, {"EMPYRALIS_OBJECT_STORAGE_ROOT": str(store_root)}, clear=False):
+                record = artifact_service.store_artifact_bytes(
+                    b"restore-me",
+                    run_id="run-restore",
+                    kind="report",
+                    file_name="restore.txt",
+                    tenant_id="tenant-1",
+                    workspace_id="workspace-1",
+                )
+                rehearsal = artifact_service.rehearse_artifact_restore(
+                    tenant_id="tenant-1",
+                    workspace_id="workspace-1",
+                )
+
+        self.assertTrue(rehearsal["ok"])
+        self.assertEqual(rehearsal["checked_count"], 1)
+        self.assertEqual(rehearsal["checked_ids"], [record.artifact_id])

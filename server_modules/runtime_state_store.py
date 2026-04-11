@@ -8,9 +8,44 @@ from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional
 import sqlite3
 
-# SQLite is retained only for local-only offline cache concerns such as queue
-# recovery, chat stream state, channel events, and runtime sessions.
-# Live run truth and archived run history are durably sourced from Postgres.
+# SQLite is retained only for explicit local checkpoint and offline cache
+# concerns. It is not the authoritative server-side source of truth for live
+# runs, approvals, outbox delivery, local claim ownership, or runtime sessions.
+# Those classes are durably sourced from Postgres; SQLite remains a local-only
+# checkpoint/mirror layer for queue recovery, chat stream state, channel events,
+# and worker-side recovery flows.
+
+SQLITE_CHECKPOINT_ONLY_STATE_CLASSES = frozenset(
+    {
+        "local_pending_queue",
+        "local_claims",
+        "runtime_registrations",
+        "runtime_sessions",
+        "runtime_session_turns",
+        "channel_events",
+        "chat_stream_state",
+        "notifications",
+        "notification_devices",
+        "notification_delivery_statuses",
+    }
+)
+
+RUNTIME_CHECKPOINT_SQLITE_TABLES = (
+    "live_runs",
+    "local_pending_queue",
+    "local_claims",
+    "runtime_registrations",
+    "run_history",
+    "channel_events",
+    "chat_stream_state",
+    "runtime_sessions",
+    "runtime_session_turns",
+    "notifications",
+    "notification_reads",
+    "notification_devices",
+    "notification_deliveries",
+    "local_app_state",
+)
 
 
 def _parse_ts(raw: Any) -> float:
@@ -1000,6 +1035,8 @@ def replace_local_runtime_state(
 
 
 def load_local_runtime_state(db_path: Path) -> Dict[str, Any]:
+    # This is an explicit local checkpoint restore seam. It does not define
+    # server-side truth for runs, approvals, outbox rows, or runtime sessions.
     with _connect(db_path) as conn:
         queue_rows = conn.execute(
             """
@@ -1874,4 +1911,41 @@ def put_local_app_state(
         "state_key": token,
         "value": value,
         "updated_at": timestamp,
+    }
+
+
+def build_runtime_checkpoint_manifest(db_path: Path) -> Dict[str, Any]:
+    target = Path(db_path).expanduser().resolve()
+    return {
+        "store_id": "runtime_checkpoint_sqlite",
+        "authority_mode": "checkpoint_restore_only",
+        "db_path": str(target),
+        "initializer": "server_modules.runtime_state_store.init_runtime_state_db",
+        "restore_rehearsal": "server_modules.runtime_state_store.rehearse_runtime_checkpoint_restore",
+        "restore_loader": "server_modules.runtime_state_store.load_local_runtime_state",
+        "checkpoint_only_state_classes": sorted(SQLITE_CHECKPOINT_ONLY_STATE_CLASSES),
+        "sqlite_tables": list(RUNTIME_CHECKPOINT_SQLITE_TABLES),
+    }
+
+
+def rehearse_runtime_checkpoint_restore(db_path: Path) -> Dict[str, Any]:
+    target = Path(db_path).expanduser().resolve()
+    init_runtime_state_db(target)
+    restored = load_local_runtime_state(target)
+    table_counts: Dict[str, int] = {}
+    with _connect(target) as conn:
+        for table_name in RUNTIME_CHECKPOINT_SQLITE_TABLES:
+            row = conn.execute(f"SELECT COUNT(*) AS count FROM {table_name}").fetchone()
+            table_counts[table_name] = int((row["count"] if row is not None else 0) or 0)
+    return {
+        "ok": True,
+        "store_id": "runtime_checkpoint_sqlite",
+        "db_path": str(target),
+        "table_counts": table_counts,
+        "restored_state_summary": {
+            "pending_run_count": len(list(restored.get("pending_run_ids") or [])),
+            "claimed_run_count": len(dict(restored.get("claimed_runs") or {})),
+            "runtime_registration_count": len(dict(restored.get("runtime_registrations") or {})),
+        },
+        "checkpoint_only_state_classes": sorted(SQLITE_CHECKPOINT_ONLY_STATE_CLASSES),
     }

@@ -1,13 +1,16 @@
+import asyncio
 import queue
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
 
-from server_modules import outbox_service, run_state_repository, runs_core, runs_engine, runs_execution, runs_output, runtime_runs_api, shared
+from server_modules import outbox_service, run_service, run_state_repository, runs_core, runs_engine, runs_execution, runs_output, runtime_runs_api, shared
 from server_modules.runtime_state_store import (
+    build_runtime_checkpoint_manifest,
     init_runtime_state_db,
     load_local_runtime_state,
+    rehearse_runtime_checkpoint_restore,
 )
 
 
@@ -23,12 +26,28 @@ class RuntimeDurableStateTests(unittest.TestCase):
         ]
         self.live_run_store: dict[str, dict] = {}
         self.archive_store: dict[str, dict] = {}
+        self.transitions: list[dict] = []
         self.patchers.extend(
             [
                 patch.object(
                     run_state_repository,
+                    "sync_create_live_run_initial",
+                    side_effect=self._sync_create_live_run_initial,
+                ),
+                patch.object(
+                    run_state_repository,
                     "sync_upsert_live_run",
                     side_effect=self._sync_upsert_live_run,
+                ),
+                patch.object(
+                    run_state_repository,
+                    "sync_record_transition",
+                    side_effect=self._sync_record_transition,
+                ),
+                patch.object(
+                    run_state_repository,
+                    "update_live_run_if_version_matches",
+                    side_effect=self._update_live_run_if_version_matches,
                 ),
                 patch.object(
                     run_state_repository,
@@ -49,6 +68,11 @@ class RuntimeDurableStateTests(unittest.TestCase):
                     run_state_repository,
                     "sync_list_run_archive",
                     side_effect=self._sync_list_run_archive,
+                ),
+                patch.object(
+                    run_state_repository,
+                    "dispatch_repository_call",
+                    side_effect=self._dispatch_repository_call,
                 ),
             ]
         )
@@ -102,10 +126,152 @@ class RuntimeDurableStateTests(unittest.TestCase):
         self.assertEqual(len(live_runs), 1)
         self.assertEqual(live_runs[0]["run_id"], run_id)
         self.assertEqual(live_runs[0]["status"], "queued_local")
+        self.assertEqual(live_runs[0]["_durable_version"], 1)
 
         local_state = load_local_runtime_state(self.db_path)
         self.assertEqual(local_state["pending_run_ids"], [run_id])
         self.assertEqual(local_state["claimed_runs"], {})
+
+    def test_create_run_refuses_memory_first_registration_when_initial_durable_insert_fails(self):
+        with patch.object(
+            run_state_repository,
+            "sync_create_live_run_initial",
+            side_effect=run_state_repository.RunStatePersistenceError("db down"),
+        ):
+            with self.assertRaises(run_state_repository.RunStatePersistenceError):
+                runs_execution.create_run(
+                    "orion",
+                    {
+                        "workspace_id": "ws-local",
+                        "user_goal": "Summarize inbox",
+                        "metadata": {"execution_target_selected": "local_companion"},
+                    },
+                )
+
+        self.assertEqual(self.live_run_store, {})
+        self.assertEqual(runs_execution.runs, {})
+        local_state = load_local_runtime_state(self.db_path)
+        self.assertEqual(local_state["pending_run_ids"], [])
+        self.assertEqual(local_state["claimed_runs"], {})
+
+    def test_load_local_runtime_state_remains_explicit_checkpoint_restore_path(self):
+        outbox_service.persist_local_runtime_state(
+            db_path=self.db_path,
+            pending_run_ids=["run-local-1"],
+            claimed_runs={
+                "run-local-2": {
+                    "worker_id": "worker-1",
+                    "claimed_at": "2026-04-12T00:00:00Z",
+                    "lease_id": "lease-1",
+                }
+            },
+            runtime_registrations={
+                "worker-1": {
+                    "runtime_id": "worker-1",
+                    "status": "busy",
+                    "current_run_id": "run-local-2",
+                }
+            },
+        )
+
+        local_state = load_local_runtime_state(self.db_path)
+
+        self.assertEqual(local_state["pending_run_ids"], ["run-local-1"])
+        self.assertEqual(local_state["claimed_runs"]["run-local-2"]["lease_id"], "lease-1")
+        self.assertEqual(local_state["runtime_registrations"]["worker-1"]["current_run_id"], "run-local-2")
+
+    def test_build_runtime_checkpoint_manifest_declares_checkpoint_only_store(self):
+        manifest = build_runtime_checkpoint_manifest(self.db_path)
+
+        self.assertEqual(manifest["store_id"], "runtime_checkpoint_sqlite")
+        self.assertEqual(manifest["authority_mode"], "checkpoint_restore_only")
+        self.assertIn("local_pending_queue", manifest["sqlite_tables"])
+        self.assertIn("notifications", manifest["sqlite_tables"])
+        self.assertIn("runtime_registrations", manifest["checkpoint_only_state_classes"])
+
+    def test_rehearse_runtime_checkpoint_restore_reports_counts_and_ok(self):
+        outbox_service.persist_local_runtime_state(
+            db_path=self.db_path,
+            pending_run_ids=["run-local-1"],
+            claimed_runs={
+                "run-local-2": {
+                    "worker_id": "worker-1",
+                    "claimed_at": "2026-04-12T00:00:00Z",
+                    "lease_id": "lease-1",
+                }
+            },
+            runtime_registrations={
+                "worker-1": {
+                    "runtime_id": "worker-1",
+                    "status": "busy",
+                    "current_run_id": "run-local-2",
+                }
+            },
+        )
+
+        rehearsal = rehearse_runtime_checkpoint_restore(self.db_path)
+
+        self.assertTrue(rehearsal["ok"])
+        self.assertEqual(rehearsal["store_id"], "runtime_checkpoint_sqlite")
+        self.assertEqual(rehearsal["restored_state_summary"]["pending_run_count"], 1)
+        self.assertEqual(rehearsal["restored_state_summary"]["claimed_run_count"], 1)
+        self.assertEqual(rehearsal["restored_state_summary"]["runtime_registration_count"], 1)
+        self.assertIn("local_claims", rehearsal["table_counts"])
+
+    def test_stale_snapshot_does_not_overwrite_newer_durable_state(self):
+        run_id = runs_execution.create_run(
+            "orion",
+            {
+                "workspace_id": "ws-local",
+                "user_goal": "Summarize inbox",
+                "metadata": {"execution_target_selected": "local_companion"},
+            },
+        )
+        current = dict(self.live_run_store[run_id])
+        stale = dict(current)
+        stale["status"] = "starting"
+        stale["_durable_version"] = 0
+        self._dispatch_repository_call(
+            run_state_repository.update_live_run_if_version_matches(
+                run_id,
+                stale["workspace_id"],
+                stale["tenant_id"],
+                stale["status"],
+                stale,
+                stale.get("trace_id") or "",
+                expected_version=0,
+            ),
+            operation="stale_snapshot_test",
+        )
+
+        self.assertEqual(self.live_run_store[run_id]["status"], "queued_local")
+        self.assertEqual(self.live_run_store[run_id]["_durable_version"], 1)
+
+    def test_post_insert_activation_failure_leaves_durable_row_registered(self):
+        with self.assertRaises(RuntimeError):
+            run_service.create_live_run(
+                "orion",
+                {"workspace_id": "ws-remote", "user_goal": "Run remotely", "metadata": {}},
+                runtime_db_path=self.db_path,
+                sync_acp_manager_paths_fn=shared.sync_acp_manager_paths,
+                selected_execution_target_from_context_fn=lambda context: "hosted",
+                runs_by_id=runs_execution.runs,
+                run_queue_index=runs_execution.RUN_QUEUE_INDEX,
+                metrics_inc_fn=lambda *_args, **_kwargs: None,
+                persist_live_run_state_fn=runs_output._persist_live_run_state,
+                hydrate_run_memory_context_fn=lambda *_args, **_kwargs: None,
+                enqueue_local_companion_run_fn=lambda *_args, **_kwargs: None,
+                start_background_run_fn=lambda _run_id: (_ for _ in ()).throw(RuntimeError("dispatch failed")),
+                local_companion_target="local_companion",
+                provider_profiles={},
+                memory_enabled=False,
+                utc_now_iso_fn=lambda: "2026-04-12T00:00:00Z",
+            )
+
+        self.assertEqual(len(self.live_run_store), 1)
+        only_run = next(iter(self.live_run_store.values()))
+        self.assertEqual(only_run["status"], "starting")
+        self.assertEqual(only_run["_durable_version"], 0)
 
     def test_load_live_runtime_state_restores_waiting_confirmation(self):
         run_id = "run-waiting-1"
@@ -445,7 +611,49 @@ class RuntimeDurableStateTests(unittest.TestCase):
         snapshot["tenant_id"] = tenant_id
         snapshot["status"] = state
         snapshot["trace_id"] = trace_id
+        if "_durable_version" in snapshot:
+            snapshot["_durable_version"] = int(snapshot.get("_durable_version") or 0) + 1
+        else:
+            snapshot["_durable_version"] = int(self.live_run_store.get(run_id, {}).get("_durable_version") or 0)
         self.live_run_store[run_id] = snapshot
+
+    def _sync_create_live_run_initial(
+        self,
+        run_id: str,
+        workspace_id: str,
+        tenant_id: str,
+        state: str,
+        payload: dict,
+        trace_id: str,
+    ) -> dict:
+        snapshot = dict(payload)
+        snapshot["run_id"] = run_id
+        snapshot["workspace_id"] = workspace_id
+        snapshot["tenant_id"] = tenant_id
+        snapshot["status"] = state
+        snapshot["trace_id"] = trace_id
+        snapshot["_durable_version"] = 0
+        snapshot["_durable_registered_at"] = "2026-04-12T00:00:00Z"
+        self.live_run_store[run_id] = snapshot
+        return {"version": 0, "registered_at": "2026-04-12T00:00:00Z"}
+
+    def _sync_record_transition(
+        self,
+        run_id: str,
+        from_state: str,
+        to_state: str,
+        actor: str,
+        trace_id: str,
+    ) -> None:
+        self.transitions.append(
+            {
+                "run_id": run_id,
+                "from_state": from_state,
+                "to_state": to_state,
+                "actor": actor,
+                "trace_id": trace_id,
+            }
+        )
 
     def _sync_delete_live_run(self, run_id: str) -> None:
         self.live_run_store.pop(run_id, None)
@@ -463,6 +671,50 @@ class RuntimeDurableStateTests(unittest.TestCase):
     def _sync_list_run_archive(self, limit: int = 200) -> list[dict]:
         items = list(self.archive_store.values())
         return [dict(item) for item in items[: max(1, int(limit or 0))]]
+
+    async def _update_live_run_if_version_matches(
+        self,
+        run_id: str,
+        workspace_id: str,
+        tenant_id: str,
+        state: str,
+        payload: dict,
+        trace_id: str,
+        *,
+        expected_version: int,
+    ) -> int | None:
+        existing = dict(self.live_run_store.get(run_id) or {})
+        if not existing:
+            return None
+        existing_version = int(existing.get("_durable_version") or 0)
+        desired = dict(payload)
+        desired["run_id"] = run_id
+        desired["workspace_id"] = workspace_id
+        desired["tenant_id"] = tenant_id
+        desired["status"] = state
+        desired["trace_id"] = trace_id
+        desired["_durable_version"] = int(expected_version or 0) + 1
+        if existing_version == int(expected_version or 0):
+            self.live_run_store[run_id] = desired
+            return desired["_durable_version"]
+        existing_compare = dict(existing)
+        existing_compare.pop("_durable_version", None)
+        desired_compare = dict(desired)
+        desired_compare.pop("_durable_version", None)
+        if existing_version >= desired["_durable_version"] and existing_compare == desired_compare:
+            return existing_version
+        return None
+
+    def _dispatch_repository_call(self, awaitable, *, operation: str) -> None:
+        try:
+            asyncio.run(awaitable)
+        except run_state_repository.RunStateVersionConflictError:
+            return
+        except Exception:
+            close_fn = getattr(awaitable, "close", None)
+            if callable(close_fn):
+                close_fn()
+            return
 
 
 if __name__ == "__main__":

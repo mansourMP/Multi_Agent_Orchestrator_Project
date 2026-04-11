@@ -11,7 +11,9 @@ import os
 import shutil
 import subprocess
 import base64
+import sys
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
 from urllib.parse import quote_plus
 
@@ -369,9 +371,6 @@ def resolve_provider_adapter(provider: Any, credentials: Optional[Dict[str, Any]
     adapter_key = provider_id
     if provider_id == "anthropic" and auth_mode == "local_cli":
         adapter_key = "claude_code_cli"
-    if provider_id == "openai" and _openai_credential_type(credentials) == "codex_token":
-        adapter_key = "openai-codex"
-        resolved_provider_id = "openai-codex"
     if provider_id == "openai-codex":
         adapter_key = "openai-codex"
     adapter = PROVIDER_ADAPTERS.get(adapter_key)
@@ -398,6 +397,17 @@ OPENAI_CODEX_DIRECT_AUTH_ERROR = (
     "This is a Codex OAuth token. Use openai-codex provider or set a direct OpenAI API key."
 )
 PROVIDER_LIVE_PROBE_PROMPT = "Reply with OK. Do not use tools."
+
+
+def _load_openai_codex_transport():
+    scripts_dir = Path(__file__).resolve().parents[1] / "scripts"
+    if str(scripts_dir) not in sys.path:
+        sys.path.insert(0, str(scripts_dir))
+    try:
+        import orion_local_worker_llm as worker_llm  # type: ignore
+    except Exception as exc:
+        raise RuntimeError(f"Could not load Codex transport: {exc}") from exc
+    return worker_llm
 
 
 class ProviderAdapter:
@@ -762,45 +772,48 @@ class OpenAICodexAdapter(ProviderAdapter):
         self._oauth_token(credentials)
         return list(OPENAI_CODEX_MODEL_CATALOG)
 
-    def generate(self, system_prompt: str, user_input: str, model: str, credentials: Dict[str, Any]) -> str:
-        _ = system_prompt, user_input, model, credentials
-        raise RuntimeError("openai-codex uses the Codex transport and is not available through the direct adapter.")
+    def _credential_override(self, credentials: Dict[str, Any], token: str) -> Dict[str, str]:
+        return {
+            "oauth_token": token,
+            "account_id": str(credentials.get("account_id") or "").strip() or codex_account_id_from_token(token),
+            "email": str(credentials.get("email") or "").strip(),
+            "profile_name": str(credentials.get("profile_name") or "").strip(),
+        }
 
-    def probe(self, credentials: Dict[str, Any]) -> Dict[str, Any]:
+    def _transport_text(
+        self,
+        system_prompt: str,
+        user_input: str,
+        model: str,
+        credentials: Dict[str, Any],
+    ) -> tuple[str, Optional[Dict[str, Any]], str]:
         token = self._oauth_token(credentials)
-        selected_model = self.probe_model(credentials) or "gpt-5.4"
-        try:
-            import sys
-            from pathlib import Path
-
-            scripts_dir = Path(__file__).resolve().parents[1] / "scripts"
-            if str(scripts_dir) not in sys.path:
-                sys.path.insert(0, str(scripts_dir))
-            import orion_local_worker_llm as worker_llm  # type: ignore
-        except Exception as exc:
-            raise RuntimeError(f"Could not load Codex probe transport: {exc}") from exc
-
-        text, _usage, used_model, error = worker_llm.openai_codex_backend_text(
-            "",
-            PROVIDER_LIVE_PROBE_PROMPT,
+        selected_model = str(model or self.probe_model(credentials) or "gpt-5.4").strip() or "gpt-5.4"
+        worker_llm = _load_openai_codex_transport()
+        text, usage, used_model, error = worker_llm.openai_codex_backend_text(
+            system_prompt,
+            user_input,
             model_override=selected_model,
-            credential_override={
-                "oauth_token": token,
-                "account_id": str(credentials.get("account_id") or "").strip() or codex_account_id_from_token(token),
-                "email": str(credentials.get("email") or "").strip(),
-                "profile_name": str(credentials.get("profile_name") or "").strip(),
-            },
+            credential_override=self._credential_override(credentials, token),
         )
         if error:
             raise RuntimeError(str(error))
         reply = str(text or "").strip()
         if not reply:
-            raise RuntimeError("openai-codex probe returned empty output.")
+            raise RuntimeError("openai-codex returned empty output.")
+        return reply, usage if isinstance(usage, dict) else None, str(used_model or selected_model)
+
+    def generate(self, system_prompt: str, user_input: str, model: str, credentials: Dict[str, Any]) -> str:
+        reply, _usage, _used_model = self._transport_text(system_prompt, user_input, model, credentials)
+        return reply
+
+    def probe(self, credentials: Dict[str, Any]) -> Dict[str, Any]:
+        reply, _usage, used_model = self._transport_text("", PROVIDER_LIVE_PROBE_PROMPT, self.probe_model(credentials) or "gpt-5.4", credentials)
         return {
             "ok": True,
             "status": 200,
             "message": "Live probe succeeded.",
-            "model": str(used_model or selected_model),
+            "model": used_model,
             "reply": reply,
         }
 
@@ -1135,14 +1148,33 @@ def _load_provider_profiles():
         _server.ACP_MANAGER.reload_secondary_state()
 
 
-def _profile_cooldown_seconds_for_error(raw_error: str) -> int:
+def classify_profile_failure(raw_error: str) -> Dict[str, Any]:
     _init()
-    lowered = raw_error.lower()
+    lowered = str(raw_error or "").lower()
     if "401" in lowered or "403" in lowered or "api_key" in lowered or "unauthorized" in lowered:
-        return max(60, _server.ORION_PROFILE_COOLDOWN_AUTH_SECONDS)
+        return {
+            "failure_class": "auth",
+            "retryable": False,
+            "backpressure": False,
+            "cooldown_seconds": max(60, _server.ORION_PROFILE_COOLDOWN_AUTH_SECONDS),
+        }
     if "429" in lowered or "rate limit" in lowered:
-        return max(30, _server.ORION_PROFILE_COOLDOWN_RATE_LIMIT_SECONDS)
-    return max(15, _server.ORION_PROFILE_COOLDOWN_TRANSIENT_SECONDS)
+        return {
+            "failure_class": "rate_limited",
+            "retryable": True,
+            "backpressure": True,
+            "cooldown_seconds": max(30, _server.ORION_PROFILE_COOLDOWN_RATE_LIMIT_SECONDS),
+        }
+    return {
+        "failure_class": "transient",
+        "retryable": True,
+        "backpressure": False,
+        "cooldown_seconds": max(15, _server.ORION_PROFILE_COOLDOWN_TRANSIENT_SECONDS),
+    }
+
+
+def _profile_cooldown_seconds_for_error(raw_error: str) -> int:
+    return int(classify_profile_failure(raw_error).get("cooldown_seconds") or 15)
 
 
 def _profile_ready(profile: Dict[str, Any], ref: Optional[datetime] = None) -> bool:
@@ -1456,3 +1488,548 @@ def _build_provider_credential_candidates(context: Dict[str, Any], metadata: Dic
         seen_labels.add("local-ollama")
 
     return candidates
+
+
+def _profile_health_value(profile: Dict[str, Any], ref: Optional[datetime] = None) -> str:
+    if not bool(profile.get("enabled", True)):
+        return "disabled"
+    now = ref or _utc_now()
+    cooldown_until = _parse_utc_ts(profile.get("cooldown_until"))
+    if cooldown_until is not None and cooldown_until > now:
+        return "cooldown"
+    return "healthy"
+
+
+def _profile_has_unresolved_failure(profile: Dict[str, Any]) -> bool:
+    last_error = str(profile.get("last_error") or "").strip()
+    if not last_error:
+        return False
+    last_failure_at = _parse_utc_ts(profile.get("last_failure_at"))
+    last_success_at = _parse_utc_ts(profile.get("last_success_at"))
+    if last_success_at is not None and last_failure_at is not None and last_success_at >= last_failure_at:
+        return False
+    if last_success_at is not None and last_failure_at is None:
+        return False
+    return True
+
+
+def _default_vault_credential_present(provider_id: str, workspace_id: str, tenant_id: Optional[str]) -> bool:
+    try:
+        resolve_default_vault_credential(
+            provider_id,
+            workspace_id,
+            tenant_id=tenant_id,
+            tool_name="provider_catalog_truth",
+            run_id=None,
+            purpose="provider_catalog_truth",
+            actor_type="provider_profile",
+        )
+        return True
+    except Exception:
+        return False
+
+
+def _push_unique_issue(target: List[Dict[str, Any]], code: str, message: str) -> None:
+    normalized_code = str(code or "").strip()
+    normalized_message = str(message or "").strip()
+    if not normalized_code or not normalized_message:
+        return
+    for item in target:
+        if not isinstance(item, dict):
+            continue
+        if str(item.get("code") or "").strip() == normalized_code:
+            return
+    target.append({"code": normalized_code, "message": normalized_message})
+
+
+def _register_provider_path(
+    entry: Dict[str, Any],
+    *,
+    state: str,
+    source: str,
+    detail: str,
+    issue_code: Optional[str] = None,
+    failure_class: Optional[str] = None,
+    retry_after_seconds: Optional[int] = None,
+    backpressure: bool = False,
+    connection_kind: Optional[str] = None,
+    connection_scope: Optional[str] = None,
+    connection_label: Optional[str] = None,
+) -> None:
+    paths = entry.setdefault("_paths", [])
+    if not isinstance(paths, list):
+        paths = []
+        entry["_paths"] = paths
+    source_token = str(source or "").strip()
+    detail_text = str(detail or "").strip()
+    payload: Dict[str, Any] = {
+        "state": str(state or "").strip() or "setup_required",
+        "source": source_token,
+        "detail": detail_text,
+    }
+    if connection_kind:
+        payload["connection_kind"] = str(connection_kind).strip()
+    if connection_scope:
+        payload["connection_scope"] = str(connection_scope).strip()
+    if connection_label:
+        payload["connection_label"] = str(connection_label).strip()
+    if issue_code:
+        payload["issue_code"] = str(issue_code).strip()
+    if failure_class:
+        payload["failure_class"] = str(failure_class).strip()
+    if retry_after_seconds is not None:
+        payload["retry_after_seconds"] = int(max(0, retry_after_seconds))
+    if backpressure:
+        payload["backpressure"] = True
+    paths.append(payload)
+    if source_token:
+        sources = entry.setdefault("credential_sources", [])
+        if isinstance(sources, list) and source_token not in sources:
+            sources.append(source_token)
+    if issue_code and detail_text:
+        _push_unique_issue(entry.setdefault("issues", []), issue_code, detail_text)
+    if failure_class and not entry.get("failure_class"):
+        entry["failure_class"] = str(failure_class).strip()
+    if backpressure:
+        entry["backpressure"] = True
+    if retry_after_seconds is not None:
+        current_retry = entry.get("retry_after_seconds")
+        if current_retry is None or int(retry_after_seconds) < int(current_retry):
+            entry["retry_after_seconds"] = int(retry_after_seconds)
+
+
+def _provider_state_rank(state: str) -> int:
+    normalized = str(state or "").strip().lower()
+    if normalized == "active":
+        return 0
+    if normalized == "degraded":
+        return 1
+    if normalized == "configured":
+        return 2
+    if normalized == "unavailable":
+        return 3
+    return 4
+
+
+def _provider_path_boundary(source: str) -> tuple[str, str, str]:
+    normalized = str(source or "").strip().lower()
+    if (
+        normalized == "codex_token_vault"
+        or normalized.startswith("profile:local_cli")
+        or normalized.startswith("local-")
+        or normalized.endswith("-cli")
+    ):
+        return ("machine_local_capability", "machine", "This machine only")
+    if normalized.startswith("env-") or normalized.startswith("env_") or normalized.startswith("env"):
+        return ("runtime_environment", "runtime", "Runtime environment")
+    if normalized.startswith("vault") or normalized.startswith("profile"):
+        return ("workspace_provider_connection", "workspace", "Workspace provider")
+    return ("workspace_provider_connection", "workspace", "Workspace provider")
+
+
+def _finalize_provider_entry(entry: Dict[str, Any]) -> Dict[str, Any]:
+    paths = entry.pop("_paths", [])
+    if not isinstance(paths, list):
+        paths = []
+    chosen_state = "setup_required"
+    chosen_issue_code = "setup_required"
+    chosen_issue = "Provider setup is still required."
+    chosen_source = None
+    chosen_detail = None
+    chosen_connection_kind = "workspace_provider_connection"
+    chosen_connection_scope = "workspace"
+    chosen_connection_label = "Workspace provider"
+    for candidate_state in ("active", "degraded", "configured", "unavailable", "setup_required"):
+        match = next((item for item in paths if isinstance(item, dict) and str(item.get("state") or "").strip() == candidate_state), None)
+        if match is None:
+            continue
+        chosen_state = candidate_state
+        chosen_source = str(match.get("source") or "").strip() or None
+        boundary_kind, boundary_scope, boundary_label = _provider_path_boundary(chosen_source or "")
+        chosen_connection_kind = str(match.get("connection_kind") or "").strip() or boundary_kind
+        chosen_connection_scope = str(match.get("connection_scope") or "").strip() or boundary_scope
+        chosen_connection_label = str(match.get("connection_label") or "").strip() or boundary_label
+        chosen_detail = str(match.get("detail") or "").strip() or None
+        if candidate_state == "active":
+            chosen_issue_code = None
+            chosen_issue = None
+        else:
+            chosen_issue_code = str(match.get("issue_code") or candidate_state).strip() or candidate_state
+            chosen_issue = str(match.get("detail") or "").strip() or None
+        break
+    issues = entry.get("issues")
+    if not isinstance(issues, list):
+        issues = []
+        entry["issues"] = issues
+    if chosen_issue_code and chosen_issue:
+        _push_unique_issue(issues, chosen_issue_code, chosen_issue)
+    entry["state"] = chosen_state
+    entry["usable"] = chosen_state == "active"
+    entry["configured"] = chosen_state in {"active", "configured", "degraded", "unavailable"}
+    entry["active"] = chosen_state == "active"
+    entry["issue_code"] = chosen_issue_code
+    entry["issue"] = chosen_issue
+    entry["state_detail"] = chosen_detail
+    entry["active_source"] = chosen_source
+    entry["connection_kind"] = chosen_connection_kind
+    entry["connection_scope"] = chosen_connection_scope
+    entry["connection_label"] = chosen_connection_label
+    entry["machine_bound"] = chosen_connection_scope == "machine"
+    entry["credential_sources"] = sorted({str(item).strip() for item in entry.get("credential_sources", []) if str(item).strip()})
+    return entry
+
+
+def build_provider_runtime_truth(
+    workspace_id: Optional[str] = None,
+    *,
+    openai_probe: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    _init()
+    requested_workspace_id = str(workspace_id or "default").strip() or "default"
+    tenant_id: Optional[str] = None
+    now = _utc_now()
+    with _server.PROFILES_LOCK:
+        profiles = [dict(item) for item in _server.PROVIDER_PROFILES.values() if isinstance(item, dict)]
+
+    items: List[Dict[str, Any]] = []
+    profile_summary = {"healthy": 0, "cooldown": 0, "disabled": 0, "total": 0}
+    provider_entries: Dict[str, Dict[str, Any]] = {}
+
+    def _entry(provider_id: str) -> Dict[str, Any]:
+        existing = provider_entries.get(provider_id)
+        if existing is not None:
+            return existing
+        catalog_entry = provider_catalog_entry(provider_id)
+        created: Dict[str, Any] = {
+            "id": provider_id,
+            "kind": "provider",
+            "label": catalog_entry.get("label", provider_id),
+            "identity_owner": "platform_account",
+            "identity_owner_label": "Empyralis account",
+            "identity_boundary_note": "Platform sign-in stays separate from provider capabilities and machine-local sessions.",
+            "auth": list(catalog_entry.get("auth", [])),
+            "auth_modes": list(catalog_entry.get("auth_modes", [])),
+            "default_auth_mode": catalog_entry.get("default_auth_mode"),
+            "default_model": catalog_entry.get("default_model"),
+            "note": catalog_entry.get("note"),
+            "profile_count": 0,
+            "enabled_profile_count": 0,
+            "disabled_profile_count": 0,
+            "healthy_profile_count": 0,
+            "cooldown_profile_count": 0,
+            "credential_sources": [],
+            "issues": [],
+            "backpressure": False,
+            "retry_after_seconds": None,
+            "failure_class": None,
+        }
+        provider_entries[provider_id] = created
+        return created
+
+    for provider_id, info in PROVIDER_CATALOG.items():
+        if bool(info.get("hidden")):
+            continue
+        _entry(provider_id)
+
+    for profile in profiles:
+        workspace = str(profile.get("workspace_id") or "default").strip() or "default"
+        if workspace != requested_workspace_id:
+            continue
+        provider_id = normalize_provider_id(profile.get("provider"))
+        if not provider_id or bool(provider_catalog_entry(provider_id).get("hidden")):
+            continue
+        health = _profile_health_value(profile, now)
+        item = {
+            "id": profile.get("id"),
+            "provider": provider_id,
+            "label": profile.get("label"),
+            "credential_id": profile.get("credential_id"),
+            "auth_mode": normalize_auth_mode(provider_id, profile.get("auth_mode")),
+            "workspace_id": workspace,
+            "priority": profile.get("priority", 100),
+            "enabled": bool(profile.get("enabled", True)),
+            "model": profile.get("model"),
+            "health": health,
+            "cooldown_until": profile.get("cooldown_until"),
+            "last_error": profile.get("last_error"),
+            "last_used_at": profile.get("last_used_at"),
+            "last_success_at": profile.get("last_success_at"),
+            "last_failure_at": profile.get("last_failure_at"),
+            "success_count": int(profile.get("success_count", 0)),
+            "failure_count": int(profile.get("failure_count", 0)),
+            "created_at": profile.get("created_at"),
+            "updated_at": profile.get("updated_at"),
+        }
+        items.append(item)
+        profile_summary[health] += 1
+        profile_summary["total"] += 1
+
+        entry = _entry(provider_id)
+        entry["profile_count"] += 1
+        if item["enabled"]:
+            entry["enabled_profile_count"] += 1
+        else:
+            entry["disabled_profile_count"] += 1
+        if health == "healthy":
+            entry["healthy_profile_count"] += 1
+        elif health == "cooldown":
+            entry["cooldown_profile_count"] += 1
+
+        auth_mode = normalize_auth_mode(provider_id, item.get("auth_mode"))
+        unresolved_failure = _profile_has_unresolved_failure(profile)
+        failure_info = classify_profile_failure(str(profile.get("last_error") or "")) if unresolved_failure else {}
+        retry_after_seconds = None
+        cooldown_until = _parse_utc_ts(profile.get("cooldown_until"))
+        if cooldown_until is not None and cooldown_until > now:
+            retry_after_seconds = max(0, int((cooldown_until - now).total_seconds()))
+
+        if auth_mode == "local_cli" and provider_id == "anthropic":
+            cli_status = claude_code_cli_status()
+            if not cli_status.get("available"):
+                _register_provider_path(
+                    entry,
+                    state="unavailable",
+                    source="profile:local_cli",
+                    detail="Claude subscription is configured for this workspace, but the Claude CLI is not installed on this machine.",
+                    issue_code="local_cli_missing",
+                )
+                continue
+            if not cli_status.get("logged_in"):
+                _register_provider_path(
+                    entry,
+                    state="setup_required",
+                    source="profile:local_cli",
+                    detail="Claude CLI is installed, but the Claude subscription is not signed in on this machine yet.",
+                    issue_code="local_cli_not_signed_in",
+                )
+                continue
+
+        if health == "disabled":
+            _register_provider_path(
+                entry,
+                state="configured",
+                source="profile",
+                detail="A provider profile exists in this workspace but is currently disabled.",
+                issue_code="profile_disabled",
+            )
+            continue
+
+        if health == "cooldown" or unresolved_failure:
+            detail = str(profile.get("last_error") or "").strip() or "Provider profile is cooling down after a runtime failure."
+            _register_provider_path(
+                entry,
+                state="degraded",
+                source="profile",
+                detail=detail,
+                issue_code=str(failure_info.get("failure_class") or "profile_degraded"),
+                failure_class=str(failure_info.get("failure_class") or "").strip() or None,
+                retry_after_seconds=retry_after_seconds,
+                backpressure=bool(failure_info.get("backpressure")),
+            )
+            continue
+
+        _register_provider_path(
+            entry,
+            state="active",
+            source="profile",
+            detail="An enabled provider profile is ready for this workspace.",
+        )
+
+    openai_env_token, openai_env_source = _openai_env_bearer_with_source()
+    openai_env_source = str(openai_env_source or "").strip().lower()
+    openai_env_present = bool(str(openai_env_token or "").strip())
+
+    openai_entry = _entry("openai")
+    if openai_probe:
+        source = str(openai_probe.get("openai_credential_source") or "").strip().lower()
+        source_label = source or "direct_openai"
+        if bool(openai_probe.get("openai_key_valid")) and source in {"env_api_key", "env_access_token", "vault"}:
+            _register_provider_path(
+                openai_entry,
+                state="active",
+                source=source_label,
+                detail="A direct OpenAI credential is verified and available to the runtime.",
+            )
+        elif bool(openai_probe.get("openai_key_present")) or bool(openai_probe.get("openai_vault_present")):
+            error_text = str(openai_probe.get("openai_error") or "").strip() or "Direct OpenAI credential is present but not currently usable."
+            failure_info = classify_profile_failure(error_text)
+            degraded = str(source or openai_env_source) in {"env_api_key", "env_access_token", "vault"}
+            _register_provider_path(
+                openai_entry,
+                state="degraded" if degraded else "setup_required",
+                source=source_label,
+                detail=error_text,
+                issue_code=str(failure_info.get("failure_class") or "openai_unusable"),
+                failure_class=str(failure_info.get("failure_class") or "").strip() or None,
+                backpressure=bool(failure_info.get("backpressure")),
+            )
+        elif source in {"env_oauth_token", "env_codex_oauth_token", "codex_token_vault"}:
+            _register_provider_path(
+                openai_entry,
+                state="setup_required",
+                source=source,
+                detail="A Codex/OpenAI token is present, but a direct OpenAI API credential is still required for the direct OpenAI provider.",
+                issue_code="direct_openai_credential_required",
+            )
+    elif openai_env_source in {"env_api_key", "env_access_token"}:
+        _register_provider_path(
+            openai_entry,
+            state="active",
+            source=openai_env_source,
+            detail="A direct OpenAI credential is available in the runtime environment.",
+        )
+    elif _default_vault_credential_present("openai", requested_workspace_id, tenant_id):
+        _register_provider_path(
+            openai_entry,
+            state="configured",
+            source="vault",
+            detail="A saved direct OpenAI credential exists for this workspace.",
+        )
+    elif openai_env_source in {"env_oauth_token", "env_codex_oauth_token", "codex_token_vault"}:
+        _register_provider_path(
+            openai_entry,
+            state="setup_required",
+            source=openai_env_source,
+            detail="A Codex/OpenAI token is present, but a direct OpenAI API credential is still required for the direct OpenAI provider.",
+            issue_code="direct_openai_credential_required",
+        )
+    elif openai_env_present:
+        _register_provider_path(
+            openai_entry,
+            state="configured",
+            source=openai_env_source or "env",
+            detail="An OpenAI credential is present in the runtime environment.",
+        )
+
+    codex_entry = _entry("openai-codex")
+    if openai_env_source in {"env_codex_oauth_token"}:
+        _register_provider_path(
+            codex_entry,
+            state="active",
+            source=openai_env_source,
+            detail="An OpenAI / Codex OAuth token is available in the runtime environment.",
+        )
+    elif _default_vault_credential_present("openai-codex", requested_workspace_id, tenant_id):
+        _register_provider_path(
+            codex_entry,
+            state="active",
+            source="vault-default-codex",
+            detail="A saved OpenAI / Codex OAuth credential exists for this workspace.",
+        )
+
+    anthropic_entry = _entry("anthropic")
+    anthropic_env_key = str(os.getenv("ANTHROPIC_API_KEY") or "").strip()
+    if anthropic_env_key:
+        _register_provider_path(
+            anthropic_entry,
+            state="active",
+            source="env-anthropic",
+            detail="An Anthropic API key is available in the runtime environment.",
+        )
+    elif _default_vault_credential_present("anthropic", requested_workspace_id, tenant_id):
+        _register_provider_path(
+            anthropic_entry,
+            state="configured",
+            source="vault-default-anthropic",
+            detail="A saved Anthropic credential exists for this workspace.",
+        )
+    claude_status = claude_code_cli_status()
+    if claude_status.get("available") and claude_status.get("logged_in"):
+        _register_provider_path(
+            anthropic_entry,
+            state="active",
+            source="local-claude-cli",
+            detail="The Claude subscription signed into the local Claude CLI is available on this machine.",
+        )
+    elif claude_status.get("available"):
+        _register_provider_path(
+            anthropic_entry,
+            state="setup_required",
+            source="local-claude-cli",
+            detail="Claude CLI is installed, but the Claude subscription is not signed in on this machine yet.",
+            issue_code="local_cli_not_signed_in",
+        )
+
+    gemini_entry = _entry("gemini")
+    gemini_env_key = str(os.getenv("GEMINI_API_KEY") or "").strip()
+    if gemini_env_key:
+        _register_provider_path(
+            gemini_entry,
+            state="active",
+            source="env-gemini",
+            detail="A Gemini API key is available in the runtime environment.",
+        )
+    elif _default_vault_credential_present("gemini", requested_workspace_id, tenant_id):
+        _register_provider_path(
+            gemini_entry,
+            state="configured",
+            source="vault-default-gemini",
+            detail="A saved Gemini credential exists for this workspace.",
+        )
+    if gemini_cli_available():
+        _register_provider_path(
+            gemini_entry,
+            state="setup_required",
+            source="gemini-cli",
+            detail="Gemini CLI is installed on this machine, but Gemini CLI OAuth still needs an access token and project configuration before it can be used.",
+            issue_code="gemini_cli_oauth_incomplete",
+        )
+
+    for provider_id in ("vertex", "qwen", "deepseek", "mistral"):
+        entry = _entry(provider_id)
+        env_var = {
+            "vertex": "",
+            "qwen": str(os.getenv("ORION_LOCAL_WORKER_QWEN_API_KEY") or os.getenv("QWEN_API_KEY") or os.getenv("DASHSCOPE_API_KEY") or "").strip(),
+            "deepseek": str(os.getenv("ORION_LOCAL_WORKER_DEEPSEEK_API_KEY") or os.getenv("DEEPSEEK_API_KEY") or "").strip(),
+            "mistral": str(os.getenv("ORION_LOCAL_WORKER_MISTRAL_API_KEY") or os.getenv("MISTRAL_API_KEY") or "").strip(),
+        }.get(provider_id, "")
+        if env_var:
+            _register_provider_path(
+                entry,
+                state="active",
+                source=f"env-{provider_id}",
+                detail=f"A {entry['label']} credential is available in the runtime environment.",
+            )
+            continue
+        if _default_vault_credential_present(provider_id, requested_workspace_id, tenant_id):
+            _register_provider_path(
+                entry,
+                state="configured",
+                source=f"vault-default-{provider_id}",
+                detail=f"A saved {entry['label']} credential exists for this workspace.",
+            )
+
+    ollama_entry = _entry("ollama")
+    _register_provider_path(
+        ollama_entry,
+        state="configured",
+        source="local-ollama",
+        detail="Ollama is a local-only provider on this machine and needs the local Ollama service running before it becomes usable.",
+        issue_code="local_service_required",
+    )
+
+    providers: List[Dict[str, Any]] = []
+    state_summary = {"active": 0, "configured": 0, "setup_required": 0, "unavailable": 0, "degraded": 0}
+    for provider_id, entry in provider_entries.items():
+        if bool(provider_catalog_entry(provider_id).get("hidden")):
+            continue
+        finalized = _finalize_provider_entry(entry)
+        state_summary[finalized["state"]] += 1
+        providers.append(finalized)
+    providers.sort(key=lambda item: (_provider_state_rank(str(item.get("state") or "")), str(item.get("label") or "")))
+    providers_by_id = {str(item.get("id") or ""): item for item in providers}
+
+    summary = {
+        **profile_summary,
+        **state_summary,
+        "provider_total": len(providers),
+    }
+    return {
+        "workspace_id": requested_workspace_id,
+        "summary": summary,
+        "items": items,
+        "providers": providers,
+        "providers_by_id": providers_by_id,
+        "openai_profile_ready": str(providers_by_id.get("openai", {}).get("state") or "") == "active",
+        "codex_profile_ready": str(providers_by_id.get("openai-codex", {}).get("state") or "") == "active",
+    }

@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
+import time
 from typing import Any, Callable, Dict, Optional
 
+from server_modules import control_plane_repository
 from server_modules import run_state_repository
+from server_modules.direct_tool_config_service import run_async_tool_call
 
 
 DEFAULT_PLAN_ID = "personal"
@@ -40,6 +43,13 @@ PLAN_DEFINITIONS: Dict[str, Dict[str, Any]] = {
         "admin_security_features_enabled": False,
         "mobile_push_enabled": False,
         "cloud_services_enabled": True,
+        "mobile_app_enabled": False,
+        "approvals_enabled": False,
+        "artifacts_enabled": False,
+        "advanced_features_enabled": False,
+        "premium_tools_enabled": False,
+        "telegram_channel_enabled": True,
+        "whatsapp_channel_enabled": True,
     },
     "personal": {
         "label": "Personal",
@@ -57,6 +67,13 @@ PLAN_DEFINITIONS: Dict[str, Dict[str, Any]] = {
         "admin_security_features_enabled": False,
         "mobile_push_enabled": True,
         "cloud_services_enabled": True,
+        "mobile_app_enabled": True,
+        "approvals_enabled": True,
+        "artifacts_enabled": True,
+        "advanced_features_enabled": True,
+        "premium_tools_enabled": True,
+        "telegram_channel_enabled": True,
+        "whatsapp_channel_enabled": True,
     },
     "pro": {
         "label": "Pro",
@@ -74,6 +91,13 @@ PLAN_DEFINITIONS: Dict[str, Dict[str, Any]] = {
         "admin_security_features_enabled": False,
         "mobile_push_enabled": True,
         "cloud_services_enabled": True,
+        "mobile_app_enabled": True,
+        "approvals_enabled": True,
+        "artifacts_enabled": True,
+        "advanced_features_enabled": True,
+        "premium_tools_enabled": True,
+        "telegram_channel_enabled": True,
+        "whatsapp_channel_enabled": True,
     },
     "power": {
         "label": "Power",
@@ -91,6 +115,13 @@ PLAN_DEFINITIONS: Dict[str, Dict[str, Any]] = {
         "admin_security_features_enabled": True,
         "mobile_push_enabled": True,
         "cloud_services_enabled": True,
+        "mobile_app_enabled": True,
+        "approvals_enabled": True,
+        "artifacts_enabled": True,
+        "advanced_features_enabled": True,
+        "premium_tools_enabled": True,
+        "telegram_channel_enabled": True,
+        "whatsapp_channel_enabled": True,
     },
     "team": {
         "label": "Team",
@@ -108,6 +139,13 @@ PLAN_DEFINITIONS: Dict[str, Dict[str, Any]] = {
         "admin_security_features_enabled": True,
         "mobile_push_enabled": True,
         "cloud_services_enabled": True,
+        "mobile_app_enabled": True,
+        "approvals_enabled": True,
+        "artifacts_enabled": True,
+        "advanced_features_enabled": True,
+        "premium_tools_enabled": True,
+        "telegram_channel_enabled": True,
+        "whatsapp_channel_enabled": True,
     },
     "enterprise": {
         "label": "Enterprise",
@@ -125,6 +163,13 @@ PLAN_DEFINITIONS: Dict[str, Dict[str, Any]] = {
         "admin_security_features_enabled": True,
         "mobile_push_enabled": True,
         "cloud_services_enabled": True,
+        "mobile_app_enabled": True,
+        "approvals_enabled": True,
+        "artifacts_enabled": True,
+        "advanced_features_enabled": True,
+        "premium_tools_enabled": True,
+        "telegram_channel_enabled": True,
+        "whatsapp_channel_enabled": True,
     },
 }
 
@@ -254,6 +299,107 @@ def resolve_workspace_entitlement_state(
     )
 
 
+def _load_workspace_record(workspace_id: str) -> Optional[Dict[str, Any]]:
+    token = str(workspace_id or "").strip()
+    if not token:
+        return None
+    try:
+        payload = run_async_tool_call(control_plane_repository.get_workspace_by_id(token))
+    except Exception:
+        return None
+    return dict(payload) if isinstance(payload, dict) else None
+
+
+def resolve_workspace_entitlement_state_for_workspace_id(
+    *,
+    workspace_id: str,
+    workspace: Optional[Dict[str, Any]] = None,
+    install: Optional[Dict[str, Any]] = None,
+) -> WorkspaceEntitlementState:
+    resolved_workspace = dict(workspace) if isinstance(workspace, dict) else _load_workspace_record(workspace_id)
+    return resolve_workspace_entitlement_state(workspace=resolved_workspace, install=install)
+
+
+def workspace_capability_flags(
+    *,
+    workspace: Optional[Dict[str, Any]] = None,
+    install: Optional[Dict[str, Any]] = None,
+    state: Optional[WorkspaceEntitlementState] = None,
+) -> Dict[str, Any]:
+    resolved_state = state or resolve_workspace_entitlement_state(workspace=workspace, install=install)
+    entitlements = resolved_state.entitlements
+    history_window_days = max(1, _coerce_int(entitlements.get("sync_depth_days"), 30))
+    return {
+        "mobile_app_enabled": bool(entitlements.get("mobile_app_enabled")),
+        "mobile_push_enabled": bool(entitlements.get("mobile_push_enabled")),
+        "approvals_enabled": bool(entitlements.get("approvals_enabled")),
+        "artifacts_enabled": bool(entitlements.get("artifacts_enabled")),
+        "advanced_features_enabled": bool(entitlements.get("advanced_features_enabled")),
+        "premium_tools_enabled": bool(entitlements.get("premium_tools_enabled")),
+        "history_window_days": history_window_days,
+        "telegram_channel_enabled": bool(entitlements.get("telegram_channel_enabled")),
+        "whatsapp_channel_enabled": bool(entitlements.get("whatsapp_channel_enabled")),
+        "channels": {
+            "telegram": bool(entitlements.get("telegram_channel_enabled")),
+            "whatsapp": bool(entitlements.get("whatsapp_channel_enabled")),
+        },
+    }
+
+
+def workspace_entitlement_payload(
+    *,
+    workspace: Optional[Dict[str, Any]] = None,
+    install: Optional[Dict[str, Any]] = None,
+    state: Optional[WorkspaceEntitlementState] = None,
+) -> Dict[str, Any]:
+    resolved_state = state or resolve_workspace_entitlement_state(workspace=workspace, install=install)
+    return {
+        **resolved_state.as_dict(),
+        "capabilities": workspace_capability_flags(state=resolved_state),
+    }
+
+
+def workspace_entitlement_payload_for_workspace_id(
+    *,
+    workspace_id: str,
+    workspace: Optional[Dict[str, Any]] = None,
+    install: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    state = resolve_workspace_entitlement_state_for_workspace_id(
+        workspace_id=workspace_id,
+        workspace=workspace,
+        install=install,
+    )
+    return workspace_entitlement_payload(state=state)
+
+
+def history_window_cutoff_ts(
+    *,
+    workspace: Optional[Dict[str, Any]] = None,
+    install: Optional[Dict[str, Any]] = None,
+    state: Optional[WorkspaceEntitlementState] = None,
+    now_ts: Optional[float] = None,
+) -> Optional[float]:
+    resolved_state = state or resolve_workspace_entitlement_state(workspace=workspace, install=install)
+    history_window_days = max(1, _coerce_int(resolved_state.entitlements.get("sync_depth_days"), 30))
+    return float(now_ts if now_ts is not None else time.time()) - float(history_window_days * 86400)
+
+
+def history_window_cutoff_ts_for_workspace_id(
+    *,
+    workspace_id: str,
+    workspace: Optional[Dict[str, Any]] = None,
+    install: Optional[Dict[str, Any]] = None,
+    now_ts: Optional[float] = None,
+) -> Optional[float]:
+    state = resolve_workspace_entitlement_state_for_workspace_id(
+        workspace_id=workspace_id,
+        workspace=workspace,
+        install=install,
+    )
+    return history_window_cutoff_ts(state=state, now_ts=now_ts)
+
+
 def scheduler_policy_defaults(
     *,
     workspace: Optional[Dict[str, Any]],
@@ -297,6 +443,24 @@ def connector_policy_defaults(
         "team_features_enabled": bool(limits.get("team_features_enabled")),
         "admin_security_features_enabled": bool(limits.get("admin_security_features_enabled")),
     }
+
+
+def _enforce_workspace_capability(
+    *,
+    workspace: Optional[Dict[str, Any]],
+    install: Optional[Dict[str, Any]],
+    entitlement_key: str,
+    reason: str,
+    message: str,
+) -> Dict[str, Any]:
+    state = resolve_workspace_entitlement_state(workspace=workspace, install=install)
+    if not bool(state.entitlements.get(entitlement_key)):
+        raise EntitlementDeniedError(
+            reason=reason,
+            message=message,
+            entitlement_state=workspace_entitlement_payload(state=state),
+        )
+    return workspace_entitlement_payload(state=state)
 
 
 def _workspace_hosted_execution_count(
@@ -400,6 +564,88 @@ def enforce_mobile_push_access(
         raise EntitlementDeniedError(
             reason="mobile_push_unavailable",
             message="Mobile push delivery is not included in the current plan. The in-app notification feed still works.",
-            entitlement_state=state.as_dict(),
+            entitlement_state=workspace_entitlement_payload(state=state),
         )
-    return state.as_dict()
+    return workspace_entitlement_payload(state=state)
+
+
+def enforce_mobile_app_access(
+    *,
+    workspace: Optional[Dict[str, Any]] = None,
+    install: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    return _enforce_workspace_capability(
+        workspace=workspace,
+        install=install,
+        entitlement_key="mobile_app_enabled",
+        reason="mobile_app_unavailable",
+        message="Mobile app access is available on paid plans only. Use web or Telegram/WhatsApp on the free plan.",
+    )
+
+
+def enforce_approvals_access(
+    *,
+    workspace: Optional[Dict[str, Any]] = None,
+    install: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    return _enforce_workspace_capability(
+        workspace=workspace,
+        install=install,
+        entitlement_key="approvals_enabled",
+        reason="approvals_unavailable",
+        message="Approvals are available on paid plans only. Free workspaces can still chat through Telegram or WhatsApp.",
+    )
+
+
+def enforce_artifacts_access(
+    *,
+    workspace: Optional[Dict[str, Any]] = None,
+    install: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    return _enforce_workspace_capability(
+        workspace=workspace,
+        install=install,
+        entitlement_key="artifacts_enabled",
+        reason="artifacts_unavailable",
+        message="Artifacts are available on paid plans only. Upgrade the workspace to inspect generated files and previews.",
+    )
+
+
+def enforce_advanced_features_access(
+    *,
+    workspace: Optional[Dict[str, Any]] = None,
+    install: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    return _enforce_workspace_capability(
+        workspace=workspace,
+        install=install,
+        entitlement_key="advanced_features_enabled",
+        reason="advanced_features_unavailable",
+        message="Advanced runtime controls and local companion management are available on paid plans only.",
+    )
+
+
+def enforce_channel_surface_access(
+    provider: str,
+    *,
+    workspace: Optional[Dict[str, Any]] = None,
+    install: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    provider_token = str(provider or "").strip().lower()
+    key = {
+        "telegram": "telegram_channel_enabled",
+        "whatsapp": "whatsapp_channel_enabled",
+    }.get(provider_token)
+    if not key:
+        raise EntitlementDeniedError(
+            reason="channel_surface_unknown",
+            message=f"Unknown channel provider '{provider_token}'.",
+            entitlement_state={},
+        )
+    return _enforce_workspace_capability(
+        workspace=workspace,
+        install=install,
+        entitlement_key=key,
+        reason=f"{provider_token}_channel_unavailable",
+        message=f"{provider_token.title()} access is not included in the current workspace plan.",
+    )

@@ -84,6 +84,44 @@ class EntitlementsServiceTests(unittest.TestCase):
         self.assertEqual(result["enforcement_target"], "self_hosted")
         self.assertEqual(result["usage_snapshot"]["concurrent_hosted_executions"], 0)
 
+    def test_workspace_capability_flags_distinguish_free_and_paid_surfaces(self) -> None:
+        free_state = entitlements_service.resolve_workspace_entitlement_state(
+            workspace={"metadata": {"billing": {"plan": "free"}}},
+        )
+        paid_state = entitlements_service.resolve_workspace_entitlement_state(
+            workspace={"metadata": {"billing": {"plan": "personal"}}},
+        )
+
+        free_flags = entitlements_service.workspace_capability_flags(state=free_state)
+        paid_flags = entitlements_service.workspace_capability_flags(state=paid_state)
+
+        self.assertFalse(free_flags["mobile_app_enabled"])
+        self.assertFalse(free_flags["approvals_enabled"])
+        self.assertFalse(free_flags["artifacts_enabled"])
+        self.assertTrue(free_flags["telegram_channel_enabled"])
+        self.assertTrue(free_flags["whatsapp_channel_enabled"])
+        self.assertTrue(paid_flags["mobile_app_enabled"])
+        self.assertTrue(paid_flags["approvals_enabled"])
+        self.assertTrue(paid_flags["artifacts_enabled"])
+
+    def test_enforce_mobile_app_access_rejects_free_workspace(self) -> None:
+        with self.assertRaises(entitlements_service.EntitlementDeniedError) as ctx:
+            entitlements_service.enforce_mobile_app_access(
+                workspace={"metadata": {"billing": {"plan": "free"}}},
+            )
+
+        self.assertEqual(ctx.exception.reason, "mobile_app_unavailable")
+
+    def test_workspace_entitlement_payload_includes_capabilities(self) -> None:
+        payload = entitlements_service.workspace_entitlement_payload(
+            workspace={"metadata": {"billing": {"plan": "free"}}},
+        )
+
+        self.assertEqual(payload["plan_id"], "free")
+        self.assertIn("capabilities", payload)
+        self.assertFalse(payload["capabilities"]["approvals_enabled"])
+        self.assertEqual(payload["capabilities"]["history_window_days"], 7)
+
 
 if __name__ == "__main__":
     unittest.main()

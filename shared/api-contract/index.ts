@@ -256,6 +256,18 @@ export type ApprovalItem = Record<string, unknown> & {
   requested_at?: string | null;
   expires_at?: string | null;
   correlation_id?: string | null;
+  target?: string | null;
+  labels?: string[];
+  capabilities?: string[];
+  metadata?: Record<string, unknown>;
+  email_preview?: {
+    recipient?: string | null;
+    subject?: string | null;
+    body_preview?: string | null;
+    connector?: string | null;
+    action_id?: string | null;
+    artifact_reference?: string | null;
+  } | null;
 };
 
 export type ApprovalListResponse = {

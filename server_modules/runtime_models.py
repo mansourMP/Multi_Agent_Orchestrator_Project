@@ -62,6 +62,22 @@ class RunStartRequest(BaseModel):
     metadata: Optional[dict] = None
 
 
+class LocalQueueCleanupRequest(BaseModel):
+    workspace_id: str
+    older_than_seconds: int = 600
+    limit: int = 200
+    dry_run: bool = True
+    reason: Optional[str] = None
+
+    def validate_fields(self) -> None:
+        if not str(self.workspace_id or "").strip():
+            raise HTTPException(status_code=400, detail="workspace_id is required.")
+        if int(self.older_than_seconds) < 60 or int(self.older_than_seconds) > 604800:
+            raise HTTPException(status_code=400, detail="older_than_seconds must be between 60 and 604800.")
+        if int(self.limit) < 1 or int(self.limit) > 1000:
+            raise HTTPException(status_code=400, detail="limit must be between 1 and 1000.")
+
+
 class DelegationChildRequest(BaseModel):
     agent_role: str
     user_goal: str

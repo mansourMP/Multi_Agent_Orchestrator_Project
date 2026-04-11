@@ -13,6 +13,11 @@
   "layers": {
     "personal_captain": {
       "role": "private_main_agent",
+      "identity_contract": {
+        "stable_internal_id": "install_id",
+        "display_name": "editable_metadata_only",
+        "mode_switching": "not_supported"
+      },
       "memory_access": "broad_policy_bound",
       "observes_specialists_via": [
         "summaries",
@@ -25,6 +30,15 @@
     },
     "specialist_agents": {
       "role": "scoped_operational_workers",
+      "modes": [
+        "owner_edit",
+        "owner_test",
+        "customer_live"
+      ],
+      "mode_defaults": {
+        "default_mode": "owner_edit",
+        "prompt_config_editing_requires": "owner_edit"
+      },
       "memory_access": "install_scoped_default",
       "tool_access": "manifest_and_policy_scoped",
       "connector_access": "manifest_and_policy_scoped",

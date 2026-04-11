@@ -84,6 +84,7 @@ from server_modules.local_queue import (
     LocalRunFailPayload,
     _cleanup_stale_local_claims,
     _is_worker_online,
+    handle_cleanup_local_run_queue,
     handle_get_local_run_queue,
     handle_get_local_workers_status,
     handle_heartbeat_local_worker,
@@ -99,6 +100,7 @@ from server_modules.connectors.autopilot_runtime_exports import (
     _whatsapp_autopilot_activate,
     _telegram_autopilot_snapshot,
     _whatsapp_autopilot_snapshot,
+    handle_telegram_webhook,
     handle_whatsapp_twilio_webhook,
     handle_telegram_autopilot_status,
     handle_whatsapp_autopilot_status,
@@ -461,6 +463,10 @@ ORION_TELEGRAM_AUTOPILOT_PROFILE = (
 )
 ORION_TELEGRAM_AUTOPILOT_SEND_ACK = config_bool("ORION_TELEGRAM_AUTOPILOT_SEND_ACK", False)
 ORION_TELEGRAM_AUTOPILOT_ALLOW_ANY_CHAT = config_bool("ORION_TELEGRAM_AUTOPILOT_ALLOW_ANY_CHAT", False)
+ORION_TELEGRAM_AUTOPILOT_DELIVERY_MODE = config_str("ORION_TELEGRAM_AUTOPILOT_DELIVERY_MODE", "polling").strip().lower() or "polling"
+if ORION_TELEGRAM_AUTOPILOT_DELIVERY_MODE not in {"polling", "webhook"}:
+    ORION_TELEGRAM_AUTOPILOT_DELIVERY_MODE = "polling"
+ORION_TELEGRAM_AUTOPILOT_WEBHOOK_SECRET = config_str("ORION_TELEGRAM_AUTOPILOT_WEBHOOK_SECRET", "").strip()
 ORION_TELEGRAM_AUTOPILOT_TRUST_MODE = config_str("ORION_TELEGRAM_AUTOPILOT_TRUST_MODE", "guarded").strip().lower() or "guarded"
 ORION_TELEGRAM_AUTOPILOT_EXECUTION_TARGET = (
     config_str("ORION_TELEGRAM_AUTOPILOT_EXECUTION_TARGET", "local_companion").strip().lower() or "local_companion"

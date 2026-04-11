@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Any, Dict, Iterable, List, Optional
 
 from server_modules import (
     agent_registry_repository,
     control_plane_repository,
     entitlements_service,
+    execution_sandbox_service,
     hybrid_policy_service,
+    memory_service,
     run_state_repository,
 )
 
@@ -14,6 +17,7 @@ from server_modules import (
 SUPPORTED_DEPLOYMENT_MODES = ("cloud_only", "local_only", "hybrid", "self_hosted_business")
 SUPPORTED_ATTACHMENT_KINDS = ("managed_cloud", "local_companion", "self_hosted_business_node")
 SUPPORTED_RUNTIME_MODES = {"hosted_secure", "local_secure", "privileged_device"}
+SUPPORTED_RUNTIME_TARGET_IDS = ("cloud_default", "local_companion", "self_host_runtime")
 
 TRUST_MODEL_MAP: dict[str, dict[str, Any]] = {
     "hosted_secure": {
@@ -43,6 +47,33 @@ TRUST_MODEL_MAP: dict[str, dict[str, Any]] = {
         "host_filesystem_access": "customer_policy_defined",
         "local_private_memory_access": "customer_policy_defined",
         "approval_mode": "workspace_policy_bound",
+    },
+}
+
+RUNTIME_TARGET_DEFINITIONS: dict[str, dict[str, Any]] = {
+    "cloud_default": {
+        "label": "Cloud Default",
+        "attachment_kind": "managed_cloud",
+        "execution_target": "cloud",
+        "connection_mode": "platform_cloud",
+        "product_default": True,
+        "description": "Cloud-hosted execution for the workspace. This remains the default product path when cloud is available.",
+    },
+    "local_companion": {
+        "label": "Local Companion",
+        "attachment_kind": "local_companion",
+        "execution_target": "local_companion",
+        "connection_mode": "platform_relay",
+        "product_default": False,
+        "description": "Paired local companion execution routed through the same workspace identity and policy model.",
+    },
+    "self_host_runtime": {
+        "label": "Self-Host Runtime",
+        "attachment_kind": "self_hosted_business_node",
+        "execution_target": "cloud",
+        "connection_mode": "workspace_hosted",
+        "product_default": False,
+        "description": "Customer-hosted secure execution that stays under the same account and workspace contract.",
     },
 }
 
@@ -115,10 +146,26 @@ def _normalize_runtime_class(value: Any) -> str:
 
 
 def _attachment_kind_for_profile(runtime_profile: Dict[str, Any], worker: Optional[Dict[str, Any]] = None) -> str:
-    runtime_class = _normalize_runtime_class(runtime_profile.get("runtime_class") or worker and worker.get("runtime_class"))
+    payload = _coerce_dict(worker)
+    runtime_class = _normalize_runtime_class(runtime_profile.get("runtime_class") or payload.get("runtime_class"))
+    runtime_type = str(payload.get("runtime_type") or "").strip().lower()
+    execution_targets = {
+        str(item or "").strip().lower()
+        for item in list(payload.get("execution_targets") or [])
+        if str(item or "").strip()
+    }
+    capabilities = {
+        str(item or "").strip().lower()
+        for item in list(payload.get("capabilities") or [])
+        if str(item or "").strip()
+    }
     if runtime_class in {"self_hosted_business_node", "self_hosted_worker", "enterprise_node"}:
         return "self_hosted_business_node"
     if runtime_class in {"desktop_companion", "mobile_runtime"}:
+        return "local_companion"
+    if runtime_type in {"local", "local_companion"}:
+        return "local_companion"
+    if "local" in execution_targets or "local.worker" in capabilities:
         return "local_companion"
     return "managed_cloud"
 
@@ -142,13 +189,45 @@ def _attachment_trust(runtime_kind: str) -> Dict[str, Any]:
     return dict(TRUST_MODEL_MAP["self_hosted_business_node"])
 
 
+def _parse_utc_ts(value: Any) -> Optional[datetime]:
+    token = str(value or "").strip()
+    if not token:
+        return None
+    if token.endswith("Z"):
+        token = f"{token[:-1]}+00:00"
+    try:
+        parsed = datetime.fromisoformat(token)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _worker_online_window_seconds(lease_seconds: Optional[int] = None) -> int:
+    return max(20, int(lease_seconds or 30) * 2)
+
+
+def _infer_attachment_online(payload: Dict[str, Any], control_state: str, status: str) -> bool:
+    if bool(payload.get("online")):
+        return True
+    if control_state != "active" or status in {"offline", "failed", "stopped", "revoked"}:
+        return False
+    seen_at = _parse_utc_ts(payload.get("last_seen_at") or payload.get("last_heartbeat_at"))
+    if seen_at is None:
+        return False
+    delta = (datetime.now(timezone.utc) - seen_at).total_seconds()
+    lease_seconds = int(payload.get("lease_seconds") or 30)
+    return delta <= _worker_online_window_seconds(lease_seconds)
+
+
 def _attachment_health(worker: Optional[Dict[str, Any]], runtime_kind: str) -> Dict[str, Any]:
     if runtime_kind == "managed_cloud":
         return {"online": True, "healthy": True, "control_state": "active", "status": "ready"}
     payload = _coerce_dict(worker)
     control_state = str(payload.get("control_state") or "active").strip().lower() or "active"
     status = str(payload.get("status") or "offline").strip().lower() or "offline"
-    online = bool(payload.get("online"))
+    online = _infer_attachment_online(payload, control_state, status)
     healthy = bool(online and control_state == "active" and status not in {"offline", "failed"})
     return {
         "online": online,
@@ -191,6 +270,111 @@ def _deployment_mode(attachments: Iterable[Dict[str, Any]]) -> str:
     if has_local:
         return "local_only"
     return "cloud_only"
+
+
+def _attachments_for_kind(attachments: Iterable[Dict[str, Any]], attachment_kind: str) -> List[Dict[str, Any]]:
+    token = str(attachment_kind or "").strip()
+    return [
+        dict(item)
+        for item in attachments
+        if isinstance(item, dict) and str(item.get("attachment_kind") or "").strip() == token
+    ]
+
+
+def _runtime_target_status(attachments: List[Dict[str, Any]]) -> str:
+    if not attachments:
+        return "unavailable"
+    online = any(bool(item.get("online")) for item in attachments)
+    healthy = any(bool(item.get("healthy")) for item in attachments)
+    if healthy and online:
+        return "live"
+    if online:
+        return "degraded"
+    return "offline"
+
+
+def _default_runtime_target_id(*, deployment_mode: str, attachments: List[Dict[str, Any]]) -> str:
+    mode = str(deployment_mode or "").strip().lower()
+    if mode == "self_hosted_business" and _attachments_for_kind(attachments, "self_hosted_business_node"):
+        return "self_host_runtime"
+    if mode == "local_only" and _attachments_for_kind(attachments, "local_companion"):
+        return "local_companion"
+    if _attachments_for_kind(attachments, "managed_cloud"):
+        return "cloud_default"
+    if _attachments_for_kind(attachments, "self_hosted_business_node"):
+        return "self_host_runtime"
+    if _attachments_for_kind(attachments, "local_companion"):
+        return "local_companion"
+    return "cloud_default"
+
+
+def build_workspace_runtime_targets(
+    *,
+    tenant_id: str,
+    workspace_id: str,
+    inventory: Dict[str, Any],
+) -> Dict[str, Any]:
+    attachments = [dict(item) for item in list(inventory.get("attachments") or []) if isinstance(item, dict)]
+    deployment_mode = str(inventory.get("deployment_mode") or _deployment_mode(attachments)).strip() or "cloud_only"
+    default_target_id = _default_runtime_target_id(
+        deployment_mode=deployment_mode,
+        attachments=attachments,
+    )
+    targets: List[Dict[str, Any]] = []
+
+    for target_id in SUPPORTED_RUNTIME_TARGET_IDS:
+        definition = dict(RUNTIME_TARGET_DEFINITIONS[target_id])
+        matching = _attachments_for_kind(attachments, str(definition.get("attachment_kind") or ""))
+        supports_runtime_modes = sorted(
+            {
+                str(mode or "").strip()
+                for item in matching
+                for mode in list(item.get("supports_runtime_modes") or [])
+                if str(mode or "").strip()
+            }
+        )
+        target_payload = {
+            "target_id": target_id,
+            "label": definition["label"],
+            "description": definition["description"],
+            "attachment_kind": definition["attachment_kind"],
+            "execution_target": definition["execution_target"],
+            "connection_mode": definition["connection_mode"],
+            "available": bool(matching),
+            "online": any(bool(item.get("online")) for item in matching),
+            "healthy": any(bool(item.get("healthy")) for item in matching),
+            "status": _runtime_target_status(matching),
+            "attachment_count": len(matching),
+            "attachment_ids": [
+                str(item.get("attachment_id") or "").strip()
+                for item in matching
+                if str(item.get("attachment_id") or "").strip()
+            ],
+            "default_for_workspace": target_id == default_target_id,
+            "product_default": bool(definition.get("product_default")),
+            "routed_through_platform": True,
+            "direct_mobile_connection_required": False,
+            "workspace_scoped_identity": True,
+            "supports_runtime_modes": supports_runtime_modes,
+        }
+        if matching:
+            target_payload["sample_attachment_label"] = str(matching[0].get("label") or "").strip() or None
+        targets.append(target_payload)
+
+    return {
+        "tenant_id": tenant_id,
+        "workspace_id": workspace_id,
+        "deployment_mode": deployment_mode,
+        "default_target_id": default_target_id,
+        "targets": targets,
+        "routing_contract": {
+            "product_default_target_id": "cloud_default",
+            "mobile_entry_mode": "platform_first",
+            "direct_mobile_lan_default": False,
+            "workspace_scoped_identity": True,
+            "supports_self_host_without_identity_fork": True,
+        },
+    }
 
 
 def _placement_manifest(install: Dict[str, Any]) -> Dict[str, Any]:
@@ -252,6 +436,10 @@ def _attachment_from_profile(
     payload = _coerce_dict(worker)
     runtime_kind = _attachment_kind_for_profile(profile, worker=payload)
     runtime_class = _normalize_runtime_class(profile.get("runtime_class") or payload.get("runtime_class"))
+    if runtime_kind == "local_companion" and runtime_class not in {"desktop_companion", "mobile_runtime"}:
+        runtime_class = "desktop_companion"
+    elif runtime_kind == "managed_cloud" and runtime_class in {"desktop_companion", "mobile_runtime"}:
+        runtime_class = "cloud_worker"
     runtime_id = str(profile.get("runtime_id") or payload.get("runtime_id") or payload.get("worker_id") or "").strip() or None
     machine_id = str(profile.get("machine_id") or payload.get("machine_id") or runtime_id or "").strip() or None
     health = _attachment_health(payload, runtime_kind)
@@ -420,6 +608,27 @@ async def list_workspace_runtime_attachments(
     }
 
 
+async def list_workspace_runtime_targets(
+    *,
+    tenant_id: str,
+    workspace_id: str,
+    runtime_profiles: Optional[List[Dict[str, Any]]] = None,
+    fleet_workers: Optional[List[Dict[str, Any]]] = None,
+    inventory: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    resolved_inventory = inventory or await list_workspace_runtime_attachments(
+        tenant_id=tenant_id,
+        workspace_id=workspace_id,
+        runtime_profiles=runtime_profiles,
+        fleet_workers=fleet_workers,
+    )
+    return build_workspace_runtime_targets(
+        tenant_id=tenant_id,
+        workspace_id=workspace_id,
+        inventory=resolved_inventory,
+    )
+
+
 async def resolve_install_runtime_plan(
     *,
     tenant_id: str,
@@ -444,6 +653,21 @@ async def resolve_install_runtime_plan(
         **_coerce_dict(install.get("policy_context_overrides")),
         **_coerce_dict(policy_context),
     }
+    requested_summary_payload_classes = hybrid_policy_service.normalize_summary_bridge_payload_classes(
+        policy.get("summary_bridge_payloads")
+        if isinstance(policy.get("summary_bridge_payloads"), (list, tuple, set))
+        else policy.get("summary_payload_classes")
+        if isinstance(policy.get("summary_payload_classes"), (list, tuple, set))
+        else []
+    )
+    summary_bridge_status = memory_service.hybrid_summary_bridge_status(
+        workspace_id,
+        payload_classes=requested_summary_payload_classes or None,
+        agent_install_id=str(install.get("id") or "").strip() or None,
+    )
+    if "last_safe_summary_available" not in policy:
+        policy["last_safe_summary_available"] = bool(summary_bridge_status.get("last_safe_summary_available"))
+    policy["summary_bridge_status"] = dict(summary_bridge_status)
     try:
         hybrid_policy = hybrid_policy_service.evaluate_hybrid_runtime_policy(
             runtime_mode=runtime_mode,
@@ -456,6 +680,11 @@ async def resolve_install_runtime_plan(
             reason=error.reason,
             enforcement_state=error.policy_state,
         ) from error
+    summary_bridge_policy = hybrid_policy.get("summary_bridge") if isinstance(hybrid_policy.get("summary_bridge"), dict) else {}
+    hybrid_policy["summary_bridge"] = {
+        **dict(summary_bridge_policy),
+        "status": dict(summary_bridge_status),
+    }
     placement_enforcement = hybrid_policy.get("placement") if isinstance(hybrid_policy.get("placement"), dict) else {}
     required_attachment_kinds = [
         str(item or "").strip()
@@ -469,6 +698,7 @@ async def resolve_install_runtime_plan(
     ]
     required_capabilities = _list_strings(placement_enforcement.get("required_capabilities"))
     required_connectors = _list_strings(placement_enforcement.get("required_connectors"))
+    state_layer_policy = execution_sandbox_service.state_layer_policy(runtime_mode=runtime_mode)
 
     filtered: List[Dict[str, Any]] = []
     requested_attachment_token = str(requested_attachment_id or "").strip()
@@ -550,6 +780,7 @@ async def resolve_install_runtime_plan(
                 "requested_memory_layers": list(hybrid_policy.get("requested_memory_layers") or []),
                 "layer_sync_classes": dict(hybrid_policy.get("layer_sync_classes") or {}),
                 "summary_bridge": dict(hybrid_policy.get("summary_bridge") or {}),
+                "summary_bridge_status": dict(summary_bridge_status),
             },
             "placement_enforcement": {
                 "priority_order": list(placement_enforcement.get("priority_order") or []),
@@ -559,6 +790,7 @@ async def resolve_install_runtime_plan(
                 "required_connectors": required_connectors,
             },
             "degraded_mode": dict(hybrid_policy.get("degraded_mode") or {}),
+            "state_layer_policy": state_layer_policy,
         }
 
     if selected is None:
@@ -608,6 +840,7 @@ async def resolve_install_runtime_plan(
             "requested_memory_layers": list(hybrid_policy.get("requested_memory_layers") or []),
             "layer_sync_classes": dict(hybrid_policy.get("layer_sync_classes") or {}),
             "summary_bridge": dict(hybrid_policy.get("summary_bridge") or {}),
+            "summary_bridge_status": dict(summary_bridge_status),
         },
         "placement_enforcement": {
             "priority_order": list(placement_enforcement.get("priority_order") or []),
@@ -617,4 +850,5 @@ async def resolve_install_runtime_plan(
             "required_connectors": required_connectors,
         },
         "degraded_mode": dict(hybrid_policy.get("degraded_mode") or {}),
+        "state_layer_policy": state_layer_policy,
     }

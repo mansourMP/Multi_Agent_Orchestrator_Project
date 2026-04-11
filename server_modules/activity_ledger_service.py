@@ -63,12 +63,16 @@ def _coerce_artifacts(value: Any) -> List[Dict[str, Any]]:
     for item in items:
         if not isinstance(item, dict):
             continue
+        name = str(item.get("name") or item.get("label") or item.get("title") or "").strip() or None
+        preview_path = str(item.get("preview_path") or item.get("preview_url") or "").strip() or None
         record = {
             "id": str(item.get("id") or "").strip() or None,
-            "name": str(item.get("name") or "").strip() or None,
+            "name": name,
+            "label": name,
             "kind": str(item.get("kind") or item.get("type") or "").strip() or None,
             "path": str(item.get("path") or item.get("uri") or "").strip() or None,
-            "preview_path": str(item.get("preview_path") or item.get("preview_url") or "").strip() or None,
+            "preview_path": preview_path,
+            "preview_url": preview_path,
             "review_required": bool(item.get("review_required")),
         }
         out.append({key: value for key, value in record.items() if value is not None})
@@ -151,9 +155,15 @@ def _project_notification_item(row: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _project_timeline_item(row: Dict[str, Any]) -> Dict[str, Any]:
+    ts = _iso_ts(row.get("created_at"))
+    actor_type = str(row.get("actor_type") or "system").strip() or "system"
+    actor_id = str(row.get("actor_id") or "system").strip() or "system"
+    install_id = str(row.get("install_id") or "").strip() or None
+    app_id = str(row.get("app_id") or "").strip() or None
     return {
         "id": str(row.get("id") or "").strip() or None,
-        "ts": _iso_ts(row.get("created_at")),
+        "ts": ts,
+        "created_at": ts,
         "workspace_id": str(row.get("workspace_id") or "").strip() or None,
         "event_class": str(row.get("event_class") or "").strip() or None,
         "detail_level": str(row.get("detail_level") or "").strip() or None,
@@ -168,11 +178,15 @@ def _project_timeline_item(row: Dict[str, Any]) -> Dict[str, Any]:
         "title": str(row.get("title") or "").strip() or None,
         "summary": str(row.get("summary") or "").strip() or None,
         "review_required": bool(row.get("review_required")),
+        "actor_type": actor_type,
+        "actor_id": actor_id,
+        "install_id": install_id,
+        "app_id": app_id,
         "actor": {
-            "type": str(row.get("actor_type") or "system").strip() or "system",
-            "id": str(row.get("actor_id") or "system").strip() or "system",
-            "install_id": str(row.get("install_id") or "").strip() or None,
-            "app_id": str(row.get("app_id") or "").strip() or None,
+            "type": actor_type,
+            "id": actor_id,
+            "install_id": install_id,
+            "app_id": app_id,
         },
         "artifacts": _coerce_artifacts(row.get("artifacts")),
         "metadata": _coerce_dict(row.get("metadata")),
@@ -395,6 +409,7 @@ async def list_sage_recent_activity_payload(
         {
             "id": str(row.get("id") or "").strip() or None,
             "ts": _iso_ts(row.get("created_at")),
+            "created_at": _iso_ts(row.get("created_at")),
             "event_class": str(row.get("event_class") or "").strip() or None,
             "action": str(row.get("action") or "").strip() or None,
             "title": str(row.get("title") or "").strip() or None,
@@ -410,15 +425,19 @@ async def list_sage_recent_activity_payload(
         for row in rows
     ]
     by_class: Dict[str, int] = {}
+    review_required_count = 0
     for item in items:
         token = str(item.get("event_class") or "").strip()
         if token:
             by_class[token] = by_class.get(token, 0) + 1
+        if bool(item.get("review_required")):
+            review_required_count += 1
     return {
         "items": items,
         "count": len(items),
         "summary": {
             "count": len(items),
             "by_class": by_class,
+            "review_required_count": review_required_count,
         },
     }

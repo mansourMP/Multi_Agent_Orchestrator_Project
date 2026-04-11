@@ -61,8 +61,10 @@ def trigger_heartbeat_response(
 async def register_webhook_trigger_response(
     *,
     request: Any,
+    current_user: Any,
     load_webhook_triggers: Callable[[], None],
     read_json_payload: Callable[..., Any],
+    enforce_workspace_access: Callable[..., str],
     register_webhook_trigger_payload: Callable[..., dict[str, Any]],
     uuid_factory: Callable[[], Any],
     build_webhook_trigger_fn: Callable[..., dict[str, Any]],
@@ -75,6 +77,13 @@ async def register_webhook_trigger_response(
         request,
         invalid_detail="Invalid webhook trigger payload",
     )
+    if isinstance(body, dict):
+        body = dict(body)
+        body["workspace_id"] = enforce_workspace_access(
+            current_user,
+            body.get("workspace_id"),
+            minimum_role="member",
+        )
     return register_webhook_trigger_payload(
         body,
         uuid_factory=uuid_factory,
@@ -90,6 +99,7 @@ async def ingest_webhook_response(
     *,
     request: Any,
     current_user: Any,
+    enforce_workspace_access: Callable[..., str],
     read_json_payload: Callable[..., Any],
     ingest_webhook_payload: Callable[..., Any],
     match_webhook_trigger_fn: Callable[[str, str], Any],
@@ -102,8 +112,13 @@ async def ingest_webhook_response(
         request,
         invalid_detail="Invalid webhook payload",
     )
+    resolved_workspace_id = enforce_workspace_access(
+        current_user,
+        workspace_id,
+        minimum_role="member",
+    )
     return await ingest_webhook_payload(
-        workspace_id=workspace_id,
+        workspace_id=resolved_workspace_id,
         request_url=str(request.url),
         payload=payload,
         current_user=current_user,

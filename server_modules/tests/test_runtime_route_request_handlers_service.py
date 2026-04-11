@@ -50,8 +50,10 @@ class RuntimeRouteRequestHandlersServiceTests(unittest.TestCase):
         async def _run():
             return await runtime_route_request_handlers_service.register_webhook_trigger_response(
                 request=_Request({"url_pattern": "*", "workflow_id": "wf-1"}),
+                current_user={"user_id": "user-1"},
                 load_webhook_triggers=lambda: calls.append("loaded"),
                 read_json_payload=lambda request, invalid_detail: request.json(),
+                enforce_workspace_access=lambda current_user, workspace_id, minimum_role="member": "ws-1",
                 register_webhook_trigger_payload=lambda body, **kwargs: {"ok": True, "workflow_id": body["workflow_id"]},
                 uuid_factory=lambda: "uuid-1",
                 build_webhook_trigger_fn=lambda **kwargs: kwargs,
@@ -73,6 +75,7 @@ class RuntimeRouteRequestHandlersServiceTests(unittest.TestCase):
                 "default",
                 request=_Request({"ok": True}),
                 current_user={"user_id": "user-1"},
+                enforce_workspace_access=lambda current_user, workspace_id, minimum_role="member": "ws-1",
                 read_json_payload=lambda request, invalid_detail: request.json(),
                 ingest_webhook_payload=_ingest_payload,
                 match_webhook_trigger_fn=lambda workspace_id, request_url: {},
@@ -83,7 +86,7 @@ class RuntimeRouteRequestHandlersServiceTests(unittest.TestCase):
             )
 
         payload = self._run_async(_run())
-        self.assertEqual(payload["workspace_id"], "default")
+        self.assertEqual(payload["workspace_id"], "ws-1")
         self.assertEqual(payload["payload"], {"ok": True})
         self.assertEqual(payload["request_url"], "https://example.test/hook")
 

@@ -170,6 +170,71 @@ class NotificationServiceTests(unittest.TestCase):
             )
             self.assertTrue(bool(after_item.get("read_at")))
 
+    def test_list_notification_payload_respects_workspace_history_window(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            db_path = Path(tempdir) / "runtime-state.sqlite3"
+            runtime_state_store.init_runtime_state_db(db_path)
+            tenant_id = "tenant-history"
+            workspace_id = "workspace-history"
+            runtime_state_store.upsert_notification(
+                db_path,
+                {
+                    "id": "notif-old",
+                    "ts": "2026-03-20T00:00:00Z",
+                    "tenant_id": tenant_id,
+                    "workspace_id": workspace_id,
+                    "channel": "runtime",
+                    "direction": "system",
+                    "event_type": "notification",
+                    "action": "run_completed",
+                    "title": "Old run",
+                    "text": "Old notification",
+                    "session_key": "run:old",
+                    "session_id": "run:old",
+                    "metadata": {"path": "/runs/run-old"},
+                },
+            )
+            runtime_state_store.upsert_notification(
+                db_path,
+                {
+                    "id": "notif-new",
+                    "ts": "2026-04-08T00:00:00Z",
+                    "tenant_id": tenant_id,
+                    "workspace_id": workspace_id,
+                    "channel": "runtime",
+                    "direction": "system",
+                    "event_type": "notification",
+                    "action": "run_completed",
+                    "title": "New run",
+                    "text": "New notification",
+                    "session_key": "run:new",
+                    "session_id": "run:new",
+                    "metadata": {"path": "/runs/run-new"},
+                },
+            )
+            current_user = {
+                "auth_type": "bearer",
+                "user_id": "user-1",
+                "role": "owner",
+                "workspace_access": {
+                    workspace_id: {"tenant_id": tenant_id, "role": "owner"},
+                },
+            }
+
+            with patch("server_modules.notification_service.time.time", return_value=1775865600.0), patch(
+                "server_modules.notification_service.entitlements_service.workspace_entitlement_payload_for_workspace_id",
+                return_value={"capabilities": {"history_window_days": 7}},
+            ):
+                payload = notification_service.list_notification_payload(
+                    current_user=current_user,
+                    limit=10,
+                    tenant_id=tenant_id,
+                    workspace_id=workspace_id,
+                    db_path=db_path,
+                )
+
+            self.assertEqual([item["id"] for item in payload["items"]], ["notif-new"])
+
     def test_list_notification_payload_prefers_activity_ledger_for_workspace_feed(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:
             db_path = Path(tempdir) / "runtime-state.sqlite3"
@@ -258,6 +323,32 @@ class NotificationServiceTests(unittest.TestCase):
 
         self.assertEqual(failed["action"], "run_failed")
         self.assertEqual(revoked["action"], "machine_revoked")
+        self.assertEqual(failed["metadata"]["status"], "failed")
+
+    def test_approval_resolved_notifications_and_activity_metadata_are_visible(self) -> None:
+        approval_event = outbox_service.OutboxEvent(
+            event_id="approval-resolved-1",
+            event_type="approval_resolved",
+            tenant_id="tenant-1",
+            workspace_id="workspace-1",
+            run_id="run-1",
+            trace_id="trace-1",
+            payload={
+                "approval_id": "approval-1",
+                "resolution": "approved",
+                "reason": "Looks good.",
+            },
+            created_at="2026-04-08T00:00:00Z",
+        )
+
+        notification = notification_service.build_notification_from_outbox_event(approval_event)
+
+        self.assertEqual(notification["action"], "approval_approved")
+        self.assertEqual(notification["title"], "Approval approved")
+        self.assertEqual(notification["text"], "Looks good.")
+        self.assertEqual(notification["metadata"]["activity_event_class"], "approval")
+        self.assertEqual(notification["metadata"]["status"], "approved")
+        self.assertEqual(notification["metadata"]["path"], "/runs/run-1")
 
     def test_deliver_notification_from_outbox_event_records_activity_ledger(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:

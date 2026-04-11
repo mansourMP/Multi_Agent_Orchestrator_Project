@@ -1,7 +1,12 @@
+from datetime import datetime, timezone
+import time
+
 from server_modules import runtime_config as config
 from server_modules import shared as shared
 from server_modules import runtime_common as common
+from server_modules import entitlements_service
 from server_modules import run_state_repository
+from server_modules.auth import enforce_workspace_access
 from server_modules.runs_output import _compact_event_text, _json_safe
 
 globals().update({key: value for key, value in vars(config).items() if not key.startswith("__")})
@@ -29,7 +34,9 @@ def _current_user_is_privileged(current_user: Any) -> bool:
         return True
     user_id = str(current_user.get("user_id") or "").strip()
     email = str(current_user.get("email") or "").strip().lower()
-    return bool((user_id and user_id in ORION_ADMIN_USER_IDS) or (email and email in ORION_ADMIN_EMAILS))
+    admin_user_ids = set(globals().get("ORION_ADMIN_USER_IDS") or [])
+    admin_emails = set(globals().get("ORION_ADMIN_EMAILS") or [])
+    return bool((user_id and user_id in admin_user_ids) or (email and email in admin_emails))
 
 
 def _current_user_owner_id(current_user: Any) -> str:
@@ -58,6 +65,89 @@ def _owned_run_ids_for_user(user_id: str) -> set[str]:
         if token:
             owned.add(token)
     return owned
+
+
+def _extract_workspace_id(payload: Any) -> str:
+    if not isinstance(payload, dict):
+        return ""
+    direct = str(payload.get("workspace_id") or "").strip()
+    if direct:
+        return _normalize_workspace_id(direct)
+    context = payload.get("context") if isinstance(payload.get("context"), dict) else {}
+    metadata = context.get("metadata") if isinstance(context.get("metadata"), dict) else {}
+    return _normalize_workspace_id(
+        context.get("workspace_id") or metadata.get("workspace_id")
+    )
+
+
+def _extract_tenant_id(payload: Any) -> str:
+    if not isinstance(payload, dict):
+        return ""
+    direct = str(payload.get("tenant_id") or "").strip()
+    if direct:
+        return direct
+    context = payload.get("context") if isinstance(payload.get("context"), dict) else {}
+    metadata = context.get("metadata") if isinstance(context.get("metadata"), dict) else {}
+    return str(context.get("tenant_id") or metadata.get("tenant_id") or "").strip()
+
+
+def _workspace_id_for_run_id(run_id: str) -> str:
+    token = str(run_id or "").strip()
+    if not token:
+        return ""
+    live_run = run_state_repository.sync_get_live_run(token)
+    workspace_id = _extract_workspace_id(live_run)
+    if workspace_id:
+        return workspace_id
+    with RUN_HISTORY_LOCK:
+        history_items = list(RUN_HISTORY)
+    for item in history_items:
+        if not isinstance(item, dict):
+            continue
+        if str(item.get("run_id") or "").strip() != token:
+            continue
+        workspace_id = _extract_workspace_id(item)
+        if workspace_id:
+            return workspace_id
+    return ""
+
+
+def _workspace_entitlement_payload(
+    cache: dict[str, dict[str, Any]],
+    workspace_id: str,
+) -> dict[str, Any]:
+    token = _normalize_workspace_id(workspace_id)
+    payload = cache.get(token)
+    if payload is None:
+        payload = entitlements_service.workspace_entitlement_payload_for_workspace_id(workspace_id=token)
+        cache[token] = payload
+    return payload
+
+
+def _workspace_history_cutoff_ts(
+    cache: dict[str, dict[str, Any]],
+    workspace_id: str,
+) -> float:
+    payload = _workspace_entitlement_payload(cache, workspace_id)
+    capabilities = payload.get("capabilities") if isinstance(payload.get("capabilities"), dict) else {}
+    history_window_days = max(1, int(capabilities.get("history_window_days") or 30))
+    return float(time.time()) - float(history_window_days * 86400)
+
+
+def _payload_timestamp_seconds(payload: dict[str, Any], *keys: str) -> float | None:
+    for key in keys:
+        text = str(payload.get(key) or "").strip()
+        if not text:
+            continue
+        normalized = text[:-1] + "+00:00" if text.endswith("Z") else text
+        try:
+            parsed = datetime.fromisoformat(normalized)
+        except ValueError:
+            continue
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed.timestamp()
+    return None
 
 def _persist_approval_audit():
     with APPROVAL_AUDIT_LOCK:
@@ -90,6 +180,8 @@ def _load_approval_audit():
                     "approval_id": approval_id,
                     "run_id": str(item.get("run_id") or "").strip(),
                     "event_id": str(item.get("event_id") or "").strip(),
+                    "workspace_id": _normalize_workspace_id(item.get("workspace_id")),
+                    "tenant_id": str(item.get("tenant_id") or "").strip(),
                     "stage": str(item.get("stage") or "").strip().lower(),
                     "decision": str(item.get("decision") or "").strip().lower(),
                     "actor": str(item.get("actor") or "").strip().lower(),
@@ -135,6 +227,8 @@ def _append_approval_audit(
         "approval_id": aid,
         "run_id": str(run_id or "").strip(),
         "event_id": str(event_id or "").strip(),
+        "workspace_id": "",
+        "tenant_id": "",
         "stage": str(stage or "").strip().lower(),
         "decision": str(decision or "").strip().lower(),
         "actor": str(actor or "").strip().lower() or "system",
@@ -142,6 +236,10 @@ def _append_approval_audit(
         "note": _compact_event_text(note, limit=300),
         "metadata": _json_safe(metadata if isinstance(metadata, dict) else {}),
     }
+    if item["run_id"]:
+        live_run = run_state_repository.sync_get_live_run(item["run_id"])
+        item["workspace_id"] = _extract_workspace_id(live_run)
+        item["tenant_id"] = _extract_tenant_id(live_run)
     with APPROVAL_AUDIT_LOCK:
         APPROVAL_AUDIT.insert(0, item)
         del APPROVAL_AUDIT[ORION_APPROVAL_AUDIT_LIMIT:]
@@ -243,6 +341,7 @@ async def resolve_cognitive_approval(event_id: str, payload: ApprovalResolvePayl
 
 async def get_approval_audit(
     limit: int = 100,
+    workspace_id: Optional[str] = None,
     run_id: Optional[str] = None,
     event_id: Optional[str] = None,
     approval_id: Optional[str] = None,
@@ -250,6 +349,20 @@ async def get_approval_audit(
     current_user=Depends(require_api_key),
 ):
     safe_limit = max(1, min(int(limit), 500))
+    workspace_filter = (
+        enforce_workspace_access(current_user, workspace_id, minimum_role="viewer")
+        if workspace_id is not None
+        else None
+    )
+    entitlement_cache: dict[str, dict[str, Any]] = {}
+    if workspace_filter:
+        capabilities = (
+            _workspace_entitlement_payload(entitlement_cache, workspace_filter).get("capabilities")
+            if isinstance(_workspace_entitlement_payload(entitlement_cache, workspace_filter), dict)
+            else {}
+        )
+        if not bool((capabilities or {}).get("approvals_enabled")):
+            raise HTTPException(status_code=403, detail="Approvals are not included in this workspace plan.")
     owned_run_ids: Optional[set[str]] = None
     if not _current_user_is_privileged(current_user):
         owner_user_id = _current_user_owner_id(current_user)
@@ -274,6 +387,24 @@ async def get_approval_audit(
             continue
         if correlation_value and str(item.get("correlation_id") or "").strip() != correlation_value:
             continue
+        if workspace_filter:
+            item_workspace_id = _normalize_workspace_id(item.get("workspace_id")) or _workspace_id_for_run_id(
+                item.get("run_id")
+            )
+            if item_workspace_id != workspace_filter:
+                continue
+        else:
+            item_workspace_id = _normalize_workspace_id(item.get("workspace_id")) or _workspace_id_for_run_id(
+                item.get("run_id")
+            )
+        item_entitlements = _workspace_entitlement_payload(entitlement_cache, item_workspace_id)
+        item_capabilities = item_entitlements.get("capabilities") if isinstance(item_entitlements.get("capabilities"), dict) else {}
+        if not bool(item_capabilities.get("approvals_enabled")):
+            continue
+        cutoff_ts = _workspace_history_cutoff_ts(entitlement_cache, item_workspace_id)
+        event_ts = _payload_timestamp_seconds(item, "ts")
+        if event_ts is not None and event_ts < cutoff_ts:
+            continue
         if owned_run_ids is not None:
             item_run_id = str(item.get("run_id") or "").strip()
             if not item_run_id or item_run_id not in owned_run_ids:
@@ -293,7 +424,20 @@ async def list_pending_approvals(
     current_user=Depends(require_api_key),
 ):
     safe_limit = max(1, min(int(limit), 300))
-    workspace_filter = _normalize_workspace_id(workspace_id) if workspace_id else None
+    workspace_filter = (
+        enforce_workspace_access(current_user, workspace_id, minimum_role="viewer")
+        if workspace_id is not None
+        else None
+    )
+    entitlement_cache: dict[str, dict[str, Any]] = {}
+    if workspace_filter:
+        capabilities = (
+            _workspace_entitlement_payload(entitlement_cache, workspace_filter).get("capabilities")
+            if isinstance(_workspace_entitlement_payload(entitlement_cache, workspace_filter), dict)
+            else {}
+        )
+        if not bool((capabilities or {}).get("approvals_enabled")):
+            raise HTTPException(status_code=403, detail="Approvals are not included in this workspace plan.")
     owner_user_id = ""
     if not _current_user_is_privileged(current_user):
         owner_user_id = _current_user_owner_id(current_user)
@@ -310,6 +454,10 @@ async def list_pending_approvals(
         metadata = context.get("metadata") if isinstance(context.get("metadata"), dict) else {}
         run_workspace = _normalize_workspace_id(context.get("workspace_id"))
         if workspace_filter and run_workspace != workspace_filter:
+            continue
+        run_entitlements = _workspace_entitlement_payload(entitlement_cache, run_workspace)
+        run_capabilities = run_entitlements.get("capabilities") if isinstance(run_entitlements.get("capabilities"), dict) else {}
+        if not bool(run_capabilities.get("approvals_enabled")):
             continue
         status = str(run.get("status") or "").strip().lower()
         if status != "waiting_for_input":
@@ -353,15 +501,19 @@ async def list_pending_approvals(
 
 async def get_audit(
     limit: int = 100,
+    workspace_id: Optional[str] = None,
     run_id: Optional[str] = None,
     event_id: Optional[str] = None,
     approval_id: Optional[str] = None,
     correlation_id: Optional[str] = None,
+    current_user=Depends(require_api_key),
 ):
     return await get_approval_audit(
         limit=limit,
+        workspace_id=workspace_id,
         run_id=run_id,
         event_id=event_id,
         approval_id=approval_id,
         correlation_id=correlation_id,
+        current_user=current_user,
     )

@@ -13,6 +13,7 @@ def build_runs_history_callbacks(
     history_item_matches: Callable[[Any, Any, Any, Any], bool],
     current_user_is_privileged: Callable[[Any], bool],
     extract_run_owner_user_id: Callable[[Any], str],
+    enforce_workspace_access: Callable[..., str] | None,
     normalize_run_id_token: Callable[[Any], str | None],
     summarize_history_item: Callable[[Any], dict[str, Any]],
 ) -> dict[str, Any]:
@@ -23,6 +24,7 @@ def build_runs_history_callbacks(
         "history_item_matches": history_item_matches,
         "current_user_is_privileged": current_user_is_privileged,
         "extract_run_owner_user_id": extract_run_owner_user_id,
+        "enforce_workspace_access": enforce_workspace_access,
         "normalize_run_id_token": normalize_run_id_token,
         "summarize_history_item": summarize_history_item,
     }
@@ -41,14 +43,22 @@ def build_runs_history_payload(
     history_item_matches: Callable[[Any, Any, Any, Any], bool],
     current_user_is_privileged: Callable[[Any], bool],
     extract_run_owner_user_id: Callable[[Any], str],
+    enforce_workspace_access: Callable[..., str] | None,
     normalize_run_id_token: Callable[[Any], str | None],
     summarize_history_item: Callable[[Any], dict[str, Any]],
 ) -> dict[str, Any]:
     refresh_server_exports()
     safe_limit = max(1, min(limit, 200))
+    resolved_workspace_id = workspace_id
+    if workspace_id is not None and callable(enforce_workspace_access):
+        resolved_workspace_id = enforce_workspace_access(
+            current_user,
+            workspace_id,
+            minimum_role="viewer",
+        )
     with run_history_lock:
         items = list(run_history)
-    filtered = [item for item in items if history_item_matches(item, workspace_id, status, pack_id)]
+    filtered = [item for item in items if history_item_matches(item, resolved_workspace_id, status, pack_id)]
     if not current_user_is_privileged(current_user):
         request_user_id = str(current_user.get("user_id") or "").strip()
         if not request_user_id:

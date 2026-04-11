@@ -13,13 +13,16 @@ from scripts.platform_execution import current_platform_context, supported_devic
 from server_modules.api_contract import ApiArtifactListResponse, ApiArtifactPreviewResponse
 from server_modules.auth import enforce_workspace_access
 from server_modules import artifact_service
+from server_modules import entitlements_service
 from server_modules import run_state_repository
 from server_modules.run_service import RunExecutionServices, build_server_system_run_execution_services
 from server_modules.schemas import DeviceExecuteRequest, WorkspaceFileDeleteRequest, WorkspaceFileWriteRequest
 from server_modules.turn_runtime import (
     build_execute_unowned_system_run_start_request_via_turn_runtime,
     execute_built_unowned_system_run_start_request_via_turn_runtime,
+    execute_run_start_request_via_turn_runtime as execute_async_run_start_request_via_turn_runtime,
 )
+from server_modules.vault_helpers import list_vault_connectors, resolve_vault_credential
 
 
 def _late_server_export(name: str):
@@ -33,6 +36,66 @@ def _refresh_server_exports():
 
     globals().update(_server.__dict__)
     return _server
+
+
+def _normalize_agent_role(value: Any) -> str:
+    try:
+        from server_modules.runs_delegation import normalize_agent_role as _normalize
+    except Exception:
+        return str(value or "").strip().lower()
+    return str(_normalize(value) or "").strip().lower()
+
+
+def _normalize_workspace_id(value: Any) -> str:
+    token = str(value or "").strip()
+    return token or "default"
+
+
+def _workspace_entitlement_payload(
+    cache: Dict[str, Dict[str, Any]],
+    workspace_id: str,
+) -> Dict[str, Any]:
+    token = _normalize_workspace_id(workspace_id)
+    payload = cache.get(token)
+    if payload is None:
+        payload = entitlements_service.workspace_entitlement_payload_for_workspace_id(workspace_id=token)
+        cache[token] = payload
+    return payload
+
+
+def _workspace_history_cutoff_ts(
+    cache: Dict[str, Dict[str, Any]],
+    workspace_id: str,
+) -> float:
+    payload = _workspace_entitlement_payload(cache, workspace_id)
+    capabilities = payload.get("capabilities") if isinstance(payload.get("capabilities"), dict) else {}
+    history_window_days = max(1, int(capabilities.get("history_window_days") or 30))
+    return float(datetime.now(timezone.utc).timestamp()) - float(history_window_days * 86400)
+
+
+def _payload_timestamp_seconds(payload: Dict[str, Any], *keys: str) -> Optional[float]:
+    for key in keys:
+        text = str(payload.get(key) or "").strip()
+        if not text:
+            continue
+        normalized = text[:-1] + "+00:00" if text.endswith("Z") else text
+        try:
+            parsed = datetime.fromisoformat(normalized)
+        except ValueError:
+            continue
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed.timestamp()
+    return None
+
+
+def _ensure_artifacts_access_for_workspace(workspace_id: str) -> None:
+    payload = entitlements_service.workspace_entitlement_payload_for_workspace_id(
+        workspace_id=_normalize_workspace_id(workspace_id),
+    )
+    capabilities = payload.get("capabilities") if isinstance(payload.get("capabilities"), dict) else {}
+    if not bool(capabilities.get("artifacts_enabled")):
+        raise HTTPException(status_code=403, detail="Artifacts are not included in this workspace plan.")
 
 
 execute_system_run_start_request_via_turn_runtime = build_execute_unowned_system_run_start_request_via_turn_runtime()
@@ -49,6 +112,24 @@ def _execute_workspace_run_request(request: Any) -> Dict[str, Any]:
         request,
         execute_system_run_start_request_via_turn_runtime_fn=execute_system_run_start_request_via_turn_runtime,
         build_run_execution_services_fn=_agent_workspace_run_execution_services,
+    )
+
+
+async def _execute_workspace_run_request_async(
+    request: Any,
+    *,
+    current_user: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    system_user = (
+        dict(current_user)
+        if isinstance(current_user, dict)
+        else {"auth_type": "api_key", "user_id": "", "email": ""}
+    )
+    return await execute_async_run_start_request_via_turn_runtime(
+        request,
+        current_user=system_user,
+        stamp_request_owner_fn=lambda req, current_user: req,
+        services=_agent_workspace_run_execution_services(),
     )
 
 
@@ -234,14 +315,14 @@ def _agent_workspace_search_text(item: Dict[str, Any]) -> str:
 
 
 def _resolve_agent_role_for_workspace_item(item: Dict[str, Any]) -> Tuple[str, str]:
-    explicit = normalize_agent_role(item.get("agent_role"))
+    explicit = _normalize_agent_role(item.get("agent_role"))
     source = str(item.get("agent_role_source") or "").strip().lower()
     if explicit:
         return explicit, source or "explicit"
 
     context = item.get("context") if isinstance(item.get("context"), dict) else {}
     metadata = context.get("metadata") if isinstance(context.get("metadata"), dict) else {}
-    nested_explicit = normalize_agent_role(metadata.get("agent_role"))
+    nested_explicit = _normalize_agent_role(metadata.get("agent_role"))
     nested_source = str(metadata.get("agent_role_source") or "").strip().lower()
     if nested_explicit:
         return nested_explicit, nested_source or "explicit"
@@ -916,7 +997,7 @@ def _agent_workspace_channel_bindings(
         if not channel or channel not in allowed:
             continue
         metadata = connector.get("metadata") if isinstance(connector.get("metadata"), dict) else {}
-        assigned_role = normalize_agent_role(metadata.get("agent_role"))
+        assigned_role = _normalize_agent_role(metadata.get("agent_role"))
         paused = bool(metadata.get("paused"))
         if assigned_role and assigned_role != agent_role:
             continue
@@ -1233,7 +1314,7 @@ def register_agent_workspace_routes(app) -> None:
         artifact_limit: int = 40,
         current_user=Depends(require_admin_api_key),
     ):
-        target_role = normalize_agent_role(agent_role)
+        target_role = _normalize_agent_role(agent_role)
         if not target_role:
             raise HTTPException(status_code=400, detail="Unknown agent role.")
         if ORION_SINGLE_AGENT_MODE and target_role != ORION_SINGLE_AGENT_ROLE:
@@ -1502,6 +1583,9 @@ def register_agent_workspace_routes(app) -> None:
         current_user: Any = None,
     ):
         workspace_filter = _normalize_workspace_id(enforce_workspace_access(current_user, workspace_id)) if workspace_id else None
+        entitlement_cache: Dict[str, Dict[str, Any]] = {}
+        if workspace_filter:
+            _ensure_artifacts_access_for_workspace(workspace_filter)
         safe_history_limit = max(1, min(int(history_limit), 160))
         safe_limit = max(1, min(int(limit), 240))
 
@@ -1522,7 +1606,15 @@ def register_agent_workspace_routes(app) -> None:
         for item in history_items_all:
             if not isinstance(item, dict):
                 continue
-            if workspace_filter and str(item.get("workspace_id") or "").strip() != workspace_filter:
+            item_workspace_id = _normalize_workspace_id(item.get("workspace_id"))
+            if workspace_filter and item_workspace_id != workspace_filter:
+                continue
+            item_entitlements = _workspace_entitlement_payload(entitlement_cache, item_workspace_id)
+            item_capabilities = item_entitlements.get("capabilities") if isinstance(item_entitlements.get("capabilities"), dict) else {}
+            if not bool(item_capabilities.get("artifacts_enabled")):
+                continue
+            event_ts = _payload_timestamp_seconds(item, "updated_at", "completed_at", "created_at")
+            if event_ts is not None and event_ts < _workspace_history_cutoff_ts(entitlement_cache, item_workspace_id):
                 continue
             remember_snapshot(_hydrate_workspace_item_role(dict(item)))
             if len(ordered_run_ids) >= safe_history_limit:
@@ -1536,7 +1628,15 @@ def register_agent_workspace_routes(app) -> None:
             if not run_id:
                 continue
             snapshot = _hydrate_workspace_item_role(_serialize_run_snapshot(run_id, run))
-            if workspace_filter and _normalize_workspace_id(snapshot.get("workspace_id")) != workspace_filter:
+            snapshot_workspace_id = _normalize_workspace_id(snapshot.get("workspace_id"))
+            if workspace_filter and snapshot_workspace_id != workspace_filter:
+                continue
+            snapshot_entitlements = _workspace_entitlement_payload(entitlement_cache, snapshot_workspace_id)
+            snapshot_capabilities = snapshot_entitlements.get("capabilities") if isinstance(snapshot_entitlements.get("capabilities"), dict) else {}
+            if not bool(snapshot_capabilities.get("artifacts_enabled")):
+                continue
+            event_ts = _payload_timestamp_seconds(snapshot, "updated_at", "completed_at", "created_at")
+            if event_ts is not None and event_ts < _workspace_history_cutoff_ts(entitlement_cache, snapshot_workspace_id):
                 continue
             if str(snapshot.get("status") or "").strip().lower() not in active_statuses:
                 continue
@@ -1693,6 +1793,7 @@ def register_agent_workspace_routes(app) -> None:
 
         artifact_metadata = artifact_service.load_artifact_metadata(normalized_path)
         if artifact_metadata is not None:
+            _ensure_artifacts_access_for_workspace(artifact_metadata.get("workspace_id") or "default")
             enforce_workspace_access(
                 current_user,
                 artifact_metadata.get("workspace_id") or "default",
@@ -1731,6 +1832,8 @@ def register_agent_workspace_routes(app) -> None:
             }
 
         lowered = normalized_path.lower()
+        if str((current_user or {}).get("auth_type") or "").strip().lower() != "api_key":
+            _ensure_artifacts_access_for_workspace(str((current_user or {}).get("workspace_id") or "default"))
         if lowered.startswith(("http://", "https://")):
             return {
                 "ok": True,
@@ -1790,6 +1893,7 @@ def register_agent_workspace_routes(app) -> None:
             raise HTTPException(status_code=400, detail="path is required.")
         artifact_metadata = artifact_service.load_artifact_metadata(normalized_path)
         if artifact_metadata is not None:
+            _ensure_artifacts_access_for_workspace(artifact_metadata.get("workspace_id") or "default")
             enforce_workspace_access(
                 current_user,
                 artifact_metadata.get("workspace_id") or "default",
@@ -1813,6 +1917,8 @@ def register_agent_workspace_routes(app) -> None:
         target = _resolve_workspace_material_target(normalized_path)
         if target is None:
             raise HTTPException(status_code=404, detail="Artifact file not found inside allowed workspace roots.")
+        if str((current_user or {}).get("auth_type") or "").strip().lower() != "api_key":
+            _ensure_artifacts_access_for_workspace(str((current_user or {}).get("workspace_id") or "default"))
 
         media_type = mimetypes.guess_type(str(target.name))[0] or "application/octet-stream"
         return FileResponse(path=str(target), media_type=media_type, filename=target.name)
@@ -2069,7 +2175,7 @@ def register_agent_workspace_routes(app) -> None:
             user_goal=f"Write file {rel_path}",
             metadata=metadata,
         )
-        created = _execute_workspace_run_request(req)
+        created = await _execute_workspace_run_request_async(req)
         return {"ok": True, **created}
 
     @app.post("/files/delete_request", dependencies=[Depends(require_admin_api_key)])
@@ -2105,7 +2211,7 @@ def register_agent_workspace_routes(app) -> None:
             user_goal=f"Delete file {rel_path}",
             metadata=metadata,
         )
-        created = _execute_workspace_run_request(req)
+        created = await _execute_workspace_run_request_async(req)
         return {"ok": True, **created}
 
     DEVICE_ACTIONS = supported_device_actions()
@@ -2145,5 +2251,5 @@ def register_agent_workspace_routes(app) -> None:
             user_goal=f"Device action: {action}",
             metadata=metadata,
         )
-        created = _execute_workspace_run_request(req)
+        created = await _execute_workspace_run_request_async(req)
         return {"ok": True, **created}

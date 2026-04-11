@@ -39,6 +39,45 @@ def _parse_ts(raw: Any) -> Optional[float]:
         return None
 
 
+def _workspace_entitlement_payload(
+    cache: Dict[str, Dict[str, Any]],
+    workspace_id: str,
+) -> Dict[str, Any]:
+    token = str(workspace_id or "default").strip() or "default"
+    payload = cache.get(token)
+    if payload is None:
+        payload = entitlements_service.workspace_entitlement_payload_for_workspace_id(workspace_id=token)
+        cache[token] = payload
+    return payload
+
+
+def _filter_notification_history_window(
+    items: List[Dict[str, Any]],
+    *,
+    entitlement_cache: Dict[str, Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    filtered: List[Dict[str, Any]] = []
+    now_ts = time.time()
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        workspace_id = str(item.get("workspace_id") or "default").strip() or "default"
+        payload = _workspace_entitlement_payload(entitlement_cache, workspace_id)
+        capabilities = payload.get("capabilities") if isinstance(payload.get("capabilities"), dict) else {}
+        history_window_days = max(1, int(capabilities.get("history_window_days") or 30))
+        cutoff_ts = now_ts - float(history_window_days * 86400)
+        event_ts = (
+            _parse_ts(item.get("updated_at"))
+            or _parse_ts(item.get("created_at"))
+            or _parse_ts(item.get("ts"))
+            or _parse_ts(item.get("timestamp"))
+        )
+        if event_ts is not None and event_ts < cutoff_ts:
+            continue
+        filtered.append(item)
+    return filtered
+
+
 def _runtime_state_db_path(db_path: Optional[Path] = None) -> Path:
     if db_path is not None:
         return Path(db_path)
@@ -69,8 +108,11 @@ def reader_key_for_current_user(current_user: Optional[Dict[str, Any]]) -> str:
         user_id = str(current_user.get("user_id") or "").strip()
         if user_id:
             return f"user:{user_id}"
-    if auth_type in {"api_key", "disabled"}:
+    if auth_type == "api_key":
         return f"{auth_type}:owner"
+    if auth_type == "local_dev":
+        user_id = str(current_user.get("user_id") or "").strip()
+        return f"local_dev:{user_id or 'scoped'}"
     email = str(current_user.get("email") or "").strip().lower()
     if email:
         return f"email:{email}"
@@ -87,6 +129,8 @@ def _default_path_for_action(action: str, *, run_id: Optional[str] = None) -> st
     normalized = str(action or "").strip().lower()
     if normalized == "approval_requested":
         return "/approvals"
+    if normalized == "artifact_created" and str(run_id or "").strip():
+        return f"/runs/{str(run_id).strip()}"
     if normalized in {"run_completed", "run_failed"} and str(run_id or "").strip():
         return f"/runs/{str(run_id).strip()}"
     if normalized.startswith("machine_"):
@@ -116,6 +160,27 @@ def build_notification_from_outbox_event(event: Any) -> Optional[Dict[str, Any]]
         title = "Approval required"
         text = str(payload.get("prompt") or "").strip() or f"Approval requested for run {run_id or 'unknown'}."
         priority = "high"
+        metadata = {
+            **metadata,
+            "status": str(metadata.get("status") or "pending").strip().lower() or "pending",
+            "approval_id": str(payload.get("approval_id") or "").strip() or None,
+        }
+    elif event_type == "approval_resolved":
+        resolution = str(payload.get("resolution") or "approved").strip().lower() or "approved"
+        action = f"approval_{resolution}"
+        title = "Approval approved" if resolution == "approved" else "Approval rejected"
+        reason = str(payload.get("reason") or "").strip()
+        text = reason or f"Approval {resolution} for run {run_id or 'unknown'}."
+        priority = "normal"
+        metadata = {
+            **metadata,
+            "activity_event_class": "approval",
+            "activity_actor_type": "system",
+            "activity_actor_id": "runtime",
+            "status": resolution,
+            "approval_id": str(payload.get("approval_id") or "").strip() or None,
+            "path": str(metadata.get("path") or "").strip() or _default_path_for_action("run_completed", run_id=run_id),
+        }
     elif event_type == "run_transition":
         to_state = str(payload.get("to_state") or "").strip().lower()
         if to_state not in {"completed", "failed"}:
@@ -124,6 +189,10 @@ def build_notification_from_outbox_event(event: Any) -> Optional[Dict[str, Any]]
         title = "Run completed" if to_state == "completed" else "Run failed"
         text = f"Run {run_id or 'unknown'} {to_state}."
         priority = "normal" if to_state == "completed" else "high"
+        metadata = {
+            **metadata,
+            "status": to_state,
+        }
     elif event_type == "machine_event":
         raw_action = str(payload.get("action") or "").strip().lower()
         enrollment_state = str(payload.get("enrollment_state") or payload.get("status") or "").strip().lower()
@@ -143,6 +212,29 @@ def build_notification_from_outbox_event(event: Any) -> Optional[Dict[str, Any]]
             priority = "high"
         else:
             return None
+    elif event_type == "artifact_created":
+        artifact_payload = payload.get("artifact") if isinstance(payload.get("artifact"), dict) else {}
+        artifact_path = str(
+            payload.get("artifact_path")
+            or artifact_payload.get("path")
+            or artifact_payload.get("file_path")
+            or artifact_payload.get("uri")
+            or artifact_payload.get("url")
+            or ""
+        ).strip()
+        action = "artifact_created"
+        title = "Artifact created"
+        text = artifact_path or f"Artifact created for run {run_id or 'unknown'}."
+        priority = "normal"
+        metadata = {
+            **metadata,
+            "activity_event_class": "artifact_created",
+            "activity_actor_type": "system",
+            "activity_actor_id": "runtime",
+            "status": str(metadata.get("status") or "created").strip().lower() or "created",
+            "artifacts": [artifact_payload] if artifact_payload else [],
+            "path": str(metadata.get("path") or "").strip() or _default_path_for_action(action, run_id=run_id),
+        }
     elif event_type == "notification":
         action = str(payload.get("action") or "notification").strip().lower() or "notification"
         title = str(metadata.get("title") or "").strip() or _title_from_action(action)
@@ -308,6 +400,7 @@ def list_notification_payload(
     )
     allowed_workspaces = allowed_workspace_ids(current_user)
     reader_key = reader_key_for_current_user(current_user)
+    entitlement_cache: Dict[str, Dict[str, Any]] = {}
     filtered: List[Dict[str, Any]] = []
     runtime_items = runtime_state_store.list_notifications(
         _ensure_runtime_state_db(db_path),
@@ -327,6 +420,10 @@ def list_notification_payload(
         allowed_workspaces=allowed_workspaces,
         requested_workspace_id=requested_workspace_id,
     )
+    runtime_filtered = _filter_notification_history_window(
+        runtime_filtered,
+        entitlement_cache=entitlement_cache,
+    )
     if requested_workspace_id:
         resolved_tenant_id = str(tenant_id or "").strip() or workspace_tenant_id(current_user, requested_workspace_id)
         ledger_items = activity_ledger_service.list_notification_feed_items_sync(
@@ -341,13 +438,17 @@ def list_notification_payload(
             limit=max(safe_limit, 500),
         )
         if ledger_items:
+            scoped_ledger_items = _filter_notification_history_window(
+                _workspace_filtered_items(
+                    ledger_items,
+                    allowed_workspaces=allowed_workspaces,
+                    requested_workspace_id=requested_workspace_id,
+                ),
+                entitlement_cache=entitlement_cache,
+            )
             filtered = _merge_notification_sources(
                 primary_items=_merge_read_state(
-                    items=_workspace_filtered_items(
-                        ledger_items,
-                        allowed_workspaces=allowed_workspaces,
-                        requested_workspace_id=requested_workspace_id,
-                    ),
+                    items=scoped_ledger_items,
                     reader_key=reader_key,
                     db_path=db_path,
                 ),

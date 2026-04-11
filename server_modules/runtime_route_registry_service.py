@@ -3,8 +3,9 @@ from __future__ import annotations
 import uuid
 from typing import Any, Optional
 
-from fastapi import Request
+from fastapi import HTTPException, Request
 
+from server_modules.auth import enforce_workspace_access as _enforce_workspace_access
 from server_modules.direct_chat_stream_response_service import build_direct_chat_stream_response as _build_direct_chat_stream_response
 from server_modules import runtime_heartbeat_service as _runtime_heartbeat_service
 from server_modules import runtime_history_service as _runtime_history_service
@@ -20,8 +21,30 @@ from server_modules import runtime_run_replay_service as _runtime_run_replay_ser
 from server_modules import runtime_usage_service as _runtime_usage_service
 from server_modules import runtime_webhook_trigger_service as _runtime_webhook_trigger_service
 from server_modules import runtime_workspace_service as _runtime_workspace_service
+from server_modules import entitlements_service
 from server_modules import safe_mode_service
 from server_modules import run_state_repository
+
+
+def _run_workspace_id_for_approval(run: Any, run_record: Any) -> str:
+    payload = run if isinstance(run, dict) else run_record if isinstance(run_record, dict) else {}
+    context = payload.get("context") if isinstance(payload.get("context"), dict) else {}
+    metadata = context.get("metadata") if isinstance(context.get("metadata"), dict) else {}
+    return str(
+        payload.get("workspace_id")
+        or context.get("workspace_id")
+        or metadata.get("workspace_id")
+        or "default"
+    ).strip() or "default"
+
+
+def _ensure_workspace_approvals_access(workspace_id: str) -> None:
+    payload = entitlements_service.workspace_entitlement_payload_for_workspace_id(
+        workspace_id=str(workspace_id or "default").strip() or "default",
+    )
+    capabilities = payload.get("capabilities") if isinstance(payload.get("capabilities"), dict) else {}
+    if not bool(capabilities.get("approvals_enabled")):
+        raise HTTPException(status_code=403, detail="Approvals are not included in this workspace plan.")
 
 
 def register_runtime_run_routes(
@@ -90,6 +113,7 @@ def register_runtime_run_routes(
     runtime_history_service=_runtime_history_service,
     runtime_usage_service=_runtime_usage_service,
     build_direct_chat_stream_response=_build_direct_chat_stream_response,
+    enforce_workspace_access_fn=_enforce_workspace_access,
 ) -> None:
     viewer_dependency = require_api_key
     member_dependency = globals().get("require_member_api_key", None)
@@ -116,8 +140,13 @@ def register_runtime_run_routes(
         current_user=depends(require_api_key),
     ):
         refresh_server_exports()
-        return runtime_workspace_service.list_workspace_memory_payload(
+        resolved_workspace_id = enforce_workspace_access_fn(
+            current_user,
             workspace_id,
+            minimum_role="viewer",
+        )
+        return runtime_workspace_service.list_workspace_memory_payload(
+            resolved_workspace_id,
             workspace_memory_snapshot=workspace_memory_snapshot,
         )
 
@@ -128,8 +157,13 @@ def register_runtime_run_routes(
         current_user=depends(require_api_key),
     ):
         refresh_server_exports()
-        return runtime_workspace_service.delete_workspace_memory_payload(
+        resolved_workspace_id = enforce_workspace_access_fn(
+            current_user,
             workspace_id,
+            minimum_role="member",
+        )
+        return runtime_workspace_service.delete_workspace_memory_payload(
+            resolved_workspace_id,
             key,
             delete_memory=delete_memory,
         )
@@ -213,8 +247,10 @@ def register_runtime_run_routes(
         refresh_server_exports()
         return await runtime_route_request_handlers_service.register_webhook_trigger_response(
             request=request,
+            current_user=current_user,
             load_webhook_triggers=load_webhook_triggers,
             read_json_payload=runtime_request_service.read_json_payload,
+            enforce_workspace_access=enforce_workspace_access_fn,
             register_webhook_trigger_payload=runtime_webhook_trigger_service.register_webhook_trigger_payload,
             uuid_factory=uuid.uuid4,
             build_webhook_trigger_fn=runtime_webhook_trigger_service.build_webhook_trigger,
@@ -234,6 +270,7 @@ def register_runtime_run_routes(
             workspace_id,
             request=request,
             current_user=current_user,
+            enforce_workspace_access=enforce_workspace_access_fn,
             read_json_payload=runtime_request_service.read_json_payload,
             ingest_webhook_payload=runtime_webhook_trigger_service.ingest_webhook_payload,
             match_webhook_trigger_fn=match_webhook_trigger_fn,
@@ -412,13 +449,16 @@ def register_runtime_run_routes(
         current_user=depends(member_dependency),
     ):
         refresh_server_exports()
+        run_payload = runs.get(str(run_id))
+        run_record = run_state_repository.sync_get_live_run(str(run_id))
+        _ensure_workspace_approvals_access(_run_workspace_id_for_approval(run_payload, run_record))
         return runtime_route_run_handlers_service.submit_run_decision_route_response(
             run_id,
             payload=payload,
             current_user=current_user,
             submit_run_decision_fn=runtime_run_approval_service.submit_run_decision,
-            run=runs.get(str(run_id)),
-            run_record=run_state_repository.sync_get_live_run(str(run_id)),
+            run=run_payload,
+            run_record=run_record,
             callbacks=submit_run_decision_callbacks,
         )
 
@@ -430,14 +470,17 @@ def register_runtime_run_routes(
         current_user=depends(member_dependency),
     ):
         refresh_server_exports()
+        run_payload = runs.get(str(run_id))
+        run_record = run_state_repository.sync_get_live_run(str(run_id))
+        _ensure_workspace_approvals_access(_run_workspace_id_for_approval(run_payload, run_record))
         return runtime_route_run_handlers_service.resolve_run_approval_route_response(
             run_id,
             approval_id,
             payload=payload,
             current_user=current_user,
             resolve_run_approval_fn=runtime_run_approval_service.resolve_run_approval,
-            run=runs.get(str(run_id)),
-            run_record=run_state_repository.sync_get_live_run(str(run_id)),
+            run=run_payload,
+            run_record=run_record,
             callbacks=resolve_run_approval_callbacks,
         )
 
@@ -448,8 +491,15 @@ def register_runtime_run_routes(
         current_user=depends(member_dependency),
     ):
         refresh_server_exports()
-        payload = runtime_request_service.read_json_object_payload(request)
+        payload = await runtime_request_service.read_json_object_payload(
+            request,
+            invalid_detail="Approval resolution body must be an object.",
+        )
         from server_modules import outbox_service, run_state_repository
+
+        matched_run = run_state_repository.sync_find_live_run_by_approval_id(approval_id)
+        if isinstance(matched_run, dict):
+            _ensure_workspace_approvals_access(_run_workspace_id_for_approval(matched_run, matched_run))
 
         return runtime_run_approval_service.resolve_standalone_approval(
             approval_id,

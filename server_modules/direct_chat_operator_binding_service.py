@@ -1921,9 +1921,9 @@ def build_direct_chat_operator_binding_bundle_from_namespace(
         image_generation_keywords=image_generation_keywords,
         llm_task_keywords=llm_task_keywords,
         parse_json_object_loose=lambda value: _namespace_value("parse_json_object_loose", parse_json_object_loose_fn)(value),
-        llm_task=lambda **kwargs: _namespace_value("llm_task", llm_task_fn)(**kwargs),
-        web_search=lambda **kwargs: _namespace_value("web_search", web_search_fn)(**kwargs),
-        web_fetch=lambda **kwargs: _namespace_value("web_fetch", web_fetch_fn)(**kwargs),
+        llm_task=lambda *args, **kwargs: _namespace_value("llm_task", llm_task_fn)(*args, **kwargs),
+        web_search=lambda *args, **kwargs: _namespace_value("web_search", web_search_fn)(*args, **kwargs),
+        web_fetch=lambda *args, **kwargs: _namespace_value("web_fetch", web_fetch_fn)(*args, **kwargs),
         search_memory_notebook=lambda *args, **kwargs: _namespace_value(
             "search_memory_notebook",
             search_memory_notebook_fn,

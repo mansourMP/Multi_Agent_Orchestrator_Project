@@ -69,6 +69,68 @@ class RuntimeRouteRegistryServiceTests(unittest.TestCase):
         self.assertIn(("POST", "/runs/{run_id}/resume"), app.routes)
         self.assertIn(("POST", "/runs/{run_id}/pause"), app.routes)
 
+    def test_standalone_approval_route_reads_json_object_payload_with_invalid_detail(self):
+        captured = {}
+        app = _FakeApp()
+
+        async def _read_json_object_payload(request, *, invalid_detail):
+            captured["invalid_detail"] = invalid_detail
+            return {"approval_id": "approval-1", "resolution": "approved"}
+
+        runtime_route_registry_service.register_runtime_run_routes(
+            app,
+            **self._registry_kwargs(
+                refresh_server_exports=lambda: None,
+                runtime_request_service=types.SimpleNamespace(
+                    read_json_object_payload=_read_json_object_payload,
+                    require_authenticated_user=lambda current_user: current_user,
+                    read_json_payload=lambda *args, **kwargs: {},
+                ),
+                runtime_run_approval_service=types.SimpleNamespace(
+                    submit_run_decision=lambda *args, **kwargs: {},
+                    resolve_run_approval=lambda *args, **kwargs: {},
+                    resolve_standalone_approval=lambda *args, **kwargs: {"ok": True, "approval_id": "approval-1"},
+                ),
+            ),
+        )
+
+        payload = self._run_async(
+            app.routes[("POST", "/approvals/{approval_id}/resolve")](
+                approval_id="approval-1",
+                request=object(),
+                current_user={"user_id": "user-1"},
+            )
+        )
+
+        self.assertEqual(payload["approval_id"], "approval-1")
+        self.assertEqual(captured["invalid_detail"], "Approval resolution body must be an object.")
+
+    def test_memory_route_resolves_workspace_on_server(self):
+        captured = {}
+        app = _FakeApp()
+
+        runtime_route_registry_service.register_runtime_run_routes(
+            app,
+            **self._registry_kwargs(
+                enforce_workspace_access_fn=lambda current_user, workspace_id, minimum_role="viewer": "ws-1",
+                runtime_workspace_service=types.SimpleNamespace(
+                    list_workspace_memory_payload=lambda workspace_id, **kwargs: captured.setdefault("workspace_id", workspace_id) or {},
+                    delete_workspace_memory_payload=lambda *args, **kwargs: {},
+                    workspace_context_files_payload=lambda *args, **kwargs: {},
+                    update_workspace_context_file_payload=lambda *args, **kwargs: {},
+                ),
+            ),
+        )
+
+        self._run_async(
+            app.routes[("GET", "/memory/{workspace_id}")](
+                workspace_id="default",
+                current_user={"user_id": "user-1"},
+            )
+        )
+
+        self.assertEqual(captured["workspace_id"], "ws-1")
+
     def _registry_kwargs(self, **overrides):
         kwargs = dict(
             depends=lambda dependency: dependency,

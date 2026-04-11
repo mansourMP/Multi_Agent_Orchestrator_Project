@@ -15,6 +15,7 @@ class RuntimeHistoryServiceTests(unittest.TestCase):
             history_item_matches=lambda item, workspace_id, status, pack_id: True,
             current_user_is_privileged=lambda current_user: False,
             extract_run_owner_user_id=lambda item: "",
+            enforce_workspace_access=lambda current_user, workspace_id, minimum_role="viewer": workspace_id,
             normalize_run_id_token=lambda value: str(value).strip() or None,
             summarize_history_item=lambda item: {"run_id": item.get("run_id")},
         )
@@ -39,6 +40,7 @@ class RuntimeHistoryServiceTests(unittest.TestCase):
             history_item_matches=lambda item, workspace_id, status, pack_id: True,
             current_user_is_privileged=lambda current_user: False,
             extract_run_owner_user_id=lambda item: str(item.get("owner_user_id") or ""),
+            enforce_workspace_access=lambda current_user, workspace_id, minimum_role="viewer": workspace_id,
             normalize_run_id_token=lambda value: str(value).strip() or None,
             summarize_history_item=lambda item: {"run_id": item.get("run_id")},
         )
@@ -62,9 +64,33 @@ class RuntimeHistoryServiceTests(unittest.TestCase):
                 history_item_matches=lambda item, workspace_id, status, pack_id: True,
                 current_user_is_privileged=lambda current_user: False,
                 extract_run_owner_user_id=lambda item: "",
+                enforce_workspace_access=lambda current_user, workspace_id, minimum_role="viewer": workspace_id,
                 normalize_run_id_token=lambda value: None,
                 summarize_history_item=lambda item: {},
             )
+
+    def test_build_runs_history_payload_resolves_workspace_on_server(self):
+        seen = {}
+
+        payload = runtime_history_service.build_runs_history_payload(
+            limit=10,
+            workspace_id="default",
+            status=None,
+            pack_id=None,
+            current_user={"user_id": "user-1"},
+            refresh_server_exports=lambda: None,
+            run_history_lock=threading.Lock(),
+            run_history=[{"run_id": "run-1", "owner_user_id": "user-1"}],
+            history_item_matches=lambda item, workspace_id, status, pack_id: seen.setdefault("workspace_id", workspace_id) == "ws-user-1",
+            current_user_is_privileged=lambda current_user: False,
+            extract_run_owner_user_id=lambda item: str(item.get("owner_user_id") or ""),
+            enforce_workspace_access=lambda current_user, workspace_id, minimum_role="viewer": "ws-user-1",
+            normalize_run_id_token=lambda value: str(value).strip() or None,
+            summarize_history_item=lambda item: {"run_id": item.get("run_id")},
+        )
+
+        self.assertEqual(seen["workspace_id"], "ws-user-1")
+        self.assertEqual(payload["count"], 1)
 
 
 if __name__ == "__main__":

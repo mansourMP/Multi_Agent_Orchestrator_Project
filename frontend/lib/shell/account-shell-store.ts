@@ -4,7 +4,7 @@ import {
   type WorkspaceMembershipRecord,
   getWorkspaceMembership,
   indexWorkspaceMemberships,
-  resolveSelectedWorkspaceId,
+  resolveRouteWorkspaceId,
   sanitizeWorkspaceRoute,
 } from '@/lib/shell/workspace-membership-model';
 
@@ -43,10 +43,6 @@ export type AccountShellAction =
       type: 'hydrate_session';
       payload: AccountShellBootstrap | null;
       persistedSnapshot?: AccountShellSnapshot | null;
-    }
-  | {
-      type: 'select_workspace';
-      workspaceId: string;
     }
   | {
       type: 'sync_workspace_from_route';
@@ -103,21 +99,13 @@ export function reduceAccountShellState(
 
       const workspaceMemberships = action.payload.workspaceMemberships;
       const workspaceMembershipIndex = indexWorkspaceMemberships(workspaceMemberships);
-      const persistedSelectedWorkspaceId =
-        action.persistedSnapshot?.accountId === action.payload.account.id
-          ? action.persistedSnapshot.selectedWorkspaceId
-          : null;
-      const selectedWorkspaceId = resolveSelectedWorkspaceId(
-        workspaceMemberships,
-        persistedSelectedWorkspaceId,
-      );
 
       return {
         status: 'authenticated',
         account: action.payload.account,
         workspaceMemberships,
         workspaceMembershipIndex,
-        selectedWorkspaceId,
+        selectedWorkspaceId: null,
         lastVisitedWorkspaceRouteById:
           action.persistedSnapshot?.accountId === action.payload.account.id
             ? action.persistedSnapshot.lastVisitedWorkspaceRouteById
@@ -127,18 +115,8 @@ export function reduceAccountShellState(
           action.persistedSnapshot?.globalChromePreferences ?? DEFAULT_GLOBAL_CHROME_PREFERENCES,
       };
     }
-    case 'select_workspace': {
-      const selectedWorkspaceId = resolveSelectedWorkspaceId(state.workspaceMemberships, action.workspaceId);
-      if (selectedWorkspaceId === state.selectedWorkspaceId) {
-        return state;
-      }
-      return {
-        ...state,
-        selectedWorkspaceId,
-      };
-    }
     case 'sync_workspace_from_route': {
-      const selectedWorkspaceId = resolveSelectedWorkspaceId(state.workspaceMemberships, action.workspaceId);
+      const selectedWorkspaceId = resolveRouteWorkspaceId(state.workspaceMemberships, action.workspaceId);
       if (selectedWorkspaceId === state.selectedWorkspaceId) {
         return state;
       }
@@ -204,4 +182,19 @@ export function createAccountShellSnapshot(state: AccountShellState): AccountShe
     globalTheme: state.globalTheme,
     globalChromePreferences: state.globalChromePreferences,
   };
+}
+
+export function resolveWorkspaceNavigationTarget(
+  state: Pick<AccountShellState, 'workspaceMembershipIndex' | 'lastVisitedWorkspaceRouteById'>,
+  workspaceId: string,
+): string | null {
+  const membership = getWorkspaceMembership(state.workspaceMembershipIndex, workspaceId);
+  if (!membership) {
+    return null;
+  }
+
+  return sanitizeWorkspaceRoute(
+    state.lastVisitedWorkspaceRouteById[workspaceId],
+    membership.defaultRoute,
+  );
 }

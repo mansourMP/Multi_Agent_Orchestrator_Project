@@ -33,20 +33,30 @@ export function indexWorkspaceMemberships(
   }, {});
 }
 
-export function resolveSelectedWorkspaceId(
+export function resolvePrimaryWorkspaceId(
   memberships: WorkspaceMembershipRecord[],
-  selectedWorkspaceId: string | null,
 ): string | null {
   if (memberships.length === 0) {
     return null;
   }
 
-  if (selectedWorkspaceId && memberships.some((membership) => membership.workspace.id === selectedWorkspaceId)) {
-    return selectedWorkspaceId;
-  }
-
   const personalMembership = memberships.find((membership) => membership.workspace.kind === 'personal');
   return personalMembership?.workspace.id ?? memberships[0].workspace.id;
+}
+
+export function resolveRouteWorkspaceId(
+  memberships: WorkspaceMembershipRecord[],
+  routeWorkspaceId: string | null,
+): string | null {
+  if (!routeWorkspaceId) {
+    return null;
+  }
+
+  if (memberships.some((membership) => membership.workspace.id === routeWorkspaceId)) {
+    return routeWorkspaceId;
+  }
+
+  return routeWorkspaceId;
 }
 
 export function sanitizeWorkspaceRoute(route: string | null | undefined, fallbackRoute: string): string {

@@ -17,6 +17,7 @@ import {
   createAccountShellSnapshot,
   createInitialAccountShellState,
   reduceAccountShellState,
+  resolveWorkspaceNavigationTarget,
 } from '@/lib/shell/account-shell-store';
 import {
   clearAccountShellSnapshot,
@@ -28,12 +29,12 @@ import { getWorkspaceMembership } from '@/lib/shell/workspace-membership-model';
 type AccountShellContextValue = {
   state: AccountShellState;
   actions: {
-    selectWorkspace: (workspaceId: string) => void;
     rememberWorkspaceRoute: (workspaceId: string, route: string) => void;
     setGlobalTheme: (theme: AccountShellState['globalTheme']) => void;
     setTenantSwitcherCollapsed: (collapsed: boolean) => void;
     replaceSession: (session: AccountShellBootstrap | null) => void;
     clearSession: () => void;
+    resolveWorkspaceHref: (workspaceId: string) => string | null;
   };
 };
 
@@ -94,9 +95,6 @@ export function AccountShellProvider({
 
   const actions = useMemo<AccountShellContextValue['actions']>(
     () => ({
-      selectWorkspace(workspaceId) {
-        dispatch({ type: 'select_workspace', workspaceId });
-      },
       rememberWorkspaceRoute(workspaceId, route) {
         dispatch({ type: 'remember_workspace_route', workspaceId, route });
       },
@@ -116,8 +114,11 @@ export function AccountShellProvider({
       clearSession() {
         dispatch({ type: 'clear_session' });
       },
+      resolveWorkspaceHref(workspaceId) {
+        return resolveWorkspaceNavigationTarget(state, workspaceId);
+      },
     }),
-    [],
+    [state],
   );
 
   const value = useMemo<AccountShellContextValue>(

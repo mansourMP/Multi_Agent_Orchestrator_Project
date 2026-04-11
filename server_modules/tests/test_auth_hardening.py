@@ -6,6 +6,7 @@ from fastapi import HTTPException
 from starlette.requests import Request
 
 from server_modules import auth, runtime_common
+from server_modules import db as runtime_db
 from server_modules import routes_connectors
 
 
@@ -92,6 +93,26 @@ class AuthHardeningTests(unittest.TestCase):
             with self.assertRaises(HTTPException) as ctx:
                 runtime_common.require_api_key(request=request)
         self.assertEqual(ctx.exception.status_code, 503)
+
+    def test_auth_disabled_fails_closed_when_orion_env_marks_production(self):
+        request = _request()
+        with patch.dict(os.environ, {"ORION_AUTH_REQUIRED": "0", "ORION_ENV": "production"}, clear=False):
+            with self.assertRaises(HTTPException) as ctx:
+                runtime_common.require_api_key(request=request)
+        self.assertEqual(ctx.exception.status_code, 503)
+
+    def test_database_url_does_not_backfill_from_backend_env_in_production(self):
+        with (
+            patch.dict(os.environ, {"ORION_ENV": "production"}, clear=True),
+            patch.object(runtime_db, "_ENV_DSN_LOADED", False),
+        ):
+            self.assertEqual(runtime_db.configured_database_url(), "")
+
+    def test_runtime_config_only_loads_dotenv_in_explicit_local_dev(self):
+        with patch.dict(os.environ, {"ORION_ENV": "production"}, clear=True):
+            self.assertFalse(runtime_common.config._should_load_dotenv())
+        with patch.dict(os.environ, {"ORION_ENV": "development"}, clear=True):
+            self.assertTrue(runtime_common.config._should_load_dotenv())
 
     def test_require_member_api_key_accepts_local_dev_member_identity(self):
         request = _request()

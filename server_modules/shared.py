@@ -3,19 +3,18 @@ import threading
 from contextlib import AsyncExitStack, asynccontextmanager
 from typing import Any, Dict, List, Optional, Set
 
-from fastapi import FastAPI
-
 from server_modules.acp_manager import DEFAULT_ACP_MANAGER
 from server_modules.runtime_config import *
 
 
 @asynccontextmanager
-async def app_lifespan(_: FastAPI):
+async def app_lifespan(_: Any):
     async with AsyncExitStack() as stack:
         await stack.enter_async_context(empyralist_mcp_lifespan())
         yield
 
-app = FastAPI(title="Empyralis Runtime API", lifespan=app_lifespan)
+# Compatibility alias assigned by server.py. shared.py does not own app construction.
+app: Optional[Any] = None
 ACP_MANAGER = DEFAULT_ACP_MANAGER
 
 

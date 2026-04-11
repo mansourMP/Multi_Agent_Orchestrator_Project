@@ -145,6 +145,9 @@ app = FastAPI(
     redoc_url=redoc_url,
     openapi_url=openapi_url,
 )
+existing_shared_app = getattr(shared, "app", None)
+if existing_shared_app is not None and existing_shared_app is not app:
+    raise RuntimeError("shared.app must reference the server-owned FastAPI app.")
 shared.app = app
 
 app.add_middleware(

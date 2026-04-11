@@ -21,6 +21,8 @@ services:
         value: "0.0.0.0"
       - key: ORION_ENV
         value: production
+      - key: ORION_AUTH_REQUIRED
+        value: "1"
       - key: ORION_LOG_FORMAT
         value: json
       - key: ORION_PUBLIC_REGISTRATION_ENABLED
@@ -34,6 +36,10 @@ services:
       - key: ORION_API_KEY
         generateValue: true
       - key: ORION_JWT_SECRET
+        generateValue: true
+      - key: EMPYRALIS_SECRETS_BROKER_SECRET
+        generateValue: true
+      - key: EMPYRALIS_TOOL_BROKER_SECRET
         generateValue: true
       - key: OPENAI_API_KEY
         sync: false
@@ -66,4 +72,3 @@ services:
         sync: false
       - key: NEXT_PUBLIC_SENTRY_DSN
         sync: false
-

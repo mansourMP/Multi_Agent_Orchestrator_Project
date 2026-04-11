@@ -1,62 +1,60 @@
-# Phase 70 Cloud Runtime Baseline
+# Empyralis Supported Deploy Targets
 
-This deploy contract makes the FastAPI runtime the public cloud source of truth for:
+This repository supports exactly two deploy shapes:
 
-- auth
-- runs
-- approvals
-- artifacts
-- Telegram and WhatsApp channel ingress
+1. `Render cloud runtime`
+2. `Repo-local Tauri desktop shell`
 
-## Target shape
+`docker-compose.yml` is retained only as an explicit unsupported legacy marker. It is not a supported deploy surface.
 
-- public runtime URL over HTTPS
-- persistent Postgres for durable run/session state where supported by the runtime
-- persistent disk mounted at `/var/data/empyralis` for state that still lives in SQLite/files
-- frontend pointed at the same public runtime URL
+## Render cloud runtime
 
-## Why the persistent disk is required
+The supported cloud runtime is the Render blueprint in [render.yaml](/Users/mansur/Multi_Agent_Orchestrator_Project/render.yaml).
 
-The runtime still stores some production-critical state outside Postgres:
+Target shape:
 
-- auth SQLite database under `EMPYRALIS_STATE_HOME/auth`
-- JWT secret file under `EMPYRALIS_STATE_HOME/auth`
-- setup sessions JSON
-- provider profiles JSON
-- idempotency JSON
-- runtime SQLite state and memory SQLite state
+- `empyralis-runtime` from `Dockerfile.runtime`
+- `empyralis-web` from `frontend/Dockerfile`
+- managed Postgres from Render
+- persistent disk mounted at `/var/data/empyralis`
 
-Until those are fully migrated, public deployment must preserve `EMPYRALIS_STATE_HOME`.
+Runtime contract:
 
-## Render blueprint
+- public health check is `GET /health`
+- privileged diagnostics are `GET /health/internal`, `GET /health/internal/db`, and `GET /doctor`
+- privileged diagnostics require `X-API-Key`
+- production mode is explicit with `ORION_ENV=production`
+- auth is explicit with `ORION_AUTH_REQUIRED=1`
+- runtime secrets are explicit with generated values for:
+  - `ORION_API_KEY`
+  - `ORION_JWT_SECRET`
+  - `EMPYRALIS_SECRETS_BROKER_SECRET`
+  - `EMPYRALIS_TOOL_BROKER_SECRET`
 
-`render.yaml` provisions:
+Persistent disk is still required because the runtime keeps explicit non-Postgres state under `EMPYRALIS_STATE_HOME`, including:
 
-- `empyralis-runtime` web service from `Dockerfile.runtime`
-- `empyralis-web` web service from `frontend/Dockerfile`
-- `empyralis-postgres` managed Postgres
-- `empyralis-state` persistent disk mounted into the runtime
+- auth SQLite state
+- JWT secret file
+- setup session/config JSON
+- runtime checkpoint SQLite
+- memory SQLite
 
-## Required manual values after blueprint creation
-
-Set these env vars in Render before production validation:
+Manual values after blueprint creation:
 
 - runtime:
   - `OPENAI_API_KEY`
-  - `ANTHROPIC_API_KEY` as needed
-  - `GEMINI_API_KEY` as needed
-  - `SENTRY_DSN`
+  - `ANTHROPIC_API_KEY` if used
+  - `GEMINI_API_KEY` if used
+  - `SENTRY_DSN` if used
   - `FRONTEND_ORIGINS=https://<your-web-service>.onrender.com`
   - `ORION_WHATSAPP_AUTOPILOT_PUBLIC_BASE_URL=https://<your-runtime-service>.onrender.com`
-- frontend:
+- web:
   - `NEXT_PUBLIC_API_URL=https://<your-runtime-service>.onrender.com`
   - `NEXT_PUBLIC_ORION_API_URL=https://<your-runtime-service>.onrender.com`
   - `NEXT_PUBLIC_WS_URL=wss://<your-runtime-service>.onrender.com`
-  - `NEXT_PUBLIC_SENTRY_DSN`
+  - `NEXT_PUBLIC_SENTRY_DSN` if used
 
-## Verification
-
-Run:
+Verification:
 
 ```bash
 chmod +x scripts/phase70_cloud_smoke.sh
@@ -65,8 +63,38 @@ EMPYRALIS_RUNTIME_API_KEY="<runtime-api-key>" \
 bash scripts/phase70_cloud_smoke.sh
 ```
 
-Then verify:
+Passing smoke means:
 
-- web loads against the public runtime
-- mobile login and chat work from a real phone
-- Telegram/WhatsApp webhook status points at the public runtime URL
+- `/health` returns the public redacted contract
+- `/health/internal/db` returns with `X-API-Key`
+- `/doctor` returns with `X-API-Key`
+
+## Repo-local Tauri desktop shell
+
+The supported desktop target is a repo-local checkout launched through the Tauri shell. It is not a generic packaged desktop artifact with host-dependent fallbacks.
+
+Target shape:
+
+- runtime sidecar from bundled `empyralis-backend` binary when available, otherwise repo-local `dist/empyralis-backend*`
+- backend sidecar from `backend/dist/main.js`
+- frontend sidecar from `frontend/.next` served by the repo-local Next CLI
+- local worker bootstrapped against the same runtime sidecar
+
+Required prerequisites for the supported desktop target:
+
+- repo checkout present
+- `frontend/node_modules/next` installed
+- `frontend/.next` built
+- `backend/dist/main.js` built
+- desktop launched from the repo through the existing desktop scripts
+
+Unsupported desktop shapes:
+
+- packaged desktop app without repo-local frontend/backend build artifacts
+- host `uvicorn` / host `python -m uvicorn` fallback
+- backend `npm run start:dev` fallback
+- frontend `next dev` fallback
+
+## Unsupported legacy surface
+
+`docker-compose.yml` is intentionally unsupported. Running it should not be treated as a valid Empyralis environment.

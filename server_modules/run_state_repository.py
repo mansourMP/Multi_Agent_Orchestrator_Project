@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 import json
 import logging
 import threading
-from typing import Any, Awaitable, Callable, Dict, Optional, TypeVar
+from typing import Any, Awaitable, Callable, Dict, Mapping, Optional, TypeVar
 
 from server_modules import db as runtime_db
 
@@ -26,6 +26,10 @@ class RunStateRepositoryError(RuntimeError):
 
 class RunStatePersistenceError(RunStateRepositoryError):
     """Raised when a critical run-state persistence operation cannot complete."""
+
+
+class RunStateVersionConflictError(RunStatePersistenceError):
+    """Raised when a stale durable snapshot attempts to overwrite a newer row."""
 
 
 class RunClaimConflictError(RunStatePersistenceError):
@@ -180,21 +184,119 @@ def _payload_tenant_id(payload: Dict[str, Any]) -> str:
     return str(payload.get("tenant_id") or context.get("tenant_id") or metadata.get("tenant_id") or "default").strip() or "default"
 
 
+def _normalize_live_run_payload(
+    run_id: str,
+    workspace_id: str,
+    tenant_id: str,
+    state: str,
+    payload: Dict[str, Any],
+    trace_id: str,
+    *,
+    version: Optional[int] = None,
+    registered_at: Optional[str] = None,
+) -> Dict[str, Any]:
+    item = _json_object(payload)
+    item["run_id"] = str(run_id or "").strip()
+    item["workspace_id"] = str(workspace_id or "").strip() or "default"
+    item["tenant_id"] = str(tenant_id or "").strip() or "default"
+    normalized_state = str(state or "").strip() or "queued"
+    item["status"] = normalized_state
+    item["state"] = normalized_state
+    trace_token = str(trace_id or "").strip()
+    if trace_token:
+        item["trace_id"] = trace_token
+    if version is not None:
+        item["_durable_version"] = int(version)
+    if registered_at:
+        item["_durable_registered_at"] = str(registered_at).strip()
+    return item
+
+
+def _normalized_live_run_compare_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
+    item = _json_object(payload)
+    item.pop("_durable_version", None)
+    item.pop("_durable_registered_at", None)
+    return item
+
+
+def _live_run_payload_from_row(row: Any) -> Dict[str, Any]:
+    payload = _json_object(row["payload"])
+    state = str(row["state"] or payload.get("status") or payload.get("state") or "queued").strip() or "queued"
+    workspace_id = str(row["workspace_id"] or payload.get("workspace_id") or _payload_workspace_id(payload)).strip() or "default"
+    tenant_id = str(row["tenant_id"] or payload.get("tenant_id") or _payload_tenant_id(payload)).strip() or "default"
+    trace_id = str(row["trace_id"] or payload.get("trace_id") or "").strip()
+    registered_at = str(row["registered_at"] or "").strip() or None
+    version = int(row["version"] or 0)
+    return _normalize_live_run_payload(
+        str(row["run_id"] or payload.get("run_id") or "").strip(),
+        workspace_id,
+        tenant_id,
+        state,
+        payload,
+        trace_id,
+        version=version,
+        registered_at=registered_at,
+    )
+
+
+async def _ensure_live_run_tables(pool: Any) -> None:
+    await pool.execute(
+        """
+        CREATE TABLE IF NOT EXISTS live_runs (
+            run_id TEXT PRIMARY KEY,
+            workspace_id TEXT NOT NULL,
+            tenant_id TEXT NOT NULL,
+            state TEXT NOT NULL,
+            payload JSONB NOT NULL,
+            trace_id TEXT,
+            version BIGINT NOT NULL DEFAULT 0,
+            registered_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+        """
+    )
+    await pool.execute("ALTER TABLE live_runs ADD COLUMN IF NOT EXISTS version BIGINT NOT NULL DEFAULT 0")
+    await pool.execute("ALTER TABLE live_runs ADD COLUMN IF NOT EXISTS registered_at TIMESTAMPTZ NOT NULL DEFAULT NOW()")
+    await pool.execute("CREATE INDEX IF NOT EXISTS idx_live_runs_workspace_state ON live_runs(workspace_id, state)")
+    await pool.execute("CREATE INDEX IF NOT EXISTS idx_live_runs_updated_at ON live_runs(updated_at DESC, created_at DESC)")
+    await pool.execute("CREATE INDEX IF NOT EXISTS idx_live_runs_workspace_updated_at ON live_runs(workspace_id, updated_at DESC, created_at DESC)")
+    await pool.execute("CREATE INDEX IF NOT EXISTS idx_live_runs_state_updated_at ON live_runs(state, updated_at DESC, created_at DESC)")
+    await pool.execute(
+        """
+        CREATE TABLE IF NOT EXISTS run_transitions (
+            id BIGSERIAL PRIMARY KEY,
+            run_id TEXT NOT NULL,
+            from_state TEXT NOT NULL,
+            to_state TEXT NOT NULL,
+            actor TEXT NOT NULL,
+            trace_id TEXT,
+            timestamp TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+        """
+    )
+    await pool.execute("CREATE INDEX IF NOT EXISTS idx_run_transitions_run_id ON run_transitions(run_id, timestamp DESC)")
+
+
 async def _ensure_local_queue_tables(pool: Any) -> None:
     await pool.execute(
         """
         CREATE TABLE IF NOT EXISTS local_queue_claims (
             run_id TEXT PRIMARY KEY,
             worker_id TEXT NOT NULL,
+            lease_id TEXT NULL,
             claimed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
             ttl INTEGER NOT NULL,
-            trace_id TEXT
+            trace_id TEXT,
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
         )
         """
     )
+    await pool.execute("ALTER TABLE local_queue_claims ADD COLUMN IF NOT EXISTS lease_id TEXT NULL")
     await pool.execute("ALTER TABLE local_queue_claims ADD COLUMN IF NOT EXISTS last_heartbeat_at TIMESTAMPTZ NULL")
     await pool.execute("ALTER TABLE local_queue_claims ADD COLUMN IF NOT EXISTS last_progress_at TIMESTAMPTZ NULL")
     await pool.execute("ALTER TABLE local_queue_claims ADD COLUMN IF NOT EXISTS last_worker_note TEXT NULL")
+    await pool.execute("ALTER TABLE local_queue_claims ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()")
     await pool.execute(
         "CREATE INDEX IF NOT EXISTS idx_local_queue_claims_worker_id ON local_queue_claims(worker_id, claimed_at DESC)"
     )
@@ -299,28 +401,198 @@ async def upsert_live_run(
     if not token:
         return None
     pool = await _require_pool(operation="upsert_live_run")
+    normalized_workspace = str(workspace_id or "").strip() or "default"
+    normalized_tenant = str(tenant_id or "").strip() or "default"
+    normalized_state = str(state or "").strip() or "queued"
+    normalized_trace = str(trace_id or "").strip() or None
+    expected_version_raw = payload.get("_durable_version") if isinstance(payload, dict) else None
     try:
+        expected_version = int(expected_version_raw) if expected_version_raw is not None else None
+    except Exception:
+        expected_version = None
+    try:
+        await _ensure_live_run_tables(pool)
+        if expected_version is not None:
+            result = await update_live_run_if_version_matches(
+                token,
+                normalized_workspace,
+                normalized_tenant,
+                normalized_state,
+                payload,
+                normalized_trace or "",
+                expected_version=expected_version,
+            )
+            if result is None:
+                raise RunStateVersionConflictError(
+                    f"Postgres upsert_live_run version conflict for {token} at expected version {expected_version}"
+                )
+            return None
         await pool.execute(
             """
-            INSERT INTO live_runs (run_id, workspace_id, tenant_id, state, payload, trace_id, created_at, updated_at)
-            VALUES ($1, $2, $3, $4, $5::jsonb, $6, NOW(), NOW())
+            INSERT INTO live_runs (
+                run_id, workspace_id, tenant_id, state, payload, trace_id, version, registered_at, created_at, updated_at
+            )
+            VALUES ($1, $2, $3, $4, $5::jsonb, $6, 0, NOW(), NOW(), NOW())
             ON CONFLICT (run_id) DO UPDATE SET
                 workspace_id = EXCLUDED.workspace_id,
                 tenant_id = EXCLUDED.tenant_id,
                 state = EXCLUDED.state,
                 payload = EXCLUDED.payload,
                 trace_id = COALESCE(NULLIF(EXCLUDED.trace_id, ''), live_runs.trace_id),
+                version = live_runs.version + 1,
                 updated_at = NOW()
             """,
             token,
-            str(workspace_id or "").strip() or "default",
-            str(tenant_id or "").strip() or "default",
-            str(state or "").strip() or "queued",
-            _json_payload(payload),
-            str(trace_id or "").strip() or None,
+            normalized_workspace,
+            normalized_tenant,
+            normalized_state,
+            _json_payload(
+                _normalize_live_run_payload(
+                    token,
+                    normalized_workspace,
+                    normalized_tenant,
+                    normalized_state,
+                    payload,
+                    normalized_trace or "",
+                )
+            ),
+            normalized_trace,
         )
     except Exception as exc:
         raise RunStatePersistenceError(f"Postgres upsert_live_run failed for {token}: {exc}") from exc
+    return None
+
+
+async def create_live_run_initial(
+    run_id: str,
+    workspace_id: str,
+    tenant_id: str,
+    state: str,
+    payload: Dict[str, Any],
+    trace_id: str,
+) -> Dict[str, Any]:
+    token = str(run_id or "").strip()
+    if not token:
+        raise RunStatePersistenceError("Postgres create_live_run_initial requires a run_id")
+    normalized_workspace = str(workspace_id or "").strip() or "default"
+    normalized_tenant = str(tenant_id or "").strip() or "default"
+    normalized_state = str(state or "").strip() or "queued"
+    normalized_trace = str(trace_id or "").strip()
+    pool = await _require_pool(operation="create_live_run_initial")
+    try:
+        await _ensure_live_run_tables(pool)
+        row = await pool.fetchrow(
+            """
+            INSERT INTO live_runs (
+                run_id, workspace_id, tenant_id, state, payload, trace_id, version, registered_at, created_at, updated_at
+            )
+            VALUES ($1, $2, $3, $4, $5::jsonb, $6, 0, NOW(), NOW(), NOW())
+            ON CONFLICT (run_id) DO NOTHING
+            RETURNING run_id, workspace_id, tenant_id, state, payload, trace_id, version, registered_at
+            """,
+            token,
+            normalized_workspace,
+            normalized_tenant,
+            normalized_state,
+            _json_payload(
+                _normalize_live_run_payload(
+                    token,
+                    normalized_workspace,
+                    normalized_tenant,
+                    normalized_state,
+                    payload,
+                    normalized_trace,
+                    version=0,
+                )
+            ),
+            normalized_trace or None,
+        )
+    except Exception as exc:
+        raise RunStatePersistenceError(f"Postgres create_live_run_initial failed for {token}: {exc}") from exc
+    if row is None:
+        raise RunStatePersistenceError(f"Postgres create_live_run_initial refused duplicate run_id {token}")
+    return {
+        "version": int(row["version"] or 0),
+        "registered_at": str(row["registered_at"] or "").strip() or None,
+    }
+
+
+async def update_live_run_if_version_matches(
+    run_id: str,
+    workspace_id: str,
+    tenant_id: str,
+    state: str,
+    payload: Dict[str, Any],
+    trace_id: str,
+    *,
+    expected_version: int,
+) -> Optional[int]:
+    token = str(run_id or "").strip()
+    if not token:
+        return None
+    normalized_workspace = str(workspace_id or "").strip() or "default"
+    normalized_tenant = str(tenant_id or "").strip() or "default"
+    normalized_state = str(state or "").strip() or "queued"
+    normalized_trace = str(trace_id or "").strip()
+    current_version = max(0, int(expected_version or 0))
+    next_version = current_version + 1
+    desired_payload = _normalize_live_run_payload(
+        token,
+        normalized_workspace,
+        normalized_tenant,
+        normalized_state,
+        payload,
+        normalized_trace,
+        version=next_version,
+    )
+    pool = await _require_pool(operation="update_live_run_if_version_matches")
+    try:
+        await _ensure_live_run_tables(pool)
+        row = await pool.fetchrow(
+            """
+            UPDATE live_runs
+            SET workspace_id = $2,
+                tenant_id = $3,
+                state = $4,
+                payload = $5::jsonb,
+                trace_id = COALESCE(NULLIF($6, ''), live_runs.trace_id),
+                version = $8,
+                updated_at = NOW()
+            WHERE run_id = $1
+              AND version = $7
+            RETURNING version
+            """,
+            token,
+            normalized_workspace,
+            normalized_tenant,
+            normalized_state,
+            _json_payload(desired_payload),
+            normalized_trace or None,
+            current_version,
+            next_version,
+        )
+        if row is not None:
+            return int(row["version"] or next_version)
+        existing = await pool.fetchrow(
+            """
+            SELECT run_id, workspace_id, tenant_id, state, payload, trace_id, version, registered_at
+            FROM live_runs
+            WHERE run_id = $1
+            LIMIT 1
+            """,
+            token,
+        )
+    except Exception as exc:
+        raise RunStatePersistenceError(f"Postgres update_live_run_if_version_matches failed for {token}: {exc}") from exc
+    if existing is None:
+        return None
+    existing_payload = _live_run_payload_from_row(existing)
+    if (
+        str(existing_payload.get("status") or "").strip() == normalized_state
+        and _normalized_live_run_compare_payload(existing_payload) == _normalized_live_run_compare_payload(desired_payload)
+        and int(existing["version"] or 0) >= next_version
+    ):
+        return int(existing["version"] or 0)
     return None
 
 
@@ -331,9 +603,10 @@ async def get_live_run(run_id: str) -> Optional[Dict[str, Any]]:
     pool = await runtime_db.get_pool()
     if pool is not None:
         try:
+            await _ensure_live_run_tables(pool)
             row = await pool.fetchrow(
                 """
-                SELECT payload
+                SELECT run_id, workspace_id, tenant_id, state, payload, trace_id, version, registered_at
                 FROM live_runs
                 WHERE run_id = $1
                 LIMIT 1
@@ -341,16 +614,7 @@ async def get_live_run(run_id: str) -> Optional[Dict[str, Any]]:
                 token,
             )
             if row is not None:
-                payload = row["payload"]
-                if isinstance(payload, dict):
-                    return payload
-                if isinstance(payload, str):
-                    try:
-                        parsed = json.loads(payload)
-                    except Exception:
-                        parsed = None
-                    if isinstance(parsed, dict):
-                        return parsed
+                return _live_run_payload_from_row(row)
         except Exception as exc:
             LOGGER.warning("Postgres get_live_run failed for %s: %s", token, exc)
     return None
@@ -397,6 +661,7 @@ async def delete_live_run(run_id: str) -> None:
         return None
     pool = await _require_pool(operation="delete_live_run")
     try:
+        await _ensure_live_run_tables(pool)
         await pool.execute(
             """
             DELETE FROM live_runs
@@ -414,9 +679,10 @@ async def list_live_runs() -> list[Dict[str, Any]]:
     if pool is None:
         return []
     try:
+        await _ensure_live_run_tables(pool)
         rows = await pool.fetch(
             """
-            SELECT payload
+            SELECT run_id, workspace_id, tenant_id, state, payload, trace_id, version, registered_at
             FROM live_runs
             ORDER BY updated_at DESC, created_at DESC
             """
@@ -426,18 +692,114 @@ async def list_live_runs() -> list[Dict[str, Any]]:
         return []
     items: list[Dict[str, Any]] = []
     for row in rows or []:
-        payload = row["payload"]
-        if isinstance(payload, dict):
-            items.append(payload)
-            continue
-        if isinstance(payload, str):
-            try:
-                parsed = json.loads(payload)
-            except Exception:
-                parsed = None
-            if isinstance(parsed, dict):
-                items.append(parsed)
+        items.append(_live_run_payload_from_row(row))
     return items
+
+
+async def list_live_runs_page(
+    *,
+    limit: int = 100,
+    offset: int = 0,
+    workspace_id: Optional[str] = None,
+    states: Optional[list[str]] = None,
+) -> list[Dict[str, Any]]:
+    pool = await runtime_db.get_pool()
+    if pool is None:
+        return []
+    workspace_filter = str(workspace_id or "").strip()
+    normalized_states = [str(state or "").strip().lower() for state in (states or []) if str(state or "").strip()]
+    try:
+        await _ensure_live_run_tables(pool)
+        rows = await pool.fetch(
+            """
+            SELECT run_id, workspace_id, tenant_id, state, payload, trace_id, version, registered_at
+            FROM live_runs
+            WHERE ($1 = '' OR workspace_id = $1)
+              AND (CARDINALITY($2::text[]) = 0 OR LOWER(COALESCE(state, '')) = ANY($2::text[]))
+            ORDER BY updated_at DESC, created_at DESC
+            LIMIT $3
+            OFFSET $4
+            """,
+            workspace_filter,
+            normalized_states,
+            max(1, min(int(limit or 0), 500)),
+            max(0, int(offset or 0)),
+        )
+    except Exception as exc:
+        LOGGER.warning("Postgres list_live_runs_page failed: %s", exc)
+        return []
+    return [_live_run_payload_from_row(row) for row in (rows or [])]
+
+
+async def count_live_runs(
+    *,
+    workspace_id: Optional[str] = None,
+    states: Optional[list[str]] = None,
+) -> int:
+    pool = await runtime_db.get_pool()
+    if pool is None:
+        return 0
+    workspace_filter = str(workspace_id or "").strip()
+    normalized_states = [str(state or "").strip().lower() for state in (states or []) if str(state or "").strip()]
+    try:
+        await _ensure_live_run_tables(pool)
+        row = await pool.fetchrow(
+            """
+            SELECT COUNT(*)::int AS count
+            FROM live_runs
+            WHERE ($1 = '' OR workspace_id = $1)
+              AND (CARDINALITY($2::text[]) = 0 OR LOWER(COALESCE(state, '')) = ANY($2::text[]))
+            """,
+            workspace_filter,
+            normalized_states,
+        )
+    except Exception as exc:
+        LOGGER.warning("Postgres count_live_runs failed: %s", exc)
+        return 0
+    if row is None:
+        return 0
+    return int(row.get("count") if isinstance(row, dict) else row["count"] or 0)
+
+
+async def count_hosted_live_runs(
+    workspace_id: str,
+    *,
+    terminal_states: Optional[list[str]] = None,
+) -> int:
+    workspace_filter = str(workspace_id or "").strip()
+    if not workspace_filter:
+        return 0
+    pool = await runtime_db.get_pool()
+    if pool is None:
+        return 0
+    normalized_terminal_states = [
+        str(state or "").strip().lower()
+        for state in (terminal_states or ["completed", "failed", "cancelled", "canceled", "timeout", "aborted"])
+        if str(state or "").strip()
+    ]
+    try:
+        await _ensure_live_run_tables(pool)
+        row = await pool.fetchrow(
+            """
+            SELECT COUNT(*)::int AS count
+            FROM live_runs
+            WHERE workspace_id = $1
+              AND NOT (LOWER(COALESCE(state, '')) = ANY($2::text[]))
+              AND LOWER(COALESCE(payload #>> '{context,metadata,runtime_attachment_kind}', '')) <> 'self_hosted_business_node'
+              AND (
+                    LOWER(COALESCE(payload #>> '{context,metadata,execution_target_selected}', '')) = 'cloud'
+                 OR LOWER(COALESCE(payload #>> '{context,metadata,runtime_mode}', payload->>'runtime_mode', '')) = 'hosted_secure'
+              )
+            """,
+            workspace_filter,
+            normalized_terminal_states,
+        )
+    except Exception as exc:
+        LOGGER.warning("Postgres count_hosted_live_runs failed: %s", exc)
+        return 0
+    if row is None:
+        return 0
+    return int(row.get("count") if isinstance(row, dict) else row["count"] or 0)
 
 
 async def list_live_runs_by_state(states: list[str]) -> list[Dict[str, Any]]:
@@ -448,9 +810,10 @@ async def list_live_runs_by_state(states: list[str]) -> list[Dict[str, Any]]:
     if pool is None:
         return []
     try:
+        await _ensure_live_run_tables(pool)
         rows = await pool.fetch(
             """
-            SELECT payload
+            SELECT run_id, workspace_id, tenant_id, state, payload, trace_id, version, registered_at
             FROM live_runs
             WHERE LOWER(COALESCE(state, '')) = ANY($1::text[])
             ORDER BY updated_at DESC, created_at DESC
@@ -462,17 +825,7 @@ async def list_live_runs_by_state(states: list[str]) -> list[Dict[str, Any]]:
         return []
     items: list[Dict[str, Any]] = []
     for row in rows or []:
-        payload = row["payload"]
-        if isinstance(payload, dict):
-            items.append(payload)
-            continue
-        if isinstance(payload, str):
-            try:
-                parsed = json.loads(payload)
-            except Exception:
-                parsed = None
-            if isinstance(parsed, dict):
-                items.append(parsed)
+        items.append(_live_run_payload_from_row(row))
     return items
 
 
@@ -517,9 +870,10 @@ async def find_live_run_by_approval_id(approval_id: str) -> Optional[Dict[str, A
     if pool is None:
         return None
     try:
+        await _ensure_live_run_tables(pool)
         row = await pool.fetchrow(
             """
-            SELECT payload
+            SELECT run_id, workspace_id, tenant_id, state, payload, trace_id, version, registered_at
             FROM live_runs
             WHERE
                 payload @> jsonb_build_object('pending_confirmation', jsonb_build_object('approval_id', $1::text)) OR
@@ -534,17 +888,7 @@ async def find_live_run_by_approval_id(approval_id: str) -> Optional[Dict[str, A
         return None
     if row is None:
         return None
-    payload = row["payload"]
-    if isinstance(payload, dict):
-        return payload
-    if isinstance(payload, str):
-        try:
-            parsed = json.loads(payload)
-        except Exception:
-            parsed = None
-        if isinstance(parsed, dict):
-            return parsed
-    return None
+    return _live_run_payload_from_row(row)
 
 
 async def record_transition(
@@ -559,6 +903,7 @@ async def record_transition(
         return None
     pool = await _require_pool(operation="record_transition")
     try:
+        await _ensure_live_run_tables(pool)
         await pool.execute(
             """
             INSERT INTO run_transitions (run_id, from_state, to_state, actor, trace_id, timestamp)
@@ -619,9 +964,10 @@ async def archive_run(
     return None
 
 
-async def claim_run(run_id: str, worker_id: str, ttl: int, trace_id: str) -> None:
+async def claim_run(run_id: str, worker_id: str, ttl: int, trace_id: str, *, lease_id: Optional[str] = None) -> None:
     token = str(run_id or "").strip()
     worker = str(worker_id or "").strip()
+    lease = str(lease_id or "").strip() or None
     if not token or not worker:
         return None
     pool = await _require_pool(operation="claim_run")
@@ -632,30 +978,41 @@ async def claim_run(run_id: str, worker_id: str, ttl: int, trace_id: str) -> Non
             INSERT INTO local_queue_claims (
                 run_id,
                 worker_id,
+                lease_id,
                 claimed_at,
                 ttl,
                 trace_id,
                 last_heartbeat_at,
                 last_progress_at,
-                last_worker_note
+                last_worker_note,
+                updated_at
             )
-            VALUES ($1, $2, NOW(), $3, $4, NOW(), NOW(), NULL)
+            VALUES ($1, $2, $3, NOW(), $4, $5, NOW(), NOW(), NULL, NOW())
             ON CONFLICT (run_id) DO UPDATE SET
                 worker_id = EXCLUDED.worker_id,
+                lease_id = COALESCE(EXCLUDED.lease_id, local_queue_claims.lease_id),
                 claimed_at = NOW(),
                 ttl = EXCLUDED.ttl,
                 trace_id = COALESCE(NULLIF(EXCLUDED.trace_id, ''), local_queue_claims.trace_id),
                 last_heartbeat_at = NOW(),
                 last_progress_at = NOW(),
-                last_worker_note = NULL
+                last_worker_note = NULL,
+                updated_at = NOW()
             WHERE
-                local_queue_claims.worker_id = EXCLUDED.worker_id OR
+                (
+                    local_queue_claims.worker_id = EXCLUDED.worker_id
+                    AND (
+                        (EXCLUDED.lease_id IS NULL AND local_queue_claims.lease_id IS NULL)
+                        OR local_queue_claims.lease_id = EXCLUDED.lease_id
+                    )
+                ) OR
                 COALESCE(local_queue_claims.last_heartbeat_at, local_queue_claims.claimed_at) +
                     (GREATEST(COALESCE(local_queue_claims.ttl, 0), 1) * INTERVAL '1 second') <= NOW()
             RETURNING run_id
             """,
             token,
             worker,
+            lease,
             max(1, int(ttl or 0)),
             str(trace_id or "").strip() or None,
         )
@@ -668,40 +1025,49 @@ async def claim_run(run_id: str, worker_id: str, ttl: int, trace_id: str) -> Non
     return None
 
 
-async def release_claim(run_id: str) -> None:
+async def release_claim(run_id: str, *, lease_id: Optional[str] = None) -> bool:
     token = str(run_id or "").strip()
+    lease = str(lease_id or "").strip() or None
     if not token:
-        return None
+        return False
     pool = await _require_pool(operation="release_claim")
     try:
         await _ensure_local_queue_tables(pool)
-        await pool.execute(
+        row = await pool.fetchrow(
             """
             DELETE FROM local_queue_claims
             WHERE run_id = $1
+              AND (
+                ($2::text IS NULL AND lease_id IS NULL)
+                OR lease_id = $2
+              )
+            RETURNING run_id
             """,
             token,
+            lease,
         )
     except Exception as exc:
         raise RunStatePersistenceError(f"Postgres release_claim failed for {token}: {exc}") from exc
-    return None
+    return row is not None
 
 
 async def touch_claim_heartbeat(
     run_id: str,
     worker_id: str,
     *,
+    lease_id: Optional[str] = None,
     note: Optional[str] = None,
     progress: bool = False,
-) -> None:
+) -> bool:
     token = str(run_id or "").strip()
     worker = str(worker_id or "").strip()
+    lease = str(lease_id or "").strip() or None
     if not token or not worker:
-        return None
+        return False
     pool = await _require_pool(operation="touch_claim_heartbeat")
     try:
         await _ensure_local_queue_tables(pool)
-        await pool.execute(
+        row = await pool.fetchrow(
             """
             UPDATE local_queue_claims
             SET
@@ -710,18 +1076,25 @@ async def touch_claim_heartbeat(
                 last_worker_note = CASE
                     WHEN NULLIF($4, '') IS NOT NULL THEN LEFT($4, 280)
                     ELSE last_worker_note
-                END
+                END,
+                updated_at = NOW()
             WHERE run_id = $1
               AND worker_id = $2
+              AND (
+                ($5::text IS NULL AND lease_id IS NULL)
+                OR lease_id = $5
+              )
+            RETURNING run_id
             """,
             token,
             worker,
             bool(progress),
             str(note or "").strip() or None,
+            lease,
         )
     except Exception as exc:
         raise RunStatePersistenceError(f"Postgres touch_claim_heartbeat failed for {token}: {exc}") from exc
-    return None
+    return row is not None
 
 
 async def append_local_queue_dead_letter(
@@ -1170,44 +1543,600 @@ async def list_fleet_queue_partitions(
     return items
 
 
+def _approval_status_token(value: Any) -> str:
+    token = str(value or "").strip().lower()
+    return token or "requested"
+
+
+def _approval_resolution_token(value: Any) -> str:
+    token = str(value or "").strip().lower()
+    return token or "approved"
+
+
+def _approval_final_status(resolution: str) -> str:
+    resolution_token = _approval_resolution_token(resolution)
+    if resolution_token in {"expired", "cancelled", "canceled", "dismissed"}:
+        return resolution_token
+    return "resolved"
+
+
+def _approval_request_timestamp(request_payload: Dict[str, Any]) -> Optional[str]:
+    token = str(
+        request_payload.get("requested_at")
+        or request_payload.get("created_at")
+        or ""
+    ).strip()
+    return token or None
+
+
+def _approval_record_from_row(row: Any) -> Dict[str, Any]:
+    row_run_id = row.get("run_id") if isinstance(row, dict) else row["run_id"]
+    row_step_id = row.get("step_id") if isinstance(row, dict) else row["step_id"]
+    row_approval_id = row.get("approval_id") if isinstance(row, dict) else row["approval_id"]
+    row_status = row.get("status") if isinstance(row, dict) else row["status"]
+    row_requested_at = row.get("requested_at") if isinstance(row, dict) else row["requested_at"]
+    row_resolved_at = row.get("resolved_at") if isinstance(row, dict) else row["resolved_at"]
+    row_resolution = row.get("resolution") if isinstance(row, dict) else row["resolution"]
+    row_actor = row.get("actor") if isinstance(row, dict) else row["actor"]
+    row_trace_id = row.get("trace_id") if isinstance(row, dict) else row["trace_id"]
+    row_expires_at = row.get("expires_at") if isinstance(row, dict) else row["expires_at"]
+    row_updated_at = row.get("updated_at") if isinstance(row, dict) else row["updated_at"]
+    row_version = row.get("version") if isinstance(row, dict) else row["version"]
+    request_payload = _json_object(row["request_payload"])
+    decision_payload = _json_object(row["decision_payload"])
+    metadata = _json_object(row["metadata"])
+    approval_id = str(row_approval_id or row_step_id or request_payload.get("approval_id") or "").strip()
+    workspace_id = str(
+        request_payload.get("workspace_id")
+        or metadata.get("workspace_id")
+        or "default"
+    ).strip() or "default"
+    tenant_id = str(
+        request_payload.get("tenant_id")
+        or metadata.get("tenant_id")
+        or "default"
+    ).strip() or "default"
+    owner_user_id = str(
+        request_payload.get("owner_user_id")
+        or metadata.get("owner_user_id")
+        or ""
+    ).strip() or None
+    owner_email = str(
+        request_payload.get("owner_email")
+        or metadata.get("owner_email")
+        or ""
+    ).strip().lower() or None
+    prompt = str(
+        request_payload.get("prompt")
+        or request_payload.get("reason")
+        or "Approval required."
+    ).strip()
+    actions = request_payload.get("actions")
+    if not isinstance(actions, list):
+        actions = metadata.get("approval_actions")
+    labels = request_payload.get("labels")
+    if not isinstance(labels, list):
+        labels = metadata.get("approval_labels")
+    capabilities = request_payload.get("capabilities")
+    if not isinstance(capabilities, list):
+        capabilities = metadata.get("approval_capabilities")
+    return {
+        "run_id": str(row_run_id or "").strip(),
+        "step_id": str(row_step_id or approval_id).strip() or approval_id,
+        "approval_id": approval_id,
+        "status": _approval_status_token(row_status),
+        "requested_at": str(row_requested_at or "").strip() or None,
+        "resolved_at": str(row_resolved_at or "").strip() or None,
+        "resolution": str(row_resolution or "").strip().lower() or None,
+        "actor": str(row_actor or "").strip() or None,
+        "trace_id": str(row_trace_id or "").strip() or None,
+        "request_payload": request_payload,
+        "decision_payload": decision_payload,
+        "metadata": metadata,
+        "expires_at": str(row_expires_at or "").strip() or None,
+        "updated_at": str(row_updated_at or "").strip() or None,
+        "version": int(row_version or 0),
+        "workspace_id": workspace_id,
+        "tenant_id": tenant_id,
+        "owner_user_id": owner_user_id,
+        "owner_email": owner_email,
+        "prompt": prompt,
+        "actions": [str(item or "").strip() for item in (actions or []) if str(item or "").strip()],
+        "labels": [str(item or "").strip() for item in (labels or []) if str(item or "").strip()],
+        "capabilities": [str(item or "").strip() for item in (capabilities or []) if str(item or "").strip()],
+        "target": str(
+            request_payload.get("target")
+            or metadata.get("approval_target")
+            or metadata.get("target")
+            or ""
+        ).strip() or None,
+        "correlation_id": str(request_payload.get("correlation_id") or "").strip() or None,
+        "scope": str(request_payload.get("scope") or "once").strip().lower() or "once",
+        "reusable": bool(request_payload.get("reusable")),
+        "consequence": str(request_payload.get("consequence") or "").strip() or None,
+        "agent_role": str(
+            request_payload.get("agent_role")
+            or metadata.get("agent_role")
+            or ""
+        ).strip() or None,
+        "email_preview": request_payload.get("email_preview")
+        if isinstance(request_payload.get("email_preview"), dict)
+        else metadata.get("email_preview")
+        if isinstance(metadata.get("email_preview"), dict)
+        else None,
+    }
+
+
+async def _fetch_approval_row(
+    pool: Any,
+    *,
+    approval_id: Optional[str] = None,
+    run_id: Optional[str] = None,
+) -> Optional[Any]:
+    approval_token = str(approval_id or "").strip()
+    run_token = str(run_id or "").strip()
+    if approval_token:
+        return await pool.fetchrow(
+            """
+            SELECT run_id, step_id, approval_id, status, requested_at, resolved_at, resolution, actor, trace_id,
+                   request_payload, decision_payload, metadata, expires_at, updated_at, version
+            FROM run_approvals
+            WHERE COALESCE(approval_id, step_id) = $1
+            LIMIT 1
+            """,
+            approval_token,
+        )
+    if run_token:
+        return await pool.fetchrow(
+            """
+            SELECT run_id, step_id, approval_id, status, requested_at, resolved_at, resolution, actor, trace_id,
+                   request_payload, decision_payload, metadata, expires_at, updated_at, version
+            FROM run_approvals
+            WHERE run_id = $1
+            ORDER BY requested_at DESC
+            LIMIT 1
+            """,
+            run_token,
+        )
+    return None
+
+
+async def _ensure_run_approval_table(pool: Any) -> None:
+    await pool.execute(
+        """
+        CREATE TABLE IF NOT EXISTS run_approvals (
+            id BIGSERIAL PRIMARY KEY,
+            run_id TEXT NOT NULL,
+            step_id TEXT NOT NULL,
+            approval_id TEXT,
+            status TEXT NOT NULL DEFAULT 'requested',
+            requested_at TIMESTAMPTZ NOT NULL,
+            resolved_at TIMESTAMPTZ,
+            resolution TEXT,
+            actor TEXT,
+            trace_id TEXT,
+            request_payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+            decision_payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+            metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+            expires_at TIMESTAMPTZ NULL,
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            version BIGINT NOT NULL DEFAULT 0
+        )
+        """
+    )
+    await pool.execute("ALTER TABLE run_approvals ADD COLUMN IF NOT EXISTS approval_id TEXT")
+    await pool.execute("ALTER TABLE run_approvals ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'requested'")
+    await pool.execute("ALTER TABLE run_approvals ADD COLUMN IF NOT EXISTS request_payload JSONB NOT NULL DEFAULT '{}'::jsonb")
+    await pool.execute("ALTER TABLE run_approvals ADD COLUMN IF NOT EXISTS decision_payload JSONB NOT NULL DEFAULT '{}'::jsonb")
+    await pool.execute("ALTER TABLE run_approvals ADD COLUMN IF NOT EXISTS metadata JSONB NOT NULL DEFAULT '{}'::jsonb")
+    await pool.execute("ALTER TABLE run_approvals ADD COLUMN IF NOT EXISTS expires_at TIMESTAMPTZ NULL")
+    await pool.execute("ALTER TABLE run_approvals ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()")
+    await pool.execute("ALTER TABLE run_approvals ADD COLUMN IF NOT EXISTS version BIGINT NOT NULL DEFAULT 0")
+    await pool.execute("UPDATE run_approvals SET approval_id = step_id WHERE COALESCE(approval_id, '') = ''")
+    await pool.execute(
+        """
+        UPDATE run_approvals
+        SET status = CASE
+            WHEN COALESCE(status, '') <> '' THEN LOWER(status)
+            WHEN COALESCE(resolution, '') IN ('expired', 'cancelled', 'canceled', 'dismissed') THEN LOWER(resolution)
+            WHEN resolved_at IS NOT NULL OR COALESCE(resolution, '') <> '' THEN 'resolved'
+            ELSE 'requested'
+        END
+        """
+    )
+    await pool.execute("CREATE INDEX IF NOT EXISTS idx_run_approvals_run_id ON run_approvals(run_id, requested_at DESC)")
+    await pool.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_run_approvals_approval_id ON run_approvals(approval_id)")
+    await pool.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_run_approvals_run_step ON run_approvals(run_id, step_id)")
+    await pool.execute("CREATE INDEX IF NOT EXISTS idx_run_approvals_status_requested ON run_approvals(status, requested_at DESC)")
+    await pool.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_run_approvals_workspace_status_requested
+        ON run_approvals ((COALESCE(request_payload->>'workspace_id', metadata->>'workspace_id', 'default')), status, requested_at DESC)
+        """
+    )
+
+
+async def create_or_update_approval_request(
+    run_id: str,
+    approval_id: str,
+    request_payload: Dict[str, Any],
+    actor: str,
+    trace_id: str,
+    *,
+    metadata: Optional[Dict[str, Any]] = None,
+    expires_at: Optional[str] = None,
+) -> Dict[str, Any]:
+    run_token = str(run_id or "").strip()
+    approval_token = str(approval_id or "").strip()
+    if not run_token or not approval_token:
+        raise RunStatePersistenceError("Postgres create_or_update_approval_request requires run_id and approval_id")
+    pool = await _require_pool(operation="create_or_update_approval_request")
+    request_item = _json_object(request_payload)
+    request_item["approval_id"] = approval_token
+    request_metadata = _json_object(metadata)
+    if not request_metadata and isinstance(request_item.get("metadata"), dict):
+        request_metadata = _json_object(request_item.get("metadata"))
+    requested_at = _approval_request_timestamp(request_item)
+    expires_at_token = str(expires_at or request_item.get("expires_at") or "").strip() or None
+    try:
+        await _ensure_run_approval_table(pool)
+        row = await pool.fetchrow(
+            """
+            INSERT INTO run_approvals (
+                run_id,
+                step_id,
+                approval_id,
+                status,
+                requested_at,
+                actor,
+                trace_id,
+                request_payload,
+                decision_payload,
+                metadata,
+                expires_at,
+                updated_at,
+                version
+            )
+            VALUES (
+                $1,
+                $2,
+                $2,
+                'requested',
+                COALESCE($3::timestamptz, NOW()),
+                $4,
+                $5,
+                $6::jsonb,
+                '{}'::jsonb,
+                $7::jsonb,
+                $8::timestamptz,
+                NOW(),
+                0
+            )
+            ON CONFLICT (run_id, step_id) DO UPDATE SET
+                approval_id = COALESCE(NULLIF(EXCLUDED.approval_id, ''), run_approvals.approval_id, run_approvals.step_id),
+                request_payload = CASE
+                    WHEN run_approvals.status = 'requested' THEN EXCLUDED.request_payload
+                    ELSE run_approvals.request_payload
+                END,
+                metadata = CASE
+                    WHEN run_approvals.status = 'requested' THEN EXCLUDED.metadata
+                    ELSE run_approvals.metadata
+                END,
+                expires_at = COALESCE(EXCLUDED.expires_at, run_approvals.expires_at),
+                updated_at = NOW()
+            RETURNING run_id, step_id, approval_id, status, requested_at, resolved_at, resolution, actor, trace_id,
+                      request_payload, decision_payload, metadata, expires_at, updated_at, version
+            """,
+            run_token,
+            approval_token,
+            requested_at,
+            str(actor or "").strip() or "system",
+            str(trace_id or "").strip() or None,
+            _json_payload(request_item),
+            _json_payload(request_metadata),
+            expires_at_token,
+        )
+    except Exception as exc:
+        raise RunStatePersistenceError(
+            f"Postgres create_or_update_approval_request failed for {run_token}/{approval_token}: {exc}"
+        ) from exc
+    if row is None:
+        raise RunStatePersistenceError(
+            f"Postgres create_or_update_approval_request returned no row for {run_token}/{approval_token}"
+        )
+    return _approval_record_from_row(row)
+
+
+async def list_pending_approvals(limit: int = 100) -> list[Dict[str, Any]]:
+    pool = await runtime_db.get_pool()
+    if pool is None:
+        return []
+    try:
+        await _ensure_run_approval_table(pool)
+        rows = await pool.fetch(
+            """
+            SELECT run_id, step_id, approval_id, status, requested_at, resolved_at, resolution, actor, trace_id,
+                   request_payload, decision_payload, metadata, expires_at, updated_at, version
+            FROM run_approvals
+            WHERE status = 'requested'
+            ORDER BY requested_at DESC, id DESC
+            LIMIT $1
+            """,
+            max(1, min(int(limit or 0), 300)),
+        )
+    except Exception as exc:
+        LOGGER.warning("Postgres list_pending_approvals failed: %s", exc)
+        return []
+    return [_approval_record_from_row(row) for row in (rows or [])]
+
+
+async def list_pending_approvals_page(
+    *,
+    limit: int = 100,
+    offset: int = 0,
+    workspace_id: Optional[str] = None,
+) -> list[Dict[str, Any]]:
+    pool = await runtime_db.get_pool()
+    if pool is None:
+        return []
+    workspace_filter = str(workspace_id or "").strip()
+    try:
+        await _ensure_run_approval_table(pool)
+        rows = await pool.fetch(
+            """
+            SELECT run_id, step_id, approval_id, status, requested_at, resolved_at, resolution, actor, trace_id,
+                   request_payload, decision_payload, metadata, expires_at, updated_at, version
+            FROM run_approvals
+            WHERE status = 'requested'
+              AND ($1 = '' OR COALESCE(request_payload->>'workspace_id', metadata->>'workspace_id', 'default') = $1)
+            ORDER BY requested_at DESC, id DESC
+            LIMIT $2
+            OFFSET $3
+            """,
+            workspace_filter,
+            max(1, min(int(limit or 0), 500)),
+            max(0, int(offset or 0)),
+        )
+    except Exception as exc:
+        LOGGER.warning("Postgres list_pending_approvals_page failed: %s", exc)
+        return []
+    return [_approval_record_from_row(row) for row in (rows or [])]
+
+
+async def get_approval_record(approval_id: str) -> Optional[Dict[str, Any]]:
+    approval_token = str(approval_id or "").strip()
+    if not approval_token:
+        return None
+    pool = await runtime_db.get_pool()
+    if pool is None:
+        return None
+    try:
+        await _ensure_run_approval_table(pool)
+        row = await pool.fetchrow(
+            """
+            SELECT run_id, step_id, approval_id, status, requested_at, resolved_at, resolution, actor, trace_id,
+                   request_payload, decision_payload, metadata, expires_at, updated_at, version
+            FROM run_approvals
+            WHERE COALESCE(approval_id, step_id) = $1
+            LIMIT 1
+            """,
+            approval_token,
+        )
+    except Exception as exc:
+        LOGGER.warning("Postgres get_approval_record failed for %s: %s", approval_token, exc)
+        return None
+    if row is None:
+        return None
+    return _approval_record_from_row(row)
+
+
+async def resolve_approval_if_pending(
+    run_id: str,
+    approval_id: str,
+    resolution: str,
+    actor: str,
+    trace_id: str,
+    *,
+    note: Optional[str] = None,
+    decision_payload: Optional[Dict[str, Any]] = None,
+) -> Optional[Dict[str, Any]]:
+    run_token = str(run_id or "").strip()
+    approval_token = str(approval_id or "").strip()
+    if not run_token or not approval_token:
+        return None
+    resolution_token = _approval_resolution_token(resolution)
+    final_status = _approval_final_status(resolution_token)
+    decision_item = _json_object(decision_payload)
+    if note is not None:
+        decision_item["note"] = str(note or "")
+    decision_item.setdefault("resolution", resolution_token)
+    decision_item.setdefault("decision", resolution_token)
+    pool = await _require_pool(operation="resolve_approval_if_pending")
+    try:
+        await _ensure_run_approval_table(pool)
+        row = await pool.fetchrow(
+            """
+            UPDATE run_approvals
+            SET status = $3,
+                resolved_at = NOW(),
+                resolution = $4,
+                actor = $5,
+                trace_id = COALESCE(NULLIF($6, ''), trace_id),
+                decision_payload = COALESCE(decision_payload, '{{}}'::jsonb) || $7::jsonb,
+                updated_at = NOW(),
+                version = version + 1
+            WHERE run_id = $1
+              AND COALESCE(approval_id, step_id) = $2
+              AND status = 'requested'
+            RETURNING run_id, step_id, approval_id, status, requested_at, resolved_at, resolution, actor, trace_id,
+                      request_payload, decision_payload, metadata, expires_at, updated_at, version
+            """,
+            run_token,
+            approval_token,
+            final_status,
+            resolution_token,
+            str(actor or "").strip() or "system",
+            str(trace_id or "").strip() or None,
+            _json_payload(decision_item),
+        )
+        if row is not None:
+            return _approval_record_from_row(row)
+        existing = await pool.fetchrow(
+            """
+            SELECT run_id, step_id, approval_id, status, requested_at, resolved_at, resolution, actor, trace_id,
+                   request_payload, decision_payload, metadata, expires_at, updated_at, version
+            FROM run_approvals
+            WHERE run_id = $1
+              AND COALESCE(approval_id, step_id) = $2
+            LIMIT 1
+            """,
+            run_token,
+            approval_token,
+        )
+    except Exception as exc:
+        raise RunStatePersistenceError(
+            f"Postgres resolve_approval_if_pending failed for {run_token}/{approval_token}: {exc}"
+        ) from exc
+    if existing is None:
+        return None
+    existing_record = _approval_record_from_row(existing)
+    if existing_record.get("resolution") == resolution_token:
+        return None
+    return None
+
+
 async def record_approval_resolution(
     run_id: str,
     approval_id: str,
     resolution: str,
     actor: str,
     trace_id: str,
-) -> None:
+    note: Optional[str] = None,
+) -> Dict[str, Any] | None:
     run_token = str(run_id or "").strip()
     approval_token = str(approval_id or "").strip()
     if not run_token or not approval_token:
         return None
+    resolution_token = _approval_resolution_token(resolution)
+    final_status = _approval_final_status(resolution_token)
+    decision_item = {"resolution": resolution_token, "decision": resolution_token}
+    if note is not None:
+        decision_item["note"] = str(note or "")
     pool = await _require_pool(operation="record_approval_resolution")
     try:
-        await pool.execute(
+        await _ensure_run_approval_table(pool)
+        row = await pool.fetchrow(
             """
-            INSERT INTO run_approvals (run_id, step_id, requested_at, resolved_at, resolution, actor, trace_id)
-            SELECT $1, $2, NOW(), NOW(), $3, $4, $5
-            WHERE NOT EXISTS (
-                SELECT 1
-                FROM run_approvals
-                WHERE run_id = $1
-                  AND step_id = $2
-                  AND resolution = $3
-                  AND actor = $4
-                  AND COALESCE(trace_id, '') = COALESCE($5, '')
-            )
+            UPDATE run_approvals
+            SET status = $3,
+                resolved_at = COALESCE(resolved_at, NOW()),
+                resolution = $4,
+                actor = $5,
+                trace_id = COALESCE(NULLIF($6, ''), trace_id),
+                decision_payload = COALESCE(decision_payload, '{{}}'::jsonb) || $7::jsonb,
+                updated_at = NOW(),
+                version = CASE
+                    WHEN status IN ('requested', 'decision_submitted') THEN version + 1
+                    ELSE version
+                END
+            WHERE run_id = $1
+              AND COALESCE(approval_id, step_id) = $2
+              AND (
+                  status NOT IN ('resolved', 'approved', 'rejected', 'expired', 'cancelled', 'canceled', 'dismissed')
+                  OR (
+                      status = $3
+                      AND COALESCE(resolution, '') = $4
+                  )
+              )
+            RETURNING run_id, step_id, approval_id, status, requested_at, resolved_at, resolution, actor, trace_id,
+                      request_payload, decision_payload, metadata, expires_at, updated_at, version
             """,
             run_token,
             approval_token,
-            str(resolution or "").strip() or "approved",
+            final_status,
+            resolution_token,
             str(actor or "").strip() or "system",
             str(trace_id or "").strip() or None,
+            _json_payload(decision_item),
         )
+        if row is None:
+            existing = await pool.fetchrow(
+                """
+                SELECT run_id, step_id, approval_id, status, requested_at, resolved_at, resolution, actor, trace_id,
+                       request_payload, decision_payload, metadata, expires_at, updated_at, version
+                FROM run_approvals
+                WHERE run_id = $1
+                  AND COALESCE(approval_id, step_id) = $2
+                LIMIT 1
+                """,
+                run_token,
+                approval_token,
+            )
+            if existing is not None:
+                existing_record = _approval_record_from_row(existing)
+                if (
+                    str(existing_record.get("status") or "").strip().lower() == final_status
+                    and str(existing_record.get("resolution") or "").strip().lower() == resolution_token
+                ):
+                    return existing_record
+                raise RunStateVersionConflictError(
+                    f"Postgres record_approval_resolution refused conflicting final state for {run_token}/{approval_token}"
+                )
+            if row is None:
+                row = await pool.fetchrow(
+                    """
+                    INSERT INTO run_approvals (
+                        run_id,
+                        step_id,
+                        approval_id,
+                        status,
+                        requested_at,
+                        resolved_at,
+                        resolution,
+                        actor,
+                        trace_id,
+                        request_payload,
+                        decision_payload,
+                        metadata,
+                        expires_at,
+                        updated_at,
+                        version
+                    )
+                    VALUES (
+                        $1,
+                        $2,
+                        $2,
+                        $3,
+                        NOW(),
+                        NOW(),
+                        $4,
+                        $5,
+                        $6,
+                        '{}'::jsonb,
+                        $7::jsonb,
+                        '{}'::jsonb,
+                        NULL,
+                        NOW(),
+                        0
+                    )
+                    ON CONFLICT (run_id, step_id) DO UPDATE SET
+                        updated_at = NOW()
+                    RETURNING run_id, step_id, approval_id, status, requested_at, resolved_at, resolution, actor, trace_id,
+                              request_payload, decision_payload, metadata, expires_at, updated_at, version
+                    """,
+                    run_token,
+                    approval_token,
+                    final_status,
+                    resolution_token,
+                    str(actor or "").strip() or "system",
+                    str(trace_id or "").strip() or None,
+                    _json_payload(decision_item),
+                )
     except Exception as exc:
         raise RunStatePersistenceError(
             f"Postgres record_approval_resolution failed for {run_token}/{approval_token}: {exc}"
         ) from exc
-    return None
+    return _approval_record_from_row(row) if row is not None else None
 
 
 async def _ensure_runtime_outbox_table(pool: Any) -> None:
@@ -1230,7 +2159,11 @@ async def _ensure_runtime_outbox_table(pool: Any) -> None:
             last_delivery_error TEXT NULL,
             last_attempted_at TIMESTAMPTZ NULL,
             next_attempt_at TIMESTAMPTZ NULL,
-            poisoned_at TIMESTAMPTZ NULL
+            poisoned_at TIMESTAMPTZ NULL,
+            claim_token TEXT NULL,
+            claimed_by TEXT NULL,
+            claimed_at TIMESTAMPTZ NULL,
+            claim_expires_at TIMESTAMPTZ NULL
         )
         """
     )
@@ -1239,9 +2172,50 @@ async def _ensure_runtime_outbox_table(pool: Any) -> None:
     await pool.execute("ALTER TABLE runtime_outbox ADD COLUMN IF NOT EXISTS last_attempted_at TIMESTAMPTZ NULL")
     await pool.execute("ALTER TABLE runtime_outbox ADD COLUMN IF NOT EXISTS next_attempt_at TIMESTAMPTZ NULL")
     await pool.execute("ALTER TABLE runtime_outbox ADD COLUMN IF NOT EXISTS poisoned_at TIMESTAMPTZ NULL")
+    await pool.execute("ALTER TABLE runtime_outbox ADD COLUMN IF NOT EXISTS claim_token TEXT NULL")
+    await pool.execute("ALTER TABLE runtime_outbox ADD COLUMN IF NOT EXISTS claimed_by TEXT NULL")
+    await pool.execute("ALTER TABLE runtime_outbox ADD COLUMN IF NOT EXISTS claimed_at TIMESTAMPTZ NULL")
+    await pool.execute("ALTER TABLE runtime_outbox ADD COLUMN IF NOT EXISTS claim_expires_at TIMESTAMPTZ NULL")
     await pool.execute(
         "CREATE INDEX IF NOT EXISTS idx_runtime_outbox_due ON runtime_outbox (delivered_at, poisoned_at, next_attempt_at, created_at)"
     )
+    await pool.execute(
+        "CREATE INDEX IF NOT EXISTS idx_runtime_outbox_claim_expiry ON runtime_outbox (claim_expires_at, created_at) WHERE delivered_at IS NULL"
+    )
+
+
+def _outbox_record_from_row(row: Mapping[str, Any]) -> Dict[str, Any]:
+    payload = row["payload"]
+    if isinstance(payload, str):
+        try:
+            payload = json.loads(payload)
+        except Exception:
+            payload = {}
+    if not isinstance(payload, dict):
+        payload = {}
+    return {
+        "event_id": str(row["event_id"] or "").strip(),
+        "event_type": str(row["event_type"] or "").strip(),
+        "tenant_id": str(row["tenant_id"] or "").strip() or "default",
+        "workspace_id": str(row["workspace_id"] or "").strip() or "default",
+        "run_id": str(row["run_id"] or "").strip() or None,
+        "machine_id": str(row["machine_id"] or "").strip() or None,
+        "trace_id": str(row["trace_id"] or "").strip(),
+        "idempotency_key": str(row["idempotency_key"] or "").strip(),
+        "payload": payload,
+        "created_at": str(row["created_at"] or "").strip() or None,
+        "delivered_at": str(row["delivered_at"] or "").strip() or None,
+        "last_replayed_at": str(row["last_replayed_at"] or "").strip() or None,
+        "retry_count": int(row["retry_count"] or 0),
+        "last_delivery_error": str(row["last_delivery_error"] or "").strip() or None,
+        "last_attempted_at": str(row["last_attempted_at"] or "").strip() or None,
+        "next_attempt_at": str(row["next_attempt_at"] or "").strip() or None,
+        "poisoned_at": str(row["poisoned_at"] or "").strip() or None,
+        "claim_token": str(row.get("claim_token") or "").strip() or None,
+        "claimed_by": str(row.get("claimed_by") or "").strip() or None,
+        "claimed_at": str(row.get("claimed_at") or "").strip() or None,
+        "claim_expires_at": str(row.get("claim_expires_at") or "").strip() or None,
+    }
 
 
 async def persist_outbox_event(
@@ -1338,7 +2312,11 @@ async def list_undelivered_outbox_events(
                 last_delivery_error,
                 last_attempted_at,
                 next_attempt_at,
-                poisoned_at
+                poisoned_at,
+                claim_token,
+                claimed_by,
+                claimed_at,
+                claim_expires_at
             FROM runtime_outbox
             WHERE delivered_at IS NULL
               AND poisoned_at IS NULL
@@ -1352,38 +2330,81 @@ async def list_undelivered_outbox_events(
     except Exception as exc:
         LOGGER.warning("Postgres list_undelivered_outbox_events failed: %s", exc)
         return []
-    items: list[Dict[str, Any]] = []
-    for row in rows or []:
-        payload = row["payload"]
-        if isinstance(payload, str):
-            try:
-                payload = json.loads(payload)
-            except Exception:
-                payload = {}
-        if not isinstance(payload, dict):
-            payload = {}
-        items.append(
-            {
-                "event_id": str(row["event_id"] or "").strip(),
-                "event_type": str(row["event_type"] or "").strip(),
-                "tenant_id": str(row["tenant_id"] or "").strip() or "default",
-                "workspace_id": str(row["workspace_id"] or "").strip() or "default",
-                "run_id": str(row["run_id"] or "").strip() or None,
-                "machine_id": str(row["machine_id"] or "").strip() or None,
-                "trace_id": str(row["trace_id"] or "").strip(),
-                "idempotency_key": str(row["idempotency_key"] or "").strip(),
-                "payload": payload,
-                "created_at": str(row["created_at"] or "").strip() or None,
-                "delivered_at": str(row["delivered_at"] or "").strip() or None,
-                "last_replayed_at": str(row["last_replayed_at"] or "").strip() or None,
-                "retry_count": int(row["retry_count"] or 0),
-                "last_delivery_error": str(row["last_delivery_error"] or "").strip() or None,
-                "last_attempted_at": str(row["last_attempted_at"] or "").strip() or None,
-                "next_attempt_at": str(row["next_attempt_at"] or "").strip() or None,
-                "poisoned_at": str(row["poisoned_at"] or "").strip() or None,
-            }
+    return [_outbox_record_from_row(row) for row in rows or []]
+
+
+async def claim_due_outbox_events(
+    *,
+    older_than_seconds: int = 0,
+    limit: int = 200,
+    claimed_by: str,
+    claim_ttl_seconds: int = 30,
+) -> list[Dict[str, Any]]:
+    claimed_by_token = str(claimed_by or "").strip() or "outbox-delivery"
+    pool = await runtime_db.get_pool()
+    if pool is None:
+        return []
+    try:
+        await _ensure_runtime_outbox_table(pool)
+        rows = await pool.fetch(
+            """
+            WITH due AS (
+                SELECT event_id
+                FROM runtime_outbox
+                WHERE delivered_at IS NULL
+                  AND poisoned_at IS NULL
+                  AND COALESCE(next_attempt_at, created_at) <= NOW() - ($1 * INTERVAL '1 second')
+                  AND (
+                    claim_expires_at IS NULL
+                    OR claim_expires_at <= NOW()
+                  )
+                ORDER BY COALESCE(next_attempt_at, created_at) ASC, created_at ASC
+                LIMIT $2
+                FOR UPDATE SKIP LOCKED
+            )
+            UPDATE runtime_outbox AS outbox
+            SET claim_token = CONCAT(
+                    outbox.event_id,
+                    ':',
+                    SUBSTRING(MD5(outbox.event_id || CLOCK_TIMESTAMP()::text || RANDOM()::text) FROM 1 FOR 24)
+                ),
+                claimed_by = $3,
+                claimed_at = NOW(),
+                claim_expires_at = NOW() + ($4::text || ' seconds')::interval
+            FROM due
+            WHERE outbox.event_id = due.event_id
+            RETURNING
+                outbox.event_id,
+                outbox.event_type,
+                outbox.tenant_id,
+                outbox.workspace_id,
+                outbox.run_id,
+                outbox.machine_id,
+                outbox.trace_id,
+                outbox.idempotency_key,
+                outbox.payload,
+                outbox.created_at,
+                outbox.delivered_at,
+                outbox.last_replayed_at,
+                outbox.retry_count,
+                outbox.last_delivery_error,
+                outbox.last_attempted_at,
+                outbox.next_attempt_at,
+                outbox.poisoned_at,
+                outbox.claim_token,
+                outbox.claimed_by,
+                outbox.claimed_at,
+                outbox.claim_expires_at
+            """,
+            max(0, int(older_than_seconds or 0)),
+            max(1, int(limit or 0)),
+            claimed_by_token,
+            max(1, int(claim_ttl_seconds or 0)),
         )
-    return items
+    except Exception as exc:
+        LOGGER.warning("Postgres claim_due_outbox_events failed: %s", exc)
+        return []
+    return [_outbox_record_from_row(row) for row in rows or []]
 
 
 async def patch_outbox_event_payload(event_id: str, payload_patch: Dict[str, Any]) -> None:
@@ -1409,14 +2430,15 @@ async def patch_outbox_event_payload(event_id: str, payload_patch: Dict[str, Any
     return None
 
 
-async def mark_outbox_event_delivered(event_id: str) -> None:
+async def mark_outbox_event_delivered(event_id: str, *, claim_token: str) -> bool:
     token = str(event_id or "").strip()
-    if not token:
-        return None
+    claim = str(claim_token or "").strip()
+    if not token or not claim:
+        return False
     pool = await _require_pool(operation="mark_outbox_event_delivered")
     try:
         await _ensure_runtime_outbox_table(pool)
-        await pool.execute(
+        row = await pool.fetchrow(
             """
             UPDATE runtime_outbox
             SET delivered_at = NOW(),
@@ -1424,31 +2446,41 @@ async def mark_outbox_event_delivered(event_id: str) -> None:
                 last_attempted_at = NOW(),
                 last_delivery_error = NULL,
                 next_attempt_at = NULL,
-                poisoned_at = NULL
+                poisoned_at = NULL,
+                claim_token = NULL,
+                claimed_by = NULL,
+                claimed_at = NULL,
+                claim_expires_at = NULL
             WHERE event_id = $1
+              AND claim_token = $2
+              AND delivered_at IS NULL
+            RETURNING event_id
             """,
             token,
+            claim,
         )
     except Exception as exc:
         raise RunStatePersistenceError(f"Postgres mark_outbox_event_delivered failed for {token}: {exc}") from exc
-    return None
+    return row is not None
 
 
 async def record_outbox_delivery_failure(
     event_id: str,
     *,
+    claim_token: str,
     error_text: str,
     retry_delay_seconds: Optional[int],
     poison: bool = False,
     increment_retry: bool = True,
-) -> None:
+) -> bool:
     token = str(event_id or "").strip()
-    if not token:
-        return None
+    claim = str(claim_token or "").strip()
+    if not token or not claim:
+        return False
     pool = await _require_pool(operation="record_outbox_delivery_failure")
     try:
         await _ensure_runtime_outbox_table(pool)
-        await pool.execute(
+        row = await pool.fetchrow(
             """
             UPDATE runtime_outbox
             SET retry_count = COALESCE(retry_count, 0) + CASE WHEN $5::boolean THEN 1 ELSE 0 END,
@@ -1460,18 +2492,26 @@ async def record_outbox_delivery_failure(
                     WHEN $4::integer IS NULL THEN NULL
                     ELSE NOW() + ($4::text || ' seconds')::interval
                 END,
-                poisoned_at = CASE WHEN $3::boolean THEN NOW() ELSE NULL END
+                poisoned_at = CASE WHEN $3::boolean THEN NOW() ELSE NULL END,
+                claim_token = NULL,
+                claimed_by = NULL,
+                claimed_at = NULL,
+                claim_expires_at = NULL
             WHERE event_id = $1
+              AND claim_token = $6
+              AND delivered_at IS NULL
+            RETURNING event_id
             """,
             token,
             str(error_text or "").strip() or "outbox_delivery_failed",
             bool(poison),
             (None if retry_delay_seconds is None else max(0, int(retry_delay_seconds))),
             bool(increment_retry),
+            claim,
         )
     except Exception as exc:
         raise RunStatePersistenceError(f"Postgres record_outbox_delivery_failure failed for {token}: {exc}") from exc
-    return None
+    return row is not None
 
 
 async def list_poisoned_outbox_events(
@@ -1502,7 +2542,11 @@ async def list_poisoned_outbox_events(
                 last_delivery_error,
                 last_attempted_at,
                 next_attempt_at,
-                poisoned_at
+                poisoned_at,
+                claim_token,
+                claimed_by,
+                claimed_at,
+                claim_expires_at
             FROM runtime_outbox
             WHERE delivered_at IS NULL
               AND poisoned_at IS NOT NULL
@@ -1514,38 +2558,7 @@ async def list_poisoned_outbox_events(
     except Exception as exc:
         LOGGER.warning("Postgres list_poisoned_outbox_events failed: %s", exc)
         return []
-    items: list[Dict[str, Any]] = []
-    for row in rows or []:
-        payload = row["payload"]
-        if isinstance(payload, str):
-            try:
-                payload = json.loads(payload)
-            except Exception:
-                payload = {}
-        if not isinstance(payload, dict):
-            payload = {}
-        items.append(
-            {
-                "event_id": str(row["event_id"] or "").strip(),
-                "event_type": str(row["event_type"] or "").strip(),
-                "tenant_id": str(row["tenant_id"] or "").strip() or "default",
-                "workspace_id": str(row["workspace_id"] or "").strip() or "default",
-                "run_id": str(row["run_id"] or "").strip() or None,
-                "machine_id": str(row["machine_id"] or "").strip() or None,
-                "trace_id": str(row["trace_id"] or "").strip(),
-                "idempotency_key": str(row["idempotency_key"] or "").strip(),
-                "payload": payload,
-                "created_at": str(row["created_at"] or "").strip() or None,
-                "delivered_at": str(row["delivered_at"] or "").strip() or None,
-                "last_replayed_at": str(row["last_replayed_at"] or "").strip() or None,
-                "retry_count": int(row["retry_count"] or 0),
-                "last_delivery_error": str(row["last_delivery_error"] or "").strip() or None,
-                "last_attempted_at": str(row["last_attempted_at"] or "").strip() or None,
-                "next_attempt_at": str(row["next_attempt_at"] or "").strip() or None,
-                "poisoned_at": str(row["poisoned_at"] or "").strip() or None,
-            }
-        )
-    return items
+    return [_outbox_record_from_row(row) for row in rows or []]
 
 
 async def get_outbox_delivery_status() -> Dict[str, Any]:
@@ -1554,6 +2567,7 @@ async def get_outbox_delivery_status() -> Dict[str, Any]:
         return {
             "undelivered_count": 0,
             "poisoned_count": 0,
+            "claimed_count": 0,
             "repeated_failure_count": 0,
             "stuck_count": 0,
             "total_retry_count": 0,
@@ -1567,6 +2581,12 @@ async def get_outbox_delivery_status() -> Dict[str, Any]:
             SELECT
                 COUNT(*) FILTER (WHERE delivered_at IS NULL AND poisoned_at IS NULL) AS undelivered_count,
                 COUNT(*) FILTER (WHERE delivered_at IS NULL AND poisoned_at IS NOT NULL) AS poisoned_count,
+                COUNT(*) FILTER (
+                    WHERE delivered_at IS NULL
+                      AND poisoned_at IS NULL
+                      AND claim_expires_at IS NOT NULL
+                      AND claim_expires_at > NOW()
+                ) AS claimed_count,
                 COUNT(*) FILTER (
                     WHERE delivered_at IS NULL
                       AND retry_count >= 3
@@ -1595,6 +2615,7 @@ async def get_outbox_delivery_status() -> Dict[str, Any]:
         return {
             "undelivered_count": 0,
             "poisoned_count": 0,
+            "claimed_count": 0,
             "repeated_failure_count": 0,
             "stuck_count": 0,
             "total_retry_count": 0,
@@ -1604,6 +2625,7 @@ async def get_outbox_delivery_status() -> Dict[str, Any]:
     return {
         "undelivered_count": int(summary_row["undelivered_count"] if summary_row is not None else 0),
         "poisoned_count": int(summary_row["poisoned_count"] if summary_row is not None else 0),
+        "claimed_count": int(summary_row["claimed_count"] if summary_row is not None else 0),
         "repeated_failure_count": int(summary_row["repeated_failure_count"] if summary_row is not None else 0),
         "stuck_count": int(summary_row["stuck_count"] if summary_row is not None else 0),
         "total_retry_count": int(summary_row["total_retry_count"] if summary_row is not None else 0),
@@ -1632,6 +2654,7 @@ async def list_expired_local_claims() -> list[Dict[str, Any]]:
             SELECT
                 claims.run_id,
                 claims.worker_id,
+                claims.lease_id,
                 claims.claimed_at,
                 claims.last_heartbeat_at,
                 claims.last_progress_at,
@@ -1660,6 +2683,7 @@ async def list_expired_local_claims() -> list[Dict[str, Any]]:
             {
                 "run_id": str(row["run_id"] or "").strip() or None,
                 "worker_id": str(row["worker_id"] or "").strip() or None,
+                "lease_id": str(row["lease_id"] or "").strip() or None,
                 "claimed_at": str(row["claimed_at"] or "").strip() or None,
                 "last_heartbeat_at": str(row["last_heartbeat_at"] or "").strip() or None,
                 "last_progress_at": str(row["last_progress_at"] or "").strip() or None,
@@ -1687,6 +2711,48 @@ def sync_upsert_live_run(
     )
 
 
+def sync_create_live_run_initial(
+    run_id: str,
+    workspace_id: str,
+    tenant_id: str,
+    state: str,
+    payload: Dict[str, Any],
+    trace_id: str,
+) -> Dict[str, Any]:
+    return _run_sync(
+        lambda: create_live_run_initial(run_id, workspace_id, tenant_id, state, payload, trace_id),
+        operation="sync_create_live_run_initial",
+        fallback={},
+        raise_on_error=True,
+    )
+
+
+def sync_update_live_run_if_version_matches(
+    run_id: str,
+    workspace_id: str,
+    tenant_id: str,
+    state: str,
+    payload: Dict[str, Any],
+    trace_id: str,
+    *,
+    expected_version: int,
+) -> Optional[int]:
+    return _run_sync(
+        lambda: update_live_run_if_version_matches(
+            run_id,
+            workspace_id,
+            tenant_id,
+            state,
+            payload,
+            trace_id,
+            expected_version=expected_version,
+        ),
+        operation="sync_update_live_run_if_version_matches",
+        fallback=None,
+        raise_on_error=True,
+    )
+
+
 def sync_delete_live_run(run_id: str) -> None:
     _run_sync(
         lambda: delete_live_run(run_id),
@@ -1707,6 +2773,44 @@ def sync_archive_run(run_id: str, final_state: str, payload: Dict[str, Any], tra
 
 def sync_list_live_runs() -> list[Dict[str, Any]]:
     return _run_sync(lambda: list_live_runs(), operation="sync_list_live_runs", fallback=[])
+
+
+def sync_list_live_runs_page(
+    *,
+    limit: int = 100,
+    offset: int = 0,
+    workspace_id: Optional[str] = None,
+    states: Optional[list[str]] = None,
+) -> list[Dict[str, Any]]:
+    return _run_sync(
+        lambda: list_live_runs_page(limit=limit, offset=offset, workspace_id=workspace_id, states=states),
+        operation="sync_list_live_runs_page",
+        fallback=[],
+    )
+
+
+def sync_count_live_runs(
+    *,
+    workspace_id: Optional[str] = None,
+    states: Optional[list[str]] = None,
+) -> int:
+    return _run_sync(
+        lambda: count_live_runs(workspace_id=workspace_id, states=states),
+        operation="sync_count_live_runs",
+        fallback=0,
+    )
+
+
+def sync_count_hosted_live_runs(
+    workspace_id: str,
+    *,
+    terminal_states: Optional[list[str]] = None,
+) -> int:
+    return _run_sync(
+        lambda: count_hosted_live_runs(workspace_id, terminal_states=terminal_states),
+        operation="sync_count_hosted_live_runs",
+        fallback=0,
+    )
 
 
 def sync_get_live_run(run_id: str) -> Optional[Dict[str, Any]]:
@@ -1749,15 +2853,112 @@ def sync_find_live_run_by_approval_id(approval_id: str) -> Optional[Dict[str, An
     )
 
 
+def sync_create_or_update_approval_request(
+    run_id: str,
+    approval_id: str,
+    request_payload: Dict[str, Any],
+    actor: str,
+    trace_id: str,
+    *,
+    metadata: Optional[Dict[str, Any]] = None,
+    expires_at: Optional[str] = None,
+) -> Dict[str, Any]:
+    return _run_sync(
+        lambda: create_or_update_approval_request(
+            run_id,
+            approval_id,
+            request_payload,
+            actor,
+            trace_id,
+            metadata=metadata,
+            expires_at=expires_at,
+        ),
+        operation="sync_create_or_update_approval_request",
+        fallback={},
+        raise_on_error=True,
+    )
+
+
+def sync_list_pending_approvals(limit: int = 100) -> list[Dict[str, Any]]:
+    return _run_sync(
+        lambda: list_pending_approvals(limit),
+        operation="sync_list_pending_approvals",
+        fallback=[],
+    )
+
+
+def sync_list_pending_approvals_page(
+    *,
+    limit: int = 100,
+    offset: int = 0,
+    workspace_id: Optional[str] = None,
+) -> list[Dict[str, Any]]:
+    return _run_sync(
+        lambda: list_pending_approvals_page(limit=limit, offset=offset, workspace_id=workspace_id),
+        operation="sync_list_pending_approvals_page",
+        fallback=[],
+    )
+
+
+def sync_get_approval_record(approval_id: str) -> Optional[Dict[str, Any]]:
+    return _run_sync(
+        lambda: get_approval_record(approval_id),
+        operation="sync_get_approval_record",
+        fallback=None,
+    )
+
+
+def sync_resolve_approval_if_pending(
+    run_id: str,
+    approval_id: str,
+    resolution: str,
+    actor: str,
+    trace_id: str,
+    *,
+    note: Optional[str] = None,
+    decision_payload: Optional[Dict[str, Any]] = None,
+) -> Optional[Dict[str, Any]]:
+    return _run_sync(
+        lambda: resolve_approval_if_pending(
+            run_id,
+            approval_id,
+            resolution,
+            actor,
+            trace_id,
+            note=note,
+            decision_payload=decision_payload,
+        ),
+        operation="sync_resolve_approval_if_pending",
+        fallback=None,
+        raise_on_error=True,
+    )
+
+
+def sync_record_transition(
+    run_id: str,
+    from_state: str,
+    to_state: str,
+    actor: str,
+    trace_id: str,
+) -> None:
+    _run_sync(
+        lambda: record_transition(run_id, from_state, to_state, actor, trace_id),
+        operation="sync_record_transition",
+        fallback=None,
+        raise_on_error=True,
+    )
+
+
 def sync_record_approval_resolution(
     run_id: str,
     approval_id: str,
     resolution: str,
     actor: str,
     trace_id: str,
-) -> None:
-    _run_sync(
-        lambda: record_approval_resolution(run_id, approval_id, resolution, actor, trace_id),
+    note: Optional[str] = None,
+) -> Dict[str, Any] | None:
+    return _run_sync(
+        lambda: record_approval_resolution(run_id, approval_id, resolution, actor, trace_id, note),
         operation="sync_record_approval_resolution",
         fallback=None,
         raise_on_error=True,
@@ -1802,11 +3003,30 @@ def sync_list_undelivered_outbox_events(*, older_than_seconds: int = 30, limit: 
     )
 
 
-def sync_mark_outbox_event_delivered(event_id: str) -> None:
-    _run_sync(
-        lambda: mark_outbox_event_delivered(event_id),
+def sync_claim_due_outbox_events(
+    *,
+    older_than_seconds: int = 0,
+    limit: int = 200,
+    claimed_by: str,
+    claim_ttl_seconds: int = 30,
+) -> list[Dict[str, Any]]:
+    return _run_sync(
+        lambda: claim_due_outbox_events(
+            older_than_seconds=older_than_seconds,
+            limit=limit,
+            claimed_by=claimed_by,
+            claim_ttl_seconds=claim_ttl_seconds,
+        ),
+        operation="sync_claim_due_outbox_events",
+        fallback=[],
+    )
+
+
+def sync_mark_outbox_event_delivered(event_id: str, *, claim_token: str) -> bool:
+    return _run_sync(
+        lambda: mark_outbox_event_delivered(event_id, claim_token=claim_token),
         operation="sync_mark_outbox_event_delivered",
-        fallback=None,
+        fallback=False,
         raise_on_error=True,
     )
 
@@ -1823,21 +3043,23 @@ def sync_patch_outbox_event_payload(event_id: str, payload_patch: Dict[str, Any]
 def sync_record_outbox_delivery_failure(
     event_id: str,
     *,
+    claim_token: str,
     error_text: str,
     retry_delay_seconds: Optional[int],
     poison: bool = False,
     increment_retry: bool = True,
-) -> None:
-    _run_sync(
+) -> bool:
+    return _run_sync(
         lambda: record_outbox_delivery_failure(
             event_id,
+            claim_token=claim_token,
             error_text=error_text,
             retry_delay_seconds=retry_delay_seconds,
             poison=poison,
             increment_retry=increment_retry,
         ),
         operation="sync_record_outbox_delivery_failure",
-        fallback=None,
+        fallback=False,
         raise_on_error=True,
     )
 
@@ -1857,6 +3079,7 @@ def sync_get_outbox_delivery_status() -> Dict[str, Any]:
         fallback={
             "undelivered_count": 0,
             "poisoned_count": 0,
+            "claimed_count": 0,
             "repeated_failure_count": 0,
             "stuck_count": 0,
             "total_retry_count": 0,
@@ -1874,11 +3097,11 @@ def sync_list_expired_local_claims() -> list[Dict[str, Any]]:
     )
 
 
-def sync_release_claim(run_id: str) -> None:
-    _run_sync(
-        lambda: release_claim(run_id),
+def sync_release_claim(run_id: str, *, lease_id: Optional[str] = None) -> bool:
+    return _run_sync(
+        lambda: release_claim(run_id, lease_id=lease_id),
         operation="sync_release_claim",
-        fallback=None,
+        fallback=False,
         raise_on_error=True,
     )
 
@@ -1887,13 +3110,14 @@ def sync_touch_claim_heartbeat(
     run_id: str,
     worker_id: str,
     *,
+    lease_id: Optional[str] = None,
     note: Optional[str] = None,
     progress: bool = False,
-) -> None:
-    _run_sync(
-        lambda: touch_claim_heartbeat(run_id, worker_id, note=note, progress=progress),
+) -> bool:
+    return _run_sync(
+        lambda: touch_claim_heartbeat(run_id, worker_id, lease_id=lease_id, note=note, progress=progress),
         operation="sync_touch_claim_heartbeat",
-        fallback=None,
+        fallback=False,
         raise_on_error=True,
     )
 

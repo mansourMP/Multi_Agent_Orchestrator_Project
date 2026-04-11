@@ -7,6 +7,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useAppTheme as useTheme } from "@/src/theme/useAppTheme";
 import { useSessionState } from "@/src/lib/session-context";
 import { appRegistryApi } from "@/src/lib/appRegistryApi";
+import { sessionHasRuntimeAccess } from "@/src/lib/session";
 import { useTransientBanner } from "@/src/lib/useTransientBanner";
 import { useAppContextStore } from "@/src/stores/appContextStore";
 import { getCatalogApp } from "@/src/lib/appCatalog";
@@ -29,12 +30,14 @@ export default function AppHomeScreen() {
     if (!params.id) return;
     try {
       setLoading(true);
-      const coreReady = Boolean(session?.runtimeUrl && session?.runtimeKey);
-      const platformReady = Boolean(session?.platformUrl);
+      const runtimeSession = sessionHasRuntimeAccess(session) ? session : null;
+      const coreReady = Boolean(runtimeSession);
+      const platformSession = session && session.platformUrl ? session : null;
+      const platformReady = Boolean(platformSession);
       const appId = String(params.id);
       const [coreManifest, platformManifest] = await Promise.all([
-        coreReady ? appRegistryApi.getAppManifest(session!, appId).catch(() => ({ item: null })) : Promise.resolve({ item: null }),
-        platformReady ? appRegistryApi.getPlatformAppManifest(session!, appId).catch(() => ({ item: null })) : Promise.resolve({ item: null }),
+        runtimeSession ? appRegistryApi.getAppManifest(runtimeSession, appId).catch(() => ({ item: null })) : Promise.resolve({ item: null }),
+        platformSession ? appRegistryApi.getPlatformAppManifest(platformSession, appId).catch(() => ({ item: null })) : Promise.resolve({ item: null }),
       ]);
       const item = mergeAppRecords(
         normalizeAppRecord(coreManifest.item, "core"),
@@ -58,7 +61,7 @@ export default function AppHomeScreen() {
   const headerGap = insets.top + 92;
   const sheetHeight = Math.max(280, windowHeight - headerGap);
 
-  if (!session?.runtimeUrl || !session?.runtimeKey) {
+  if (!sessionHasRuntimeAccess(session)) {
     return (
       <View style={{ flex: 1, backgroundColor: theme.colors.background, paddingTop: insets.top + 12, paddingHorizontal: 16 }}>
         <TouchableOpacity onPress={() => router.back()} style={{ width: 40, height: 40, justifyContent: "center" }}>
@@ -162,7 +165,8 @@ export default function AppHomeScreen() {
                     router.push("/session");
                     return;
                   }
-                  await appRegistryApi.installApp(session, app.id, {
+                  const runtimeSession = session;
+                  await appRegistryApi.installApp(runtimeSession, app.id, {
                     packageId: app.packageId,
                     releaseChannel: app.releaseChannel,
                     source: app.source,
@@ -201,7 +205,8 @@ export default function AppHomeScreen() {
                   justifyContent: "center",
                 }}
                 onPress={async () => {
-                  await appRegistryApi.updateApp(session, app.id, {
+                  const runtimeSession = session;
+                  await appRegistryApi.updateApp(runtimeSession, app.id, {
                     packageId: app.packageId,
                     releaseChannel: app.releaseChannel,
                     source: app.source,

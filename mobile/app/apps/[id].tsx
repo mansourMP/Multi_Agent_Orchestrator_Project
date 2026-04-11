@@ -7,6 +7,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useAppTheme as useTheme } from "@/src/theme/useAppTheme";
 import { useSessionState } from "@/src/lib/session-context";
 import { appRegistryApi } from "@/src/lib/appRegistryApi";
+import { sessionHasRuntimeAccess } from "@/src/lib/session";
 import { useTransientBanner } from "@/src/lib/useTransientBanner";
 import { useAppContextStore } from "@/src/stores/appContextStore";
 import { getCatalogApp } from "@/src/lib/appCatalog";
@@ -30,13 +31,15 @@ export default function AppDetailScreen() {
 
     setLoading(true);
     try {
-      const coreReady = Boolean(session?.runtimeUrl && session?.runtimeKey);
-      const platformReady = Boolean(session?.platformUrl);
+      const runtimeSession = sessionHasRuntimeAccess(session) ? session : null;
+      const coreReady = Boolean(runtimeSession);
+      const platformSession = session && session.platformUrl ? session : null;
+      const platformReady = Boolean(platformSession);
       const appId = String(params.id);
 
       const [coreManifest, platformManifest] = await Promise.all([
-        coreReady ? appRegistryApi.getAppManifest(session!, appId).catch(() => ({ item: null })) : Promise.resolve({ item: null }),
-        platformReady ? appRegistryApi.getPlatformAppManifest(session!, appId).catch(() => ({ item: null })) : Promise.resolve({ item: null }),
+        runtimeSession ? appRegistryApi.getAppManifest(runtimeSession, appId).catch(() => ({ item: null })) : Promise.resolve({ item: null }),
+        platformSession ? appRegistryApi.getPlatformAppManifest(platformSession, appId).catch(() => ({ item: null })) : Promise.resolve({ item: null }),
       ]);
 
       const normalizedCore = normalizeAppRecord(coreManifest.item, "core");
@@ -75,7 +78,7 @@ export default function AppDetailScreen() {
     );
   }
 
-  const coreReady = Boolean(session?.runtimeUrl && session?.runtimeKey);
+  const coreReady = sessionHasRuntimeAccess(session);
   const needsUpdate = Boolean(app.latestVersion && app.latestVersion !== app.version);
   const status = String(app.status || "available").toLowerCase();
   const iconName = getCatalogApp(app.id)?.icon || app.icon || "apps";
@@ -180,12 +183,13 @@ export default function AppDetailScreen() {
                 router.push("/session");
                 return;
               }
-              if (!session?.runtimeUrl || !session?.runtimeKey) {
+              if (!sessionHasRuntimeAccess(session)) {
                 showBanner("Connect your Mac Mini to install apps.", "neutral");
                 router.push("/session");
                 return;
               }
-              await appRegistryApi.installApp(session, app.id, {
+              const runtimeSession = session;
+              await appRegistryApi.installApp(runtimeSession, app.id, {
                 packageId: app.packageId,
                 releaseChannel: app.releaseChannel,
                 source: app.source,
@@ -208,8 +212,9 @@ export default function AppDetailScreen() {
               justifyContent: "center",
             }}
             onPress={async () => {
-              if (!session?.runtimeUrl || !session?.runtimeKey) return;
-              await appRegistryApi.updateApp(session, app.id, {
+              if (!sessionHasRuntimeAccess(session)) return;
+              const runtimeSession = session;
+              await appRegistryApi.updateApp(runtimeSession, app.id, {
                 packageId: app.packageId,
                 releaseChannel: app.releaseChannel,
                 source: app.source,
@@ -246,8 +251,9 @@ export default function AppDetailScreen() {
               justifyContent: "center",
             }}
             onPress={async () => {
-              if (!session?.runtimeUrl || !session?.runtimeKey) return;
-              await appRegistryApi.uninstallApp(session, app.id);
+              if (!sessionHasRuntimeAccess(session)) return;
+              const runtimeSession = session;
+              await appRegistryApi.uninstallApp(runtimeSession, app.id);
               showBanner("Uninstalled.", "success");
               if (activeApp?.id === app.id) {
                 clearActiveApp();

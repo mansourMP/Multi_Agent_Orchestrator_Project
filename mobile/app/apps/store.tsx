@@ -5,6 +5,7 @@ import { useRouter } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { appRegistryApi } from "@/src/lib/appRegistryApi";
+import { sessionHasRuntimeAccess } from "@/src/lib/session";
 import { useAppTheme as useTheme } from "@/src/theme/useAppTheme";
 import { useSessionState } from "@/src/lib/session-context";
 import { useTransientBanner } from "@/src/lib/useTransientBanner";
@@ -92,8 +93,10 @@ export default function AppStoreScreen() {
       .map((a) => normalizeAppRecord(a, "preview"))
       .filter((item): item is AppRecord => Boolean(item));
     const fallbackInstalled = new Set(getDefaultInstalledApps().map((a) => a.id));
-    const hasCore = Boolean(session?.runtimeUrl && session?.runtimeKey);
-    const hasPlatform = Boolean(session?.platformUrl);
+    const runtimeSession = sessionHasRuntimeAccess(session) ? session : null;
+    const hasCore = Boolean(runtimeSession);
+    const platformSession = session && session.platformUrl ? session : null;
+    const hasPlatform = Boolean(platformSession);
 
     setLoading(true);
     setError(null);
@@ -114,9 +117,9 @@ export default function AppStoreScreen() {
 
     try {
       const [storeRes, updatesRes, installedRes] = await Promise.all([
-        hasPlatform ? appRegistryApi.getPlatformStoreApps(session!) : Promise.resolve({ items: [] }),
-        hasCore ? appRegistryApi.getAppUpdates(session!) : Promise.resolve({ items: [] }),
-        hasCore ? appRegistryApi.getInstalledApps(session!) : Promise.resolve({ items: [] }),
+        platformSession ? appRegistryApi.getPlatformStoreApps(platformSession) : Promise.resolve({ items: [] }),
+        runtimeSession ? appRegistryApi.getAppUpdates(runtimeSession) : Promise.resolve({ items: [] }),
+        runtimeSession ? appRegistryApi.getInstalledApps(runtimeSession) : Promise.resolve({ items: [] }),
       ]);
       const nextStore = (storeRes.items ?? [])
         .map((item: any) => normalizeAppRecord(item, "platform"))
@@ -198,14 +201,15 @@ export default function AppStoreScreen() {
         return;
       }
 
-      if (!session?.runtimeUrl || !session?.runtimeKey) {
+      if (!sessionHasRuntimeAccess(session)) {
         showBanner("Connect your Mac Mini to manage apps.", "neutral");
         router.push("/session");
         return;
       }
+      const runtimeSession = session;
 
       if (needsUpdate) {
-        await appRegistryApi.updateApp(session, app.id, getInstallMetadata(app));
+        await appRegistryApi.updateApp(runtimeSession, app.id, getInstallMetadata(app));
         showBanner(`Updated ${app.name}.`, "success");
         await refresh();
         return;
@@ -216,7 +220,7 @@ export default function AppStoreScreen() {
         return;
       }
 
-      await appRegistryApi.installApp(session, app.id, getInstallMetadata(app));
+      await appRegistryApi.installApp(runtimeSession, app.id, getInstallMetadata(app));
       showBanner(`Installed ${app.name}.`, "success");
       await refresh();
     },

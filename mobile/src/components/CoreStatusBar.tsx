@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useRouter } from "expo-router";
 
 import { mobileApi } from "@/src/lib/api";
+import { sessionHasRuntimeAccess } from "@/src/lib/session";
 import { useSessionState } from "@/src/lib/session-context";
 import { useAppTheme as useTheme } from "@/src/theme/useAppTheme";
 
@@ -15,7 +16,7 @@ export function CoreStatusBar({ variant = "bar", style }: CoreStatusBarProps) {
   const theme = useTheme();
   const router = useRouter();
   const { session } = useSessionState();
-  const enabled = Boolean(session?.runtimeUrl && session?.runtimeKey);
+  const enabled = sessionHasRuntimeAccess(session);
 
   const { data, isError, isLoading } = useQuery({
     queryKey: ["core-status", session?.runtimeUrl, session?.workspaceId],

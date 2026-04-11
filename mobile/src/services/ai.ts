@@ -1,5 +1,5 @@
 import { mobileApi, type EmpyralistChatPriorMessage } from "../lib/api";
-import { getSession } from "../lib/session";
+import { getSession, sessionHasRuntimeAccess } from "../lib/session";
 import type { MobileSession } from "../lib/types";
 
 export interface Message {
@@ -52,7 +52,7 @@ function buildRuntimeRequest(history: Message[]) {
 
 async function resolveRuntimeSession(session?: MobileSession | null): Promise<MobileSession> {
   const resolved = session ?? (await getSession());
-  if (!resolved?.runtimeKey) {
+  if (!sessionHasRuntimeAccess(resolved)) {
     throw new Error("Empyralis runtime session not configured.");
   }
   return resolved;

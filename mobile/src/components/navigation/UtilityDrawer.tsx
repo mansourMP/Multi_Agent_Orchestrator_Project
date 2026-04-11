@@ -25,8 +25,8 @@ const DRAWER_ITEMS: {
   },
   {
     href: "/session",
-    label: "Pair & Connect",
-    subtitle: "Desktop pairing, runtime, and platform access",
+    label: "Account & Connect",
+    subtitle: "Cloud account, trusted devices, and advanced local runtime",
     icon: "link-outline",
   },
   {

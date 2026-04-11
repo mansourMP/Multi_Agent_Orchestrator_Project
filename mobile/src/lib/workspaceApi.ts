@@ -1,5 +1,6 @@
 import type { MobileSession } from "./types";
 import { normalizeServerUrl } from "./api";
+import { sessionAuthHeaders } from "./session";
 
 function formatNetworkError(baseUrl: string) {
   const normalized = normalizeServerUrl(baseUrl);
@@ -19,7 +20,7 @@ async function requestRuntime<T>(session: MobileSession, path: string, init?: Re
       ...init,
       headers: {
         "Content-Type": "application/json",
-        "X-API-Key": session.runtimeKey,
+        ...(sessionAuthHeaders(session) || {}),
         ...(init?.headers || {}),
       },
     });

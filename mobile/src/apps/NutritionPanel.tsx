@@ -1,6 +1,7 @@
 import React from "react";
 import { Text, View } from "react-native";
 
+import { sessionHasRuntimeAccess } from "@/src/lib/session";
 import { useAppTheme as useTheme } from "@/src/theme/useAppTheme";
 import { MobileSession } from "@/src/lib/types";
 import { workspaceApi } from "@/src/lib/workspaceApi";
@@ -17,7 +18,7 @@ export function NutritionPanel({ session }: NutritionPanelProps) {
   React.useEffect(() => {
     let mounted = true;
     const load = async () => {
-      if (!session?.runtimeUrl || !session?.runtimeKey) return;
+      if (!sessionHasRuntimeAccess(session)) return;
       try {
         setLoading(true);
         const res = await workspaceApi.readFile(session, "nutrition_log.txt");

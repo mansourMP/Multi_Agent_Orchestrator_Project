@@ -9,6 +9,7 @@ import {
   queuePersonalContextEvent,
   recordNotificationSync,
 } from "./mobile-engine";
+import { sessionHasRuntimeAccess } from "./session";
 import type { MobileSession } from "./types";
 
 const STORAGE_KEY = "empyralis.mobile.notifications.v1";
@@ -163,9 +164,10 @@ export async function registerForPushNotificationsAsync(session?: MobileSession 
       deviceId,
       updatedAt: Date.now(),
     };
-    if (session?.runtimeUrl && session?.runtimeKey) {
+    if (sessionHasRuntimeAccess(session)) {
+      const runtimeSession = session;
       try {
-        const registration = await mobileApi.registerNotificationDevice(session, {
+        const registration = await mobileApi.registerNotificationDevice(runtimeSession, {
           device_id: deviceId,
           push_token: token,
           provider: "expo",

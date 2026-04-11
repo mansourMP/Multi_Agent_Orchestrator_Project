@@ -9,6 +9,7 @@ import { appRegistryApi } from "@/src/lib/appRegistryApi";
 import { getDefaultInstalledApps } from "@/src/lib/appCatalog";
 import { BrandedAppIcon } from "@/src/components/apps/BrandedAppIcon";
 import { normalizeAppRecord } from "@/src/lib/appRegistry";
+import { sessionHasRuntimeAccess } from "@/src/lib/session";
 import type { AppRecord } from "@/src/lib/types";
 
 const GRID_GAP = 14;
@@ -89,7 +90,7 @@ export default function AppsScreen() {
   const [loadedOnce, setLoadedOnce] = React.useState(false);
 
   const refresh = React.useCallback(async () => {
-    if (!session?.runtimeUrl || !session?.runtimeKey) {
+    if (!sessionHasRuntimeAccess(session)) {
       if (!loadedOnce) {
         setInstalled(
           getDefaultInstalledApps()
@@ -101,7 +102,8 @@ export default function AppsScreen() {
       return;
     }
     try {
-      const [installedRes] = await Promise.all([appRegistryApi.getInstalledApps(session)]);
+      const runtimeSession = session;
+      const [installedRes] = await Promise.all([appRegistryApi.getInstalledApps(runtimeSession)]);
       setInstalled(
         (installedRes.items ?? [])
           .map((app: any) => normalizeAppRecord(app, "core"))
@@ -124,7 +126,7 @@ export default function AppsScreen() {
     void refresh();
   }, [refresh]);
 
-  const isConnected = Boolean(session?.runtimeUrl && session?.runtimeKey);
+  const isConnected = sessionHasRuntimeAccess(session);
   const showEmpty = installed.length === 0;
 
   return (
@@ -197,7 +199,7 @@ export default function AppsScreen() {
             items={installed}
             variant="installed"
             onPress={(app) => {
-              if (!session?.runtimeUrl || !session?.runtimeKey) {
+              if (!sessionHasRuntimeAccess(session)) {
                 router.push("/session");
                 return;
               }

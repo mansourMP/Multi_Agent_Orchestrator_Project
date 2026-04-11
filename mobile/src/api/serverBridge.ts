@@ -6,6 +6,7 @@ import {
   type EmpyralistChatPriorMessage,
   type EmpyralistDirectChatResponse,
 } from "../lib/api";
+import { sessionHasRuntimeAccess } from "../lib/session";
 import type { MobileSession } from "../lib/types";
 
 export type ServerBridgeResponse = {
@@ -34,17 +35,32 @@ export type ServerBridgeOptions = {
 };
 
 function buildSharedRuntimeSession(session?: Partial<MobileSession> | null): MobileSession | null {
-  const runtimeKey = session?.runtimeKey?.trim() || "";
-  if (!runtimeKey) {
+  if (!sessionHasRuntimeAccess(session)) {
     return null;
   }
 
   return {
     runtimeUrl: session?.runtimeUrl?.trim() || getDefaultRuntimeUrl(),
-    runtimeKey,
+    runtimeKey: session?.runtimeKey?.trim() || "",
     workspaceId: session?.workspaceId?.trim() || getDefaultWorkspaceId(),
+    authMode: session?.authMode,
+    authToken: session?.authToken?.trim() || undefined,
+    user: session?.user,
+    workspaceAccess: session?.workspaceAccess,
+    tenantAccess: session?.tenantAccess,
+    authSession: session?.authSession,
+    deviceLink: session?.deviceLink,
+    identityBoundary: session?.identityBoundary,
+    enterpriseSecurity: session?.enterpriseSecurity,
     platformUrl: session?.platformUrl?.trim() || undefined,
     platformKey: session?.platformKey?.trim() || undefined,
+    pairingMethod: session?.pairingMethod,
+    pairedAt: session?.pairedAt,
+    pairingId: session?.pairingId,
+    pairingExpiresAt: session?.pairingExpiresAt,
+    pairingLabel: session?.pairingLabel,
+    deviceId: session?.deviceId,
+    sessionLinkedAt: session?.sessionLinkedAt,
   };
 }
 

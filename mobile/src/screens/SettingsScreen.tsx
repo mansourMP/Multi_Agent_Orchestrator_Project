@@ -7,6 +7,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { PrimaryScreenHeader } from "@/src/components/navigation/PrimaryScreenHeader";
 import { APP_CATALOG } from "@/src/lib/appCatalog";
 import { useKinPreferences } from "@/src/lib/kin-preferences";
+import { sessionHasRuntimeAccess } from "@/src/lib/session";
 import { useSessionState } from "@/src/lib/session-context";
 import { useAppTheme as useTheme } from "@/src/theme/useAppTheme";
 
@@ -27,8 +28,8 @@ const UTILITY_LINKS: {
   },
   {
     href: "/session",
-    label: "Pair & Connect",
-    subtitle: "Desktop pairing, runtime, and platform access",
+    label: "Account & Connect",
+    subtitle: "Cloud account, trusted devices, and advanced local runtime",
     icon: "link-outline",
   },
   {
@@ -53,7 +54,7 @@ export default function SettingsScreen() {
   const { session, clearSession } = useSessionState();
   const { preferences, ready, updatePreferences } = useKinPreferences();
   const isProfile = segments.at(1) === "profile";
-  const connected = Boolean(session?.runtimeUrl && session?.runtimeKey);
+  const connected = sessionHasRuntimeAccess(session);
   const activeApps = APP_CATALOG.filter((app) => PROFILE_APP_IDS.includes(app.id));
   const selectedAppIds = preferences.activeAppIds.length ? preferences.activeAppIds : DEFAULT_ACTIVE_APP_IDS;
   const enabledApps = activeApps.filter((app) => selectedAppIds.includes(app.id));
@@ -103,12 +104,12 @@ export default function SettingsScreen() {
             Identity
           </Text>
           <Text style={{ fontSize: 22, fontFamily: "DMSans_700Bold", color: theme.colors.text }}>
-            {connected ? "Connected to your private core." : "Preview mode only."}
+            {connected ? "Connected to your Empyralis cloud." : "Preview mode only."}
           </Text>
           <Text style={{ fontSize: 14, lineHeight: 21, color: theme.colors.textSecondary }}>
             {connected
-              ? "Sage can use the runtime access you enabled. Utilities stay in the drawer so the main tabs remain focused."
-              : "Connect your runtime when you want live approvals, active runs, and saved outputs to flow into the app."}
+              ? "Your Empyralis account signs in this device. Workspace providers stay separate from product identity, and machine-local subscriptions stay on the paired machine."
+              : "Sign in to the cloud workspace when you want live approvals, active runs, and saved outputs to flow into the app. Advanced local runtime controls stay separate from normal account access."}
           </Text>
           <TouchableOpacity
             activeOpacity={0.86}
@@ -123,9 +124,9 @@ export default function SettingsScreen() {
               justifyContent: "center",
             }}
           >
-            <Text style={{ color: "#FFFFFF", fontSize: 13, fontWeight: "700" }}>
-              {connected ? "Open Status" : "Pair & Connect"}
-            </Text>
+              <Text style={{ color: "#FFFFFF", fontSize: 13, fontWeight: "700" }}>
+              {connected ? "Open Status" : "Account & Connect"}
+              </Text>
           </TouchableOpacity>
         </View>
 
@@ -228,7 +229,7 @@ export default function SettingsScreen() {
           }}
         >
           <Text style={{ fontSize: 13, lineHeight: 20, color: theme.colors.textSecondary }}>
-            Sage only uses the connections and apps you allow. Disconnecting removes this device from your private core.
+            Sage only uses the connections and apps you allow. Disconnecting removes this device from your trusted Empyralis account session.
           </Text>
           <TouchableOpacity
             activeOpacity={0.86}
@@ -407,7 +408,7 @@ export default function SettingsScreen() {
           }}
         >
           <Text style={{ fontSize: 14, lineHeight: 22, color: theme.colors.textSecondary }}>
-            Sage only uses the runtime and apps you explicitly enable. Use Pair & Connect in the drawer when you want to change runtime access.
+            Sage only uses the runtime and apps you explicitly enable. Use Account & Connect in the drawer when you want to change runtime access or open advanced local runtime settings.
           </Text>
 
           <TouchableOpacity

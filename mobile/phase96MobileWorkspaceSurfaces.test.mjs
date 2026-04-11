@@ -7,7 +7,10 @@ import {
 } from './src/lib/shell/account-shell-store.js';
 import { createMemoryKeyValueStorage } from './src/lib/storage/memory-key-value-storage.js';
 import { createMobileWorkspaceFoundation } from './src/lib/mobile-foundation.js';
-import { createMobileWorkspaceSurfaceSet } from './src/lib/mobile-workspace-surfaces.js';
+import {
+  buildMobileWorkspaceShellModel,
+  createMobileWorkspaceSurfaceSet,
+} from './src/lib/mobile-workspace-surfaces.js';
 
 function createMembership({
   workspaceId,
@@ -259,6 +262,7 @@ test('chat surface stays workspace-scoped and preserves drafts honestly on cloud
   });
 
   const liveCalls = [];
+  const turnBodies = [];
   const liveFoundation = createMobileWorkspaceFoundation({
     session: {
       accountId: 'acct_1',
@@ -268,12 +272,13 @@ test('chat surface stays workspace-scoped and preserves drafts honestly on cloud
     bootstrap,
     storage,
     fetchImpl: createFetchRouter({
-      'GET /api/workspaces/ws_law/chat?threadId=primary': ({ headers }) => {
+      'GET /api/threads/primary': ({ headers }) => {
         liveCalls.push(headers.get('x-empyralis-workspace-id'));
         return {
           json: {
-            threadId: 'primary',
-            messages: [
+            id: 'primary',
+            title: 'Law workspace chat',
+            turns: [
               {
                 id: 'm1',
                 role: 'assistant',
@@ -283,23 +288,31 @@ test('chat surface stays workspace-scoped and preserves drafts honestly on cloud
           },
         };
       },
-      'POST /api/workspaces/ws_law/chat/turns': ({ headers, body }) => {
+      'POST /api/sessions': ({ headers, body }) => {
         liveCalls.push(headers.get('x-empyralis-workspace-id'));
         return {
           json: {
-            threadId: body.threadId,
-            messages: [
-              {
-                id: 'm1',
-                role: 'assistant',
-                content: 'Welcome to the law workspace.',
-              },
-              {
-                id: 'm2',
-                role: 'user',
-                content: body.text,
-              },
-            ],
+            session_id: 'session-primary',
+            workspace_id: body.workspace_id,
+            tenant_id: body.tenant_id,
+            channel: body.channel,
+            metadata: body.metadata,
+            status: 'active',
+          },
+        };
+      },
+      'POST /api/turn': ({ headers, body }) => {
+        liveCalls.push(headers.get('x-empyralis-workspace-id'));
+        turnBodies.push(body);
+        return {
+          json: {
+            status: 'completed',
+            thread_id: body.thread_id,
+            session_id: body.session_id,
+            reply: `Canonical reply: ${body.message}`,
+            approvals: [],
+            interventions: [],
+            metadata: { kind: 'sync_reply' },
           },
         };
       },
@@ -321,9 +334,33 @@ test('chat surface stays workspace-scoped and preserves drafts honestly on cloud
     text: 'Draft motion status?',
   });
   assert.equal(sendResult.status, 'ready');
-  assert.equal(sendResult.data.messages.at(-1).content, 'Draft motion status?');
+  assert.equal(sendResult.data.messages.at(-2).content, 'Draft motion status?');
+  assert.equal(sendResult.data.messages.at(-1).content, 'Canonical reply: Draft motion status?');
   assert.equal(liveChat.getDraft('primary'), null);
-  assert.deepEqual(liveCalls, ['ws_law', 'ws_law']);
+  assert.deepEqual(liveCalls, ['ws_law', 'ws_law', 'ws_law']);
+  assert.equal(turnBodies.length, 1);
+  assert.deepEqual(turnBodies[0], {
+    tenant_id: 'tenant-ws_law',
+    workspace_id: 'ws_law',
+    thread_id: 'primary',
+    session_id: 'session-primary',
+    channel: 'mobile',
+    actor: {
+      type: 'user',
+      id: 'acct_1',
+      display_name: 'User',
+    },
+    message: 'Draft motion status?',
+    attachments: [],
+    context_hints: {
+      source: 'mobile_workspace_chat_surface',
+      thread_id: 'primary',
+      metadata: {},
+    },
+    execution_mode: 'sync',
+    response_mode: 'artifact',
+    policy_context: {},
+  });
 
   const failingFoundation = createMobileWorkspaceFoundation({
     session: {
@@ -334,13 +371,24 @@ test('chat surface stays workspace-scoped and preserves drafts honestly on cloud
     bootstrap,
     storage,
     fetchImpl: createFetchRouter({
-      'GET /api/workspaces/ws_law/chat?threadId=primary': () => ({
+      'GET /api/threads/primary': () => ({
         status: 503,
         json: {
           error: 'offline',
         },
       }),
-      'POST /api/workspaces/ws_law/chat/turns': () => ({
+      'POST /api/sessions': () => ({
+        json: {
+          session_id: 'session-primary',
+          workspace_id: 'ws_law',
+          tenant_id: 'tenant-ws_law',
+          channel: 'mobile',
+          metadata: {
+            thread_id: 'primary',
+          },
+        },
+      }),
+      'POST /api/turn': () => ({
         status: 503,
         json: {
           error: 'offline',
@@ -388,7 +436,7 @@ test('runs and approvals surface uses capability gating and workspace-scoped per
     }),
     storage,
     fetchImpl: createFetchRouter({
-      'GET /api/workspaces/ws_ops/runs': ({ headers }) => {
+      'GET /api/runs?workspace_id=ws_ops': ({ headers }) => {
         opsCalls.push(headers.get('x-empyralis-workspace-id'));
         return {
           json: {
@@ -396,7 +444,7 @@ test('runs and approvals surface uses capability gating and workspace-scoped per
           },
         };
       },
-      'GET /api/workspaces/ws_ops/approvals': ({ headers }) => {
+      'GET /api/approvals?workspace_id=ws_ops': ({ headers }) => {
         opsCalls.push(headers.get('x-empyralis-workspace-id'));
         return {
           json: {
@@ -404,7 +452,7 @@ test('runs and approvals surface uses capability gating and workspace-scoped per
           },
         };
       },
-      'POST /api/workspaces/ws_ops/approvals/approval_1/decision': ({ headers, body }) => {
+      'POST /api/approvals/approval_1/resolve': ({ headers, body }) => {
         opsCalls.push(headers.get('x-empyralis-workspace-id'));
         return {
           json: {
@@ -446,7 +494,7 @@ test('runs and approvals surface uses capability gating and workspace-scoped per
     }),
     storage,
     fetchImpl: createFetchRouter({
-      'GET /api/workspaces/ws_personal/runs': () => ({
+      'GET /api/runs?workspace_id=ws_personal': () => ({
         json: [{ id: 'run_personal', status: 'idle' }],
       }),
     }),
@@ -459,6 +507,43 @@ test('runs and approvals surface uses capability gating and workspace-scoped per
   const personalOverview = await personalSurface.loadOverview({ refresh: true });
   assert.equal(personalSurface.approvalsAvailable, false);
   assert.equal(personalOverview.approvals.length, 0);
+});
+
+test('mobile shell model mounts workspace-backed tabs when a real foundation is present', () => {
+  const storage = createMemoryKeyValueStorage();
+  const accountState = createAccountState();
+  const foundation = createMobileWorkspaceFoundation({
+    session: accountState.session,
+    bootstrap: createBootstrap({
+      workspaceId: 'ws_ops',
+      label: 'Side Business',
+      kind: 'side_business',
+      role: 'admin',
+      capabilities: {
+        approvals_enabled: true,
+        artifacts_enabled: true,
+        workspace_admin_enabled: true,
+      },
+      defaultRoute: '/w/ws_ops/admin',
+      preferredProfile: 'operations_admin_shell',
+    }),
+    storage,
+    fetchImpl: createFetchRouter({}),
+  });
+
+  const shell = buildMobileWorkspaceShellModel({
+    accountState,
+    foundation,
+    storage,
+    fetchImpl: createFetchRouter({}),
+  });
+
+  assert.equal(shell.defaultRoute, '/w/ws_ops/admin');
+  assert.equal(shell.shellProfileId, 'operations_admin_shell');
+  assert.equal(shell.tabs.some((tab) => tab.id === 'chat' && tab.mounted), true);
+  assert.equal(shell.tabs.some((tab) => tab.id === 'runs' && tab.mounted), true);
+  assert.equal(shell.tabs.some((tab) => tab.id === 'approvals' && tab.mounted), true);
+  assert.equal(shell.tabs.some((tab) => tab.id === 'artifacts' && tab.mounted), true);
 });
 
 test('notifications and artifacts surfaces stay scoped and tear down cleanly', async () => {

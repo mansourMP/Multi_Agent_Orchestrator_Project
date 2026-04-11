@@ -29,3 +29,61 @@ export function createMobileWorkspaceSurfaceSet({
     artifacts: foundation && routeIndex.artifacts ? createArtifactsSurface({ foundation, apiPaths }) : null,
   };
 }
+
+function resolveMountedSurface(routeId, surfaces) {
+  if (routeId === 'chat') {
+    return surfaces.chat;
+  }
+  if (routeId === 'runs' || routeId === 'approvals') {
+    return surfaces.runsApprovals;
+  }
+  if (routeId === 'notifications') {
+    return surfaces.notifications;
+  }
+  if (routeId === 'artifacts') {
+    return surfaces.artifacts;
+  }
+  return null;
+}
+
+export function buildMobileWorkspaceShellModel({
+  accountState,
+  foundation = null,
+  storage,
+  fetchImpl,
+  apiPaths = {},
+}) {
+  const surfaces = createMobileWorkspaceSurfaceSet({
+    accountState,
+    foundation,
+    storage,
+    fetchImpl,
+    apiPaths,
+  });
+
+  const tabs = [
+    {
+      id: 'account',
+      label: 'Account',
+      route: '/account',
+      mounted: Boolean(surfaces.account),
+    },
+    ...((foundation?.routeManifest?.navGroups ?? []).flatMap((group) =>
+      group.routes.map((route) => ({
+        id: route.id,
+        label: route.label,
+        route: route.href,
+        groupId: group.id,
+        mounted: Boolean(resolveMountedSurface(route.id, surfaces)),
+      })),
+    )),
+  ];
+
+  return {
+    surfaces,
+    tabs,
+    activeWorkspaceId: accountState?.activeWorkspaceId ?? null,
+    defaultRoute: foundation?.routeManifest?.defaultRoute ?? null,
+    shellProfileId: foundation?.shellProfile?.id ?? null,
+  };
+}

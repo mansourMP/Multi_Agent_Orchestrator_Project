@@ -1,0 +1,6 @@
+export const EMPYRALIS_RUNTIME_KEY_STORAGE_KEY = 'empyralis_runtime_api_key';
+export const LEGACY_ORION_RUNTIME_KEY_STORAGE_KEY = 'orion_runtime_api_key';
+export const RUNTIME_KEY_STORAGE_CANDIDATES = [
+  EMPYRALIS_RUNTIME_KEY_STORAGE_KEY,
+  LEGACY_ORION_RUNTIME_KEY_STORAGE_KEY,
+] as const;

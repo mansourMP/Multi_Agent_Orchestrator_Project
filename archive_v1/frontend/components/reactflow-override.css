@@ -1,0 +1,95 @@
+div.react-flow__pane {
+    background: var(--canvas--color--background) !important;
+}
+
+div.react-flow__background {
+    background-color: transparent !important;
+}
+
+div.react-flow__controls {
+    background: var(--bg-surface) !important;
+    border: 1px solid var(--border-subtle) !important;
+    border-radius: 12px !important;
+    box-shadow: 0 14px 28px rgba(15, 23, 42, 0.12) !important;
+    overflow: hidden !important;
+}
+
+button.react-flow__controls-button {
+    background: transparent !important;
+    border: none !important;
+    color: var(--text-secondary) !important;
+    width: 36px !important;
+    height: 36px !important;
+    border-bottom: 1px solid var(--border-subtle) !important;
+}
+
+button.react-flow__controls-button:hover {
+    background: color-mix(in srgb, var(--bg-element) 10%, transparent) !important;
+    color: var(--text-primary) !important;
+}
+
+div.react-flow__minimap {
+    background: #020408 !important;
+    border: 1px solid rgba(255, 255, 255, 0.1) !important;
+    border-radius: 8px !important;
+}
+
+svg.react-flow__minimap-mask {
+    fill: rgba(2, 4, 8, 0.7) !important;
+}
+
+svg.react-flow__minimap-node {
+    fill: #1e293b !important;
+    stroke: none !important;
+}
+
+path.react-flow__edge-path {
+    stroke: var(--canvas-edge--color) !important;
+    stroke-width: 2px !important;
+    transition: stroke 160ms ease, stroke-width 160ms ease !important;
+    stroke-linecap: square !important;
+}
+
+g.react-flow__edge.selected path.react-flow__edge-path {
+    stroke: var(--canvas-edge--color) !important;
+    stroke-width: 2px !important;
+}
+
+g.react-flow__edge.animated path.react-flow__edge-path {
+    stroke-dasharray: none !important;
+    animation: none !important;
+}
+
+div.react-flow__handle {
+    width: 16px !important;
+    height: 16px !important;
+    border-radius: 50% !important;
+    background: white !important;
+    border: 1px solid var(--canvas-handle-border-light) !important;
+    opacity: 0 !important;
+    transition: transform 0.2s ease, background 0.2s ease, border 0.2s ease, opacity 0.2s ease !important;
+}
+
+div.react-flow__node:hover div.react-flow__handle,
+div.react-flow__node.selected div.react-flow__handle {
+    opacity: 1 !important;
+}
+
+div.react-flow__handle:hover {
+    background: #f5f5f5 !important;
+    border: 1.5px solid var(--primary-base) !important;
+    transform: scale(1.5) !important;
+}
+
+[data-theme='dark'] div.react-flow__handle {
+    background: #1a1a1a !important;
+    border-color: var(--canvas-handle-border-dark) !important;
+}
+
+div.react-flow__node {
+    transition: transform 160ms ease, filter 160ms ease !important;
+}
+
+.react-flow__node.selected .canvas-node {
+    box-shadow: 0 0 0 calc(6px * var(--canvas-zoom-compensation-factor, 1)) var(--canvas--color--selected-transparent) !important;
+}

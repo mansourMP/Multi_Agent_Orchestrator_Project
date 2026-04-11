@@ -4,7 +4,6 @@ from dataclasses import dataclass, field
 import json
 import re
 from typing import Any, Dict, List
-from uuid import uuid4
 
 from server_modules.capability_registry import resolve_capability
 
@@ -1135,6 +1134,13 @@ def _resolve_direct_tool_browser_adapter(session_ctx: Any) -> Any:
     return browser
 
 
+DIRECT_CHAT_TOOL_EXECUTION_BLOCKED = "direct_chat_tool_execution_blocked"
+
+
+def _raise_direct_chat_tool_execution_blocked() -> None:
+    raise RuntimeError(DIRECT_CHAT_TOOL_EXECUTION_BLOCKED)
+
+
 def execute_single_direct_tool_call(
     *,
     tool_call: Dict[str, Any],
@@ -1148,37 +1154,12 @@ def execute_single_direct_tool_call(
     session_ctx: Dict[str, Any] | None = None,
     callbacks: Any,
 ) -> str:
-    from server_modules.runs_execution import _workflow_execute_connector_action, _workflow_execute_local_tool
-    from server_modules.tools_http import http_request as run_http_request
     from server_modules.tools_image_gen import generate_image as run_generate_image
 
     connector_id, action_id = callbacks.parse_tool_name(str(tool_call.get("name") or ""))
     argument_payload = callbacks.tool_arguments_payload(tool_call.get("arguments"))
     if connector_id == "http" and action_id == "request":
-        response = callbacks.run_async_tool_call(
-            run_http_request(
-                method=argument_payload.get("method") or "GET",
-                url=argument_payload.get("url") or "",
-                headers=argument_payload.get("headers"),
-                body=argument_payload.get("body"),
-                params=argument_payload.get("params"),
-                timeout=argument_payload.get("timeout") or 30,
-                auth_type=argument_payload.get("auth_type"),
-                auth_value=argument_payload.get("auth_value"),
-            )
-        )
-        body_value = response.get("body")
-        body_text = (
-            json.dumps(body_value, ensure_ascii=False, indent=2)
-            if isinstance(body_value, (dict, list))
-            else str(body_value or "").strip()
-        )
-        lines = [f"HTTP {int(response.get('status_code') or 0)}"]
-        if body_text:
-            lines.extend(["", body_text])
-        if bool(response.get("truncated")):
-            lines.extend(["", "Response body was truncated at 100KB."])
-        return "\n".join(lines).strip()
+        _raise_direct_chat_tool_execution_blocked()
     if connector_id == "image" and action_id == "generate":
         saved_images = run_generate_image(
             prompt=argument_payload.get("prompt") or "",
@@ -1244,35 +1225,7 @@ def execute_single_direct_tool_call(
         url = str(argument_payload.get("url") or argument_payload.get("input") or "").strip()
         return callbacks.web_fetch(url)
     if connector_id == "llm" and action_id == "task":
-        prompt = str(argument_payload.get("prompt") or argument_payload.get("input") or "").strip()
-        schema = argument_payload.get("schema") if isinstance(argument_payload.get("schema"), dict) else None
-        llm_task_metadata: Dict[str, Any] = {
-            "provider": provider,
-            "model": model,
-            "source": "chat_direct_llm_task",
-            "reasoning_effort": callbacks.normalize_reasoning_effort(reasoning_effort),
-            "tools": [],
-            "disable_provider_fallback": True,
-        }
-        if isinstance(credentials, dict) and credentials:
-            llm_task_metadata["credentials"] = credentials
-        result = callbacks.llm_task(
-            prompt,
-            schema=schema,
-            context={
-                "workspace_id": workspace_id,
-                "provider": provider,
-                "model": model,
-                "source": "chat_direct_llm_task",
-                "reasoning_effort": callbacks.normalize_reasoning_effort(reasoning_effort),
-                "tools": [],
-                "disable_provider_fallback": True,
-            },
-            metadata=llm_task_metadata,
-        )
-        if isinstance(result, (dict, list)):
-            return json.dumps(result, ensure_ascii=False, indent=2)
-        return str(result or "").strip()
+        _raise_direct_chat_tool_execution_blocked()
     if connector_id == "memory" and action_id == "search":
         query = str(argument_payload.get("query") or argument_payload.get("input") or "").strip()
         if not query:
@@ -1294,45 +1247,6 @@ def execute_single_direct_tool_call(
             line_count=argument_payload.get("lines"),
         )
         return json.dumps(excerpt, ensure_ascii=False)
-    if connector_id in {"file", "shell", "screenshot", "computer"} and isinstance(argument_payload.get("input"), str):
-        nested_input = callbacks.parse_json_object_loose(str(argument_payload.get("input") or ""))
-        if isinstance(nested_input, dict):
-            argument_payload = nested_input
-
-    run_id = f"direct-chat-{uuid4().hex}"
-    execution_context: Dict[str, Any] = {
-        "workspace_id": workspace_id,
-        "workflow_id": "direct_chat",
-        "workflow_name": "Direct chat",
-        "metadata": {
-            "source": "chat_direct",
-            "thread_id": thread_id or None,
-            "execution_target": "local_companion",
-            "execution_target_selected": "local_companion",
-        },
-    }
-
     if connector_id in {"file", "shell", "screenshot", "computer"}:
-        variant, config = callbacks.build_direct_local_tool_config(connector_id, action_id, argument_payload)
-        result = _workflow_execute_local_tool(
-            run_id,
-            execution_context,
-            config,
-            label=f"{connector_id}__{action_id}",
-            variant=variant,
-            current_text=str(argument_payload.get("content") or argument_payload.get("command") or "").strip(),
-        )
-        return callbacks.format_direct_local_tool_result(result)
-
-    tool_input = str(argument_payload.get("input") or "").strip()
-    if not tool_input:
-        raise RuntimeError(f"Tool '{connector_id}__{action_id}' requires a non-empty input argument.")
-    config = callbacks.build_direct_tool_config(connector_id, action_id, tool_input)
-    result = _workflow_execute_connector_action(
-        run_id,
-        f"direct_chat_tool:{index}",
-        execution_context,
-        config,
-        current_text=tool_input,
-    )
-    return callbacks.format_direct_tool_result(result)
+        _raise_direct_chat_tool_execution_blocked()
+    _raise_direct_chat_tool_execution_blocked()

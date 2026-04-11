@@ -1673,6 +1673,16 @@ def _workflow_tool_workspace_id(context: Dict[str, Any]) -> Optional[str]:
     return workspace_id or None
 
 
+def _workflow_execution_source(context: Dict[str, Any]) -> str:
+    metadata = context.get("metadata") if isinstance(context.get("metadata"), dict) else {}
+    return str(metadata.get("source") or "").strip().lower()
+
+
+def _assert_direct_chat_tool_execution_allowed(context: Dict[str, Any]) -> None:
+    if _workflow_execution_source(context) in {"chat_direct", "chat_direct_llm_task"}:
+        raise RuntimeError("direct_chat_tool_execution_blocked")
+
+
 def _workflow_tool_tenant_id(context: Dict[str, Any]) -> Optional[str]:
     metadata = context.get("metadata") if isinstance(context.get("metadata"), dict) else {}
     tenant_id = str(context.get("tenant_id") or metadata.get("tenant_id") or "").strip()
@@ -1948,6 +1958,7 @@ def _workflow_execute_connector_action(
     *,
     current_text: str,
 ) -> Dict[str, Any]:
+    _assert_direct_chat_tool_execution_allowed(context)
     requested_connector = str(config.get("connector") or "").strip().lower()
     action_id = normalize_action_id(config.get("action_id"))
     if not action_id:
@@ -3871,6 +3882,7 @@ def _workflow_execute_local_tool(
     on_waiting_for_input: Optional[Callable[[str, Dict[str, Any]], None]] = None,
     on_resumed: Optional[Callable[[str, Dict[str, Any]], None]] = None,
 ) -> Dict[str, Any]:
+    _assert_direct_chat_tool_execution_allowed(context)
     return run_service.execute_workflow_local_tool(
         run_id=run_id,
         context=context,

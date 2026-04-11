@@ -6,6 +6,8 @@ from typing import Any, Callable, Dict, List, Optional
 from server_modules.direct_chat_intervention_service import build_intervention
 from server_modules import memory_service
 
+DIRECT_CHAT_TOOL_EXECUTION_BLOCKED = "direct_chat_tool_execution_blocked"
+
 
 @dataclass(slots=True)
 class DirectChatResponseServices:
@@ -17,6 +19,34 @@ class DirectChatResponseServices:
     execute_direct_tool_calls: Callable[..., str]
     direct_chat_credentials: Callable[[str, str], Dict[str, Any]]
     capture_exception: Callable[[BaseException], None]
+
+
+def _blocked_direct_chat_action_payload(
+    *,
+    proactive_suggestions: List[str],
+    base_context: Dict[str, Any],
+    services: DirectChatResponseServices,
+) -> Dict[str, Any]:
+    return services.with_context_used(
+        {
+            "reply": "",
+            "actions": [],
+            "interventions": [
+                build_intervention(
+                    "system_notice",
+                    "Direct chat action is unavailable",
+                    detail="Direct chat is limited to text replies and cannot execute connector, HTTP, local, or llm task actions.",
+                    severity="warning",
+                    status="blocked",
+                    code=DIRECT_CHAT_TOOL_EXECUTION_BLOCKED,
+                )
+            ],
+            "suggestions": proactive_suggestions,
+            "mode": "answer",
+            "error": DIRECT_CHAT_TOOL_EXECUTION_BLOCKED,
+        },
+        base_context,
+    )
 
 
 def slash_command_payload(
@@ -175,66 +205,11 @@ def approval_confirmation_payload(
             },
             base_context,
         )
-    try:
-        tool_reply = services.execute_direct_tool_calls(
-            tool_calls=[approved_action_to_tool_call_fn(approved_action_payload)],
-            workspace_id=workspace_id,
-            thread_id=thread_id,
-            provider=requested_provider or None,
-            model=requested_model or None,
-            credentials=services.direct_chat_credentials(workspace_id, requested_provider) if requested_provider else None,
-            reasoning_effort=reasoning_effort or "",
-            session_ctx=session_ctx,
-        )
-        return {
-            "reply": tool_reply or "",
-            "actions": [],
-            "interventions": []
-            if tool_reply
-            else [
-                build_intervention(
-                    "system_notice",
-                    "Connector action completed",
-                    detail="The connector action finished successfully.",
-                    severity="info",
-                    status="completed",
-                    code="approved_action_completed",
-                )
-            ],
-            "suggestions": proactive_suggestions,
-            "mode": "answer",
-            "usage_masked": {},
-            "provider": None,
-            "model": None,
-            "attempted_providers": "",
-            "error": "",
-            "context_used": base_context,
-        }
-    except Exception as exc:
-        error_text = str(exc).strip() or "connector_action_failed"
-        services.capture_exception(exc)
-        return {
-            "reply": "",
-            "actions": [],
-            "interventions": [
-                build_intervention(
-                    "system_error",
-                    "Connector action failed",
-                    detail=error_text,
-                    severity="error",
-                    status="failed",
-                    code=error_text,
-                )
-            ],
-            "suggestions": proactive_suggestions,
-            "mode": "answer",
-            "usage_masked": {},
-            "provider": None,
-            "model": None,
-            "attempted_providers": "",
-            "error": error_text,
-            "context_used": base_context,
-        }
+    return _blocked_direct_chat_action_payload(
+        proactive_suggestions=proactive_suggestions,
+        base_context=base_context,
+        services=services,
+    )
 
 
 def unavailable_fallback_payload(

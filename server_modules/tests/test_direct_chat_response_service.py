@@ -1,5 +1,5 @@
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from server_modules import direct_chat_response_service
 
@@ -100,6 +100,41 @@ class DirectChatResponseServiceTests(unittest.TestCase):
         self.assertEqual(payload["reply"], "")
         self.assertEqual(payload["interventions"][0]["kind"], "system_error")
         self.assertEqual(payload["interventions"][0]["title"], "Approval confirmation payload is missing")
+
+    def test_approval_confirmation_payload_blocks_direct_tool_execution(self) -> None:
+        execute_direct_tool_calls = Mock(return_value="tool reply")
+        services = direct_chat_response_service.DirectChatResponseServices(
+            with_context_used=lambda payload, context: {**payload, "context_used": context},
+            build_context_used=lambda **kwargs: kwargs,
+            connected_provider_tokens=lambda _workspace_id: ["openai", "gemini"],
+            active_run_count=lambda _workspace_id: 3,
+            slash_command_help_text=lambda: "help text",
+            execute_direct_tool_calls=execute_direct_tool_calls,
+            direct_chat_credentials=lambda _workspace_id, _provider: {"api_key": "sk-test"},
+            capture_exception=lambda exc: None,
+        )
+
+        payload = direct_chat_response_service.approval_confirmation_payload(
+            approved_action_payload={"connector": "slack", "action": "post_message"},
+            workspace_id="default",
+            thread_id="thread-1",
+            requested_provider="openai",
+            requested_model="gpt-5.4",
+            reasoning_effort="medium",
+            session_ctx=None,
+            proactive_suggestions=[],
+            connected_systems=[],
+            tool_capabilities=[],
+            tool_write_action_available_fn=lambda connector, action, capabilities: True,
+            approved_action_to_tool_call_fn=lambda approved: {"name": "tool", "arguments": approved},
+            services=services,
+        )
+
+        execute_direct_tool_calls.assert_not_called()
+        self.assertEqual(payload["reply"], "")
+        self.assertEqual(payload["error"], "direct_chat_tool_execution_blocked")
+        self.assertEqual(payload["interventions"][0]["code"], "direct_chat_tool_execution_blocked")
+        self.assertEqual(payload["interventions"][0]["status"], "blocked")
 
     def test_unavailable_fallback_payload_uses_no_provider_response_when_no_tool_result(self) -> None:
         payload = direct_chat_response_service.unavailable_fallback_payload(

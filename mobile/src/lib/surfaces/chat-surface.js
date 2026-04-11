@@ -1,30 +1,72 @@
 import {
   assertWorkspaceRouteAvailable,
-  loadWorkspaceSurfaceResource,
+  requestWorkspaceSurfaceJson,
   resolveMobileWorkspaceApiPaths,
   writeWorkspaceSurfaceResource,
+  WorkspaceSurfaceRequestError,
 } from './shared.js';
 
 function normalizeChatPayload(payload, threadId) {
-  const thread =
-    payload && typeof payload === 'object' && payload.thread && typeof payload.thread === 'object'
-      ? payload.thread
-      : null;
-
-  const messages = Array.isArray(payload)
-    ? payload
-    : Array.isArray(payload?.messages)
-      ? payload.messages
-      : Array.isArray(payload?.turns)
-        ? payload.turns
+  const thread = payload && typeof payload === 'object' ? payload : null;
+  const messages = Array.isArray(payload?.turns)
+    ? payload.turns.map((turn) => ({
+        id: String(turn?.id ?? `${threadId}:${turn?.role ?? 'message'}`),
+        role: String(turn?.role ?? 'assistant'),
+        content: String(turn?.content ?? ''),
+        status: typeof turn?.status === 'string' ? turn.status : 'completed',
+        runId: typeof turn?.run_id === 'string' ? turn.run_id : null,
+        approvals: Array.isArray(turn?.approvals) ? turn.approvals : [],
+        interventions: Array.isArray(turn?.interventions) ? turn.interventions : [],
+      }))
+    : Array.isArray(payload)
+      ? payload
+      : Array.isArray(payload?.messages)
+        ? payload.messages
         : [];
 
   return {
-    threadId:
-      payload?.threadId
-      ?? thread?.id
-      ?? threadId,
+    threadId: payload?.threadId ?? thread?.id ?? threadId,
     messages,
+    title: typeof thread?.title === 'string' ? thread.title : 'Chat',
+  };
+}
+
+function createUserMessage(text, threadId) {
+  return {
+    id: `${threadId}:user:${Date.now()}`,
+    role: 'user',
+    content: text,
+    status: 'completed',
+    runId: null,
+    approvals: [],
+    interventions: [],
+  };
+}
+
+function createAssistantMessage(response, threadId) {
+  const approvals = Array.isArray(response?.approvals) ? response.approvals : [];
+  const interventions = Array.isArray(response?.interventions) ? response.interventions : [];
+  const reply = typeof response?.reply === 'string' ? response.reply.trim() : '';
+  const runId = typeof response?.run_id === 'string' ? response.run_id : null;
+  const content = reply
+    || (approvals.length > 0
+      ? 'Approval is required before this run can continue.'
+      : runId
+        ? 'Run accepted. Open the runs surface for status updates.'
+        : `Turn ${String(response?.status ?? 'completed')}.`);
+
+  if (!content.trim()) {
+    return null;
+  }
+
+  return {
+    id: `${threadId}:assistant:${Date.now()}`,
+    role: 'assistant',
+    content,
+    status: typeof response?.status === 'string' ? response.status : 'completed',
+    runId,
+    approvals,
+    interventions,
   };
 }
 
@@ -51,6 +93,48 @@ export function createChatSurface({
     return `chat:thread:${threadId}`;
   }
 
+  function sessionPersistenceKey(threadId) {
+    return `chat:session:${threadId}`;
+  }
+
+  async function ensureSession(threadId, forceNew = false) {
+    if (!forceNew) {
+      const cachedSession = foundation.services.queryClient.peek(sessionPersistenceKey(threadId))
+        ?? foundation.services.persistence.getJson(sessionPersistenceKey(threadId));
+      if (cachedSession?.session_id) {
+        return cachedSession;
+      }
+    }
+
+    const session = await requestWorkspaceSurfaceJson({
+      foundation,
+      path: paths.sessionCreate,
+      init: {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({
+          tenant_id: foundation.bootstrap.workspace.tenantId,
+          workspace_id: foundation.bootstrap.workspace.id,
+          channel: 'mobile',
+          actor: {
+            type: 'user',
+            id: foundation.bootstrap.account.id,
+            display_name: foundation.bootstrap.account.displayName ?? foundation.bootstrap.account.email,
+          },
+          metadata: {
+            thread_id: threadId,
+            source: 'mobile_workspace_chat_surface',
+          },
+        }),
+      },
+    });
+    foundation.services.queryClient.set(sessionPersistenceKey(threadId), session);
+    foundation.services.persistence.setJson(sessionPersistenceKey(threadId), session);
+    return session;
+  }
+
   return {
     route: route.href,
     getDraft(threadId = 'primary') {
@@ -74,20 +158,61 @@ export function createChatSurface({
         activeThreadId: threadId,
       }));
 
-      const result = await loadWorkspaceSurfaceResource({
-        foundation,
-        routeId: 'chat',
-        queryKey: threadQueryKey(threadId),
-        persistenceKey: threadPersistenceKey(threadId),
-        path: paths.chatThread(threadId),
-        emptyValue: () => ({
-          threadId,
-          messages: [],
-        }),
-        transform: (payload) => normalizeChatPayload(payload, threadId),
-        scopeLabel: 'chat history',
-        refresh,
-      });
+      const cachedMemory = refresh ? null : foundation.services.queryClient.peek(threadQueryKey(threadId));
+      if (cachedMemory !== null) {
+        return {
+          status: 'ready',
+          statusMessage: null,
+          source: 'memory',
+          data: cachedMemory,
+          draft: this.getDraft(threadId),
+        };
+      }
+
+      const cachedPersisted = foundation.services.persistence.getJson(threadPersistenceKey(threadId));
+
+      let result;
+      try {
+        const payload = await requestWorkspaceSurfaceJson({
+          foundation,
+          path: paths.chatThread(threadId),
+          allowStatuses: [404],
+        });
+        const data = normalizeChatPayload(payload, threadId);
+        writeWorkspaceSurfaceResource({
+          foundation,
+          queryKey: threadQueryKey(threadId),
+          persistenceKey: threadPersistenceKey(threadId),
+          data,
+        });
+        result = {
+          status: 'ready',
+          statusMessage: null,
+          source: payload === null ? 'empty' : 'live',
+          data,
+        };
+      } catch (error) {
+        if (cachedPersisted !== null) {
+          result = {
+            status: 'degraded',
+            statusMessage: 'Showing cached chat history because cloud sync failed.',
+            source: 'persisted',
+            data: cachedPersisted,
+            error,
+          };
+        } else {
+          result = {
+            status: 'error',
+            statusMessage: 'Chat history is unavailable because the cloud workspace is unreachable.',
+            source: 'empty',
+            data: {
+              threadId,
+              messages: [],
+            },
+            error,
+          };
+        }
+      }
 
       return {
         ...result,
@@ -95,22 +220,105 @@ export function createChatSurface({
       };
     },
     async sendMessage({ threadId = 'primary', text, metadata = {} }) {
-      const payload = {
-        threadId,
-        text,
-        metadata,
-      };
       const draft = this.setDraft(threadId, text);
 
       try {
-        const response = await foundation.services.transport.requestJson(paths.chatSend, {
-          method: 'POST',
-          headers: {
-            'content-type': 'application/json',
-          },
-          body: JSON.stringify(payload),
-        });
-        const thread = normalizeChatPayload(response, threadId);
+        let session = await ensureSession(threadId, false);
+        let response;
+
+        try {
+          response = await requestWorkspaceSurfaceJson({
+            foundation,
+            path: paths.chatSend,
+            init: {
+              method: 'POST',
+              headers: {
+                'content-type': 'application/json',
+              },
+              body: JSON.stringify({
+                tenant_id: foundation.bootstrap.workspace.tenantId,
+                workspace_id: foundation.bootstrap.workspace.id,
+                thread_id: threadId,
+                session_id: session.session_id,
+                channel: 'mobile',
+                actor: {
+                  type: 'user',
+                  id: foundation.bootstrap.account.id,
+                  display_name: foundation.bootstrap.account.displayName ?? foundation.bootstrap.account.email,
+                },
+                message: text,
+                attachments: [],
+                context_hints: {
+                  source: 'mobile_workspace_chat_surface',
+                  thread_id: threadId,
+                  metadata,
+                },
+                execution_mode: 'sync',
+                response_mode: 'artifact',
+                policy_context: {},
+              }),
+            },
+          });
+        } catch (error) {
+          if (error instanceof WorkspaceSurfaceRequestError && error.status === 409) {
+            session = await ensureSession(threadId, true);
+            response = await requestWorkspaceSurfaceJson({
+              foundation,
+              path: paths.chatSend,
+              init: {
+                method: 'POST',
+                headers: {
+                  'content-type': 'application/json',
+                },
+                body: JSON.stringify({
+                  tenant_id: foundation.bootstrap.workspace.tenantId,
+                  workspace_id: foundation.bootstrap.workspace.id,
+                  thread_id: threadId,
+                  session_id: session.session_id,
+                  channel: 'mobile',
+                  actor: {
+                    type: 'user',
+                    id: foundation.bootstrap.account.id,
+                    display_name: foundation.bootstrap.account.displayName ?? foundation.bootstrap.account.email,
+                  },
+                  message: text,
+                  attachments: [],
+                  context_hints: {
+                    source: 'mobile_workspace_chat_surface',
+                    thread_id: threadId,
+                    metadata,
+                  },
+                  execution_mode: 'sync',
+                  response_mode: 'artifact',
+                  policy_context: {},
+                }),
+              },
+            });
+          } else {
+            throw error;
+          }
+        }
+
+        const currentThread = foundation.services.queryClient.peek(threadQueryKey(threadId))
+          ?? foundation.services.persistence.getJson(threadPersistenceKey(threadId))
+          ?? {
+            threadId,
+            messages: [],
+            title: 'Chat',
+          };
+        const nextMessages = [
+          ...currentThread.messages,
+          createUserMessage(text, threadId),
+        ];
+        const assistantMessage = createAssistantMessage(response, threadId);
+        if (assistantMessage) {
+          nextMessages.push(assistantMessage);
+        }
+        const thread = {
+          ...currentThread,
+          threadId: response?.thread_id ?? currentThread.threadId ?? threadId,
+          messages: nextMessages,
+        };
         writeWorkspaceSurfaceResource({
           foundation,
           queryKey: threadQueryKey(threadId),
@@ -121,9 +329,13 @@ export function createChatSurface({
 
         return {
           status: 'ready',
-          statusMessage: null,
+          statusMessage:
+            Array.isArray(response?.approvals) && response.approvals.length > 0
+              ? 'Turn submitted. Approval is now pending in the canonical approval queue.'
+              : null,
           source: 'live',
           data: thread,
+          turn: response,
         };
       } catch (error) {
         const cachedThread = foundation.services.persistence.getJson(threadPersistenceKey(threadId)) ?? {

@@ -10,13 +10,14 @@ function capitalize(value) {
 export function resolveMobileWorkspaceApiPaths(workspaceId, overrides = {}) {
   const defaults = {
     workspaceEntry: `/w/${workspaceId}`,
+    sessionCreate: '/api/sessions',
     chatThread: (threadId = 'primary') =>
-      `/api/workspaces/${workspaceId}/chat?threadId=${encodeURIComponent(threadId)}`,
-    chatSend: `/api/workspaces/${workspaceId}/chat/turns`,
-    runs: `/api/workspaces/${workspaceId}/runs`,
-    approvals: `/api/workspaces/${workspaceId}/approvals`,
+      `/api/threads/${encodeURIComponent(threadId)}`,
+    chatSend: '/api/turn',
+    runs: `/api/runs?workspace_id=${encodeURIComponent(workspaceId)}`,
+    approvals: `/api/approvals?workspace_id=${encodeURIComponent(workspaceId)}`,
     approvalAction: (approvalId) =>
-      `/api/workspaces/${workspaceId}/approvals/${encodeURIComponent(approvalId)}/decision`,
+      `/api/approvals/${encodeURIComponent(approvalId)}/resolve`,
     notifications: `/api/workspaces/${workspaceId}/notifications`,
     artifacts: `/api/workspaces/${workspaceId}/artifacts`,
   };
@@ -161,4 +162,50 @@ export function normalizeListPayload(payload, preferredKeys = []) {
   }
 
   return [];
+}
+
+export class WorkspaceSurfaceRequestError extends Error {
+  constructor(message, status, detail = null) {
+    super(message);
+    this.name = 'WorkspaceSurfaceRequestError';
+    this.status = status;
+    this.detail = detail;
+  }
+}
+
+export async function requestWorkspaceSurfaceJson({
+  foundation,
+  path,
+  init = {},
+  allowStatuses = [],
+}) {
+  const response = await foundation.services.transport.request(path, init);
+  let payload = null;
+  const text = await response.text();
+  if (text.trim()) {
+    try {
+      payload = JSON.parse(text);
+    } catch {
+      payload = text;
+    }
+  }
+
+  if (!response.ok && allowStatuses.includes(response.status)) {
+    return null;
+  }
+
+  if (!response.ok && !allowStatuses.includes(response.status)) {
+    const detail = payload && typeof payload === 'object' && 'detail' in payload
+      ? payload.detail
+      : payload;
+    throw new WorkspaceSurfaceRequestError(
+      typeof detail === 'string'
+        ? detail
+        : `Workspace transport request failed with status ${response.status}.`,
+      response.status,
+      detail,
+    );
+  }
+
+  return payload;
 }

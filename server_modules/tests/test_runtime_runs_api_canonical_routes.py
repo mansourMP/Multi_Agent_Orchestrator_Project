@@ -2,6 +2,7 @@ import sys
 import threading
 import types
 import unittest
+from fastapi import HTTPException
 
 from server_modules import runtime_runs_api
 from server_modules.api_contract import ApiAgentTurnRequest
@@ -204,6 +205,7 @@ class RuntimeRunsApiCanonicalRouteTests(unittest.TestCase):
                 app.routes[("POST", "/turn")](
                     _FakeRequest(
                         {
+                            "thread_id": "thread-1",
                             "workspace_id": "default",
                             "session_id": "thread-1",
                             "channel": "web",
@@ -214,6 +216,7 @@ class RuntimeRunsApiCanonicalRouteTests(unittest.TestCase):
                         }
                     ),
                     {
+                        "thread_id": "thread-1",
                         "workspace_id": "default",
                         "session_id": "thread-1",
                         "channel": "web",
@@ -225,8 +228,9 @@ class RuntimeRunsApiCanonicalRouteTests(unittest.TestCase):
                     current_user=self._current_user(),
                 )
             )
-            self.assertEqual(turn_payload.status, "stream_ready")
-            self.assertEqual(turn_payload.metadata["kind"], "direct_chat_stream")
+            self.assertEqual(turn_payload.status, "accepted")
+            self.assertEqual(turn_payload.run_id, "run-from-typed-turn")
+            self.assertEqual(turn_payload.metadata["kind"], "durable_run")
 
             stream_payload = self._run_async(
                 app.routes[("POST", "/turn")](
@@ -265,6 +269,7 @@ class RuntimeRunsApiCanonicalRouteTests(unittest.TestCase):
                             "channel": "web",
                             "message": "legacy hello",
                             "provider": "anthropic",
+                            "prior_messages": [],
                         },
                         headers={"last-event-id": "evt-8"},
                     ),
@@ -274,6 +279,7 @@ class RuntimeRunsApiCanonicalRouteTests(unittest.TestCase):
                         "channel": "web",
                         "message": "legacy hello",
                         "provider": "anthropic",
+                        "prior_messages": [],
                     },
                     current_user=self._current_user(),
                 )
@@ -282,6 +288,43 @@ class RuntimeRunsApiCanonicalRouteTests(unittest.TestCase):
             self.assertEqual(legacy_stream_payload["last_event_id"], "evt-8")
             self.assertEqual(legacy_stream_payload["turn_request"].session_id, "legacy-thread")
             self.assertEqual(legacy_stream_payload["chat_body"]["provider"], "anthropic")
+
+            promoted_run_payload = self._run_async(
+                app.routes[("POST", "/turn")](
+                    _FakeRequest(
+                        {
+                            "tenant_id": "default",
+                            "workspace_id": "default",
+                            "thread_id": "thread-serious",
+                            "session_id": "thread-serious",
+                            "channel": "web",
+                            "actor": {"type": "user", "id": "user-1"},
+                            "message": "Research the release blockers and draft a summary.",
+                            "execution_mode": "sync",
+                            "response_mode": "stream",
+                        }
+                    ),
+                    {
+                        "tenant_id": "default",
+                        "workspace_id": "default",
+                        "thread_id": "thread-serious",
+                        "session_id": "thread-serious",
+                        "channel": "web",
+                        "actor": {"type": "user", "id": "user-1"},
+                        "message": "Research the release blockers and draft a summary.",
+                        "execution_mode": "sync",
+                        "response_mode": "stream",
+                    },
+                    current_user=self._current_user(),
+                )
+            )
+            self.assertEqual(promoted_run_payload.status, "accepted")
+            self.assertEqual(promoted_run_payload.run_id, "run-from-typed-turn")
+            self.assertEqual(promoted_run_payload.metadata["kind"], "durable_run")
+            self.assertEqual(
+                promoted_run_payload.metadata["turn_request"]["context_hints"]["metadata"]["primary_engine_reason"],
+                "task_markers",
+            )
 
             legacy_run_payload = self._run_async(
                 app.routes[("POST", "/turn")](
@@ -393,13 +436,254 @@ class RuntimeRunsApiCanonicalRouteTests(unittest.TestCase):
             else:
                 sys.modules["server"] = previous_server
 
+    def test_list_approvals_filters_resolved_items_and_projects_visibility_fields(self):
+        fake_server = types.ModuleType("server")
+        fake_server.require_api_key = object()
+        fake_server.require_admin_api_key = object()
+        fake_server.ORION_SINGLE_AGENT_MODE = False
+        fake_server.runs = {}
+        fake_server.iter_logs_for_run = lambda run_id: []
+        fake_server._get_replay_payload = lambda run_id: {}
+
+        previous_server = sys.modules.get("server")
+        sys.modules["server"] = fake_server
+        original_register = runtime_runs_api.runtime_route_registration_service.register_runtime_run_routes_from_api
+        original_refresh = runtime_runs_api._refresh_server_exports
+        original_privileged = runtime_runs_api._current_user_is_privileged
+        original_extract_owner = runtime_runs_api._extract_run_owner_user_id
+        original_list_live_runs = runtime_runs_api.run_state_repository.sync_list_live_runs
+        try:
+            runtime_runs_api.runtime_route_registration_service.register_runtime_run_routes_from_api = lambda *args, **kwargs: None
+            runtime_runs_api._refresh_server_exports = lambda: fake_server
+            runtime_runs_api._current_user_is_privileged = lambda current_user: False
+            runtime_runs_api._extract_run_owner_user_id = lambda item: str(item.get("owner_user_id") or "")
+            runtime_runs_api.run_state_repository.sync_list_live_runs = lambda: [
+                {
+                    "run_id": "run-pending",
+                    "owner_user_id": "user-1",
+                    "workspace_id": "default",
+                    "updated_at": "2026-04-06T10:00:00Z",
+                    "context": {
+                        "workspace_id": "default",
+                        "metadata": {"agent_role": "sage"},
+                    },
+                    "pending_confirmation": {
+                        "approval_id": "approval-1",
+                        "status": "waiting",
+                        "prompt": "Approve sending the summary by email.",
+                        "requested_at": "2026-04-06T10:00:00Z",
+                        "expires_at": "2026-04-06T10:05:00Z",
+                        "correlation_id": "corr-1",
+                        "metadata": {
+                            "kind": "email_review",
+                            "target": "email",
+                            "approval_actions": ["send_email"],
+                            "approval_labels": ["email"],
+                            "approval_capabilities": ["smtp.send"],
+                            "email_preview": {
+                                "recipient": "demo@example.com",
+                                "subject": "AI summary",
+                                "body_preview": "Top three paper findings.",
+                            },
+                        },
+                    },
+                },
+                {
+                    "run_id": "run-resolved",
+                    "owner_user_id": "user-1",
+                    "workspace_id": "default",
+                    "updated_at": "2026-04-06T10:01:00Z",
+                    "context": {
+                        "workspace_id": "default",
+                        "metadata": {"agent_role": "sage"},
+                    },
+                    "pending_confirmation": {
+                        "approval_id": "approval-2",
+                        "status": "resolved",
+                        "prompt": "Already handled.",
+                    },
+                },
+            ]
+
+            app = _FakeApp()
+            runtime_runs_api.register_run_routes(app)
+
+            payload = self._run_async(
+                app.routes[("GET", "/approvals")](
+                    workspace_id="default",
+                    current_user=self._current_user(),
+                )
+            )
+        finally:
+            runtime_runs_api.runtime_route_registration_service.register_runtime_run_routes_from_api = original_register
+            runtime_runs_api._refresh_server_exports = original_refresh
+            runtime_runs_api._current_user_is_privileged = original_privileged
+            runtime_runs_api._extract_run_owner_user_id = original_extract_owner
+            runtime_runs_api.run_state_repository.sync_list_live_runs = original_list_live_runs
+            if previous_server is None:
+                sys.modules.pop("server", None)
+            else:
+                sys.modules["server"] = previous_server
+
+        self.assertEqual(payload["count"], 1)
+        item = payload["items"][0]
+        self.assertEqual(item["approval_id"], "approval-1")
+        self.assertEqual(item["owner_user_id"], "user-1")
+        self.assertEqual(item["prompt"], "Approve sending the summary by email.")
+        self.assertEqual(item["scope"], "once")
+        self.assertFalse(item["reusable"])
+        self.assertEqual(item["target"], "email")
+        self.assertEqual(item["actions"], ["send_email"])
+        self.assertEqual(item["labels"], ["email"])
+        self.assertEqual(item["capabilities"], ["smtp.send"])
+        self.assertEqual(item["agent_role"], "sage")
+        self.assertEqual(item["email_preview"]["recipient"], "demo@example.com")
+        self.assertEqual(item["email_preview"]["subject"], "AI summary")
+        self.assertEqual(item["target"], "email")
+
+    def test_list_approvals_rejects_free_workspace_plan(self):
+        fake_server = types.ModuleType("server")
+        fake_server.require_api_key = object()
+        fake_server.require_admin_api_key = object()
+        fake_server.ORION_SINGLE_AGENT_MODE = False
+        fake_server.runs = {}
+        fake_server.iter_logs_for_run = lambda run_id: []
+        fake_server._get_replay_payload = lambda run_id: {}
+
+        previous_server = sys.modules.get("server")
+        sys.modules["server"] = fake_server
+        original_register = runtime_runs_api.runtime_route_registration_service.register_runtime_run_routes_from_api
+        original_refresh = runtime_runs_api._refresh_server_exports
+        try:
+            runtime_runs_api.runtime_route_registration_service.register_runtime_run_routes_from_api = lambda *args, **kwargs: None
+            runtime_runs_api._refresh_server_exports = lambda: fake_server
+
+            app = _FakeApp()
+            runtime_runs_api.register_run_routes(app)
+            handler = app.routes[("GET", "/approvals")]
+
+            with unittest.mock.patch(
+                "server_modules.runtime_runs_api.entitlements_service.workspace_entitlement_payload_for_workspace_id",
+                return_value={"capabilities": {"approvals_enabled": False}},
+            ):
+                with self.assertRaises(HTTPException) as exc:
+                    self._run_async(
+                        handler(
+                            workspace_id="default",
+                            current_user=self._current_user(),
+                        )
+                    )
+        finally:
+            runtime_runs_api.runtime_route_registration_service.register_runtime_run_routes_from_api = original_register
+            runtime_runs_api._refresh_server_exports = original_refresh
+            if previous_server is None:
+                sys.modules.pop("server", None)
+            else:
+                sys.modules["server"] = previous_server
+
+        self.assertEqual(exc.exception.status_code, 403)
+        self.assertEqual(exc.exception.detail, "Approvals are not included in this workspace plan.")
+
+    def test_list_runs_applies_workspace_history_window(self):
+        fake_server = types.ModuleType("server")
+        fake_server.require_api_key = object()
+        fake_server.require_admin_api_key = object()
+        fake_server.ORION_SINGLE_AGENT_MODE = False
+        fake_server.runs = {}
+        fake_server.iter_logs_for_run = lambda run_id: []
+        fake_server._get_replay_payload = lambda run_id: {}
+        fake_server.RUN_HISTORY_LOCK = threading.Lock()
+        fake_server.RUN_HISTORY = [
+            {
+                "run_id": "run-old",
+                "workspace_id": "default",
+                "owner_user_id": "user-1",
+                "status": "completed",
+                "updated_at": "2026-03-20T00:00:00Z",
+                "created_at": "2026-03-20T00:00:00Z",
+            },
+            {
+                "run_id": "run-new",
+                "workspace_id": "default",
+                "owner_user_id": "user-1",
+                "status": "completed",
+                "updated_at": "2026-04-08T00:00:00Z",
+                "created_at": "2026-04-08T00:00:00Z",
+            },
+        ]
+        fake_server._serialize_run_snapshot = lambda run_id, run: dict(run)
+        fake_server._summarize_history_item = lambda item: dict(item)
+        fake_server._parse_utc_ts = lambda value: runtime_runs_api.datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        fake_server._history_item_matches = lambda item, workspace_id, status, pack_id: (
+            (not workspace_id or str(item.get("workspace_id") or "") == str(workspace_id))
+            and (not status or str(item.get("status") or "") == str(status))
+        )
+
+        previous_server = sys.modules.get("server")
+        sys.modules["server"] = fake_server
+        original_register = runtime_runs_api.runtime_route_registration_service.register_runtime_run_routes_from_api
+        original_refresh = runtime_runs_api._refresh_server_exports
+        original_list_live_runs = runtime_runs_api.run_state_repository.sync_list_live_runs
+        try:
+            runtime_runs_api.runtime_route_registration_service.register_runtime_run_routes_from_api = lambda *args, **kwargs: None
+            runtime_runs_api._refresh_server_exports = lambda: fake_server
+            runtime_runs_api.run_state_repository.sync_list_live_runs = lambda: []
+
+            app = _FakeApp()
+            runtime_runs_api.register_run_routes(app)
+            handler = app.routes[("GET", "/runs")]
+
+            with unittest.mock.patch(
+                "server_modules.runtime_runs_api.entitlements_service.workspace_entitlement_payload_for_workspace_id",
+                return_value={"capabilities": {"history_window_days": 7}},
+            ), unittest.mock.patch(
+                "server_modules.runtime_runs_api._utc_now",
+                return_value=runtime_runs_api.datetime(2026, 4, 11, tzinfo=runtime_runs_api.timezone.utc),
+            ):
+                payload = self._run_async(
+                    handler(
+                        workspace_id="default",
+                        current_user=self._current_user(),
+                    )
+                )
+        finally:
+            runtime_runs_api.runtime_route_registration_service.register_runtime_run_routes_from_api = original_register
+            runtime_runs_api._refresh_server_exports = original_refresh
+            runtime_runs_api.run_state_repository.sync_list_live_runs = original_list_live_runs
+            if previous_server is None:
+                sys.modules.pop("server", None)
+            else:
+                sys.modules["server"] = previous_server
+
+        self.assertEqual([item["run_id"] for item in payload["items"]], ["run-new"])
+
     async def _fake_agent_turn(self, **kwargs):
+        turn_request = kwargs.get("turn_request")
         if kwargs.get("run_request") is not None:
             return {
-                "status": "accepted",
-                "run_id": "run-from-legacy-start",
-                "session_id": "legacy-run-start-session",
-                "metadata": {"kind": "legacy_run_start"},
+                "kind": "durable_run",
+                "result": {
+                    "status": "accepted",
+                    "run_id": "run-from-legacy-start",
+                    "route": {"selected": "cloud"},
+                    "created_run": {
+                        "run_id": "run-from-legacy-start",
+                        "status": "accepted",
+                    },
+                },
+            }
+        if getattr(turn_request, "execution_mode", None) == "durable":
+            return {
+                "kind": "durable_run",
+                "result": {
+                    "status": "accepted",
+                    "run_id": "run-from-typed-turn",
+                    "route": {"selected": "cloud"},
+                    "created_run": {
+                        "run_id": "run-from-typed-turn",
+                        "status": "accepted",
+                    },
+                },
             }
         return {
             "kind": "direct_chat_stream",

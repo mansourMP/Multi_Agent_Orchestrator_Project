@@ -1,10 +1,25 @@
 from __future__ import annotations
 
+import threading
 from types import SimpleNamespace
 from typing import Any, Callable
 
 from fastapi import HTTPException
 from server_modules import run_state_repository
+
+
+_APPROVAL_RESOLUTION_GUARD_LOCK = threading.Lock()
+_APPROVAL_RESOLUTION_GUARDS: dict[str, threading.Lock] = {}
+
+
+def _approval_resolution_guard(approval_id: str) -> threading.Lock:
+    token = str(approval_id or "").strip()
+    with _APPROVAL_RESOLUTION_GUARD_LOCK:
+        lock = _APPROVAL_RESOLUTION_GUARDS.get(token)
+        if lock is None:
+            lock = threading.Lock()
+            _APPROVAL_RESOLUTION_GUARDS[token] = lock
+        return lock
 
 
 def build_submit_run_decision_callbacks(
@@ -15,6 +30,7 @@ def build_submit_run_decision_callbacks(
     approval_correlation_id: Callable[[str], str] | Callable[..., str],
     append_approval_audit: Callable[..., None],
     resolve_local_execution_start_approval: Callable[..., dict[str, Any]],
+    emit_security_audit_event: Callable[..., Any] | None = None,
 ) -> dict[str, Any]:
     return {
         "serialize_run_snapshot": serialize_run_snapshot,
@@ -23,6 +39,7 @@ def build_submit_run_decision_callbacks(
         "approval_correlation_id": approval_correlation_id,
         "append_approval_audit": append_approval_audit,
         "resolve_local_execution_start_approval": resolve_local_execution_start_approval,
+        "emit_security_audit_event": emit_security_audit_event,
     }
 
 
@@ -44,6 +61,7 @@ def build_resolve_run_approval_callbacks(
     emit_log: Callable[..., None],
     schedule_restored_run_resume: Callable[[str, dict[str, Any]], bool],
     ensure_live_run_handle: Callable[[str, dict[str, Any]], dict[str, Any] | None] = lambda _run_id, _run_record: None,
+    emit_security_audit_event: Callable[..., Any] | None = None,
 ) -> dict[str, Any]:
     callbacks = build_submit_run_decision_callbacks(
         serialize_run_snapshot=serialize_run_snapshot,
@@ -65,6 +83,7 @@ def build_resolve_run_approval_callbacks(
             "emit_log": emit_log,
             "schedule_restored_run_resume": schedule_restored_run_resume,
             "ensure_live_run_handle": ensure_live_run_handle,
+            "emit_security_audit_event": emit_security_audit_event,
         }
     )
     return callbacks
@@ -83,6 +102,7 @@ def submit_run_decision(
     approval_correlation_id: Callable[[str], str] | Callable[..., str],
     append_approval_audit: Callable[..., None],
     resolve_local_execution_start_approval: Callable[..., dict[str, Any]],
+    emit_security_audit_event: Callable[..., Any] | None = None,
 ) -> dict[str, Any]:
     snapshot_run = run if isinstance(run, dict) else run_record if isinstance(run_record, dict) else None
     if not isinstance(snapshot_run, dict):
@@ -94,6 +114,18 @@ def submit_run_decision(
     correlation_id = str(pending.get("correlation_id") or "").strip() if isinstance(pending, dict) else ""
     context = snapshot_run.get("context")
     metadata = context.get("metadata") if isinstance(context, dict) and isinstance(context.get("metadata"), dict) else {}
+    resolved_workspace_id = str(
+        snapshot_run.get("workspace_id")
+        or (context.get("workspace_id") if isinstance(context, dict) else None)
+        or metadata.get("workspace_id")
+        or "default"
+    ).strip() or "default"
+    resolved_tenant_id = str(
+        snapshot_run.get("tenant_id")
+        or (context.get("tenant_id") if isinstance(context, dict) else None)
+        or metadata.get("tenant_id")
+        or "default"
+    ).strip() or "default"
     decision_text = str(payload.decision or "").strip().lower()
     note_text = str(payload.note or "")
     if approval_id and (
@@ -123,6 +155,22 @@ def submit_run_decision(
             correlation_id=correlation_id or approval_correlation_id(approval_id, run_id=run_id),
             metadata={"scope": "once", "reusable": False},
         )
+        if callable(emit_security_audit_event):
+            emit_security_audit_event(
+                action="approval.decision_submitted",
+                tenant_id=resolved_tenant_id,
+                workspace_id=resolved_workspace_id,
+                current_user=current_user,
+                run_id=run_id,
+                trace_id=correlation_id or approval_id,
+                idempotency_key=f"approval.decision_submitted:{approval_id}:{decision_text}",
+                metadata={
+                    "approval_id": approval_id,
+                    "decision": decision_text,
+                    "source": "runs_decision_api",
+                    "scope": "once",
+                },
+            )
         run["input_queue"].put({"approval_id": approval_id, "decision": payload.decision, "note": payload.note})
         return {
             "status": "ok",
@@ -162,6 +210,7 @@ def resolve_run_approval(
     emit_log: Callable[..., None],
     schedule_restored_run_resume: Callable[[str, dict[str, Any]], bool],
     ensure_live_run_handle: Callable[[str, dict[str, Any]], dict[str, Any] | None] = lambda _run_id, _run_record: None,
+    emit_security_audit_event: Callable[..., Any] | None = None,
 ) -> dict[str, Any]:
     snapshot_run = run if isinstance(run, dict) else run_record if isinstance(run_record, dict) else None
     if not isinstance(snapshot_run, dict):
@@ -174,9 +223,24 @@ def resolve_run_approval(
     expected = str(pending.get("approval_id") or "").strip()
     if expected != approval_id:
         raise HTTPException(status_code=409, detail="approval_id does not match pending confirmation.")
+    pending_status = str(pending.get("status") or "").strip().lower()
+    if pending_status in {"decision_submitted", "resolved", "expired"}:
+        raise HTTPException(status_code=409, detail="Confirmation has already been processed for this run.")
     decision_text = str(payload.decision or "").strip().lower()
     context = snapshot_run.get("context")
     metadata = context.get("metadata") if isinstance(context, dict) and isinstance(context.get("metadata"), dict) else {}
+    resolved_workspace_id = str(
+        snapshot_run.get("workspace_id")
+        or (context.get("workspace_id") if isinstance(context, dict) else None)
+        or metadata.get("workspace_id")
+        or "default"
+    ).strip() or "default"
+    resolved_tenant_id = str(
+        snapshot_run.get("tenant_id")
+        or (context.get("tenant_id") if isinstance(context, dict) else None)
+        or metadata.get("tenant_id")
+        or "default"
+    ).strip() or "default"
     if bool(metadata.get("local_execution_waiting_confirmation")) or bool(metadata.get("local_execution_waiting_approval")):
         if not isinstance(run, dict):
             raise HTTPException(status_code=409, detail="Run is not active in this process.")
@@ -215,6 +279,11 @@ def resolve_run_approval(
     active_run = run if isinstance(run, dict) else ensure_live_run_handle(run_id, snapshot_run)
     if not isinstance(active_run, dict):
         raise HTTPException(status_code=409, detail="Run is not active in this process.")
+    pending["status"] = "decision_submitted"
+    pending["decision_submitted_at"] = utc_now_iso()
+    pending["submitted_decision"] = decision_text
+    pending["submitted_note"] = str(payload.note or "")
+    set_pending_confirmation(active_run, pending)
     active_run["input_queue"].put(
         {
             "approval_id": approval_id,
@@ -240,12 +309,39 @@ def resolve_run_approval(
             "reusable": False,
         },
     )
+    if callable(emit_security_audit_event):
+        emit_security_audit_event(
+            action="approval.decision_submitted",
+            tenant_id=resolved_tenant_id,
+            workspace_id=resolved_workspace_id,
+            current_user=current_user,
+            run_id=run_id,
+            trace_id=correlation_id,
+            idempotency_key=f"approval.decision_submitted:{approval_id}:{decision_text}",
+            metadata={
+                "approval_id": approval_id,
+                "decision": ("approved" if approved else "escalated" if escalated else "rejected"),
+                "raw_decision": decision_text,
+                "source": "runs_approval_api",
+                "scope": "once",
+            },
+        )
     if not run_thread_is_alive(active_run) and str(active_run.get("status") or "").strip().lower() == "waiting_for_input":
         pending["status"] = "resolved"
         pending["resolved_at"] = utc_now_iso()
         pending["decision"] = decision_text
         pending["note"] = str(payload.note or "")
         set_pending_confirmation(active_run, pending)
+        active_run["_resume_confirmation_token"] = {
+            "approval_id": approval_id,
+            "correlation_id": correlation_id,
+            "prompt": str(pending.get("prompt") or "").strip(),
+            "decision": decision_text,
+            "note": str(payload.note or ""),
+            "resolved_at": str(pending.get("resolved_at") or "").strip() or utc_now_iso(),
+            "scope": "once",
+            "reusable": False,
+        }
         emit_log(
             active_run["logs"],
             "info" if approved else "warn",
@@ -300,83 +396,113 @@ def resolve_standalone_approval(
     reason = str(payload.get("reason") or payload.get("note") or "")
     decision = "approve" if resolution == "approved" else "reject"
 
-    matched_run = run_state_repository.sync_find_live_run_by_approval_id(approval_token)
-    matched_run_id = str((matched_run or {}).get("run_id") or "").strip() if isinstance(matched_run, dict) else ""
-    if not matched_run_id or not isinstance(matched_run, dict):
-        raise HTTPException(status_code=404, detail="approval_id not found")
-    live_run = runs.get(matched_run_id) if isinstance(runs, dict) else None
-    ensure_live_run_handle = resolve_run_approval_callbacks.get("ensure_live_run_handle")
-    if not isinstance(live_run, dict) and callable(ensure_live_run_handle):
-        live_run = ensure_live_run_handle(matched_run_id, matched_run)
-    if isinstance(live_run, dict):
-        live_run["_defer_resume_until_approval_persisted"] = True
+    with _approval_resolution_guard(approval_token):
+        matched_run = run_state_repository.sync_find_live_run_by_approval_id(approval_token)
+        if (
+            (not isinstance(matched_run, dict) or not str(matched_run.get("run_id") or "").strip())
+            and isinstance(runs, dict)
+        ):
+            for candidate_run_id, candidate_run in runs.items():
+                if not isinstance(candidate_run, dict):
+                    continue
+                pending = candidate_run.get("pending_confirmation")
+                if not isinstance(pending, dict):
+                    pending = candidate_run.get("pending_approval")
+                if not isinstance(pending, dict):
+                    continue
+                if str(pending.get("approval_id") or "").strip() != approval_token:
+                    continue
+                matched_run = {"run_id": str(candidate_run_id or "").strip(), **candidate_run}
+                break
+        if not isinstance(matched_run, dict) or not str(matched_run.get("run_id") or "").strip():
+            for candidate_run in run_state_repository.sync_list_live_runs():
+                if not isinstance(candidate_run, dict):
+                    continue
+                pending = candidate_run.get("pending_confirmation")
+                if not isinstance(pending, dict):
+                    pending = candidate_run.get("pending_approval")
+                if not isinstance(pending, dict):
+                    continue
+                if str(pending.get("approval_id") or "").strip() != approval_token:
+                    continue
+                matched_run = candidate_run
+                break
+        matched_run_id = str((matched_run or {}).get("run_id") or "").strip() if isinstance(matched_run, dict) else ""
+        if not matched_run_id or not isinstance(matched_run, dict):
+            raise HTTPException(status_code=404, detail="approval_id not found")
+        live_run = runs.get(matched_run_id) if isinstance(runs, dict) else None
+        ensure_live_run_handle = resolve_run_approval_callbacks.get("ensure_live_run_handle")
+        if not isinstance(live_run, dict) and callable(ensure_live_run_handle):
+            live_run = ensure_live_run_handle(matched_run_id, matched_run)
+        if isinstance(live_run, dict):
+            live_run["_defer_resume_until_approval_persisted"] = True
 
-    result = resolve_run_approval_fn(
-        matched_run_id,
-        approval_token,
-        run=live_run if isinstance(live_run, dict) else None,
-        run_record=matched_run,
-        payload=SimpleNamespace(decision=decision, note=reason),
-        current_user=current_user,
-        **resolve_run_approval_callbacks,
-    )
-    context = matched_run.get("context") if isinstance(matched_run.get("context"), dict) else {}
-    metadata = context.get("metadata") if isinstance(context.get("metadata"), dict) else {}
-    trace_id = str(
-        matched_run.get("trace_id")
-        or matched_run.get("last_trace_id")
-        or context.get("trace_id")
-        or metadata.get("trace_id")
-        or approval_token
-    ).strip()
-    tenant_id = str(
-        matched_run.get("tenant_id")
-        or context.get("tenant_id")
-        or metadata.get("tenant_id")
-        or "default"
-    ).strip() or "default"
-    workspace_id = str(
-        matched_run.get("workspace_id")
-        or context.get("workspace_id")
-        or "default"
-    ).strip() or "default"
-    record_approval_resolution_fn(
-        matched_run_id,
-        approval_token,
-        resolution,
-        actor,
-        trace_id,
-    )
-    outbox_event = emit_approval_resolved_event_fn(
-        approval_id=approval_token,
-        run_id=matched_run_id,
-        tenant_id=tenant_id,
-        workspace_id=workspace_id,
-        resolution=resolution,
-        actor=actor,
-        reason=reason,
-        trace_id=trace_id,
-    )
-    response = dict(result or {})
-    if (
-        resolution == "approved"
-        and isinstance(live_run, dict)
-        and bool(live_run.pop("_resume_ready_after_persist", False))
-        and callable(resume_run_after_persist_fn)
-    ):
-        live_run.pop("_defer_resume_until_approval_persisted", None)
-        response["resumed"] = bool(resume_run_after_persist_fn(matched_run_id, live_run))
-    elif isinstance(live_run, dict):
-        live_run.pop("_defer_resume_until_approval_persisted", None)
-    response["run_id"] = matched_run_id
-    response["approval_id"] = approval_token
-    response["resolution"] = resolution
-    response["actor"] = actor
-    response["reason"] = reason
-    response["outbox_event"] = {
-        "event_id": outbox_event.event_id,
-        "event_type": outbox_event.event_type,
-        "trace_id": outbox_event.trace_id,
-        "payload": dict(outbox_event.payload),
-    }
-    return response
+        result = resolve_run_approval_fn(
+            matched_run_id,
+            approval_token,
+            run=live_run if isinstance(live_run, dict) else None,
+            run_record=matched_run,
+            payload=SimpleNamespace(decision=decision, note=reason),
+            current_user=current_user,
+            **resolve_run_approval_callbacks,
+        )
+        context = matched_run.get("context") if isinstance(matched_run.get("context"), dict) else {}
+        metadata = context.get("metadata") if isinstance(context.get("metadata"), dict) else {}
+        trace_id = str(
+            matched_run.get("trace_id")
+            or matched_run.get("last_trace_id")
+            or context.get("trace_id")
+            or metadata.get("trace_id")
+            or approval_token
+        ).strip()
+        tenant_id = str(
+            matched_run.get("tenant_id")
+            or context.get("tenant_id")
+            or metadata.get("tenant_id")
+            or "default"
+        ).strip() or "default"
+        workspace_id = str(
+            matched_run.get("workspace_id")
+            or context.get("workspace_id")
+            or "default"
+        ).strip() or "default"
+        record_approval_resolution_fn(
+            matched_run_id,
+            approval_token,
+            resolution,
+            actor,
+            trace_id,
+        )
+        outbox_event = emit_approval_resolved_event_fn(
+            approval_id=approval_token,
+            run_id=matched_run_id,
+            tenant_id=tenant_id,
+            workspace_id=workspace_id,
+            resolution=resolution,
+            actor=actor,
+            reason=reason,
+            trace_id=trace_id,
+        )
+        response = dict(result or {})
+        if (
+            resolution == "approved"
+            and isinstance(live_run, dict)
+            and bool(live_run.pop("_resume_ready_after_persist", False))
+            and callable(resume_run_after_persist_fn)
+        ):
+            live_run.pop("_defer_resume_until_approval_persisted", None)
+            response["resumed"] = bool(resume_run_after_persist_fn(matched_run_id, live_run))
+        elif isinstance(live_run, dict):
+            live_run.pop("_defer_resume_until_approval_persisted", None)
+        response["run_id"] = matched_run_id
+        response["approval_id"] = approval_token
+        response["resolution"] = resolution
+        response["actor"] = actor
+        response["reason"] = reason
+        response["outbox_event"] = {
+            "event_id": outbox_event.event_id,
+            "event_type": outbox_event.event_type,
+            "trace_id": outbox_event.trace_id,
+            "payload": dict(outbox_event.payload),
+        }
+        return response

@@ -38,8 +38,6 @@ globals().update({key: value for key, value in vars(common).items() if not key.s
 
 _PERSISTED_TERMINAL_RUN_STATUSES = {"completed", "failed", "timeout", "stopped", "cancelled"}
 LOCAL_RUNTIME_WATCHDOG_THREAD = None
-
-
 def _get_pending_confirmation(run: Dict[str, Any]) -> Dict[str, Any]:
     return run_service.get_pending_confirmation(run)
 
@@ -733,6 +731,18 @@ def _recognize_email_write_intent(
         action_id = "draft_email" if str(match.group("mode") or "").strip().lower() == "draft" else "send_email"
         subject = _strip_wrapping_quotes(str(match.group("subject") or "").strip())
     else:
+        invalid_recipient_match = re.match(
+            r"(?is)^\s*(?P<mode>send|draft)(?:\s+(?:an?|the))?\s+email\s+to\s+(?P<recipient>\S+)(?:\s+subject\s+(?P<subject>.+?))?\s+(?:saying|with\s+message|with\s+body|body)\s+(?P<body>.+?)\s*$",
+            compact,
+        )
+        if invalid_recipient_match:
+            candidate = _strip_trailing_punctuation(
+                _strip_wrapping_quotes(str(invalid_recipient_match.group("recipient") or "").strip())
+            )
+            if str(candidate).strip().lower() not in {"myself", "me"} and not run_service.is_valid_email_recipient(candidate):
+                from fastapi import HTTPException
+
+                raise HTTPException(status_code=400, detail="Invalid email recipient for email connector action.")
         natural_self_match = re.match(
             r"(?is)^\s*(?P<mode>send|draft)(?:\s+(?:an?|the))?\s+email\s+to\s+(?P<recipient>myself|me)\s+(?P<body>.+?)\s*$",
             compact,
@@ -743,6 +753,10 @@ def _recognize_email_write_intent(
         body_text = _strip_wrapping_quotes(str(natural_self_match.group("body") or "").strip())
         action_id = "draft_email" if str(natural_self_match.group("mode") or "").strip().lower() == "draft" else "send_email"
         subject = ""
+    if recipient and not run_service.is_valid_email_recipient(recipient):
+        from fastapi import HTTPException
+
+        raise HTTPException(status_code=400, detail="Invalid email recipient for email connector action.")
     if not recipient or not body_text:
         return None
     connector_id = "google_workspace"
@@ -1299,6 +1313,23 @@ async def get_runtime_kpis():
 
 async def get_local_run_queue(workspace_id: Optional[str] = None, limit: int = 50):
     return handle_get_local_run_queue(workspace_id, limit)
+
+
+async def cleanup_local_run_queue(
+    workspace_id: str,
+    *,
+    older_than_seconds: int = 600,
+    limit: int = 200,
+    dry_run: bool = True,
+    reason: Optional[str] = None,
+):
+    return handle_cleanup_local_run_queue(
+        workspace_id,
+        older_than_seconds=older_than_seconds,
+        limit=limit,
+        dry_run=dry_run,
+        reason=reason,
+    )
 
 async def get_local_workers_status():
     return handle_get_local_workers_status()

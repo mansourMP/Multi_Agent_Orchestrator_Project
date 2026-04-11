@@ -16,6 +16,7 @@ from server_modules.auth import (
 
 from server_modules.agent_turn import (
     agent_turn as execute_canonical_agent_turn,
+    normalize_server_owned_turn_request,
     resolve_direct_chat_turn_request,
     resolve_run_start_turn_request,
 )
@@ -36,6 +37,7 @@ from server_modules.api_contract import (
 from server_modules import session_service
 from server_modules import thread_service
 from server_modules import run_state_repository
+from server_modules import entitlements_service
 from server_modules.direct_chat_stream_response_service import (
     build_agent_turn_stream_response,
     build_direct_chat_stream_response,
@@ -133,6 +135,60 @@ def _workspace_filtered_items(items: list[dict[str, Any]], current_user: Any) ->
         if workspace_id in allowed:
             filtered.append(item)
     return filtered
+
+
+def _workspace_entitlement_payload(
+    cache: dict[str, dict[str, Any]],
+    workspace_id: str,
+) -> dict[str, Any]:
+    token = str(workspace_id or "default").strip() or "default"
+    payload = cache.get(token)
+    if payload is None:
+        payload = entitlements_service.workspace_entitlement_payload_for_workspace_id(workspace_id=token)
+        cache[token] = payload
+    return payload
+
+
+def _workspace_history_cutoff_ts(
+    cache: dict[str, dict[str, Any]],
+    workspace_id: str,
+) -> Optional[float]:
+    payload = _workspace_entitlement_payload(cache, workspace_id)
+    capabilities = payload.get("capabilities") if isinstance(payload.get("capabilities"), dict) else {}
+    history_window_days = max(1, int(capabilities.get("history_window_days") or 30))
+    return float(_utc_now().timestamp()) - float(history_window_days * 86400)
+
+
+def _payload_timestamp_seconds(payload: dict[str, Any], *keys: str) -> Optional[float]:
+    for key in keys:
+        value = payload.get(key)
+        if isinstance(value, datetime):
+            normalized = value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
+            return normalized.timestamp()
+        text = str(value or "").strip()
+        if not text:
+            continue
+        normalized = text[:-1] + "+00:00" if text.endswith("Z") else text
+        try:
+            parsed = datetime.fromisoformat(normalized)
+        except ValueError:
+            continue
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed.timestamp()
+    return None
+
+
+def _payload_within_workspace_history_window(
+    *,
+    payload: dict[str, Any],
+    workspace_id: str,
+    cache: dict[str, dict[str, Any]],
+    timestamp_keys: tuple[str, ...],
+) -> bool:
+    cutoff_ts = _workspace_history_cutoff_ts(cache, workspace_id)
+    event_ts = _payload_timestamp_seconds(payload, *timestamp_keys)
+    return cutoff_ts is None or event_ts is None or event_ts >= cutoff_ts
 
 
 def normalize_thread_turn_record(record: Dict[str, Any]) -> Dict[str, Any]:
@@ -552,7 +608,20 @@ def register_run_routes(app) -> None:
         if any(
             key in payload
             for key in (
-                "thread_id",
+                "session_id",
+                "actor",
+                "execution_mode",
+                "response_mode",
+                "context_hints",
+                "attachments",
+                "policy_context",
+                "machine_target",
+            )
+        ):
+            return False
+        if any(
+            key in payload
+            for key in (
                 "prior_messages",
                 "approved_action",
                 "availability",
@@ -560,7 +629,9 @@ def register_run_routes(app) -> None:
             )
         ):
             return True
-        return "message" in payload and "session_id" not in payload and "actor" not in payload
+        if "thread_id" in payload:
+            return True
+        return "message" in payload and "actor" not in payload
 
     @app.post("/turn", dependencies=[Depends(member_dependency)], response_model=ApiAgentTurnResponse)
     async def canonical_turn(
@@ -569,13 +640,14 @@ def register_run_routes(app) -> None:
         current_user=Depends(member_dependency),
     ):
         _refresh_server_exports()
-        payload = dict(body or {})
-        if not payload:
-            payload = await request.json()
-            if not isinstance(payload, dict):
+        raw_payload = dict(body or {})
+        if not raw_payload:
+            raw_payload = await request.json()
+            if not isinstance(raw_payload, dict):
                 from fastapi import HTTPException
 
                 raise HTTPException(status_code=400, detail="Invalid turn payload")
+        payload = dict(raw_payload)
         payload = _stamp_workspace_authorization_on_turn_payload(
             payload,
             current_user=current_user,
@@ -587,7 +659,7 @@ def register_run_routes(app) -> None:
 
         # Freeze legacy growth here: compatibility payloads are normalized to AgentTurnRequest
         # at the runtime boundary and do not execute through alternate ingress contracts.
-        if _looks_like_legacy_direct_chat_body(payload):
+        if _looks_like_legacy_direct_chat_body(raw_payload):
             legacy_direct_resolution = resolve_direct_chat_turn_request(
                 current_user=current_user,
                 body=payload,
@@ -595,7 +667,7 @@ def register_run_routes(app) -> None:
             )
             turn_request = legacy_direct_resolution.turn_request
             chat_body = dict(payload)
-        elif _looks_like_legacy_run_start_body(payload):
+        elif _looks_like_legacy_run_start_body(raw_payload):
             from server_modules.runtime_models import RunStartRequest
 
             raw_run_request = RunStartRequest(**payload)
@@ -608,6 +680,10 @@ def register_run_routes(app) -> None:
             run_request = resolution.request
         else:
             turn_request = request_body_to_turn_request(payload)
+            turn_request = normalize_server_owned_turn_request(
+                current_user=current_user,
+                turn_request=turn_request,
+            )
 
         if (
             str(turn_request.execution_mode or "").strip().lower() == "sync"
@@ -652,16 +728,22 @@ def register_run_routes(app) -> None:
             else None
         )
         base_history_item_matches = _late_server_export("_history_item_matches")
+        entitlement_cache: dict[str, dict[str, Any]] = {}
 
         def _authorized_history_item_matches(item: Any, requested_workspace: Any, requested_status: Any, requested_pack_id: Any) -> bool:
             if not base_history_item_matches(item, requested_workspace, requested_status, requested_pack_id):
                 return False
-            if allowed_workspaces is None:
-                return True
             if not isinstance(item, dict):
                 return False
             run_workspace_id = str(item.get("workspace_id") or "default").strip() or "default"
-            return run_workspace_id in allowed_workspaces
+            if allowed_workspaces is not None and run_workspace_id not in allowed_workspaces:
+                return False
+            return _payload_within_workspace_history_window(
+                payload=item,
+                workspace_id=run_workspace_id,
+                cache=entitlement_cache,
+                timestamp_keys=("updated_at", "created_at", "completed_at"),
+            )
 
         payload = runtime_run_query_service.build_run_list_response(
             limit=limit,
@@ -695,6 +777,18 @@ def register_run_routes(app) -> None:
             if workspace_id
             else None
         )
+        entitlement_cache: dict[str, dict[str, Any]] = {}
+        if requested_workspace_id:
+            requested_entitlements = _workspace_entitlement_payload(entitlement_cache, requested_workspace_id)
+            requested_capabilities = (
+                requested_entitlements.get("capabilities")
+                if isinstance(requested_entitlements.get("capabilities"), dict)
+                else {}
+            )
+            if not bool(requested_capabilities.get("approvals_enabled")):
+                from fastapi import HTTPException
+
+                raise HTTPException(status_code=403, detail="Approvals are not included in this workspace plan.")
         request_user_id = str((current_user or {}).get("user_id") or "").strip()
         include_all = _current_user_is_privileged(current_user)
         if not include_all and not request_user_id:
@@ -722,6 +816,14 @@ def register_run_routes(app) -> None:
                 continue
             if allowed_workspaces is not None and run_workspace_id not in allowed_workspaces:
                 continue
+            run_entitlements = _workspace_entitlement_payload(entitlement_cache, run_workspace_id)
+            run_capabilities = (
+                run_entitlements.get("capabilities")
+                if isinstance(run_entitlements.get("capabilities"), dict)
+                else {}
+            )
+            if not bool(run_capabilities.get("approvals_enabled")):
+                continue
             pending = (
                 run.get("pending_confirmation")
                 if isinstance(run.get("pending_confirmation"), dict)
@@ -734,22 +836,67 @@ def register_run_routes(app) -> None:
             approval_id = str(pending.get("approval_id") or "").strip()
             if not approval_id:
                 continue
+            pending_status = str(pending.get("status") or "pending").strip().lower() or "pending"
+            if pending_status in {"resolved", "approved", "rejected", "expired", "cancelled", "canceled", "dismissed"}:
+                continue
+            pending_metadata = pending.get("metadata") if isinstance(pending.get("metadata"), dict) else {}
+            email_preview = pending_metadata.get("email_preview") if isinstance(pending_metadata.get("email_preview"), dict) else None
+            actions = pending.get("actions") if isinstance(pending.get("actions"), list) else pending_metadata.get("approval_actions")
+            labels = pending_metadata.get("approval_labels")
+            capabilities = pending_metadata.get("approval_capabilities")
+            prompt = str(pending.get("prompt") or pending.get("reason") or "Approval required.").strip()
             items.append(
                 {
                     "approval_id": approval_id,
                     "run_id": run_id,
                     "workspace_id": run_workspace_id,
-                    "status": str(pending.get("status") or "pending").strip().lower() or "pending",
+                    "owner_user_id": _extract_run_owner_user_id(run) or None,
+                    "status": pending_status,
                     "action": (
                         str(pending.get("action") or "").strip()
-                        or str((pending.get("metadata") or {}).get("kind") or "").strip()
+                        or str(pending_metadata.get("kind") or "").strip()
                         or str(metadata.get("agent_role") or "").strip()
                         or "Approval"
                     ),
-                    "summary": str(pending.get("prompt") or pending.get("reason") or "Approval required.").strip(),
+                    "summary": prompt,
+                    "prompt": prompt,
                     "requested_at": pending.get("requested_at") or pending.get("created_at") or run.get("updated_at"),
                     "expires_at": pending.get("expires_at"),
                     "correlation_id": pending.get("correlation_id"),
+                    "scope": str(pending.get("scope") or "once").strip().lower() or "once",
+                    "reusable": bool(pending.get("reusable")),
+                    "consequence": (
+                        str(pending.get("consequence") or pending_metadata.get("consequence") or "").strip()
+                        or "This confirmation applies only to this pending step in this run. Later runs or later confirmation points will ask again."
+                    ),
+                    "actions": [
+                        str(item or "").strip()
+                        for item in (actions or [])
+                        if str(item or "").strip()
+                    ],
+                    "target": (
+                        str(
+                            pending.get("target")
+                            or pending_metadata.get("target")
+                            or pending_metadata.get("approval_target")
+                            or (email_preview or {}).get("recipient")
+                            or ""
+                        ).strip()
+                        or None
+                    ),
+                    "labels": [
+                        str(item or "").strip()
+                        for item in (labels or [])
+                        if str(item or "").strip()
+                    ],
+                    "capabilities": [
+                        str(item or "").strip()
+                        for item in (capabilities or [])
+                        if str(item or "").strip()
+                    ],
+                    "agent_role": str(metadata.get("agent_role") or "").strip() or None,
+                    "metadata": pending_metadata,
+                    "email_preview": email_preview,
                 }
             )
         items.sort(key=lambda item: str(item.get("requested_at") or ""), reverse=True)

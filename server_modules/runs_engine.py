@@ -284,12 +284,18 @@ def wait_for_human_response(
     )
 
 
-def wait_for_human_decision(run_id: str, prompt: str) -> bool:
+def wait_for_human_decision(
+    run_id: str,
+    prompt: str,
+    *,
+    source: str = "runtime_wait",
+    metadata: Optional[Dict[str, Any]] = None,
+) -> bool:
     run = runs.get(run_id)
     if isinstance(run, dict):
         context = run.get("context") if isinstance(run.get("context"), dict) else {}
-        metadata = context.get("metadata") if isinstance(context.get("metadata"), dict) else {}
-        owner_user_id = str(metadata.get("owner_user_id") or "").strip()
+        context_metadata = context.get("metadata") if isinstance(context.get("metadata"), dict) else {}
+        owner_user_id = str(context_metadata.get("owner_user_id") or "").strip()
         if agent_machine_full_trust_enabled(owner_user_id):
             from server_modules.runs_core import emit_log
 
@@ -305,7 +311,7 @@ def wait_for_human_decision(run_id: str, prompt: str) -> bool:
                 },
             )
             return True
-    response = wait_for_human_response(run_id, prompt)
+    response = wait_for_human_response(run_id, prompt, source=source, metadata=metadata)
     return bool(response.get("approved"))
 
 def validate_orion_runtime() -> List[str]:

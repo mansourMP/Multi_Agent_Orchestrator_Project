@@ -4,7 +4,7 @@ from pathlib import Path
 import unittest
 from unittest.mock import patch
 
-from server_modules import run_state_repository, runs_execution, runs_output, safe_mode_service, shared
+from server_modules import run_service, run_state_repository, runs_execution, runs_output, safe_mode_service, shared
 from server_modules.runtime_state_store import init_runtime_state_db
 
 
@@ -510,6 +510,8 @@ class RunsExecutionGraphTests(unittest.TestCase):
                     "config": {
                         "connector": "google_workspace",
                         "action_id": "draft_email",
+                        "to_email": "ops@example.com",
+                        "subject": "Draft",
                     },
                 },
             ],
@@ -525,6 +527,134 @@ class RunsExecutionGraphTests(unittest.TestCase):
 
         self.assertIn("Connector action completed", result["result_text"])
         self.assertEqual(result["result_data"]["workflow_execution"]["final_node_id"], "tool_1")
+
+    @patch("server_modules.runs_execution._workflow_execute_connector_action")
+    def test_execute_workflow_graph_reuses_resolved_connector_approval_without_reprompting(self, connector_action_mock):
+        connector_action_mock.return_value = {
+            "summary": "Connector action completed: google_workspace.send_email.",
+            "result_data": {
+                "connector_action": {
+                    "connector": "google_workspace",
+                    "action_id": "send_email",
+                    "recipient": "ops@example.com",
+                }
+            },
+        }
+        definition = {
+            "version": "empyralist.workflow.v2",
+            "nodes": [
+                {"id": "trigger_1", "type": "trigger", "variant": "manual", "config": {}},
+                {
+                    "id": "tool_1",
+                    "type": "tool",
+                    "variant": "connector_action",
+                    "config": {
+                        "connector": "google_workspace",
+                        "action_id": "send_email",
+                        "to_email": "ops@example.com",
+                        "subject": "Ops update",
+                    },
+                },
+            ],
+            "edges": [{"id": "e1", "source": "trigger_1", "target": "tool_1"}],
+        }
+        approval_metadata = runs_execution._connector_tool_node_approval_metadata(
+            node_id="tool_1",
+            label="send_email",
+            tool_id="send_email",
+            variant="connector_action",
+            config=definition["nodes"][1]["config"],
+            evaluation={"approval_label": "Email"},
+        )
+        fingerprint = run_service.approval_resolution_fingerprint(approval_metadata)
+        context = {
+            "workflow_id": "wf_connector",
+            "user_goal": "Send email",
+            "metadata": {
+                run_service.RESOLVED_APPROVAL_MARKERS_KEY: [
+                    {
+                        "fingerprint": fingerprint,
+                        "approval_id": "approval-1",
+                        "decision": "approved",
+                    }
+                ]
+            },
+        }
+
+        with patch("server_modules.runs_execution.wait_for_human_decision", side_effect=AssertionError("approval should not repeat")):
+            result = runs_execution._execute_workflow_graph(
+                "run-connector-approved",
+                context,
+                queue.Queue(),
+                definition,
+            )
+
+        self.assertIn("Connector action completed", result["result_text"])
+        self.assertEqual(result["result_data"]["workflow_execution"]["final_node_id"], "tool_1")
+
+    def test_execute_workflow_graph_rejects_invalid_email_before_requesting_approval(self):
+        definition = {
+            "version": "empyralist.workflow.v2",
+            "nodes": [
+                {"id": "trigger_1", "type": "trigger", "variant": "manual", "config": {}},
+                {
+                    "id": "tool_1",
+                    "type": "tool",
+                    "variant": "connector_action",
+                    "config": {
+                        "connector": "google_workspace",
+                        "action_id": "send_email",
+                        "to_email": "not-an-email",
+                        "subject": "Ops update",
+                    },
+                },
+            ],
+            "edges": [{"id": "e1", "source": "trigger_1", "target": "tool_1"}],
+        }
+
+        with patch("server_modules.runs_execution.wait_for_human_decision", side_effect=AssertionError("approval should not be requested")):
+            with self.assertRaises(RuntimeError) as raised:
+                runs_execution._execute_workflow_graph(
+                    "run-connector-invalid-email",
+                    {"workflow_id": "wf_connector", "user_goal": "Send email", "metadata": {}},
+                    queue.Queue(),
+                    definition,
+                )
+
+        self.assertEqual(str(raised.exception), "Connector action 'send_email' requires a valid recipient email.")
+
+    @patch("server_modules.runs_execution._workflow_execute_connector_action")
+    @patch("server_modules.runs_execution.wait_for_human_decision", return_value=False)
+    def test_execute_workflow_graph_stops_when_connector_approval_is_denied(self, _approval_mock, connector_action_mock):
+        definition = {
+            "version": "empyralist.workflow.v2",
+            "nodes": [
+                {"id": "trigger_1", "type": "trigger", "variant": "manual", "config": {}},
+                {
+                    "id": "tool_1",
+                    "type": "tool",
+                    "variant": "connector_action",
+                    "config": {
+                        "connector": "google_workspace",
+                        "action_id": "send_email",
+                        "to_email": "ops@example.com",
+                        "subject": "Ops update",
+                    },
+                },
+            ],
+            "edges": [{"id": "e1", "source": "trigger_1", "target": "tool_1"}],
+        }
+
+        with self.assertRaises(RuntimeError) as raised:
+            runs_execution._execute_workflow_graph(
+                "run-connector-denied",
+                {"workflow_id": "wf_connector", "user_goal": "Send email", "metadata": {}},
+                queue.Queue(),
+                definition,
+            )
+
+        self.assertEqual(str(raised.exception), "Workflow stopped before tool node 'tool_1'.")
+        connector_action_mock.assert_not_called()
 
     @patch(
         "server_modules.runs_execution._workflow_tool_connector_secret",

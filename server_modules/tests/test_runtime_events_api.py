@@ -104,61 +104,65 @@ class RuntimeEventsApiTests(unittest.TestCase):
                 self.assertIn(("POST", "/notifications/devices"), app.routes)
                 self.assertIn(("GET", "/activity/timeline"), app.routes)
 
-                payload = self._run_async(
-                    app.routes[("GET", "/notifications")](
-                        tenant_id="default",
-                        workspace_id="default",
-                        current_user=current_user,
+                with patch(
+                    "server_modules.notification_service.activity_ledger_service.list_notification_feed_items_sync",
+                    return_value=[],
+                ):
+                    payload = self._run_async(
+                        app.routes[("GET", "/notifications")](
+                            tenant_id="default",
+                            workspace_id="default",
+                            current_user=current_user,
+                        )
                     )
-                )
-                self.assertEqual(payload["count"], 1)
-                self.assertEqual(payload["session_count"], 1)
-                self.assertIsNone(payload["items"][0].get("read_at"))
+                    self.assertEqual(payload["count"], 1)
+                    self.assertEqual(payload["session_count"], 1)
+                    self.assertIsNone(payload["items"][0].get("read_at"))
 
-                registration = self._run_async(
-                    app.routes[("POST", "/notifications/devices")](
-                        {
-                            "workspace_id": "default",
-                            "device_id": "device-1",
-                            "push_token": "ExponentPushToken[test]",
-                            "provider": "expo",
-                        },
-                        current_user=current_user,
+                    registration = self._run_async(
+                        app.routes[("POST", "/notifications/devices")](
+                            {
+                                "workspace_id": "default",
+                                "device_id": "device-1",
+                                "push_token": "ExponentPushToken[test]",
+                                "provider": "expo",
+                            },
+                            current_user=current_user,
+                        )
                     )
-                )
-                self.assertTrue(registration["ok"])
+                    self.assertTrue(registration["ok"])
 
-                marked = self._run_async(
-                    app.routes[("POST", "/notifications")](
-                        {
-                            "notification_ids": ["evt-1"],
-                            "tenant_id": "default",
-                            "workspace_id": "default",
-                        },
-                        current_user=current_user,
+                    marked = self._run_async(
+                        app.routes[("POST", "/notifications")](
+                            {
+                                "notification_ids": ["evt-1"],
+                                "tenant_id": "default",
+                                "workspace_id": "default",
+                            },
+                            current_user=current_user,
+                        )
                     )
-                )
-                self.assertEqual(marked["marked_count"], 1)
+                    self.assertEqual(marked["marked_count"], 1)
 
-                next_payload = self._run_async(
-                    app.routes[("GET", "/notifications")](
-                        tenant_id="default",
-                        workspace_id="default",
-                        current_user=current_user,
+                    next_payload = self._run_async(
+                        app.routes[("GET", "/notifications")](
+                            tenant_id="default",
+                            workspace_id="default",
+                            current_user=current_user,
+                        )
                     )
-                )
-                self.assertTrue(bool(next_payload["items"][0].get("read_at")))
+                    self.assertTrue(bool(next_payload["items"][0].get("read_at")))
 
-                stream_payload = self._run_async(
-                    app.routes[("GET", "/notifications")](
-                        tenant_id="default",
-                        workspace_id="default",
-                        stream=True,
-                        current_user=current_user,
+                    stream_payload = self._run_async(
+                        app.routes[("GET", "/notifications")](
+                            tenant_id="default",
+                            workspace_id="default",
+                            stream=True,
+                            current_user=current_user,
+                        )
                     )
-                )
-                self.assertIsInstance(stream_payload, _FakeEventSourceResponse)
-                self.assertEqual(stream_payload.ping, 5)
+                    self.assertIsInstance(stream_payload, _FakeEventSourceResponse)
+                    self.assertEqual(stream_payload.ping, 5)
 
                 with patch(
                     "server_modules.runtime_events_api.activity_ledger_service.list_activity_timeline_payload",

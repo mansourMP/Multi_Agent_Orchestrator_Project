@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
 from datetime import datetime, timezone
 import json
 import logging
@@ -12,6 +13,11 @@ from server_modules import db as runtime_db
 
 LOGGER = logging.getLogger(__name__)
 _T = TypeVar("_T")
+_SYNC_DISPATCH_LOCK = threading.Lock()
+_SYNC_DISPATCH_READY = threading.Event()
+_SYNC_DISPATCH_THREAD: Optional[threading.Thread] = None
+_SYNC_DISPATCH_LOOP: Optional[asyncio.AbstractEventLoop] = None
+_SYNC_DISPATCH_THREAD_ID: Optional[int] = None
 
 
 class RunStateRepositoryError(RuntimeError):
@@ -31,12 +37,90 @@ def _utc_now_iso() -> str:
 
 
 def dispatch_repository_call(awaitable: Awaitable[Any], *, operation: str) -> None:
-    _run_sync(
-        lambda: awaitable,
-        operation=operation,
-        fallback=None,
-        raise_on_error=True,
-    )
+    try:
+        future = _submit_awaitable(awaitable, operation=operation)
+    except Exception as exc:
+        _close_awaitable_quietly(awaitable)
+        LOGGER.warning("Repository async dispatch failed during %s: %s", operation, exc)
+        return
+
+    def _report_completion(done: concurrent.futures.Future[Any]) -> None:
+        try:
+            done.result()
+        except Exception as exc:  # pragma: no cover - background logging path
+            LOGGER.warning("Repository async operation failed during %s: %s", operation, exc)
+
+    future.add_done_callback(_report_completion)
+
+
+def _close_awaitable_quietly(awaitable: Awaitable[Any]) -> None:
+    close_fn = getattr(awaitable, "close", None)
+    if callable(close_fn):
+        try:
+            close_fn()
+        except Exception:
+            return
+
+
+def _run_sync_dispatch_loop() -> None:
+    global _SYNC_DISPATCH_LOOP, _SYNC_DISPATCH_THREAD_ID
+
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    _SYNC_DISPATCH_LOOP = loop
+    _SYNC_DISPATCH_THREAD_ID = threading.get_ident()
+    _SYNC_DISPATCH_READY.set()
+    try:
+        loop.run_forever()
+    finally:  # pragma: no cover - shutdown path
+        pending = asyncio.all_tasks(loop)
+        for task in pending:
+            task.cancel()
+        if pending:
+            loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+        loop.run_until_complete(loop.shutdown_asyncgens())
+        loop.close()
+
+
+def _ensure_sync_dispatch_loop() -> asyncio.AbstractEventLoop:
+    global _SYNC_DISPATCH_THREAD, _SYNC_DISPATCH_LOOP, _SYNC_DISPATCH_THREAD_ID
+
+    with _SYNC_DISPATCH_LOCK:
+        if (
+            _SYNC_DISPATCH_LOOP is not None
+            and not _SYNC_DISPATCH_LOOP.is_closed()
+            and _SYNC_DISPATCH_THREAD is not None
+            and _SYNC_DISPATCH_THREAD.is_alive()
+        ):
+            return _SYNC_DISPATCH_LOOP
+        _SYNC_DISPATCH_READY.clear()
+        _SYNC_DISPATCH_LOOP = None
+        _SYNC_DISPATCH_THREAD_ID = None
+        _SYNC_DISPATCH_THREAD = threading.Thread(
+            target=_run_sync_dispatch_loop,
+            name="run-state-sync-dispatch",
+            daemon=True,
+        )
+        _SYNC_DISPATCH_THREAD.start()
+
+    if not _SYNC_DISPATCH_READY.wait(timeout=5.0):
+        raise RuntimeError("Repository sync dispatch loop failed to start.")
+    if _SYNC_DISPATCH_LOOP is None:
+        raise RuntimeError("Repository sync dispatch loop is unavailable.")
+    return _SYNC_DISPATCH_LOOP
+
+
+def _submit_awaitable(
+    awaitable: Awaitable[_T],
+    *,
+    operation: str,
+) -> concurrent.futures.Future[_T]:
+    loop = _ensure_sync_dispatch_loop()
+    try:
+        return asyncio.run_coroutine_threadsafe(awaitable, loop)
+    except Exception:
+        _close_awaitable_quietly(awaitable)
+        raise
 
 
 def _run_sync(
@@ -46,44 +130,14 @@ def _run_sync(
     fallback: _T,
     raise_on_error: bool = False,
 ) -> _T:
-    result_box: dict[str, _T] = {"value": fallback}
-    error_box: dict[str, Exception] = {}
-
-    async def _guard() -> _T:
-        return await awaitable_factory()
-
     try:
-        asyncio.get_running_loop()
-    except RuntimeError:
-        try:
-            return asyncio.run(_guard())
-        except Exception as exc:
-            if raise_on_error:
-                raise
-            LOGGER.warning("Repository sync dispatch failed during %s: %s", operation, exc)
-            return fallback
-
-    def _worker() -> None:
-        try:
-            result_box["value"] = asyncio.run(_guard())
-        except Exception as exc:
-            error_box["exc"] = exc
-
-    try:
-        thread = threading.Thread(target=_worker, name=f"run-state-sync-{operation}", daemon=True)
-        thread.start()
-        thread.join()
+        future = _submit_awaitable(awaitable_factory(), operation=operation)
+        return future.result()
     except Exception as exc:
         if raise_on_error:
             raise
-        LOGGER.warning("Repository sync thread failed during %s: %s", operation, exc)
+        LOGGER.warning("Repository sync dispatch failed during %s: %s", operation, exc)
         return fallback
-    if "exc" in error_box:
-        if raise_on_error:
-            raise error_box["exc"]
-        LOGGER.warning("Repository sync operation failed during %s: %s", operation, error_box["exc"])
-        return fallback
-    return result_box["value"]
 
 
 async def _require_pool(*, operation: str) -> Any:
@@ -468,8 +522,8 @@ async def find_live_run_by_approval_id(approval_id: str) -> Optional[Dict[str, A
             SELECT payload
             FROM live_runs
             WHERE
-                payload @> jsonb_build_object('pending_confirmation', jsonb_build_object('approval_id', $1)) OR
-                payload @> jsonb_build_object('pending_approval', jsonb_build_object('approval_id', $1))
+                payload @> jsonb_build_object('pending_confirmation', jsonb_build_object('approval_id', $1::text)) OR
+                payload @> jsonb_build_object('pending_approval', jsonb_build_object('approval_id', $1::text))
             ORDER BY updated_at DESC
             LIMIT 1
             """,
@@ -1363,6 +1417,7 @@ async def record_outbox_delivery_failure(
     error_text: str,
     retry_delay_seconds: Optional[int],
     poison: bool = False,
+    increment_retry: bool = True,
 ) -> None:
     token = str(event_id or "").strip()
     if not token:
@@ -1373,7 +1428,7 @@ async def record_outbox_delivery_failure(
         await pool.execute(
             """
             UPDATE runtime_outbox
-            SET retry_count = COALESCE(retry_count, 0) + 1,
+            SET retry_count = COALESCE(retry_count, 0) + CASE WHEN $5::boolean THEN 1 ELSE 0 END,
                 last_delivery_error = LEFT($2, 2000),
                 last_attempted_at = NOW(),
                 last_replayed_at = NOW(),
@@ -1389,6 +1444,7 @@ async def record_outbox_delivery_failure(
             str(error_text or "").strip() or "outbox_delivery_failed",
             bool(poison),
             (None if retry_delay_seconds is None else max(0, int(retry_delay_seconds))),
+            bool(increment_retry),
         )
     except Exception as exc:
         raise RunStatePersistenceError(f"Postgres record_outbox_delivery_failure failed for {token}: {exc}") from exc
@@ -1649,6 +1705,7 @@ def sync_record_outbox_delivery_failure(
     error_text: str,
     retry_delay_seconds: Optional[int],
     poison: bool = False,
+    increment_retry: bool = True,
 ) -> None:
     _run_sync(
         lambda: record_outbox_delivery_failure(
@@ -1656,6 +1713,7 @@ def sync_record_outbox_delivery_failure(
             error_text=error_text,
             retry_delay_seconds=retry_delay_seconds,
             poison=poison,
+            increment_retry=increment_retry,
         ),
         operation="sync_record_outbox_delivery_failure",
         fallback=None,

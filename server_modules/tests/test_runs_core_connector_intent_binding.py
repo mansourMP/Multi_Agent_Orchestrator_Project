@@ -1,6 +1,8 @@
 import unittest
 from unittest.mock import patch
 
+from fastapi import HTTPException
+
 from server_modules import runs_core, runs_execution
 from server_modules.runtime_models import RunStartRequest
 
@@ -178,6 +180,70 @@ class RunsCoreConnectorIntentBindingTests(unittest.TestCase):
 
         self.assertEqual(precheck.get("tool_ids"), ["create_calendar_event"])
         self.assertEqual(precheck.get("require_confirmation"), ["create_calendar_event"])
+
+    @patch(
+        "server_modules.runs_core.list_vault_connectors",
+        return_value=[
+            {
+                "id": "cred-google",
+                "connector": "google_workspace",
+                "label": "Google Workspace",
+                "metadata": {
+                    "emailAddress": "mansurao886@gmail.com",
+                    "timezone": "UTC",
+                    "capability_verification": {
+                        "runtime_usable": True,
+                    },
+                },
+                "updated_at": "2026-03-29T10:00:00Z",
+            }
+        ],
+    )
+    def test_prepare_run_start_request_rejects_invalid_email_recipient_early(self, _list_connectors_mock):
+        req = RunStartRequest(
+            engine="orion",
+            workspace_id="default",
+            user_goal="Send an email to invalid@localhost saying hello.",
+            metadata={"source": "operator_chat", "direct_chat": True, "execution_target": "auto"},
+        )
+
+        with self.assertRaises(HTTPException) as raised:
+            runs_core._prepare_run_start_request(req)
+
+        self.assertEqual(raised.exception.status_code, 400)
+        self.assertEqual(raised.exception.detail, "Invalid email recipient for email connector action.")
+
+    @patch(
+        "server_modules.runs_core.list_vault_connectors",
+        return_value=[
+            {
+                "id": "cred-google",
+                "connector": "google_workspace",
+                "label": "Google Workspace",
+                "metadata": {
+                    "emailAddress": "mansurao886@gmail.com",
+                    "timezone": "UTC",
+                    "capability_verification": {
+                        "runtime_usable": True,
+                    },
+                },
+                "updated_at": "2026-03-29T10:00:00Z",
+            }
+        ],
+    )
+    def test_prepare_run_start_request_rejects_non_email_recipient_early(self, _list_connectors_mock):
+        req = RunStartRequest(
+            engine="orion",
+            workspace_id="default",
+            user_goal="Send an email to not-an-email saying hello.",
+            metadata={"source": "operator_chat", "direct_chat": True, "execution_target": "auto"},
+        )
+
+        with self.assertRaises(HTTPException) as raised:
+            runs_core._prepare_run_start_request(req)
+
+        self.assertEqual(raised.exception.status_code, 400)
+        self.assertEqual(raised.exception.detail, "Invalid email recipient for email connector action.")
 
 
 if __name__ == "__main__":

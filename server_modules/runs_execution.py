@@ -809,6 +809,108 @@ def _append_run_tool_policy_audit(
         run["tool_policy_audit"] = items
 
 
+def _truncate_email_preview_text(value: Any, *, limit: int = 280) -> str:
+    text = str(value or "").strip()
+    if len(text) <= limit:
+        return text
+    return f"{text[: max(0, limit - 1)].rstrip()}…"
+
+
+def _connector_tool_node_approval_metadata(
+    *,
+    node_id: str,
+    label: str,
+    tool_id: str,
+    variant: str,
+    config: Dict[str, Any],
+    evaluation: Dict[str, Any],
+) -> Dict[str, Any]:
+    metadata: Dict[str, Any] = {}
+    if str(node_id or "").strip():
+        metadata["approval_node_key"] = str(node_id).strip()
+    normalized_tool_id = normalize_action_id(tool_id)
+    if normalized_tool_id:
+        metadata["approval_actions"] = [normalized_tool_id]
+    approval_label = str(evaluation.get("approval_label") or "").strip() or label
+    if approval_label:
+        metadata["approval_labels"] = [approval_label]
+
+    if variant != "connector_action":
+        return metadata
+
+    connector_id = str(config.get("connector") or "").strip()
+    action_id = str(config.get("action_id") or "").strip()
+    target_label = str(
+        config.get("target_label")
+        or config.get("to_email")
+        or config.get("recipient")
+        or config.get("to")
+        or ""
+    ).strip()
+    if target_label:
+        metadata["target"] = target_label
+        metadata["approval_target"] = target_label
+    if connector_id:
+        metadata["connector"] = connector_id
+    if action_id:
+        metadata["connector_action"] = action_id
+        metadata["approval_actions"] = [action_id]
+    if connector_id and action_id:
+        metadata["approval_capabilities"] = [f"{connector_id}.{action_id}"]
+
+    recipient = str(
+        config.get("to_email")
+        or config.get("to")
+        or config.get("email")
+        or config.get("recipient")
+        or ""
+    ).strip()
+    if recipient and action_id in {"send_email", "draft_email", "send_message"}:
+        metadata["kind"] = "email_review"
+        metadata["target"] = recipient
+        metadata["approval_target"] = recipient
+        metadata["approval_labels"] = ["Email"]
+        metadata["email_preview"] = {
+            "recipient": recipient,
+            "subject": str(config.get("subject") or "").strip() or None,
+            "body_preview": _truncate_email_preview_text(_workflow_tool_text_input(config, "")) or None,
+            "connector": connector_id or None,
+            "action_id": action_id or None,
+            "artifact_reference": str(
+                config.get("artifact_reference")
+                or config.get("artifact_uri")
+                or config.get("summary_artifact_reference")
+                or ""
+            ).strip()
+            or None,
+        }
+
+    return metadata
+
+
+def _validate_connector_action_request(
+    *,
+    connector_id: str,
+    action_id: str,
+    config: Dict[str, Any],
+) -> None:
+    if connector_id not in {"smtp", "google_workspace", "microsoft_365"}:
+        return
+    if action_id not in {"send_email", "draft_email"}:
+        return
+    recipient = str(
+        config.get("to_email")
+        or config.get("to")
+        or config.get("email")
+        or config.get("recipient")
+        or ""
+    ).strip()
+    if not recipient:
+        raise RuntimeError(f"Connector action '{action_id}' requires a recipient email.")
+    if not run_service.is_valid_email_recipient(recipient):
+        raise RuntimeError(f"Connector action '{action_id}' requires a valid recipient email.")
+
+
 def _enqueue_local_companion_run(run_id: str, *, message: str = "Run queued for Local Companion execution.", event: str = "local_queued") -> None:
     outbox_service.enqueue_local_companion_run(
         run_id,
@@ -2352,6 +2454,8 @@ def _workflow_execute_connector_action(
         ).strip()
         if not to_email:
             raise RuntimeError("SMTP send_email requires a recipient email.")
+        if not run_service.is_valid_email_recipient(to_email):
+            raise RuntimeError("SMTP send_email requires a valid recipient email.")
         subject = str(
             config.get("subject")
             or f"Empyralist workflow: {context.get('workflow_name') or context.get('workflow_id') or 'Untitled'}"
@@ -3448,6 +3552,8 @@ def _workflow_execute_connector_action(
         ).strip()
         if not to_email:
             raise RuntimeError(f"Connector action '{action_id}' requires a recipient email.")
+        if not run_service.is_valid_email_recipient(to_email):
+            raise RuntimeError(f"Connector action '{action_id}' requires a valid recipient email.")
         subject = str(config.get("subject") or f"Empyralist workflow: {context.get('workflow_name') or context.get('workflow_id') or 'Untitled'}").strip()
         body_text = _workflow_tool_text_input(config, current_text)
         def _perform_mail_write() -> Dict[str, Any]:
@@ -4130,6 +4236,24 @@ def _execute_workflow_graph(
                         policy_metadata["raw_shell_command"] = raw_command
                     if raw_argv:
                         policy_metadata["raw_shell_argv"] = raw_argv
+                approval_metadata = (
+                    _connector_tool_node_approval_metadata(
+                        node_id=node_id,
+                        label=label,
+                        tool_id=tool_id or variant,
+                        variant=variant,
+                        config=config if isinstance(config, dict) else {},
+                        evaluation={},
+                    )
+                    if variant == "connector_action"
+                    else None
+                )
+                if variant == "connector_action":
+                    _validate_connector_action_request(
+                        connector_id=str(config.get("connector") or "").strip(),
+                        action_id=str(config.get("action_id") or "").strip(),
+                        config=config if isinstance(config, dict) else {},
+                    )
                 if tool_id:
                     evaluation = policy_service.evaluate_tool_policy_decision(
                         tool_id=tool_id,
@@ -4153,28 +4277,73 @@ def _execute_workflow_graph(
                     if decision == "deny" or decision == "blocked":
                         raise RuntimeError(f"Tool node '{label}' is blocked by runtime policy.")
                     if decision == "require_confirmation" or decision == "approval_required":
-                        update_node_state(
-                            run_id,
-                            node_id,
-                            status="waiting_human",
-                            summary=f"Confirmation required before {label}",
-                            detail={"tool_id": tool_id, "variant": variant, "evaluation": evaluation},
-                            waiting_for_approval=True,
+                        approval_metadata = _connector_tool_node_approval_metadata(
+                            node_id=node_id,
+                            label=label,
+                            tool_id=tool_id or variant,
+                            variant=variant,
+                            config=config if isinstance(config, dict) else {},
+                            evaluation=evaluation if isinstance(evaluation, dict) else {},
                         )
-                        approved = wait_for_human_decision(
-                            run_id,
-                            f"Tool node '{label}' requires confirmation before execution. Reply with Proceed to continue or Hold to stop.",
-                        )
-                        if not approved:
-                            raise RuntimeError(f"Workflow stopped before tool node '{label}'.")
-                        update_node_state(
-                            run_id,
-                            node_id,
-                            status="running",
-                            activate=True,
-                            summary=f"Executing approved tool: {label}",
-                            waiting_for_approval=False,
-                        )
+                        resolved_marker = run_service.resolved_approval_marker_for_metadata(context, approval_metadata)
+                        if isinstance(resolved_marker, dict):
+                            emit_log(
+                                log_queue,
+                                "info",
+                                "Reused persisted approval for connector action.",
+                                event="approval_reused",
+                                data={
+                                    "node_id": node_id,
+                                    "approval_id": str(resolved_marker.get("approval_id") or "").strip() or None,
+                                    "connector": approval_metadata.get("connector"),
+                                    "connector_action": approval_metadata.get("connector_action"),
+                                },
+                            )
+                            update_node_state(
+                                run_id,
+                                node_id,
+                                status="running",
+                                activate=True,
+                                summary=f"Executing approved tool: {label}",
+                                detail={
+                                    "tool_id": tool_id,
+                                    "variant": variant,
+                                    "evaluation": evaluation,
+                                    "approval_reused": True,
+                                    "approval_id": str(resolved_marker.get("approval_id") or "").strip() or None,
+                                },
+                                waiting_for_approval=False,
+                            )
+                            decision = "allow"
+                        else:
+                            update_node_state(
+                                run_id,
+                                node_id,
+                                status="waiting_human",
+                                summary=f"Confirmation required before {label}",
+                                detail={"tool_id": tool_id, "variant": variant, "evaluation": evaluation},
+                                waiting_for_approval=True,
+                            )
+                            approval_prompt = (
+                                f"Tool node '{label}' requires confirmation before execution. "
+                                "Reply with Proceed to continue or Hold to stop."
+                            )
+                            approved = wait_for_human_decision(
+                                run_id,
+                                approval_prompt,
+                                source="workflow_tool_node",
+                                metadata=approval_metadata,
+                            )
+                            if not approved:
+                                raise RuntimeError(f"Workflow stopped before tool node '{label}'.")
+                            update_node_state(
+                                run_id,
+                                node_id,
+                                status="running",
+                                activate=True,
+                                summary=f"Executing approved tool: {label}",
+                                waiting_for_approval=False,
+                            )
 
                 tool_signature_payload = {
                     "variant": variant,

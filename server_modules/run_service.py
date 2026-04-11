@@ -3,8 +3,11 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
+import hashlib
+import json
 import logging
 import queue
+import re
 import time
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 import uuid
@@ -14,6 +17,7 @@ from fastapi import HTTPException
 from server_modules.agent_turn import AgentTurnRequest, bind_agent_turn_metadata, resolve_run_start_turn_request
 from server_modules import app_bridge_service
 from server_modules.doctor_gate import build_doctor_run_gate_live
+from server_modules import execution_sandbox_service
 from server_modules import machine_lease_service
 from server_modules import outbox_service
 from server_modules.policy_service import apply_execution_route_metadata, decide_execution_target
@@ -44,6 +48,12 @@ APPROVAL_SCOPE_CONSEQUENCE = "This confirmation applies only to this pending ste
 APPROVAL_APPROVE_TOKENS = {"proceed", "approve", "yes", "y", "continue", "ok"}
 APPROVAL_REJECT_TOKENS = {"hold", "reject", "no", "n", "abort", "stop", "cancel"}
 APPROVAL_ESCALATE_TOKENS = {"escalate", "escalated"}
+SUPPORTED_RUNTIME_MODES = frozenset({"hosted_secure", "local_secure", "privileged_device"})
+LOCAL_RUNTIME_MODES = frozenset({"local_secure", "privileged_device"})
+RESOLVED_APPROVAL_MARKERS_KEY = "resolved_approval_markers"
+EMAIL_RECIPIENT_PATTERN = re.compile(
+    r"(?i)^[a-z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-z0-9-]+(?:\.[a-z0-9-]+)+$"
+)
 
 
 AUTO_DELEGATION_ROLE_RULES: Dict[str, Dict[str, Any]] = {
@@ -513,6 +523,139 @@ def clear_pending_confirmation(run: Dict[str, Any]) -> None:
     run["pending_approval"] = None
 
 
+def is_valid_email_recipient(value: Any) -> bool:
+    token = str(value or "").strip()
+    if not token:
+        return False
+    return bool(EMAIL_RECIPIENT_PATTERN.match(token))
+
+
+def _approval_marker_payload(metadata: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    if not isinstance(metadata, dict):
+        return {}
+    payload: Dict[str, Any] = {}
+    for key in (
+        "approval_node_key",
+        "connector",
+        "connector_action",
+        "target",
+        "approval_target",
+        "kind",
+    ):
+        value = metadata.get(key)
+        token = str(value or "").strip()
+        if token:
+            payload[key] = token
+    for key in ("approval_actions", "approval_capabilities", "approval_labels"):
+        values = metadata.get(key)
+        if isinstance(values, list):
+            tokens = [str(item).strip() for item in values if str(item).strip()]
+            if tokens:
+                payload[key] = tokens
+    email_preview = metadata.get("email_preview")
+    if isinstance(email_preview, dict):
+        normalized_preview = {
+            "recipient": str(email_preview.get("recipient") or "").strip() or None,
+            "subject": str(email_preview.get("subject") or "").strip() or None,
+            "body_preview": str(email_preview.get("body_preview") or "").strip() or None,
+            "connector": str(email_preview.get("connector") or "").strip() or None,
+            "action_id": str(email_preview.get("action_id") or "").strip() or None,
+            "artifact_reference": str(email_preview.get("artifact_reference") or "").strip() or None,
+        }
+        normalized_preview = {key: value for key, value in normalized_preview.items() if value}
+        if normalized_preview:
+            payload["email_preview"] = normalized_preview
+    return payload
+
+
+def approval_resolution_fingerprint(metadata: Optional[Dict[str, Any]]) -> Optional[str]:
+    payload = _approval_marker_payload(metadata)
+    if not payload:
+        return None
+    text = json.dumps(payload, sort_keys=True, ensure_ascii=True, separators=(",", ":"))
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def resolved_approval_marker_for_metadata(
+    context: Optional[Dict[str, Any]],
+    approval_metadata: Optional[Dict[str, Any]],
+) -> Optional[Dict[str, Any]]:
+    if not isinstance(context, dict):
+        return None
+    metadata = context.get("metadata") if isinstance(context.get("metadata"), dict) else {}
+    markers = metadata.get(RESOLVED_APPROVAL_MARKERS_KEY)
+    if not isinstance(markers, list):
+        return None
+    fingerprint = approval_resolution_fingerprint(approval_metadata)
+    if not fingerprint:
+        return None
+    for item in markers:
+        if not isinstance(item, dict):
+            continue
+        if str(item.get("fingerprint") or "").strip() != fingerprint:
+            continue
+        if str(item.get("decision") or "").strip().lower() != "approved":
+            continue
+        return dict(item)
+    return None
+
+
+def record_run_approval_resolution(
+    run: Dict[str, Any],
+    pending: Optional[Dict[str, Any]],
+    *,
+    decision_text: str,
+    decision_note: str,
+    approved: bool,
+    rejected: bool,
+    escalated: bool,
+) -> None:
+    if not isinstance(run, dict):
+        return
+    context = run.get("context") if isinstance(run.get("context"), dict) else {}
+    metadata = context.get("metadata") if isinstance(context.get("metadata"), dict) else {}
+    pending_payload = pending if isinstance(pending, dict) else {}
+    approval_metadata = pending_payload.get("metadata") if isinstance(pending_payload.get("metadata"), dict) else {}
+    fingerprint = approval_resolution_fingerprint(approval_metadata)
+    approval_id = str(pending_payload.get("approval_id") or "").strip() or None
+    resolved_at = str(pending_payload.get("resolved_at") or "").strip() or None
+    marker = {
+        "approval_id": approval_id,
+        "decision": ("approved" if approved else "escalated" if escalated else "rejected"),
+        "raw_decision": str(decision_text or "").strip().lower(),
+        "note": str(decision_note or "").strip() or None,
+        "approved": bool(approved),
+        "rejected": bool(rejected),
+        "escalated": bool(escalated),
+        "resolved_at": resolved_at,
+        "fingerprint": fingerprint,
+        "connector": str(approval_metadata.get("connector") or "").strip() or None,
+        "connector_action": str(approval_metadata.get("connector_action") or "").strip() or None,
+        "target": str(
+            approval_metadata.get("approval_target")
+            or approval_metadata.get("target")
+            or ""
+        ).strip()
+        or None,
+        "metadata": _approval_marker_payload(approval_metadata) or None,
+    }
+    metadata["last_approval_result"] = marker
+    if approved and fingerprint:
+        markers = metadata.get(RESOLVED_APPROVAL_MARKERS_KEY)
+        next_markers = [dict(item) for item in markers if isinstance(item, dict)] if isinstance(markers, list) else []
+        next_markers = [
+            item
+            for item in next_markers
+            if str(item.get("fingerprint") or "").strip() != fingerprint
+        ]
+        next_markers.append(marker)
+        if len(next_markers) > 50:
+            next_markers = next_markers[-50:]
+        metadata[RESOLVED_APPROVAL_MARKERS_KEY] = next_markers
+    context["metadata"] = metadata
+    run["context"] = context
+
+
 def begin_run_pending_confirmation(
     run_id: str,
     prompt: str,
@@ -687,6 +830,52 @@ def wait_for_human_response(
 ) -> Dict[str, Any]:
     run = runs_by_id[run_id]
     existing_pending = get_pending_confirmation_fn(run)
+    resume_token = run.get("_resume_confirmation_token") if isinstance(run.get("_resume_confirmation_token"), dict) else None
+    if isinstance(resume_token, dict):
+        token_prompt = str(resume_token.get("prompt") or "").strip()
+        token_decision = str(resume_token.get("decision") or "").strip()
+        if token_decision and (not token_prompt or token_prompt == str(prompt or "").strip()):
+            if not isinstance(existing_pending, dict):
+                existing_pending = {
+                    "approval_id": str(resume_token.get("approval_id") or "").strip() or "restored-approval",
+                    "correlation_id": str(resume_token.get("correlation_id") or "").strip()
+                    or approval_correlation_id_fn(
+                        str(resume_token.get("approval_id") or "").strip() or "restored-approval",
+                        run_id=run_id,
+                    ),
+                    "status": "resolved",
+                    "scope": str(resume_token.get("scope") or "once").strip() or "once",
+                    "reusable": bool(resume_token.get("reusable", False)),
+                    "prompt": token_prompt or str(prompt or "").strip(),
+                    "decision": token_decision,
+                    "note": str(resume_token.get("note") or "").strip(),
+                    "resolved_at": str(resume_token.get("resolved_at") or "").strip() or utc_now_iso_fn(),
+                }
+            elif str(existing_pending.get("status") or "").strip().lower() != "resolved":
+                existing_pending = dict(existing_pending)
+                existing_pending["status"] = "resolved"
+                existing_pending["prompt"] = str(existing_pending.get("prompt") or token_prompt or prompt).strip()
+                existing_pending["decision"] = token_decision
+                existing_pending["note"] = str(resume_token.get("note") or existing_pending.get("note") or "").strip()
+                existing_pending["resolved_at"] = (
+                    str(resume_token.get("resolved_at") or "").strip() or utc_now_iso_fn()
+                )
+                existing_pending["approval_id"] = (
+                    str(existing_pending.get("approval_id") or "").strip()
+                    or str(resume_token.get("approval_id") or "").strip()
+                    or "restored-approval"
+                )
+                existing_pending["correlation_id"] = (
+                    str(existing_pending.get("correlation_id") or "").strip()
+                    or str(resume_token.get("correlation_id") or "").strip()
+                    or approval_correlation_id_fn(
+                        str(existing_pending.get("approval_id") or "").strip() or "restored-approval",
+                        run_id=run_id,
+                    )
+                )
+            set_pending_confirmation_fn(run, existing_pending)
+            run.pop("_resume_confirmation_token", None)
+            existing_pending = get_pending_confirmation_fn(run)
     if isinstance(existing_pending, dict):
         existing_status = str(existing_pending.get("status") or "").strip().lower()
         existing_prompt = str(existing_pending.get("prompt") or "").strip()
@@ -782,7 +971,17 @@ def wait_for_human_response(
                         "resumed_after_restart": True,
                     },
                 )
+            record_run_approval_resolution(
+                run,
+                existing_pending,
+                decision_text=decision_text,
+                decision_note=decision_note,
+                approved=bool(approved),
+                rejected=bool(rejected),
+                escalated=bool(escalated),
+            )
             clear_pending_confirmation_fn(run)
+            run.pop("_resume_confirmation_token", None)
             return {
                 "approval_id": approval_id,
                 "correlation_id": correlation_id,
@@ -877,6 +1076,7 @@ def wait_for_human_response(
         pending["resolved_at"] = utc_now_iso_fn()
         pending["decision"] = decision_text
         set_pending_confirmation_fn(run, pending)
+        run.pop("_resume_confirmation_token", None)
         elapsed_ms = _elapsed_ms_between_iso(pending.get("requested_at"), pending.get("resolved_at"))
         set_run_status_fn(run_id, "executing")
         emit_log_fn(
@@ -954,6 +1154,15 @@ def wait_for_human_response(
                     "resumed_after_restart": False,
                 },
             )
+        record_run_approval_resolution(
+            run,
+            pending,
+            decision_text=decision_text,
+            decision_note=decision_note,
+            approved=bool(approved),
+            rejected=bool(rejected),
+            escalated=bool(escalated),
+        )
         clear_pending_confirmation_fn(run)
         return {
             "approval_id": approval_id,
@@ -1202,6 +1411,8 @@ def transition_live_run_status(
                 trace_id=trace_id,
             )
             if status in {"completed", "failed", "timeout"}:
+                if status == "completed" and str(previous or "").strip() != "completed":
+                    _publish_local_completion_summary_bridge(run_id, run)
                 if str(previous or "").strip() != str(status or "").strip():
                     _emit_artifact_outbox_events(
                         run_id,
@@ -1232,6 +1443,71 @@ def transition_live_run_status(
             except Exception:
                 pass
             raise
+
+
+def _publish_local_completion_summary_bridge(run_id: str, run: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    context = run.get("context") if isinstance(run.get("context"), dict) else {}
+    metadata = context.get("metadata") if isinstance(context.get("metadata"), dict) else {}
+    runtime_mode = _normalize_runtime_mode(metadata.get("runtime_mode"))
+    if runtime_mode not in LOCAL_RUNTIME_MODES:
+        return None
+    runtime_selection = _runtime_selection_payload(metadata)
+    hybrid_policy = runtime_selection.get("hybrid_policy") if isinstance(runtime_selection.get("hybrid_policy"), dict) else {}
+    summary_bridge = hybrid_policy.get("summary_bridge") if isinstance(hybrid_policy.get("summary_bridge"), dict) else {}
+    if not bool(summary_bridge.get("enabled")):
+        return None
+    allowed_payload_classes = list(summary_bridge.get("payload_classes") or [])
+    if not allowed_payload_classes:
+        return None
+
+    workspace_id = str(context.get("workspace_id") or metadata.get("workspace_id") or "default").strip() or "default"
+    summary_text = ""
+    try:
+        from server_modules import memory_service
+
+        summary_text = memory_service._run_result_summary(run)
+    except Exception:
+        summary_text = str(run.get("result") or "").strip()
+    summary_text = str(summary_text or "").strip()
+    if not summary_text:
+        return None
+
+    payload_class = ""
+    memory_layer: Optional[str] = None
+    agent_install_id = _runtime_binding_install_id(metadata)
+    if "specialist_outcome_summaries" in allowed_payload_classes and (agent_install_id or str(run_id or "").strip()):
+        payload_class = "specialist_outcome_summaries"
+    elif "bounded_local_private_summaries" in allowed_payload_classes:
+        payload_class = "bounded_local_private_summaries"
+        memory_layer = "local_private_memory"
+    else:
+        return None
+
+    try:
+        from server_modules import memory_service
+
+        return memory_service.publish_hybrid_summary_bridge_payload(
+            workspace_id,
+            payload_class=payload_class,
+            summary=summary_text,
+            memory_layer=memory_layer,
+            agent_install_id=agent_install_id,
+            run_id=str(run_id or "").strip() or None,
+            source_runtime_mode=runtime_mode,
+            last_safe=True,
+            allowed_payload_classes=allowed_payload_classes,
+        )
+    except Exception as exc:
+        LOGGER.warning(
+            "hybrid_summary_bridge_publish_failed",
+            extra={
+                "run_id": str(run_id or "").strip() or None,
+                "workspace_id": workspace_id,
+                "runtime_mode": runtime_mode,
+                "error": str(exc)[:400],
+            },
+        )
+        return None
 
 
 def build_run_routing_preview_services(
@@ -1551,6 +1827,49 @@ def load_live_runtime_state(
     sync_local_runtime_state_snapshot_fn: Callable[[], Any],
 ) -> None:
     startup_sync_fn()
+
+    local_state_pruned = False
+    with local_queue_lock:
+        pending_snapshot = list(local_pending_run_ids)
+        claimed_snapshot = {
+            run_id: dict(claim)
+            for run_id, claim in local_claimed_runs.items()
+            if isinstance(claim, dict)
+        }
+        next_pending: list[str] = []
+        seen_pending: set[str] = set()
+        for run_id in pending_snapshot:
+            run = runs_by_id.get(run_id)
+            if not isinstance(run, dict):
+                local_state_pruned = True
+                continue
+            status = str(run.get("status") or "").strip().lower()
+            if status not in {"starting", "queued_local"}:
+                local_state_pruned = True
+                continue
+            if run_id in seen_pending:
+                local_state_pruned = True
+                continue
+            seen_pending.add(run_id)
+            next_pending.append(run_id)
+        next_claimed: Dict[str, Dict[str, Any]] = {}
+        for run_id, claim in claimed_snapshot.items():
+            run = runs_by_id.get(run_id)
+            if not isinstance(run, dict):
+                local_state_pruned = True
+                continue
+            status = str(run.get("status") or "").strip().lower()
+            if status in persisted_terminal_statuses:
+                local_state_pruned = True
+                continue
+            next_claimed[run_id] = claim
+        if next_pending != pending_snapshot:
+            local_pending_run_ids[:] = next_pending
+        if next_claimed != claimed_snapshot:
+            local_claimed_runs.clear()
+            local_claimed_runs.update(next_claimed)
+    if local_state_pruned:
+        sync_local_runtime_state_snapshot_fn()
 
     run_queue_index.clear()
     for run_id, run in list(runs_by_id.items()):
@@ -3374,6 +3693,231 @@ def _hint_list(value: Any) -> Optional[List[dict]]:
     return list(value) if isinstance(value, list) else None
 
 
+def _normalize_runtime_mode(value: Any) -> Optional[str]:
+    token = str(value or "").strip().lower()
+    return token if token in SUPPORTED_RUNTIME_MODES else None
+
+
+def _runtime_binding_install_id(metadata: Dict[str, Any]) -> Optional[str]:
+    for key in ("workspace_agent_install_id", "active_agent_install_id", "master_agent_install_id"):
+        token = _hint_text(metadata.get(key))
+        if token:
+            return token
+    return None
+
+
+def _runtime_selection_payload(metadata: Dict[str, Any]) -> Dict[str, Any]:
+    return _metadata_dict(metadata.get("runtime_selection"))
+
+
+def _runtime_binding_requested(metadata: Dict[str, Any]) -> bool:
+    if _runtime_binding_install_id(metadata):
+        return True
+    if _hint_text(metadata.get("runtime_attachment_id")):
+        return True
+    if _hint_text(metadata.get("runtime_attachment_kind")):
+        return True
+    if _hint_text(metadata.get("workspace_runtime_deployment_mode")):
+        return True
+    return bool(_runtime_selection_payload(metadata))
+
+
+def _expected_runtime_mode_for_target(selected_target: str) -> str:
+    return "local_secure" if selected_target == "local_companion" else "hosted_secure"
+
+
+def _resolve_runtime_mode_from_metadata(metadata: Dict[str, Any], *, selected_target: str) -> str:
+    explicit = _normalize_runtime_mode(metadata.get("runtime_mode"))
+    if explicit:
+        if selected_target == "local_companion" and explicit not in LOCAL_RUNTIME_MODES:
+            raise HTTPException(
+                status_code=409,
+                detail="Runtime mode does not match local companion placement.",
+            )
+        if selected_target != "local_companion" and explicit in LOCAL_RUNTIME_MODES:
+            raise HTTPException(
+                status_code=409,
+                detail="Runtime mode does not match hosted placement.",
+            )
+        return explicit
+    return _expected_runtime_mode_for_target(selected_target)
+
+
+def _merge_runtime_selection_metadata(
+    metadata: Dict[str, Any],
+    *,
+    runtime_selection: Dict[str, Any],
+    runtime_mode: str,
+    selected_target: str,
+) -> Dict[str, Any]:
+    resolved = dict(metadata)
+    selected_attachment = _metadata_dict(runtime_selection.get("selected_attachment"))
+    selection_target = _hint_text(runtime_selection.get("execution_target_selected"))
+    if not selection_target:
+        raise HTTPException(status_code=409, detail="Runtime attachment selection is incomplete.")
+    if selection_target != selected_target:
+        raise HTTPException(
+            status_code=409,
+            detail="Runtime attachment selection does not match the resolved execution target.",
+        )
+    if runtime_mode in LOCAL_RUNTIME_MODES and selection_target != "local_companion":
+        raise HTTPException(
+            status_code=409,
+            detail="Local runtime mode requires a local companion attachment.",
+        )
+    if runtime_mode == "hosted_secure" and selection_target != "cloud":
+        raise HTTPException(
+            status_code=409,
+            detail="Hosted secure runtime mode requires a hosted execution attachment.",
+        )
+    attachment_id = _hint_text(selected_attachment.get("attachment_id")) or _hint_text(resolved.get("runtime_attachment_id"))
+    if not attachment_id:
+        raise HTTPException(status_code=409, detail="Runtime attachment selection is missing attachment_id.")
+    attachment_kind = _hint_text(selected_attachment.get("attachment_kind")) or _hint_text(resolved.get("runtime_attachment_kind"))
+    if not attachment_kind:
+        raise HTTPException(status_code=409, detail="Runtime attachment selection is missing attachment_kind.")
+    provided_attachment_id = _hint_text(resolved.get("runtime_attachment_id"))
+    if provided_attachment_id and provided_attachment_id != attachment_id:
+        raise HTTPException(
+            status_code=409,
+            detail="Runtime attachment metadata does not match the resolved attachment.",
+        )
+    provided_attachment_kind = _hint_text(resolved.get("runtime_attachment_kind"))
+    if provided_attachment_kind and provided_attachment_kind != attachment_kind:
+        raise HTTPException(
+            status_code=409,
+            detail="Runtime attachment kind does not match the resolved attachment.",
+        )
+    machine_target = _hint_text(runtime_selection.get("machine_target"))
+    provided_machine_target = _hint_text(resolved.get("machine_target"))
+    if runtime_mode in LOCAL_RUNTIME_MODES:
+        effective_machine_target = machine_target or provided_machine_target
+        if not effective_machine_target:
+            raise HTTPException(
+                status_code=409,
+                detail="Local runtime selection is missing machine_target.",
+            )
+        if provided_machine_target and machine_target and provided_machine_target != machine_target:
+            raise HTTPException(
+                status_code=409,
+                detail="Runtime machine target does not match the resolved attachment.",
+            )
+        resolved["machine_target"] = effective_machine_target
+    resolved["runtime_selection"] = dict(runtime_selection)
+    resolved["runtime_attachment_id"] = attachment_id
+    resolved["runtime_attachment_kind"] = attachment_kind
+    deployment_mode = _hint_text(runtime_selection.get("deployment_mode"))
+    if deployment_mode:
+        resolved["workspace_runtime_deployment_mode"] = deployment_mode
+    resolved["execution_target"] = selection_target
+    resolved["execution_target_selected"] = selection_target
+    return resolved
+
+
+def resolve_run_execution_boundary(
+    metadata: Dict[str, Any],
+    *,
+    decide_execution_target_fn: Callable[..., Dict[str, Any]],
+    apply_execution_route_metadata_fn: Callable[[Dict[str, Any], Dict[str, Any]], Dict[str, Any]],
+    schedule_id: Optional[str] = None,
+) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+    try:
+        route = decide_execution_target_fn(metadata, schedule_id=schedule_id)
+    except TypeError:
+        route = decide_execution_target_fn(metadata)
+    resolved_metadata = apply_execution_route_metadata_fn(dict(metadata), route)
+    selected_target = str(
+        route.get("selected")
+        or resolved_metadata.get("execution_target_selected")
+        or resolved_metadata.get("execution_target")
+        or ""
+    ).strip().lower() or "cloud"
+    runtime_mode = _resolve_runtime_mode_from_metadata(resolved_metadata, selected_target=selected_target)
+    runtime_selection = _runtime_selection_payload(resolved_metadata)
+    if runtime_selection:
+        resolved_metadata = _merge_runtime_selection_metadata(
+            resolved_metadata,
+            runtime_selection=runtime_selection,
+            runtime_mode=runtime_mode,
+            selected_target=selected_target,
+        )
+    elif _runtime_binding_requested(resolved_metadata) or (
+        selected_target == "local_companion" and _hint_text(resolved_metadata.get("machine_target"))
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="Runtime attachment selection is required before this run can start.",
+        )
+    resolved_metadata["runtime_mode"] = runtime_mode
+    current_scope = _metadata_dict(resolved_metadata.get("runtime_scope"))
+    if _normalize_runtime_mode(current_scope.get("mode")) == runtime_mode:
+        resolved_metadata["runtime_scope"] = current_scope
+    else:
+        resolved_metadata["runtime_scope"] = execution_sandbox_service.runtime_scope(
+            runtime_mode=runtime_mode,
+            runtime_profile=_metadata_dict(resolved_metadata.get("runtime_profile")),
+        )
+    return resolved_metadata, route
+
+
+async def resolve_turn_runtime_attachment_selection(
+    req: DurableTurnExecutionRequest,
+    *,
+    turn_request: AgentTurnRequest,
+) -> DurableTurnExecutionRequest:
+    metadata = _metadata_dict(getattr(req, "metadata", None))
+    if _runtime_selection_payload(metadata):
+        return req
+    install_id = _runtime_binding_install_id(metadata)
+    if not install_id:
+        return req
+
+    from server_modules import agent_registry_repository, runtime_attachment_service
+
+    install = await agent_registry_repository.get_workspace_agent_install_bundle(
+        install_id,
+        tenant_id=str(turn_request.tenant_id or "").strip() or None,
+        workspace_id=str(req.workspace_id or turn_request.workspace_id or "default").strip() or "default",
+    )
+    if not isinstance(install, dict):
+        raise HTTPException(status_code=404, detail="Specialist install not found.")
+    runtime_profile = install.get("runtime_profile") if isinstance(install.get("runtime_profile"), dict) else {}
+    runtime_mode = _normalize_runtime_mode(install.get("runtime_mode")) or "hosted_secure"
+    runtime_scope = execution_sandbox_service.runtime_scope(
+        runtime_mode=runtime_mode,
+        runtime_profile=runtime_profile,
+        install=install,
+    )
+    try:
+        runtime_selection = await runtime_attachment_service.resolve_install_runtime_plan(
+            tenant_id=str(turn_request.tenant_id or "").strip() or None,
+            workspace_id=str(req.workspace_id or turn_request.workspace_id or "default").strip() or "default",
+            install=install,
+            requested_machine_target=_hint_text(metadata.get("machine_target")) or _hint_text(turn_request.machine_target),
+            policy_context=_metadata_dict(turn_request.policy_context),
+        )
+    except runtime_attachment_service.RuntimeAttachmentSelectionError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+
+    metadata["runtime_mode"] = runtime_mode
+    metadata["runtime_scope"] = runtime_scope
+    metadata["runtime_selection"] = runtime_selection
+    metadata["runtime_profile_id"] = metadata.get("runtime_profile_id") or install.get("runtime_profile_id")
+    metadata["runtime_profile_label"] = metadata.get("runtime_profile_label") or runtime_profile.get("label")
+    metadata["runtime_id"] = metadata.get("runtime_id") or runtime_profile.get("runtime_id")
+    metadata["machine_id"] = metadata.get("machine_id") or runtime_profile.get("machine_id")
+    metadata["runtime_attachment_id"] = runtime_selection.get("selected_attachment", {}).get("attachment_id")
+    metadata["runtime_attachment_kind"] = runtime_selection.get("selected_attachment", {}).get("attachment_kind")
+    metadata["workspace_runtime_deployment_mode"] = runtime_selection.get("deployment_mode")
+    metadata["execution_target"] = str(runtime_selection.get("execution_target_selected") or metadata.get("execution_target") or "").strip() or None
+    metadata["execution_target_selected"] = str(runtime_selection.get("execution_target_selected") or metadata.get("execution_target_selected") or "").strip() or None
+    machine_target = _hint_text(runtime_selection.get("machine_target"))
+    if machine_target:
+        metadata["machine_target"] = machine_target
+    req.metadata = metadata
+    return req
+
+
 def build_turn_seed_from_request(
     turn_request: AgentTurnRequest,
     *,
@@ -3536,10 +4080,12 @@ def build_run_routing_preview(
     services: RunRoutingPreviewServices,
 ) -> Dict[str, Any]:
     prepared = services.prepare_run_start_request(req)
-    metadata = dict(prepared["metadata"])
+    metadata, route = resolve_run_execution_boundary(
+        dict(prepared["metadata"]),
+        decide_execution_target_fn=decide_execution_target,
+        apply_execution_route_metadata_fn=apply_execution_route_metadata,
+    )
     workflow_snapshot = prepared.get("workflow_snapshot") if isinstance(prepared.get("workflow_snapshot"), dict) else None
-    route = decide_execution_target(metadata)
-    metadata = apply_execution_route_metadata(metadata, route)
     preview_context = build_run_preview_context(
         req,
         metadata=metadata,
@@ -3955,6 +4501,35 @@ def build_delegated_child_run_request(
     child_metadata["delegated_by_role"] = delegated_by_role
     if note:
         child_metadata["delegation_note"] = note
+    for owner_key in ("owner_user_id", "owner_email", "owner_role", "owner_is_admin", "auth_type"):
+        if owner_key in child_metadata:
+            continue
+        if parent_metadata.get(owner_key) is not None:
+            child_metadata[owner_key] = parent_metadata.get(owner_key)
+    for inherited_key in (
+        "runtime_mode",
+        "runtime_scope",
+        "runtime_selection",
+        "runtime_attachment_id",
+        "runtime_attachment_kind",
+        "workspace_runtime_deployment_mode",
+        "runtime_profile_id",
+        "runtime_profile_label",
+        "runtime_id",
+        "machine_id",
+        "machine_target",
+        "root_folder_uri",
+        "folder_grants",
+        "file_mount_grants",
+        "workspace_agent_install_id",
+        "active_agent_install_id",
+        "master_agent_install_id",
+        "execution_target_selected",
+    ):
+        if inherited_key in child_metadata:
+            continue
+        if parent_metadata.get(inherited_key) is not None:
+            child_metadata[inherited_key] = parent_metadata.get(inherited_key)
     selected_target = str(
         parent_metadata.get("execution_target_selected") or parent_metadata.get("execution_target") or ""
     ).strip().lower()
@@ -4861,10 +5436,13 @@ def create_run_from_prepared_request(
     schedule_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     engine = prepared["engine"]
-    metadata = dict(prepared["metadata"])
+    metadata, route = resolve_run_execution_boundary(
+        dict(prepared["metadata"]),
+        decide_execution_target_fn=services.decide_execution_target,
+        apply_execution_route_metadata_fn=services.apply_execution_route_metadata,
+        schedule_id=schedule_id,
+    )
     workflow_snapshot = prepared.get("workflow_snapshot") if isinstance(prepared.get("workflow_snapshot"), dict) else None
-    route = services.decide_execution_target(metadata, schedule_id=schedule_id)
-    metadata = services.apply_execution_route_metadata(metadata, route)
     doctor_preflight = services.build_doctor_run_gate(
         execution_target=route["selected"],
         metadata=metadata,
@@ -4981,10 +5559,13 @@ async def execute_durable_turn_request(
     # RunStartRequest remains a compatibility input at the edges, not the primary internal shape here.
     req = build_durable_turn_execution_request(turn_request, base_request=base_request)
     req = services.stamp_request_owner(req, current_user)
+    req = await resolve_turn_runtime_attachment_selection(req, turn_request=turn_request)
     prepared = services.prepare_run_start_request(req)
-    metadata = dict(prepared["metadata"])
-    route = decide_execution_target(metadata)
-    metadata = apply_execution_route_metadata(metadata, route)
+    metadata, route = resolve_run_execution_boundary(
+        dict(prepared["metadata"]),
+        decide_execution_target_fn=decide_execution_target,
+        apply_execution_route_metadata_fn=apply_execution_route_metadata,
+    )
     doctor_preflight = await build_doctor_run_gate_live(
         execution_target=route["selected"],
         metadata=metadata,

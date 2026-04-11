@@ -1,3 +1,6 @@
+import asyncio
+import time
+import threading
 import unittest
 from unittest.mock import patch
 
@@ -366,3 +369,21 @@ class RunStateRepositoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(items[0]["partition_id"], "ws-1::install-1")
         self.assertEqual(items[0]["pending_count"], 3)
         self.assertEqual(items[0]["prewarmed_workers"], 1)
+
+
+class RunStateRepositorySyncDispatchTests(unittest.TestCase):
+    def test_dispatch_repository_call_returns_without_waiting_for_completion(self):
+        started = threading.Event()
+        release = threading.Event()
+
+        async def _blocking() -> None:
+            started.set()
+            await asyncio.to_thread(release.wait, 1.0)
+
+        started_at = time.monotonic()
+        run_state_repository.dispatch_repository_call(_blocking(), operation="test_dispatch_repository_call")
+        elapsed = time.monotonic() - started_at
+
+        self.assertLess(elapsed, 0.1)
+        self.assertTrue(started.wait(timeout=1.0))
+        release.set()

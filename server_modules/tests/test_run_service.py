@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, patch
 from fastapi import HTTPException
 
 from server_modules.agent_turn import build_agent_turn_request, build_run_start_turn_request
+from server_modules import runtime_attachment_service
 from server_modules.run_service import (
     AUTO_DELEGATION_ROLE_RULES,
     ROUTING_PROVIDER_ORDER,
@@ -243,6 +244,14 @@ class RunServiceTests(unittest.TestCase):
             "status": "waiting_for_input",
             "logs": log_queue,
             "input_queue": queue.Queue(),
+            "context": {
+                "metadata": {
+                    "connector": "google_workspace",
+                    "connector_action": "send_email",
+                    "approval_node_key": "tool_1",
+                    "approval_target": "ops@example.com",
+                }
+            },
             "pending_confirmation": {
                 "approval_id": "approval-1",
                 "correlation_id": "corr-1",
@@ -250,6 +259,12 @@ class RunServiceTests(unittest.TestCase):
                 "prompt": "Confirm send",
                 "decision": "proceed",
                 "note": "resume note",
+                "metadata": {
+                    "connector": "google_workspace",
+                    "connector_action": "send_email",
+                    "approval_node_key": "tool_1",
+                    "approval_target": "ops@example.com",
+                },
             },
             "pending_approval": {
                 "approval_id": "approval-1",
@@ -258,6 +273,12 @@ class RunServiceTests(unittest.TestCase):
                 "prompt": "Confirm send",
                 "decision": "proceed",
                 "note": "resume note",
+                "metadata": {
+                    "connector": "google_workspace",
+                    "connector_action": "send_email",
+                    "approval_node_key": "tool_1",
+                    "approval_target": "ops@example.com",
+                },
             },
             "_resume_after_confirmation_scheduled": True,
         }
@@ -286,6 +307,8 @@ class RunServiceTests(unittest.TestCase):
         self.assertIsNone(run["pending_confirmation"])
         self.assertIsNone(run["pending_approval"])
         self.assertNotIn("_resume_after_confirmation_scheduled", run)
+        self.assertEqual(run["context"]["metadata"]["last_approval_result"]["approval_id"], "approval-1")
+        self.assertEqual(run["context"]["metadata"]["resolved_approval_markers"][0]["decision"], "approved")
         self.assertEqual(emitted[0][1]["event"], "approval_received")
         self.assertEqual(emitted[1][1]["event"], "approval_resolved")
         self.assertEqual(audits[0]["stage"], "received")
@@ -302,6 +325,7 @@ class RunServiceTests(unittest.TestCase):
             "status": "waiting_for_input",
             "logs": log_queue,
             "input_queue": input_queue,
+            "context": {"metadata": {}},
         }
         emitted = []
         audits = []
@@ -314,6 +338,12 @@ class RunServiceTests(unittest.TestCase):
                 "ttl_seconds": 300,
                 "status": "waiting",
                 "prompt": "Confirm ship",
+                "metadata": {
+                    "connector": "google_workspace",
+                    "connector_action": "send_email",
+                    "approval_node_key": "tool_ship",
+                    "approval_target": "ship@example.com",
+                },
             }
             set_pending_confirmation(run, payload)
             return payload
@@ -338,6 +368,7 @@ class RunServiceTests(unittest.TestCase):
         self.assertTrue(payload["approved"])
         self.assertEqual(status_changes, [("run-approval-live", "executing")])
         self.assertIsNone(run["pending_confirmation"])
+        self.assertEqual(run["context"]["metadata"]["last_approval_result"]["approval_id"], "approval-2")
         self.assertEqual(emitted[0][1]["event"], "approval_ignored")
         self.assertEqual(emitted[1][1]["event"], "approval_received")
         self.assertEqual(emitted[2][1]["event"], "approval_resolved")
@@ -534,6 +565,166 @@ class RunServiceTests(unittest.TestCase):
         self.assertIn("archive_run:run-1:completed", repo_dispatches)
         self.assertEqual(transition_outbox[0]["to_state"], "completed")
         self.assertEqual(artifact_outbox, [])
+
+    def test_transition_live_run_status_publishes_safe_summary_bridge_for_local_completion(self):
+        run = {
+            "status": "running",
+            "_started_mono": 5.0,
+            "logs": queue.Queue(),
+            "result": "Research summary ready.",
+            "context": {
+                "workspace_id": "workspace-1",
+                "tenant_id": "tenant-1",
+                "metadata": {
+                    "trace_id": "trace-1",
+                    "runtime_mode": "local_secure",
+                    "active_agent_install_id": "install-research",
+                    "runtime_selection": {
+                        "hybrid_policy": {
+                            "summary_bridge": {
+                                "enabled": True,
+                                "payload_classes": ["specialist_outcome_summaries"],
+                            }
+                        }
+                    },
+                },
+            },
+        }
+        published = []
+
+        with patch("server_modules.run_service.run_state_repository.dispatch_repository_call", side_effect=lambda awaitable, operation: asyncio.run(awaitable)), \
+             patch("server_modules.run_service.outbox_service.emit_run_transition_event"), \
+             patch("server_modules.run_service.outbox_service.emit_artifact_created_event"), \
+             patch("server_modules.memory_service.publish_hybrid_summary_bridge_payload", side_effect=lambda *args, **kwargs: published.append((args, kwargs)) or {"record_id": "record-1"}):
+            transition_live_run_status(
+                "run-1",
+                "completed",
+                run=run,
+                now_mono=7.5,
+                now_iso="2026-04-06T00:00:00Z",
+                terminal_statuses={"completed", "failed", "timeout"},
+                local_queue_lock=__import__("threading").Lock(),
+                local_pending_run_ids=[],
+                local_claimed_runs={},
+                archive_run_if_terminal_fn=lambda run_id, payload: None,
+                remove_live_run_state_fn=lambda run_id: None,
+                sync_local_runtime_state_snapshot_fn=lambda: None,
+                persist_live_run_state_fn=lambda run_id, payload: None,
+                run_queue_index={},
+                metrics_add_fn=lambda key, value: None,
+                metrics_inc_fn=lambda key, value=1: None,
+            )
+
+        self.assertEqual(len(published), 1)
+        self.assertEqual(published[0][0][0], "workspace-1")
+        self.assertEqual(published[0][1]["payload_class"], "specialist_outcome_summaries")
+        self.assertEqual(published[0][1]["summary"], "Research summary ready.")
+        self.assertEqual(published[0][1]["agent_install_id"], "install-research")
+        self.assertEqual(published[0][1]["source_runtime_mode"], "local_secure")
+
+    def test_transition_live_run_status_skips_summary_bridge_when_not_local(self):
+        run = {
+            "status": "running",
+            "_started_mono": 5.0,
+            "logs": queue.Queue(),
+            "result": "Research summary ready.",
+            "context": {
+                "workspace_id": "workspace-1",
+                "tenant_id": "tenant-1",
+                "metadata": {
+                    "trace_id": "trace-1",
+                    "runtime_mode": "hosted_secure",
+                    "runtime_selection": {
+                        "hybrid_policy": {
+                            "summary_bridge": {
+                                "enabled": True,
+                                "payload_classes": ["specialist_outcome_summaries"],
+                            }
+                        }
+                    },
+                },
+            },
+        }
+
+        with patch("server_modules.run_service.run_state_repository.dispatch_repository_call", side_effect=lambda awaitable, operation: asyncio.run(awaitable)), \
+             patch("server_modules.run_service.outbox_service.emit_run_transition_event"), \
+             patch("server_modules.run_service.outbox_service.emit_artifact_created_event"), \
+             patch("server_modules.memory_service.publish_hybrid_summary_bridge_payload") as publish_mock:
+            transition_live_run_status(
+                "run-1",
+                "completed",
+                run=run,
+                now_mono=7.5,
+                now_iso="2026-04-06T00:00:00Z",
+                terminal_statuses={"completed", "failed", "timeout"},
+                local_queue_lock=__import__("threading").Lock(),
+                local_pending_run_ids=[],
+                local_claimed_runs={},
+                archive_run_if_terminal_fn=lambda run_id, payload: None,
+                remove_live_run_state_fn=lambda run_id: None,
+                sync_local_runtime_state_snapshot_fn=lambda: None,
+                persist_live_run_state_fn=lambda run_id, payload: None,
+                run_queue_index={},
+                metrics_add_fn=lambda key, value: None,
+                metrics_inc_fn=lambda key, value=1: None,
+            )
+
+        publish_mock.assert_not_called()
+
+    def test_transition_live_run_status_publishes_bounded_local_private_summary_bridge_when_requested(self):
+        run = {
+            "status": "running",
+            "_started_mono": 5.0,
+            "logs": queue.Queue(),
+            "result": "Local runtime summary available.",
+            "context": {
+                "workspace_id": "workspace-1",
+                "tenant_id": "tenant-1",
+                "metadata": {
+                    "trace_id": "trace-1",
+                    "runtime_mode": "local_secure",
+                    "runtime_selection": {
+                        "hybrid_policy": {
+                            "summary_bridge": {
+                                "enabled": True,
+                                "payload_classes": ["bounded_local_private_summaries"],
+                            }
+                        }
+                    },
+                },
+            },
+        }
+        published = []
+
+        with patch("server_modules.run_service.run_state_repository.dispatch_repository_call", side_effect=lambda awaitable, operation: asyncio.run(awaitable)), \
+             patch("server_modules.run_service.outbox_service.emit_run_transition_event"), \
+             patch("server_modules.run_service.outbox_service.emit_artifact_created_event"), \
+             patch("server_modules.memory_service.publish_hybrid_summary_bridge_payload", side_effect=lambda *args, **kwargs: published.append((args, kwargs)) or {"record_id": "record-1"}):
+            transition_live_run_status(
+                "run-1",
+                "completed",
+                run=run,
+                now_mono=7.5,
+                now_iso="2026-04-06T00:00:00Z",
+                terminal_statuses={"completed", "failed", "timeout"},
+                local_queue_lock=__import__("threading").Lock(),
+                local_pending_run_ids=[],
+                local_claimed_runs={},
+                archive_run_if_terminal_fn=lambda run_id, payload: None,
+                remove_live_run_state_fn=lambda run_id: None,
+                sync_local_runtime_state_snapshot_fn=lambda: None,
+                persist_live_run_state_fn=lambda run_id, payload: None,
+                run_queue_index={},
+                metrics_add_fn=lambda key, value: None,
+                metrics_inc_fn=lambda key, value=1: None,
+            )
+
+        self.assertEqual(len(published), 1)
+        self.assertEqual(published[0][0][0], "workspace-1")
+        self.assertEqual(published[0][1]["payload_class"], "bounded_local_private_summaries")
+        self.assertEqual(published[0][1]["summary"], "Local runtime summary available.")
+        self.assertEqual(published[0][1]["memory_layer"], "local_private_memory")
+        self.assertEqual(published[0][1]["source_runtime_mode"], "local_secure")
 
     def test_load_live_runtime_state_requeues_local_runs_and_fails_interrupted_cloud_runs(self):
         local_log_queue = queue.Queue()
@@ -1985,6 +2176,197 @@ class RunServiceTests(unittest.TestCase):
         self.assertEqual(execution["result"]["run_id"], "run-1")
         self.assertFalse(execution["result"]["doctor_preflight"]["blocking"])
 
+    def test_execute_durable_turn_request_allows_unbound_local_companion_runs(self):
+        run_request = RunStartRequest(
+            engine="orion",
+            workspace_id="default",
+            user_goal="Write file demo.txt",
+            metadata={
+                "owner_user_id": "user-1",
+                "execution_target": "local_companion",
+                "outcome_pack": "local-execution-v1",
+            },
+        )
+        turn_request = build_run_start_turn_request(run_request)
+        services = RunExecutionServices(
+            stamp_request_owner=lambda req, current_user: req,
+            prepare_run_start_request=lambda req: {"metadata": dict(req.metadata or {})},
+            create_run_from_request=lambda req: {"run_id": "run-local", "status": "starting"},
+        )
+
+        with patch(
+            "server_modules.run_service.decide_execution_target",
+            return_value={
+                "selected": "local_companion",
+                "requested": "local_companion",
+                "reason": "Run is pinned to local companion execution and no local runtime is online yet.",
+                "waiting_for_runtime": True,
+                "waiting_for_capacity": False,
+            },
+        ), patch(
+            "server_modules.run_service.apply_execution_route_metadata",
+            side_effect=lambda metadata, route: {
+                **metadata,
+                "execution_target_selected": route["selected"],
+                "execution_target_requested": route.get("requested"),
+                "execution_target_reason": route.get("reason"),
+                "execution_target_waiting_for_runtime": bool(route.get("waiting_for_runtime")),
+                "execution_target_waiting_for_capacity": bool(route.get("waiting_for_capacity")),
+            },
+        ), patch(
+            "server_modules.run_service.build_doctor_run_gate_live",
+            new=AsyncMock(return_value={"blocking": False, "title": "ok"}),
+        ):
+            execution = asyncio.run(
+                execute_durable_turn_request(
+                    turn_request=turn_request,
+                    current_user={"user_id": "user-1"},
+                    services=services,
+                    base_request=run_request,
+                )
+            )
+
+        self.assertEqual(execution["kind"], "durable_run")
+        self.assertEqual(execution["result"]["run_id"], "run-local")
+        self.assertFalse(execution["result"]["doctor_preflight"]["blocking"])
+
+    def test_execute_durable_turn_request_resolves_runtime_attachment_selection_for_install_runs(self):
+        run_request = RunStartRequest(
+            engine="orion",
+            workspace_id="default",
+            user_goal="Summarize inbox state",
+            provider="openai",
+            model="gpt-test",
+            metadata={
+                "owner_user_id": "user-1",
+                "active_agent_install_id": "install-1",
+                "runtime_mode": "local_secure",
+            },
+        )
+        turn_request = build_run_start_turn_request(run_request)
+        captured_metadata = {}
+
+        def _create_run(req):
+            captured_metadata.update(dict(req.metadata or {}))
+            return {"run_id": "run-1", "status": "starting"}
+
+        services = RunExecutionServices(
+            stamp_request_owner=lambda req, current_user: req,
+            prepare_run_start_request=lambda req: {"metadata": dict(req.metadata or {})},
+            create_run_from_request=_create_run,
+        )
+
+        with patch(
+            "server_modules.agent_registry_repository.get_workspace_agent_install_bundle",
+            new=AsyncMock(
+                return_value={
+                    "id": "install-1",
+                    "tenant_id": "default",
+                    "workspace_id": "default",
+                    "runtime_mode": "local_secure",
+                    "runtime_profile_id": "profile-local",
+                    "runtime_profile": {
+                        "id": "profile-local",
+                        "label": "Local Box",
+                        "runtime_class": "desktop_companion",
+                        "runtime_id": "runtime-local",
+                        "machine_id": "machine-local",
+                    },
+                }
+            ),
+        ), patch(
+            "server_modules.runtime_attachment_service.resolve_install_runtime_plan",
+            new=AsyncMock(
+                return_value={
+                    "runtime_mode": "local_secure",
+                    "deployment_mode": "hybrid",
+                    "machine_target": "machine-local",
+                    "execution_target_selected": "local_companion",
+                    "selected_attachment": {
+                        "attachment_id": "local_companion:profile-local",
+                        "attachment_kind": "local_companion",
+                    },
+                }
+            ),
+        ), patch(
+            "server_modules.run_service.decide_execution_target",
+            return_value={"selected": "local_companion"},
+        ), patch(
+            "server_modules.run_service.apply_execution_route_metadata",
+            side_effect=lambda metadata, route: {**metadata, "execution_target_selected": route["selected"]},
+        ), patch(
+            "server_modules.run_service.build_doctor_run_gate_live",
+            new=AsyncMock(return_value={"blocking": False, "title": "ok"}),
+        ):
+            execution = asyncio.run(
+                execute_durable_turn_request(
+                    turn_request=turn_request,
+                    current_user={"user_id": "user-1"},
+                    services=services,
+                    base_request=run_request,
+                )
+            )
+
+        self.assertEqual(execution["result"]["run_id"], "run-1")
+        self.assertEqual(captured_metadata["runtime_attachment_id"], "local_companion:profile-local")
+        self.assertEqual(captured_metadata["machine_target"], "machine-local")
+        self.assertEqual(captured_metadata["runtime_scope"]["mode"], "local_secure")
+        self.assertEqual(captured_metadata["runtime_selection"]["execution_target_selected"], "local_companion")
+
+    def test_execute_durable_turn_request_rejects_runtime_attachment_resolution_failure(self):
+        run_request = RunStartRequest(
+            engine="orion",
+            workspace_id="default",
+            user_goal="Summarize inbox state",
+            provider="openai",
+            model="gpt-test",
+            metadata={
+                "owner_user_id": "user-1",
+                "active_agent_install_id": "install-1",
+            },
+        )
+        turn_request = build_run_start_turn_request(run_request)
+        services = RunExecutionServices(
+            stamp_request_owner=lambda req, current_user: req,
+            prepare_run_start_request=lambda req: {"metadata": dict(req.metadata or {})},
+            create_run_from_request=lambda req: {"run_id": "run-1", "status": "starting"},
+        )
+
+        with patch(
+            "server_modules.agent_registry_repository.get_workspace_agent_install_bundle",
+            new=AsyncMock(
+                return_value={
+                    "id": "install-1",
+                    "tenant_id": "default",
+                    "workspace_id": "default",
+                    "runtime_mode": "local_secure",
+                    "runtime_profile": {"runtime_class": "desktop_companion"},
+                }
+            ),
+        ), patch(
+            "server_modules.runtime_attachment_service.resolve_install_runtime_plan",
+            new=AsyncMock(
+                side_effect=runtime_attachment_service.RuntimeAttachmentSelectionError(
+                    "No active local runtime attachment matches this specialist runtime profile."
+                )
+            ),
+        ), patch(
+            "server_modules.run_service.build_doctor_run_gate_live",
+            new=AsyncMock(return_value={"blocking": False, "title": "ok"}),
+        ):
+            with self.assertRaises(HTTPException) as error:
+                asyncio.run(
+                    execute_durable_turn_request(
+                        turn_request=turn_request,
+                        current_user={"user_id": "user-1"},
+                        services=services,
+                        base_request=run_request,
+                    )
+                )
+
+        self.assertEqual(error.exception.status_code, 409)
+        self.assertIn("No active local runtime attachment", error.exception.detail)
+
     def test_execute_durable_turn_request_raises_on_doctor_block(self):
         run_request = RunStartRequest(
             engine="orion",
@@ -2088,6 +2470,151 @@ class RunServiceTests(unittest.TestCase):
         self.assertEqual(result["route"]["selected"], "cloud")
         self.assertEqual(result["metadata"]["policy_mode"], "guarded")
         self.assertEqual(result["created_run"]["active_profile_id"], "profile-1")
+
+    def test_create_run_from_prepared_request_stamps_hosted_runtime_scope(self):
+        request = RunStartRequest(
+            engine="orion",
+            workspace_id="default",
+            user_goal="hello",
+            provider="openai",
+            model="gpt-test",
+            metadata={"owner_user_id": "user-1"},
+        )
+        prepared = {
+            "engine": "orion",
+            "metadata": {"owner_user_id": "user-1", "agent_role": "orchestrator"},
+            "workflow_snapshot": None,
+        }
+
+        result = create_run_from_prepared_request(
+            request,
+            prepared=prepared,
+            services=PreparedRunCreationServices(
+                decide_execution_target=lambda metadata, schedule_id=None: {"selected": "cloud"},
+                apply_execution_route_metadata=lambda metadata, route: {**metadata, "execution_target_selected": route["selected"]},
+                build_doctor_run_gate=lambda **kwargs: {"blocking": False},
+                agent_machine_inherited_owner_user_id=lambda owner_user_id: owner_user_id,
+                compute_tool_policy_precheck=lambda preview_context: {"blocked_count": 0},
+                apply_browser_execution_metadata=lambda metadata: None,
+                local_execution_block_prompt=lambda precheck: "blocked",
+                resolve_runtime_policy_mode=lambda metadata, selected_target=None: {"policy_mode": "guarded"},
+                agent_machine_full_trust_enabled=lambda owner_user_id: False,
+                local_execution_requires_start_confirmation=lambda metadata, precheck: False,
+                mark_local_execution_tools_approved=lambda metadata: None,
+                precheck_human_action_labels=lambda precheck, decision="require_confirmation": [],
+                local_execution_confirmation_prompt=lambda precheck: "confirm",
+                begin_run_pending_confirmation=lambda *args, **kwargs: {"id": "approval-1"},
+                create_run=lambda **kwargs: "run-hosted",
+            ),
+        )
+
+        self.assertEqual(result["metadata"]["runtime_mode"], "hosted_secure")
+        self.assertEqual(result["metadata"]["runtime_scope"]["mode"], "hosted_secure")
+        self.assertFalse(result["metadata"]["runtime_scope"]["state_layer_policy"]["cross_install_private_memory_allowed"])
+        self.assertFalse(result["metadata"]["runtime_scope"]["state_layer_policy"]["specialist_to_captain_private_access"])
+
+    def test_create_run_from_prepared_request_stamps_local_runtime_scope_from_selection(self):
+        request = RunStartRequest(
+            engine="orion",
+            workspace_id="default",
+            user_goal="hello",
+            provider="openai",
+            model="gpt-test",
+            metadata={"owner_user_id": "user-1"},
+        )
+        prepared = {
+            "engine": "orion",
+            "metadata": {
+                "owner_user_id": "user-1",
+                "agent_role": "orchestrator",
+                "runtime_mode": "local_secure",
+                "machine_target": "machine-local",
+                "runtime_selection": {
+                    "execution_target_selected": "local_companion",
+                    "machine_target": "machine-local",
+                    "deployment_mode": "hybrid",
+                    "selected_attachment": {
+                        "attachment_id": "local_companion:profile-local",
+                        "attachment_kind": "local_companion",
+                    },
+                },
+            },
+            "workflow_snapshot": None,
+        }
+
+        result = create_run_from_prepared_request(
+            request,
+            prepared=prepared,
+            services=PreparedRunCreationServices(
+                decide_execution_target=lambda metadata, schedule_id=None: {"selected": "local_companion"},
+                apply_execution_route_metadata=lambda metadata, route: {**metadata, "execution_target_selected": route["selected"]},
+                build_doctor_run_gate=lambda **kwargs: {"blocking": False},
+                agent_machine_inherited_owner_user_id=lambda owner_user_id: owner_user_id,
+                compute_tool_policy_precheck=lambda preview_context: {"blocked_count": 0},
+                apply_browser_execution_metadata=lambda metadata: None,
+                local_execution_block_prompt=lambda precheck: "blocked",
+                resolve_runtime_policy_mode=lambda metadata, selected_target=None: {"policy_mode": "guarded"},
+                agent_machine_full_trust_enabled=lambda owner_user_id: False,
+                local_execution_requires_start_confirmation=lambda metadata, precheck: False,
+                mark_local_execution_tools_approved=lambda metadata: None,
+                precheck_human_action_labels=lambda precheck, decision="require_confirmation": [],
+                local_execution_confirmation_prompt=lambda precheck: "confirm",
+                begin_run_pending_confirmation=lambda *args, **kwargs: {"id": "approval-1"},
+                create_run=lambda **kwargs: "run-local",
+            ),
+        )
+
+        self.assertEqual(result["metadata"]["runtime_mode"], "local_secure")
+        self.assertEqual(result["metadata"]["runtime_scope"]["mode"], "local_secure")
+        self.assertEqual(result["metadata"]["runtime_attachment_id"], "local_companion:profile-local")
+        self.assertEqual(result["metadata"]["machine_target"], "machine-local")
+        self.assertEqual(result["metadata"]["runtime_scope"]["state_layer_policy"]["local_private_memory_access"], "allowed_locally")
+        self.assertEqual(result["metadata"]["runtime_scope"]["state_layer_policy"]["artifacts_history"]["cross_install_exchange_mode"], "artifacts_only")
+
+    def test_create_run_from_prepared_request_rejects_unresolved_runtime_binding(self):
+        request = RunStartRequest(
+            engine="orion",
+            workspace_id="default",
+            user_goal="hello",
+            provider="openai",
+            model="gpt-test",
+            metadata={"owner_user_id": "user-1"},
+        )
+        prepared = {
+            "engine": "orion",
+            "metadata": {
+                "owner_user_id": "user-1",
+                "agent_role": "orchestrator",
+                "machine_target": "machine-local",
+            },
+            "workflow_snapshot": None,
+        }
+
+        with self.assertRaises(HTTPException) as error:
+            create_run_from_prepared_request(
+                request,
+                prepared=prepared,
+                services=PreparedRunCreationServices(
+                    decide_execution_target=lambda metadata, schedule_id=None: {"selected": "local_companion"},
+                    apply_execution_route_metadata=lambda metadata, route: {**metadata, "execution_target_selected": route["selected"]},
+                    build_doctor_run_gate=lambda **kwargs: {"blocking": False},
+                    agent_machine_inherited_owner_user_id=lambda owner_user_id: owner_user_id,
+                    compute_tool_policy_precheck=lambda preview_context: {"blocked_count": 0},
+                    apply_browser_execution_metadata=lambda metadata: None,
+                    local_execution_block_prompt=lambda precheck: "blocked",
+                    resolve_runtime_policy_mode=lambda metadata, selected_target=None: {"policy_mode": "guarded"},
+                    agent_machine_full_trust_enabled=lambda owner_user_id: False,
+                    local_execution_requires_start_confirmation=lambda metadata, precheck: False,
+                    mark_local_execution_tools_approved=lambda metadata: None,
+                    precheck_human_action_labels=lambda precheck, decision="require_confirmation": [],
+                    local_execution_confirmation_prompt=lambda precheck: "confirm",
+                    begin_run_pending_confirmation=lambda *args, **kwargs: {"id": "approval-1"},
+                    create_run=lambda **kwargs: "run-invalid",
+                ),
+            )
+
+        self.assertEqual(error.exception.status_code, 409)
+        self.assertIn("Runtime attachment selection is required", error.exception.detail)
 
     def test_create_run_result_from_prepared_request_applies_legacy_result_builder(self):
         request = RunStartRequest(engine="orion", workspace_id="default", user_goal="hello")
@@ -2460,8 +2987,25 @@ class RunServiceTests(unittest.TestCase):
                     "model": "gpt-test",
                     "credential_id": "cred-1",
                     "metadata": {
+                        "active_agent_install_id": "install-1",
+                        "runtime_mode": "local_secure",
+                        "runtime_scope": {"mode": "local_secure", "driver": "desktop_companion"},
+                        "runtime_selection": {
+                            "execution_target_selected": "local_companion",
+                            "machine_target": "machine-local",
+                            "deployment_mode": "hybrid",
+                            "selected_attachment": {
+                                "attachment_id": "local_companion:profile-local",
+                                "attachment_kind": "local_companion",
+                            },
+                        },
+                        "runtime_attachment_id": "local_companion:profile-local",
+                        "runtime_attachment_kind": "local_companion",
+                        "machine_target": "machine-local",
                         "execution_target_selected": "local_companion",
                         "trust_mode": "guarded",
+                        "owner_user_id": "user-1",
+                        "owner_email": "user@example.com",
                     },
                 },
             },
@@ -2484,6 +3028,14 @@ class RunServiceTests(unittest.TestCase):
         self.assertEqual(request.metadata["execution_target"], "local_companion")
         self.assertEqual(request.metadata["trust_mode"], "guarded")
         self.assertEqual(request.metadata["delegation_note"], "Retry after failure.")
+        self.assertEqual(request.metadata["active_agent_install_id"], "install-1")
+        self.assertEqual(request.metadata["runtime_mode"], "local_secure")
+        self.assertEqual(request.metadata["runtime_scope"]["mode"], "local_secure")
+        self.assertEqual(request.metadata["runtime_attachment_id"], "local_companion:profile-local")
+        self.assertEqual(request.metadata["runtime_attachment_kind"], "local_companion")
+        self.assertEqual(request.metadata["machine_target"], "machine-local")
+        self.assertEqual(request.metadata["owner_user_id"], "user-1")
+        self.assertEqual(request.metadata["owner_email"], "user@example.com")
         self.assertEqual(request.max_iterations, 7)
 
     def test_timeout_stale_delegated_child_runs_marks_failed_child(self):

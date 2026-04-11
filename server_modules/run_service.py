@@ -21,7 +21,7 @@ from server_modules import execution_sandbox_service
 from server_modules import machine_lease_service
 from server_modules import outbox_service
 from server_modules.policy_service import apply_execution_route_metadata, decide_execution_target
-from server_modules.run_execution_handle import attach_execution_handle, build_run_record
+from server_modules.run_execution_handle import attach_execution_handle, build_run_record, durable_run_payload
 from server_modules import run_state_repository
 from server_modules.runtime_models import RunStartRequest
 from server_modules.telemetry import get_tracer, record_reliability_latency_sample, set_span_attributes
@@ -335,16 +335,74 @@ def register_live_run(
     run_queue_index: Dict[int, str],
     metrics_inc_fn: Callable[[str, int], Any],
     persist_live_run_state_fn: Callable[[str, Dict[str, Any]], Any],
+    create_live_run_initial_fn: Optional[Callable[..., Any]] = None,
+    record_transition_fn: Optional[Callable[..., Any]] = None,
+    serialize_durable_run_payload_fn: Optional[Callable[[str, Dict[str, Any]], Dict[str, Any]]] = None,
 ) -> None:
+    state = str(run.get("status") or run.get("state") or "queued").strip() or "queued"
+    trace_id = _run_trace_id(run)
+    if callable(create_live_run_initial_fn):
+        payload_builder = serialize_durable_run_payload_fn or _serialize_run_for_durable_repository
+        initial_snapshot = payload_builder(run_id, run)
+        created = create_live_run_initial_fn(
+            run_id,
+            _run_workspace_id(run),
+            _run_tenant_id(run),
+            state,
+            initial_snapshot,
+            trace_id,
+        )
+        run["_durable_version"] = int((created or {}).get("version") or 0)
+        if (created or {}).get("registered_at"):
+            run["_durable_registered_at"] = created["registered_at"]
+        if callable(record_transition_fn):
+            record_transition_fn(
+                run_id,
+                "unknown",
+                state,
+                "runtime",
+                trace_id,
+            )
     runs_by_id[run_id] = run
     log_queue = run.get("logs")
     if log_queue is not None:
         run_queue_index[id(log_queue)] = run_id
     metrics_inc_fn("runs_started", 1)
+    if not callable(create_live_run_initial_fn):
+        try:
+            persist_live_run_state_fn(run_id, run)
+        except Exception:
+            pass
+
+
+def _json_safe_run_payload(value: Any) -> Any:
     try:
-        persist_live_run_state_fn(run_id, run)
+        return json.loads(json.dumps(value, default=str))
     except Exception:
-        pass
+        return str(value)
+
+
+def _serialize_run_for_durable_repository(run_id: str, run: Dict[str, Any]) -> Dict[str, Any]:
+    return durable_run_payload(run_id, run, json_safe=_json_safe_run_payload)
+
+
+def _run_durable_version(run: Dict[str, Any]) -> int:
+    try:
+        return max(0, int(run.get("_durable_version") or 0))
+    except Exception:
+        return 0
+
+
+def _persist_live_run_state_with_version(
+    run_id: str,
+    run: Dict[str, Any],
+    *,
+    persist_live_run_state_fn: Callable[[str, Dict[str, Any]], Any],
+) -> int:
+    current_version = _run_durable_version(run)
+    persist_live_run_state_fn(run_id, run)
+    run["_durable_version"] = current_version + 1
+    return current_version + 1
 
 
 def _run_workspace_id(run: Dict[str, Any]) -> str:
@@ -391,20 +449,31 @@ def _persist_run_repository_snapshot(
     state: str,
     trace_id: str,
 ) -> None:
+    expected_version = _run_durable_version(run)
+    payload = _serialize_run_for_durable_repository(run_id, run)
+    payload["_durable_version"] = expected_version
+    async def _write_snapshot() -> int:
+        result = await run_state_repository.update_live_run_if_version_matches(
+            run_id=run_id,
+            workspace_id=_run_workspace_id(run),
+            tenant_id=_run_tenant_id(run),
+            state=state,
+            payload=payload,
+            trace_id=trace_id,
+            expected_version=expected_version,
+        )
+        if result is None:
+            raise run_state_repository.RunStateVersionConflictError(
+                f"Durable snapshot conflict for {run_id} at version {expected_version}"
+            )
+        return int(result)
     try:
         run_state_repository.dispatch_repository_call(
-            run_state_repository.upsert_live_run(
-                run_id=run_id,
-                workspace_id=_run_workspace_id(run),
-                tenant_id=_run_tenant_id(run),
-                state=state,
-                payload=dict(run),
-                trace_id=trace_id,
-            ),
-            operation=f"upsert_live_run:{run_id}:{state}",
+            _write_snapshot(),
+            operation=f"update_live_run_if_version_matches:{run_id}:{state}:{expected_version}",
         )
     except Exception as exc:
-        LOGGER.warning("Failed to dispatch live run repository upsert for %s: %s", run_id, exc)
+        LOGGER.warning("Failed to dispatch live run repository update for %s: %s", run_id, exc)
 
 
 def _record_run_repository_transition(
@@ -656,6 +725,57 @@ def record_run_approval_resolution(
     run["context"] = context
 
 
+def _durable_approval_request_payload(
+    run_id: str,
+    run: Dict[str, Any],
+    *,
+    prompt: str,
+    approval_id: str,
+    correlation_id: str,
+    requested_at: str,
+    expires_at: str,
+    ttl_seconds: int,
+    source: str,
+    approval_actions: list[str],
+    approval_target: Optional[str],
+    safe_metadata: Dict[str, Any],
+) -> Dict[str, Any]:
+    context = run.get("context") if isinstance(run.get("context"), dict) else {}
+    context_metadata = context.get("metadata") if isinstance(context.get("metadata"), dict) else {}
+    return {
+        "approval_id": approval_id,
+        "run_id": run_id,
+        "workspace_id": _run_workspace_id(run),
+        "tenant_id": _run_tenant_id(run),
+        "owner_user_id": str(context_metadata.get("owner_user_id") or "").strip() or None,
+        "owner_email": str(context_metadata.get("owner_email") or "").strip().lower() or None,
+        "agent_role": str(context_metadata.get("agent_role") or "").strip() or None,
+        "prompt": prompt,
+        "requested_at": requested_at,
+        "expires_at": expires_at,
+        "ttl_seconds": ttl_seconds,
+        "correlation_id": correlation_id,
+        "source": source,
+        "scope": APPROVAL_SCOPE_ONCE,
+        "reusable": False,
+        "consequence": APPROVAL_SCOPE_CONSEQUENCE,
+        "actions": list(approval_actions),
+        "target": approval_target,
+        "metadata": dict(safe_metadata),
+        "email_preview": safe_metadata.get("email_preview") if isinstance(safe_metadata.get("email_preview"), dict) else None,
+        "labels": [
+            str(item or "").strip()
+            for item in (safe_metadata.get("approval_labels") if isinstance(safe_metadata.get("approval_labels"), list) else [])
+            if str(item or "").strip()
+        ],
+        "capabilities": [
+            str(item or "").strip()
+            for item in (safe_metadata.get("approval_capabilities") if isinstance(safe_metadata.get("approval_capabilities"), list) else [])
+            if str(item or "").strip()
+        ],
+    }
+
+
 def begin_run_pending_confirmation(
     run_id: str,
     prompt: str,
@@ -713,6 +833,30 @@ def begin_run_pending_confirmation(
         "target": approval_target,
         "metadata": safe_metadata,
     }
+    durable_request = run_state_repository.sync_create_or_update_approval_request(
+        run_id,
+        approval_id,
+        _durable_approval_request_payload(
+            run_id,
+            run,
+            prompt=prompt,
+            approval_id=approval_id,
+            correlation_id=correlation_id,
+            requested_at=requested_at,
+            expires_at=expires_at,
+            ttl_seconds=ttl_seconds,
+            source=source,
+            approval_actions=approval_actions,
+            approval_target=approval_target,
+            safe_metadata=safe_metadata,
+        ),
+        "system",
+        _run_trace_id(run, fallback=correlation_id),
+        metadata=safe_metadata,
+        expires_at=expires_at,
+    )
+    if isinstance(durable_request, dict):
+        payload["_durable_approval_version"] = int(durable_request.get("version") or 0)
     set_pending_confirmation(run, payload)
     try:
         outbox_service.emit_approval_requested_event(
@@ -877,6 +1021,49 @@ def wait_for_human_response(
             run.pop("_resume_confirmation_token", None)
             existing_pending = get_pending_confirmation_fn(run)
     if isinstance(existing_pending, dict):
+        approval_id = str(existing_pending.get("approval_id") or "").strip()
+        if approval_id:
+            approval_record = run_state_repository.sync_get_approval_record(approval_id)
+            if isinstance(approval_record, dict):
+                approval_decision_payload = (
+                    approval_record.get("decision_payload")
+                    if isinstance(approval_record.get("decision_payload"), dict)
+                    else {}
+                )
+                durable_status = str(approval_record.get("status") or "").strip().lower()
+                durable_resolution = str(
+                    approval_record.get("resolution")
+                    or approval_decision_payload.get("resolution")
+                    or approval_decision_payload.get("decision")
+                    or ""
+                ).strip().lower()
+                if durable_status in {"decision_submitted", "resolved", "approved", "rejected", "expired", "cancelled", "canceled", "dismissed"} and durable_resolution:
+                    hydrated_pending = dict(existing_pending)
+                    hydrated_pending["status"] = "resolved" if durable_status == "decision_submitted" else durable_status
+                    hydrated_pending["decision"] = str(
+                        hydrated_pending.get("decision")
+                        or approval_decision_payload.get("decision")
+                        or approval_decision_payload.get("resolution")
+                        or durable_resolution
+                    ).strip()
+                    hydrated_pending["note"] = str(
+                        hydrated_pending.get("note")
+                        or approval_decision_payload.get("note")
+                        or ""
+                    ).strip()
+                    hydrated_pending["resolved_at"] = str(
+                        hydrated_pending.get("resolved_at")
+                        or approval_record.get("resolved_at")
+                        or approval_record.get("updated_at")
+                        or utc_now_iso_fn()
+                    ).strip() or utc_now_iso_fn()
+                    hydrated_pending["correlation_id"] = (
+                        str(hydrated_pending.get("correlation_id") or "").strip()
+                        or str(approval_record.get("correlation_id") or "").strip()
+                        or approval_correlation_id_fn(approval_id, run_id=run_id)
+                    )
+                    set_pending_confirmation_fn(run, hydrated_pending)
+                    existing_pending = get_pending_confirmation_fn(run)
         existing_status = str(existing_pending.get("status") or "").strip().lower()
         existing_prompt = str(existing_pending.get("prompt") or "").strip()
         decision_raw_text = str(existing_pending.get("decision") or "").strip()
@@ -971,6 +1158,14 @@ def wait_for_human_response(
                         "resumed_after_restart": True,
                     },
                 )
+            run_state_repository.sync_record_approval_resolution(
+                run_id,
+                approval_id,
+                ("approved" if approved else "escalated" if escalated else "expired" if decision_text == "expired" else "rejected"),
+                "runtime",
+                correlation_id,
+                note=decision_note,
+            )
             record_run_approval_resolution(
                 run,
                 existing_pending,
@@ -1010,6 +1205,14 @@ def wait_for_human_response(
             pending["status"] = "expired"
             pending["expired_at"] = utc_now_iso_fn()
             set_pending_confirmation_fn(run, pending)
+            run_state_repository.sync_record_approval_resolution(
+                run_id,
+                approval_id,
+                "expired",
+                "system",
+                correlation_id,
+                note="Confirmation timeout reached while waiting for user decision.",
+            )
             emit_log_fn(
                 run["logs"],
                 "error",
@@ -1154,6 +1357,14 @@ def wait_for_human_response(
                     "resumed_after_restart": False,
                 },
             )
+        run_state_repository.sync_record_approval_resolution(
+            run_id,
+            approval_id,
+            ("approved" if approved else "escalated" if escalated else "rejected"),
+            "runtime",
+            correlation_id,
+            note=decision_note or str(decision_raw),
+        )
         record_run_approval_resolution(
             run,
             pending,
@@ -1221,12 +1432,18 @@ def create_live_run(
     utc_now_iso_fn: Callable[[], str],
     inject_runtime_skill_defaults_fn: Optional[Callable[[Dict[str, Any]], Any]] = None,
     compute_tool_policy_precheck_fn: Optional[Callable[[Dict[str, Any]], Dict[str, Any]]] = None,
+    create_live_run_initial_fn: Optional[Callable[..., Any]] = None,
+    record_run_transition_fn: Optional[Callable[..., Any]] = None,
     log_queue_factory: Callable[[], Any] = queue.Queue,
     input_queue_factory: Callable[[], Any] = queue.Queue,
     uuid4_fn: Callable[[], Any] = uuid.uuid4,
     utcnow_fn: Callable[[], datetime] = datetime.utcnow,
     monotonic_fn: Callable[[], float] = time.monotonic,
 ) -> str:
+    if create_live_run_initial_fn is None:
+        create_live_run_initial_fn = run_state_repository.sync_create_live_run_initial
+    if record_run_transition_fn is None:
+        record_run_transition_fn = run_state_repository.sync_record_transition
     sync_acp_manager_paths_fn(runtime_db_path=runtime_db_path)
     run_id = str(uuid4_fn())
     now = utcnow_fn().isoformat() + "Z"
@@ -1292,6 +1509,9 @@ def create_live_run(
         run_queue_index=run_queue_index,
         metrics_inc_fn=metrics_inc_fn,
         persist_live_run_state_fn=persist_live_run_state_fn,
+        create_live_run_initial_fn=create_live_run_initial_fn,
+        record_transition_fn=record_run_transition_fn,
+        serialize_durable_run_payload_fn=_serialize_run_for_durable_repository,
     )
     active_run_id = activate_live_run(
         run_id,
@@ -1433,7 +1653,11 @@ def transition_live_run_status(
                     run_queue_index.pop(id(log_queue), None)
                 remove_live_run_state_fn(run_id)
             else:
-                persist_live_run_state_fn(run_id, run)
+                _persist_live_run_state_with_version(
+                    run_id,
+                    run,
+                    persist_live_run_state_fn=persist_live_run_state_fn,
+                )
 
             if parent_run_id and status in terminal_statuses and callable(refresh_parent_delegation_state_fn):
                 refresh_parent_delegation_state_fn(parent_run_id, triggering_run_id=run_id)
@@ -1907,7 +2131,11 @@ def load_live_runtime_state(
                     actor="runtime",
                     trace_id=trace_id,
                 )
-                persist_live_run_state_fn(run_id, run)
+                _persist_live_run_state_with_version(
+                    run_id,
+                    run,
+                    persist_live_run_state_fn=persist_live_run_state_fn,
+                )
                 recovered_queue = True
                 continue
             if status in {"starting", "queued_local"}:
@@ -1926,7 +2154,11 @@ def load_live_runtime_state(
                     actor="runtime",
                     trace_id=trace_id,
                 )
-                persist_live_run_state_fn(run_id, run)
+                _persist_live_run_state_with_version(
+                    run_id,
+                    run,
+                    persist_live_run_state_fn=persist_live_run_state_fn,
+                )
                 recovered_queue = True
                 continue
             _persist_run_repository_snapshot(
@@ -1935,7 +2167,11 @@ def load_live_runtime_state(
                 state=str(run.get("status") or "").strip() or "queued",
                 trace_id=_run_trace_id(run),
             )
-            persist_live_run_state_fn(run_id, run)
+            _persist_live_run_state_with_version(
+                run_id,
+                run,
+                persist_live_run_state_fn=persist_live_run_state_fn,
+            )
             continue
         if status in {"starting", "running"}:
             emit_log_fn(
@@ -1955,7 +2191,11 @@ def load_live_runtime_state(
             state=str(run.get("status") or "").strip() or "queued",
             trace_id=_run_trace_id(run),
         )
-        persist_live_run_state_fn(run_id, run)
+        _persist_live_run_state_with_version(
+            run_id,
+            run,
+            persist_live_run_state_fn=persist_live_run_state_fn,
+        )
     if recovered_queue:
         sync_local_runtime_state_snapshot_fn()
 
@@ -4733,7 +4973,11 @@ def schedule_auto_retry_for_failed_children(
             context["metadata"] = metadata
         metadata["delegation_pending_retries"] = dict(pending_retry_state)
         if callable(persist_live_run_state_fn):
-            persist_live_run_state_fn(parent_run_id, live_parent)
+            _persist_live_run_state_with_version(
+                parent_run_id,
+                live_parent,
+                persist_live_run_state_fn=persist_live_run_state_fn,
+            )
 
     def _schedule_retry_timer(
         *,

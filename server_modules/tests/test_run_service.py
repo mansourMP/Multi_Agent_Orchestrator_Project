@@ -185,7 +185,13 @@ class RunServiceTests(unittest.TestCase):
         status_changes = []
         outbox_events = []
 
-        with patch("server_modules.run_service.outbox_service.emit_approval_requested_event", side_effect=lambda **kwargs: outbox_events.append(kwargs)):
+        with (
+            patch("server_modules.run_service.outbox_service.emit_approval_requested_event", side_effect=lambda **kwargs: outbox_events.append(kwargs)),
+            patch(
+                "server_modules.run_service.run_state_repository.sync_create_or_update_approval_request",
+                side_effect=lambda *args, **kwargs: self.assertIsNone(run.get("pending_confirmation")) or {"version": 0},
+            ),
+        ):
             payload = begin_run_pending_confirmation(
                 "run-approval-1",
                 "Confirm send",
@@ -286,21 +292,28 @@ class RunServiceTests(unittest.TestCase):
         audits = []
         status_changes = []
 
-        payload = wait_for_human_response(
-            "run-approval-resume",
-            "Confirm send",
-            runs_by_id={"run-approval-resume": run},
-            begin_run_pending_confirmation_fn=lambda *args, **kwargs: self.fail("should not begin new approval"),
-            clear_pending_confirmation_fn=clear_pending_confirmation,
-            get_pending_confirmation_fn=get_pending_confirmation,
-            set_pending_confirmation_fn=set_pending_confirmation,
-            approval_correlation_id_fn=lambda approval_id, run_id=None: f"corr:{run_id}:{approval_id}",
-            append_approval_audit_fn=lambda **kwargs: audits.append(kwargs),
-            emit_log_fn=lambda *args, **kwargs: emitted.append((args, kwargs)),
-            set_run_status_fn=lambda run_id, status: status_changes.append((run_id, status)),
-            utc_now_iso_fn=lambda: "2026-04-06T00:00:00Z",
-            approval_ttl_seconds=600,
-        )
+        with (
+            patch(
+                "server_modules.run_service.run_state_repository.sync_get_approval_record",
+                return_value={"approval_id": "approval-1", "run_id": "run-approval-resume", "status": "resolved", "resolution": "approved", "decision_payload": {"decision": "proceed", "note": "resume note"}, "resolved_at": "2026-04-06T00:00:00Z"},
+            ),
+            patch("server_modules.run_service.run_state_repository.sync_record_approval_resolution", return_value={"approval_id": "approval-1"}),
+        ):
+            payload = wait_for_human_response(
+                "run-approval-resume",
+                "Confirm send",
+                runs_by_id={"run-approval-resume": run},
+                begin_run_pending_confirmation_fn=lambda *args, **kwargs: self.fail("should not begin new approval"),
+                clear_pending_confirmation_fn=clear_pending_confirmation,
+                get_pending_confirmation_fn=get_pending_confirmation,
+                set_pending_confirmation_fn=set_pending_confirmation,
+                approval_correlation_id_fn=lambda approval_id, run_id=None: f"corr:{run_id}:{approval_id}",
+                append_approval_audit_fn=lambda **kwargs: audits.append(kwargs),
+                emit_log_fn=lambda *args, **kwargs: emitted.append((args, kwargs)),
+                set_run_status_fn=lambda run_id, status: status_changes.append((run_id, status)),
+                utc_now_iso_fn=lambda: "2026-04-06T00:00:00Z",
+                approval_ttl_seconds=600,
+            )
 
         self.assertTrue(payload["approved"])
         self.assertEqual(status_changes, [("run-approval-resume", "executing")])
@@ -348,22 +361,23 @@ class RunServiceTests(unittest.TestCase):
             set_pending_confirmation(run, payload)
             return payload
 
-        payload = wait_for_human_response(
-            "run-approval-live",
-            "Confirm ship",
-            runs_by_id={"run-approval-live": run},
-            begin_run_pending_confirmation_fn=_begin,
-            clear_pending_confirmation_fn=clear_pending_confirmation,
-            get_pending_confirmation_fn=get_pending_confirmation,
-            set_pending_confirmation_fn=set_pending_confirmation,
-            approval_correlation_id_fn=lambda approval_id, run_id=None: f"corr:{run_id}:{approval_id}",
-            append_approval_audit_fn=lambda **kwargs: audits.append(kwargs),
-            emit_log_fn=lambda *args, **kwargs: emitted.append((args, kwargs)),
-            set_run_status_fn=lambda run_id, status: status_changes.append((run_id, status)),
-            utc_now_iso_fn=lambda: "2026-04-06T00:00:00Z",
-            approval_ttl_seconds=600,
-            monotonic_fn=lambda: 10.0,
-        )
+        with patch("server_modules.run_service.run_state_repository.sync_record_approval_resolution", return_value={"approval_id": "approval-2"}):
+            payload = wait_for_human_response(
+                "run-approval-live",
+                "Confirm ship",
+                runs_by_id={"run-approval-live": run},
+                begin_run_pending_confirmation_fn=_begin,
+                clear_pending_confirmation_fn=clear_pending_confirmation,
+                get_pending_confirmation_fn=get_pending_confirmation,
+                set_pending_confirmation_fn=set_pending_confirmation,
+                approval_correlation_id_fn=lambda approval_id, run_id=None: f"corr:{run_id}:{approval_id}",
+                append_approval_audit_fn=lambda **kwargs: audits.append(kwargs),
+                emit_log_fn=lambda *args, **kwargs: emitted.append((args, kwargs)),
+                set_run_status_fn=lambda run_id, status: status_changes.append((run_id, status)),
+                utc_now_iso_fn=lambda: "2026-04-06T00:00:00Z",
+                approval_ttl_seconds=600,
+                monotonic_fn=lambda: 10.0,
+            )
 
         self.assertTrue(payload["approved"])
         self.assertEqual(status_changes, [("run-approval-live", "executing")])
@@ -405,7 +419,10 @@ class RunServiceTests(unittest.TestCase):
 
         monotonic_values = iter([100.0, 131.0])
 
-        with self.assertRaises(RuntimeError):
+        with (
+            patch("server_modules.run_service.run_state_repository.sync_record_approval_resolution", return_value={"approval_id": "approval-timeout"}),
+            self.assertRaises(RuntimeError),
+        ):
             wait_for_human_response(
                 "run-approval-timeout",
                 "Confirm send",
@@ -451,22 +468,23 @@ class RunServiceTests(unittest.TestCase):
             set_pending_confirmation(run, payload)
             return payload
 
-        payload = wait_for_human_response(
-            "run-approval-metric",
-            "Confirm",
-            runs_by_id={"run-approval-metric": run},
-            begin_run_pending_confirmation_fn=_begin,
-            clear_pending_confirmation_fn=clear_pending_confirmation,
-            get_pending_confirmation_fn=get_pending_confirmation,
-            set_pending_confirmation_fn=set_pending_confirmation,
-            approval_correlation_id_fn=lambda approval_id, run_id=None: f"corr:{run_id}:{approval_id}",
-            append_approval_audit_fn=lambda **kwargs: None,
-            emit_log_fn=lambda *args, **kwargs: None,
-            set_run_status_fn=lambda run_id, status: None,
-            utc_now_iso_fn=lambda: "2026-04-06T00:00:01Z",
-            approval_ttl_seconds=600,
-            monotonic_fn=lambda: 10.0,
-        )
+        with patch("server_modules.run_service.run_state_repository.sync_record_approval_resolution", return_value={"approval_id": "approval-3"}):
+            payload = wait_for_human_response(
+                "run-approval-metric",
+                "Confirm",
+                runs_by_id={"run-approval-metric": run},
+                begin_run_pending_confirmation_fn=_begin,
+                clear_pending_confirmation_fn=clear_pending_confirmation,
+                get_pending_confirmation_fn=get_pending_confirmation,
+                set_pending_confirmation_fn=set_pending_confirmation,
+                approval_correlation_id_fn=lambda approval_id, run_id=None: f"corr:{run_id}:{approval_id}",
+                append_approval_audit_fn=lambda **kwargs: None,
+                emit_log_fn=lambda *args, **kwargs: None,
+                set_run_status_fn=lambda run_id, status: None,
+                utc_now_iso_fn=lambda: "2026-04-06T00:00:01Z",
+                approval_ttl_seconds=600,
+                monotonic_fn=lambda: 10.0,
+            )
 
         self.assertTrue(payload["approved"])
         self.assertEqual(mock_record_latency.call_args.args[0], "approval_propagation_latency_ms")

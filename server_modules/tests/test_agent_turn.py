@@ -63,7 +63,13 @@ class AgentTurnTests(unittest.TestCase):
             "expires_at": "2099-01-01T00:00:00Z",
             "metadata": {"thread_id": "thread-1"},
             "status": "active",
-        })), patch("server_modules.agent_turn.session_service.extend_session", new=AsyncMock(return_value=None)), patch("server_modules.agent_turn.thread_service.ensure_master_thread", new=AsyncMock(return_value={"id": "thread-1"})) as ensure_thread_mock, patch("server_modules.agent_turn.thread_service.record_user_turn", new=AsyncMock(return_value={"id": "turn-user"})) as record_user_mock, patch("server_modules.agent_turn.thread_service.record_assistant_turn", new=AsyncMock(return_value={"id": "turn-assistant"})) as record_assistant_mock, patch("server_modules.turn_runtime.build_turn_execution_services", return_value={"services": "ok"}), patch("server_modules.turn_runtime.execute_agent_turn_request", new=AsyncMock(return_value={
+        })), patch("server_modules.agent_turn.session_service.extend_session", new=AsyncMock(return_value=None)), patch("server_modules.agent_turn.thread_service.ensure_master_thread", new=AsyncMock(return_value={"id": "thread-1"})) as ensure_thread_mock, patch("server_modules.agent_turn.thread_service.record_user_turn", new=AsyncMock(return_value={
+            "thread": {"id": "thread-1", "updated_at": "2026-04-12T00:00:00Z"},
+            "turn": {"id": "turn-user", "role": "user", "content": "hello world"},
+        })) as record_user_mock, patch("server_modules.agent_turn.thread_service.record_assistant_turn", new=AsyncMock(return_value={
+            "thread": {"id": "thread-1", "updated_at": "2026-04-12T00:00:01Z"},
+            "turn": {"id": "turn-assistant", "role": "assistant", "content": "done"},
+        })) as record_assistant_mock, patch("server_modules.turn_runtime.build_turn_execution_services", return_value={"services": "ok"}), patch("server_modules.turn_runtime.execute_agent_turn_request", new=AsyncMock(return_value={
             "status": "completed",
             "reply": "done",
             "run_id": "run-1",

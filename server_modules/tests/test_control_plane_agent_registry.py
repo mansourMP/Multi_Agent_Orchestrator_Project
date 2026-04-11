@@ -26,6 +26,7 @@ class ControlPlaneAgentRegistrySchemaTests(unittest.TestCase):
         schema = control_plane_repository.CONTROL_PLANE_SCHEMA_SQL
 
         for fragment in (
+            "CREATE TABLE IF NOT EXISTS governance_holds",
             "CREATE TABLE IF NOT EXISTS runtime_profiles",
             "CREATE TABLE IF NOT EXISTS agent_definitions",
             "CREATE TABLE IF NOT EXISTS agent_definition_versions",
@@ -63,6 +64,7 @@ class ControlPlaneAgentRegistrySchemaTests(unittest.TestCase):
             "CREATE INDEX IF NOT EXISTS idx_security_control_events_scope",
             "CREATE INDEX IF NOT EXISTS idx_activity_ledger_events_scope_created",
             "CREATE INDEX IF NOT EXISTS idx_activity_ledger_events_actor",
+            "CREATE INDEX IF NOT EXISTS idx_governance_holds_scope",
         ):
             self.assertIn(fragment, schema)
 
@@ -198,6 +200,78 @@ class ControlPlaneInstallIsolationTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("control_kind = $4", query)
         self.assertIn("enabled = TRUE", query)
 
+    async def test_upsert_agent_turn_returns_minimal_write_payload_without_thread_reread(self):
+        connection = AsyncMock()
+        connection.fetch = AsyncMock()
+        connection.fetchrow = AsyncMock(
+            side_effect=[
+                {
+                    "id": "turn-1",
+                    "tenant_id": "tenant-1",
+                    "workspace_id": "workspace-1",
+                    "thread_id": "thread-1",
+                    "session_id": "session-1",
+                    "request_id": "req-1",
+                    "role": "assistant",
+                    "status": "completed",
+                    "content": "done",
+                    "run_id": "run-1",
+                    "actor": {"type": "assistant"},
+                    "active_agent_install_id": "install-1",
+                    "runtime_profile_id": "runtime-1",
+                    "approvals": [],
+                    "interventions": [],
+                    "metadata": {},
+                    "created_at": "2026-04-12T00:00:00Z",
+                    "updated_at": "2026-04-12T00:00:00Z",
+                },
+                {
+                    "id": "thread-1",
+                    "tenant_id": "tenant-1",
+                    "workspace_id": "workspace-1",
+                    "owner_user_id": "user-1",
+                    "master_agent_install_id": "install-master",
+                    "channel": "web",
+                    "title": "done",
+                    "status": "active",
+                    "metadata": {},
+                    "created_at": "2026-04-12T00:00:00Z",
+                    "updated_at": "2026-04-12T00:00:00Z",
+                    "last_turn_at": "2026-04-12T00:00:00Z",
+                },
+            ]
+        )
+
+        @asynccontextmanager
+        async def fake_scoped_connection(**_kwargs):
+            yield connection
+
+        with patch("server_modules.control_plane_repository._scoped_connection", new=fake_scoped_connection):
+            payload = await control_plane_repository.upsert_agent_turn(
+                tenant_id="tenant-1",
+                workspace_id="workspace-1",
+                thread_id="thread-1",
+                session_id="session-1",
+                role="assistant",
+                content="done",
+                request_id="req-1",
+                run_id="run-1",
+                active_agent_install_id="install-1",
+                runtime_profile_id="runtime-1",
+            )
+
+        self.assertEqual(payload["turn"]["id"], "turn-1")
+        self.assertEqual(payload["thread"]["id"], "thread-1")
+        self.assertNotIn("turns", payload["thread"])
+        self.assertEqual(connection.fetchrow.await_count, 2)
+        connection.fetch.assert_not_called()
+        insert_query = connection.fetchrow.await_args_list[0].args[0]
+        update_query = connection.fetchrow.await_args_list[1].args[0]
+        self.assertIn("INSERT INTO agent_turns", insert_query)
+        self.assertIn("RETURNING *", insert_query)
+        self.assertIn("UPDATE agent_threads", update_query)
+        self.assertIn("RETURNING id, tenant_id, workspace_id", update_query)
+
     async def test_upsert_security_control_state_records_audit_event(self):
         connection = AsyncMock()
         connection.execute = AsyncMock()
@@ -328,6 +402,89 @@ class ControlPlaneInstallIsolationTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("actor_type = $5", query)
         self.assertIn("install_id = $6", query)
         self.assertIn("run_id = $7", query)
+
+    async def test_list_activity_ledger_events_supports_cursor_filters(self):
+        connection = AsyncMock()
+        connection.fetch = AsyncMock(return_value=[])
+
+        @asynccontextmanager
+        async def fake_scoped_connection(**_kwargs):
+            yield connection
+
+        with patch("server_modules.control_plane_repository._scoped_connection", new=fake_scoped_connection):
+            await control_plane_repository.list_activity_ledger_events(
+                tenant_id="tenant-1",
+                workspace_id="workspace-1",
+                since_created_at="2026-04-10T09:00:00Z",
+                since_id="aevt-1",
+                limit=20,
+            )
+
+        query = connection.fetch.await_args.args[0]
+        self.assertIn("created_at >", query)
+        self.assertIn("AND id >", query)
+        self.assertIn("ORDER BY created_at DESC, id DESC", query)
+
+    async def test_plan_governance_operation_blocks_destructive_flow_when_hold_active(self):
+        with (
+            patch(
+                "server_modules.control_plane_repository.build_governance_scope_export",
+                new=AsyncMock(return_value={"counts": {"thread_count": 3}}),
+            ),
+            patch(
+                "server_modules.control_plane_repository.list_governance_holds",
+                new=AsyncMock(
+                    return_value=[
+                        {
+                            "id": "hold-1",
+                            "hold_key": "legal-hold",
+                            "blocked_operations": ["retention_delete", "workspace_delete"],
+                            "status": "active",
+                        }
+                    ]
+                ),
+            ),
+        ):
+            result = await control_plane_repository.plan_governance_operation(
+                tenant_id="tenant-1",
+                workspace_id="workspace-1",
+                operation="workspace_delete",
+            )
+
+        self.assertTrue(result["blocked"])
+        self.assertEqual(result["status"], "blocked")
+        self.assertEqual(result["blocking_hold_ids"], ["hold-1"])
+        self.assertEqual(result["operation"], "workspace_delete")
+
+    async def test_plan_governance_operation_allows_export_under_hold(self):
+        with (
+            patch(
+                "server_modules.control_plane_repository.build_governance_scope_export",
+                new=AsyncMock(return_value={"counts": {"thread_count": 3}}),
+            ),
+            patch(
+                "server_modules.control_plane_repository.list_governance_holds",
+                new=AsyncMock(
+                    return_value=[
+                        {
+                            "id": "hold-1",
+                            "hold_key": "legal-hold",
+                            "blocked_operations": ["retention_delete", "workspace_delete", "tenant_delete"],
+                            "status": "active",
+                        }
+                    ]
+                ),
+            ),
+        ):
+            result = await control_plane_repository.plan_governance_operation(
+                tenant_id="tenant-1",
+                workspace_id="workspace-1",
+                operation="export",
+            )
+
+        self.assertFalse(result["blocked"])
+        self.assertEqual(result["status"], "ready")
+        self.assertEqual(result["blocking_hold_ids"], [])
 
 
 if __name__ == "__main__":

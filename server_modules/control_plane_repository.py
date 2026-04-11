@@ -155,6 +155,23 @@ CREATE TABLE IF NOT EXISTS agent_turns (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+CREATE TABLE IF NOT EXISTS governance_holds (
+    id TEXT PRIMARY KEY,
+    tenant_id TEXT NOT NULL,
+    workspace_id TEXT NOT NULL DEFAULT '',
+    scope_type TEXT NOT NULL,
+    scope_key TEXT NOT NULL,
+    hold_key TEXT NOT NULL,
+    reason TEXT NOT NULL DEFAULT '',
+    blocked_operations JSONB NOT NULL DEFAULT '[]'::jsonb,
+    status TEXT NOT NULL DEFAULT 'active',
+    metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    released_at TIMESTAMPTZ NULL,
+    UNIQUE(scope_type, scope_key, hold_key)
+);
+
 CREATE TABLE IF NOT EXISTS workflow_definitions (
     id TEXT PRIMARY KEY,
     tenant_id TEXT NOT NULL,
@@ -651,6 +668,7 @@ CREATE INDEX IF NOT EXISTS idx_activity_ledger_events_install ON activity_ledger
 CREATE INDEX IF NOT EXISTS idx_activity_ledger_events_app ON activity_ledger_events(tenant_id, workspace_id, app_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_activity_ledger_events_feed_query ON activity_ledger_events(tenant_id, workspace_id, detail_level, action, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_activity_ledger_events_session ON activity_ledger_events(tenant_id, workspace_id, channel, session_key, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_governance_holds_scope ON governance_holds(tenant_id, workspace_id, scope_type, status, updated_at DESC);
 CREATE UNIQUE INDEX IF NOT EXISTS uq_agent_channel_execution_leases_active_thread
     ON agent_channel_execution_leases(tenant_id, workspace_id, thread_id);
 CREATE UNIQUE INDEX IF NOT EXISTS uq_agent_channel_bindings_active_inbound_owner
@@ -1953,7 +1971,7 @@ async def upsert_agent_turn(
     async with _scoped_connection(tenant_id=resolved_tenant_id, workspace_id=resolved_workspace_id) as connection:
         if connection is None:
             return None
-        await connection.execute(
+        turn_row = await connection.fetchrow(
             """
             INSERT INTO agent_turns (
                 id, tenant_id, workspace_id, thread_id, session_id, request_id, role, status, content, run_id, actor, active_agent_install_id, runtime_profile_id, approvals, interventions, metadata, created_at, updated_at
@@ -1973,6 +1991,7 @@ async def upsert_agent_turn(
                 interventions = EXCLUDED.interventions,
                 metadata = agent_turns.metadata || EXCLUDED.metadata,
                 updated_at = EXCLUDED.updated_at
+            RETURNING *
             """,
             resolved_turn_id,
             resolved_tenant_id,
@@ -1992,7 +2011,7 @@ async def upsert_agent_turn(
             _to_json(metadata, default={}),
             now_ts,
         )
-        await connection.execute(
+        thread_row = await connection.fetchrow(
             """
             UPDATE agent_threads
             SET
@@ -2003,18 +2022,17 @@ async def upsert_agent_turn(
                     ELSE title
                 END
             WHERE id = $1
+            RETURNING id, tenant_id, workspace_id, owner_user_id, master_agent_install_id, channel, title, status, metadata, created_at, updated_at, last_turn_at
             """,
             resolved_thread_id,
             now_ts,
             build_default_thread_title(content),
             str(role or "").strip().lower(),
         )
-    return await get_agent_thread(
-        resolved_thread_id,
-        tenant_id=resolved_tenant_id,
-        workspace_id=resolved_workspace_id,
-        include_turns=True,
-    )
+    return {
+        "thread": dict(thread_row) if thread_row is not None else None,
+        "turn": dict(turn_row) if turn_row is not None else None,
+    }
 
 
 async def list_agent_turns(
@@ -2642,6 +2660,8 @@ async def list_activity_ledger_events(
     action: Optional[str] = None,
     trace_id: Optional[str] = None,
     status: Optional[str] = None,
+    since_created_at: Any = None,
+    since_id: Optional[str] = None,
     limit: int = 100,
 ) -> List[Dict[str, Any]]:
     resolved_tenant_id = _require_scope_token(tenant_id, "tenant_id")
@@ -2700,6 +2720,19 @@ async def list_activity_ledger_events(
     if status:
         params.append(str(status or "").strip().lower())
         conditions.append(f"status = ${len(params)}")
+    resolved_since_created_at = _coerce_timestamptz(since_created_at)
+    resolved_since_id = str(since_id or "").strip() or None
+    if resolved_since_created_at is not None:
+        params.append(resolved_since_created_at)
+        since_index = len(params)
+        if resolved_since_id:
+            params.append(resolved_since_id)
+            conditions.append(
+                f"(created_at > ${since_index}::timestamptz OR "
+                f"(created_at = ${since_index}::timestamptz AND id > ${len(params)}))"
+            )
+        else:
+            conditions.append(f"created_at > ${since_index}::timestamptz")
     params.append(max(1, int(limit or 100)))
     async with _scoped_connection(tenant_id=resolved_tenant_id, workspace_id=resolved_workspace_id) as connection:
         if connection is None:
@@ -2709,12 +2742,42 @@ async def list_activity_ledger_events(
             SELECT *
             FROM activity_ledger_events
             WHERE {' AND '.join(conditions)}
-            ORDER BY created_at DESC
+            ORDER BY created_at DESC, id DESC
             LIMIT ${len(params)}
             """,
             *params,
         )
     return [dict(row) for row in rows]
+
+
+async def get_activity_ledger_event(
+    *,
+    tenant_id: str,
+    workspace_id: str,
+    event_id: str,
+) -> Optional[Dict[str, Any]]:
+    resolved_tenant_id = _require_scope_token(tenant_id, "tenant_id")
+    resolved_workspace_id = _require_scope_token(workspace_id, "workspace_id")
+    resolved_event_id = str(event_id or "").strip()
+    if not resolved_event_id:
+        return None
+    async with _scoped_connection(tenant_id=resolved_tenant_id, workspace_id=resolved_workspace_id) as connection:
+        if connection is None:
+            return None
+        row = await connection.fetchrow(
+            """
+            SELECT *
+            FROM activity_ledger_events
+            WHERE tenant_id = $1
+              AND workspace_id = $2
+              AND id = $3
+            LIMIT 1
+            """,
+            resolved_tenant_id,
+            resolved_workspace_id,
+            resolved_event_id,
+        )
+    return dict(row) if row is not None else None
 
 
 async def count_agent_scheduler_wake_requests_since(
@@ -3226,3 +3289,247 @@ async def clear_security_control_state_for_tests() -> None:
             return
         await connection.execute("DELETE FROM security_control_events")
         await connection.execute("DELETE FROM security_control_states")
+
+
+def _normalize_governance_operation(value: Any) -> str:
+    return str(value or "").strip().lower()
+
+
+def _default_hold_blocked_operations() -> List[str]:
+    return ["retention_delete", "workspace_delete", "tenant_delete"]
+
+
+def _hold_blocks_operation(hold: Dict[str, Any], operation: str) -> bool:
+    normalized_operation = _normalize_governance_operation(operation)
+    if normalized_operation == "export":
+        return False
+    configured = [
+        _normalize_governance_operation(item)
+        for item in list(hold.get("blocked_operations") or [])
+        if _normalize_governance_operation(item)
+    ]
+    blocked = configured or _default_hold_blocked_operations()
+    if "*" in blocked:
+        return True
+    if normalized_operation in blocked:
+        return True
+    if normalized_operation.endswith("_delete") and "delete" in blocked:
+        return True
+    if normalized_operation == "retention_delete" and "retention" in blocked:
+        return True
+    return False
+
+
+async def upsert_governance_hold(
+    *,
+    tenant_id: str,
+    workspace_id: Optional[str] = None,
+    scope_type: str,
+    hold_key: str,
+    reason: str,
+    blocked_operations: Optional[List[str]] = None,
+    metadata: Optional[Dict[str, Any]] = None,
+    hold_id: Optional[str] = None,
+    status: str = "active",
+) -> Optional[Dict[str, Any]]:
+    resolved_tenant_id = _require_scope_token(tenant_id, "tenant_id")
+    normalized_scope_type = _normalize_governance_operation(scope_type)
+    if normalized_scope_type not in {"tenant", "workspace"}:
+        raise ValueError("scope_type must be 'tenant' or 'workspace'.")
+    resolved_workspace_id = (
+        _require_scope_token(workspace_id, "workspace_id") if normalized_scope_type == "workspace" else ""
+    )
+    scope_key = resolved_workspace_id if normalized_scope_type == "workspace" else resolved_tenant_id
+    now_ts = _utc_now_ts()
+    resolved_hold_id = str(hold_id or uuid.uuid4()).strip() or str(uuid.uuid4())
+    normalized_hold_key = _require_scope_token(hold_key, "hold_key")
+    normalized_status = _normalize_governance_operation(status) or "active"
+    operations = [
+        _normalize_governance_operation(item)
+        for item in list(blocked_operations or [])
+        if _normalize_governance_operation(item)
+    ]
+    async with _scoped_connection(bypass_rls=True) as connection:
+        if connection is None:
+            return None
+        row = await connection.fetchrow(
+            """
+            INSERT INTO governance_holds (
+                id, tenant_id, workspace_id, scope_type, scope_key, hold_key, reason, blocked_operations, status, metadata, created_at, updated_at, released_at
+            ) VALUES (
+                $1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9, $10::jsonb, $11::timestamptz, $11::timestamptz, NULL
+            )
+            ON CONFLICT (scope_type, scope_key, hold_key)
+            DO UPDATE SET
+                reason = EXCLUDED.reason,
+                blocked_operations = EXCLUDED.blocked_operations,
+                status = EXCLUDED.status,
+                metadata = governance_holds.metadata || EXCLUDED.metadata,
+                workspace_id = EXCLUDED.workspace_id,
+                updated_at = EXCLUDED.updated_at,
+                released_at = CASE WHEN EXCLUDED.status = 'active' THEN NULL ELSE governance_holds.released_at END
+            RETURNING *
+            """,
+            resolved_hold_id,
+            resolved_tenant_id,
+            resolved_workspace_id,
+            normalized_scope_type,
+            scope_key,
+            normalized_hold_key,
+            str(reason or "").strip(),
+            _to_json(operations, default=[]),
+            normalized_status,
+            _to_json(metadata, default={}),
+            now_ts,
+        )
+    return dict(row) if row is not None else None
+
+
+async def release_governance_hold(
+    *,
+    tenant_id: str,
+    hold_key: str,
+    scope_type: str,
+    workspace_id: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    resolved_tenant_id = _require_scope_token(tenant_id, "tenant_id")
+    normalized_scope_type = _normalize_governance_operation(scope_type)
+    resolved_workspace_id = (
+        _require_scope_token(workspace_id, "workspace_id") if normalized_scope_type == "workspace" else ""
+    )
+    scope_key = resolved_workspace_id if normalized_scope_type == "workspace" else resolved_tenant_id
+    now_ts = _utc_now_ts()
+    async with _scoped_connection(bypass_rls=True) as connection:
+        if connection is None:
+            return None
+        row = await connection.fetchrow(
+            """
+            UPDATE governance_holds
+            SET status = 'released', updated_at = $4::timestamptz, released_at = $4::timestamptz
+            WHERE tenant_id = $1
+              AND scope_type = $2
+              AND scope_key = $3
+              AND hold_key = $5
+            RETURNING *
+            """,
+            resolved_tenant_id,
+            normalized_scope_type,
+            scope_key,
+            now_ts,
+            _require_scope_token(hold_key, "hold_key"),
+        )
+    return dict(row) if row is not None else None
+
+
+async def list_governance_holds(
+    *,
+    tenant_id: str,
+    workspace_id: Optional[str] = None,
+    scope_type: Optional[str] = None,
+    status: str = "active",
+) -> List[Dict[str, Any]]:
+    resolved_tenant_id = _require_scope_token(tenant_id, "tenant_id")
+    resolved_workspace_id = _normalize_scope_token(workspace_id)
+    normalized_scope_type = _normalize_governance_operation(scope_type)
+    normalized_status = _normalize_governance_operation(status)
+    params: List[Any] = [resolved_tenant_id]
+    conditions = ["tenant_id = $1"]
+    if normalized_status:
+        params.append(normalized_status)
+        conditions.append(f"status = ${len(params)}")
+    if resolved_workspace_id:
+        params.append(resolved_workspace_id)
+        conditions.append(
+            f"((scope_type = 'tenant' AND scope_key = $1) OR (scope_type = 'workspace' AND workspace_id = ${len(params)}))"
+        )
+    elif normalized_scope_type:
+        params.append(normalized_scope_type)
+        conditions.append(f"scope_type = ${len(params)}")
+    async with _scoped_connection(bypass_rls=True) as connection:
+        if connection is None:
+            return []
+        rows = await connection.fetch(
+            f"""
+            SELECT *
+            FROM governance_holds
+            WHERE {' AND '.join(conditions)}
+            ORDER BY updated_at DESC, created_at DESC
+            """,
+            *params,
+        )
+    return [dict(row) for row in rows]
+
+
+async def build_governance_scope_export(
+    *,
+    tenant_id: str,
+    workspace_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    resolved_tenant_id = _require_scope_token(tenant_id, "tenant_id")
+    resolved_workspace_id = _normalize_scope_token(workspace_id)
+    async with _scoped_connection(bypass_rls=True) as connection:
+        if connection is None:
+            return {
+                "tenant_id": resolved_tenant_id,
+                "workspace_id": resolved_workspace_id or None,
+                "counts": {},
+            }
+        row = await connection.fetchrow(
+            """
+            SELECT
+                (SELECT COUNT(*) FROM workspaces WHERE tenant_id = $1 AND ($2 = '' OR workspace_id = $2)) AS workspace_count,
+                (SELECT COUNT(*) FROM workspace_memberships WHERE tenant_id = $1 AND ($2 = '' OR workspace_id = $2)) AS membership_count,
+                (SELECT COUNT(*) FROM agent_threads WHERE tenant_id = $1 AND ($2 = '' OR workspace_id = $2)) AS thread_count,
+                (SELECT COUNT(*) FROM agent_sessions WHERE tenant_id = $1 AND ($2 = '' OR workspace_id = $2)) AS session_count,
+                (SELECT COUNT(*) FROM agent_turns WHERE tenant_id = $1 AND ($2 = '' OR workspace_id = $2)) AS turn_count,
+                (SELECT COUNT(*) FROM workspace_agent_installs WHERE tenant_id = $1 AND ($2 = '' OR workspace_id = $2)) AS install_count,
+                (SELECT COUNT(*) FROM agent_channel_events WHERE tenant_id = $1 AND ($2 = '' OR workspace_id = $2)) AS channel_event_count,
+                (SELECT COUNT(*) FROM activity_ledger_events WHERE tenant_id = $1 AND ($2 = '' OR workspace_id = $2)) AS activity_ledger_event_count,
+                (SELECT COUNT(*) FROM governance_holds WHERE tenant_id = $1 AND ($2 = '' OR workspace_id = $2 OR scope_type = 'tenant')) AS governance_hold_count
+            """,
+            resolved_tenant_id,
+            resolved_workspace_id,
+        )
+    counts = dict(row) if row is not None else {}
+    return {
+        "tenant_id": resolved_tenant_id,
+        "workspace_id": resolved_workspace_id or None,
+        "counts": counts,
+    }
+
+
+async def plan_governance_operation(
+    *,
+    tenant_id: str,
+    workspace_id: Optional[str] = None,
+    operation: str,
+) -> Dict[str, Any]:
+    resolved_tenant_id = _require_scope_token(tenant_id, "tenant_id")
+    resolved_workspace_id = _normalize_scope_token(workspace_id)
+    normalized_operation = _normalize_governance_operation(operation)
+    if not normalized_operation:
+        raise ValueError("operation is required.")
+    export_scope = await build_governance_scope_export(
+        tenant_id=resolved_tenant_id,
+        workspace_id=resolved_workspace_id or None,
+    )
+    active_holds = await list_governance_holds(
+        tenant_id=resolved_tenant_id,
+        workspace_id=resolved_workspace_id or None,
+    )
+    blocking_holds = [hold for hold in active_holds if _hold_blocks_operation(hold, normalized_operation)]
+    return {
+        "tenant_id": resolved_tenant_id,
+        "workspace_id": resolved_workspace_id or None,
+        "operation": normalized_operation,
+        "status": "blocked" if blocking_holds else "ready",
+        "blocked": bool(blocking_holds),
+        "blocking_hold_ids": [str(hold.get("id") or "").strip() for hold in blocking_holds if str(hold.get("id") or "").strip()],
+        "blocking_hold_keys": [
+            str(hold.get("hold_key") or "").strip()
+            for hold in blocking_holds
+            if str(hold.get("hold_key") or "").strip()
+        ],
+        "active_holds": active_holds,
+        "export_scope": export_scope,
+    }

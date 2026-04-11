@@ -1,5 +1,7 @@
 import unittest
+from unittest.mock import patch
 
+from server_modules import entitlements_service
 from server_modules.connectors.telegram_poll_dispatch_service import TelegramPollDispatchService
 
 
@@ -184,6 +186,39 @@ class TelegramPollDispatchServiceTests(unittest.TestCase):
         self.assertTrue(result["processed"])
         self.assertEqual(result["action"], "status")
         self.assertEqual(len(messages), 1)
+
+    def test_entitlement_denial_returns_guidance_without_processing(self) -> None:
+        messages = []
+        service = self._make_service(messages=messages)
+        with patch(
+            "server_modules.connectors.telegram_poll_dispatch_service.entitlements_service.enforce_channel_surface_access_for_workspace_id",
+            side_effect=entitlements_service.EntitlementDeniedError(
+                reason="telegram_channel_unavailable",
+                message="Telegram access is not included in this workspace plan.",
+            ),
+        ):
+            result = service.handle_update(
+                entry={},
+                label="Telegram",
+                workspace_id="ws",
+                profile={"id": "profile-1"},
+                allow_from=[],
+                connector_state={},
+                connector_id="conn",
+                bot_token="token",
+                configured_chat_id="chat-1",
+                extracted_message={
+                    "message": {"text": "hello", "message_id": "msg-1"},
+                    "chat": {"id": "chat-1"},
+                    "sender": {"id": "user-1"},
+                },
+                update_id=10,
+            )
+
+        self.assertFalse(result["processed"])
+        self.assertEqual(result["reason"], "telegram_channel_unavailable")
+        self.assertEqual(len(messages), 1)
+        self.assertEqual(messages[0][1]["text"], "Telegram access is not included in this workspace plan.")
 
 
 if __name__ == "__main__":

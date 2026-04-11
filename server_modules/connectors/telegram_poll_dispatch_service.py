@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any, Callable, Dict, List
 
+from server_modules import entitlements_service
+
 
 class TelegramPollDispatchService:
     def __init__(
@@ -89,6 +91,30 @@ class TelegramPollDispatchService:
             }
 
         resolved_workspace_id = str(pair_resolution.get("workspace_id") or workspace_id).strip() or workspace_id
+        try:
+            entitlements_service.enforce_channel_surface_access_for_workspace_id(
+                "telegram",
+                workspace_id=resolved_workspace_id,
+            )
+        except entitlements_service.EntitlementDeniedError as exc:
+            if chat_id:
+                self.send_message(
+                    bot_token=bot_token,
+                    chat_id=chat_id,
+                    text=str(exc.message or "Telegram access is not included in this workspace plan."),
+                    workspace_id=resolved_workspace_id,
+                    action=str(exc.reason or "telegram_channel_unavailable"),
+                    connector_id=connector_id,
+                    parent_message_id=inbound_message_id or None,
+                    profile=profile,
+                    trace_id=f"tgent:{chat_id}:{update_id}",
+                    source_event_id=None,
+                )
+            return {
+                "handled": True,
+                "processed": False,
+                "reason": str(exc.reason or "telegram_channel_unavailable"),
+            }
 
         inbound_context = self.inbound_context_service().build_inbound_context(
             bot_token=bot_token,

@@ -1,5 +1,7 @@
 import unittest
+from unittest.mock import patch
 
+from server_modules import entitlements_service
 from server_modules.connectors.whatsapp_webhook_service import WhatsAppWebhookService
 
 
@@ -242,6 +244,40 @@ class WhatsAppWebhookServiceTests(unittest.TestCase):
         self.assertEqual(processed, [])
         self.assertEqual(started, [])
         self.assertTrue(any(evt["event_type"] == "duplicate" for evt in record_events))
+
+    def test_entitlement_denial_returns_guidance_without_run_access(self) -> None:
+        record_events = []
+        state_patches = []
+        processed = []
+        service = self._make_service(
+            record_events=record_events,
+            state_patches=state_patches,
+            processed=processed,
+            match={"entry": {"id": "entry-1"}, "secret": {"from_number": "whatsapp:+100"}, "connector_id": "conn-1", "workspace_id": "ws-1"},
+            route_message=lambda body, profile: {"action": "run", "goal": "do it"},
+        )
+
+        with patch(
+            "server_modules.connectors.whatsapp_webhook_service.entitlements_service.enforce_channel_surface_access_for_workspace_id",
+            side_effect=entitlements_service.EntitlementDeniedError(
+                reason="whatsapp_channel_unavailable",
+                message="WhatsApp access is not included in this workspace plan.",
+            ),
+        ):
+            response = service.handle_inbound(
+                {
+                    "AccountSid": "AC123",
+                    "MessageSid": "SM126",
+                    "From": "whatsapp:+100",
+                    "To": "whatsapp:+200",
+                    "Body": "run do it",
+                }
+            )
+
+        self.assertEqual(response, "WhatsApp access is not included in this workspace plan.")
+        self.assertEqual(state_patches, [])
+        self.assertEqual(processed, [])
+        self.assertTrue(any(evt["action"] == "entitlement_denied" for evt in record_events))
 
 
 if __name__ == "__main__":

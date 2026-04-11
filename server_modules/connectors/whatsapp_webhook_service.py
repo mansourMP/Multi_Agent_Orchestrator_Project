@@ -3,6 +3,8 @@ from __future__ import annotations
 from typing import Any, Callable, Dict, Optional
 from urllib.parse import parse_qs
 
+from server_modules import entitlements_service
+
 
 class WhatsAppWebhookService:
     def __init__(
@@ -201,6 +203,30 @@ class WhatsAppWebhookService:
             )
 
         resolved_workspace_id = str(pair_resolution.get("workspace_id") or workspace_id).strip() or workspace_id
+        try:
+            entitlements_service.enforce_channel_surface_access_for_workspace_id(
+                "whatsapp",
+                workspace_id=resolved_workspace_id,
+            )
+        except entitlements_service.EntitlementDeniedError as exc:
+            self.record_channel_event(
+                channel="whatsapp",
+                direction="system",
+                event_type="error",
+                text=self._event_text(str(exc.message or "WhatsApp access is unavailable.")),
+                workspace_id=resolved_workspace_id,
+                session_key=session_key,
+                session_id=session_key,
+                parent_id=message_sid or None,
+                action="entitlement_denied",
+                metadata=self._event_metadata({
+                    "connector_id": connector_id,
+                    "message_sid": message_sid,
+                    "trace_id": trace_id,
+                    "reason": str(exc.reason or "whatsapp_channel_unavailable"),
+                }),
+            )
+            return str(exc.message or "WhatsApp access is not included in this workspace plan.")
         profile = self.resolve_profile(entry)
         routed = self.route_message(body, profile)
         action = str(routed.get("action") or "ignore").strip().lower()

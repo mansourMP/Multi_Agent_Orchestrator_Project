@@ -233,6 +233,34 @@ def normalize_thread_record(record: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _history_filtered_thread_record(
+    record: Dict[str, Any],
+    *,
+    cache: dict[str, dict[str, Any]],
+) -> Optional[Dict[str, Any]]:
+    payload = normalize_thread_record(record)
+    workspace_id = str(payload.get("workspace_id") or "default").strip() or "default"
+    if not _payload_within_workspace_history_window(
+        payload=payload,
+        workspace_id=workspace_id,
+        cache=cache,
+        timestamp_keys=("last_turn_at", "updated_at", "created_at"),
+    ):
+        return None
+    payload["turns"] = [
+        turn
+        for turn in (payload.get("turns") or [])
+        if isinstance(turn, dict)
+        and _payload_within_workspace_history_window(
+            payload=turn,
+            workspace_id=workspace_id,
+            cache=cache,
+            timestamp_keys=("created_at", "updated_at"),
+        )
+    ]
+    return payload
+
+
 def _workspace_id_from_turn_payload(payload: dict[str, Any]) -> str:
     return str(payload.get("workspace_id") or "default").strip() or "default"
 
@@ -1000,7 +1028,14 @@ def register_run_routes(app) -> None:
             include_turns=bool(include_turns),
             limit=max(1, min(int(limit or 50), 200)),
         )
-        items = [normalize_thread_record(item) for item in records if isinstance(item, dict)]
+        entitlement_cache: dict[str, dict[str, Any]] = {}
+        items = [
+            normalized
+            for item in records
+            if isinstance(item, dict)
+            for normalized in [_history_filtered_thread_record(item, cache=entitlement_cache)]
+            if isinstance(normalized, dict)
+        ]
         return {
             "items": items,
             "count": len(items),
@@ -1041,4 +1076,7 @@ def register_run_routes(app) -> None:
             owner_user_id = str(record.get("owner_user_id") or "").strip()
             if owner_user_id and request_user_id and owner_user_id != request_user_id:
                 raise HTTPException(status_code=404, detail="Thread not found.")
-        return normalize_thread_record(record)
+        normalized = _history_filtered_thread_record(record, cache={})
+        if not isinstance(normalized, dict):
+            raise HTTPException(status_code=404, detail="Thread not found.")
+        return normalized

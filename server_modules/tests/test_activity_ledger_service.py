@@ -131,6 +131,46 @@ class ActivityLedgerServiceTests(unittest.TestCase):
         self.assertEqual(item["artifacts"][0]["label"], "Knowledge summary")
         self.assertEqual(item["artifacts"][0]["preview_url"], "/preview/out")
 
+    def test_list_activity_timeline_payload_applies_workspace_history_window(self) -> None:
+        with patch(
+            "server_modules.activity_ledger_service.control_plane_repository.list_activity_ledger_events",
+            new=AsyncMock(
+                return_value=[
+                    {
+                        "id": "aevt-old",
+                        "workspace_id": "workspace-1",
+                        "actor_type": "specialist",
+                        "actor_id": "install-1",
+                        "event_class": "artifact_created",
+                        "action": "artifact_created",
+                        "summary": "Old artifact.",
+                        "created_at": datetime(2026, 4, 1, 9, 0, tzinfo=timezone.utc),
+                    },
+                    {
+                        "id": "aevt-new",
+                        "workspace_id": "workspace-1",
+                        "actor_type": "specialist",
+                        "actor_id": "install-1",
+                        "event_class": "artifact_created",
+                        "action": "artifact_created",
+                        "summary": "New artifact.",
+                        "created_at": datetime(2026, 4, 10, 9, 0, tzinfo=timezone.utc),
+                    },
+                ]
+            ),
+        ), patch(
+            "server_modules.activity_ledger_service._workspace_history_cutoff_ts",
+            return_value=datetime(2026, 4, 5, tzinfo=timezone.utc).timestamp(),
+        ):
+            payload = asyncio.run(
+                activity_ledger_service.list_activity_timeline_payload(
+                    tenant_id="tenant-1",
+                    workspace_id="workspace-1",
+                )
+            )
+
+        self.assertEqual([item["id"] for item in payload["items"]], ["aevt-new"])
+
     def test_list_sage_recent_activity_payload_groups_by_class(self) -> None:
         created_at = datetime(2026, 4, 10, 9, 0, tzinfo=timezone.utc)
         with patch(
@@ -204,6 +244,46 @@ class ActivityLedgerServiceTests(unittest.TestCase):
         self.assertEqual(payload["summary"]["review_required_count"], 1)
         self.assertEqual(payload["items"][0]["created_at"], "2026-04-10T10:00:00Z")
         self.assertEqual(payload["items"][0]["artifacts"][0]["label"], "Out")
+
+    def test_list_sage_recent_activity_payload_applies_workspace_history_window(self) -> None:
+        with patch(
+            "server_modules.activity_ledger_service.control_plane_repository.list_activity_ledger_events",
+            new=AsyncMock(
+                return_value=[
+                    {
+                        "id": "aevt-old",
+                        "workspace_id": "workspace-1",
+                        "actor_type": "sage",
+                        "actor_id": "install-sage",
+                        "event_class": "delegation",
+                        "action": "event_trigger",
+                        "summary": "Old event.",
+                        "created_at": datetime(2026, 4, 1, 9, 0, tzinfo=timezone.utc),
+                    },
+                    {
+                        "id": "aevt-new",
+                        "workspace_id": "workspace-1",
+                        "actor_type": "sage",
+                        "actor_id": "install-sage",
+                        "event_class": "memory_update",
+                        "action": "note_changed",
+                        "summary": "New event.",
+                        "created_at": datetime(2026, 4, 10, 9, 0, tzinfo=timezone.utc),
+                    },
+                ]
+            ),
+        ), patch(
+            "server_modules.activity_ledger_service._workspace_history_cutoff_ts",
+            return_value=datetime(2026, 4, 5, tzinfo=timezone.utc).timestamp(),
+        ):
+            payload = asyncio.run(
+                activity_ledger_service.list_sage_recent_activity_payload(
+                    tenant_id="tenant-1",
+                    workspace_id="workspace-1",
+                )
+            )
+
+        self.assertEqual([item["id"] for item in payload["items"]], ["aevt-new"])
 
 
 if __name__ == "__main__":

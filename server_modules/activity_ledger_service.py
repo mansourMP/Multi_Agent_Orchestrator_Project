@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from server_modules import control_plane_repository
+from server_modules import entitlements_service
 
 
 DETAIL_LEVELS = {"feed_summary", "timeline_detail", "audit_reference"}
@@ -101,6 +102,44 @@ def _iso_ts(value: Any) -> Optional[str]:
         return value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
     token = str(value or "").strip()
     return token or None
+
+
+def _utc_now_ts() -> float:
+    return datetime.now(timezone.utc).timestamp()
+
+
+def _payload_timestamp_seconds(payload: Dict[str, Any], *keys: str) -> Optional[float]:
+    for key in keys:
+        value = payload.get(key)
+        if isinstance(value, datetime):
+            normalized = value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
+            return normalized.timestamp()
+        token = str(value or "").strip()
+        if not token:
+            continue
+        normalized = token[:-1] + "+00:00" if token.endswith("Z") else token
+        try:
+            parsed = datetime.fromisoformat(normalized)
+        except ValueError:
+            continue
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed.timestamp()
+    return None
+
+
+def _workspace_history_cutoff_ts(workspace_id: str) -> Optional[float]:
+    token = str(workspace_id or "default").strip() or "default"
+    return entitlements_service.history_window_cutoff_ts_for_workspace_id(
+        workspace_id=token,
+        now_ts=_utc_now_ts(),
+    )
+
+
+def _row_within_workspace_history_window(row: Dict[str, Any], *, workspace_id: str) -> bool:
+    cutoff_ts = _workspace_history_cutoff_ts(workspace_id)
+    event_ts = _payload_timestamp_seconds(row, "created_at", "updated_at")
+    return cutoff_ts is None or event_ts is None or event_ts >= cutoff_ts
 
 
 def _row_metadata(row: Dict[str, Any]) -> Dict[str, Any]:
@@ -373,6 +412,11 @@ async def list_activity_timeline_payload(
         thread_id=str(thread_id or "").strip() or None,
         limit=max(1, min(int(limit or 80), 500)),
     )
+    rows = [
+        row
+        for row in rows
+        if isinstance(row, dict) and _row_within_workspace_history_window(row, workspace_id=workspace_id)
+    ]
     items = [_project_timeline_item(row) for row in rows]
     by_class: Dict[str, int] = {}
     review_required_count = 0
@@ -405,6 +449,11 @@ async def list_sage_recent_activity_payload(
         detail_levels=["feed_summary", "timeline_detail"],
         limit=max(1, min(int(limit or 12), 50)),
     )
+    rows = [
+        row
+        for row in rows
+        if isinstance(row, dict) and _row_within_workspace_history_window(row, workspace_id=workspace_id)
+    ]
     items = [
         {
             "id": str(row.get("id") or "").strip() or None,

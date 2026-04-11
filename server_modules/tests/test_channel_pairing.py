@@ -10,6 +10,7 @@ import server_modules.auth as auth_module
 import server_modules.channel_pairing_service as channel_pairing_service_module
 import server_modules.control_plane_repository as control_plane_repository_module
 import server_modules.db as db_module
+import server_modules.entitlements_service as entitlements_service_module
 import server_modules.jwt_secret as jwt_secret_module
 
 
@@ -192,3 +193,30 @@ def test_list_and_revoke_channel_links(monkeypatch: pytest.MonkeyPatch, tmp_path
         all_links = pairing_module.list_authenticated_channel_links(current_user, include_revoked=True)
         assert len(all_links["links"]) == 1
         assert all_links["links"][0]["status"] == "revoked"
+
+
+def test_pairing_intent_rejects_disabled_channel_provider(monkeypatch: pytest.MonkeyPatch, tmp_path):
+    with _isolated_modules(monkeypatch, tmp_path) as (auth, pairing_module, _):
+        created = auth.register_user("pairing.disabled@example.com", "password-123", name="Disabled Pairing")
+        current_user = _current_user(auth, created["token"])
+
+        monkeypatch.setattr(
+            pairing_module.entitlements_service,
+            "enforce_channel_surface_access_for_workspace_id",
+            lambda provider, *, workspace_id, workspace=None, install=None: (_ for _ in ()).throw(
+                entitlements_service_module.EntitlementDeniedError(
+                    reason="telegram_channel_unavailable",
+                    message="Telegram access is not included in this workspace plan.",
+                )
+            ),
+        )
+
+        with pytest.raises(pairing_module.HTTPException) as excinfo:
+            pairing_module.create_authenticated_channel_pairing_intent(
+                current_user,
+                provider="telegram",
+                workspace_id="default",
+            )
+
+        assert excinfo.value.status_code == 403
+        assert excinfo.value.detail == "Telegram access is not included in this workspace plan."

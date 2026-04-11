@@ -657,6 +657,139 @@ class RuntimeRunsApiCanonicalRouteTests(unittest.TestCase):
 
         self.assertEqual([item["run_id"] for item in payload["items"]], ["run-new"])
 
+    def test_threads_apply_workspace_history_window(self):
+        fake_server = types.ModuleType("server")
+        fake_server.require_api_key = object()
+        fake_server.require_admin_api_key = object()
+        fake_server.ORION_SINGLE_AGENT_MODE = False
+        fake_server.runs = {}
+        fake_server.iter_logs_for_run = lambda run_id: []
+        fake_server._get_replay_payload = lambda run_id: {}
+
+        async def _fake_list_threads(*, workspace_id, tenant_id=None, owner_user_id=None, include_turns=False, limit=50):
+            turns_new = [
+                {
+                    "id": "turn-old",
+                    "tenant_id": tenant_id or "default",
+                    "workspace_id": workspace_id,
+                    "thread_id": "thread-new",
+                    "role": "user",
+                    "content": "old",
+                    "created_at": "2026-04-01T00:00:00Z",
+                    "updated_at": "2026-04-01T00:00:00Z",
+                },
+                {
+                    "id": "turn-new",
+                    "tenant_id": tenant_id or "default",
+                    "workspace_id": workspace_id,
+                    "thread_id": "thread-new",
+                    "role": "assistant",
+                    "content": "new",
+                    "created_at": "2026-04-10T00:00:00Z",
+                    "updated_at": "2026-04-10T00:00:00Z",
+                },
+            ] if include_turns else []
+            return [
+                {
+                    "id": "thread-old",
+                    "tenant_id": tenant_id or "default",
+                    "workspace_id": workspace_id,
+                    "owner_user_id": owner_user_id or "user-1",
+                    "channel": "web",
+                    "title": "old thread",
+                    "status": "active",
+                    "metadata": {},
+                    "created_at": "2026-04-01T00:00:00Z",
+                    "updated_at": "2026-04-01T00:00:00Z",
+                    "last_turn_at": "2026-04-01T00:00:00Z",
+                    "turns": [],
+                },
+                {
+                    "id": "thread-new",
+                    "tenant_id": tenant_id or "default",
+                    "workspace_id": workspace_id,
+                    "owner_user_id": owner_user_id or "user-1",
+                    "channel": "web",
+                    "title": "new thread",
+                    "status": "active",
+                    "metadata": {},
+                    "created_at": "2026-04-10T00:00:00Z",
+                    "updated_at": "2026-04-10T00:00:00Z",
+                    "last_turn_at": "2026-04-10T00:00:00Z",
+                    "turns": turns_new,
+                },
+            ]
+
+        async def _fake_get_thread(thread_id, *, tenant_id, workspace_id, include_turns=True):
+            for item in await _fake_list_threads(
+                workspace_id=workspace_id,
+                tenant_id=tenant_id,
+                owner_user_id="user-1",
+                include_turns=include_turns,
+                limit=10,
+            ):
+                if item.get("id") == thread_id:
+                    return item
+            return None
+
+        previous_server = sys.modules.get("server")
+        sys.modules["server"] = fake_server
+        original_register = runtime_runs_api.runtime_route_registration_service.register_runtime_run_routes_from_api
+        original_refresh = runtime_runs_api._refresh_server_exports
+        original_list_threads = runtime_runs_api.thread_service.list_threads
+        original_get_thread = runtime_runs_api.thread_service.get_thread
+        try:
+            runtime_runs_api.runtime_route_registration_service.register_runtime_run_routes_from_api = lambda *args, **kwargs: None
+            runtime_runs_api._refresh_server_exports = lambda: fake_server
+            runtime_runs_api.thread_service.list_threads = _fake_list_threads
+            runtime_runs_api.thread_service.get_thread = _fake_get_thread
+
+            app = _FakeApp()
+            runtime_runs_api.register_run_routes(app)
+            list_handler = app.routes[("GET", "/threads")]
+            detail_handler = app.routes[("GET", "/threads/{thread_id}")]
+
+            with unittest.mock.patch(
+                "server_modules.runtime_runs_api.entitlements_service.workspace_entitlement_payload_for_workspace_id",
+                return_value={"capabilities": {"history_window_days": 7}},
+            ), unittest.mock.patch(
+                "server_modules.runtime_runs_api._utc_now",
+                return_value=runtime_runs_api.datetime(2026, 4, 11, tzinfo=runtime_runs_api.timezone.utc),
+            ):
+                payload = self._run_async(
+                    list_handler(
+                        workspace_id="default",
+                        include_turns=True,
+                        current_user=self._current_user(),
+                    )
+                )
+                detail = self._run_async(
+                    detail_handler(
+                        "thread-new",
+                        current_user=self._current_user(),
+                    )
+                )
+                with self.assertRaises(HTTPException) as exc:
+                    self._run_async(
+                        detail_handler(
+                            "thread-old",
+                            current_user=self._current_user(),
+                        )
+                    )
+        finally:
+            runtime_runs_api.runtime_route_registration_service.register_runtime_run_routes_from_api = original_register
+            runtime_runs_api._refresh_server_exports = original_refresh
+            runtime_runs_api.thread_service.list_threads = original_list_threads
+            runtime_runs_api.thread_service.get_thread = original_get_thread
+            if previous_server is None:
+                sys.modules.pop("server", None)
+            else:
+                sys.modules["server"] = previous_server
+
+        self.assertEqual([item["id"] for item in payload["items"]], ["thread-new"])
+        self.assertEqual([item["id"] for item in detail["turns"]], ["turn-new"])
+        self.assertEqual(exc.exception.status_code, 404)
+
     async def _fake_agent_turn(self, **kwargs):
         turn_request = kwargs.get("turn_request")
         if kwargs.get("run_request") is not None:

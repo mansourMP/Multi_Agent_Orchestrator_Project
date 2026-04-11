@@ -13,6 +13,7 @@ from typing import Any, Dict, Optional
 from fastapi import HTTPException
 
 from server_modules import auth as auth_module
+from server_modules import entitlements_service
 from server_modules import security_audit_service
 
 
@@ -335,6 +336,14 @@ class ChannelPairingService:
             workspace_id or "default",
             minimum_role="member",
         )
+        if resolved_provider in {"telegram", "whatsapp"}:
+            try:
+                entitlements_service.enforce_channel_surface_access_for_workspace_id(
+                    resolved_provider,
+                    workspace_id=resolved_workspace_id,
+                )
+            except entitlements_service.EntitlementDeniedError as exc:
+                raise HTTPException(status_code=403, detail=exc.message) from exc
         resolved_tenant_id = auth_module.workspace_tenant_id(current_user, resolved_workspace_id)
         resolved_scopes = _normalize_scopes(scopes, provider=resolved_provider)
         ttl = max(MIN_PAIRING_TTL_SECONDS, min(int(ttl_seconds or DEFAULT_PAIRING_TTL_SECONDS), MAX_PAIRING_TTL_SECONDS))

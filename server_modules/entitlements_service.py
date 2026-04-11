@@ -649,3 +649,35 @@ def enforce_channel_surface_access(
         reason=f"{provider_token}_channel_unavailable",
         message=f"{provider_token.title()} access is not included in the current workspace plan.",
     )
+
+
+def enforce_channel_surface_access_for_workspace_id(
+    provider: str,
+    *,
+    workspace_id: str,
+    workspace: Optional[Dict[str, Any]] = None,
+    install: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    provider_token = str(provider or "").strip().lower()
+    key = {
+        "telegram": "telegram_channel_enabled",
+        "whatsapp": "whatsapp_channel_enabled",
+    }.get(provider_token)
+    if not key:
+        raise EntitlementDeniedError(
+            reason="channel_surface_unknown",
+            message=f"Unknown channel provider '{provider_token}'.",
+            entitlement_state={},
+        )
+    state = resolve_workspace_entitlement_state_for_workspace_id(
+        workspace_id=workspace_id,
+        workspace=workspace,
+        install=install,
+    )
+    if not bool(state.entitlements.get(key)):
+        raise EntitlementDeniedError(
+            reason=f"{provider_token}_channel_unavailable",
+            message=f"{provider_token.title()} access is not included in the current workspace plan.",
+            entitlement_state=workspace_entitlement_payload(state=state),
+        )
+    return workspace_entitlement_payload(state=state)

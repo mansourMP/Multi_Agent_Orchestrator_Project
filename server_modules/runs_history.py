@@ -6,6 +6,7 @@ from server_modules import shared as shared
 from server_modules import runtime_common as common
 from server_modules import entitlements_service
 from server_modules import run_state_repository
+from server_modules import runtime_run_approval_service
 from server_modules.auth import enforce_workspace_access
 from server_modules.runs_output import _compact_event_text, _json_safe
 
@@ -264,23 +265,39 @@ def _cognitive_daemon_module():
         raise HTTPException(status_code=503, detail=f"cognitive_daemon_unavailable: {exc}") from exc
 
 async def list_cognitive_approvals(limit: int = 20):
-    mod = _cognitive_daemon_module()
-    conf = _cognitive_defaults()
     safe_limit = max(1, min(int(limit), 200))
-    try:
-        items = mod.list_pending_approvals(
-            db_path=conf["db_path"],
-            niche_id=conf["niche_id"],
-            limit=safe_limit,
+    payload = runtime_run_approval_service.list_pending_approvals_payload(
+        limit=safe_limit,
+        workspace_entitlement_payload_fn=_workspace_entitlement_payload,
+    )
+    items: List[Dict[str, Any]] = []
+    for item in payload.get("items") if isinstance(payload.get("items"), list) else []:
+        if not isinstance(item, dict):
+            continue
+        approval_id = str(item.get("approval_id") or "").strip()
+        if not approval_id:
+            continue
+        items.append(
+            {
+                "event_id": approval_id,
+                "approval_id": approval_id,
+                "run_id": str(item.get("run_id") or "").strip() or None,
+                "workspace_id": str(item.get("workspace_id") or "").strip() or None,
+                "summary": str(item.get("summary") or item.get("prompt") or "Approval required.").strip(),
+                "status": str(item.get("status") or "pending").strip().lower() or "pending",
+                "risk_level": str(item.get("status") or "unknown").strip().lower() or "unknown",
+                "objective_id": str(item.get("run_id") or "").strip() or None,
+                "objective_title": str(item.get("action") or "").strip() or None,
+                "correlation_id": str(item.get("correlation_id") or "").strip() or None,
+                "requested_at": item.get("requested_at"),
+                "expires_at": item.get("expires_at"),
+            }
         )
-    except HTTPException:
-        raise
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"failed_to_list_cognitive_approvals: {exc}") from exc
     return {
         "ok": True,
-        "niche_id": conf["niche_id"],
-        "db_path": conf["db_path"],
+        "source": "runtime",
+        "niche_id": None,
+        "db_path": None,
         "count": len(items),
         "items": items,
     }
@@ -299,45 +316,36 @@ async def resolve_cognitive_approval(event_id: str, payload: ApprovalResolvePayl
     escalated = decision in escalate_tokens
     if decision not in approve_tokens and decision not in reject_tokens and decision not in escalate_tokens:
         raise HTTPException(status_code=400, detail="Unsupported decision value.")
-    correlation_id = _approval_correlation_id(target_event_id, event_id=target_event_id)
-
-    mod = _cognitive_daemon_module()
-    conf = _cognitive_defaults()
-    try:
-        out = mod.resolve_event_approval(
-            db_path=conf["db_path"],
-            event_id=target_event_id,
-            approved=approved,
-            note=str(payload.note or "").strip(),
-        )
-    except HTTPException:
-        raise
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"failed_to_resolve_cognitive_approval: {exc}") from exc
-
-    if not isinstance(out, dict):
-        raise HTTPException(status_code=500, detail="invalid_cognitive_approval_response")
-    if not bool(out.get("ok")):
-        reason = str(out.get("error") or "approval_update_failed")
-        if reason == "event_not_found":
-            raise HTTPException(status_code=404, detail=reason)
-        if reason == "event_not_waiting_for_input":
-            raise HTTPException(status_code=409, detail=reason)
-        raise HTTPException(status_code=400, detail=reason)
-    _append_approval_audit(
-        approval_id=target_event_id,
-        stage="resolved",
-        decision=("approved" if approved else "escalated" if escalated else "rejected"),
-        actor="user",
-        source="cognitive_api",
-        event_id=target_event_id,
-        note=str(payload.note or ""),
-        correlation_id=correlation_id,
-        metadata={"raw_decision": decision},
+    result = runtime_run_approval_service.resolve_standalone_approval_with_runtime_defaults(
+        target_event_id,
+        payload={
+            "approval_id": target_event_id,
+            "resolution": "approved" if approved else "rejected",
+            "actor": "user",
+            "reason": str(payload.note or "").strip(),
+        },
     )
-    out["correlation_id"] = correlation_id
-    out["decision_kind"] = "approved" if approved else ("escalated" if escalated else "rejected")
-    return out
+    correlation_id = str(
+        result.get("correlation_id")
+        or ((result.get("outbox_event") or {}).get("trace_id") if isinstance(result.get("outbox_event"), dict) else "")
+        or _approval_correlation_id(target_event_id, event_id=target_event_id)
+    ).strip()
+    resolution = str(result.get("resolution") or ("approved" if approved else "rejected")).strip().lower() or "rejected"
+    return {
+        "ok": True,
+        "source": "runtime",
+        "event_id": target_event_id,
+        "approval_id": str(result.get("approval_id") or target_event_id).strip() or target_event_id,
+        "run_id": str(result.get("run_id") or "").strip() or None,
+        "status": resolution,
+        "resolution": resolution,
+        "decision_kind": "approved" if approved else ("escalated" if escalated else "rejected"),
+        "actor": str(result.get("actor") or "user").strip() or "user",
+        "note": str(payload.note or ""),
+        "reason": str(result.get("reason") or payload.note or ""),
+        "correlation_id": correlation_id,
+        "outbox_event": result.get("outbox_event"),
+    }
 
 async def get_approval_audit(
     limit: int = 100,
@@ -423,81 +431,15 @@ async def list_pending_approvals(
     limit: int = 100,
     current_user=Depends(require_api_key),
 ):
-    safe_limit = max(1, min(int(limit), 300))
-    workspace_filter = (
-        enforce_workspace_access(current_user, workspace_id, minimum_role="viewer")
-        if workspace_id is not None
-        else None
+    return runtime_run_approval_service.list_pending_approvals_payload(
+        workspace_id=workspace_id,
+        limit=limit,
+        current_user=current_user,
+        enforce_workspace_access_fn=enforce_workspace_access,
+        workspace_entitlement_payload_fn=_workspace_entitlement_payload,
+        current_user_is_privileged_fn=_current_user_is_privileged,
+        extract_run_owner_user_id_fn=_extract_owner_user_id,
     )
-    entitlement_cache: dict[str, dict[str, Any]] = {}
-    if workspace_filter:
-        capabilities = (
-            _workspace_entitlement_payload(entitlement_cache, workspace_filter).get("capabilities")
-            if isinstance(_workspace_entitlement_payload(entitlement_cache, workspace_filter), dict)
-            else {}
-        )
-        if not bool((capabilities or {}).get("approvals_enabled")):
-            raise HTTPException(status_code=403, detail="Approvals are not included in this workspace plan.")
-    owner_user_id = ""
-    if not _current_user_is_privileged(current_user):
-        owner_user_id = _current_user_owner_id(current_user)
-        if not owner_user_id:
-            raise HTTPException(status_code=401, detail="Authenticated user id is required.")
-    pending_items: List[Dict[str, Any]] = []
-    for run in run_state_repository.sync_list_live_runs():
-        if not isinstance(run, dict):
-            continue
-        run_id = str(run.get("run_id") or "").strip()
-        if not run_id:
-            continue
-        context = run.get("context") if isinstance(run.get("context"), dict) else {}
-        metadata = context.get("metadata") if isinstance(context.get("metadata"), dict) else {}
-        run_workspace = _normalize_workspace_id(context.get("workspace_id"))
-        if workspace_filter and run_workspace != workspace_filter:
-            continue
-        run_entitlements = _workspace_entitlement_payload(entitlement_cache, run_workspace)
-        run_capabilities = run_entitlements.get("capabilities") if isinstance(run_entitlements.get("capabilities"), dict) else {}
-        if not bool(run_capabilities.get("approvals_enabled")):
-            continue
-        status = str(run.get("status") or "").strip().lower()
-        if status != "waiting_for_input":
-            continue
-        pending = run.get("pending_approval")
-        if not isinstance(pending, dict):
-            continue
-        run_owner_user_id = str(metadata.get("owner_user_id") or "").strip()
-        if owner_user_id and run_owner_user_id != owner_user_id:
-            continue
-        approval_id = str(pending.get("approval_id") or "").strip()
-        if not approval_id:
-            continue
-        pending_items.append(
-            {
-                "run_id": run_id,
-                "approval_id": approval_id,
-                "owner_user_id": str(metadata.get("owner_user_id") or "").strip() or None,
-                "owner_email": str(metadata.get("owner_email") or "").strip().lower() or None,
-                "prompt": str(pending.get("prompt") or "Approval required."),
-                "status": str(pending.get("status") or "pending").strip().lower() or "pending",
-                "scope": str(pending.get("scope") or "once").strip().lower() or "once",
-                "reusable": bool(pending.get("reusable")),
-                "consequence": str(pending.get("consequence") or "").strip() or None,
-                "actions": list(pending.get("actions") or []) if isinstance(pending.get("actions"), list) else [],
-                "target": str(pending.get("target") or "").strip() or None,
-                "labels": list(pending.get("metadata", {}).get("approval_labels") or []) if isinstance(pending.get("metadata"), dict) else [],
-                "capabilities": list(pending.get("metadata", {}).get("approval_capabilities") or []) if isinstance(pending.get("metadata"), dict) else [],
-                "agent_role": str(metadata.get("agent_role") or "").strip() or None,
-                "requested_at": pending.get("requested_at"),
-                "expires_at": pending.get("expires_at"),
-                "correlation_id": pending.get("correlation_id"),
-            }
-        )
-        if len(pending_items) >= safe_limit:
-            break
-    return {
-        "items": pending_items,
-        "count": len(pending_items),
-    }
 
 async def get_audit(
     limit: int = 100,

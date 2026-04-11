@@ -1,5 +1,6 @@
 import queue
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from fastapi import HTTPException
@@ -163,6 +164,7 @@ class RuntimeRunApprovalServiceTests(unittest.TestCase):
         recorded = []
         emitted = []
         run_record = {
+            "run_id": "run-1",
             "status": "waiting_for_input",
             "context": {"workspace_id": "ws-1", "tenant_id": "tenant-1", "metadata": {"trace_id": "trace-1"}},
             "pending_confirmation": {"approval_id": "approval-1", "correlation_id": "corr-1"},
@@ -173,8 +175,12 @@ class RuntimeRunApprovalServiceTests(unittest.TestCase):
 
         with patch.object(
             runtime_run_approval_service.run_state_repository,
-            "sync_find_live_run_by_approval_id",
-            return_value={"run_id": "run-1", **run_record},
+            "sync_get_approval_record",
+            return_value={"approval_id": "approval-1", "run_id": "run-1"},
+        ), patch.object(
+            runtime_run_approval_service.run_state_repository,
+            "sync_get_live_run",
+            return_value=run_record,
         ):
             payload = runtime_run_approval_service.resolve_standalone_approval(
                 "approval-1",
@@ -215,7 +221,7 @@ class RuntimeRunApprovalServiceTests(unittest.TestCase):
 
         with patch.object(
             runtime_run_approval_service.run_state_repository,
-            "sync_find_live_run_by_approval_id",
+            "sync_get_approval_record",
             return_value=None,
         ):
             payload = runtime_run_approval_service.resolve_standalone_approval(
@@ -241,7 +247,7 @@ class RuntimeRunApprovalServiceTests(unittest.TestCase):
         self.assertEqual(payload["run_id"], "run-memory")
         self.assertEqual(recorded[0][:3], ("run-memory", "approval-memory", "approved"))
 
-    def test_resolve_standalone_approval_falls_back_to_repository_live_runs_when_route_runs_missing(self):
+    def test_resolve_standalone_approval_falls_back_to_repository_live_run_record_when_route_runs_missing(self):
         recorded = []
         run_record = {
             "run_id": "run-repo",
@@ -254,13 +260,13 @@ class RuntimeRunApprovalServiceTests(unittest.TestCase):
         with (
             patch.object(
                 runtime_run_approval_service.run_state_repository,
-                "sync_find_live_run_by_approval_id",
-                return_value=None,
+                "sync_get_approval_record",
+                return_value={"approval_id": "approval-repo", "run_id": "run-repo"},
             ),
             patch.object(
                 runtime_run_approval_service.run_state_repository,
-                "sync_list_live_runs",
-                return_value=[run_record],
+                "sync_get_live_run",
+                return_value=run_record,
             ),
         ):
             payload = runtime_run_approval_service.resolve_standalone_approval(
@@ -321,13 +327,193 @@ class RuntimeRunApprovalServiceTests(unittest.TestCase):
             "ensure_live_run_handle": lambda run_id, run_record: run,
         }
 
-        first = runtime_run_approval_service.resolve_standalone_approval(
-            "approval-1",
-            payload={"approval_id": "approval-1", "resolution": "approved", "actor": "user-a"},
+        with (
+            patch.object(
+                runtime_run_approval_service.run_state_repository,
+                "sync_get_approval_record",
+                return_value={"approval_id": "approval-1", "run_id": "run-1"},
+            ),
+            patch.object(
+                runtime_run_approval_service.run_state_repository,
+                "sync_resolve_approval_if_pending",
+                side_effect=[
+                    {"approval_id": "approval-1", "run_id": "run-1", "resolved_at": "2026-04-11T00:00:00Z"},
+                    None,
+                ],
+            ),
+            patch.object(
+                runtime_run_approval_service.run_state_repository,
+                "sync_create_or_update_approval_request",
+                return_value={"approval_id": "approval-1", "run_id": "run-1", "status": "requested"},
+            ),
+        ):
+            first = runtime_run_approval_service.resolve_standalone_approval(
+                "approval-1",
+                payload={"approval_id": "approval-1", "resolution": "approved", "actor": "user-a"},
+                current_user={"user_id": "user-1"},
+                runs={"run-1": run},
+                resolve_run_approval_fn=runtime_run_approval_service.resolve_run_approval,
+                resolve_run_approval_callbacks=callbacks,
+                record_approval_resolution_fn=lambda *args: None,
+                emit_approval_resolved_event_fn=lambda **kwargs: type(
+                    "Event",
+                    (),
+                    {
+                        "event_id": "evt-1",
+                        "event_type": "approval_resolved",
+                        "trace_id": "trace-1",
+                        "payload": kwargs,
+                    },
+                )(),
+            )
+
+            self.assertEqual(first["resolution"], "approved")
+            self.assertEqual(run["pending_confirmation"]["status"], "decision_submitted")
+            self.assertEqual(run["input_queue"].qsize(), 1)
+
+            with self.assertRaises(HTTPException) as exc:
+                runtime_run_approval_service.resolve_standalone_approval(
+                    "approval-1",
+                    payload={"approval_id": "approval-1", "resolution": "approved", "actor": "user-b"},
+                    current_user={"user_id": "user-1"},
+                    runs={"run-1": run},
+                    resolve_run_approval_fn=runtime_run_approval_service.resolve_run_approval,
+                    resolve_run_approval_callbacks=callbacks,
+                    record_approval_resolution_fn=lambda *args: None,
+                    emit_approval_resolved_event_fn=lambda **kwargs: type(
+                        "Event",
+                        (),
+                        {
+                            "event_id": "evt-2",
+                            "event_type": "approval_resolved",
+                            "trace_id": "trace-2",
+                            "payload": kwargs,
+                        },
+                    )(),
+                )
+
+            self.assertEqual(exc.exception.status_code, 409)
+            self.assertEqual(run["input_queue"].qsize(), 1)
+
+    def test_list_pending_approvals_payload_filters_by_workspace_owner_and_status(self):
+        approvals = [
+            {
+                "approval_id": "approval-1",
+                "run_id": "run-1",
+                "workspace_id": "ws-1",
+                "owner_user_id": "user-1",
+                "owner_email": "user-1@example.com",
+                "status": "requested",
+                "prompt": "Approve email",
+                "requested_at": "2026-04-12T10:00:00Z",
+                "metadata": {"approval_labels": ["email"]},
+                "labels": ["email"],
+            },
+            {
+                "approval_id": "approval-2",
+                "run_id": "run-2",
+                "workspace_id": "ws-2",
+                "owner_user_id": "user-1",
+                "status": "requested",
+                "prompt": "Approve deploy",
+            },
+            {
+                "approval_id": "approval-3",
+                "run_id": "run-3",
+                "workspace_id": "ws-1",
+                "owner_user_id": "other-user",
+                "status": "requested",
+                "prompt": "Should not be visible",
+            },
+            {
+                "approval_id": "approval-4",
+                "run_id": "run-4",
+                "workspace_id": "ws-1",
+                "owner_user_id": "user-1",
+                "status": "resolved",
+                "prompt": "Already resolved",
+            },
+        ]
+
+        payload = runtime_run_approval_service.list_pending_approvals_payload(
+            workspace_id="ws-1",
+            limit=10,
             current_user={"user_id": "user-1"},
+            enforce_workspace_access_fn=lambda current_user, workspace_id, minimum_role="viewer": workspace_id,
+            workspace_entitlement_payload_fn=lambda cache, workspace_id: {"capabilities": {"approvals_enabled": True}},
+            current_user_is_privileged_fn=lambda current_user: False,
+            extract_run_owner_user_id_fn=lambda run: str(run.get("context", {}).get("metadata", {}).get("owner_user_id") or ""),
+            list_pending_approvals_fn=lambda limit: approvals,
+        )
+
+        self.assertEqual(payload["count"], 1)
+        self.assertEqual(payload["items"][0]["approval_id"], "approval-1")
+        self.assertEqual(payload["items"][0]["workspace_id"], "ws-1")
+        self.assertEqual(payload["items"][0]["labels"], ["email"])
+
+    def test_submit_run_decision_durably_resolves_pending_approval_before_queueing(self):
+        run = {
+            "status": "waiting_for_input",
+            "input_queue": queue.Queue(),
+            "context": {"metadata": {}},
+            "pending_confirmation": {"approval_id": "approval-1", "correlation_id": "corr-1", "prompt": "Approve deploy"},
+            "pending_approval": {"approval_id": "approval-1", "correlation_id": "corr-1", "prompt": "Approve deploy"},
+        }
+        resolved_calls = []
+
+        with (
+            patch.object(
+                runtime_run_approval_service.run_state_repository,
+                "sync_create_or_update_approval_request",
+                return_value={"approval_id": "approval-1", "run_id": "run-1", "status": "requested"},
+            ),
+            patch.object(
+                runtime_run_approval_service.run_state_repository,
+                "sync_resolve_approval_if_pending",
+                side_effect=lambda *args, **kwargs: resolved_calls.append((args, kwargs)) or {"resolved_at": "2026-04-12T10:01:00Z"},
+            ),
+        ):
+            payload = runtime_run_approval_service.submit_run_decision(
+                "run-1",
+                run=run,
+                payload=_Payload("approve", "ship it"),
+                current_user={"user_id": "user-1"},
+                serialize_run_snapshot=lambda run_id, run: {"run_id": run_id},
+                enforce_run_owner_access=lambda current_user, snapshot: None,
+                get_pending_confirmation=lambda run: run.get("pending_confirmation"),
+                approval_correlation_id=lambda approval_id, run_id=None: "corr-1",
+                append_approval_audit=lambda **kwargs: None,
+                resolve_local_execution_start_approval=lambda *args, **kwargs: {},
+            )
+
+        self.assertEqual(payload["status"], "ok")
+        self.assertEqual(resolved_calls[0][0][:3], ("run-1", "approval-1", "approved"))
+        self.assertEqual(run["input_queue"].get_nowait()["approval_id"], "approval-1")
+        self.assertEqual(run["pending_confirmation"]["status"], "decision_submitted")
+
+    def test_resolve_standalone_approval_with_runtime_defaults_uses_service_actor_by_default(self):
+        run = {
+            "run_id": "run-1",
+            "pending_confirmation": {"approval_id": "approval-1"},
+        }
+        captured = {}
+
+        payload = runtime_run_approval_service.resolve_standalone_approval_with_runtime_defaults(
+            "approval-1",
+            payload={"approval_id": "approval-1", "resolution": "approved", "actor": "connector", "reason": "ok"},
+            current_user=None,
             runs={"run-1": run},
-            resolve_run_approval_fn=runtime_run_approval_service.resolve_run_approval,
-            resolve_run_approval_callbacks=callbacks,
+            server_module=SimpleNamespace(),
+            runtime_runs_api_module=SimpleNamespace(),
+            resolve_run_approval_fn=lambda run_id, approval_id, **kwargs: (
+                captured.setdefault("current_user", kwargs.get("current_user")),
+                {
+                    "status": "ok",
+                    "run_id": run_id,
+                    "approval_id": approval_id,
+                },
+            )[1],
+            resolve_run_approval_callbacks={},
             record_approval_resolution_fn=lambda *args: None,
             emit_approval_resolved_event_fn=lambda **kwargs: type(
                 "Event",
@@ -341,33 +527,9 @@ class RuntimeRunApprovalServiceTests(unittest.TestCase):
             )(),
         )
 
-        self.assertEqual(first["resolution"], "approved")
-        self.assertEqual(run["pending_confirmation"]["status"], "decision_submitted")
-        self.assertEqual(run["input_queue"].qsize(), 1)
-
-        with self.assertRaises(HTTPException) as exc:
-            runtime_run_approval_service.resolve_standalone_approval(
-                "approval-1",
-                payload={"approval_id": "approval-1", "resolution": "approved", "actor": "user-b"},
-                current_user={"user_id": "user-1"},
-                runs={"run-1": run},
-                resolve_run_approval_fn=runtime_run_approval_service.resolve_run_approval,
-                resolve_run_approval_callbacks=callbacks,
-                record_approval_resolution_fn=lambda *args: None,
-                emit_approval_resolved_event_fn=lambda **kwargs: type(
-                    "Event",
-                    (),
-                    {
-                        "event_id": "evt-2",
-                        "event_type": "approval_resolved",
-                        "trace_id": "trace-2",
-                        "payload": kwargs,
-                    },
-                )(),
-            )
-
-        self.assertEqual(exc.exception.status_code, 409)
-        self.assertEqual(run["input_queue"].qsize(), 1)
+        self.assertEqual(payload["approval_id"], "approval-1")
+        self.assertEqual(captured["current_user"]["auth_type"], "api_key")
+        self.assertTrue(captured["current_user"]["is_admin"])
 
 
 if __name__ == "__main__":

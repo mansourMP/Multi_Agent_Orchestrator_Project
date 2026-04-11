@@ -28,6 +28,17 @@ class AutopilotApprovalServiceTests(unittest.TestCase):
     def _make_service(self, **overrides):
         self.messages = overrides.pop("messages", [])
         self.mod = overrides.pop("mod", _CognitiveStub())
+        self.runtime_items = overrides.pop(
+            "runtime_items",
+            [
+                {
+                    "approval_id": "abc12345-1111",
+                    "summary": "Needs approval",
+                    "status": "pending",
+                    "action": "Launch",
+                }
+            ],
+        )
         return AutopilotApprovalService(
             default_chat_prefix="/empyralis",
             cognitive_module=overrides.pop("cognitive_module", lambda: self.mod),
@@ -37,11 +48,23 @@ class AutopilotApprovalServiceTests(unittest.TestCase):
             utc_now_iso=overrides.pop("utc_now_iso", lambda: "2026-04-05T00:00:00Z"),
             send_message=overrides.pop("send_message", lambda **kwargs: self.messages.append(kwargs)),
             ensure_workspace_approvals_access=overrides.pop("ensure_workspace_approvals_access", None),
+            runtime_approvals_list=overrides.pop(
+                "runtime_approvals_list",
+                lambda limit, workspace_id=None: {"ok": True, "items": self.runtime_items[:limit], "count": min(limit, len(self.runtime_items))},
+            ),
+            runtime_approval_resolve=overrides.pop(
+                "runtime_approval_resolve",
+                lambda event_id, approved, note, workspace_id=None: {
+                    "ok": True,
+                    "approval_id": event_id,
+                    "resolution": "approved" if approved else "rejected",
+                },
+            ),
         )
 
     def test_approvals_text_formats_items(self):
         service = self._make_service()
-        text = service.approvals_text({"ok": True, "items": self.mod.list_pending_approvals()}, prefix="/ops")
+        text = service.approvals_text(service.approvals_list(limit=5, workspace_id="ws-1"), prefix="/ops")
         self.assertIn("Pending approvals:", text)
         self.assertIn("/ops approve", text)
 

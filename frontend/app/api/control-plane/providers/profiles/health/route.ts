@@ -1,6 +1,10 @@
 import type { NextRequest } from 'next/server';
 import { enforceBffRouteGuard } from '@/lib/server/bffRouteGuard';
-import { requireControlPlaneSession } from '@/lib/server/controlPlaneSession';
+import {
+  requireControlPlaneSession,
+  requireControlPlaneWorkspaceAccess,
+  resolveRuntimeWorkspaceId,
+} from '@/lib/server/controlPlaneSession';
 import { runtimeProxyResponse } from '@/lib/server/runtimeControlPlane';
 
 export const dynamic = 'force-dynamic';
@@ -13,7 +17,11 @@ export async function GET(request: NextRequest) {
 
   const search = new URLSearchParams();
   const workspaceId = String(request.nextUrl.searchParams.get('workspace_id') || '').trim();
-  if (workspaceId) search.set('workspace_id', workspaceId);
+  if (workspaceId) {
+    const workspaceFailure = await requireControlPlaneWorkspaceAccess(request, workspaceId, 'viewer');
+    if (workspaceFailure) return workspaceFailure;
+    search.set('workspace_id', await resolveRuntimeWorkspaceId(request, workspaceId));
+  }
 
   try {
     const suffix = search.toString() ? `?${search.toString()}` : '';

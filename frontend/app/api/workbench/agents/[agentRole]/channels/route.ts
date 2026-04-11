@@ -1,6 +1,6 @@
 import type { NextRequest } from 'next/server';
 import { enforceBffRouteGuard } from '@/lib/server/bffRouteGuard';
-import { requireControlPlaneSession } from '@/lib/server/controlPlaneSession';
+import { requireControlPlaneSession, resolveRuntimeWorkspaceId } from '@/lib/server/controlPlaneSession';
 import { runtimeJsonRequest } from '@/lib/server/runtimeControlPlane';
 
 export const dynamic = 'force-dynamic';
@@ -17,7 +17,8 @@ export async function GET(request: NextRequest, { params }: Params) {
 
   const { agentRole } = await params;
   const safeRole = encodeURIComponent(String(agentRole || '').trim());
-  const query = 'workspace_id=default&history_limit=1&file_limit=1&artifact_limit=1';
+  const workspaceId = await resolveRuntimeWorkspaceId(request, 'default');
+  const query = `workspace_id=${encodeURIComponent(workspaceId)}&history_limit=1&file_limit=1&artifact_limit=1`;
 
   try {
     const { status, payload } = await runtimeJsonRequest(`/agents/workspace/agents/${safeRole}?${query}`, { method: 'GET' });

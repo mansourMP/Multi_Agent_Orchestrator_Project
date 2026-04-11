@@ -69,10 +69,17 @@ type RuntimeAvailabilityItem = {
   label: string;
   ready: boolean;
   status: 'ready' | 'attention';
+  state: 'active' | 'configured' | 'setup_required' | 'unavailable' | 'degraded';
   source: string;
   source_label: string;
   detail: string;
   profile_count: number;
+  connection_kind: 'workspace_provider_connection' | 'machine_local_capability' | 'runtime_environment';
+  connection_scope: 'workspace' | 'machine' | 'runtime';
+  connection_label: string;
+  identity_owner: 'platform_account';
+  identity_owner_label: string;
+  identity_boundary_note: string;
 };
 
 type LocalOpenAiAuthStatus = {
@@ -498,6 +505,22 @@ function providerAccountContextLine(item: ProviderCredentialRow): string {
       .join(' • ') || 'Saved access token for Vertex AI.';
   }
   return 'Saved in the encrypted Empyralis vault for this workspace.';
+}
+
+function fallbackConnectionLabel(item: ProviderCredentialRow | null): string {
+  if (!item) return 'Workspace provider';
+  if (item.provider === 'anthropic' && item.authMode === 'local_cli') return 'This machine only';
+  if (item.provider === 'ollama') return 'This machine only';
+  return 'Workspace provider';
+}
+
+function providerCapabilityContextLine(
+  availability: RuntimeAvailabilityItem | null,
+  credential: ProviderCredentialRow | null,
+): string | null {
+  if (availability?.detail) return availability.detail;
+  if (credential) return providerAccountContextLine(credential);
+  return null;
 }
 
 function profileTone(profile: ProviderProfileRow | null): CSSProperties {
@@ -936,9 +959,17 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
   const providerCardStatusByProvider = useMemo(() => {
     const map = new Map<ProviderId, { tone: 'success' | 'error' | 'neutral'; text: string }>();
     for (const card of providerCards) {
-      const configured = Boolean(card.credential);
-      if (!configured) {
+      const hasCapability = Boolean(card.credential || card.availability);
+      if (!hasCapability) {
         map.set(card.provider, { tone: 'neutral', text: 'Not configured' });
+        continue;
+      }
+      if (card.availability?.ready && card.availability.connection_kind === 'machine_local_capability') {
+        map.set(card.provider, { tone: 'success', text: 'Ready on this machine' });
+        continue;
+      }
+      if (card.availability?.ready && !card.credential) {
+        map.set(card.provider, { tone: 'success', text: 'Available' });
         continue;
       }
       const health = providerHealthCheck[card.provider];
@@ -1182,10 +1213,35 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
                 label: typeof item.label === 'string' && item.label.trim() ? item.label.trim() : providerLabel(provider, normalizedProviders.length > 0 ? normalizedProviders : providerOptions),
                 ready: item.ready === true,
                 status: item.status === 'attention' ? 'attention' : 'ready',
+                state: item.state === 'active'
+                  || item.state === 'configured'
+                  || item.state === 'setup_required'
+                  || item.state === 'unavailable'
+                  || item.state === 'degraded'
+                  ? item.state
+                  : 'setup_required',
                 source: typeof item.source === 'string' ? item.source : '',
                 source_label: typeof item.source_label === 'string' ? item.source_label : 'Runtime account',
                 detail: typeof item.detail === 'string' ? item.detail : '',
                 profile_count: typeof item.profile_count === 'number' ? item.profile_count : 0,
+                connection_kind: item.connection_kind === 'machine_local_capability'
+                  || item.connection_kind === 'runtime_environment'
+                  ? item.connection_kind
+                  : 'workspace_provider_connection',
+                connection_scope: item.connection_scope === 'machine'
+                  || item.connection_scope === 'runtime'
+                  ? item.connection_scope
+                  : 'workspace',
+                connection_label: typeof item.connection_label === 'string' && item.connection_label.trim()
+                  ? item.connection_label.trim()
+                  : 'Workspace provider',
+                identity_owner: 'platform_account',
+                identity_owner_label: typeof item.identity_owner_label === 'string' && item.identity_owner_label.trim()
+                  ? item.identity_owner_label.trim()
+                  : 'Empyralis account',
+                identity_boundary_note: typeof item.identity_boundary_note === 'string' && item.identity_boundary_note.trim()
+                  ? item.identity_boundary_note.trim()
+                  : 'Platform sign-in stays separate from provider capabilities and machine-local sessions.',
               };
             })
             .filter((item: RuntimeAvailabilityItem | null): item is RuntimeAvailabilityItem => item !== null)
@@ -1880,11 +1936,11 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
           }}
         >
           <div style={{ display: 'grid', gap: 3 }}>
-            <div className="orion-panel-title">{connectMode ? 'Connect AI account' : 'AI accounts'}</div>
+            <div className="orion-panel-title">{connectMode ? 'Connect provider capability' : 'AI providers'}</div>
             <div className="orion-panel-copy">
               {connectMode
-                ? 'Connect one provider account, then return to your setup flow or chat.'
-                : 'Manage the provider accounts connected to this workspace.'}
+                ? 'Connect one workspace provider or machine-local capability, then return to your setup flow or chat.'
+                : 'Manage workspace provider connections and machine-local AI capabilities. Your Empyralis account stays separate from provider sign-in.'}
             </div>
           </div>
           <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
@@ -1900,7 +1956,7 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
               }}
             >
               <Plus size={14} />
-              Add account
+              Add provider
             </button>
           </div>
         </div>
@@ -1977,19 +2033,22 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
 
         {providerLoading ? (
           <section className="orion-empty" style={{ minHeight: 180 }}>
-            <div className="orion-empty-title">Loading AI accounts</div>
-            <div className="orion-empty-copy">Loading connected accounts and runtime availability.</div>
+            <div className="orion-empty-title">Loading provider capabilities</div>
+            <div className="orion-empty-copy">Loading workspace providers, machine-local capabilities, and runtime availability.</div>
           </section>
         ) : (
           <div style={{ display: 'grid', gap: 10 }}>
             {providerCards.map((card) => {
               const credential = card.credential;
               const configured = Boolean(credential);
+              const capabilityAvailable = Boolean(credential || card.availability);
               const busyAction = credential ? (providerBusy[credential.id] || '') : '';
               const wasJustConnected = credential ? recentlyConnectedCredentialId === credential.id : false;
               const status = providerCardStatusByProvider.get(card.provider) || { tone: 'neutral' as const, text: 'Status unavailable' };
               const probeResult = providerProbeResults[card.provider] || null;
               const providerOption = providerOptionFor(card.provider, providerOptions);
+              const capabilityLabel = card.availability?.connection_label || fallbackConnectionLabel(credential);
+              const capabilityContext = providerCapabilityContextLine(card.availability, credential);
               const statusTone = status.tone === 'success'
                 ? { color: 'var(--success-fg)', border: '1px solid var(--success-border)', background: 'var(--success-bg)' }
                 : status.tone === 'error'
@@ -2020,6 +2079,11 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
                         <div style={{ fontSize: 12.5, color: 'var(--text-secondary)', lineHeight: 1.45, wordBreak: 'break-word' }}>
                           {configured ? credential?.label : providerOption.note}
                         </div>
+                        {capabilityContext ? (
+                          <div style={{ fontSize: 12, color: 'var(--text-secondary)', lineHeight: 1.5, wordBreak: 'break-word' }}>
+                            {capabilityContext}
+                          </div>
+                        ) : null}
                       </div>
                     </div>
                     <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
@@ -2060,10 +2124,16 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
                       {card.profile?.model ? (
                         <span className="orion-chip">{card.profile.model}</span>
                       ) : null}
+                      <span className="orion-chip">{capabilityLabel}</span>
                       {card.isActiveProfile ? (
                         <span className="orion-chip">Runtime enabled</span>
                       ) : null}
                     </div>
+                    {card.availability?.identity_boundary_note ? (
+                      <div style={{ fontSize: 12, color: 'var(--text-secondary)', lineHeight: 1.5 }}>
+                        {card.availability.identity_boundary_note}
+                      </div>
+                    ) : null}
                     {probeResult ? (
                       <div
                         style={{
@@ -2104,6 +2174,14 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
                           {busyAction === 'remove' ? 'Removing…' : 'Remove'}
                         </button>
                       </>
+                    ) : capabilityAvailable ? (
+                      <button
+                        className="orion-btn orion-btn-ghost"
+                        style={{ minHeight: 34, paddingInline: 12 }}
+                        onClick={() => openProviderFormForMethod(card.provider)}
+                      >
+                        Manage capability
+                      </button>
                     ) : (
                       <button
                         className="orion-btn orion-btn-ghost"
@@ -2152,10 +2230,10 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
             <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) auto', gap: 20, alignItems: 'start' }}>
               <div style={{ display: 'grid', gap: 6 }}>
                 <div style={{ fontSize: 24, fontWeight: 800, color: 'var(--text-primary)' }}>
-                  Add account
+                  Add provider capability
                 </div>
                 <div style={{ fontSize: 14, color: 'var(--text-secondary)', lineHeight: 1.6 }}>
-                  Connect one provider account to this workspace.
+                  Connect one workspace provider or machine-local capability. Your Empyralis account stays separate from provider sign-in.
                 </div>
               </div>
               <button

@@ -108,23 +108,29 @@ export default function SettingsPage() {
     setAccessError('');
     try {
       await ensureControlPlaneSession();
-      const [connectorsRes, authRes, accessRes, authProvidersRes, providerProfilesRes] = await Promise.all([
-        fetch('/api/control-plane/connectors?workspace_id=default', { cache: 'no-store' }),
-        fetch('/api/control-plane/auth/me', { cache: 'no-store' }),
+      const authRes = await fetch('/api/control-plane/auth/me', { cache: 'no-store' });
+      const authBody = await authRes.json().catch(() => ({}));
+      if (!authRes.ok) {
+        throw new Error(String(authBody?.detail || authBody?.message || 'Failed to load account profile.'));
+      }
+      const workspaceId = String(
+        authBody?.current_workspace_id
+          || authBody?.default_workspace_id
+          || authBody?.workspace_access?.[0]?.workspace_id
+          || 'default',
+      ).trim() || 'default';
+      const [connectorsRes, accessRes, authProvidersRes, providerProfilesRes] = await Promise.all([
+        fetch(`/api/control-plane/connectors?workspace_id=${encodeURIComponent(workspaceId)}`, { cache: 'no-store' }),
         fetch('/api/control-plane/auth/access', { cache: 'no-store' }),
         fetch('/api/control-plane/auth/providers', { cache: 'no-store' }),
-        fetch('/api/control-plane/providers/profiles/health?workspace_id=default', { cache: 'no-store' }),
+        fetch(`/api/control-plane/providers/profiles/health?workspace_id=${encodeURIComponent(workspaceId)}`, { cache: 'no-store' }),
       ]);
       const connectorsBody = await connectorsRes.json().catch(() => ({}));
-      const authBody = await authRes.json().catch(() => ({}));
       const accessBody = await accessRes.json().catch(() => ({}));
       const authProvidersBody = await authProvidersRes.json().catch(() => ({}));
       const providerProfilesBody = await providerProfilesRes.json().catch(() => ({}));
       if (!connectorsRes.ok) {
         throw new Error(String(connectorsBody?.detail || connectorsBody?.message || 'Failed to load connectors.'));
-      }
-      if (!authRes.ok) {
-        throw new Error(String(authBody?.detail || authBody?.message || 'Failed to load account profile.'));
       }
       if (!accessRes.ok) {
         throw new Error(String(accessBody?.detail || accessBody?.message || 'Failed to load account access.'));

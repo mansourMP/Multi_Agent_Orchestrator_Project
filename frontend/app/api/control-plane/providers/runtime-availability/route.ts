@@ -1,6 +1,10 @@
 import type { NextRequest } from 'next/server';
 import { enforceBffRouteGuard } from '@/lib/server/bffRouteGuard';
-import { requireControlPlaneSession } from '@/lib/server/controlPlaneSession';
+import {
+  requireControlPlaneSession,
+  requireControlPlaneWorkspaceAccess,
+  resolveRuntimeWorkspaceId,
+} from '@/lib/server/controlPlaneSession';
 import { runtimeJsonRequest } from '@/lib/server/runtimeControlPlane';
 
 export const dynamic = 'force-dynamic';
@@ -17,79 +21,102 @@ type RuntimeAvailabilityItem = {
   label: string;
   ready: boolean;
   status: 'ready' | 'attention';
+  state: 'active' | 'configured' | 'setup_required' | 'unavailable' | 'degraded';
   source: string;
   source_label: string;
   detail: string;
   profile_count: number;
+  connection_kind: 'workspace_provider_connection' | 'machine_local_capability' | 'runtime_environment';
+  connection_scope: 'workspace' | 'machine' | 'runtime';
+  connection_label: string;
+  identity_owner: 'platform_account';
+  identity_owner_label: string;
+  identity_boundary_note: string;
 };
 
 function normalizeProvider(raw: unknown): string {
   return String(raw || '').trim().toLowerCase();
 }
 
-function openAiSourceLabel(source: string): string {
-  switch (source) {
-    case 'env_api_key':
-      return 'OpenAI API key in runtime environment';
-    case 'env_access_token':
-      return 'OpenAI access token in runtime environment';
-    case 'env_oauth_token':
-      return 'OpenAI OAuth token in runtime environment';
-    case 'env_codex_oauth_token':
-      return 'OpenAI / Codex token in runtime environment';
-    case 'codex_token_vault':
-      return 'Saved OpenAI / Codex token on this machine';
-    case 'vault':
-      return 'Saved OpenAI credential in the workspace vault';
-    default:
-      return 'OpenAI credential available to the runtime';
+function connectionLabelFromKind(kind: string, fallback?: string): RuntimeAvailabilityItem['connection_label'] {
+  if (kind === 'machine_local_capability') return 'This machine only';
+  if (kind === 'runtime_environment') return 'Runtime environment';
+  if (fallback === 'This machine only' || fallback === 'Runtime environment') return fallback;
+  return 'Workspace provider';
+}
+
+function sourceLabelForItem(item: Record<string, unknown>): string {
+  const connectionLabel = connectionLabelFromKind(
+    String(item.connection_kind || '').trim(),
+    typeof item.connection_label === 'string' ? item.connection_label : undefined,
+  );
+  const source = String(item.active_source || '').trim().toLowerCase();
+  if (connectionLabel === 'This machine only') {
+    if (source.includes('claude')) return 'Claude CLI session on this machine';
+    if (source.includes('gemini')) return 'Gemini CLI session on this machine';
+    if (source.includes('ollama')) return 'Local Ollama service on this machine';
+    if (source.includes('codex')) return 'Codex session on this machine';
+    return 'Machine-local capability';
   }
-}
-
-function openAiSourceCountsAsVerified(source: string): boolean {
-  return source === 'env_api_key' || source === 'env_access_token' || source === 'vault';
-}
-
-function openAiReadyDetail(source: string): string {
-  switch (source) {
-    case 'env_api_key':
-      return 'The workspace runtime can already use an OpenAI API key from its environment.';
-    case 'env_access_token':
-      return 'The workspace runtime can already use a direct OpenAI access token from its environment.';
-    case 'vault':
-      return 'The workspace runtime can already use a saved OpenAI credential from the workspace vault.';
-    default:
-      return 'The workspace runtime can already use a direct OpenAI credential available on this machine.';
+  if (connectionLabel === 'Runtime environment') {
+    return 'Runtime environment credential';
   }
+  return 'Workspace provider connection';
 }
 
-function openAiAttentionDetail(source: string): string {
-  switch (source) {
-    case 'env_access_token':
-      return 'An OpenAI access token was detected for the runtime, but it is not treated as a verified workspace account yet.';
-    case 'env_oauth_token':
-      return 'An OpenAI OAuth token was detected for the runtime, but you should connect a direct OpenAI API key for reliable chat and workflow execution.';
-    case 'env_codex_oauth_token':
-      return 'A Codex/OpenAI token was detected in the runtime environment, but it is not treated as a verified runtime account for launch-critical chat execution.';
-    case 'codex_token_vault':
-      return 'A saved OpenAI / Codex token was detected on this machine, but you should connect a direct OpenAI API key before relying on chat or workflows.';
-    default:
-      return 'An OpenAI credential was detected for the runtime, but it is not treated as a verified workspace account yet.';
+function normalizeProviderState(raw: unknown): RuntimeAvailabilityItem['state'] {
+  const state = String(raw || '').trim().toLowerCase();
+  if (
+    state === 'active'
+    || state === 'configured'
+    || state === 'setup_required'
+    || state === 'unavailable'
+    || state === 'degraded'
+  ) {
+    return state;
   }
+  return 'setup_required';
 }
 
-function buildProfileItem(provider: string, profileCount: number): RuntimeAvailabilityItem {
+function buildProviderItem(rawItem: Record<string, unknown>): RuntimeAvailabilityItem | null {
+  const provider = normalizeProvider(rawItem.id);
+  if (!provider) return null;
+  const state = normalizeProviderState(rawItem.state);
+  const connectionKind = String(rawItem.connection_kind || '').trim() === 'machine_local_capability'
+    ? 'machine_local_capability'
+    : String(rawItem.connection_kind || '').trim() === 'runtime_environment'
+      ? 'runtime_environment'
+      : 'workspace_provider_connection';
+  const connectionScope = String(rawItem.connection_scope || '').trim() === 'machine'
+    ? 'machine'
+    : String(rawItem.connection_scope || '').trim() === 'runtime'
+      ? 'runtime'
+      : 'workspace';
+
   return {
     provider,
-    label: PROVIDER_LABELS[provider] || provider,
-    ready: true,
-    status: 'ready',
-    source: 'runtime_profile',
-    source_label: 'Workspace runtime profile',
-    detail: profileCount > 1
-      ? `${profileCount} runtime profiles are already enabled for this workspace.`
-      : 'A runtime profile is already enabled for this workspace.',
-    profile_count: profileCount,
+    label: typeof rawItem.label === 'string' && rawItem.label.trim() ? rawItem.label.trim() : PROVIDER_LABELS[provider] || provider,
+    ready: state === 'active',
+    status: state === 'active' ? 'ready' : 'attention',
+    state,
+    source: typeof rawItem.active_source === 'string' ? rawItem.active_source : '',
+    source_label: sourceLabelForItem(rawItem),
+    detail: typeof rawItem.state_detail === 'string' && rawItem.state_detail.trim()
+      ? rawItem.state_detail.trim()
+      : typeof rawItem.issue === 'string' && rawItem.issue.trim()
+        ? rawItem.issue.trim()
+        : 'Provider capability truth is available from the runtime.',
+    profile_count: typeof rawItem.profile_count === 'number' ? rawItem.profile_count : 0,
+    connection_kind: connectionKind,
+    connection_scope: connectionScope,
+    connection_label: connectionLabelFromKind(connectionKind, typeof rawItem.connection_label === 'string' ? rawItem.connection_label : undefined),
+    identity_owner: 'platform_account',
+    identity_owner_label: typeof rawItem.identity_owner_label === 'string' && rawItem.identity_owner_label.trim()
+      ? rawItem.identity_owner_label.trim()
+      : 'Empyralis account',
+    identity_boundary_note: typeof rawItem.identity_boundary_note === 'string' && rawItem.identity_boundary_note.trim()
+      ? rawItem.identity_boundary_note.trim()
+      : 'Platform sign-in stays separate from provider capabilities and machine-local sessions.',
   };
 }
 
@@ -101,75 +128,25 @@ export async function GET(request: NextRequest) {
 
   const search = new URLSearchParams();
   const workspaceId = String(request.nextUrl.searchParams.get('workspace_id') || '').trim();
-  if (workspaceId) search.set('workspace_id', workspaceId);
+  if (workspaceId) {
+    const workspaceFailure = await requireControlPlaneWorkspaceAccess(request, workspaceId, 'viewer');
+    if (workspaceFailure) return workspaceFailure;
+    search.set('workspace_id', await resolveRuntimeWorkspaceId(request, workspaceId));
+  }
   const suffix = search.toString() ? `?${search.toString()}` : '';
 
   try {
-    const [profilesResult, healthResult, claudeResult] = await Promise.all([
-      runtimeJsonRequest(`/providers/profiles/health${suffix}`, { method: 'GET' }),
-      runtimeJsonRequest('/health', { method: 'GET' }),
-      runtimeJsonRequest('/providers/anthropic/local-cli/status', { method: 'GET' }),
-    ]);
+    const profilesResult = await runtimeJsonRequest(`/providers/profiles/health${suffix}`, { method: 'GET' });
 
     const profilePayload = profilesResult.payload && typeof profilesResult.payload === 'object'
       ? (profilesResult.payload as Record<string, unknown>)
       : {};
-    const profileItems = Array.isArray(profilePayload.items) ? profilePayload.items : [];
-    const profileCounts = new Map<string, number>();
-
-    for (const rawItem of profileItems) {
-      if (!rawItem || typeof rawItem !== 'object') continue;
-      const item = rawItem as Record<string, unknown>;
-      const provider = normalizeProvider(item.provider);
-      if (!provider) continue;
-      const enabled = item.enabled !== false;
-      const health = String(item.health || '').trim().toLowerCase();
-      if (!enabled || health === 'disabled') continue;
-      profileCounts.set(provider, (profileCounts.get(provider) || 0) + 1);
-    }
-
-    const items: RuntimeAvailabilityItem[] = Array.from(profileCounts.entries()).map(([provider, count]) =>
-      buildProfileItem(provider, count),
-    );
-    const byProvider = new Map(items.map((item) => [item.provider, item]));
-
-    const healthPayload = healthResult.payload && typeof healthResult.payload === 'object'
-      ? (healthResult.payload as Record<string, unknown>)
-      : {};
-    const openAiDetected = Boolean(healthPayload.openai_key_present) || Boolean(healthPayload.openai_vault_present);
-    const source = String(healthPayload.openai_credential_source || '').trim().toLowerCase();
-    const openAiReady = Boolean(healthPayload.openai_key_valid) && openAiSourceCountsAsVerified(source);
-    if (!byProvider.has('openai') && (openAiReady || openAiDetected)) {
-      items.push({
-        provider: 'openai',
-        label: PROVIDER_LABELS.openai,
-        ready: openAiReady,
-        status: openAiReady ? 'ready' : 'attention',
-        source: source || 'runtime_openai',
-        source_label: openAiSourceLabel(source),
-        detail: openAiReady
-          ? openAiReadyDetail(source)
-          : openAiAttentionDetail(source),
-        profile_count: 0,
-      });
-    }
-
-    const claudePayload = claudeResult.payload && typeof claudeResult.payload === 'object'
-      ? (claudeResult.payload as Record<string, unknown>)
-      : {};
-    const claudeLoggedIn = Boolean(claudePayload.loggedIn);
-    if (!byProvider.has('anthropic') && claudeLoggedIn) {
-      items.push({
-        provider: 'anthropic',
-        label: PROVIDER_LABELS.anthropic,
-        ready: true,
-        status: 'ready',
-        source: 'local_cli',
-        source_label: 'Claude subscription on this machine',
-        detail: 'The workspace runtime can already use the Claude subscription signed into the local Claude CLI on this machine.',
-        profile_count: 0,
-      });
-    }
+    const providerItems = Array.isArray(profilePayload.providers) ? profilePayload.providers : [];
+    const items: RuntimeAvailabilityItem[] = providerItems
+      .filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === 'object')
+      .map((item) => buildProviderItem(item))
+      .filter((item): item is RuntimeAvailabilityItem => item !== null)
+      .filter((item) => ['openai', 'anthropic', 'gemini', 'vertex'].includes(item.provider));
 
     const sortOrder = ['openai', 'anthropic', 'gemini', 'vertex'];
     items.sort((left, right) => {

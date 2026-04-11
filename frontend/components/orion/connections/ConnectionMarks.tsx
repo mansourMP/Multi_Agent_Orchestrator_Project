@@ -11,6 +11,62 @@ type ConnectorLogoId =
   | 'tiktok_business'
   | 'custom_api';
 
+const PROVIDER_ASSET_TILE_BG = '#FFFFFF';
+const PROVIDER_ASSET_TILE_BORDER = '#E2E2E2';
+
+const PROVIDER_VISUALS: Partial<Record<ProviderId, { assetSrc: string; bg: string; border: string }>> = {
+  openai: {
+    assetSrc: '/provider-logos/openai.svg',
+    bg: PROVIDER_ASSET_TILE_BG,
+    border: PROVIDER_ASSET_TILE_BORDER,
+  },
+  'openai-codex': {
+    assetSrc: '/provider-logos/openai.svg',
+    bg: PROVIDER_ASSET_TILE_BG,
+    border: PROVIDER_ASSET_TILE_BORDER,
+  },
+  anthropic: {
+    assetSrc: '/provider-logos/anthropic.svg',
+    bg: PROVIDER_ASSET_TILE_BG,
+    border: PROVIDER_ASSET_TILE_BORDER,
+  },
+  claude_code_cli: {
+    assetSrc: '/provider-logos/anthropic.svg',
+    bg: PROVIDER_ASSET_TILE_BG,
+    border: PROVIDER_ASSET_TILE_BORDER,
+  },
+  gemini: {
+    assetSrc: '/provider-logos/gemini.svg',
+    bg: PROVIDER_ASSET_TILE_BG,
+    border: PROVIDER_ASSET_TILE_BORDER,
+  },
+  vertex: {
+    assetSrc: '/provider-logos/vertex.svg',
+    bg: PROVIDER_ASSET_TILE_BG,
+    border: PROVIDER_ASSET_TILE_BORDER,
+  },
+  qwen: {
+    assetSrc: '/provider-logos/qwen.svg',
+    bg: PROVIDER_ASSET_TILE_BG,
+    border: PROVIDER_ASSET_TILE_BORDER,
+  },
+  deepseek: {
+    assetSrc: '/provider-logos/deepseek.svg',
+    bg: PROVIDER_ASSET_TILE_BG,
+    border: PROVIDER_ASSET_TILE_BORDER,
+  },
+  mistral: {
+    assetSrc: '/provider-logos/mistral.svg',
+    bg: PROVIDER_ASSET_TILE_BG,
+    border: PROVIDER_ASSET_TILE_BORDER,
+  },
+  ollama: {
+    assetSrc: '/provider-logos/ollama.svg',
+    bg: PROVIDER_ASSET_TILE_BG,
+    border: PROVIDER_ASSET_TILE_BORDER,
+  },
+};
+
 function LogoTile({
   size,
   bg,
@@ -73,101 +129,24 @@ export function ProviderLogoMark({
   provider: ProviderId;
   size?: number;
 }) {
-  if (provider === 'openai' || provider === 'openai-codex') {
+  const visual = PROVIDER_VISUALS[provider];
+  if (visual?.assetSrc) {
+    const innerSize = Math.round(size * 0.88);
     return (
-      <LogoTile size={size} bg="#111111">
-        <SvgMark size={size}>
-          <circle cx="12" cy="12" r="10" fill="#111111" />
-          <text x="12" y="15" textAnchor="middle" fill="#FFFFFF" fontSize="8" fontWeight="700" fontFamily="Arial, sans-serif">
-            AI
-          </text>
-        </SvgMark>
-      </LogoTile>
-    );
-  }
-
-  if (provider === 'anthropic' || provider === 'claude_code_cli') {
-    return (
-      <LogoTile size={size} bg="#FFFFFF" border="#E2E2E2">
-        <SvgMark size={size}>
-          <rect x="7" y="7" width="10" height="10" transform="rotate(45 12 12)" fill="#111111" />
-        </SvgMark>
-      </LogoTile>
-    );
-  }
-
-  if (provider === 'gemini') {
-    return (
-      <LogoTile size={size} bg="#FFFFFF" border="#E2E2E2">
-        <SvgMark size={size}>
-          <path d="M12 3L15.8 8.2L12 12L8.2 8.2L12 3Z" fill="#4285F4" />
-          <path d="M21 12L15.8 15.8L12 12L15.8 8.2L21 12Z" fill="#34A853" />
-          <path d="M12 21L8.2 15.8L12 12L15.8 15.8L12 21Z" fill="#FBBC05" />
-          <path d="M3 12L8.2 8.2L12 12L8.2 15.8L3 12Z" fill="#EA4335" />
-          <circle cx="12" cy="12" r="2.2" fill="#FFFFFF" />
-        </SvgMark>
-      </LogoTile>
-    );
-  }
-
-  if (provider === 'vertex') {
-    return (
-      <LogoTile size={size} bg="#FFFFFF" border="#E2E2E2">
-        <SvgMark size={size}>
-          <circle cx="6" cy="17" r="2" fill="#34A853" />
-          <circle cx="12" cy="7" r="2" fill="#4285F4" />
-          <circle cx="18" cy="17" r="2" fill="#FBBC05" />
-          <path d="M7.6 15.9L10.8 8.8M13.2 8.8L16.4 15.9M8.2 17H15.8" stroke="#EA4335" strokeWidth="1.8" strokeLinecap="round" />
-        </SvgMark>
-      </LogoTile>
-    );
-  }
-
-  if (provider === 'qwen') {
-    return (
-      <LogoTile size={size} bg="#6B40F0">
-        <SvgMark size={size}>
-          <circle cx="12" cy="12" r="9" fill="#6B40F0" />
-          <text x="12" y="15.3" textAnchor="middle" fill="#FFFFFF" fontSize="9" fontWeight="700" fontFamily="Arial, sans-serif">
-            Q
-          </text>
-        </SvgMark>
-      </LogoTile>
-    );
-  }
-
-  if (provider === 'deepseek') {
-    return (
-      <LogoTile size={size} bg="#4D6BFE">
-        <SvgMark size={size}>
-          <circle cx="12" cy="12" r="9" fill="#4D6BFE" />
-          <text x="12" y="15.1" textAnchor="middle" fill="#FFFFFF" fontSize="6.6" fontWeight="700" fontFamily="Arial, sans-serif">
-            DS
-          </text>
-        </SvgMark>
-      </LogoTile>
-    );
-  }
-
-  if (provider === 'mistral') {
-    return (
-      <LogoTile size={size} bg="#FF7000">
-        <SvgMark size={size}>
-          <path d="M5.5 18V6L9 11L12 6L15 11L18.5 6V18" stroke="#FFFFFF" strokeWidth="2.1" strokeLinejoin="round" strokeLinecap="round" />
-        </SvgMark>
-      </LogoTile>
-    );
-  }
-
-  if (provider === 'ollama') {
-    return (
-      <LogoTile size={size} bg="#333333">
-        <SvgMark size={size}>
-          <circle cx="12" cy="12" r="9" fill="#333333" />
-          <text x="12" y="15.1" textAnchor="middle" fill="#FFFFFF" fontSize="6.8" fontWeight="700" fontFamily="Arial, sans-serif">
-            OL
-          </text>
-        </SvgMark>
+      <LogoTile size={size} bg={visual.bg} border={visual.border}>
+        <img
+          src={visual.assetSrc}
+          alt=""
+          aria-hidden="true"
+          loading="eager"
+          style={{
+            width: innerSize,
+            height: innerSize,
+            objectFit: 'contain',
+            display: 'block',
+            flexShrink: 0,
+          }}
+        />
       </LogoTile>
     );
   }

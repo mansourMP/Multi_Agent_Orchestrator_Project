@@ -1,4 +1,5 @@
 import Constants from "expo-constants";
+import { Platform } from "react-native";
 
 import type {
   AgentTurnIntervention,
@@ -17,7 +18,8 @@ import type {
   NotificationReadResponse,
 } from "@shared/api-contract";
 import { createApiClient } from "@shared/api-contract/client";
-import type { MobileSession } from "./types";
+import { sessionAuthHeaders } from "./session";
+import type { MobileSession, TrustedDeviceSummary } from "./types";
 
 const extra = (Constants.expoConfig?.extra ?? {}) as {
   runtimeUrl?: string;
@@ -28,8 +30,39 @@ const extra = (Constants.expoConfig?.extra ?? {}) as {
   empyralistChatModel?: string;
 };
 
+function parseHostCandidate(value?: string | null) {
+  const trimmed = String(value || "").trim();
+  if (!trimmed) {
+    return "";
+  }
+  const withProtocol = /^[a-z][a-z0-9+.-]*:\/\//i.test(trimmed) ? trimmed : `http://${trimmed}`;
+  try {
+    return new URL(withProtocol).hostname || "";
+  } catch {
+    return "";
+  }
+}
+
+function getExpoDevRuntimeUrl() {
+  const host = parseHostCandidate(Constants.expoConfig?.hostUri);
+  if (!host) {
+    return "";
+  }
+  return `http://${host}:8001`;
+}
+
 export function getDefaultRuntimeUrl() {
-  return process.env.EXPO_PUBLIC_RUNTIME_URL || extra.runtimeUrl || "http://127.0.0.1:8001";
+  const explicitRuntimeUrl =
+    process.env.EXPO_PUBLIC_RUNTIME_URL ||
+    extra.runtimeUrl ||
+    "";
+  if (explicitRuntimeUrl) {
+    return explicitRuntimeUrl;
+  }
+  if (Platform.OS === "web") {
+    return "http://127.0.0.1:8001";
+  }
+  return getExpoDevRuntimeUrl();
 }
 
 function getConfiguredEmpyralistApiUrl() {
@@ -69,6 +102,53 @@ export function getDefaultWorkspaceId() {
 
 export function getDefaultPlatformUrl() {
   return process.env.EXPO_PUBLIC_PLATFORM_URL || extra.platformUrl || "";
+}
+
+export type MobileAccountAuthPayload = {
+  ok?: boolean;
+  token?: string;
+  user?: MobileSession["user"];
+  current_workspace_id?: string;
+  default_workspace_id?: string;
+  current_tenant_id?: string;
+  default_tenant_id?: string;
+  workspace_access?: NonNullable<MobileSession["workspaceAccess"]>;
+  tenant_access?: NonNullable<MobileSession["tenantAccess"]>;
+  auth_session?: MobileSession["authSession"];
+  device_link?: MobileSession["deviceLink"];
+  session_recovery?: MobileSession["sessionRecovery"];
+  identity_boundary?: MobileSession["identityBoundary"];
+  enterprise_security?: MobileSession["enterpriseSecurity"];
+  detail?: string;
+};
+
+function normalizeSessionRecoveryPayload(
+  value: unknown,
+): MobileSession["sessionRecovery"] | undefined {
+  const record = value && typeof value === "object" ? (value as Record<string, unknown>) : null;
+  if (!record) return undefined;
+  return {
+    session_id: typeof record.session_id === "string" ? record.session_id : undefined,
+    issued_at: typeof record.issued_at === "number" ? record.issued_at : undefined,
+    updated_at: typeof record.updated_at === "number" ? record.updated_at : undefined,
+    refreshToken: typeof record.refresh_token === "string" ? record.refresh_token : undefined,
+    refresh_expires_at: typeof record.refresh_expires_at === "number" ? record.refresh_expires_at : undefined,
+    rotated_at: typeof record.rotated_at === "number" ? record.rotated_at : undefined,
+    revoked_at: typeof record.revoked_at === "number" ? record.revoked_at : undefined,
+    revoked_reason: typeof record.revoked_reason === "string" ? record.revoked_reason : undefined,
+    active: typeof record.active === "boolean" ? record.active : undefined,
+  };
+}
+
+function normalizeMobileAccountAuthPayload(payload: Record<string, any> | null): MobileAccountAuthPayload {
+  return {
+    ...(payload || {}),
+    current_workspace_id: typeof payload?.current_workspace_id === "string" ? payload.current_workspace_id : undefined,
+    default_workspace_id: typeof payload?.default_workspace_id === "string" ? payload.default_workspace_id : undefined,
+    current_tenant_id: typeof payload?.current_tenant_id === "string" ? payload.current_tenant_id : undefined,
+    default_tenant_id: typeof payload?.default_tenant_id === "string" ? payload.default_tenant_id : undefined,
+    session_recovery: normalizeSessionRecoveryPayload(payload?.session_recovery),
+  };
 }
 
 export async function testRuntimeConnection(apiKey: string, runtimeUrl: string = getDefaultRuntimeUrl()) {
@@ -119,6 +199,7 @@ export type EmpyralistDirectChatResponse = {
   actions: EmpyralistChatAction[];
   approvals?: Record<string, unknown>[];
   interventions?: AgentTurnIntervention[];
+  thread_id?: string | null;
   mode?: string;
   error?: string;
   context_used?: Record<string, unknown> | null;
@@ -127,6 +208,7 @@ export type EmpyralistDirectChatResponse = {
 type EmpyralistDirectChatRequest = {
   message: string;
   threadId?: string;
+  clientSessionId?: string;
   provider?: string;
   model?: string;
   agentId?: string;
@@ -148,7 +230,10 @@ function buildMobileActor(session: MobileSession, actorId: string): AgentTurnReq
   return {
     type: "user",
     id: actorId,
-    display_name: "Mobile user",
+    display_name:
+      String(session.user?.name || "").trim() ||
+      String(session.user?.email || "").trim() ||
+      "Mobile user",
   };
 }
 
@@ -193,7 +278,7 @@ async function fetchAgentRegistryJson(
       ...options,
       headers: {
         ...(options?.headers || {}),
-        ...(session.runtimeKey ? { "X-API-Key": session.runtimeKey } : {}),
+        ...(sessionAuthHeaders(session) || {}),
       },
     });
   } catch (error) {
@@ -211,7 +296,7 @@ function buildMobileRuntimeClient(session: MobileSession) {
   const baseUrl = normalizeServerUrl(session.runtimeUrl);
   return createApiClient({
     buildUrl: (path) => `${baseUrl}${path.startsWith("/") ? path : `/${path}`}`,
-    getHeaders: () => (session.runtimeKey ? { "X-API-Key": session.runtimeKey } : undefined),
+    getHeaders: () => sessionAuthHeaders(session),
     fetchFn: async (input, init) => {
       try {
         return await fetch(input, init);
@@ -220,6 +305,33 @@ function buildMobileRuntimeClient(session: MobileSession) {
       }
     },
   });
+}
+
+async function requestMobileAuth(
+  runtimeUrl: string,
+  path: "/auth/login" | "/auth/register" | "/auth/me" | "/auth/providers" | "/auth/signup" | "/auth/refresh",
+  options?: RequestInit,
+) {
+  const baseUrl = normalizeServerUrl(runtimeUrl || getDefaultRuntimeUrl());
+  let response: Response;
+  try {
+    response = await fetch(`${baseUrl}${path}`, {
+      ...options,
+      headers: {
+        ...(options?.headers || {}),
+      },
+    });
+  } catch (error) {
+    throw new Error(error instanceof TypeError ? formatNetworkError(baseUrl) : "Request failed.");
+  }
+  const payload = await response.json().catch(() => null) as Record<string, any> | null;
+  if (!response.ok) {
+    const detail = typeof payload?.detail === "string" && payload.detail.trim()
+      ? payload.detail.trim()
+      : "Authentication request failed.";
+    throw new Error(detail);
+  }
+  return normalizeMobileAccountAuthPayload(payload);
 }
 
 function normalizeEmpyralistChatResponse(payload: unknown): EmpyralistDirectChatResponse {
@@ -352,18 +464,164 @@ async function parseEmpyralistEventStream(
 }
 
 export const mobileApi = {
+  async loginAccount(input: {
+    runtimeUrl?: string;
+    email: string;
+    password: string;
+    deviceId?: string;
+    deviceName?: string;
+    devicePlatform?: string;
+    workspaceId?: string;
+    sessionTtlSeconds?: number;
+  }) {
+    return requestMobileAuth(input.runtimeUrl || getDefaultRuntimeUrl(), "/auth/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        email: input.email,
+        password: input.password,
+        channel: "mobile",
+        device_id: input.deviceId,
+        device_name: input.deviceName,
+        device_platform: input.devicePlatform,
+        workspace_id: input.workspaceId,
+        session_ttl_seconds: input.sessionTtlSeconds,
+      }),
+    });
+  },
+  async registerAccount(input: {
+    runtimeUrl?: string;
+    name: string;
+    email: string;
+    password: string;
+    deviceId?: string;
+    deviceName?: string;
+    devicePlatform?: string;
+    workspaceId?: string;
+    sessionTtlSeconds?: number;
+  }) {
+    return requestMobileAuth(input.runtimeUrl || getDefaultRuntimeUrl(), "/auth/register", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        name: input.name,
+        email: input.email,
+        password: input.password,
+        channel: "mobile",
+        device_id: input.deviceId,
+        device_name: input.deviceName,
+        device_platform: input.devicePlatform,
+        workspace_id: input.workspaceId,
+        session_ttl_seconds: input.sessionTtlSeconds,
+      }),
+    });
+  },
+  async getAccountProfile(session: MobileSession) {
+    const baseUrl = normalizeServerUrl(session.runtimeUrl);
+    let response: Response;
+    try {
+      response = await fetch(`${baseUrl}/auth/me`, {
+        method: "GET",
+        headers: sessionAuthHeaders(session),
+      });
+    } catch (error) {
+      throw new Error(error instanceof TypeError ? formatNetworkError(baseUrl) : "Request failed.");
+    }
+    const payload = await response.json().catch(() => null) as MobileAccountAuthPayload | null;
+    if (!response.ok) {
+      const detail = typeof payload?.detail === "string" && payload.detail.trim()
+        ? payload.detail.trim()
+        : "Profile request failed.";
+      throw new Error(detail);
+    }
+    return normalizeMobileAccountAuthPayload(payload);
+  },
+  async refreshAccountSession(input: {
+    runtimeUrl?: string;
+    refreshToken: string;
+    deviceId?: string;
+    deviceName?: string;
+    devicePlatform?: string;
+    workspaceId?: string;
+    sessionTtlSeconds?: number;
+  }) {
+    return requestMobileAuth(input.runtimeUrl || getDefaultRuntimeUrl(), "/auth/refresh", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        refresh_token: input.refreshToken,
+        device_id: input.deviceId,
+        device_name: input.deviceName,
+        device_platform: input.devicePlatform,
+        workspace_id: input.workspaceId,
+        session_ttl_seconds: input.sessionTtlSeconds,
+      }),
+    });
+  },
+  async listTrustedDevices(session: MobileSession) {
+    const baseUrl = normalizeServerUrl(session.runtimeUrl);
+    const response = await fetch(`${baseUrl}/auth/devices`, {
+      method: "GET",
+      headers: sessionAuthHeaders(session),
+    });
+    const payload = await response.json().catch(() => null) as {
+      devices?: TrustedDeviceSummary[];
+      current_device_id?: string;
+      detail?: string;
+    } | null;
+    if (!response.ok) {
+      throw new Error(typeof payload?.detail === "string" ? payload.detail : "Failed to load trusted devices.");
+    }
+    return {
+      devices: Array.isArray(payload?.devices) ? payload.devices : [],
+      currentDeviceId: typeof payload?.current_device_id === "string" ? payload.current_device_id : "",
+    };
+  },
+  async revokeTrustedDevice(session: MobileSession, deviceId: string) {
+    const baseUrl = normalizeServerUrl(session.runtimeUrl);
+    const response = await fetch(`${baseUrl}/auth/devices/${encodeURIComponent(deviceId)}`, {
+      method: "DELETE",
+      headers: sessionAuthHeaders(session),
+    });
+    const payload = await response.json().catch(() => null) as {
+      ok?: boolean;
+      current_device_id?: string;
+      revoked_current_device?: boolean;
+      detail?: string;
+      device?: TrustedDeviceSummary;
+    } | null;
+    if (!response.ok) {
+      throw new Error(typeof payload?.detail === "string" ? payload.detail : "Failed to revoke trusted device.");
+    }
+    return {
+      ok: payload?.ok === true,
+      currentDeviceId: typeof payload?.current_device_id === "string" ? payload.current_device_id : "",
+      revokedCurrentDevice: payload?.revoked_current_device === true,
+      device: payload?.device,
+    };
+  },
   async respondChat(
     session: MobileSession,
     payload: EmpyralistDirectChatRequest,
     options?: { onChunk?: (delta: string) => void },
   ) {
     const chatUrl = getEmpyralistChatEndpoint(session);
+    const controller = typeof AbortController !== "undefined" ? new AbortController() : null;
+    const timeoutMs = 45_000;
+    const timeoutId = controller
+      ? setTimeout(() => {
+          controller.abort();
+        }, timeoutMs)
+      : null;
     let response: Response;
     try {
-      const actorId = payload.threadId || createMobileRequestId("mobile-chat");
+      const actorId =
+        String(payload.clientSessionId || payload.threadId || createMobileRequestId("mobile-chat")).trim() ||
+        createMobileRequestId("mobile-chat");
       const requestBody: AgentTurnRequest = {
         tenant_id: "default",
         workspace_id: session.workspaceId || getDefaultWorkspaceId(),
+        thread_id: payload.threadId ? payload.threadId : undefined,
         session_id: actorId,
         channel: "mobile",
         actor: buildMobileActor(session, actorId),
@@ -379,7 +637,7 @@ export const mobileApi = {
           approved_action: payload.approvedAction || undefined,
           metadata: {
             source: "mobile_chat",
-            thread_id: payload.threadId || undefined,
+            client_session_id: payload.clientSessionId || undefined,
             agent_id: payload.agentId || undefined,
             agent_label: payload.agentName || undefined,
             agent_role: payload.agentRole || undefined,
@@ -387,16 +645,40 @@ export const mobileApi = {
           },
         },
       };
-      response = await buildMobileRuntimeClient(session).openTurnStreamResponse(requestBody);
+      response = await buildMobileRuntimeClient(session).openTurnStreamResponse(requestBody, {
+        signal: controller?.signal,
+      });
     } catch (error) {
+      if (timeoutId) clearTimeout(timeoutId);
+      const normalized = error instanceof Error ? error : null;
+      if (normalized?.name === "AbortError") {
+        throw new Error("Empyralis cloud took too long to respond. The thread is still here on this phone, so you can retry once the backend recovers.");
+      }
       throw new Error(error instanceof TypeError ? formatNetworkError(chatUrl) : "Request failed.");
     }
 
     if (!response.ok) {
-      throw new Error(`API request failed: ${response.status}`);
+      if (timeoutId) clearTimeout(timeoutId);
+      const payload = await response.json().catch(() => null) as { detail?: string; error?: string } | null;
+      throw new Error(
+        typeof payload?.detail === "string" && payload.detail.trim()
+          ? payload.detail.trim()
+          : typeof payload?.error === "string" && payload.error.trim()
+            ? payload.error.trim()
+            : `API request failed: ${response.status}`,
+      );
     }
-
-    return parseEmpyralistEventStream(response, options?.onChunk);
+    try {
+      return await parseEmpyralistEventStream(response, options?.onChunk);
+    } catch (error) {
+      const normalized = error instanceof Error ? error : null;
+      if (normalized?.name === "AbortError") {
+        throw new Error("Empyralis cloud took too long to respond. The thread is still here on this phone, so you can retry once the backend recovers.");
+      }
+      throw error;
+    } finally {
+      if (timeoutId) clearTimeout(timeoutId);
+    }
   },
   getRun(session: MobileSession, runId: string) {
     return buildMobileRuntimeClient(session).getRunDetail(runId) as Promise<RunDetailResponse>;
@@ -528,7 +810,7 @@ export const mobileApi = {
     const baseUrl = normalizeServerUrl(session.runtimeUrl);
     const response = await fetch(`${baseUrl}/connectors/vault/${encodeURIComponent(connectorId)}/test?workspace_id=${encodeURIComponent(session.workspaceId)}`, {
       method: "POST",
-      headers: session.runtimeKey ? { "X-API-Key": session.runtimeKey } : undefined,
+      headers: sessionAuthHeaders(session),
     });
     const payload = await response.json().catch(() => null);
     if (!response.ok) {
@@ -540,7 +822,7 @@ export const mobileApi = {
     const baseUrl = normalizeServerUrl(session.runtimeUrl);
     const response = await fetch(`${baseUrl}/connectors/vault/${encodeURIComponent(connectorId)}?workspace_id=${encodeURIComponent(session.workspaceId)}`, {
       method: "DELETE",
-      headers: session.runtimeKey ? { "X-API-Key": session.runtimeKey } : undefined,
+      headers: sessionAuthHeaders(session),
     });
     const payload = await response.json().catch(() => null);
     if (!response.ok) {

@@ -139,7 +139,7 @@ class OutboxServiceTests(unittest.TestCase):
 
         replayed = outbox_service.replay_undelivered_events_on_startup(
             older_than_seconds=30,
-            list_undelivered_outbox_events_fn=lambda **kwargs: [
+            claim_due_outbox_events_fn=lambda **kwargs: [
                 {
                     "event_id": "evt-1",
                     "event_type": "approval_resolved",
@@ -149,22 +149,24 @@ class OutboxServiceTests(unittest.TestCase):
                     "trace_id": "trace-1",
                     "idempotency_key": "approval_resolved:approval-1:approved",
                     "payload": {"approval_id": "approval-1"},
+                    "claim_token": "claim-1",
+                    "claimed_by": kwargs.get("claimed_by"),
                 }
             ],
-            mark_outbox_event_delivered_fn=lambda event_id: marked.append(event_id),
+            mark_outbox_event_delivered_fn=lambda event_id, **kwargs: marked.append((event_id, kwargs.get("claim_token"))),
             deliver_event_fn=lambda event: delivered.append(event.event_id) or True,
         )
 
         self.assertEqual(replayed, ["evt-1"])
         self.assertEqual(delivered, ["evt-1"])
-        self.assertEqual(marked, ["evt-1"])
+        self.assertEqual(marked, [("evt-1", "claim-1")])
 
     def test_deliver_due_outbox_events_once_records_failure_and_poison_isolation(self) -> None:
         failures = []
         marked = []
 
         result = outbox_service.deliver_due_outbox_events_once(
-            list_undelivered_outbox_events_fn=lambda **kwargs: [
+            claim_due_outbox_events_fn=lambda **kwargs: [
                 {
                     "event_id": "evt-bad",
                     "event_type": "approval_resolved",
@@ -175,6 +177,7 @@ class OutboxServiceTests(unittest.TestCase):
                     "idempotency_key": "approval_resolved:approval-1:approved",
                     "payload": {"approval_id": "approval-1"},
                     "retry_count": 4,
+                    "claim_token": "claim-bad",
                 },
                 {
                     "event_id": "evt-good",
@@ -186,23 +189,26 @@ class OutboxServiceTests(unittest.TestCase):
                     "idempotency_key": "artifact_created:run-1:/tmp/shot.png:0",
                     "payload": {"artifact_path": "/tmp/shot.png"},
                     "retry_count": 0,
+                    "claim_token": "claim-good",
                 },
             ],
-            mark_outbox_event_delivered_fn=lambda event_id: marked.append(event_id),
-            record_outbox_delivery_failure_fn=lambda event_id, **kwargs: failures.append((event_id, kwargs)),
+            mark_outbox_event_delivered_fn=lambda event_id, **kwargs: marked.append((event_id, kwargs.get("claim_token"))) or True,
+            record_outbox_delivery_failure_fn=lambda event_id, **kwargs: failures.append((event_id, kwargs)) or True,
             deliver_event_fn=lambda event: event.event_id == "evt-good",
             get_outbox_delivery_status_fn=lambda: {
                 "undelivered_count": 1,
                 "poisoned_count": 1,
+                "claimed_count": 0,
                 "total_retry_count": 5,
                 "max_retry_count": 5,
                 "last_delivery_error": {"event_id": "evt-bad", "message": "delivery sink returned false"},
             },
         )
 
-        self.assertEqual(marked, ["evt-good"])
+        self.assertEqual(marked, [("evt-good", "claim-good")])
         self.assertEqual(failures[0][0], "evt-bad")
         self.assertTrue(failures[0][1]["poison"])
+        self.assertEqual(failures[0][1]["claim_token"], "claim-bad")
         self.assertEqual(result["poisoned_ids"], ["evt-bad"])
         self.assertEqual(result["delivered_ids"], ["evt-good"])
         self.assertEqual(result["status"]["last_delivery_error"]["event_id"], "evt-bad")
@@ -211,7 +217,7 @@ class OutboxServiceTests(unittest.TestCase):
     def test_deliver_due_outbox_events_once_defers_retry_later_without_increment(self) -> None:
         failures = []
         result = outbox_service.deliver_due_outbox_events_once(
-            list_undelivered_outbox_events_fn=lambda **kwargs: [
+            claim_due_outbox_events_fn=lambda **kwargs: [
                 {
                     "event_id": "evt-pending",
                     "event_type": "channel_run_delivery",
@@ -222,20 +228,46 @@ class OutboxServiceTests(unittest.TestCase):
                     "idempotency_key": "channel_run_delivery:telegram:conn-1:run-1",
                     "payload": {"channel": "telegram", "connector_id": "conn-1"},
                     "retry_count": 0,
+                    "claim_token": "claim-pending",
                 }
             ],
-            mark_outbox_event_delivered_fn=lambda event_id: None,
-            record_outbox_delivery_failure_fn=lambda event_id, **kwargs: failures.append((event_id, kwargs)),
+            mark_outbox_event_delivered_fn=lambda event_id, **kwargs: None,
+            record_outbox_delivery_failure_fn=lambda event_id, **kwargs: failures.append((event_id, kwargs)) or True,
             deliver_event_fn=lambda event: (_ for _ in ()).throw(
                 outbox_service.OutboxRetryLater("pending terminal state", retry_delay_seconds=3)
             ),
-            get_outbox_delivery_status_fn=lambda: {"undelivered_count": 1, "poisoned_count": 0},
+            get_outbox_delivery_status_fn=lambda: {"undelivered_count": 1, "poisoned_count": 0, "claimed_count": 0},
         )
 
         self.assertEqual(result["deferred_ids"], ["evt-pending"])
         self.assertEqual(failures[0][0], "evt-pending")
+        self.assertEqual(failures[0][1]["claim_token"], "claim-pending")
         self.assertEqual(failures[0][1]["retry_delay_seconds"], 3)
         self.assertFalse(failures[0][1]["increment_retry"])
+
+    def test_deliver_due_outbox_events_once_skips_items_without_claim(self) -> None:
+        delivered = []
+        result = outbox_service.deliver_due_outbox_events_once(
+            claim_due_outbox_events_fn=lambda **kwargs: [
+                {
+                    "event_id": "evt-unclaimed",
+                    "event_type": "approval_resolved",
+                    "tenant_id": "tenant-1",
+                    "workspace_id": "ws-1",
+                    "run_id": "run-1",
+                    "trace_id": "trace-1",
+                    "idempotency_key": "approval_resolved:approval-1:approved",
+                    "payload": {"approval_id": "approval-1"},
+                }
+            ],
+            mark_outbox_event_delivered_fn=lambda event_id, **kwargs: True,
+            record_outbox_delivery_failure_fn=lambda event_id, **kwargs: True,
+            deliver_event_fn=lambda event: delivered.append(event.event_id) or True,
+            get_outbox_delivery_status_fn=lambda: {"undelivered_count": 1, "poisoned_count": 0, "claimed_count": 0},
+        )
+
+        self.assertEqual(delivered, [])
+        self.assertEqual(result["attempted"], 0)
 
     def test_deliver_outbox_event_uses_stable_ids_for_duplicate_safety(self) -> None:
         channel_events = []

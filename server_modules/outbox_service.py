@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 import logging
+import os
 from pathlib import Path
 import threading
 import time
@@ -34,6 +35,10 @@ class OutboxEvent:
     last_attempted_at: Optional[str] = None
     next_attempt_at: Optional[str] = None
     poisoned_at: Optional[str] = None
+    claim_token: Optional[str] = None
+    claimed_by: Optional[str] = None
+    claimed_at: Optional[str] = None
+    claim_expires_at: Optional[str] = None
 
 
 @dataclass(slots=True)
@@ -51,6 +56,10 @@ class OutboxRetryLater(RuntimeError):
 
 def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _default_outbox_claimed_by() -> str:
+    return f"outbox-delivery:{os.getpid()}:{threading.get_ident()}"
 
 
 def _normalized_scope_token(value: Any, *, default: str = "default") -> str:
@@ -402,7 +411,68 @@ def _outbox_event_from_item(item: Mapping[str, Any]) -> Optional[OutboxEvent]:
         last_attempted_at=str(item.get("last_attempted_at") or "").strip() or None,
         next_attempt_at=str(item.get("next_attempt_at") or "").strip() or None,
         poisoned_at=str(item.get("poisoned_at") or "").strip() or None,
+        claim_token=str(item.get("claim_token") or "").strip() or None,
+        claimed_by=str(item.get("claimed_by") or "").strip() or None,
+        claimed_at=str(item.get("claimed_at") or "").strip() or None,
+        claim_expires_at=str(item.get("claim_expires_at") or "").strip() or None,
     )
+
+
+def _compat_claim_items(
+    items: Sequence[Mapping[str, Any]],
+    *,
+    claimed_by: str,
+) -> list[Dict[str, Any]]:
+    claimed_items: list[Dict[str, Any]] = []
+    claimed_at = _utc_now_iso()
+    for item in items or []:
+        payload = dict(item or {}) if isinstance(item, Mapping) else {}
+        payload.setdefault("claim_token", f"compat-claim:{payload.get('event_id')}")
+        payload.setdefault("claimed_by", claimed_by)
+        payload.setdefault("claimed_at", claimed_at)
+        payload.setdefault("claim_expires_at", claimed_at)
+        claimed_items.append(payload)
+    return claimed_items
+
+
+def _mark_outbox_event_delivered_with_claim(
+    mark_outbox_event_delivered_fn: Callable[..., Any],
+    event_id: str,
+    claim_token: str,
+) -> Any:
+    try:
+        return mark_outbox_event_delivered_fn(event_id, claim_token=claim_token)
+    except TypeError:
+        return mark_outbox_event_delivered_fn(event_id)
+
+
+def _record_outbox_delivery_failure_with_claim(
+    record_outbox_delivery_failure_fn: Callable[..., Any],
+    event_id: str,
+    *,
+    claim_token: str,
+    error_text: str,
+    retry_delay_seconds: Optional[int],
+    poison: bool,
+    increment_retry: bool,
+) -> Any:
+    try:
+        return record_outbox_delivery_failure_fn(
+            event_id,
+            claim_token=claim_token,
+            error_text=error_text,
+            retry_delay_seconds=retry_delay_seconds,
+            poison=poison,
+            increment_retry=increment_retry,
+        )
+    except TypeError:
+        return record_outbox_delivery_failure_fn(
+            event_id,
+            error_text=error_text,
+            retry_delay_seconds=retry_delay_seconds,
+            poison=poison,
+            increment_retry=increment_retry,
+        )
 
 
 def _delivery_text_for_event(event: OutboxEvent) -> str:
@@ -507,14 +577,17 @@ def deliver_due_outbox_events_once(
     *,
     older_than_seconds: int = 0,
     limit: int = 200,
+    claim_due_outbox_events_fn: Optional[Callable[..., Sequence[Mapping[str, Any]]]] = None,
     list_undelivered_outbox_events_fn: Optional[Callable[..., Sequence[Mapping[str, Any]]]] = None,
     mark_outbox_event_delivered_fn: Optional[Callable[[str], Any]] = None,
     record_outbox_delivery_failure_fn: Optional[Callable[..., Any]] = None,
     deliver_event_fn: Optional[Callable[[OutboxEvent], Any]] = None,
     get_outbox_delivery_status_fn: Optional[Callable[[], Dict[str, Any]]] = None,
+    claimed_by: Optional[str] = None,
+    claim_ttl_seconds: int = 30,
 ) -> Dict[str, Any]:
     if (
-        list_undelivered_outbox_events_fn is None
+        claim_due_outbox_events_fn is None
         or mark_outbox_event_delivered_fn is None
         or record_outbox_delivery_failure_fn is None
         or get_outbox_delivery_status_fn is None
@@ -522,9 +595,9 @@ def deliver_due_outbox_events_once(
         try:
             from server_modules import run_state_repository
 
-            list_undelivered_outbox_events_fn = (
-                list_undelivered_outbox_events_fn
-                or run_state_repository.sync_list_undelivered_outbox_events
+            claim_due_outbox_events_fn = (
+                claim_due_outbox_events_fn
+                or run_state_repository.sync_claim_due_outbox_events
             )
             mark_outbox_event_delivered_fn = (
                 mark_outbox_event_delivered_fn
@@ -547,6 +620,7 @@ def deliver_due_outbox_events_once(
                 "status": {
                     "undelivered_count": 0,
                     "poisoned_count": 0,
+                    "claimed_count": 0,
                     "repeated_failure_count": 0,
                     "stuck_count": 0,
                     "total_retry_count": 0,
@@ -556,7 +630,19 @@ def deliver_due_outbox_events_once(
             }
     if deliver_event_fn is None:
         deliver_event_fn = deliver_outbox_event
-    if not callable(list_undelivered_outbox_events_fn):
+    claimed_by_token = str(claimed_by or "").strip() or _default_outbox_claimed_by()
+    if not callable(claim_due_outbox_events_fn):
+        if callable(list_undelivered_outbox_events_fn):
+            claim_due_outbox_events_fn = lambda **kwargs: _compat_claim_items(  # noqa: E731
+                list_undelivered_outbox_events_fn(
+                    older_than_seconds=kwargs.get("older_than_seconds", 0),
+                    limit=kwargs.get("limit", 200),
+                ),
+                claimed_by=str(kwargs.get("claimed_by") or claimed_by_token),
+            )
+        else:
+            claim_due_outbox_events_fn = None
+    if not callable(claim_due_outbox_events_fn):
         return {
             "attempted": 0,
             "delivered_ids": [],
@@ -569,13 +655,19 @@ def deliver_due_outbox_events_once(
     failed_ids: list[str] = []
     deferred_ids: list[str] = []
     poisoned_ids: list[str] = []
-    items = list_undelivered_outbox_events_fn(
+    items = claim_due_outbox_events_fn(
         older_than_seconds=max(0, int(older_than_seconds or 0)),
         limit=max(1, int(limit or 0)),
+        claimed_by=claimed_by_token,
+        claim_ttl_seconds=max(1, int(claim_ttl_seconds or 0)),
     )
     for item in items or []:
         event = _outbox_event_from_item(item)
         if event is None:
+            continue
+        claim_token = str(event.claim_token or "").strip()
+        if not claim_token:
+            LOGGER.warning("Skipping outbox event %s without claim token.", event.event_id)
             continue
         try:
             delivered = bool(deliver_event_fn(event))
@@ -585,8 +677,10 @@ def deliver_due_outbox_events_once(
             retry_delay_seconds = max(1, int(exc.retry_delay_seconds or 1))
             error_message = str(exc or "retry later").strip() or "retry later"
             try:
-                record_outbox_delivery_failure_fn(
+                _record_outbox_delivery_failure_with_claim(
+                    record_outbox_delivery_failure_fn,
                     event.event_id,
+                    claim_token=claim_token,
                     error_text=error_message,
                     retry_delay_seconds=retry_delay_seconds,
                     poison=False,
@@ -602,8 +696,10 @@ def deliver_due_outbox_events_once(
             poison = retry_delay_seconds is None
             error_message = str(exc or "delivery failed").strip() or "delivery failed"
             try:
-                record_outbox_delivery_failure_fn(
+                _record_outbox_delivery_failure_with_claim(
+                    record_outbox_delivery_failure_fn,
                     event.event_id,
+                    claim_token=claim_token,
                     error_text=error_message,
                     retry_delay_seconds=retry_delay_seconds,
                     poison=poison,
@@ -616,8 +712,15 @@ def deliver_due_outbox_events_once(
                 poisoned_ids.append(event.event_id)
             continue
         try:
-            mark_outbox_event_delivered_fn(event.event_id)
-            delivered_ids.append(event.event_id)
+            marked = _mark_outbox_event_delivered_with_claim(
+                mark_outbox_event_delivered_fn,
+                event.event_id,
+                claim_token,
+            )
+            if bool(marked) or marked is None:
+                delivered_ids.append(event.event_id)
+            else:
+                LOGGER.warning("Failed to fence delivered outbox event %s with active claim.", event.event_id)
         except Exception as exc:
             LOGGER.warning("Failed to mark outbox event %s delivered: %s", event.event_id, exc)
     status = (
@@ -626,6 +729,7 @@ def deliver_due_outbox_events_once(
         else {
             "undelivered_count": 0,
             "poisoned_count": 0,
+            "claimed_count": 0,
             "repeated_failure_count": 0,
             "stuck_count": 0,
             "total_retry_count": 0,
@@ -647,18 +751,24 @@ def replay_undelivered_events_on_startup(
     *,
     older_than_seconds: int = 30,
     limit: int = 200,
+    claim_due_outbox_events_fn: Optional[Callable[..., Sequence[Mapping[str, Any]]]] = None,
     list_undelivered_outbox_events_fn: Optional[Callable[..., Sequence[Mapping[str, Any]]]] = None,
     mark_outbox_event_delivered_fn: Optional[Callable[[str], Any]] = None,
     record_outbox_delivery_failure_fn: Optional[Callable[..., Any]] = None,
     deliver_event_fn: Optional[Callable[[OutboxEvent], Any]] = None,
+    claimed_by: Optional[str] = None,
+    claim_ttl_seconds: int = 30,
 ) -> list[str]:
     result = deliver_due_outbox_events_once(
         older_than_seconds=max(0, int(older_than_seconds or 0)),
         limit=max(1, int(limit or 0)),
+        claim_due_outbox_events_fn=claim_due_outbox_events_fn,
         list_undelivered_outbox_events_fn=list_undelivered_outbox_events_fn,
         mark_outbox_event_delivered_fn=mark_outbox_event_delivered_fn,
         record_outbox_delivery_failure_fn=record_outbox_delivery_failure_fn,
         deliver_event_fn=deliver_event_fn,
+        claimed_by=claimed_by,
+        claim_ttl_seconds=claim_ttl_seconds,
     )
     return list(result.get("delivered_ids") or [])
 
@@ -670,6 +780,8 @@ def run_outbox_delivery_forever(
     older_than_seconds: int = 0,
     stop_event: Optional[threading.Event] = None,
     deliver_once_fn: Callable[..., Dict[str, Any]] = deliver_due_outbox_events_once,
+    claimed_by: Optional[str] = None,
+    claim_ttl_seconds: int = 30,
 ) -> None:
     interval = max(0.25, float(poll_seconds or 0.0))
     while True:
@@ -679,6 +791,8 @@ def run_outbox_delivery_forever(
             deliver_once_fn(
                 older_than_seconds=max(0, int(older_than_seconds or 0)),
                 limit=max(1, int(limit or 0)),
+                claimed_by=claimed_by,
+                claim_ttl_seconds=claim_ttl_seconds,
             )
         except Exception as exc:
             LOGGER.warning("Outbox delivery loop failed: %s", exc)
@@ -700,6 +814,7 @@ def get_outbox_delivery_status(
         return {
             "undelivered_count": 0,
             "poisoned_count": 0,
+            "claimed_count": 0,
             "repeated_failure_count": 0,
             "stuck_count": 0,
             "total_retry_count": 0,
@@ -712,6 +827,7 @@ def get_outbox_delivery_status(
         return {
             "undelivered_count": 0,
             "poisoned_count": 0,
+            "claimed_count": 0,
             "repeated_failure_count": 0,
             "stuck_count": 0,
             "total_retry_count": 0,

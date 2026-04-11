@@ -17,6 +17,7 @@ class TelegramPollDispatchService:
         explicit_run_command: Callable[[str], bool],
         help_text: Callable[[Dict[str, Any]], str],
         send_message: Callable[..., Any],
+        channel_pairing_service: Callable[[], Any],
     ) -> None:
         self.sender_allowed = sender_allowed
         self.session_key_builder = session_key_builder
@@ -28,6 +29,7 @@ class TelegramPollDispatchService:
         self.explicit_run_command = explicit_run_command
         self.help_text = help_text
         self.send_message = send_message
+        self.channel_pairing_service = channel_pairing_service
 
     def handle_update(
         self,
@@ -48,28 +50,49 @@ class TelegramPollDispatchService:
         chat = extracted_message.get("chat") if isinstance(extracted_message.get("chat"), dict) else {}
         sender = extracted_message.get("sender") if isinstance(extracted_message.get("sender"), dict) else {}
 
-        if not self.sender_allowed(sender, allow_from):
-            sender_id = str(sender.get("id") or "").strip()
-            sender_username = str(sender.get("username") or "").strip().lower()
-            dropped_count = int(connector_state.get("dropped_sender_count") or 0) + 1
-            self.sender_filter_service().handle_denied_sender(
-                connector_id=connector_id,
-                label=label,
-                workspace_id=workspace_id,
-                update_id=update_id,
-                profile_id=str(profile.get("id") or ""),
-                allow_from=list(allow_from),
-                sender_id=sender_id,
-                sender_username=sender_username,
-                chat_id=self.session_key_builder(str(chat.get("id") or configured_chat_id)),
-                dropped_count=dropped_count,
-                dedupe_seconds=8.0,
-            )
-            return {"handled": True, "processed": False, "reason": "sender_denied"}
+        chat_id = str(chat.get("id") or configured_chat_id).strip()
+        sender_id = str(sender.get("id") or "").strip()
+        inbound_message_id = str(message.get("message_id") or "").strip()
+        raw_message_text = str(message.get("text") or "")
+        pair_resolution = self.channel_pairing_service().authorize_channel_message(
+            provider="telegram",
+            external_subject=sender_id,
+            workspace_id=workspace_id,
+            message_text=raw_message_text,
+            observed_metadata={
+                "chat_id": chat_id or None,
+                "sender_username": str(sender.get("username") or "").strip().lower() or None,
+                "sender_display_name": str(sender.get("first_name") or "").strip() or None,
+                "connector_id": connector_id,
+                "update_id": update_id,
+            },
+        )
+        if not bool(pair_resolution.get("authorized")):
+            reply_text = str(pair_resolution.get("reply_text") or "").strip()
+            if reply_text and chat_id:
+                self.send_message(
+                    bot_token=bot_token,
+                    chat_id=chat_id,
+                    text=reply_text,
+                    workspace_id=workspace_id,
+                    action=str(pair_resolution.get("status") or "pairing_required"),
+                    connector_id=connector_id,
+                    parent_message_id=inbound_message_id or None,
+                    profile=profile,
+                    trace_id=f"tgpair:{chat_id}:{update_id}",
+                    source_event_id=None,
+                )
+            return {
+                "handled": True,
+                "processed": False,
+                "reason": str(pair_resolution.get("status") or "pairing_required"),
+            }
+
+        resolved_workspace_id = str(pair_resolution.get("workspace_id") or workspace_id).strip() or workspace_id
 
         inbound_context = self.inbound_context_service().build_inbound_context(
             bot_token=bot_token,
-            workspace_id=workspace_id,
+            workspace_id=resolved_workspace_id,
             connector_id=connector_id,
             profile=profile,
             configured_chat_id=configured_chat_id,
@@ -94,7 +117,7 @@ class TelegramPollDispatchService:
         source_event_id = str(inbound_context.get("source_event_id") or "").strip()
 
         guided_setup = self.inbound_context_service().handle_guided_setup(
-            workspace_id=workspace_id,
+            workspace_id=resolved_workspace_id,
             connector_id=connector_id,
             profile=profile,
             bot_token=bot_token,
@@ -111,14 +134,14 @@ class TelegramPollDispatchService:
             return {"handled": True, "processed": False, "reason": "ignore"}
 
         run_id = ""
-        chat_profile = self.get_chat_profile(workspace_id, chat_id)
+        chat_profile = self.get_chat_profile(resolved_workspace_id, chat_id)
         if action != "run":
             action_result = self.action_service().handle_non_run_action(
                 action=action,
                 routed=routed,
                 profile=profile,
                 chat_profile=chat_profile,
-                workspace_id=workspace_id,
+                workspace_id=resolved_workspace_id,
                 connector_id=connector_id,
                 bot_token=bot_token,
                 chat_id=chat_id,
@@ -138,7 +161,7 @@ class TelegramPollDispatchService:
                 profile=profile,
                 chat_profile=chat_profile,
                 stored_attachments=stored_attachments,
-                workspace_id=workspace_id,
+                workspace_id=resolved_workspace_id,
                 connector_id=connector_id,
                 connector_entry=entry,
                 bot_token=bot_token,
@@ -157,7 +180,7 @@ class TelegramPollDispatchService:
                 bot_token,
                 chat_id,
                 self.help_text(profile),
-                workspace_id=workspace_id,
+                workspace_id=resolved_workspace_id,
                 action="help",
                 connector_id=connector_id,
                 parent_message_id=inbound_message_id or None,

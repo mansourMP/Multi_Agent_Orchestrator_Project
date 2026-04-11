@@ -28,6 +28,7 @@ class TelegramAutopilotServiceRegistryTests(unittest.TestCase):
             media_max_items=4,
             max_updates=25,
             poll_seconds=5.0,
+            delivery_mode="polling",
             run_timeout_seconds=180,
             max_reply_chars=1200,
             send_ack=True,
@@ -114,6 +115,7 @@ class TelegramAutopilotServiceRegistryTests(unittest.TestCase):
             local_companion_snapshot=lambda: {},
             can_auto_approve_wait=lambda run: False,
             pending_confirmation_payload=lambda run: {},
+            emit_channel_run_delivery_event=lambda **kwargs: None,
             sleep=lambda seconds: None,
         )
 
@@ -129,6 +131,7 @@ class TelegramAutopilotServiceRegistryTests(unittest.TestCase):
         self.assertIs(poll_service, registry.telegram_connector_poll_service())
         self.assertIsNotNone(registry.telegram_poll_dispatch_service())
         self.assertIsNotNone(registry.telegram_poll_state_service())
+        self.assertIsNotNone(registry.telegram_webhook_service())
 
 
 if __name__ == "__main__":

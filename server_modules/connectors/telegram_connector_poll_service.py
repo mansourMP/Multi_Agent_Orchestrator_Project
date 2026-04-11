@@ -9,6 +9,7 @@ class TelegramConnectorPollService:
         *,
         default_workspace_id: str,
         normalize_workspace_id: Callable[[Any], str],
+        resolve_workspace_scope: Callable[[Dict[str, Any], str | None, str], str],
         resolve_profile: Callable[[Dict[str, Any]], Dict[str, Any]],
         resolve_allow_from: Callable[[Dict[str, Any]], List[str]],
         connector_state: Callable[[str], Dict[str, Any]],
@@ -20,6 +21,7 @@ class TelegramConnectorPollService:
     ) -> None:
         self.default_workspace_id = str(default_workspace_id or "default").strip() or "default"
         self.normalize_workspace_id = normalize_workspace_id
+        self.resolve_workspace_scope = resolve_workspace_scope
         self.resolve_profile = resolve_profile
         self.resolve_allow_from = resolve_allow_from
         self.connector_state = connector_state
@@ -34,13 +36,14 @@ class TelegramConnectorPollService:
         if not connector_id:
             return
         label = str(entry.get("label") or connector_id)
-        workspace_id = self.normalize_workspace_id(entry.get("workspace_id")) or self.default_workspace_id
-        profile = self.resolve_profile(entry)
-        allow_from = self.resolve_allow_from(entry)
-        connector_state = self.connector_state(connector_id)
-        last_update_id = int(connector_state.get("last_update_id") or 0)
+        workspace_id = ""
 
         try:
+            workspace_id = self.resolve_workspace_scope(entry, self.default_workspace_id, "Telegram connector")
+            profile = self.resolve_profile(entry)
+            allow_from = self.resolve_allow_from(entry)
+            connector_state = self.connector_state(connector_id)
+            last_update_id = int(connector_state.get("last_update_id") or 0)
             secret = self.resolve_secret(entry)
             bot_token = str(secret.get("bot_token") or "").strip()
             configured_chat_id = str(secret.get("chat_id") or "").strip()

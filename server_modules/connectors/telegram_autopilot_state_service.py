@@ -22,6 +22,7 @@ class TelegramAutopilotStateService:
         default_profile: str,
         require_prefix: bool,
         prefix: str,
+        delivery_mode: str,
         poll_seconds: float,
         max_updates: int,
         run_timeout_seconds: int,
@@ -43,6 +44,7 @@ class TelegramAutopilotStateService:
         self.default_profile = str(default_profile or "")
         self.require_prefix = bool(require_prefix)
         self.prefix = str(prefix or "")
+        self.delivery_mode = str(delivery_mode or "").strip().lower() or "polling"
         self.poll_seconds = float(poll_seconds or 0.0)
         self.max_updates = int(max_updates or 0)
         self.run_timeout_seconds = int(run_timeout_seconds or 0)
@@ -164,6 +166,26 @@ class TelegramAutopilotStateService:
         entries.sort(key=lambda item: str(item.get("label") or "").lower())
         return entries
 
+    def get_connector_entry(self, connector_id: str) -> Dict[str, Any]:
+        connector_token = str(connector_id or "").strip()
+        if not connector_token:
+            raise LookupError("Telegram connector id is required.")
+        for item in self.load_vault().get("credentials", []):
+            if not isinstance(item, dict):
+                continue
+            if str(item.get("provider") or "").strip().lower() != "telegram_bot":
+                continue
+            if str(item.get("id") or "").strip() != connector_token:
+                continue
+            if self.connector_paused(item):
+                raise LookupError(f"Telegram connector '{connector_token}' is paused.")
+            try:
+                self.resolve_secret(item)
+            except Exception as exc:
+                raise RuntimeError(f"Telegram connector '{connector_token}' is not usable: {exc}") from exc
+            return item
+        raise LookupError(f"Telegram connector '{connector_token}' is not configured.")
+
     def snapshot(self, *, include_connectors: bool = False) -> Dict[str, Any]:
         with self.lock:
             connectors_raw = self.state.get("connectors", {})
@@ -194,6 +216,7 @@ class TelegramAutopilotStateService:
                 "require_prefix": self.require_prefix,
                 "prefix": self.prefix,
                 "default_profile": self.default_profile,
+                "delivery_mode": self.delivery_mode,
                 "state_file": str(self.state_file),
                 "thread_alive": bool(self.thread_alive()),
             }

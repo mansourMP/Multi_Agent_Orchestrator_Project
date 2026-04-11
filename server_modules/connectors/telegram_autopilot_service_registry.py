@@ -16,6 +16,9 @@ from server_modules.connectors.telegram_poll_state_service import TelegramPollSt
 from server_modules.connectors.telegram_run_action_service import TelegramRunActionService
 from server_modules.connectors.telegram_run_dispatch_service import TelegramRunDispatchService
 from server_modules.connectors.telegram_sender_filter_service import TelegramSenderFilterService
+from server_modules.connectors.telegram_webhook_service import TelegramWebhookService
+from server_modules.connectors.channel_workspace_scope_service import resolve_connector_workspace_scope
+from server_modules.channel_pairing_service import get_channel_pairing_service
 
 
 class TelegramAutopilotServiceRegistry:
@@ -32,6 +35,7 @@ class TelegramAutopilotServiceRegistry:
         media_max_items: int,
         max_updates: int,
         poll_seconds: float,
+        delivery_mode: str,
         run_timeout_seconds: int,
         max_reply_chars: int,
         send_ack: bool,
@@ -118,6 +122,7 @@ class TelegramAutopilotServiceRegistry:
         local_companion_snapshot: Callable[[], Dict[str, Any]],
         can_auto_approve_wait: Callable[[Any], bool],
         pending_confirmation_payload: Callable[[Any], Dict[str, Any]],
+        emit_channel_run_delivery_event: Callable[..., Any],
         sleep: Callable[[float], Any],
     ) -> None:
         self.project_root = Path(project_root)
@@ -130,6 +135,7 @@ class TelegramAutopilotServiceRegistry:
         self.media_max_items = int(media_max_items)
         self.max_updates = int(max_updates)
         self.poll_seconds = float(poll_seconds)
+        self.delivery_mode = str(delivery_mode or "").strip().lower() or "polling"
         self.run_timeout_seconds = int(run_timeout_seconds)
         self.max_reply_chars = int(max_reply_chars)
         self.send_ack = bool(send_ack)
@@ -216,6 +222,7 @@ class TelegramAutopilotServiceRegistry:
         self.local_companion_snapshot = local_companion_snapshot
         self.can_auto_approve_wait = can_auto_approve_wait
         self.pending_confirmation_payload = pending_confirmation_payload
+        self.emit_channel_run_delivery_event = emit_channel_run_delivery_event
         self.sleep = sleep
 
         self._run_dispatch_service: Optional[TelegramRunDispatchService] = None
@@ -230,6 +237,7 @@ class TelegramAutopilotServiceRegistry:
         self._poll_state_service: Optional[TelegramPollStateService] = None
         self._run_action_service: Optional[TelegramRunActionService] = None
         self._connector_poll_service: Optional[TelegramConnectorPollService] = None
+        self._webhook_service: Optional[TelegramWebhookService] = None
         self._autopilot_supervisor_service: Optional[TelegramAutopilotSupervisorService] = None
 
     def telegram_run_dispatch_service(self) -> TelegramRunDispatchService:
@@ -250,6 +258,7 @@ class TelegramAutopilotServiceRegistry:
                 local_companion_snapshot=self.local_companion_snapshot,
                 can_auto_approve_wait=self.can_auto_approve_wait,
                 pending_confirmation_payload=self.pending_confirmation_payload,
+                emit_channel_run_delivery_event=self.emit_channel_run_delivery_event,
             )
         return self._run_dispatch_service
 
@@ -271,6 +280,7 @@ class TelegramAutopilotServiceRegistry:
                 default_profile=self.default_profile,
                 require_prefix=self.require_prefix,
                 prefix=self.prefix,
+                delivery_mode=self.delivery_mode,
                 poll_seconds=self.poll_seconds,
                 max_updates=self.max_updates,
                 run_timeout_seconds=self.run_timeout_seconds,
@@ -385,6 +395,7 @@ class TelegramAutopilotServiceRegistry:
                 explicit_run_command=self.explicit_run_command,
                 help_text=self.help_text,
                 send_message=self.send_message,
+                channel_pairing_service=get_channel_pairing_service,
             )
         return self._poll_dispatch_service
 
@@ -432,6 +443,12 @@ class TelegramAutopilotServiceRegistry:
             self._connector_poll_service = TelegramConnectorPollService(
                 default_workspace_id=self.default_workspace_id,
                 normalize_workspace_id=self.normalize_workspace_id,
+                resolve_workspace_scope=lambda entry, fallback_workspace_id, detail_prefix: resolve_connector_workspace_scope(
+                    entry,
+                    normalize_workspace_id=self.normalize_workspace_id,
+                    fallback_workspace_id=fallback_workspace_id,
+                    detail_prefix=detail_prefix,
+                ),
                 resolve_profile=self.resolve_profile,
                 resolve_allow_from=self.resolve_allow_from,
                 connector_state=self.connector_state,
@@ -443,9 +460,29 @@ class TelegramAutopilotServiceRegistry:
             )
         return self._connector_poll_service
 
+    def telegram_webhook_service(self) -> TelegramWebhookService:
+        if self._webhook_service is None:
+            self._webhook_service = TelegramWebhookService(
+                default_workspace_id=self.default_workspace_id,
+                resolve_workspace_scope=resolve_connector_workspace_scope,
+                get_connector_entry=lambda connector_id: self.telegram_autopilot_state_service().get_connector_entry(
+                    connector_id
+                ),
+                resolve_profile=self.resolve_profile,
+                resolve_allow_from=self.resolve_allow_from,
+                connector_state=self.connector_state,
+                resolve_secret=self.resolve_secret,
+                inbound_context_service=lambda: self.telegram_inbound_context_service(),
+                poll_dispatch_service=lambda: self.telegram_poll_dispatch_service(),
+                poll_state_service=lambda: self.telegram_poll_state_service(),
+                poll_cycle_service=lambda: self.telegram_poll_cycle_service(),
+            )
+        return self._webhook_service
+
     def telegram_autopilot_supervisor_service(self) -> TelegramAutopilotSupervisorService:
         if self._autopilot_supervisor_service is None:
             self._autopilot_supervisor_service = TelegramAutopilotSupervisorService(
+                delivery_mode=self.delivery_mode,
                 poll_seconds=self.poll_seconds,
                 utc_now_iso=self.utc_now_iso,
                 mark_started=self.mark_started,

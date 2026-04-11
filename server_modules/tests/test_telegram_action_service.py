@@ -20,9 +20,9 @@ class TelegramActionServiceTests(unittest.TestCase):
             profile_set=lambda workspace_id, chat_id, field_name, value: {"field": field_name, "value": value},
             profile_clear=lambda workspace_id, chat_id, field_name: {},
             runtime_status_text=lambda workspace_id: "status",
-            approvals_list=lambda limit: approvals,
+            approvals_list=lambda limit, workspace_id=None: approvals,
             approvals_text=lambda payload, prefix: "approvals",
-            approval_resolve=lambda event_id, approved, note: {"ok": True},
+            approval_resolve=lambda event_id, approved, note, workspace_id=None: {"ok": True},
             approval_result_text=lambda payload, approved: "approved" if approved else "rejected",
             send_message=lambda **kwargs: messages.append(kwargs),
         )

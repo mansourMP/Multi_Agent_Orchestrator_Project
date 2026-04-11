@@ -25,6 +25,7 @@ class TelegramAutopilotStateServiceTests(unittest.TestCase):
             default_profile="assistant",
             require_prefix=True,
             prefix="/empyralis",
+            delivery_mode=overrides.pop("delivery_mode", "polling"),
             poll_seconds=5.0,
             max_updates=25,
             run_timeout_seconds=180,
@@ -94,6 +95,7 @@ class TelegramAutopilotStateServiceTests(unittest.TestCase):
         )
         snapshot = service.snapshot(include_connectors=True)
         self.assertTrue(snapshot["enabled"])
+        self.assertEqual(snapshot["delivery_mode"], "polling")
         self.assertEqual(snapshot["connector_state_count"], 2)
         self.assertEqual(snapshot["connector_error_count"], 1)
         self.assertEqual(snapshot["dropped_sender_count"], 3)

@@ -66,6 +66,10 @@ class TelegramConnectorPollServiceTests(unittest.TestCase):
         return TelegramConnectorPollService(
             default_workspace_id="default",
             normalize_workspace_id=overrides.pop("normalize_workspace_id", lambda value: str(value or "")),
+            resolve_workspace_scope=overrides.pop(
+                "resolve_workspace_scope",
+                lambda entry, fallback_workspace_id, detail_prefix: str(entry.get("workspace_id") or fallback_workspace_id or ""),
+            ),
             resolve_profile=overrides.pop("resolve_profile", lambda entry: {"id": "profile-1"}),
             resolve_allow_from=overrides.pop("resolve_allow_from", lambda entry: ["alice"]),
             connector_state=overrides.pop("connector_state", lambda connector_id: {"last_update_id": 3}),
@@ -124,6 +128,20 @@ class TelegramConnectorPollServiceTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             service.poll_connector({"id": "conn-1", "label": "Telegram", "workspace_id": "ws-1"})
         self.assertEqual(poll_cycle.error_calls[0]["detail"], "boom")
+
+    def test_poll_connector_rejects_unscoped_workspace(self) -> None:
+        poll_cycle = _PollCycleStub()
+        service = self._make_service(
+            poll_cycle=poll_cycle,
+            resolve_workspace_scope=lambda entry, fallback_workspace_id, detail_prefix: (_ for _ in ()).throw(
+                RuntimeError("Telegram connector 'Main' is not scoped to an explicit workspace.")
+            ),
+        )
+
+        with self.assertRaises(RuntimeError):
+            service.poll_connector({"id": "conn-1", "label": "Main"})
+
+        self.assertIn("not scoped to an explicit workspace", poll_cycle.error_calls[0]["detail"])
 
 
 if __name__ == "__main__":

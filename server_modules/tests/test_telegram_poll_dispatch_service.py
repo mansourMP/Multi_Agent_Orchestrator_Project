@@ -47,12 +47,23 @@ class _RunActionStub:
         return self.result
 
 
+class _PairingStub:
+    def __init__(self, result=None):
+        self.result = result or {"authorized": True, "status": "linked", "workspace_id": "ws"}
+        self.calls = []
+
+    def authorize_channel_message(self, **kwargs):
+        self.calls.append(kwargs)
+        return self.result
+
+
 class TelegramPollDispatchServiceTests(unittest.TestCase):
     def _make_service(self, **overrides) -> TelegramPollDispatchService:
         inbound = overrides.pop("inbound", _InboundContextStub())
         sender_filter = overrides.pop("sender_filter", _SenderFilterStub())
         action_service = overrides.pop("action_service", _ActionStub())
         run_action_service = overrides.pop("run_action_service", _RunActionStub())
+        pairing_service = overrides.pop("pairing_service", _PairingStub())
         messages = overrides.pop("messages", [])
         return TelegramPollDispatchService(
             sender_allowed=overrides.pop("sender_allowed", lambda sender, allow_from: True),
@@ -65,13 +76,16 @@ class TelegramPollDispatchServiceTests(unittest.TestCase):
             explicit_run_command=overrides.pop("explicit_run_command", lambda text: text.startswith("run ")),
             help_text=overrides.pop("help_text", lambda profile: "help"),
             send_message=lambda *args, **kwargs: messages.append((args, kwargs)),
+            channel_pairing_service=lambda: pairing_service,
         )
 
-    def test_denied_sender_short_circuits_and_records_drop(self) -> None:
-        sender_filter = _SenderFilterStub()
+    def test_unpaired_sender_gets_guidance_without_processing(self) -> None:
+        messages = []
         service = self._make_service(
-            sender_allowed=lambda sender, allow_from: False,
-            sender_filter=sender_filter,
+            pairing_service=_PairingStub(
+                {"authorized": False, "status": "pairing_required", "reply_text": "pair me"}
+            ),
+            messages=messages,
         )
         result = service.handle_update(
             entry={},
@@ -91,8 +105,8 @@ class TelegramPollDispatchServiceTests(unittest.TestCase):
             update_id=7,
         )
         self.assertFalse(result["processed"])
-        self.assertEqual(len(sender_filter.calls), 1)
-        self.assertEqual(sender_filter.calls[0]["dropped_count"], 3)
+        self.assertEqual(result["reason"], "pairing_required")
+        self.assertEqual(len(messages), 1)
 
     def test_run_action_dispatches_through_run_service(self) -> None:
         inbound = _InboundContextStub(

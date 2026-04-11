@@ -26,6 +26,7 @@ class TelegramRunDispatchService:
         local_companion_snapshot: Callable[[], Dict[str, int]],
         can_auto_approve_wait: Callable[[Dict[str, Any]], bool],
         pending_confirmation_payload: Callable[[Dict[str, Any]], Dict[str, Any]],
+        emit_channel_run_delivery_event: Callable[..., Any],
         time_now: Callable[[], float] = time.time,
         sleep: Callable[[float], None] = time.sleep,
     ) -> None:
@@ -44,6 +45,7 @@ class TelegramRunDispatchService:
         self.local_companion_snapshot = local_companion_snapshot
         self.can_auto_approve_wait = can_auto_approve_wait
         self.pending_confirmation_payload = pending_confirmation_payload
+        self.emit_channel_run_delivery_event = emit_channel_run_delivery_event
         self.time_now = time_now
         self.sleep = sleep
 
@@ -144,6 +146,159 @@ class TelegramRunDispatchService:
             }
         return {"status": "timeout", "summary": "Run timed out while waiting for completion."}
 
+    def poll_run_terminal_result(
+        self,
+        run_id: str,
+        *,
+        max_reply_chars: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        summary_limit = int(max_reply_chars if max_reply_chars is not None else self.default_max_reply_chars)
+        run = self.runs_get(run_id)
+        if not isinstance(run, dict):
+            return {"ready": True, "status": "failed", "summary": "Run not found.", "auto_approved": False}
+        latest_error = self.latest_run_error_message(run)
+        if latest_error and self.is_non_retryable_run_error(latest_error):
+            return {
+                "ready": True,
+                "status": "failed",
+                "summary": self.friendly_run_error(latest_error),
+                "auto_approved": False,
+            }
+        status = str(run.get("status") or "").strip().lower()
+        if status in {"completed", "failed", "timeout"}:
+            return {
+                "ready": True,
+                "status": status,
+                "summary": self.summarize_run_terminal_result(run, summary_limit),
+                "auto_approved": False,
+            }
+        auto_approved = False
+        if status == "waiting_for_input" and self.can_auto_approve_wait(run):
+            pending = self.pending_confirmation_payload(run)
+            approval_id = str(pending.get("approval_id") or "").strip()
+            input_queue = run.get("input_queue")
+            if approval_id and hasattr(input_queue, "put"):
+                input_queue.put({"approval_id": approval_id, "decision": "proceed"})
+                auto_approved = True
+        return {
+            "ready": False,
+            "status": status or "starting",
+            "summary": "",
+            "auto_approved": auto_approved,
+        }
+
+    def schedule_final_delivery(
+        self,
+        *,
+        workspace_id: str,
+        connector_id: str,
+        chat_id: str,
+        run_id: str,
+        pending_message_id: str,
+        inbound_message_id: Optional[str],
+        action: str,
+        trace_id: str,
+        source_event_id: str,
+    ) -> None:
+        self.emit_channel_run_delivery_event(
+            channel="telegram",
+            tenant_id="default",
+            workspace_id=workspace_id,
+            run_id=run_id,
+            connector_id=connector_id,
+            trace_id=trace_id,
+            idempotency_key=f"channel_run_delivery:telegram:{connector_id}:{run_id}",
+            payload={
+                "chat_id": str(chat_id or "").strip(),
+                "pending_message_id": str(pending_message_id or "").strip() or None,
+                "parent_message_id": str(inbound_message_id or "").strip() or None,
+                "action": str(action or "run").strip().lower() or "run",
+                "source_event_id": str(source_event_id or "").strip() or None,
+            },
+        )
+
+    def deliver_final_response(
+        self,
+        *,
+        bot_token: str,
+        chat_id: str,
+        workspace_id: str,
+        connector_id: str,
+        session_key: str,
+        profile: Dict[str, Any],
+        run_id: str,
+        pending_message_id: Optional[str],
+        inbound_message_id: Optional[str],
+        action: str,
+        trace_id: str,
+        source_event_id: str,
+        status: str,
+        summary: str,
+        record_channel_event: Callable[..., Any],
+        send_message: Callable[..., str],
+        edit_message: Callable[..., bool],
+    ) -> Dict[str, Any]:
+        resolved_status = str(status or "").strip().lower() or "completed"
+        compact_summary = self.truncate_one_line(
+            str(summary or "Run finished."),
+            self.default_max_reply_chars,
+        )
+        final_reply = self.run_reply_text(resolved_status, run_id, compact_summary)
+        record_channel_event(
+            channel="telegram",
+            direction="system",
+            event_type=f"run_{resolved_status if resolved_status in {'completed', 'failed', 'timeout'} else 'finished'}",
+            text=compact_summary,
+            workspace_id=workspace_id,
+            session_key=session_key,
+            session_id=session_key,
+            parent_id=inbound_message_id or None,
+            run_id=run_id,
+            action=action,
+            metadata={
+                "connector_id": connector_id,
+                "profile_id": profile.get("id"),
+                "trace_id": trace_id,
+                "source_event_id": source_event_id,
+            },
+        )
+        edited = False
+        if pending_message_id:
+            edited = edit_message(
+                bot_token=bot_token,
+                chat_id=chat_id,
+                message_id=pending_message_id,
+                text=final_reply,
+                workspace_id=workspace_id,
+                action=action,
+                run_id=run_id,
+                connector_id=connector_id,
+                parent_message_id=inbound_message_id or None,
+                profile=profile,
+                trace_id=trace_id,
+                source_event_id=source_event_id,
+            )
+        if not edited:
+            send_message(
+                bot_token=bot_token,
+                chat_id=chat_id,
+                text=final_reply,
+                workspace_id=workspace_id,
+                action=action,
+                run_id=run_id,
+                connector_id=connector_id,
+                parent_message_id=inbound_message_id or None,
+                profile=profile,
+                trace_id=trace_id,
+                source_event_id=source_event_id,
+            )
+        return {
+            "status": resolved_status,
+            "summary": compact_summary,
+            "final_reply": final_reply,
+            "edited": edited,
+        }
+
     def dispatch_run_action(
         self,
         *,
@@ -195,9 +350,9 @@ class TelegramRunDispatchService:
             if self.include_run_meta():
                 ack_text += f"\nrun_id: {run_id}"
             pending_message_id = send_message(
-                bot_token,
-                chat_id,
-                ack_text,
+                bot_token=bot_token,
+                chat_id=chat_id,
+                text=ack_text,
                 workspace_id=workspace_id,
                 action="thinking",
                 run_id=run_id,
@@ -208,67 +363,24 @@ class TelegramRunDispatchService:
                 source_event_id=source_event_id,
             )
 
-        result = self.wait_for_terminal_status(run_id)
-        status = str(result.get("status") or "").lower()
-        summary = self.truncate_one_line(
-            str(result.get("summary") or "Run finished."),
-            self.default_max_reply_chars,
-        )
-        final_reply = self.run_reply_text(status, run_id, summary)
-        record_channel_event(
-            channel="telegram",
-            direction="system",
-            event_type=f"run_{status if status in {'completed', 'failed', 'timeout'} else 'finished'}",
-            text=summary,
-            workspace_id=workspace_id,
-            session_key=session_key,
-            session_id=session_key,
-            parent_id=inbound_message_id or None,
-            run_id=run_id,
-            action=action,
-            metadata={
-                "connector_id": connector_id,
-                "profile_id": profile.get("id"),
-                "trace_id": trace_id,
-                "source_event_id": source_event_id,
-            },
-        )
-        edited = False
-        if pending_message_id:
-            edited = edit_message(
-                bot_token,
-                chat_id,
-                pending_message_id,
-                final_reply,
+        if run_id:
+            self.schedule_final_delivery(
                 workspace_id=workspace_id,
-                action=action,
-                run_id=run_id,
                 connector_id=connector_id,
-                parent_message_id=inbound_message_id or None,
-                profile=profile,
-                trace_id=trace_id,
-                source_event_id=source_event_id,
-            )
-        if not edited:
-            send_message(
-                bot_token,
-                chat_id,
-                final_reply,
-                workspace_id=workspace_id,
-                action=action,
+                chat_id=chat_id,
                 run_id=run_id,
-                connector_id=connector_id,
-                parent_message_id=inbound_message_id or None,
-                profile=profile,
+                pending_message_id=pending_message_id,
+                inbound_message_id=inbound_message_id or None,
+                action=action,
                 trace_id=trace_id,
                 source_event_id=source_event_id,
             )
         return {
             "run_id": run_id,
-            "status": status,
-            "summary": summary,
-            "final_reply": final_reply,
+            "status": "accepted" if run_id else "failed",
+            "summary": "Run accepted for durable delivery." if run_id else "Run did not start.",
+            "final_reply": "",
             "pending_message_id": pending_message_id,
-            "edited": edited,
+            "edited": False,
             "route": run_info.get("route"),
         }

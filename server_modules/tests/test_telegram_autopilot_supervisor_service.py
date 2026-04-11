@@ -24,6 +24,7 @@ class TelegramAutopilotSupervisorServiceTests(unittest.TestCase):
         sleeps = overrides.pop("sleeps", [])
         loop = overrides.pop("loop", _LoopStub([5.0, RuntimeError("stop")]))
         return TelegramAutopilotSupervisorService(
+            delivery_mode=overrides.pop("delivery_mode", "polling"),
             poll_seconds=5.0,
             utc_now_iso=overrides.pop("utc_now_iso", lambda: "2026-04-05T00:00:00Z"),
             mark_started=lambda started_at: started.append(started_at),
@@ -54,6 +55,26 @@ class TelegramAutopilotSupervisorServiceTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "stop"):
             service.run_forever()
         self.assertEqual(sleeps, [0.25])
+
+    def test_run_forever_in_webhook_mode_skips_poll_loop(self) -> None:
+        started = []
+        persisted = []
+        logs = []
+        sleeps = []
+        service = self._make_service(
+            started=started,
+            persisted=persisted,
+            logs=logs,
+            sleeps=sleeps,
+            delivery_mode="webhook",
+        )
+
+        service.run_forever()
+
+        self.assertEqual(started, ["2026-04-05T00:00:00Z"])
+        self.assertEqual(persisted, [True])
+        self.assertEqual(sleeps, [])
+        self.assertIn("polling fallback disabled", logs[0])
 
 
 if __name__ == "__main__":

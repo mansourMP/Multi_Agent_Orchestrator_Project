@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Callable, Dict
+from typing import Any, Callable, Dict, Optional
 
 
 class TelegramActionService:
@@ -19,9 +19,9 @@ class TelegramActionService:
         profile_set: Callable[[str, str, str, str], Dict[str, Any]],
         profile_clear: Callable[[str, str, str], Dict[str, Any]],
         runtime_status_text: Callable[[str], str],
-        approvals_list: Callable[[int], Dict[str, Any]],
+        approvals_list: Callable[[int, Optional[str]], Dict[str, Any]],
         approvals_text: Callable[[Dict[str, Any], str], str],
-        approval_resolve: Callable[[str, bool, str], Dict[str, Any]],
+        approval_resolve: Callable[[str, bool, str, Optional[str]], Dict[str, Any]],
         approval_result_text: Callable[[Dict[str, Any], bool], str],
         send_message: Callable[..., Any],
     ) -> None:
@@ -246,7 +246,7 @@ class TelegramActionService:
             handled = True
         elif action == "approvals":
             limit = int(routed.get("limit") or 5)
-            payload = self.approvals_list(limit)
+            payload = self.approvals_list(limit, workspace_id)
             self.send_message(
                 text=self.approvals_text(payload, prefix=str(profile.get("prefix") or self.default_chat_prefix)),
                 workspace_id=workspace_id,
@@ -263,7 +263,7 @@ class TelegramActionService:
         elif action == "approve":
             event_id = str(routed.get("event_id") or "").strip()
             note = str(routed.get("note") or "").strip()
-            payload = self.approval_resolve(event_id, True, note)
+            payload = self.approval_resolve(event_id, True, note, workspace_id)
             self.send_message(
                 text=self.approval_result_text(payload, True),
                 workspace_id=workspace_id,
@@ -280,7 +280,7 @@ class TelegramActionService:
         elif action == "reject":
             event_id = str(routed.get("event_id") or "").strip()
             note = str(routed.get("note") or "").strip()
-            payload = self.approval_resolve(event_id, False, note)
+            payload = self.approval_resolve(event_id, False, note, workspace_id)
             self.send_message(
                 text=self.approval_result_text(payload, False),
                 workspace_id=workspace_id,

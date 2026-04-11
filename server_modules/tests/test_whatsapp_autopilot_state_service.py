@@ -18,6 +18,10 @@ class WhatsAppAutopilotStateServiceTests(unittest.TestCase):
             utc_now_iso=overrides.pop("utc_now_iso", lambda: "2026-04-04T00:00:00Z"),
             classify_error=overrides.pop("classify_error", lambda detail: "runtime"),
             normalize_workspace_id=overrides.pop("normalize_workspace_id", lambda value: str(value or "")),
+            resolve_workspace_scope=overrides.pop(
+                "resolve_workspace_scope",
+                lambda entry, fallback_workspace_id, detail_prefix: str(entry.get("workspace_id") or fallback_workspace_id or ""),
+            ),
             load_vault=overrides.pop("load_vault", lambda: vault_payload),
             workspace_visible=overrides.pop("workspace_visible", lambda workspace_id, requested_ws: True),
             connector_paused=overrides.pop("connector_paused", lambda item: False),
@@ -122,6 +126,12 @@ class WhatsAppAutopilotStateServiceTests(unittest.TestCase):
         self.assertEqual(matched["connector_id"], "conn-1")
         self.assertEqual(matched["workspace_id"], "ws-1")
         self.assertEqual(service.state["connectors_seen"], 1)
+
+    def test_mark_processed_message_is_duplicate_safe(self) -> None:
+        service = self._make_service(state={})
+
+        self.assertTrue(service.mark_processed_message("conn-1", "SM123"))
+        self.assertFalse(service.mark_processed_message("conn-1", "SM123"))
 
 
 if __name__ == "__main__":

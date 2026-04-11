@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any, Callable, Dict, List, Optional
 
+from server_modules.channel_pairing_service import get_channel_pairing_service
+from server_modules.connectors.channel_workspace_scope_service import resolve_connector_workspace_scope
 from server_modules.connectors.whatsapp_autopilot_state_service import WhatsAppAutopilotStateService
 from server_modules.connectors.whatsapp_run_dispatch_service import WhatsAppRunDispatchService
 from server_modules.connectors.whatsapp_transport_service import WhatsAppTransportService
@@ -33,8 +35,9 @@ class WhatsAppAutopilotServiceRegistry:
         send_ack: bool,
         include_run_meta: Callable[[], bool],
         truncate_one_line: Callable[[str, int], str],
-        wait_for_run_terminal_status: Callable[..., Dict[str, Any]],
+        poll_run_terminal_result: Callable[..., Dict[str, Any]],
         run_reply_text: Callable[[str, str, str], str],
+        emit_channel_run_delivery_event: Callable[..., Any],
         append_dead_letter: Callable[..., Any],
         record_channel_event: Callable[..., Any],
         log_error: Callable[[str], Any],
@@ -50,6 +53,9 @@ class WhatsAppAutopilotServiceRegistry:
         create_run: Callable[..., Dict[str, Any]],
         session_key_builder: Callable[[str, str], str],
         default_chat_prefix: str,
+        require_explicit_opt_in: bool,
+        redact_event_text: bool,
+        retention_days: int,
     ) -> None:
         self.state = state
         self.lock = lock
@@ -72,8 +78,9 @@ class WhatsAppAutopilotServiceRegistry:
         self.send_ack = bool(send_ack)
         self.include_run_meta = include_run_meta
         self.truncate_one_line = truncate_one_line
-        self.wait_for_run_terminal_status = wait_for_run_terminal_status
+        self.poll_run_terminal_result = poll_run_terminal_result
         self.run_reply_text = run_reply_text
+        self.emit_channel_run_delivery_event = emit_channel_run_delivery_event
         self.append_dead_letter = append_dead_letter
         self.record_channel_event = record_channel_event
         self.log_error = log_error
@@ -89,6 +96,9 @@ class WhatsAppAutopilotServiceRegistry:
         self.create_run = create_run
         self.session_key_builder = session_key_builder
         self.default_chat_prefix = default_chat_prefix
+        self.require_explicit_opt_in = bool(require_explicit_opt_in)
+        self.redact_event_text = bool(redact_event_text)
+        self.retention_days = max(1, int(retention_days or 30))
 
         self._transport_service: Optional[WhatsAppTransportService] = None
         self._state_service: Optional[WhatsAppAutopilotStateService] = None
@@ -111,6 +121,12 @@ class WhatsAppAutopilotServiceRegistry:
                 utc_now_iso=self.utc_now_iso,
                 classify_error=self.classify_error,
                 normalize_workspace_id=self.normalize_workspace_id,
+                resolve_workspace_scope=lambda entry, fallback_workspace_id, detail_prefix: resolve_connector_workspace_scope(
+                    entry,
+                    normalize_workspace_id=self.normalize_workspace_id,
+                    fallback_workspace_id=fallback_workspace_id,
+                    detail_prefix=detail_prefix,
+                ),
                 load_vault=self.load_vault,
                 workspace_visible=self.workspace_visible,
                 connector_paused=self.connector_paused,
@@ -133,8 +149,9 @@ class WhatsAppAutopilotServiceRegistry:
                 send_ack=self.send_ack,
                 include_run_meta=self.include_run_meta,
                 truncate_one_line=self.truncate_one_line,
-                wait_for_run_terminal_status=self.wait_for_run_terminal_status,
+                poll_run_terminal_result=self.poll_run_terminal_result,
                 run_reply_text=self.run_reply_text,
+                emit_channel_run_delivery_event=self.emit_channel_run_delivery_event,
                 send_whatsapp_message=self.whatsapp_transport_service().send_message,
                 append_dead_letter=self.append_dead_letter,
                 record_channel_event=self.record_channel_event,
@@ -178,11 +195,19 @@ class WhatsAppAutopilotServiceRegistry:
                     payload,
                 ),
                 persist_state=lambda: self.whatsapp_autopilot_state_service().persist_state(),
+                mark_processed_message=lambda connector_id, message_sid: self.whatsapp_autopilot_state_service().mark_processed_message(
+                    connector_id,
+                    message_sid,
+                ),
                 increment_processed=lambda: self.whatsapp_autopilot_state_service().increment_processed(),
                 autopilot_activate=lambda: self.whatsapp_autopilot_state_service().activate(),
                 mark_inbound=lambda **kwargs: self.whatsapp_autopilot_state_service().mark_inbound(**kwargs),
                 mark_error=lambda detail: self.whatsapp_autopilot_state_service().mark_error(detail, source="match_connector"),
                 utc_now_iso=self.utc_now_iso,
                 default_chat_prefix=self.default_chat_prefix,
+                require_explicit_opt_in=self.require_explicit_opt_in,
+                redact_event_text=self.redact_event_text,
+                retention_days=self.retention_days,
+                channel_pairing_service=get_channel_pairing_service,
             )
         return self._webhook_service

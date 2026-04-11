@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import base64
+import hashlib
+import hmac
 import html
 import json
 import ssl
@@ -41,6 +43,28 @@ class WhatsAppTransportService:
         else:
             xml = '<?xml version="1.0" encoding="UTF-8"?><Response></Response>'
         return Response(content=xml, media_type="application/xml")
+
+    def validate_webhook_signature(
+        self,
+        *,
+        request_url: str,
+        form: Dict[str, Any],
+        signature: str,
+        auth_token: str,
+    ) -> bool:
+        url = str(request_url or "").strip()
+        provided_signature = str(signature or "").strip()
+        token = str(auth_token or "").strip()
+        if not url or not provided_signature or not token:
+            return False
+        parts = [url]
+        for key in sorted(str(item) for item in form.keys()):
+            parts.append(key)
+            parts.append(str(form.get(key) or ""))
+        payload = "".join(parts).encode("utf-8")
+        digest = hmac.new(token.encode("utf-8"), payload, hashlib.sha1).digest()
+        expected_signature = base64.b64encode(digest).decode("ascii")
+        return hmac.compare_digest(expected_signature, provided_signature)
 
     def send_message(
         self,

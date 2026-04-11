@@ -26,13 +26,18 @@ class WhatsAppAutopilotServiceRegistryTests(unittest.TestCase):
             run_timeout_seconds=180,
             max_reply_chars=1200,
             send_ack=True,
+            require_explicit_opt_in=True,
+            redact_event_text=True,
+            retention_days=30,
             include_run_meta=lambda: True,
             truncate_one_line=lambda text, limit: str(text or "")[:limit],
-            wait_for_run_terminal_status=lambda run_id, timeout_seconds=None, max_reply_chars=None: {
+            poll_run_terminal_result=lambda run_id, max_reply_chars=None: {
+                "ready": True,
                 "status": "completed",
                 "summary": "done",
             },
             run_reply_text=lambda status, run_id, summary: f"{status}:{run_id}:{summary}",
+            emit_channel_run_delivery_event=lambda **kwargs: None,
             append_dead_letter=lambda **kwargs: None,
             record_channel_event=lambda **kwargs: None,
             log_error=lambda message: None,
@@ -62,6 +67,9 @@ class WhatsAppAutopilotServiceRegistryTests(unittest.TestCase):
         service = registry.whatsapp_webhook_service()
         self.assertIs(service.run_dispatch_service(), registry.whatsapp_run_dispatch_service())
         self.assertEqual(service.normalize_number("+100"), "whatsapp:+100")
+        self.assertTrue(service.require_explicit_opt_in)
+        self.assertTrue(service.redact_event_text)
+        self.assertEqual(service.retention_days, 30)
 
 
 if __name__ == "__main__":

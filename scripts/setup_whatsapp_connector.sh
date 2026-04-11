@@ -16,6 +16,31 @@ WEBHOOK_SECRET="${ORION_WHATSAPP_AUTOPILOT_WEBHOOK_SECRET:-}"
 NON_INTERACTIVE="${NON_INTERACTIVE:-0}"
 RUN_PROBE="${RUN_PROBE:-0}"
 
+webhook_base_status="live"
+webhook_base_reason=""
+classify_webhook_base_url() {
+  local value="$1"
+  local host
+  host="$(printf "%s" "${value}" | sed -E 's#^[a-zA-Z]+://##; s#/.*$##; s#:[0-9]+$##')"
+  if [[ -z "${value}" || -z "${host}" ]]; then
+    webhook_base_status="setup_needed"
+    webhook_base_reason="Missing public webhook base URL."
+    return
+  fi
+  if [[ "${host}" == "localhost" || "${host}" == *.local || "${host}" == 127.* || "${host}" == 10.* || "${host}" == 192.168.* ]]; then
+    webhook_base_status="setup_needed"
+    webhook_base_reason="Twilio cannot reach localhost or private LAN webhook URLs."
+    return
+  fi
+  if [[ "${host}" =~ ^172\.([1][6-9]|2[0-9]|3[0-1])\. ]]; then
+    webhook_base_status="setup_needed"
+    webhook_base_reason="Twilio cannot reach private LAN webhook URLs."
+    return
+  fi
+  webhook_base_status="live"
+  webhook_base_reason=""
+}
+
 is_interactive="0"
 if [[ -t 0 && -t 1 ]]; then
   is_interactive="1"
@@ -118,6 +143,9 @@ WA_STATUS="$(curl -fsS -H "X-API-Key: ${RUNTIME_KEY}" "${API_URL}/channels/whats
 echo "${WA_STATUS}" | jq '{ok,autopilot:{enabled,active,thread_alive,processed_messages,runs_started,connectors_seen,last_error},connectors}'
 
 WA_ENABLED="$(echo "${WA_STATUS}" | jq -r '.autopilot.enabled // false' 2>/dev/null || echo "false")"
+WA_CHANNEL_STATUS="$(echo "${WA_STATUS}" | jq -r '.autopilot.channel_state // .status // "unknown"' 2>/dev/null || echo "unknown")"
+WA_WEBHOOK_STATUS="$(echo "${WA_STATUS}" | jq -r '.webhook.status // "unknown"' 2>/dev/null || echo "unknown")"
+WA_WEBHOOK_GUIDANCE="$(echo "${WA_STATUS}" | jq -r '.webhook.guidance // empty' 2>/dev/null || echo "")"
 if [[ "${WA_ENABLED}" != "true" ]]; then
   echo
   echo "WhatsApp autopilot is disabled in runtime config."
@@ -129,12 +157,29 @@ WEBHOOK_URL="${WEBHOOK_BASE_URL%/}/channels/whatsapp/twilio/webhook"
 if [[ -n "${WEBHOOK_SECRET}" ]]; then
   WEBHOOK_URL="${WEBHOOK_URL}?secret=${WEBHOOK_SECRET}"
 fi
+classify_webhook_base_url "${WEBHOOK_BASE_URL}"
 
 echo
 echo "Twilio inbound webhook URL:"
 echo "  ${WEBHOOK_URL}"
-if [[ "${WEBHOOK_BASE_URL}" == http://127.0.0.1:* || "${WEBHOOK_BASE_URL}" == http://localhost:* ]]; then
-  echo "Note: Twilio cannot reach localhost directly. Use a tunnel (ngrok/cloudflared) and set WEBHOOK_BASE_URL."
+echo "Webhook reachability contract: ${webhook_base_status}"
+if [[ -n "${webhook_base_reason}" ]]; then
+  echo "Reason: ${webhook_base_reason}"
+fi
+if [[ "${webhook_base_status}" != "live" ]]; then
+  echo "Guidance: Use a public HTTPS tunnel or deployed runtime URL, then set WEBHOOK_BASE_URL."
+fi
+if [[ -z "${WEBHOOK_SECRET}" ]]; then
+  echo "Guidance: Set ORION_WHATSAPP_AUTOPILOT_WEBHOOK_SECRET so Twilio requests can be authenticated."
+fi
+echo "Runtime WhatsApp status: ${WA_CHANNEL_STATUS}"
+echo "Runtime webhook status: ${WA_WEBHOOK_STATUS}"
+if [[ -n "${WA_WEBHOOK_GUIDANCE}" ]]; then
+  echo "Runtime guidance: ${WA_WEBHOOK_GUIDANCE}"
+fi
+if [[ "${WA_WEBHOOK_STATUS}" != "live" ]]; then
+  echo "If you expose a tunnel URL, restart the runtime with:"
+  echo "  ORION_WHATSAPP_AUTOPILOT_PUBLIC_BASE_URL=${WEBHOOK_BASE_URL} bash scripts/start_empyralis_local_stack.sh"
 fi
 
 echo

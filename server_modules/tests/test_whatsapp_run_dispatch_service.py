@@ -11,9 +11,10 @@ class WhatsAppRunDispatchServiceTests(unittest.TestCase):
             send_ack=overrides.pop("send_ack", True),
             include_run_meta=overrides.pop("include_run_meta", lambda: False),
             truncate_one_line=lambda text, limit: str(text or "").strip()[:limit],
-            wait_for_run_terminal_status=overrides.pop(
-                "wait_for_run_terminal_status",
-                lambda run_id, timeout_seconds=None, max_reply_chars=None: {
+            poll_run_terminal_result=overrides.pop(
+                "poll_run_terminal_result",
+                lambda run_id, max_reply_chars=None: {
+                    "ready": True,
                     "status": "completed",
                     "summary": "Run finished.",
                 },
@@ -22,6 +23,7 @@ class WhatsAppRunDispatchServiceTests(unittest.TestCase):
                 "run_reply_text",
                 lambda status, run_id, summary: f"{status}:{run_id}:{summary}",
             ),
+            emit_channel_run_delivery_event=overrides.pop("emit_channel_run_delivery_event", lambda **kwargs: None),
             send_whatsapp_message=overrides.pop(
                 "send_whatsapp_message",
                 lambda **kwargs: {"sid": "SM123"},
@@ -45,7 +47,7 @@ class WhatsAppRunDispatchServiceTests(unittest.TestCase):
         )
         self.assertEqual(service.ack_text(""), "⏣ Empyralis started your request.")
 
-    def test_finalize_run_async_records_success(self) -> None:
+    def test_deliver_final_response_records_success(self) -> None:
         events = []
         states = []
         service = self._make_service(
@@ -53,17 +55,19 @@ class WhatsAppRunDispatchServiceTests(unittest.TestCase):
             set_connector_state=lambda connector_id, payload: states.append((connector_id, payload)),
         )
 
-        service.finalize_run_async(
-            "run-1",
-            "conn-1",
-            "ws-1",
-            {"id": "profile-1"},
-            {
+        service.deliver_final_response(
+            run_id="run-1",
+            connector_id="conn-1",
+            workspace_id="ws-1",
+            profile={"id": "profile-1"},
+            secret={
                 "account_sid": "AC123",
                 "auth_token": "token",
                 "from_number": "whatsapp:+100",
             },
-            "whatsapp:+200",
+            reply_to_number="whatsapp:+200",
+            status="completed",
+            summary="Run finished.",
         )
 
         self.assertEqual(len(events), 2)
@@ -72,7 +76,7 @@ class WhatsAppRunDispatchServiceTests(unittest.TestCase):
         self.assertEqual(states[0][0], "conn-1")
         self.assertEqual(states[0][1]["last_error"], None)
 
-    def test_finalize_run_async_dead_letters_send_failure(self) -> None:
+    def test_deliver_final_response_dead_letters_send_failure(self) -> None:
         dead_letters = []
         events = []
         states = []
@@ -86,23 +90,42 @@ class WhatsAppRunDispatchServiceTests(unittest.TestCase):
             classify_error=lambda detail: "network",
         )
 
-        service.finalize_run_async(
-            "run-2",
-            "conn-2",
-            "ws-2",
-            {"id": "profile-2"},
-            {
-                "account_sid": "AC999",
-                "auth_token": "token",
-                "from_number": "whatsapp:+300",
-            },
-            "whatsapp:+400",
-        )
+        with self.assertRaisesRegex(RuntimeError, "twilio down"):
+            service.deliver_final_response(
+                run_id="run-2",
+                connector_id="conn-2",
+                workspace_id="ws-2",
+                profile={"id": "profile-2"},
+                secret={
+                    "account_sid": "AC999",
+                    "auth_token": "token",
+                    "from_number": "whatsapp:+300",
+                },
+                reply_to_number="whatsapp:+400",
+                status="failed",
+                summary="twilio down",
+            )
 
         self.assertEqual(len(dead_letters), 1)
         self.assertEqual(events[0]["event_type"], "error")
         self.assertEqual(states[0][1]["last_error_category"], "network")
         self.assertEqual(marked, ["twilio down"])
+
+    def test_schedule_final_delivery_emits_outbox_event(self) -> None:
+        emitted = []
+        service = self._make_service(emit_channel_run_delivery_event=lambda **kwargs: emitted.append(kwargs))
+
+        service.schedule_final_delivery(
+            workspace_id="ws-1",
+            connector_id="conn-1",
+            run_id="run-1",
+            reply_to_number="whatsapp:+200",
+            trace_id="trace-1",
+        )
+
+        self.assertEqual(len(emitted), 1)
+        self.assertEqual(emitted[0]["channel"], "whatsapp")
+        self.assertEqual(emitted[0]["payload"]["reply_to_number"], "whatsapp:+200")
 
 
 if __name__ == "__main__":

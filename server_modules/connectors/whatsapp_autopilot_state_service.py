@@ -15,6 +15,7 @@ class WhatsAppAutopilotStateService:
         utc_now_iso: Callable[[], str],
         classify_error: Callable[[Any], str],
         normalize_workspace_id: Callable[[Any], str],
+        resolve_workspace_scope: Callable[[Dict[str, Any], str | None, str], str],
         load_vault: Callable[[], Dict[str, Any]],
         workspace_visible: Callable[[Any, Optional[str]], bool],
         connector_paused: Callable[[Dict[str, Any]], bool],
@@ -35,6 +36,7 @@ class WhatsAppAutopilotStateService:
         self.utc_now_iso = utc_now_iso
         self.classify_error = classify_error
         self.normalize_workspace_id = normalize_workspace_id
+        self.resolve_workspace_scope = resolve_workspace_scope
         self.load_vault = load_vault
         self.workspace_visible = workspace_visible
         self.connector_paused = connector_paused
@@ -54,6 +56,7 @@ class WhatsAppAutopilotStateService:
                 "version": 1,
                 "state": {
                     "connectors": {},
+                    "processed_message_ids": {},
                     "processed_messages": 0,
                     "runs_started": 0,
                     "last_inbound_at": None,
@@ -70,6 +73,8 @@ class WhatsAppAutopilotStateService:
         connectors = state.get("connectors") if isinstance(state.get("connectors"), dict) else {}
         with self.lock:
             self.state["connectors"] = connectors
+            processed_message_ids = state.get("processed_message_ids") if isinstance(state.get("processed_message_ids"), dict) else {}
+            self.state["processed_message_ids"] = processed_message_ids
             self.state["processed_messages"] = int(state.get("processed_messages") or 0)
             self.state["runs_started"] = int(state.get("runs_started") or 0)
             self.state["last_inbound_at"] = state.get("last_inbound_at")
@@ -86,6 +91,7 @@ class WhatsAppAutopilotStateService:
                 "version": 1,
                 "state": {
                     "connectors": self.state.get("connectors", {}),
+                    "processed_message_ids": self.state.get("processed_message_ids", {}),
                     "processed_messages": int(self.state.get("processed_messages") or 0),
                     "runs_started": int(self.state.get("runs_started") or 0),
                     "last_inbound_at": self.state.get("last_inbound_at"),
@@ -137,6 +143,26 @@ class WhatsAppAutopilotStateService:
         with self.lock:
             self.state["processed_messages"] = int(self.state.get("processed_messages") or 0) + 1
 
+    def mark_processed_message(self, connector_id: str, message_sid: str) -> bool:
+        clean_connector_id = str(connector_id or "").strip()
+        clean_message_sid = str(message_sid or "").strip()
+        if not clean_connector_id or not clean_message_sid:
+            return True
+        with self.lock:
+            processed = self.state.setdefault("processed_message_ids", {})
+            bucket = processed.get(clean_connector_id)
+            if not isinstance(bucket, dict):
+                bucket = {}
+            if clean_message_sid in bucket:
+                return False
+            bucket[clean_message_sid] = self.utc_now_iso()
+            while len(bucket) > 512:
+                oldest_key = next(iter(bucket.keys()))
+                bucket.pop(oldest_key, None)
+            processed[clean_connector_id] = bucket
+        self.persist_state()
+        return True
+
     def connector_state(self, credential_id: str) -> Dict[str, Any]:
         with self.lock:
             connectors = self.state.setdefault("connectors", {})
@@ -172,7 +198,10 @@ class WhatsAppAutopilotStateService:
             self.state["connectors_seen"] = len(entries)
         for entry in entries:
             credential_id = str(entry.get("id") or "").strip()
-            workspace_id = self.normalize_workspace_id(entry.get("workspace_id"))
+            try:
+                workspace_id = self.resolve_workspace_scope(entry, None, "WhatsApp connector")
+            except Exception:
+                continue
             if not credential_id:
                 continue
             try:
@@ -197,9 +226,30 @@ class WhatsAppAutopilotStateService:
                 "entry": entry,
                 "secret": secret,
                 "connector_id": credential_id,
-                "workspace_id": workspace_id or "default",
+                "workspace_id": workspace_id,
             }
         return None
+
+    def get_connector_entry(self, connector_id: str) -> Dict[str, Any]:
+        connector_token = str(connector_id or "").strip()
+        if not connector_token:
+            raise LookupError("WhatsApp connector id is required.")
+        for item in self.load_vault().get("credentials", []):
+            if not isinstance(item, dict):
+                continue
+            if str(item.get("provider") or "").strip().lower() != "whatsapp_twilio":
+                continue
+            if str(item.get("id") or "").strip() != connector_token:
+                continue
+            if self.connector_paused(item):
+                raise LookupError(f"WhatsApp connector '{connector_token}' is paused.")
+            workspace_id = self.resolve_workspace_scope(item, None, "WhatsApp connector")
+            try:
+                self.resolve_vault_credential(connector_token, workspace_id)
+            except Exception as exc:
+                raise RuntimeError(f"WhatsApp connector '{connector_token}' is not usable: {exc}") from exc
+            return item
+        raise LookupError(f"WhatsApp connector '{connector_token}' is not configured.")
 
     def list_connector_entries(self, requested_workspace_id: Optional[str]) -> List[Dict[str, Any]]:
         requested_ws = self.normalize_workspace_id(requested_workspace_id)
@@ -215,7 +265,10 @@ class WhatsAppAutopilotStateService:
             if self.connector_paused(item):
                 continue
             credential_id = str(item.get("id") or "").strip()
-            workspace_id = self.normalize_workspace_id(item.get("workspace_id"))
+            try:
+                workspace_id = self.resolve_workspace_scope(item, None, "WhatsApp connector")
+            except Exception:
+                continue
             if not credential_id:
                 continue
             try:

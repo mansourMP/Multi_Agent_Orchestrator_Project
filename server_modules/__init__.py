@@ -54,6 +54,7 @@ from .local_queue import (
 
 from .connectors.autopilot_runtime_exports import (
     _run_telegram_autopilot_forever,
+    handle_telegram_webhook,
     handle_whatsapp_twilio_webhook,
     handle_telegram_autopilot_status,
     handle_whatsapp_autopilot_status,
@@ -132,6 +133,7 @@ __all__ = [
 
     # Autopilot
     "_run_telegram_autopilot_forever",
+    "handle_telegram_webhook",
     "handle_whatsapp_twilio_webhook",
     "handle_telegram_autopilot_status",
     "handle_whatsapp_autopilot_status",

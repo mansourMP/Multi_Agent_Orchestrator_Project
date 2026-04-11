@@ -64,6 +64,20 @@ class RuntimePolicyModeTests(unittest.TestCase):
         self.assertEqual(publish_eval.get("confirmation_required_actions"), ["publish_content"])
         self.assertTrue(publish_eval.get("requires_confirmation"))
 
+    def test_friendly_runtime_error_message_surfaces_codex_direct_auth_mismatch(self):
+        message = runtime_policy.friendly_runtime_error_message(
+            RuntimeError("This is a Codex OAuth token. Use openai-codex provider or set a direct OpenAI API key.")
+        )
+
+        self.assertIn("OpenAI Codex", message)
+
+    def test_friendly_runtime_error_message_surfaces_missing_claude_cli(self):
+        message = runtime_policy.friendly_runtime_error_message(
+            RuntimeError("Claude Code CLI is not installed.")
+        )
+
+        self.assertIn("Claude Code CLI is not installed", message)
+
 
 if __name__ == "__main__":
     unittest.main()

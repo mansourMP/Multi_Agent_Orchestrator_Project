@@ -5,11 +5,13 @@ import queue
 import uuid
 from typing import Any, Callable
 
+from server_modules.auth import enforce_workspace_access
 from server_modules import runtime_history_service
 from server_modules import runtime_run_control_service
 from server_modules import runtime_run_approval_service
 from server_modules import runtime_run_delegation_service
 from server_modules import runtime_run_query_service
+from server_modules import security_audit_service
 from server_modules.run_execution_handle import attach_execution_handle
 from server_modules import local_queue
 
@@ -151,6 +153,7 @@ def build_runtime_route_bindings(
         history_item_matches=history_item_matches,
         current_user_is_privileged=current_user_is_privileged,
         extract_run_owner_user_id=extract_run_owner_user_id,
+        enforce_workspace_access=enforce_workspace_access,
         normalize_run_id_token=late_server_export("_normalize_run_id_token"),
         summarize_history_item=summarize_history_item,
     )
@@ -161,6 +164,7 @@ def build_runtime_route_bindings(
         approval_correlation_id=approval_correlation_id,
         append_approval_audit=append_approval_audit,
         resolve_local_execution_start_approval=resolve_local_execution_start_approval,
+        emit_security_audit_event=security_audit_service.emit_security_audit_event,
     )
     resolve_run_approval_callbacks = runtime_run_approval_service.build_resolve_run_approval_callbacks(
         serialize_run_snapshot=serialize_run_snapshot,
@@ -179,6 +183,7 @@ def build_runtime_route_bindings(
         emit_log=emit_log,
         schedule_restored_run_resume=schedule_restored_run_resume,
         ensure_live_run_handle=_ensure_live_run_handle,
+        emit_security_audit_event=security_audit_service.emit_security_audit_event,
     )
     resume_waiting_run_callbacks = runtime_run_control_service.build_resume_waiting_run_callbacks(
         serialize_run_snapshot=serialize_run_snapshot,

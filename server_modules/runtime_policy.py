@@ -2499,6 +2499,12 @@ def friendly_runtime_error_message(exc: Exception) -> str:
     if not raw:
         return "Runtime failed unexpectedly. Please try again."
     lower = raw.lower()
+    if "codex oauth token" in lower and "use openai-codex provider" in lower:
+        return "This workspace is using a Codex/ChatGPT OAuth token for a direct OpenAI run. Switch to OpenAI Codex or connect a direct OpenAI API key."
+    if "missing_chatgpt_account_id" in lower or "codex session expired" in lower or "missing_oauth_token" in lower:
+        return "OpenAI Codex session is not valid. Open Setup and reconnect your Codex/OpenAI account."
+    if "claude code cli is not installed" in lower:
+        return "Claude Code CLI is not installed on this machine. Install it or switch to another provider."
     if "invalid api key" in lower or "incorrect api key" in lower or "unauthorized" in lower:
         return "AI account authorization failed. Open Setup and reconnect your AI account."
     if "no credentials available" in lower or "credential" in lower:
@@ -2527,6 +2533,11 @@ def is_non_retryable_runtime_error(exc: Exception) -> bool:
         "incorrect api key",
         "unauthorized",
         "no credentials available",
+        "codex oauth token",
+        "missing_chatgpt_account_id",
+        "missing_oauth_token",
+        "codex session expired",
+        "claude code cli is not installed",
         "api_key is required",
         "api key is required",
         "unsupported provider",

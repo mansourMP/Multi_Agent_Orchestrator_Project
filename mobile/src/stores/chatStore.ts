@@ -12,10 +12,12 @@ export type ChatSession = {
   agentId: string;
   agentName: string;
   runtimeRole?: string;
+  backendThreadId?: string;
   avatarColor: string;
   icon: string;
   createdAt: number;
   updatedAt: number;
+  draft?: string;
   messages: AgentPayload[];
 };
 
@@ -28,6 +30,13 @@ type ChatState = {
   addMessage: (id: string, message: AgentPayload) => void;
   updateMessage: (id: string, index: number, patch: Partial<AgentPayload>) => void;
   setSessionTitle: (id: string, title: string) => void;
+  setSessionDraft: (id: string, draft: string) => void;
+  setSessionBackendThreadId: (id: string, backendThreadId: string) => void;
+  replaceSessionMessages: (
+    id: string,
+    messages: AgentPayload[],
+    options?: { title?: string; backendThreadId?: string },
+  ) => void;
   clearAllSessions: () => void;
 };
 
@@ -50,6 +59,7 @@ export const useChatStore = create<ChatState>()(
           icon: agent.icon,
           createdAt: now,
           updatedAt: now,
+          draft: "",
           messages: [],
         };
         set((state) => ({
@@ -111,6 +121,39 @@ export const useChatStore = create<ChatState>()(
         set((state) => ({
           sessions: state.sessions.map((session) =>
             session.id === id ? { ...session, title: trimmed, updatedAt: Date.now() } : session
+          ),
+        }));
+      },
+      setSessionDraft: (id, draft) => {
+        set((state) => ({
+          sessions: state.sessions.map((session) =>
+            session.id === id ? { ...session, draft, updatedAt: Date.now() } : session
+          ),
+        }));
+      },
+      setSessionBackendThreadId: (id, backendThreadId) => {
+        const normalized = backendThreadId.trim();
+        if (!normalized) return;
+        set((state) => ({
+          sessions: state.sessions.map((session) =>
+            session.id === id ? { ...session, backendThreadId: normalized, updatedAt: Date.now() } : session
+          ),
+        }));
+      },
+      replaceSessionMessages: (id, messages, options) => {
+        set((state) => ({
+          sessions: state.sessions.map((session) =>
+            session.id === id
+              ? {
+                  ...session,
+                  messages,
+                  updatedAt: Date.now(),
+                  ...(options?.title ? { title: options.title.trim() || session.title } : {}),
+                  ...(options?.backendThreadId?.trim()
+                    ? { backendThreadId: options.backendThreadId.trim() }
+                    : {}),
+                }
+              : session
           ),
         }));
       },

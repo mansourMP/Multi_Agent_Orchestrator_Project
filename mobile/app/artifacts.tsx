@@ -4,6 +4,7 @@ import { useRouter } from "expo-router";
 
 import { MobileScreen } from "@/src/components/MobileScreen";
 import { ScreenHeader } from "@/src/components/ScreenHeader";
+import { SurfaceStatusBanner } from "@/src/components/SurfaceStatusBanner";
 import { useMobileArtifacts } from "@/src/lib/mobile-data";
 import { useAppTheme as useTheme } from "@/src/theme/useAppTheme";
 
@@ -38,6 +39,11 @@ export default function ArtifactsScreen() {
       </View>
 
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 24 }}>
+        {artifactsQuery.statusMessage ? (
+          <View style={{ marginTop: 12 }}>
+            <SurfaceStatusBanner message={artifactsQuery.statusMessage} />
+          </View>
+        ) : null}
         <View style={{ gap: 12, marginTop: 12 }}>
           {artifacts.map((artifact) => (
             <View

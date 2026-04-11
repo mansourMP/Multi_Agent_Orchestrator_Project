@@ -4,6 +4,7 @@ import { useRouter } from "expo-router";
 
 import { MobileScreen } from "@/src/components/MobileScreen";
 import { ScreenHeader } from "@/src/components/ScreenHeader";
+import { SurfaceStatusBanner } from "@/src/components/SurfaceStatusBanner";
 import { mobileApi } from "@/src/lib/api";
 import { formatRelativeTime } from "@/src/lib/kin-surface";
 import { useMobileApprovals } from "@/src/lib/mobile-data";
@@ -54,6 +55,11 @@ export default function ApprovalsScreen() {
       </View>
 
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 24 }}>
+        {approvalsQuery.statusMessage ? (
+          <View style={{ marginTop: 12 }}>
+            <SurfaceStatusBanner message={approvalsQuery.statusMessage} />
+          </View>
+        ) : null}
         <View style={{ gap: 12, marginTop: 12 }}>
           {approvals.map((approval) => (
             <View
@@ -68,9 +74,24 @@ export default function ApprovalsScreen() {
               }}
             >
               <Text style={{ fontSize: 15, fontFamily: "DMSans_700Bold", color: theme.colors.text }}>{approval.action}</Text>
+              {approval.target ? (
+                <Text style={{ fontSize: 13, color: theme.colors.textSecondary }}>
+                  {approval.target}
+                </Text>
+              ) : null}
               <Text style={{ fontSize: 13, lineHeight: 20, color: theme.colors.textSecondary }}>
                 {approval.summary || "This run is waiting for your approval."}
               </Text>
+              {approval.email_preview?.subject ? (
+                <Text style={{ fontSize: 13, color: theme.colors.text }}>
+                  Subject: {approval.email_preview.subject}
+                </Text>
+              ) : null}
+              {approval.email_preview?.body_preview ? (
+                <Text style={{ fontSize: 13, lineHeight: 20, color: theme.colors.textSecondary }}>
+                  {approval.email_preview.body_preview}
+                </Text>
+              ) : null}
               <Text style={{ fontSize: 12, color: theme.colors.textSecondary }}>
                 {formatRelativeTime(approval.requested_at)} · {approval.status}
               </Text>

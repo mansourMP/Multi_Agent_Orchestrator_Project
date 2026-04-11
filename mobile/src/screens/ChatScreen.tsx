@@ -17,6 +17,7 @@ import { useRouter } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { TransientBanner } from "@/src/components/TransientBanner";
+import { SurfaceStatusBanner } from "@/src/components/SurfaceStatusBanner";
 import { InputBar } from "@/src/components/InputBar";
 import { AgentPayload } from "@/src/components/Renderer";
 import {
@@ -26,6 +27,7 @@ import {
 } from "@/src/lib/agents";
 import { mobileApi } from "@/src/lib/api";
 import { useMobileChatContext, useMobileOverviewData } from "@/src/lib/mobile-data";
+import { sessionHasRuntimeAccess } from "@/src/lib/session";
 import { useSessionState } from "@/src/lib/session-context";
 import { useChatStore, type ChatSession } from "@/src/stores/chatStore";
 import { useAppTheme as useTheme } from "@/src/theme/useAppTheme";
@@ -159,6 +161,45 @@ function formatTimestamp(timestamp?: number) {
   return date.toLocaleDateString([], { month: "short", day: "numeric" });
 }
 
+function normalizeBackendThreadMessages(
+  turns: Array<{
+    role?: string;
+    content?: string;
+    approvals?: Record<string, any>[];
+  }> | undefined,
+): AgentPayload[] {
+  const items = Array.isArray(turns) ? turns : [];
+  const messages: AgentPayload[] = [];
+  for (const turn of items) {
+    const role = String(turn?.role || "").trim().toLowerCase();
+    const speech = String(turn?.content || "").trim();
+    const approvals = Array.isArray(turn?.approvals) ? turn.approvals : [];
+    if (!speech && approvals.length === 0) continue;
+    const firstApproval = approvals[0] && typeof approvals[0] === "object" ? approvals[0] as Record<string, any> : null;
+    if (firstApproval) {
+      messages.push({
+        intent: role === "user" ? "user" : "assistant",
+        speech: speech || "Approval required",
+        messageType: "approval",
+        approval: {
+          kind: "run",
+          action: String(firstApproval.action || firstApproval.label || "Approval required").trim() || "Approval required",
+          target: typeof firstApproval.target === "string" ? firstApproval.target : undefined,
+          reason: typeof firstApproval.prompt === "string" ? firstApproval.prompt : undefined,
+          approvalId: typeof firstApproval.approval_id === "string" ? firstApproval.approval_id : undefined,
+          runId: typeof firstApproval.run_id === "string" ? firstApproval.run_id : undefined,
+        },
+      });
+      continue;
+    }
+    messages.push({
+      intent: role === "user" ? "user" : "assistant",
+      speech,
+    });
+  }
+  return messages;
+}
+
 function resolveAgentThread(
   session: ChatSession | undefined,
   specialistInstalls: Record<string, any>[],
@@ -213,9 +254,11 @@ export default function ChatScreen({ sessionId }: ChatScreenProps) {
     updateMessage,
     setActiveSession,
     setSessionTitle,
+    setSessionDraft,
+    setSessionBackendThreadId,
+    replaceSessionMessages,
   } = useChatStore();
   const activeApp = useAppContextStore((state) => state.activeApp);
-  const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [failedMessageIndex, setFailedMessageIndex] = useState<number | null>(null);
   const [runActivity, setRunActivity] = useState<string[]>([]);
@@ -237,6 +280,7 @@ export default function ChatScreen({ sessionId }: ChatScreenProps) {
     () => resolveAgentThread(activeSession, specialistInstalls, sage),
     [activeSession, sage, specialistInstalls],
   );
+  const draft = activeSession?.draft || "";
   const messages = activeSession?.messages || [];
   const lastMessageSpeech = messages[messages.length - 1]?.speech || "";
   const recentSessions = useMemo(() => [...sessions].sort((a, b) => b.updatedAt - a.updatedAt), [sessions]);
@@ -244,6 +288,7 @@ export default function ChatScreen({ sessionId }: ChatScreenProps) {
   const liveRuns = overview.runs.length;
   const unseenChanges = Number(chatContextQuery.data?.personalContext.summary?.unseen_count || 0);
   const recentChanges = (chatContextQuery.data?.personalContext.recentChanges ?? []).slice(0, 3);
+  const degradedMessage = chatContextQuery.statusMessage || overview.statusMessage;
   const channelLabel = activeAgent.label;
   const channelRole = activeSession?.runtimeRole || activeAgent.runtimeRole || "specialist";
   const channelSubtitle = viewMode === "owner"
@@ -254,6 +299,11 @@ export default function ChatScreen({ sessionId }: ChatScreenProps) {
         ? "Pinned Sage channel"
         : "Specialist customer thread";
   const latestRunActivity = runActivity[runActivity.length - 1];
+  const outboundThreadId = useMemo(() => {
+    if (activeAgent.id === sage.id) return undefined;
+    const token = String(activeSession?.backendThreadId || sessionId).trim();
+    return token || undefined;
+  }, [activeAgent.id, activeSession?.backendThreadId, sage.id, sessionId]);
 
   const scrollToBottom = React.useCallback((animated = true) => {
     requestAnimationFrame(() => {
@@ -270,6 +320,43 @@ export default function ChatScreen({ sessionId }: ChatScreenProps) {
     const nextSessionId = createSession(sage);
     router.replace(`/chats/${nextSessionId}`);
   }, [activeSession?.id, createSession, router, sage, setActiveSession]);
+
+  useEffect(() => {
+    if (!activeSession?.id || activeAgent.id !== sage.id) return;
+    const backendThreadId = String(chatContextQuery.data?.threadId || "").trim();
+    if (!backendThreadId || activeSession.backendThreadId === backendThreadId) return;
+    setSessionBackendThreadId(activeSession.id, backendThreadId);
+  }, [
+    activeAgent.id,
+    activeSession?.backendThreadId,
+    activeSession?.id,
+    chatContextQuery.data?.threadId,
+    sage.id,
+    setSessionBackendThreadId,
+  ]);
+
+  useEffect(() => {
+    if (!activeSession?.id || activeAgent.id !== sage.id) return;
+    if ((activeSession.messages || []).length > 0) return;
+    const backendThreadId = String(chatContextQuery.data?.threadId || "").trim();
+    const turns = chatContextQuery.data?.thread?.turns ?? [];
+    if (!backendThreadId || !turns.length) return;
+    const messagesFromBackend = normalizeBackendThreadMessages(turns);
+    if (!messagesFromBackend.length) return;
+    replaceSessionMessages(activeSession.id, messagesFromBackend, {
+      title: String(chatContextQuery.data?.thread?.title || "").trim() || undefined,
+      backendThreadId,
+    });
+  }, [
+    activeAgent.id,
+    activeSession?.id,
+    activeSession?.messages,
+    chatContextQuery.data?.thread?.title,
+    chatContextQuery.data?.thread?.turns,
+    chatContextQuery.data?.threadId,
+    replaceSessionMessages,
+    sage.id,
+  ]);
 
   useEffect(() => {
     scrollToBottom(false);
@@ -329,7 +416,7 @@ export default function ChatScreen({ sessionId }: ChatScreenProps) {
 
   const sendMessage = async (textOverride?: string) => {
     if (!activeSession?.id) return;
-    const finalInput = (textOverride || input).trim();
+    const finalInput = (textOverride || draft).trim();
     if (!finalInput) return;
 
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
@@ -350,34 +437,30 @@ export default function ChatScreen({ sessionId }: ChatScreenProps) {
       setSessionTitle(sessionId, finalInput.slice(0, 60));
     }
     setFailedMessageIndex(null);
-    setInput("");
+    setSessionDraft(sessionId, "");
     setIsLoading(true);
-    setRunActivity(["Connecting to Empyralist", "Waiting for response"]);
+    setRunActivity(["Contacting Empyralis cloud", "Waiting for response"]);
 
-    if (!session?.runtimeKey) {
+    const runtimeSession = session;
+    if (!runtimeSession || !sessionHasRuntimeAccess(runtimeSession)) {
       setFailedMessageIndex(nextUserMessageIndex);
       updateMessage(sessionId, placeholderIndex, {
-        speech: "Add your server API key in Profile first.",
+        speech: "Sign in to your Empyralis account first. Advanced local runtime fallback is only needed for companion testing.",
       });
       setIsLoading(false);
       setRunActivity([]);
-      showBanner("Add your server API key in Profile first.", "error");
+      showBanner("Sign in to your Empyralis account first. Advanced local runtime fallback is only for testing.", "error");
       return;
     }
 
     try {
       let streamedReply = "";
       const payload = await mobileApi.respondChat(
-        {
-          runtimeUrl: session.runtimeUrl || "",
-          runtimeKey: session.runtimeKey,
-          workspaceId: session.workspaceId || "default",
-          platformUrl: session.platformUrl,
-          platformKey: session.platformKey,
-        },
+        runtimeSession,
         {
           message: finalInput,
-          threadId: sessionId,
+          clientSessionId: activeSession.id,
+          threadId: activeAgent.id === sage.id ? undefined : outboundThreadId,
           provider: "",
           model: "",
           agentId: activeAgent.id,
@@ -402,6 +485,10 @@ export default function ChatScreen({ sessionId }: ChatScreenProps) {
       updateMessage(sessionId, placeholderIndex, {
         speech: hasStructuredCards ? "" : (payload.reply || streamedReply || ""),
       });
+      const responseThreadId = String(payload.thread_id || outboundThreadId || "").trim();
+      if (responseThreadId) {
+        setSessionBackendThreadId(sessionId, responseThreadId);
+      }
 
       const approvalAction = payload.actions.find(
         (action) =>
@@ -446,7 +533,8 @@ export default function ChatScreen({ sessionId }: ChatScreenProps) {
   };
 
   const handleApprovalDecision = async (card: ApprovalCard, decision: "approved" | "rejected") => {
-    if (!session?.runtimeKey) return;
+    const runtimeSession = session;
+    if (!runtimeSession || !sessionHasRuntimeAccess(runtimeSession)) return;
     try {
       if (card.kind === "direct") {
         if (!activeSession?.id || !card.connector || !card.actionId || !card.input) return;
@@ -467,16 +555,11 @@ export default function ChatScreen({ sessionId }: ChatScreenProps) {
         setRunActivity(["Confirming approval", "Executing action"]);
         let streamedReply = "";
         const payload = await mobileApi.respondChat(
-          {
-            runtimeUrl: session.runtimeUrl || "",
-            runtimeKey: session.runtimeKey,
-            workspaceId: session.workspaceId || "default",
-            platformUrl: session.platformUrl,
-            platformKey: session.platformKey,
-          },
+          runtimeSession,
           {
             message: "__approval_confirmed__",
-            threadId: activeSession.id,
+            clientSessionId: activeSession.id,
+            threadId: activeAgent.id === sage.id ? undefined : outboundThreadId,
             provider: "",
             model: "",
             agentId: activeAgent.id,
@@ -500,6 +583,10 @@ export default function ChatScreen({ sessionId }: ChatScreenProps) {
         updateMessage(activeSession.id, placeholderIndex, {
           speech: payload.reply || streamedReply || "",
         });
+        const responseThreadId = String(payload.thread_id || outboundThreadId || "").trim();
+        if (responseThreadId) {
+          setSessionBackendThreadId(activeSession.id, responseThreadId);
+        }
         setRunActivity([]);
         setIsLoading(false);
         showBanner("Approval sent.", "success");
@@ -510,13 +597,7 @@ export default function ChatScreen({ sessionId }: ChatScreenProps) {
         return;
       }
       await mobileApi.resolveApproval(
-        {
-          runtimeUrl: session.runtimeUrl || "",
-          runtimeKey: session.runtimeKey,
-          workspaceId: session.workspaceId || "default",
-          platformUrl: session.platformUrl,
-          platformKey: session.platformKey,
-        },
+        runtimeSession,
         card.runId,
         card.approvalId,
         decision,
@@ -911,6 +992,11 @@ export default function ChatScreen({ sessionId }: ChatScreenProps) {
       <View style={{ flex: 1 }}>
         {viewMode === "customer" ? (
           <>
+            {degradedMessage ? (
+              <View style={{ paddingHorizontal: 20, paddingTop: 14, paddingBottom: 6 }}>
+                <SurfaceStatusBanner message={degradedMessage} />
+              </View>
+            ) : null}
             <FlatList
               ref={messagesListRef}
               data={messages}
@@ -966,7 +1052,8 @@ export default function ChatScreen({ sessionId }: ChatScreenProps) {
                 onSend={(text) => sendMessage(text)}
                 onMediaUpload={handleMediaUpload}
                 isLoading={isLoading}
-                prefilledPrompt={input}
+                value={draft}
+                onChangeText={(next) => setSessionDraft(sessionId, next)}
                 placeholder={`Message ${channelLabel}`}
               />
             </View>
@@ -1074,7 +1161,7 @@ export default function ChatScreen({ sessionId }: ChatScreenProps) {
               <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 10 }}>
                 <OwnerActionButton label="Applications" icon="grid-outline" onPress={() => router.push("/apps" as never)} theme={theme} />
                 <OwnerActionButton label="Notifications" icon="notifications-outline" onPress={() => router.push("/inbox" as never)} theme={theme} />
-                <OwnerActionButton label="Pair & Connect" icon="link-outline" onPress={() => router.push("/session" as never)} theme={theme} />
+                <OwnerActionButton label="Account & Connect" icon="link-outline" onPress={() => router.push("/session" as never)} theme={theme} />
                 <OwnerActionButton label="Recent Threads" icon="time-outline" onPress={() => setRecentsOpen(true)} theme={theme} />
               </View>
             </View>

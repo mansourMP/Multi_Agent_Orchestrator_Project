@@ -5,6 +5,7 @@ import { useRouter } from "expo-router";
 import { MobileScreen } from "@/src/components/MobileScreen";
 import { ScreenHeader } from "@/src/components/ScreenHeader";
 import { SectionCard } from "@/src/components/SectionCard";
+import { SurfaceStatusBanner } from "@/src/components/SurfaceStatusBanner";
 import { mobileApi } from "@/src/lib/api";
 import { getMobileEngineState, type MobileEngineState } from "@/src/lib/mobile-engine";
 import { useMobileNotifications } from "@/src/lib/mobile-data";
@@ -74,6 +75,12 @@ export default function NotificationsScreen() {
           <ScreenHeader title="Notifications" subtitle="Push permissions, delivery state, and test alerts." />
         </View>
       </View>
+
+      {notificationsQuery.statusMessage ? (
+        <View style={{ marginTop: 12 }}>
+          <SurfaceStatusBanner message={notificationsQuery.statusMessage} />
+        </View>
+      ) : null}
 
       <SectionCard title="Push Delivery" subtitle="Control how Sage alerts arrive on this device.">
         <View style={{ gap: 12 }}>

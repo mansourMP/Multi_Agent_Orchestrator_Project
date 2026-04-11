@@ -4,6 +4,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
 
 import { PrimaryScreenHeader } from "@/src/components/navigation/PrimaryScreenHeader";
+import { SurfaceStatusBanner } from "@/src/components/SurfaceStatusBanner";
 import { getPrimaryAgent } from "@/src/lib/agents";
 import {
   formatRelativeTime,
@@ -13,6 +14,7 @@ import {
   isCompletedRunStatus,
 } from "@/src/lib/kin-surface";
 import { useMobileOverviewData } from "@/src/lib/mobile-data";
+import { sessionHasRuntimeAccess } from "@/src/lib/session";
 import { useSessionState } from "@/src/lib/session-context";
 import { useChatStore } from "@/src/stores/chatStore";
 import { useAppTheme as useTheme } from "@/src/theme/useAppTheme";
@@ -22,8 +24,8 @@ export default function InboxScreen() {
   const router = useRouter();
   const { session } = useSessionState();
   const ensureSessionForAgent = useChatStore((state) => state.ensureSessionForAgent);
-  const { approvals, runs, artifacts, loading } = useMobileOverviewData();
-  const connected = Boolean(session?.runtimeUrl && session?.runtimeKey);
+  const { approvals, runs, artifacts, loading, statusMessage } = useMobileOverviewData();
+  const connected = sessionHasRuntimeAccess(session);
   const kin = getPrimaryAgent();
 
   const approvalQueue = React.useMemo(
@@ -82,9 +84,9 @@ export default function InboxScreen() {
             backgroundColor: theme.colors.surface,
           }}
         >
-          <Text style={{ fontSize: 16, fontFamily: "DMSans_700Bold", color: theme.colors.text }}>Pair and connect first</Text>
+          <Text style={{ fontSize: 16, fontFamily: "DMSans_700Bold", color: theme.colors.text }}>Sign in to Empyralis cloud first</Text>
           <Text style={{ marginTop: 8, fontSize: 14, lineHeight: 22, color: theme.colors.textSecondary }}>
-            Notifications become your trust layer once Sage can sync runs, approvals, and outputs from your private runtime.
+            Notifications become your trust layer once Sage can sync runs, approvals, and outputs from your cloud workspace. Local runtime pairing stays optional for advanced setups.
           </Text>
           <TouchableOpacity
             onPress={() => router.push("/session")}
@@ -99,8 +101,14 @@ export default function InboxScreen() {
               justifyContent: "center",
             }}
           >
-            <Text style={{ color: "#FFFFFF", fontSize: 13, fontWeight: "700" }}>Pair &amp; Connect</Text>
+            <Text style={{ color: "#FFFFFF", fontSize: 13, fontWeight: "700" }}>Sign in &amp; Connect</Text>
           </TouchableOpacity>
+        </View>
+      ) : null}
+
+      {statusMessage ? (
+        <View style={{ marginTop: connected ? 4 : 12 }}>
+          <SurfaceStatusBanner message={statusMessage} />
         </View>
       ) : null}
 

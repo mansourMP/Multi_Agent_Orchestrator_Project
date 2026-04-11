@@ -35,6 +35,7 @@ import {
   recordRoutePresence,
   rememberLinkedSession,
 } from "@/src/lib/mobile-engine";
+import { sessionHasRuntimeAccess } from "@/src/lib/session";
 
 SplashScreen.preventAutoHideAsync();
 
@@ -179,7 +180,7 @@ export default function RootLayout() {
 }
 
 function MobileRuntimeNotificationBridge() {
-  const { session, saveSession } = useSessionState();
+  const { session, saveSession, refreshSession } = useSessionState();
   const queryClient = useQueryClient();
   const segments = useSegments();
   const routeKey = getRouteKeyFromSegments(segments);
@@ -192,7 +193,7 @@ function MobileRuntimeNotificationBridge() {
   }, [routeKey]);
 
   useEffect(() => {
-    if (!session?.runtimeUrl || !session?.runtimeKey) return;
+    if (!session) return;
 
     let cancelled = false;
     let syncing = false;
@@ -200,16 +201,21 @@ function MobileRuntimeNotificationBridge() {
       if (cancelled || syncing) return;
       syncing = true;
       try {
+        const refreshedSession = await refreshSession();
+        const runtimeSession = sessionHasRuntimeAccess(refreshedSession)
+          ? refreshedSession
+          : (sessionHasRuntimeAccess(session) ? session : null);
+        if (!runtimeSession) return;
         await recordRoutePresence(routeKey);
-        const deviceId = await ensureMobileDeviceId(session.deviceId);
-        const linkedSession = deviceId && deviceId !== session.deviceId
+        const deviceId = await ensureMobileDeviceId(runtimeSession.deviceId);
+        const linkedSession = deviceId && deviceId !== runtimeSession.deviceId
           ? {
-              ...session,
+              ...runtimeSession,
               deviceId,
-              sessionLinkedAt: session.sessionLinkedAt || new Date().toISOString(),
+              sessionLinkedAt: runtimeSession.sessionLinkedAt || new Date().toISOString(),
             }
-          : session;
-        if (linkedSession !== session) {
+          : runtimeSession;
+        if (linkedSession !== runtimeSession) {
           await saveSession(linkedSession);
         }
         await rememberLinkedSession(linkedSession);
@@ -261,7 +267,7 @@ function MobileRuntimeNotificationBridge() {
       clearInterval(interval);
       appStateSubscription.remove();
     };
-  }, [queryClient, routeKey, saveSession, session]);
+  }, [queryClient, refreshSession, routeKey, saveSession, session]);
 
   return null;
 }

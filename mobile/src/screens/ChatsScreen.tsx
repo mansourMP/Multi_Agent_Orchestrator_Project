@@ -4,6 +4,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
 
 import { PrimaryScreenHeader } from "@/src/components/navigation/PrimaryScreenHeader";
+import { SurfaceStatusBanner } from "@/src/components/SurfaceStatusBanner";
 import {
   buildAgentThreadFromInstall,
   getFallbackSpecialists,
@@ -11,6 +12,7 @@ import {
   type AgentThread,
 } from "@/src/lib/agents";
 import { useMobileChatContext, useMobileOverviewData } from "@/src/lib/mobile-data";
+import { sessionHasRuntimeAccess } from "@/src/lib/session";
 import { useSessionState } from "@/src/lib/session-context";
 import { useChatStore } from "@/src/stores/chatStore";
 import { useAppTheme as useTheme } from "@/src/theme/useAppTheme";
@@ -35,11 +37,12 @@ export default function ChatsScreen() {
   const createSession = useChatStore((state) => state.createSession);
   const ensureSessionForAgent = useChatStore((state) => state.ensureSessionForAgent);
 
-  const connected = Boolean(session?.runtimeUrl && session?.runtimeKey);
+  const connected = sessionHasRuntimeAccess(session);
   const sage = getPrimaryAgent();
   const unseenChanges = Number(chatContextQuery.data?.personalContext.summary?.unseen_count || 0);
   const specialistCount = chatContextQuery.data?.specialistInstalls.length ?? 0;
   const pendingApprovals = approvals.length;
+  const degradedMessage = chatContextQuery.statusMessage || null;
 
   const specialistChannels = useMemo(() => {
     const installs = chatContextQuery.data?.specialistInstalls ?? [];
@@ -109,10 +112,10 @@ export default function ChatsScreen() {
           }}
         >
           <Text style={{ fontSize: 16, fontFamily: "DMSans_700Bold", color: theme.colors.text }}>
-            Pair the phone with your desktop workspace
+            Sign in to your cloud workspace
           </Text>
           <Text style={{ fontSize: 13, lineHeight: 20, color: theme.colors.textSecondary }}>
-            QR pairing opens the session setup with runtime values prefilled. The fallback pairing code does the same if scanning is not available.
+            Mobile is cloud-first now. Advanced pairing and runtime overrides still exist in session settings for local companion testing.
           </Text>
           <TouchableOpacity
             activeOpacity={0.86}
@@ -127,8 +130,14 @@ export default function ChatsScreen() {
               justifyContent: "center",
             }}
           >
-            <Text style={{ color: "#FFFFFF", fontSize: 13, fontWeight: "700" }}>Open pairing</Text>
+            <Text style={{ color: "#FFFFFF", fontSize: 13, fontWeight: "700" }}>Open sign-in</Text>
           </TouchableOpacity>
+        </View>
+      ) : null}
+
+      {degradedMessage ? (
+        <View style={{ marginBottom: 14 }}>
+          <SurfaceStatusBanner message={degradedMessage} />
         </View>
       ) : null}
 

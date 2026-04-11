@@ -20,6 +20,8 @@ interface InputBarProps {
   isLoading?: boolean;
   prefilledPrompt?: string;
   placeholder?: string;
+  value?: string;
+  onChangeText?: (value: string) => void;
 }
 
 export const InputBar: React.FC<InputBarProps> = ({
@@ -29,22 +31,38 @@ export const InputBar: React.FC<InputBarProps> = ({
   isLoading,
   prefilledPrompt,
   placeholder,
+  value,
+  onChangeText,
 }) => {
   const theme = useAppTheme();
   const insets = useSafeAreaInsets();
   const styles = useStyles(theme, insets);
-  const [text, setText] = useState("");
+  const [uncontrolledText, setUncontrolledText] = useState("");
   const [isRecording, setIsRecording] = useState(false);
   const [recording, setRecording] = useState<Audio.Recording | null>(null);
   const recordingRef = useRef<Audio.Recording | null>(null);
   const [isPreparing, setIsPreparing] = useState(false);
 
+  const controlled = typeof value === "string";
+  const text = controlled ? value : uncontrolledText;
+
+  const setText = React.useCallback(
+    (next: string) => {
+      if (!controlled) {
+        setUncontrolledText(next);
+      }
+      onChangeText?.(next);
+    },
+    [controlled, onChangeText],
+  );
+
   // Handle prefilled prompt from extensions
   React.useEffect(() => {
+    if (controlled) return;
     if (prefilledPrompt) {
       setText(prefilledPrompt);
     }
-  }, [prefilledPrompt]);
+  }, [controlled, prefilledPrompt, setText]);
 
   const handleSend = () => {
     if (text.trim() && !isLoading) {

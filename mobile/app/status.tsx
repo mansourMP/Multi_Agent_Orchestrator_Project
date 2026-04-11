@@ -8,7 +8,7 @@ import { ScreenHeader } from "@/src/components/ScreenHeader";
 import { SectionCard } from "@/src/components/SectionCard";
 import { useMobileChatContext } from "@/src/lib/mobile-data";
 import { useSessionState } from "@/src/lib/session-context";
-import type { RuntimeAttachmentSummary } from "@/src/lib/types";
+import type { RuntimeAttachmentSummary, RuntimeTargetSummary } from "@/src/lib/types";
 import { useAppTheme as useTheme } from "@/src/theme/useAppTheme";
 
 export default function StatusScreen() {
@@ -17,10 +17,13 @@ export default function StatusScreen() {
   const { session } = useSessionState();
   const chatContextQuery = useMobileChatContext();
   const runtimeAttachments = chatContextQuery.data?.runtimeAttachments;
+  const runtimeTargets = chatContextQuery.data?.runtimeTargets;
   const unifiedMemory = chatContextQuery.data?.unifiedMemory;
   const scheduler = chatContextQuery.data?.scheduler;
   const continuity = summarizeStatusTopology(runtimeAttachments?.attachments ?? []);
   const deploymentMode = formatDeploymentMode(runtimeAttachments?.deploymentMode);
+  const runtimeTargetSummary = summarizeRuntimeTargets(runtimeTargets?.targets ?? []);
+  const defaultRuntimeTarget = formatRuntimeTargetLabel(runtimeTargets?.defaultTargetId, runtimeTargets?.targets ?? []);
   const localOnlyLayers = unifiedMemory?.boundaryMap.neverSyncByDefault.length ?? 0;
   const cloudSyncedLayers = unifiedMemory?.boundaryMap.cloudSyncedByDefault.length ?? 0;
   const optInLayers = unifiedMemory?.boundaryMap.explicitOptIn.length ?? 0;
@@ -79,9 +82,11 @@ export default function StatusScreen() {
 
       <SectionCard title="Runtime Topology" subtitle="Phone and desktop share the same Sage, with placement decided by runtime health and policy.">
         <DetailRow label="Deployment mode" value={deploymentMode} />
+        <DetailRow label="Default target" value={defaultRuntimeTarget} />
+        <DetailRow label="Available targets" value={runtimeTargetSummary} multiline />
         <DetailRow label="Attached runtimes" value={String(runtimeAttachments?.attachments.length ?? 0)} />
         <DetailRow label="Healthy continuity" value={continuity} />
-        <DetailRow label="Placement rule" value="Capability follows runtime availability and policy, not the phone surface." multiline />
+        <DetailRow label="Placement rule" value="Mobile enters through the platform first. Cloud stays the default product path, while local companion and self-host runtime stay workspace targets under the same identity model." multiline />
       </SectionCard>
 
       <SectionCard title="Memory Boundary" subtitle="Safe summaries on phone, deeper controls on desktop-power.">
@@ -140,4 +145,30 @@ function summarizeStatusTopology(attachments: RuntimeAttachmentSummary[]): strin
     return "Local continuity is degraded while the paired companion is offline.";
   }
   return `${healthy}/${attachments.length} attachment${attachments.length === 1 ? "" : "s"} healthy, with ${local.length} local companion${local.length === 1 ? "" : "s"} available for private execution.`;
+}
+
+function formatRuntimeTargetLabel(targetId: string | undefined, targets: RuntimeTargetSummary[]): string {
+  const token = String(targetId || "").trim();
+  const match = targets.find((item) => String(item.target_id || "").trim() === token);
+  if (match?.label) return match.label;
+  if (token === "cloud_default") return "Cloud Default";
+  if (token === "local_companion") return "Local Companion";
+  if (token === "self_host_runtime") return "Self-Host Runtime";
+  return "Cloud Default";
+}
+
+function summarizeRuntimeTargets(targets: RuntimeTargetSummary[]): string {
+  if (!targets.length) return "No workspace runtime targets reported yet.";
+  const available = targets.filter((item) => item.available !== false);
+  if (!available.length) return "Targets exist, but none are currently available.";
+  return available
+    .map((item) => {
+      const label = item.label || formatRuntimeTargetLabel(item.target_id, targets);
+      const status = String(item.status || "").trim().toLowerCase();
+      if (status === "live") return `${label} live`;
+      if (status === "degraded") return `${label} degraded`;
+      if (status === "offline") return `${label} offline`;
+      return label;
+    })
+    .join(" · ");
 }

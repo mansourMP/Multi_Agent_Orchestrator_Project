@@ -5,6 +5,7 @@ import { useRouter } from "expo-router";
 
 import { BrandedAppIcon } from "@/src/components/apps/BrandedAppIcon";
 import { PrimaryScreenHeader } from "@/src/components/navigation/PrimaryScreenHeader";
+import { SurfaceStatusBanner } from "@/src/components/SurfaceStatusBanner";
 import { getPrimaryAgent } from "@/src/lib/agents";
 import { getPreviewAppRecord, normalizeAppRecord } from "@/src/lib/appRegistry";
 import { appRegistryApi } from "@/src/lib/appRegistryApi";
@@ -17,6 +18,7 @@ import {
   isCompletedRunStatus,
 } from "@/src/lib/kin-surface";
 import { useMobileChatContext, useMobileOverviewData } from "@/src/lib/mobile-data";
+import { sessionHasRuntimeAccess } from "@/src/lib/session";
 import { useSessionState } from "@/src/lib/session-context";
 import type { ActivitySummary, AppRecord, RuntimeAttachmentSummary, UnifiedMemorySummary } from "@/src/lib/types";
 import { useChatStore } from "@/src/stores/chatStore";
@@ -29,16 +31,17 @@ export default function HomeScreen() {
   const router = useRouter();
   const { session } = useSessionState();
   const { preferences } = useKinPreferences();
-  const { runs, approvals, artifacts, loading } = useMobileOverviewData();
+  const { runs, approvals, artifacts, loading, statusMessage } = useMobileOverviewData();
   const chatContextQuery = useMobileChatContext();
   const ensureSessionForAgent = useChatStore((state) => state.ensureSessionForAgent);
   const [featuredApps, setFeaturedApps] = React.useState<AppRecord[]>([]);
-  const connected = Boolean(session?.runtimeUrl && session?.runtimeKey);
+  const connected = sessionHasRuntimeAccess(session);
   const kin = getPrimaryAgent();
   const runtimeAttachments = chatContextQuery.data?.runtimeAttachments;
   const recentActivity = chatContextQuery.data?.recentActivity;
   const unifiedMemory = chatContextQuery.data?.unifiedMemory;
   const scheduler = chatContextQuery.data?.scheduler;
+  const degradedMessage = chatContextQuery.statusMessage || statusMessage;
   const selectedAppIds = React.useMemo(
     () => (preferences.activeAppIds.length ? preferences.activeAppIds : DEFAULT_ACTIVE_APP_IDS),
     [preferences.activeAppIds],
@@ -62,7 +65,7 @@ export default function HomeScreen() {
         .map((id) => getPreviewAppRecord(id))
         .filter((item): item is AppRecord => Boolean(item));
 
-      if (!connected || !session?.runtimeUrl || !session?.runtimeKey) {
+      if (!connected || !session?.runtimeUrl) {
         if (active) {
           setFeaturedApps(fallbackApps);
         }
@@ -218,10 +221,10 @@ export default function HomeScreen() {
           }}
         >
           <Text style={{ fontSize: 15, fontFamily: "DMSans_700Bold", color: theme.colors.text }}>
-            Live data is offline
+            Sign in to Empyralis cloud
           </Text>
           <Text style={{ fontSize: 13, lineHeight: 20, color: theme.colors.textSecondary }}>
-            Pair and connect your core to turn Home into a real operations view.
+            The paid mobile surface runs against your cloud workspace by default. Advanced local runtime pairing stays available only for companion testing.
           </Text>
           <TouchableOpacity
             activeOpacity={0.86}
@@ -236,8 +239,14 @@ export default function HomeScreen() {
               justifyContent: "center",
             }}
           >
-            <Text style={{ color: "#FFFFFF", fontSize: 13, fontWeight: "700" }}>Pair &amp; Connect</Text>
+            <Text style={{ color: "#FFFFFF", fontSize: 13, fontWeight: "700" }}>Account &amp; Connect</Text>
           </TouchableOpacity>
+        </View>
+      ) : null}
+
+      {degradedMessage ? (
+        <View style={{ marginTop: connected ? 4 : 12 }}>
+          <SurfaceStatusBanner message={degradedMessage} />
         </View>
       ) : null}
 

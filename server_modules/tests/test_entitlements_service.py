@@ -65,6 +65,14 @@ class EntitlementsServiceTests(unittest.TestCase):
 
         self.assertEqual(ctx.exception.reason, "hosted_runtime_concurrency_exhausted")
 
+    def test_workspace_hosted_execution_count_prefers_bounded_count_query(self) -> None:
+        count = entitlements_service._workspace_hosted_execution_count(
+            "workspace-1",
+            count_hosted_live_runs_fn=lambda workspace_id: 3,
+        )
+
+        self.assertEqual(count, 3)
+
     def test_enforce_hosted_runtime_access_bypasses_self_hosted_nodes(self) -> None:
         workspace = {
             "metadata": {

@@ -467,10 +467,21 @@ def _workspace_hosted_execution_count(
     workspace_id: str,
     *,
     live_runs_fn: Optional[Callable[[], list[Dict[str, Any]]]] = None,
+    count_hosted_live_runs_fn: Optional[Callable[[str], int]] = None,
 ) -> int:
     resolved_workspace_id = str(workspace_id or "").strip()
     if not resolved_workspace_id:
         return 0
+    if callable(count_hosted_live_runs_fn):
+        try:
+            return max(0, int(count_hosted_live_runs_fn(resolved_workspace_id)))
+        except Exception:
+            return 0
+    if live_runs_fn is None:
+        try:
+            return max(0, int(run_state_repository.sync_count_hosted_live_runs(resolved_workspace_id)))
+        except Exception:
+            return 0
     try:
         live_runs = live_runs_fn() if callable(live_runs_fn) else run_state_repository.sync_list_live_runs()
     except Exception:
@@ -502,6 +513,7 @@ def enforce_hosted_runtime_access(
     workspace_id: str,
     selected_attachment: Optional[Dict[str, Any]] = None,
     live_runs_fn: Optional[Callable[[], list[Dict[str, Any]]]] = None,
+    count_hosted_live_runs_fn: Optional[Callable[[str], int]] = None,
 ) -> Dict[str, Any]:
     state = resolve_workspace_entitlement_state(workspace=workspace, install=install)
     attachment = _coerce_dict(selected_attachment)
@@ -535,6 +547,7 @@ def enforce_hosted_runtime_access(
     active_hosted = _workspace_hosted_execution_count(
         workspace_id,
         live_runs_fn=live_runs_fn,
+        count_hosted_live_runs_fn=count_hosted_live_runs_fn,
     )
     if active_hosted >= concurrent_limit:
         raise EntitlementQuotaExceededError(

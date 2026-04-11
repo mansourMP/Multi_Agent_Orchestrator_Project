@@ -25,6 +25,7 @@ class AutopilotRunEntryService:
         decide_execution_target: Callable[[Dict[str, Any]], Any],
         apply_execution_route_metadata: Callable[[Dict[str, Any], Any], Dict[str, Any]],
         execute_agent_turn_request: Optional[Callable[..., Dict[str, Any]]] = None,
+        route_transport_channel_message: Optional[Callable[..., Dict[str, Any]]] = None,
         run_start_request_class: Optional[Callable[..., Any]] = None,
         start_run_request: Optional[Callable[[Any], Dict[str, Any]]] = None,
         create_run: Callable[..., str],
@@ -46,6 +47,7 @@ class AutopilotRunEntryService:
         self.decide_execution_target = decide_execution_target
         self.apply_execution_route_metadata = apply_execution_route_metadata
         self.execute_agent_turn_request = execute_agent_turn_request
+        self.route_transport_channel_message = route_transport_channel_message
         self.run_start_request_class = run_start_request_class
         self.start_run_request = start_run_request
         self.create_run = create_run
@@ -84,6 +86,135 @@ class AutopilotRunEntryService:
         context = run.get("context") if isinstance(run.get("context"), dict) else {}
         metadata = context.get("metadata") if isinstance(context.get("metadata"), dict) else {}
         return bool(metadata.get("local_execution_waiting_confirmation") or metadata.get("local_execution_waiting_approval"))
+
+    def _connector_metadata(self, connector_entry: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+        return connector_entry.get("metadata") if isinstance((connector_entry or {}).get("metadata"), dict) else {}
+
+    def _channel_endpoint_key(
+        self,
+        *,
+        channel_key: str,
+        connector_id: str,
+        connector_entry: Optional[Dict[str, Any]],
+        fallback: Optional[str] = None,
+    ) -> str:
+        metadata = self._connector_metadata(connector_entry)
+        bindings = metadata.get("channel_registry_bindings") if isinstance(metadata.get("channel_registry_bindings"), dict) else {}
+        binding = bindings.get(channel_key) if isinstance(bindings.get(channel_key), dict) else {}
+        candidates = (
+            binding.get("endpoint_key"),
+            metadata.get(f"{channel_key}_endpoint_key"),
+            fallback,
+            connector_id,
+        )
+        for candidate in candidates:
+            token = str(candidate or "").strip()
+            if token:
+                return token
+        return str(channel_key or "").strip() or "channel"
+
+    def _canonical_owner_install(
+        self,
+        *,
+        channel_key: str,
+        connector_entry: Optional[Dict[str, Any]],
+        metadata: Dict[str, Any],
+        assigned_role: str,
+        owner_user_id: str,
+    ) -> Dict[str, Any]:
+        entry = connector_entry or {}
+        connector_metadata = self._connector_metadata(connector_entry)
+        runtime_profile = metadata.get("runtime_profile") if isinstance(metadata.get("runtime_profile"), dict) else {}
+        runtime_profile_id = str(
+            metadata.get("runtime_profile_id")
+            or runtime_profile.get("id")
+            or connector_metadata.get("runtime_profile_id")
+            or ""
+        ).strip()
+        install_metadata = {
+            "agent_role": assigned_role or str(metadata.get("agent_role") or connector_metadata.get("agent_role") or "").strip() or None,
+        }
+        return {
+            "id": str(
+                metadata.get("active_agent_install_id")
+                or metadata.get("workspace_agent_install_id")
+                or connector_metadata.get("active_agent_install_id")
+                or connector_metadata.get("workspace_agent_install_id")
+                or entry.get("agent_install_id")
+                or entry.get("id")
+                or ""
+            ).strip()
+            or None,
+            "label": str(entry.get("label") or assigned_role or channel_key.title() or "Agent").strip() or "Agent",
+            "owner_user_id": owner_user_id or None,
+            "owner_email": str(metadata.get("owner_email") or connector_metadata.get("owner_email") or "").strip().lower() or None,
+            "runtime_mode": str(metadata.get("runtime_mode") or connector_metadata.get("runtime_mode") or "hosted_secure").strip().lower() or "hosted_secure",
+            "runtime_profile_id": runtime_profile_id or None,
+            "runtime_profile": {
+                **(runtime_profile if isinstance(runtime_profile, dict) else {}),
+                "id": runtime_profile_id or runtime_profile.get("id") or None,
+                "label": str(runtime_profile.get("label") or metadata.get("runtime_profile_label") or connector_metadata.get("runtime_profile_label") or "").strip() or None,
+                "runtime_id": str(runtime_profile.get("runtime_id") or metadata.get("runtime_id") or "").strip() or None,
+                "machine_id": str(runtime_profile.get("machine_id") or metadata.get("machine_id") or "").strip() or None,
+            },
+            "metadata": install_metadata,
+        }
+
+    def _create_canonical_channel_run(
+        self,
+        *,
+        tenant_id: str,
+        workspace_id: str,
+        channel_key: str,
+        endpoint_key: str,
+        goal: str,
+        message_id: Optional[str],
+        actor_id: str,
+        actor_display_name: str,
+        metadata: Dict[str, Any],
+        owner_install: Dict[str, Any],
+        owner_type: str,
+    ) -> Optional[Dict[str, Any]]:
+        if not callable(self.route_transport_channel_message):
+            return None
+        result = self.route_transport_channel_message(
+            tenant_id=tenant_id,
+            workspace_id=workspace_id,
+            channel_key=channel_key,
+            endpoint_key=endpoint_key,
+            customer_message=goal,
+            actor_id=actor_id,
+            actor_display_name=actor_display_name,
+            message_id=message_id,
+            metadata=metadata,
+            install=owner_install,
+            manifest=None,
+            owner_type=owner_type,
+            master_install_id=str(
+                metadata.get("master_agent_install_id")
+                or metadata.get("active_agent_install_id")
+                or owner_install.get("id")
+                or ""
+            ).strip()
+            or None,
+            runtime_mode=str(owner_install.get("runtime_mode") or "").strip() or None,
+            runtime_profile_id=str(
+                metadata.get("runtime_profile_id")
+                or ((owner_install.get("runtime_profile") or {}) if isinstance(owner_install.get("runtime_profile"), dict) else {}).get("id")
+                or ""
+            ).strip()
+            or None,
+            privileged_runtime_approved=bool(metadata.get("privileged_runtime_approved")),
+            seed_demo_if_empty=bool(metadata.get("seed_demo_if_empty")),
+        )
+        if not isinstance(result, dict):
+            return {"result": result}
+        route = result.get("metadata") if isinstance(result.get("metadata"), dict) else {}
+        return {
+            "run_id": str(result.get("run_id") or "").strip() or None,
+            "route": route.get("route") if isinstance(route.get("route"), dict) else None,
+            "result": result,
+        }
 
     def create_telegram_run(
         self,
@@ -202,31 +333,66 @@ class AutopilotRunEntryService:
             metadata["agent_role_source"] = "connector_assignment"
         metadata["trust_mode"] = self.normalize_trust_mode(trust_mode_value)
         metadata["execution_target"] = self.normalize_execution_target(execution_target_value)
-        turn_request = build_telegram_turn_request(
-            workspace_id=workspace_id,
+        connector_metadata = self._connector_metadata(connector_entry)
+        tenant_id = str(metadata.get("tenant_id") or connector_metadata.get("tenant_id") or "default").strip() or "default"
+        endpoint_key = self._channel_endpoint_key(
+            channel_key="telegram",
+            connector_id=connector_id,
             connector_entry=connector_entry,
-            goal=goal,
-            chat_id=chat_id,
-            sender_id=sender_id,
-            update_id=update_id,
-            message_id=message_id,
-            trace_id=resolved_trace_id,
-            source_event_id=str(source_event_id or "").strip(),
-            metadata=metadata,
+            fallback=str(connector_metadata.get("configured_chat_id") or "").strip() or None,
         )
-        created = self._create_run_record(
-            engine=self.telegram_engine,
+        owner_install = self._canonical_owner_install(
+            channel_key="telegram",
+            connector_entry=connector_entry,
+            metadata=metadata,
+            assigned_role=assigned_role,
+            owner_user_id=owner_user_id,
+        )
+        created = self._create_canonical_channel_run(
+            tenant_id=tenant_id,
             workspace_id=workspace_id,
+            channel_key="telegram",
+            endpoint_key=endpoint_key,
             goal=goal,
+            message_id=message_id,
+            actor_id=str(sender_id or chat_id or "telegram-user").strip() or "telegram-user",
+            actor_display_name=str(sender_id or chat_id or "telegram-user").strip() or "telegram-user",
             metadata=metadata,
-            turn_request=turn_request,
+            owner_install=owner_install,
+            owner_type="specialist",
         )
+        if created is None:
+            turn_request = build_telegram_turn_request(
+                workspace_id=workspace_id,
+                connector_entry=connector_entry,
+                goal=goal,
+                chat_id=chat_id,
+                sender_id=sender_id,
+                update_id=update_id,
+                message_id=message_id,
+                trace_id=resolved_trace_id,
+                source_event_id=str(source_event_id or "").strip(),
+                metadata=metadata,
+            )
+            created = self._create_run_record(
+                engine=self.telegram_engine,
+                workspace_id=workspace_id,
+                goal=goal,
+                metadata=metadata,
+                turn_request=turn_request,
+            )
         run_id = str(created.get("run_id") or "").strip()
-        if not run_id:
-            raise RuntimeError("Telegram channel run did not produce a run id.")
         route = created.get("route") if isinstance(created.get("route"), dict) else {
             "selected": str(metadata.get("execution_target_selected") or metadata.get("execution_target") or "").strip() or None
         }
+        result_payload = created.get("result") if isinstance(created.get("result"), dict) else {}
+        if not run_id:
+            return {
+                "run_id": "",
+                "route": route,
+                "status": str(result_payload.get("status") or "failed").strip().lower() or "failed",
+                "reply": str(result_payload.get("reply") or "").strip(),
+            }
         self.telegram_runs_started()
         self.record_channel_event(
             channel="telegram",
@@ -234,8 +400,14 @@ class AutopilotRunEntryService:
             event_type="run_started",
             text=f"Run started for chat {chat_id}",
             workspace_id=workspace_id,
-            session_key=self.telegram_session_key(chat_id),
-            session_id=self.telegram_session_key(chat_id),
+            session_key=str(
+                ((created.get("result") or {}) if isinstance(created.get("result"), dict) else {}).get("session_key")
+                or self.telegram_session_key(chat_id)
+            ),
+            session_id=str(
+                ((created.get("result") or {}) if isinstance(created.get("result"), dict) else {}).get("session_key")
+                or self.telegram_session_key(chat_id)
+            ),
             parent_id=str(message_id or "").strip() or None,
             run_id=run_id,
             action="run",
@@ -291,31 +463,66 @@ class AutopilotRunEntryService:
             metadata["agent_role_source"] = "connector_assignment"
         metadata["trust_mode"] = self.normalize_trust_mode(trust_mode_value)
         metadata["execution_target"] = self.normalize_execution_target(execution_target_value)
-        turn_request = build_whatsapp_turn_request(
-            workspace_id=workspace_id,
+        connector_metadata = self._connector_metadata(connector_entry)
+        tenant_id = str(metadata.get("tenant_id") or connector_metadata.get("tenant_id") or "default").strip() or "default"
+        endpoint_key = self._channel_endpoint_key(
+            channel_key="whatsapp",
+            connector_id=connector_id,
             connector_entry=connector_entry,
-            goal=goal,
-            from_number=from_number,
-            to_number=to_number,
-            message_sid=message_sid,
-            account_sid=account_sid,
-            session_id=self.whatsapp_session_key(from_number, to_number),
-            trace_id=trace_id,
-            metadata=metadata,
+            fallback=to_number,
         )
-        created = self._create_run_record(
-            engine=self.whatsapp_engine,
+        owner_install = self._canonical_owner_install(
+            channel_key="whatsapp",
+            connector_entry=connector_entry,
+            metadata=metadata,
+            assigned_role=assigned_role,
+            owner_user_id=owner_user_id,
+        )
+        created = self._create_canonical_channel_run(
+            tenant_id=tenant_id,
             workspace_id=workspace_id,
+            channel_key="whatsapp",
+            endpoint_key=endpoint_key,
             goal=goal,
+            message_id=message_sid,
+            actor_id=str(from_number or "whatsapp-user").strip() or "whatsapp-user",
+            actor_display_name=str(from_number or "whatsapp-user").strip() or "whatsapp-user",
             metadata=metadata,
-            turn_request=turn_request,
+            owner_install=owner_install,
+            owner_type="specialist",
         )
+        if created is None:
+            turn_request = build_whatsapp_turn_request(
+                workspace_id=workspace_id,
+                connector_entry=connector_entry,
+                goal=goal,
+                from_number=from_number,
+                to_number=to_number,
+                message_sid=message_sid,
+                account_sid=account_sid,
+                session_id=self.whatsapp_session_key(from_number, to_number),
+                trace_id=trace_id,
+                metadata=metadata,
+            )
+            created = self._create_run_record(
+                engine=self.whatsapp_engine,
+                workspace_id=workspace_id,
+                goal=goal,
+                metadata=metadata,
+                turn_request=turn_request,
+            )
         run_id = str(created.get("run_id") or "").strip()
-        if not run_id:
-            raise RuntimeError("WhatsApp channel run did not produce a run id.")
         route = created.get("route") if isinstance(created.get("route"), dict) else {
             "selected": str(metadata.get("execution_target_selected") or metadata.get("execution_target") or "").strip() or None
         }
+        result_payload = created.get("result") if isinstance(created.get("result"), dict) else {}
+        if not run_id:
+            return {
+                "run_id": "",
+                "route": route,
+                "status": str(result_payload.get("status") or "failed").strip().lower() or "failed",
+                "reply": str(result_payload.get("reply") or "").strip(),
+            }
         self.whatsapp_runs_started()
         self.record_channel_event(
             channel="whatsapp",
@@ -323,8 +530,14 @@ class AutopilotRunEntryService:
             event_type="run_started",
             text=f"Run started for WhatsApp inbound {from_number}",
             workspace_id=workspace_id,
-            session_key=self.whatsapp_session_key(from_number, to_number),
-            session_id=self.whatsapp_session_key(from_number, to_number),
+            session_key=str(
+                ((created.get("result") or {}) if isinstance(created.get("result"), dict) else {}).get("session_key")
+                or self.whatsapp_session_key(from_number, to_number)
+            ),
+            session_id=str(
+                ((created.get("result") or {}) if isinstance(created.get("result"), dict) else {}).get("session_key")
+                or self.whatsapp_session_key(from_number, to_number)
+            ),
             parent_id=str(message_sid or "").strip() or None,
             run_id=run_id,
             action="run",

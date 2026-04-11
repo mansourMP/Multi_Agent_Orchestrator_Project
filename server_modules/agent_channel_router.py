@@ -365,19 +365,25 @@ def _normalize_canonical_channel_result(
     }
 
 
-async def route_inbound_channel_message(
+def prepare_canonical_channel_turn(
     *,
     tenant_id: str,
     workspace_id: str,
     channel_key: str,
     endpoint_key: Any,
     customer_message: str,
+    install: Dict[str, Any],
+    manifest: Any = None,
+    owner_type: str = "specialist",
     session_key: Optional[str] = None,
     message_id: Optional[str] = None,
     actor_id: Optional[str] = None,
     actor_display_name: Optional[str] = None,
     metadata: Optional[Dict[str, Any]] = None,
-    allow_master_fallback: bool = True,
+    master_install_id: Optional[str] = None,
+    runtime_mode: Optional[str] = None,
+    runtime_profile_id: Optional[str] = None,
+    request_id: Optional[str] = None,
     privileged_runtime_approved: bool = False,
     seed_demo_if_empty: bool = False,
 ) -> Dict[str, Any]:
@@ -407,6 +413,7 @@ async def route_inbound_channel_message(
     ):
         raise ChannelSecurityDeniedError("This channel is temporarily disabled by a security control.")
 
+    install_payload = _coerce_dict(install)
     resolved_actor_id = str(actor_id or "").strip() or f"{resolved_channel_key}-customer"
     resolved_actor_display_name = str(actor_display_name or "").strip() or resolved_actor_id
     resolved_session_key = _build_session_key(
@@ -422,6 +429,259 @@ async def route_inbound_channel_message(
         endpoint_key=resolved_endpoint_key,
         session_key=resolved_session_key,
     )
+    responder_install_id = str(install_payload.get("id") or "").strip() or None
+    if responder_install_id and safe_mode_service.is_agent_disabled(
+        tenant_id=tenant_id,
+        workspace_id=workspace_id,
+        agent_install_id=responder_install_id,
+    ):
+        raise ChannelSecurityDeniedError("This agent is temporarily disabled by a security control.")
+
+    resolved_runtime_mode = (
+        str(runtime_mode or install_payload.get("runtime_mode") or getattr(getattr(manifest, "runtime", None), "mode", "hosted_secure") or "hosted_secure")
+        .strip()
+        .lower()
+        or "hosted_secure"
+    )
+    resolved_runtime_profile_id = str(runtime_profile_id or _runtime_profile_id(install_payload) or "").strip() or None
+    resolved_owner_type = str(owner_type or "specialist").strip() or "specialist"
+    responder_label = str(install_payload.get("label") or "").strip() or getattr(getattr(manifest, "identity", None), "name", "Agent")
+    shared_metadata = {
+        "source": "external_channel_ingress",
+        "channel_key": resolved_channel_key,
+        "endpoint_key": resolved_endpoint_key,
+        "owner_type": resolved_owner_type,
+        "responder_install_id": responder_install_id,
+        "message_id": str(message_id or "").strip() or None,
+        **_coerce_dict(metadata),
+    }
+    turn_request = _build_channel_turn_request(
+        tenant_id=tenant_id,
+        workspace_id=workspace_id,
+        channel_key=resolved_channel_key,
+        actor_id=resolved_actor_id,
+        actor_display_name=resolved_actor_display_name,
+        message=resolved_message,
+        thread_id=resolved_thread_id,
+        session_id=resolved_session_key,
+        install=install_payload,
+        manifest=manifest,
+        shared_metadata=shared_metadata,
+        master_install_id=master_install_id,
+        runtime_mode=resolved_runtime_mode,
+        runtime_profile_id=resolved_runtime_profile_id,
+        request_id=request_id,
+        privileged_runtime_approved=privileged_runtime_approved,
+        seed_demo_if_empty=seed_demo_if_empty,
+    )
+    return {
+        "tenant_id": tenant_id,
+        "workspace_id": workspace_id,
+        "channel_key": resolved_channel_key,
+        "endpoint_key": resolved_endpoint_key,
+        "session_key": resolved_session_key,
+        "thread_id": resolved_thread_id,
+        "message": resolved_message,
+        "actor_id": resolved_actor_id,
+        "actor_display_name": resolved_actor_display_name,
+        "install": install_payload,
+        "manifest": manifest,
+        "owner_type": resolved_owner_type,
+        "responder_install_id": responder_install_id,
+        "responder_label": responder_label,
+        "runtime_mode": resolved_runtime_mode,
+        "runtime_profile_id": resolved_runtime_profile_id,
+        "shared_metadata": shared_metadata,
+        "turn_request": turn_request,
+        "execution_owner": _channel_turn_owner_user(install=install_payload),
+    }
+
+
+async def execute_prepared_channel_turn(
+    *,
+    prepared: Dict[str, Any],
+) -> Dict[str, Any]:
+    quota_snapshot = None
+    try:
+        async with channel_concurrency_service.channel_execution_slot(
+            tenant_id=str(prepared.get("tenant_id") or "").strip(),
+            workspace_id=str(prepared.get("workspace_id") or "").strip(),
+            responder_install_id=str(prepared.get("responder_install_id") or "").strip() or None,
+            thread_id=str(prepared.get("thread_id") or "").strip() or None,
+            session_key=str(prepared.get("session_key") or "").strip() or None,
+            channel_key=str(prepared.get("channel_key") or "").strip() or None,
+            endpoint_key=str(prepared.get("endpoint_key") or "").strip() or None,
+            install=_coerce_dict(prepared.get("install")),
+            metadata=_coerce_dict(prepared.get("shared_metadata")),
+        ) as execution_slot:
+            quota_snapshot = execution_slot.get("quota_snapshot")
+            timeout_seconds = max(
+                int(getattr(quota_snapshot, "max_runtime_seconds", 0) or 0),
+                1,
+            )
+            try:
+                execution_result = await asyncio.wait_for(
+                    execute_canonical_channel_turn(
+                        turn_request=prepared["turn_request"],
+                        current_user=_coerce_dict(prepared.get("execution_owner")),
+                    ),
+                    timeout=timeout_seconds,
+                )
+                return _normalize_canonical_channel_result(execution_result=execution_result)
+            except asyncio.TimeoutError:
+                return channel_concurrency_service.build_runtime_capped_result(
+                    quota_snapshot=quota_snapshot,
+                )
+    except channel_concurrency_service.ChannelExecutionLimitError as error:
+        return channel_concurrency_service.build_limit_result(error=error)
+
+
+async def route_transport_channel_message(
+    *,
+    tenant_id: str,
+    workspace_id: str,
+    channel_key: str,
+    endpoint_key: Any,
+    customer_message: str,
+    install: Dict[str, Any],
+    manifest: Any = None,
+    owner_type: str = "specialist",
+    session_key: Optional[str] = None,
+    message_id: Optional[str] = None,
+    actor_id: Optional[str] = None,
+    actor_display_name: Optional[str] = None,
+    metadata: Optional[Dict[str, Any]] = None,
+    master_install_id: Optional[str] = None,
+    runtime_mode: Optional[str] = None,
+    runtime_profile_id: Optional[str] = None,
+    privileged_runtime_approved: bool = False,
+    seed_demo_if_empty: bool = False,
+) -> Dict[str, Any]:
+    prepared = prepare_canonical_channel_turn(
+        tenant_id=tenant_id,
+        workspace_id=workspace_id,
+        channel_key=channel_key,
+        endpoint_key=endpoint_key,
+        customer_message=customer_message,
+        install=install,
+        manifest=manifest,
+        owner_type=owner_type,
+        session_key=session_key,
+        message_id=message_id,
+        actor_id=actor_id,
+        actor_display_name=actor_display_name,
+        metadata=metadata,
+        master_install_id=master_install_id,
+        runtime_mode=runtime_mode,
+        runtime_profile_id=runtime_profile_id,
+        privileged_runtime_approved=privileged_runtime_approved,
+        seed_demo_if_empty=seed_demo_if_empty,
+    )
+    incident_state = safe_mode_service.resolve_channel_incident_state(
+        tenant_id=tenant_id,
+        workspace_id=workspace_id,
+        channel_key=str(prepared.get("channel_key") or "").strip(),
+        endpoint_key=str(prepared.get("endpoint_key") or "").strip(),
+    )
+    if bool(incident_state.get("active")):
+        incident_result = _incident_result_payload(incident_state)
+        return {
+            "workspace_id": workspace_id,
+            "tenant_id": tenant_id,
+            "channel_key": prepared["channel_key"],
+            "endpoint_key": prepared["endpoint_key"],
+            "session_key": prepared["session_key"],
+            "thread_id": prepared["thread_id"],
+            "owner": {
+                "install_id": prepared["responder_install_id"],
+                "label": prepared["responder_label"],
+                "type": prepared["owner_type"],
+                "runtime_mode": prepared["runtime_mode"],
+            },
+            "status": incident_result.get("status"),
+            "reply": incident_result.get("reply"),
+            "artifact": None,
+            "steps": [],
+            "critic": None,
+            "limit_reason": f"incident_{incident_result.get('incident_mode')}",
+            "retry_after_seconds": incident_result.get("retry_after_seconds"),
+            "quota_snapshot": None,
+            "incident_scope": incident_result.get("incident_scope"),
+            "incident_mode": incident_result.get("incident_mode"),
+            "metadata": {},
+            "audit": {"inbound_event_id": None, "outbound_event_id": None},
+        }
+    result = await execute_prepared_channel_turn(prepared=prepared)
+    return {
+        "workspace_id": workspace_id,
+        "tenant_id": tenant_id,
+        "channel_key": prepared["channel_key"],
+        "endpoint_key": prepared["endpoint_key"],
+        "session_key": prepared["session_key"],
+        "thread_id": prepared["thread_id"],
+        "owner": {
+            "install_id": prepared["responder_install_id"],
+            "label": prepared["responder_label"],
+            "type": prepared["owner_type"],
+            "runtime_mode": prepared["runtime_mode"],
+        },
+        "status": result.get("status"),
+        "reply": str(result.get("reply") or "").strip(),
+        "run_id": result.get("run_id"),
+        "artifact": result.get("artifact"),
+        "steps": result.get("steps"),
+        "critic": result.get("critic"),
+        "limit_reason": result.get("limit_reason"),
+        "retry_after_seconds": result.get("retry_after_seconds"),
+        "quota_snapshot": result.get("quota_snapshot"),
+        "metadata": result.get("metadata"),
+        "audit": {"inbound_event_id": None, "outbound_event_id": None},
+    }
+
+
+def route_transport_channel_message_sync(**kwargs: Any) -> Dict[str, Any]:
+    from server_modules.direct_tool_config_service import run_async_tool_call
+
+    return run_async_tool_call(route_transport_channel_message(**kwargs))
+
+
+async def route_inbound_channel_message(
+    *,
+    tenant_id: str,
+    workspace_id: str,
+    channel_key: str,
+    endpoint_key: Any,
+    customer_message: str,
+    session_key: Optional[str] = None,
+    message_id: Optional[str] = None,
+    actor_id: Optional[str] = None,
+    actor_display_name: Optional[str] = None,
+    metadata: Optional[Dict[str, Any]] = None,
+    allow_master_fallback: bool = True,
+    privileged_runtime_approved: bool = False,
+    seed_demo_if_empty: bool = False,
+) -> Dict[str, Any]:
+    resolved_channel_key = _normalize_channel_key(channel_key)
+    if resolved_channel_key not in SUPPORTED_CHANNEL_KEYS:
+        raise ChannelIngressValidationError("Unsupported channel.")
+    resolved_endpoint_key = _normalize_endpoint_key(resolved_channel_key, endpoint_key)
+    if not resolved_endpoint_key:
+        raise ChannelIngressValidationError("endpoint_key is required.")
+    if not str(customer_message or "").strip():
+        raise ChannelIngressValidationError("customer_message is required.")
+    workspace_policy = safe_mode_service.resolve_machine_policy_status(
+        tenant_id=tenant_id,
+        workspace_id=workspace_id,
+    )
+    if bool((workspace_policy.get("kill_switch") or {}).get("active")):
+        raise ChannelSecurityDeniedError("This workspace is temporarily disabled by a security kill switch.")
+    if safe_mode_service.is_channel_disabled(
+        tenant_id=tenant_id,
+        workspace_id=workspace_id,
+        channel_key=resolved_channel_key,
+        endpoint_key=resolved_endpoint_key,
+    ):
+        raise ChannelSecurityDeniedError("This channel is temporarily disabled by a security control.")
 
     owner_route = await agent_specialist_repository.resolve_active_inbound_channel_owner(
         tenant_id=tenant_id,
@@ -453,36 +713,47 @@ async def route_inbound_channel_message(
     master_install_id = str(_coerce_dict(master_install).get("id") or install.get("id") or "").strip() or None
     responder_label = str(install.get("label") or "").strip() or getattr(manifest.identity, "name", "Agent")
     runtime_mode = str(install.get("runtime_mode") or getattr(manifest.runtime, "mode", "hosted_secure") or "hosted_secure").strip().lower()
-    runtime_profile = _coerce_dict(install.get("runtime_profile"))
     runtime_profile_id = _runtime_profile_id(install)
+    prepared = prepare_canonical_channel_turn(
+        tenant_id=tenant_id,
+        workspace_id=workspace_id,
+        channel_key=resolved_channel_key,
+        endpoint_key=resolved_endpoint_key,
+        customer_message=customer_message,
+        install=install,
+        manifest=manifest,
+        owner_type=owner_type,
+        session_key=session_key,
+        message_id=message_id,
+        actor_id=actor_id,
+        actor_display_name=actor_display_name,
+        metadata=metadata,
+        master_install_id=master_install_id,
+        runtime_mode=runtime_mode,
+        runtime_profile_id=runtime_profile_id,
+        privileged_runtime_approved=privileged_runtime_approved,
+        seed_demo_if_empty=seed_demo_if_empty,
+    )
     actor_payload = {
         "type": "user",
-        "id": resolved_actor_id,
-        "display_name": resolved_actor_display_name,
+        "id": prepared["actor_id"],
+        "display_name": prepared["actor_display_name"],
     }
-    shared_metadata = {
-        "source": "external_channel_ingress",
-        "channel_key": resolved_channel_key,
-        "endpoint_key": resolved_endpoint_key,
-        "owner_type": owner_type,
-        "responder_install_id": responder_install_id,
-        "message_id": str(message_id or "").strip() or None,
-        **_coerce_dict(metadata),
-    }
+    shared_metadata = prepared["shared_metadata"]
     inbound_event = await control_plane_repository.append_agent_channel_event(
         tenant_id=tenant_id,
         workspace_id=workspace_id,
         channel_key=resolved_channel_key,
         endpoint_key=resolved_endpoint_key,
-        session_key=resolved_session_key,
+        session_key=prepared["session_key"],
         thread_id=None,
         responder_install_id=responder_install_id,
         direction="inbound",
         event_type="message",
         message_id=str(message_id or "").strip() or None,
         actor=actor_payload,
-        text=resolved_message,
-        payload={"message": resolved_message},
+        text=prepared["message"],
+        payload={"message": prepared["message"]},
         metadata=shared_metadata,
         status="received",
     )
@@ -492,8 +763,8 @@ async def route_inbound_channel_message(
             "tenant_id": tenant_id,
             "channel_key": resolved_channel_key,
             "endpoint_key": resolved_endpoint_key,
-            "session_key": resolved_session_key,
-            "thread_id": resolved_thread_id,
+            "session_key": prepared["session_key"],
+            "thread_id": prepared["thread_id"],
             "owner": {
                 "install_id": responder_install_id,
                 "label": responder_label,
@@ -557,8 +828,8 @@ async def route_inbound_channel_message(
                 actor_type="sage" if owner_type == "master" else "specialist",
                 actor_id=responder_install_id or getattr(manifest, "manifest_id", "agent"),
                 install_id=responder_install_id,
-                thread_id=resolved_thread_id,
-                session_key=resolved_session_key,
+                thread_id=prepared["thread_id"],
+                session_key=prepared["session_key"],
                 channel=resolved_channel_key,
                 direction="outbound",
                 event_class="blocked_action",
@@ -584,8 +855,8 @@ async def route_inbound_channel_message(
             "tenant_id": tenant_id,
             "channel_key": resolved_channel_key,
             "endpoint_key": resolved_endpoint_key,
-            "session_key": resolved_session_key,
-            "thread_id": resolved_thread_id,
+            "session_key": prepared["session_key"],
+            "thread_id": prepared["thread_id"],
             "owner": {
                 "install_id": responder_install_id,
                 "label": responder_label,
@@ -607,19 +878,22 @@ async def route_inbound_channel_message(
                 "outbound_event_id": str(_coerce_dict(outbound_event).get("id") or "").strip() or None,
             },
         }
-
-    turn_request = _build_channel_turn_request(
+    prepared["shared_metadata"] = {
+        **_coerce_dict(prepared.get("shared_metadata")),
+        "request_id": str(_coerce_dict(inbound_event).get("id") or "").strip() or None,
+    }
+    prepared["turn_request"] = _build_channel_turn_request(
         tenant_id=tenant_id,
         workspace_id=workspace_id,
         channel_key=resolved_channel_key,
-        actor_id=resolved_actor_id,
-        actor_display_name=resolved_actor_display_name,
-        message=resolved_message,
-        thread_id=resolved_thread_id,
-        session_id=resolved_session_key,
+        actor_id=prepared["actor_id"],
+        actor_display_name=prepared["actor_display_name"],
+        message=prepared["message"],
+        thread_id=prepared["thread_id"],
+        session_id=prepared["session_key"],
         install=install,
         manifest=manifest,
-        shared_metadata=shared_metadata,
+        shared_metadata=prepared["shared_metadata"],
         master_install_id=master_install_id,
         runtime_mode=runtime_mode,
         runtime_profile_id=runtime_profile_id,
@@ -627,39 +901,7 @@ async def route_inbound_channel_message(
         privileged_runtime_approved=privileged_runtime_approved,
         seed_demo_if_empty=seed_demo_if_empty,
     )
-    execution_owner = _channel_turn_owner_user(install=install)
-    try:
-        async with channel_concurrency_service.channel_execution_slot(
-            tenant_id=tenant_id,
-            workspace_id=workspace_id,
-            responder_install_id=responder_install_id,
-            thread_id=resolved_thread_id,
-            session_key=resolved_session_key,
-            channel_key=resolved_channel_key,
-            endpoint_key=resolved_endpoint_key,
-            install=install,
-            metadata=shared_metadata,
-        ) as execution_slot:
-            quota_snapshot = execution_slot.get("quota_snapshot")
-            timeout_seconds = max(
-                int(getattr(quota_snapshot, "max_runtime_seconds", 0) or 0),
-                1,
-            )
-            try:
-                execution_result = await asyncio.wait_for(
-                    execute_canonical_channel_turn(
-                        turn_request=turn_request,
-                        current_user=execution_owner,
-                    ),
-                    timeout=timeout_seconds,
-                )
-                result = _normalize_canonical_channel_result(execution_result=execution_result)
-            except asyncio.TimeoutError:
-                result = channel_concurrency_service.build_runtime_capped_result(
-                    quota_snapshot=quota_snapshot,
-                )
-    except channel_concurrency_service.ChannelExecutionLimitError as error:
-        result = channel_concurrency_service.build_limit_result(error=error)
+    result = await execute_prepared_channel_turn(prepared=prepared)
 
     reply = str(result.get("reply") or "").strip()
     assistant_actor = {
@@ -672,8 +914,8 @@ async def route_inbound_channel_message(
         workspace_id=workspace_id,
         channel_key=resolved_channel_key,
         endpoint_key=resolved_endpoint_key,
-        session_key=resolved_session_key,
-        thread_id=resolved_thread_id,
+        session_key=prepared["session_key"],
+        thread_id=prepared["thread_id"],
         responder_install_id=responder_install_id,
         direction="outbound",
         event_type=str(result.get("event_type") or "response").strip() or "response",
@@ -709,8 +951,8 @@ async def route_inbound_channel_message(
             actor_id=actor_id,
             install_id=responder_install_id,
             run_id=str(result.get("run_id") or "").strip() or None,
-            thread_id=resolved_thread_id,
-            session_key=resolved_session_key,
+            thread_id=prepared["thread_id"],
+            session_key=prepared["session_key"],
             channel=resolved_channel_key,
             direction="outbound",
             event_class="sage_activity" if owner_type == "master" else "specialist_activity",
@@ -740,8 +982,8 @@ async def route_inbound_channel_message(
                 actor_id=actor_id,
                 install_id=responder_install_id,
                 run_id=str(result.get("run_id") or "").strip() or None,
-                thread_id=resolved_thread_id,
-                session_key=resolved_session_key,
+                thread_id=prepared["thread_id"],
+                session_key=prepared["session_key"],
                 channel=resolved_channel_key,
                 direction="outbound",
                 event_class="artifact_created",
@@ -767,8 +1009,8 @@ async def route_inbound_channel_message(
         "tenant_id": tenant_id,
         "channel_key": resolved_channel_key,
         "endpoint_key": resolved_endpoint_key,
-        "session_key": resolved_session_key,
-        "thread_id": resolved_thread_id,
+        "session_key": prepared["session_key"],
+        "thread_id": prepared["thread_id"],
         "owner": {
             "install_id": responder_install_id,
             "label": responder_label,

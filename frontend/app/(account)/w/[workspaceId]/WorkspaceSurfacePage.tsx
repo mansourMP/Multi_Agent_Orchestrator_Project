@@ -2,6 +2,7 @@
 
 import Link from 'next/link';
 
+import { WorkspaceChannelPairingSurface } from '@/lib/workspace/workspace-channel-pairing-surface';
 import { useWorkspaceBoundary } from '@/lib/workspace/workspace-boundary';
 import { WorkspaceFeatureSurface } from '@/lib/workspace/workspace-feature-surface';
 import type { WorkspaceRouteId } from '@/lib/workspace/workspace-shell';
@@ -38,6 +39,10 @@ export function WorkspaceSurfacePage({
         </p>
       </main>
     );
+  }
+
+  if (surface === 'settings' || surface === 'integrations') {
+    return <WorkspaceChannelPairingSurface featureId={surface} />;
   }
 
   return (

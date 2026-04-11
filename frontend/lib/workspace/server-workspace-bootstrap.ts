@@ -2,21 +2,11 @@ import 'server-only';
 
 import { headers } from 'next/headers';
 
+import { controlPlaneBaseUrl } from '@/lib/server/control-plane-base-url';
 import {
   type WorkspaceBootstrapPayload,
   parseWorkspaceBootstrapPayload,
 } from '@/lib/workspace/workspace-bootstrap';
-
-function controlPlaneBaseUrl(): string {
-  const rawValue =
-    process.env.EMPYRALIS_API_URL
-    ?? process.env.NEXT_PUBLIC_API_URL
-    ?? process.env.NEXT_PUBLIC_ORION_API_URL
-    ?? process.env.EMPYRALIS_PUBLIC_URL
-    ?? 'http://127.0.0.1:8000';
-
-  return rawValue.replace(/\/+$/, '');
-}
 
 export async function loadWorkspaceBootstrap(workspaceId: string): Promise<WorkspaceBootstrapPayload> {
   const requestHeaders = await headers();

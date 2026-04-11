@@ -162,6 +162,8 @@ def _membership_permissions(*, role: str, capabilities: Dict[str, Any], traits: 
         permissions.add("channels.telegram.use")
     if capabilities.get("whatsapp_channel_enabled"):
         permissions.add("channels.whatsapp.use")
+    if capabilities.get("channel_pairing_enabled"):
+        permissions.update({"channels.pair", "channels.link.revoke"})
     if str(traits.get("operatingMode") or "").strip().lower() == "document_workstation":
         permissions.add("documents.workstation.use")
     if role in {"owner", "admin"}:
@@ -278,6 +280,13 @@ async def build_workspace_bootstrap(
         "routing_read_enabled": role in {"owner", "admin"},
         "routing_write_enabled": role in {"owner", "admin"},
         "document_workstation_enabled": bool(workspace_traits.get("documentHeavy")),
+        "channel_pairing_enabled": (
+            role in {"member", "owner", "admin"}
+            and (
+                bool(capability_flags.get("telegram_channel_enabled"))
+                or bool(capability_flags.get("whatsapp_channel_enabled"))
+            )
+        ),
     }
     permissions = _membership_permissions(
         role=role,

@@ -132,10 +132,12 @@ async def test_build_workspace_bootstrap_composes_canonical_payload(monkeypatch:
     assert "chat.write" in payload["membership"]["permissions"]
     assert payload["entitlements"]["plan"] == "personal"
     assert payload["capabilities"]["mobile_app_enabled"] is True
+    assert payload["capabilities"]["channel_pairing_enabled"] is True
     assert payload["runtime"]["deploymentMode"] == "hybrid"
     assert payload["runtime"]["runtimeTargets"][0]["id"] == "cloud_default"
     assert payload["shellHints"]["defaultRoute"] == "/w/ws-1/chat"
     assert payload["shellHints"]["preferredProfile"] == "personal_shell"
+    assert "channels.pair" in payload["membership"]["permissions"]
 
 
 @pytest.mark.anyio

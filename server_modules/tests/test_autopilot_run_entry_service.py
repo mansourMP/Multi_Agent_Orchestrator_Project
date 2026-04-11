@@ -9,6 +9,7 @@ class AutopilotRunEntryServiceTests(unittest.TestCase):
         self.events = overrides.pop("events", [])
         self.telegram_started = overrides.pop("telegram_started", [])
         self.whatsapp_started = overrides.pop("whatsapp_started", [])
+        self.canonical_calls = overrides.pop("canonical_calls", [])
         return AutopilotRunEntryService(
             telegram_profile_fields=["project", "role"],
             telegram_engine="orion",
@@ -21,6 +22,14 @@ class AutopilotRunEntryServiceTests(unittest.TestCase):
             apply_execution_route_metadata=overrides.pop(
                 "apply_execution_route_metadata",
                 lambda metadata, route: {**metadata, "route_selected": route.get("selected")},
+            ),
+            route_transport_channel_message=overrides.pop(
+                "route_transport_channel_message",
+                lambda **kwargs: self.canonical_calls.append(kwargs) or {
+                    "run_id": f"run-canonical-{len(self.canonical_calls)}",
+                    "session_key": f"canonical:{kwargs.get('channel_key')}:{kwargs.get('endpoint_key')}:{kwargs.get('actor_id')}",
+                    "metadata": {"route": {"selected": "cloud"}},
+                },
             ),
             run_start_request_class=overrides.pop("run_start_request_class", None),
             start_run_request=overrides.pop("start_run_request", None),
@@ -51,15 +60,19 @@ class AutopilotRunEntryServiceTests(unittest.TestCase):
             execution_target_value="cloud",
         )
 
-        self.assertEqual(result["run_id"], "run-1")
-        metadata = self.created[0]["context"]["metadata"]
-        self.assertEqual(metadata["owner_user_id"], "user-123")
-        self.assertEqual(metadata["telegram"]["profile_context"]["project"], "alpha")
-        self.assertEqual(metadata["route_selected"], "cloud")
-        self.assertEqual(metadata["agent_turn_request"]["channel"], "telegram")
-        self.assertEqual(metadata["agent_turn_request"]["message"], "Investigate")
+        self.assertEqual(result["run_id"], "run-canonical-1")
+        self.assertEqual(self.created, [])
+        canonical = self.canonical_calls[0]
+        self.assertEqual(canonical["tenant_id"], "default")
+        self.assertEqual(canonical["channel_key"], "telegram")
+        self.assertEqual(canonical["customer_message"], "Investigate")
+        self.assertEqual(canonical["actor_id"], "456")
+        self.assertEqual(canonical["metadata"]["owner_user_id"], "user-123")
+        self.assertEqual(canonical["metadata"]["telegram"]["profile_context"]["project"], "alpha")
+        self.assertEqual(canonical["metadata"]["execution_target"], "cloud")
         self.assertEqual(len(self.telegram_started), 1)
         self.assertEqual(self.events[0]["event_type"], "run_started")
+        self.assertEqual(self.events[0]["session_key"], "canonical:telegram:cred-telegram:456")
 
     def test_create_whatsapp_run_includes_owner(self) -> None:
         service = self._make_service()
@@ -75,13 +88,16 @@ class AutopilotRunEntryServiceTests(unittest.TestCase):
             execution_target_value="cloud",
         )
 
-        self.assertEqual(result["run_id"], "run-1")
-        metadata = self.created[0]["context"]["metadata"]
-        self.assertEqual(metadata["owner_user_id"], "user-123")
-        self.assertEqual(metadata["route_selected"], "cloud")
-        self.assertEqual(metadata["agent_turn_request"]["channel"], "whatsapp")
-        self.assertEqual(metadata["agent_turn_request"]["message"], "Handle this")
+        self.assertEqual(result["run_id"], "run-canonical-1")
+        self.assertEqual(self.created, [])
+        canonical = self.canonical_calls[0]
+        self.assertEqual(canonical["channel_key"], "whatsapp")
+        self.assertEqual(canonical["endpoint_key"], "whatsapp:+2")
+        self.assertEqual(canonical["actor_id"], "whatsapp:+1")
+        self.assertEqual(canonical["metadata"]["owner_user_id"], "user-123")
+        self.assertEqual(canonical["metadata"]["execution_target"], "cloud")
         self.assertEqual(len(self.whatsapp_started), 1)
+        self.assertEqual(self.events[0]["session_key"], "canonical:whatsapp:whatsapp:+2:whatsapp:+1")
 
     def test_create_telegram_run_can_start_via_canonical_run_request(self) -> None:
         started_requests = []
@@ -92,6 +108,7 @@ class AutopilotRunEntryServiceTests(unittest.TestCase):
                     setattr(self, key, value)
 
         service = self._make_service(
+            route_transport_channel_message=None,
             run_start_request_class=_RunStartRequest,
             start_run_request=lambda request: started_requests.append(request) or {
                 "run_id": "run-canonical-1",
@@ -118,6 +135,62 @@ class AutopilotRunEntryServiceTests(unittest.TestCase):
         self.assertEqual(started_requests[0].metadata["owner_user_id"], "user-123")
         self.assertEqual(started_requests[0].metadata["agent_turn_request"]["channel"], "telegram")
         self.assertEqual(len(self.created), 0)
+
+    def test_create_telegram_run_uses_channel_binding_endpoint_for_canonical_contract(self) -> None:
+        service = self._make_service()
+
+        service.create_telegram_run(
+            goal="Investigate",
+            workspace_id="default",
+            connector_id="cred-telegram",
+            chat_id="123",
+            sender_id="456",
+            update_id=1,
+            connector_entry={
+                "id": "cred-telegram",
+                "label": "Parts Pro",
+                "metadata": {
+                    "tenant_id": "tenant-1",
+                    "channel_registry_bindings": {
+                        "telegram": {"endpoint_key": "@partspro_bot"},
+                    },
+                    "active_agent_install_id": "install-specialist",
+                    "master_agent_install_id": "install-sage",
+                    "runtime_profile_id": "runtime-cloud",
+                },
+            },
+        )
+
+        canonical = self.canonical_calls[0]
+        self.assertEqual(canonical["tenant_id"], "tenant-1")
+        self.assertEqual(canonical["endpoint_key"], "@partspro_bot")
+        self.assertEqual(canonical["install"]["id"], "install-specialist")
+        self.assertEqual(canonical["master_install_id"], "install-sage")
+        self.assertEqual(canonical["runtime_profile_id"], "runtime-cloud")
+
+    def test_create_telegram_run_returns_non_run_canonical_result_without_run_started_side_effects(self) -> None:
+        service = self._make_service(
+            route_transport_channel_message=lambda **kwargs: self.canonical_calls.append(kwargs) or {
+                "status": "thread_busy",
+                "reply": "Still working on the previous message.",
+                "metadata": {},
+            },
+        )
+
+        result = service.create_telegram_run(
+            goal="Investigate",
+            workspace_id="default",
+            connector_id="cred-telegram",
+            chat_id="123",
+            sender_id="456",
+            update_id=1,
+        )
+
+        self.assertEqual(result["run_id"], "")
+        self.assertEqual(result["status"], "thread_busy")
+        self.assertEqual(result["reply"], "Still working on the previous message.")
+        self.assertEqual(self.telegram_started, [])
+        self.assertEqual(self.events, [])
 
     def test_can_auto_approve_wait_requires_matching_owner_and_approval(self) -> None:
         service = self._make_service()

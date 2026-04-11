@@ -5,10 +5,17 @@ import Link from 'next/link';
 import { useAccountShell } from '@/lib/shell/account-shell-context';
 import { resolvePrimaryWorkspaceId } from '@/lib/shell/workspace-membership-model';
 
+function workspaceEntryHref(workspaceId: string): string {
+  return `/w/${encodeURIComponent(workspaceId)}`;
+}
+
 export function AccountHomeClient() {
   const { state, actions } = useAccountShell();
   const suggestedWorkspaceId = resolvePrimaryWorkspaceId(state.workspaceMemberships);
-  const suggestedHref = suggestedWorkspaceId ? actions.resolveWorkspaceHref(suggestedWorkspaceId) : null;
+  const suggestedHref = suggestedWorkspaceId ? workspaceEntryHref(suggestedWorkspaceId) : null;
+  const suggestedRememberedRoute = suggestedWorkspaceId
+    ? actions.resolveWorkspaceHref(suggestedWorkspaceId)
+    : null;
 
   return (
     <main
@@ -44,9 +51,12 @@ export function AccountHomeClient() {
             memberships: state.workspaceMemberships.map((membership) => ({
               workspaceId: membership.workspace.id,
               role: membership.role,
+              entryHref: workspaceEntryHref(membership.workspace.id),
+              rememberedRoute: actions.resolveWorkspaceHref(membership.workspace.id),
               defaultRoute: membership.defaultRoute,
             })),
-            suggestedWorkspaceHref: suggestedHref,
+            suggestedWorkspaceEntryHref: suggestedHref,
+            suggestedWorkspaceRememberedRoute: suggestedRememberedRoute,
           },
           null,
           2,
@@ -54,7 +64,7 @@ export function AccountHomeClient() {
       </pre>
       {suggestedHref ? (
         <Link href={suggestedHref} style={{ color: '#1d4ed8', fontWeight: 600 }}>
-          Go to active workspace route
+          Open primary workspace entry route
         </Link>
       ) : null}
     </main>

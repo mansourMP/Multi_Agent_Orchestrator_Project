@@ -1,0 +1,38 @@
+import tempfile
+import unittest
+from pathlib import Path
+from unittest.mock import patch
+
+from server_modules import jwt_secret
+
+
+class JwtSecretResolutionTests(unittest.TestCase):
+    def test_explicit_secret_wins_over_persisted_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            secret_file = Path(tmp) / "jwt_secret"
+            secret_file.write_text("persisted-secret\n", encoding="utf-8")
+            with (
+                patch.object(jwt_secret, "JWT_SECRET_FILE", secret_file),
+                patch.object(jwt_secret, "_JWT_SECRET_CACHE", None),
+                patch.dict("os.environ", {"ORION_JWT_SECRET": "explicit-secret"}, clear=True),
+            ):
+                resolved = jwt_secret.resolve_jwt_secret()
+
+        self.assertEqual(resolved, "explicit-secret")
+
+    def test_resolve_jwt_secret_does_not_seed_from_orion_api_key(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            secret_file = Path(tmp) / "jwt_secret"
+            with (
+                patch.object(jwt_secret, "JWT_SECRET_FILE", secret_file),
+                patch.object(jwt_secret, "_JWT_SECRET_CACHE", None),
+                patch.dict("os.environ", {"ORION_API_KEY": "api-key-secret"}, clear=True),
+            ):
+                resolved = jwt_secret.resolve_jwt_secret()
+
+        self.assertNotEqual(resolved, "api-key-secret")
+        self.assertNotEqual(secret_file.read_text(encoding="utf-8").strip(), "api-key-secret")
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -35,6 +35,24 @@ class AppBridgeServiceTests(unittest.TestCase):
 
         self.assertEqual(ctx.exception.status_code, 400)
 
+    def test_normalize_bridge_contract_rejects_nested_implicit_captain_context_metadata(self) -> None:
+        with patch(
+            "server_modules.app_bridge_service._resolve_registry_app_item",
+            return_value={"id": "study", "status": "installed", "permissions": ["files.read"]},
+        ):
+            with self.assertRaises(HTTPException) as ctx:
+                app_bridge_service.normalize_bridge_contract(
+                    app_id="study",
+                    bridge_kind="app_to_sage",
+                    bridge_type="summary_request",
+                    metadata={
+                        "captain_context": {"raw": True},
+                    },
+                )
+
+        self.assertEqual(ctx.exception.status_code, 400)
+        self.assertIn("captain_context", str(ctx.exception.detail))
+
     def test_enforce_app_metadata_contract_rejects_implicit_captain_context(self) -> None:
         with patch(
             "server_modules.app_bridge_service._resolve_registry_app_item",
@@ -50,6 +68,22 @@ class AppBridgeServiceTests(unittest.TestCase):
 
         self.assertEqual(ctx.exception.status_code, 400)
         self.assertIn("captain_context", str(ctx.exception.detail))
+
+    def test_enforce_app_metadata_contract_rejects_captain_profile_metadata(self) -> None:
+        with patch(
+            "server_modules.app_bridge_service._resolve_registry_app_item",
+            return_value={"id": "study", "status": "installed", "permissions": ["files.read"]},
+        ):
+            with self.assertRaises(HTTPException) as ctx:
+                app_bridge_service.enforce_app_metadata_contract(
+                    metadata={
+                        "app_id": "study",
+                        "captain_profile": {"display_name": "Nope"},
+                    }
+                )
+
+        self.assertEqual(ctx.exception.status_code, 400)
+        self.assertIn("captain_profile", str(ctx.exception.detail))
 
     def test_enforce_app_metadata_contract_normalizes_context_and_bridge(self) -> None:
         with patch(

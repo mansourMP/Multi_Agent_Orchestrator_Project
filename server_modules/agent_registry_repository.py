@@ -9,6 +9,40 @@ from typing import Any, Dict, List, Optional
 from server_modules import control_plane_repository
 
 
+CAPTAIN_AGENT_KIND = "master"
+SPECIALIST_AGENT_KIND = "specialist"
+PRIVATE_CAPTAIN_ROLE = "private_main_agent"
+DEFAULT_SPECIALIST_MODE = "owner_edit"
+SPECIALIST_ALLOWED_MODES = (
+    "owner_edit",
+    "owner_test",
+    "customer_live",
+)
+_SPECIALIST_MODE_CONTRACTS: Dict[str, Dict[str, Any]] = {
+    "owner_edit": {
+        "mode": "owner_edit",
+        "prompt_editable": True,
+        "config_editable": True,
+        "response_audience": "owner_operator",
+        "approval_behavior": "workspace_policy_enforced",
+    },
+    "owner_test": {
+        "mode": "owner_test",
+        "prompt_editable": False,
+        "config_editable": False,
+        "response_audience": "owner_operator_preview",
+        "approval_behavior": "workspace_policy_enforced",
+    },
+    "customer_live": {
+        "mode": "customer_live",
+        "prompt_editable": False,
+        "config_editable": False,
+        "response_audience": "external_customer",
+        "approval_behavior": "workspace_policy_enforced",
+    },
+}
+
+
 def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
@@ -44,6 +78,121 @@ def _iso(value: Any) -> Optional[str]:
 def _slugify(value: Any, *, fallback: str) -> str:
     normalized = re.sub(r"[^a-z0-9]+", "-", str(value or "").strip().lower()).strip("-")
     return normalized or fallback
+
+
+def normalize_specialist_mode(
+    value: Any,
+    *,
+    default: Optional[str] = DEFAULT_SPECIALIST_MODE,
+    strict: bool = True,
+) -> Optional[str]:
+    token = _normalize_token(value)
+    if token is None:
+        return default
+    token = token.lower()
+    if token in SPECIALIST_ALLOWED_MODES:
+        return token
+    if strict:
+        raise ValueError(
+            "Unsupported specialist_mode. Allowed values are owner_edit, owner_test, customer_live."
+        )
+    return default
+
+
+def specialist_mode_contract(mode: Optional[str]) -> Optional[Dict[str, Any]]:
+    token = normalize_specialist_mode(mode, default=None, strict=False)
+    if token is None:
+        return None
+    return dict(_SPECIALIST_MODE_CONTRACTS[token])
+
+
+def captain_identity_contract(
+    *,
+    install_id: Optional[str],
+    label: Optional[str],
+) -> Dict[str, Any]:
+    display_name = _normalize_token(label) or "Captain"
+    stable_id = _normalize_token(install_id)
+    return {
+        "install_id": stable_id,
+        "stable_internal_id": stable_id,
+        "role": PRIVATE_CAPTAIN_ROLE,
+        "display_name": display_name,
+        "editable_display_name": True,
+        "mode_switching_supported": False,
+    }
+
+
+def normalize_install_contract_metadata(
+    *,
+    install_id: Optional[str],
+    label: Optional[str],
+    agent_kind: Any,
+    metadata: Optional[Dict[str, Any]],
+    strict: bool = True,
+) -> Dict[str, Any]:
+    token = str(agent_kind or "").strip().lower() or SPECIALIST_AGENT_KIND
+    next_metadata = _dict_json(metadata)
+    if token == CAPTAIN_AGENT_KIND:
+        if strict and (
+            "specialist_mode" in next_metadata or "specialist_mode_contract" in next_metadata
+        ):
+            raise ValueError("Captain installs do not support owner_edit, owner_test, or customer_live modes.")
+        next_metadata.pop("specialist_mode", None)
+        next_metadata.pop("specialist_mode_contract", None)
+        next_metadata["captain_profile"] = {
+            **_dict_json(next_metadata.get("captain_profile")),
+            **captain_identity_contract(install_id=install_id, label=label),
+        }
+        return next_metadata
+
+    if strict and "captain_profile" in next_metadata:
+        raise ValueError("Specialist installs cannot persist captain_profile metadata.")
+
+    next_metadata.pop("captain_profile", None)
+    if token == SPECIALIST_AGENT_KIND:
+        raw_mode = next_metadata.get("specialist_mode")
+        if raw_mode is None:
+            raw_mode = _dict_json(next_metadata.get("specialist_mode_contract")).get("mode")
+        mode = normalize_specialist_mode(raw_mode, default=DEFAULT_SPECIALIST_MODE, strict=strict)
+        next_metadata["specialist_mode"] = mode
+        next_metadata["specialist_mode_contract"] = specialist_mode_contract(mode)
+    return next_metadata
+
+
+def project_install_contract_fields(
+    *,
+    install_id: Optional[str],
+    label: Optional[str],
+    agent_kind: Any,
+    metadata: Optional[Dict[str, Any]],
+) -> Dict[str, Any]:
+    token = str(agent_kind or "").strip().lower() or SPECIALIST_AGENT_KIND
+    normalized_metadata = normalize_install_contract_metadata(
+        install_id=install_id,
+        label=label,
+        agent_kind=token,
+        metadata=metadata,
+        strict=False,
+    )
+    if token == CAPTAIN_AGENT_KIND:
+        return {
+            "metadata": normalized_metadata,
+            "captain_identity": captain_identity_contract(install_id=install_id, label=label),
+            "specialist_mode": None,
+            "specialist_mode_contract": None,
+        }
+    mode = normalize_specialist_mode(
+        normalized_metadata.get("specialist_mode"),
+        default=DEFAULT_SPECIALIST_MODE,
+        strict=False,
+    )
+    return {
+        "metadata": normalized_metadata,
+        "captain_identity": None,
+        "specialist_mode": mode,
+        "specialist_mode_contract": specialist_mode_contract(mode),
+    }
 
 
 def _row_to_runtime_profile(row: Any) -> Optional[Dict[str, Any]]:
@@ -139,6 +288,14 @@ def _row_to_install_summary(row: Any) -> Optional[Dict[str, Any]]:
     if row is None:
         return None
     payload = dict(row)
+    agent_kind = str(payload.get("agent_kind") or "").strip() or SPECIALIST_AGENT_KIND
+    label = _normalize_token(payload.get("label"))
+    projected_contract = project_install_contract_fields(
+        install_id=str(payload.get("id") or "").strip() or None,
+        label=label or str(payload.get("agent_definition_name") or "").strip() or None,
+        agent_kind=agent_kind,
+        metadata=_dict_json(payload.get("metadata")),
+    )
     return {
         "id": str(payload.get("id") or "").strip(),
         "tenant_id": str(payload.get("tenant_id") or "").strip() or None,
@@ -149,7 +306,7 @@ def _row_to_install_summary(row: Any) -> Optional[Dict[str, Any]]:
         "install_scope": str(payload.get("install_scope") or "").strip() or "workspace",
         "owner_user_id": _normalize_token(payload.get("owner_user_id")),
         "thread_id": _normalize_token(payload.get("thread_id")),
-        "label": _normalize_token(payload.get("label")),
+        "label": label,
         "status": str(payload.get("status") or "").strip() or "active",
         "enabled": bool(payload.get("enabled")),
         "runtime_profile_id": _normalize_token(payload.get("runtime_profile_id")),
@@ -162,7 +319,10 @@ def _row_to_install_summary(row: Any) -> Optional[Dict[str, Any]]:
         "connector_bindings": _dict_json(payload.get("connector_bindings")),
         "memory_scope_overrides": _dict_json(payload.get("memory_scope_overrides")),
         "policy_context_overrides": _dict_json(payload.get("policy_context_overrides")),
-        "metadata": _dict_json(payload.get("metadata")),
+        "metadata": projected_contract["metadata"],
+        "captain_identity": projected_contract["captain_identity"],
+        "specialist_mode": projected_contract["specialist_mode"],
+        "specialist_mode_contract": projected_contract["specialist_mode_contract"],
         "created_at": _iso(payload.get("created_at")),
         "updated_at": _iso(payload.get("updated_at")),
         "agent_definition": {
@@ -172,7 +332,7 @@ def _row_to_install_summary(row: Any) -> Optional[Dict[str, Any]]:
             "description": str(payload.get("agent_definition_description") or "").strip(),
             "category": _normalize_token(payload.get("agent_definition_category")),
             "icon": _normalize_token(payload.get("agent_definition_icon")),
-            "agent_kind": str(payload.get("agent_kind") or "").strip() or "specialist",
+            "agent_kind": agent_kind,
         },
         "agent_definition_version": {
             "id": _normalize_token(payload.get("agent_definition_version_id")),
@@ -925,6 +1085,7 @@ async def create_workspace_agent_install(
     )
     if not isinstance(definition, dict):
         return None
+    agent_kind = str(definition.get("agent_kind") or "").strip().lower() or SPECIALIST_AGENT_KIND
     runtime_profiles = await list_runtime_profiles(tenant_id=tenant_id, workspace_id=workspace_id)
     resolved_runtime_profile_id = _normalize_token(runtime_profile_id) or _default_runtime_profile_id(definition, runtime_profiles)
     current_version = _dict_json(definition.get("current_version"))
@@ -936,6 +1097,13 @@ async def create_workspace_agent_install(
         **_dict_json(policy_context_overrides),
     }
     install_id = f"ainstall_{uuid.uuid4().hex[:16]}"
+    resolved_label = _normalize_token(label) or str(definition.get("name") or "").strip() or "Installed Agent"
+    normalized_metadata = normalize_install_contract_metadata(
+        install_id=install_id,
+        label=resolved_label,
+        agent_kind=agent_kind,
+        metadata=metadata,
+    )
     pool = await control_plane_repository.ensure_control_plane_schema()
     if pool is None:
         return None
@@ -962,7 +1130,7 @@ async def create_workspace_agent_install(
         _normalize_token(installed_by_user_id),
         _normalize_token(owner_user_id),
         _normalize_token(thread_id),
-        _normalize_token(label) or str(definition.get("name") or "").strip() or "Installed Agent",
+        resolved_label,
         resolved_runtime_profile_id,
         _normalize_token(root_folder_uri),
         _to_json(merged_toggles, default={}),
@@ -970,7 +1138,7 @@ async def create_workspace_agent_install(
         _to_json(connector_bindings, default={}),
         _to_json(memory_scope_overrides, default={}),
         _to_json(merged_policy, default={}),
-        _to_json(metadata, default={}),
+        _to_json(normalized_metadata, default={}),
     )
     return await get_workspace_agent_install_bundle(
         install_id,
@@ -1003,12 +1171,20 @@ async def update_workspace_agent_install(
     )
     if not isinstance(existing, dict):
         return None
+    agent_kind = str(_dict_json(existing.get("agent_definition")).get("agent_kind") or "").strip().lower() or SPECIALIST_AGENT_KIND
     pool = await control_plane_repository.ensure_control_plane_schema()
     if pool is None:
         return None
     next_tool_toggles = {**_dict_json(existing.get("tool_toggles")), **_dict_json(tool_toggles)}
     next_policy = {**_dict_json(existing.get("policy_context_overrides")), **_dict_json(policy_context_overrides)}
     next_metadata = {**_dict_json(existing.get("metadata")), **_dict_json(metadata)}
+    next_label = _normalize_token(label) or _normalize_token(existing.get("label")) or _normalize_token(_dict_json(existing.get("agent_definition")).get("name"))
+    normalized_metadata = normalize_install_contract_metadata(
+        install_id=str(install_id or "").strip() or None,
+        label=next_label,
+        agent_kind=agent_kind,
+        metadata=next_metadata,
+    )
     await pool.execute(
         """
         UPDATE workspace_agent_installs
@@ -1030,7 +1206,7 @@ async def update_workspace_agent_install(
         str(install_id or "").strip(),
         str(tenant_id or "").strip(),
         str(workspace_id or "").strip(),
-        _normalize_token(label) or _normalize_token(existing.get("label")),
+        next_label,
         _normalize_token(runtime_profile_id) if runtime_profile_id is not None else _normalize_token(existing.get("runtime_profile_id")),
         _normalize_token(root_folder_uri) if root_folder_uri is not None else _normalize_token(existing.get("root_folder_uri")),
         _to_json(next_tool_toggles, default={}),
@@ -1040,7 +1216,7 @@ async def update_workspace_agent_install(
         _to_json(next_policy, default={}),
         bool(enabled) if enabled is not None else bool(existing.get("enabled", True)),
         _normalize_token(status) or str(existing.get("status") or "active").strip() or "active",
-        _to_json(next_metadata, default={}),
+        _to_json(normalized_metadata, default={}),
     )
     return await get_workspace_agent_install_bundle(
         install_id,
@@ -1152,6 +1328,14 @@ async def get_workspace_agent_install_bundle(
     if row is None:
         return None
     payload = dict(row)
+    agent_kind = str(payload.get("agent_kind") or "").strip() or SPECIALIST_AGENT_KIND
+    label = _normalize_token(payload.get("label"))
+    projected_contract = project_install_contract_fields(
+        install_id=str(payload.get("id") or "").strip() or None,
+        label=label or str(payload.get("agent_definition_name") or "").strip() or None,
+        agent_kind=agent_kind,
+        metadata=_dict_json(payload.get("metadata")),
+    )
     runtime_profile = None
     if payload.get("runtime_profile_id"):
         runtime_profile = {
@@ -1182,7 +1366,7 @@ async def get_workspace_agent_install_bundle(
         "install_scope": str(payload.get("install_scope") or "").strip() or "workspace",
         "owner_user_id": _normalize_token(payload.get("owner_user_id")),
         "thread_id": _normalize_token(payload.get("thread_id")),
-        "label": _normalize_token(payload.get("label")),
+        "label": label,
         "status": str(payload.get("status") or "").strip() or "active",
         "enabled": bool(payload.get("enabled")),
         "runtime_profile_id": _normalize_token(payload.get("runtime_profile_id")),
@@ -1195,7 +1379,10 @@ async def get_workspace_agent_install_bundle(
         "connector_bindings": _dict_json(payload.get("connector_bindings")),
         "memory_scope_overrides": _dict_json(payload.get("memory_scope_overrides")),
         "policy_context_overrides": _dict_json(payload.get("policy_context_overrides")),
-        "metadata": _dict_json(payload.get("metadata")),
+        "metadata": projected_contract["metadata"],
+        "captain_identity": projected_contract["captain_identity"],
+        "specialist_mode": projected_contract["specialist_mode"],
+        "specialist_mode_contract": projected_contract["specialist_mode_contract"],
         "created_at": _iso(payload.get("created_at")),
         "updated_at": _iso(payload.get("updated_at")),
         "agent_definition": {
@@ -1203,7 +1390,7 @@ async def get_workspace_agent_install_bundle(
             "slug": str(payload.get("agent_definition_slug") or "").strip() or None,
             "name": str(payload.get("agent_definition_name") or "").strip() or "Installed Agent",
             "description": str(payload.get("agent_definition_description") or "").strip(),
-            "agent_kind": str(payload.get("agent_kind") or "").strip() or "specialist",
+            "agent_kind": agent_kind,
             "visibility": str(payload.get("agent_definition_visibility") or "").strip() or "workspace",
             "status": str(payload.get("agent_definition_status") or "").strip() or "draft",
             "source_workflow_definition_id": _normalize_token(payload.get("source_workflow_definition_id")),
@@ -1289,7 +1476,7 @@ async def create_compiled_workflow_artifact(
         return None
     workflow_id = f"wf_{uuid.uuid4().hex[:12]}"
     version_id = f"wfver_{uuid.uuid4().hex[:16]}"
-    now_iso = _utc_now_iso()
+    now = datetime.now(timezone.utc)
     async with pool.acquire() as connection:
         async with connection.transaction():
             await connection.execute(
@@ -1309,7 +1496,7 @@ async def create_compiled_workflow_artifact(
                 version_id,
                 _normalize_token(created_by_user_id),
                 _to_json(metadata, default={}),
-                now_iso,
+                now,
             )
             await connection.execute(
                 """
@@ -1327,7 +1514,7 @@ async def create_compiled_workflow_artifact(
                 _to_json(validation, default={}),
                 _normalize_token(created_by_user_id),
                 _to_json(metadata, default={}),
-                now_iso,
+                now,
             )
     return await fetch_workflow_snapshot(
         workflow_id,

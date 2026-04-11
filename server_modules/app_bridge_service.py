@@ -12,10 +12,14 @@ _CONTRACT_MAP_PATH = (
 )
 _FORBIDDEN_IMPLICIT_METADATA_KEYS = {
     "captain_context",
+    "captain_identity",
+    "captain_profile",
     "sage_context",
     "sage_memory",
     "specialist_context",
     "specialist_memory",
+    "specialist_mode",
+    "specialist_mode_contract",
     "private_context",
     "personal_context",
     "unified_memory",
@@ -42,6 +46,13 @@ _ENVELOPE_ALIASES = {
     "specialist_summaries": "explicit_summaries_from_specialists",
     "shared_artifacts": "explicit_shared_artifacts",
 }
+
+
+def _forbidden_bridge_key(raw_key: Any) -> Optional[str]:
+    key = str(raw_key or "").strip().lower()
+    if key in _FORBIDDEN_IMPLICIT_METADATA_KEYS or key in _FORBIDDEN_BRIDGE_FIELDS:
+        return key
+    return None
 
 
 def _read_contract_map() -> Dict[str, Any]:
@@ -213,7 +224,8 @@ def normalize_bridge_contract(
         raise HTTPException(status_code=400, detail="Unsupported bridge_type for this bridge_kind.")
     target_payload = _coerce_dict(target)
     for key in list(target_payload):
-        if key in _FORBIDDEN_BRIDGE_FIELDS:
+        forbidden = _forbidden_bridge_key(key)
+        if forbidden:
             raise HTTPException(status_code=400, detail=f"bridge target field '{key}' is not allowed.")
     if kind == "app_to_specialist" and not (
         str(target_payload.get("target_install_id") or "").strip()
@@ -233,7 +245,8 @@ def normalize_bridge_contract(
         raise HTTPException(status_code=400, detail="App -> connector/runtime bridges require connector_id, workflow_id, or route_key.")
     normalized_metadata = _coerce_dict(metadata)
     for key in normalized_metadata:
-        if key in _FORBIDDEN_BRIDGE_FIELDS:
+        forbidden = _forbidden_bridge_key(key)
+        if forbidden:
             raise HTTPException(status_code=400, detail=f"metadata.{key} is not allowed for explicit app bridges.")
     normalized_envelope = normalize_app_context_envelope(context_envelope, contract=contract)
     return {

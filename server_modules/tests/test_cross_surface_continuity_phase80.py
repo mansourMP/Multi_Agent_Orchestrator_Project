@@ -1,0 +1,292 @@
+from __future__ import annotations
+
+import asyncio
+from contextlib import contextmanager
+import importlib
+import os
+import queue
+from unittest.mock import patch
+
+import pytest
+
+from server_modules import entitlements_service, runs_history, runtime_run_approval_service
+import server_modules.auth as auth_module
+import server_modules.channel_pairing_service as channel_pairing_service_module
+import server_modules.control_plane_repository as control_plane_repository_module
+import server_modules.db as db_module
+import server_modules.jwt_secret as jwt_secret_module
+
+
+class _Request:
+    headers = {}
+    client = None
+
+
+@contextmanager
+def _isolated_modules(monkeypatch: pytest.MonkeyPatch, tmp_path):
+    tracked_keys = (
+        "EMPYRALIS_STATE_HOME",
+        "EMPYRALIS_JWT_SECRET_FILE",
+        "DATABASE_URL",
+        "ORION_JWT_SECRET",
+        "JWT_SECRET",
+        "ORION_API_KEY",
+        "RUNTIME_KEY",
+    )
+    original_env = {key: os.environ.get(key) for key in tracked_keys}
+    state_home = tmp_path / "state"
+    monkeypatch.setenv("EMPYRALIS_STATE_HOME", str(state_home))
+    monkeypatch.delenv("EMPYRALIS_JWT_SECRET_FILE", raising=False)
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    for key in ("ORION_JWT_SECRET", "JWT_SECRET", "ORION_API_KEY", "RUNTIME_KEY"):
+        monkeypatch.delenv(key, raising=False)
+    runtime_db = importlib.reload(db_module)
+    runtime_db._POOLS_BY_LOOP.clear()
+    runtime_db._ENV_DSN_LOADED = True
+    importlib.reload(control_plane_repository_module)
+    importlib.reload(jwt_secret_module)
+    auth = importlib.reload(auth_module)
+    pairing = importlib.reload(channel_pairing_service_module)
+    auth.USER_RATE_LIMIT_BUCKETS.clear()
+    auth.LOGIN_RATE_LIMIT_BUCKETS.clear()
+    try:
+        yield auth, pairing
+    finally:
+        for key, value in original_env.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+        runtime_db = importlib.reload(db_module)
+        runtime_db._POOLS_BY_LOOP.clear()
+        importlib.reload(jwt_secret_module)
+        importlib.reload(control_plane_repository_module)
+        importlib.reload(auth_module)
+        importlib.reload(channel_pairing_service_module)
+
+
+def _current_user(auth, token: str):
+    return auth.get_current_user(_Request(), authorization=f"Bearer {token}")
+
+
+def test_phase80_paired_telegram_and_whatsapp_messages_share_workspace(monkeypatch: pytest.MonkeyPatch, tmp_path):
+    with _isolated_modules(monkeypatch, tmp_path) as (auth, pairing_module):
+        created = auth.register_user("phase80@example.com", "password-123", name="Phase 80")
+        current_user = _current_user(auth, created["token"])
+        workspace_id = created["current_workspace_id"]
+        service = pairing_module.get_channel_pairing_service()
+
+        unpaired = service.authorize_channel_message(
+            provider="telegram",
+            external_subject="telegram-user-80",
+            workspace_id=workspace_id,
+            message_text="hello before pairing",
+        )
+        assert unpaired["authorized"] is False
+        assert unpaired["status"] == "pairing_required"
+
+        telegram_intent = pairing_module.create_authenticated_channel_pairing_intent(
+            current_user,
+            provider="telegram",
+            workspace_id="default",
+        )
+        whatsapp_intent = pairing_module.create_authenticated_channel_pairing_intent(
+            current_user,
+            provider="whatsapp",
+            workspace_id="default",
+        )
+
+        telegram_pair = service.authorize_channel_message(
+            provider="telegram",
+            external_subject="telegram-user-80",
+            workspace_id=workspace_id,
+            message_text=f"/pair {telegram_intent['intent']['pairing_code']}",
+        )
+        whatsapp_pair = service.authorize_channel_message(
+            provider="whatsapp",
+            external_subject="whatsapp:+15558000080",
+            workspace_id=workspace_id,
+            message_text=f"pair {whatsapp_intent['intent']['pairing_code']}",
+        )
+
+        assert telegram_pair["status"] == "paired"
+        assert whatsapp_pair["status"] == "paired"
+
+        telegram_message = service.authorize_channel_message(
+            provider="telegram",
+            external_subject="telegram-user-80",
+            workspace_id=workspace_id,
+            message_text="hello from telegram",
+        )
+        whatsapp_message = service.authorize_channel_message(
+            provider="whatsapp",
+            external_subject="whatsapp:+15558000080",
+            workspace_id=workspace_id,
+            message_text="hello from whatsapp",
+        )
+
+        assert telegram_message["authorized"] is True
+        assert whatsapp_message["authorized"] is True
+        assert telegram_message["workspace_id"] == workspace_id
+        assert whatsapp_message["workspace_id"] == workspace_id
+        assert telegram_message["link"]["account_id"] == current_user["user_id"]
+        assert whatsapp_message["link"]["account_id"] == current_user["user_id"]
+
+
+def test_phase80_channel_identity_cannot_cross_workspace_boundary(monkeypatch: pytest.MonkeyPatch, tmp_path):
+    with _isolated_modules(monkeypatch, tmp_path) as (auth, pairing_module):
+        user_one = auth.register_user("phase80.one@example.com", "password-123", name="Phase One")
+        user_two = auth.register_user("phase80.two@example.com", "password-123", name="Phase Two")
+        current_user_one = _current_user(auth, user_one["token"])
+        current_user_two = _current_user(auth, user_two["token"])
+        workspace_one = user_one["current_workspace_id"]
+        workspace_two = user_two["current_workspace_id"]
+        service = pairing_module.get_channel_pairing_service()
+
+        first_intent = pairing_module.create_authenticated_channel_pairing_intent(
+            current_user_one,
+            provider="telegram",
+            workspace_id="default",
+        )
+        paired = service.authorize_channel_message(
+            provider="telegram",
+            external_subject="telegram-shared-user",
+            workspace_id=workspace_one,
+            message_text=f"/pair {first_intent['intent']['pairing_code']}",
+        )
+        assert paired["status"] == "paired"
+
+        second_intent = pairing_module.create_authenticated_channel_pairing_intent(
+            current_user_two,
+            provider="telegram",
+            workspace_id="default",
+        )
+        blocked = service.authorize_channel_message(
+            provider="telegram",
+            external_subject="telegram-shared-user",
+            workspace_id=workspace_two,
+            message_text=f"/pair {second_intent['intent']['pairing_code']}",
+        )
+
+        assert blocked["authorized"] is False
+        assert blocked["status"] == "pairing_failed"
+        assert "already linked" in blocked["reply_text"].lower()
+
+
+def test_phase80_paid_mobile_and_free_channel_boundaries():
+    free_flags = entitlements_service.workspace_capability_flags(
+        state=entitlements_service.resolve_workspace_entitlement_state(
+            workspace={"metadata": {"billing": {"plan": "free"}}},
+        )
+    )
+    paid_flags = entitlements_service.workspace_capability_flags(
+        state=entitlements_service.resolve_workspace_entitlement_state(
+            workspace={"metadata": {"billing": {"plan": "personal"}}},
+        )
+    )
+
+    assert free_flags["mobile_app_enabled"] is False
+    assert free_flags["approvals_enabled"] is False
+    assert free_flags["telegram_channel_enabled"] is True
+    assert free_flags["whatsapp_channel_enabled"] is True
+    assert paid_flags["mobile_app_enabled"] is True
+    assert paid_flags["approvals_enabled"] is True
+    assert paid_flags["artifacts_enabled"] is True
+
+
+def test_phase80_workspace_pending_approval_is_visible_and_resolvable():
+    current_user = {
+        "auth_type": "bearer",
+        "user_id": "user-1",
+        "email": "user-1@example.com",
+        "workspace_access": {
+            "ws-paid": {
+                "workspace_id": "ws-paid",
+                "tenant_id": "tenant-1",
+                "role": "owner",
+                "tenant_role": "owner",
+            }
+        },
+    }
+    live_run = {
+        "run_id": "run-1",
+        "status": "waiting_for_input",
+        "context": {
+            "workspace_id": "ws-paid",
+            "tenant_id": "tenant-1",
+            "metadata": {
+                "owner_user_id": "user-1",
+                "owner_email": "user-1@example.com",
+                "trace_id": "trace-phase80",
+            },
+        },
+        "pending_approval": {
+            "approval_id": "approval-1",
+            "prompt": "Approve sending the update",
+            "status": "pending",
+            "scope": "once",
+            "metadata": {
+                "approval_labels": ["email"],
+                "approval_capabilities": ["send"],
+            },
+        },
+        "pending_confirmation": {
+            "approval_id": "approval-1",
+            "correlation_id": "corr-phase80",
+        },
+        "logs": object(),
+        "input_queue": queue.Queue(),
+    }
+
+    with patch.object(
+        runs_history,
+        "_workspace_entitlement_payload",
+        return_value={"capabilities": {"approvals_enabled": True}},
+    ), patch.object(
+        runs_history.run_state_repository,
+        "sync_list_live_runs",
+        return_value=[live_run],
+    ):
+        pending = asyncio.run(
+            runs_history.list_pending_approvals(
+                workspace_id="default",
+                current_user=current_user,
+            )
+        )
+
+    assert pending["count"] == 1
+    assert pending["items"][0]["approval_id"] == "approval-1"
+    assert pending["items"][0]["run_id"] == "run-1"
+
+    with patch.object(
+        runtime_run_approval_service.run_state_repository,
+        "sync_find_live_run_by_approval_id",
+        return_value={"run_id": "run-1", **live_run},
+    ):
+        resolved = runtime_run_approval_service.resolve_standalone_approval(
+            "approval-1",
+            payload={"approval_id": "approval-1", "resolution": "approved", "actor": "user-1", "reason": "ok"},
+            current_user=current_user,
+            runs={"run-1": live_run},
+            resolve_run_approval_fn=lambda run_id, approval_id, **kwargs: {
+                "status": "ok",
+                "run_id": run_id,
+                "approval_id": approval_id,
+            },
+            resolve_run_approval_callbacks={},
+            record_approval_resolution_fn=lambda *args: None,
+            emit_approval_resolved_event_fn=lambda **kwargs: type(
+                "Event",
+                (),
+                {
+                    "event_id": "evt-phase80",
+                    "event_type": "approval_resolved",
+                    "trace_id": "trace-phase80",
+                    "payload": kwargs,
+                },
+            )(),
+        )
+
+    assert resolved["run_id"] == "run-1"
+    assert resolved["approval_id"] == "approval-1"
+    assert resolved["resolution"] == "approved"

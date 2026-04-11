@@ -2,7 +2,7 @@ import asyncio
 import sys
 import types
 import unittest
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 from fastapi import HTTPException
 
@@ -60,6 +60,10 @@ class AgentRegistryApiRouteTests(unittest.TestCase):
             self.assertIn(("GET", "/agent-registry/definitions/{definition_id}"), app.routes)
             self.assertIn(("GET", "/agent-registry/runtime-profiles"), app.routes)
             self.assertIn(("GET", "/agent-registry/chat-context"), app.routes)
+            self.assertIn(("GET", "/agent-registry/runtime-targets"), app.routes)
+            self.assertIn(("GET", "/agent-registry/shared-board"), app.routes)
+            self.assertIn(("GET", "/agent-registry/shared-board/{entry_id}/history"), app.routes)
+            self.assertIn(("POST", "/agent-registry/shared-board"), app.routes)
             self.assertIn(("GET", "/agent-registry/installs"), app.routes)
             self.assertIn(("POST", "/agent-registry/installs"), app.routes)
             self.assertIn(("GET", "/agent-registry/installs/{install_id}"), app.routes)
@@ -452,6 +456,10 @@ class AgentRegistryApiRouteTests(unittest.TestCase):
             }
             with (
                 patch("server_modules.agent_registry_api.enforce_workspace_access", return_value="workspace-1"),
+                patch(
+                    "server_modules.agent_registry_api.agent_registry_repository.get_agent_definition",
+                    new=AsyncMock(return_value={"id": "agentdef-1", "name": "Executive Assistant", "agent_kind": "specialist"}),
+                ),
                 patch("server_modules.agent_registry_api.agent_registry_repository.create_workspace_agent_install", new=AsyncMock(return_value=install_record)) as create_mock,
                 patch("server_modules.agent_registry_api.template_compiler_service.ensure_install_compiled_artifact", new=AsyncMock(return_value={"install": install_record})) as compile_mock,
             ):
@@ -468,6 +476,113 @@ class AgentRegistryApiRouteTests(unittest.TestCase):
             self.assertEqual(result["id"], "install-1")
             create_mock.assert_awaited_once()
             compile_mock.assert_awaited_once()
+        finally:
+            if previous_server is None:
+                sys.modules.pop("server", None)
+            else:
+                sys.modules["server"] = previous_server
+
+    def test_create_install_rejects_specialist_mode_for_captain_definition(self):
+        fake_server = types.ModuleType("server")
+        fake_server.require_api_key = object()
+
+        previous_server = sys.modules.get("server")
+        sys.modules["server"] = fake_server
+        try:
+            app = _FakeApp()
+            agent_registry_api.register_agent_registry_routes(app)
+            route = app.routes[("POST", "/agent-registry/installs")]
+            with (
+                patch("server_modules.agent_registry_api.enforce_workspace_access", return_value="workspace-1"),
+                patch(
+                    "server_modules.agent_registry_api.agent_registry_repository.get_agent_definition",
+                    new=AsyncMock(return_value={"id": "agentdef-sage", "name": "Sage", "agent_kind": "master"}),
+                ),
+                patch(
+                    "server_modules.agent_registry_api.agent_registry_repository.create_workspace_agent_install",
+                    new=AsyncMock(),
+                ) as create_mock,
+            ):
+                with self.assertRaises(HTTPException) as ctx:
+                    asyncio.run(
+                        route(
+                            agent_registry_api.AgentInstallUpsertRequest(
+                                workspace_id="workspace-1",
+                                agent_definition_id="agentdef-sage",
+                                label="Captain",
+                                metadata={"specialist_mode": "owner_test"},
+                            ),
+                            current_user={"user_id": "user-1", "tenant_id": "tenant-1", "role": "owner", "is_admin": True},
+                        )
+                    )
+
+            self.assertEqual(ctx.exception.status_code, 400)
+            self.assertIn("Captain installs do not support", str(ctx.exception.detail))
+            create_mock.assert_not_called()
+        finally:
+            if previous_server is None:
+                sys.modules.pop("server", None)
+            else:
+                sys.modules["server"] = previous_server
+
+    def test_update_install_normalizes_captain_display_name_without_id_breakage(self):
+        fake_server = types.ModuleType("server")
+        fake_server.require_api_key = object()
+
+        previous_server = sys.modules.get("server")
+        sys.modules["server"] = fake_server
+        try:
+            app = _FakeApp()
+            agent_registry_api.register_agent_registry_routes(app)
+            route = app.routes[("PATCH", "/agent-registry/installs/{install_id}")]
+            existing_install = {
+                "id": "install-sage",
+                "label": "Sage",
+                "metadata": {"system_agent": True},
+                "agent_definition": {"name": "Sage", "agent_kind": "master"},
+            }
+            updated_install = {
+                **existing_install,
+                "label": "Mansur",
+                "captain_identity": {
+                    "install_id": "install-sage",
+                    "stable_internal_id": "install-sage",
+                    "role": "private_main_agent",
+                    "display_name": "Mansur",
+                    "editable_display_name": True,
+                    "mode_switching_supported": False,
+                },
+            }
+            with (
+                patch("server_modules.agent_registry_api.enforce_workspace_access", return_value="workspace-1"),
+                patch(
+                    "server_modules.agent_registry_api.agent_registry_repository.get_workspace_agent_install_bundle",
+                    new=AsyncMock(return_value=existing_install),
+                ),
+                patch(
+                    "server_modules.agent_registry_api.agent_registry_repository.update_workspace_agent_install",
+                    new=AsyncMock(return_value=updated_install),
+                ) as update_mock,
+                patch(
+                    "server_modules.agent_registry_api.template_compiler_service.ensure_install_compiled_artifact",
+                    new=AsyncMock(return_value={"install": updated_install}),
+                ),
+            ):
+                result = asyncio.run(
+                    route(
+                        "install-sage",
+                        agent_registry_api.AgentInstallUpsertRequest(
+                            workspace_id="workspace-1",
+                            label="Mansur",
+                        ),
+                        current_user={"user_id": "user-1", "tenant_id": "tenant-1", "role": "owner", "is_admin": True},
+                    )
+                )
+
+            self.assertEqual(result["id"], "install-sage")
+            self.assertEqual(update_mock.await_args.kwargs["metadata"]["captain_profile"]["display_name"], "Mansur")
+            self.assertEqual(update_mock.await_args.kwargs["metadata"]["captain_profile"]["stable_internal_id"], "install-sage")
+            self.assertNotIn("specialist_mode", update_mock.await_args.kwargs["metadata"])
         finally:
             if previous_server is None:
                 sys.modules.pop("server", None)
@@ -585,6 +700,15 @@ class AgentRegistryApiRouteTests(unittest.TestCase):
                     ),
                 ),
                 patch(
+                    "server_modules.agent_registry_api.runtime_attachment_service.build_workspace_runtime_targets",
+                    return_value={
+                        "deployment_mode": "hybrid",
+                        "default_target_id": "cloud_default",
+                        "targets": [{"target_id": "cloud_default", "available": True}],
+                        "routing_contract": {"mobile_entry_mode": "platform_first"},
+                    },
+                ),
+                patch(
                     "server_modules.agent_registry_api.bounded_scheduler_service.scheduler_status_snapshot",
                     new=AsyncMock(return_value={"policy": {"plan_tier": "standard"}, "wake_queue": {"pending_count": 1}}),
                 ),
@@ -614,6 +738,8 @@ class AgentRegistryApiRouteTests(unittest.TestCase):
             self.assertEqual(result["thread_id"], "thread-sage")
             self.assertEqual(result["master_install"]["id"], "install-sage")
             self.assertEqual(len(result["specialist_installs"]), 1)
+            self.assertEqual(result["runtime_targets"]["default_target_id"], "cloud_default")
+            self.assertEqual(result["runtime_targets"]["routing_contract"]["mobile_entry_mode"], "platform_first")
             self.assertEqual(result["specialist_installs"][0]["id"], "install-research")
             self.assertEqual(result["specialist_services"][0]["install_id"], "install-research")
             self.assertEqual(result["personal_context"]["summary"]["count"], 1)
@@ -679,6 +805,112 @@ class AgentRegistryApiRouteTests(unittest.TestCase):
             else:
                 sys.modules["server"] = previous_server
 
+    def test_create_specialist_normalizes_specialist_mode_metadata(self):
+        fake_server = types.ModuleType("server")
+        fake_server.require_api_key = object()
+
+        previous_server = sys.modules.get("server")
+        sys.modules["server"] = fake_server
+        try:
+            app = _FakeApp()
+            agent_registry_api.register_agent_registry_routes(app)
+            route = app.routes[("POST", "/agent-registry/specialists")]
+            manifest = AgentManifest(
+                manifest_id="manifest-support",
+                identity={
+                    "name": "Support Specialist",
+                    "role": "Customer Service",
+                    "archetype": "support_specialist",
+                    "summary": "Handles support.",
+                },
+            )
+            with (
+                patch("server_modules.agent_registry_api.enforce_workspace_access", return_value="workspace-1"),
+                patch(
+                    "server_modules.agent_registry_api.agent_specialist_repository.create_workspace_specialist",
+                    new=AsyncMock(return_value={"id": "install-support", "label": "Support Specialist"}),
+                ) as create_mock,
+            ):
+                result = asyncio.run(
+                    route(
+                        agent_registry_api.SpecialistCreateRequest(
+                            workspace_id="workspace-1",
+                            manifest=manifest,
+                            metadata={"specialist_mode": "owner_test"},
+                        ),
+                        current_user={"user_id": "user-1", "tenant_id": "tenant-1", "role": "owner", "is_admin": True},
+                    )
+                )
+
+            self.assertEqual(result["id"], "install-support")
+            self.assertEqual(create_mock.await_args.kwargs["metadata"]["specialist_mode"], "owner_test")
+            self.assertEqual(
+                create_mock.await_args.kwargs["metadata"]["specialist_mode_contract"]["response_audience"],
+                "owner_operator_preview",
+            )
+        finally:
+            if previous_server is None:
+                sys.modules.pop("server", None)
+            else:
+                sys.modules["server"] = previous_server
+
+    def test_update_specialist_manifest_rejects_non_owner_edit_mode(self):
+        fake_server = types.ModuleType("server")
+        fake_server.require_api_key = object()
+
+        previous_server = sys.modules.get("server")
+        sys.modules["server"] = fake_server
+        try:
+            app = _FakeApp()
+            agent_registry_api.register_agent_registry_routes(app)
+            route = app.routes[("PATCH", "/agent-registry/specialists/{install_id}")]
+            manifest = AgentManifest(
+                manifest_id="manifest-support",
+                identity={
+                    "name": "Support Specialist",
+                    "role": "Customer Service",
+                    "archetype": "support_specialist",
+                    "summary": "Handles support.",
+                },
+            )
+            existing = {
+                "id": "install-support",
+                "label": "Support Specialist",
+                "metadata": {"specialist_mode": "customer_live"},
+                "specialist_mode": "customer_live",
+            }
+            with (
+                patch("server_modules.agent_registry_api.enforce_workspace_access", return_value="workspace-1"),
+                patch(
+                    "server_modules.agent_registry_api.agent_specialist_repository.get_workspace_specialist",
+                    new=AsyncMock(return_value=existing),
+                ),
+                patch(
+                    "server_modules.agent_registry_api.agent_specialist_repository.update_workspace_specialist_manifest",
+                    new=AsyncMock(),
+                ) as update_mock,
+            ):
+                with self.assertRaises(HTTPException) as ctx:
+                    asyncio.run(
+                        route(
+                            "install-support",
+                            agent_registry_api.SpecialistManifestUpdateRequest(
+                                workspace_id="workspace-1",
+                                manifest=manifest,
+                            ),
+                            current_user={"user_id": "user-1", "tenant_id": "tenant-1", "role": "owner", "is_admin": True},
+                        )
+                    )
+
+            self.assertEqual(ctx.exception.status_code, 409)
+            self.assertIn("owner_edit", str(ctx.exception.detail))
+            update_mock.assert_not_called()
+        finally:
+            if previous_server is None:
+                sys.modules.pop("server", None)
+            else:
+                sys.modules["server"] = previous_server
+
     def test_list_runtime_attachments_returns_inventory(self):
         fake_server = types.ModuleType("server")
         fake_server.require_api_key = object()
@@ -711,6 +943,140 @@ class AgentRegistryApiRouteTests(unittest.TestCase):
                 )
             self.assertEqual(result["deployment_mode"], "hybrid")
             self.assertEqual(result["attachments"][0]["attachment_id"], "local_companion:profile-local")
+        finally:
+            if previous_server is None:
+                sys.modules.pop("server", None)
+            else:
+                sys.modules["server"] = previous_server
+
+    def test_list_runtime_targets_returns_workspace_projection(self):
+        fake_server = types.ModuleType("server")
+        fake_server.require_api_key = object()
+
+        previous_server = sys.modules.get("server")
+        sys.modules["server"] = fake_server
+        try:
+            app = _FakeApp()
+            agent_registry_api.register_agent_registry_routes(app)
+            route = app.routes[("GET", "/agent-registry/runtime-targets")]
+            with (
+                patch("server_modules.agent_registry_api.enforce_workspace_access", return_value="workspace-1"),
+                patch(
+                    "server_modules.agent_registry_api.runtime_attachment_service.list_workspace_runtime_targets",
+                    new=AsyncMock(
+                        return_value={
+                            "tenant_id": "tenant-1",
+                            "workspace_id": "workspace-1",
+                            "deployment_mode": "hybrid",
+                            "default_target_id": "cloud_default",
+                            "targets": [{"target_id": "cloud_default", "available": True}],
+                            "routing_contract": {"mobile_entry_mode": "platform_first"},
+                        }
+                    ),
+                ),
+            ):
+                result = asyncio.run(
+                    route(
+                        workspace_id="workspace-1",
+                        current_user={"user_id": "user-1", "tenant_id": "tenant-1", "role": "owner", "is_admin": True},
+                    )
+                )
+            self.assertEqual(result["default_target_id"], "cloud_default")
+            self.assertEqual(result["targets"][0]["target_id"], "cloud_default")
+        finally:
+            if previous_server is None:
+                sys.modules.pop("server", None)
+            else:
+                sys.modules["server"] = previous_server
+
+    def test_list_shared_board_returns_published_entries(self):
+        fake_server = types.ModuleType("server")
+        fake_server.require_api_key = object()
+
+        previous_server = sys.modules.get("server")
+        sys.modules["server"] = fake_server
+        try:
+            app = _FakeApp()
+            agent_registry_api.register_agent_registry_routes(app)
+            route = app.routes[("GET", "/agent-registry/shared-board")]
+            fake_memory_service = types.SimpleNamespace(
+                list_shared_operational_board_entries=Mock(
+                    return_value=[
+                        {
+                            "entry_id": "board-1",
+                            "revision_id": "rev-2",
+                            "revision_number": 2,
+                            "status": "published",
+                            "entry_kind": "sop_playbook",
+                            "title": "Refund playbook",
+                        }
+                    ]
+                )
+            )
+            with (
+                patch("server_modules.agent_registry_api.enforce_workspace_access", return_value="workspace-1"),
+                patch.object(agent_registry_api, "memory_service", fake_memory_service, create=True),
+            ):
+                result = asyncio.run(
+                    route(
+                        workspace_id="workspace-1",
+                        current_user={"user_id": "user-1", "tenant_id": "tenant-1", "role": "member", "is_admin": False},
+                    )
+                )
+
+            self.assertEqual(result["summary"]["count"], 1)
+            self.assertEqual(result["summary"]["permission_tier"], "propose_update")
+            self.assertEqual(result["entries"][0]["entry_id"], "board-1")
+            self.assertEqual(
+                fake_memory_service.list_shared_operational_board_entries.call_args.kwargs["actor_permission"],
+                "propose_update",
+            )
+        finally:
+            if previous_server is None:
+                sys.modules.pop("server", None)
+            else:
+                sys.modules["server"] = previous_server
+
+    def test_write_shared_board_maps_owner_to_publish_permission(self):
+        fake_server = types.ModuleType("server")
+        fake_server.require_api_key = object()
+
+        previous_server = sys.modules.get("server")
+        sys.modules["server"] = fake_server
+        try:
+            app = _FakeApp()
+            agent_registry_api.register_agent_registry_routes(app)
+            route = app.routes[("POST", "/agent-registry/shared-board")]
+            with (
+                patch("server_modules.agent_registry_api.enforce_workspace_access", return_value="workspace-1"),
+                patch(
+                    "server_modules.agent_registry_api.shared_operational_board_service.write_shared_operational_board_entry",
+                    new=AsyncMock(
+                        return_value={
+                            "entry": {"entry_id": "board-1", "status": "published"},
+                            "revision": {"revision_id": "rev-1", "revision_number": 1},
+                            "activity_event_id": "aevt-1",
+                        }
+                    ),
+                ) as write_mock,
+            ):
+                result = asyncio.run(
+                    route(
+                        agent_registry_api.SharedOperationalBoardWriteRequest(
+                            workspace_id="workspace-1",
+                            action="publish_update",
+                            entry_kind="shared_instruction",
+                            title="Escalation rule",
+                            body="Escalate urgent billing tickets within 10 minutes.",
+                        ),
+                        current_user={"user_id": "owner-1", "tenant_id": "tenant-1", "role": "owner", "is_admin": False, "email": "owner@example.com"},
+                    )
+                )
+
+            self.assertEqual(result["permission_tier"], "publish_update")
+            self.assertEqual(result["entry"]["entry_id"], "board-1")
+            self.assertEqual(write_mock.await_args.kwargs["actor_permission"], "publish_update")
+            self.assertEqual(write_mock.await_args.kwargs["actor"]["role"], "owner")
         finally:
             if previous_server is None:
                 sys.modules.pop("server", None)
@@ -1200,6 +1566,10 @@ class AgentRegistryApiRouteTests(unittest.TestCase):
                 patch("server_modules.agent_registry_api.enforce_workspace_access", return_value="workspace-1"),
                 patch("server_modules.agent_registry_api.workspace_tenant_id", return_value="tenant-1"),
                 patch(
+                    "server_modules.agent_registry_api.agent_specialist_repository.get_workspace_specialist",
+                    new=AsyncMock(return_value={"id": "install-2", "specialist_mode": "owner_edit", "metadata": {"specialist_mode": "owner_edit"}}),
+                ),
+                patch(
                     "server_modules.agent_registry_api.agent_specialist_repository.save_workspace_specialist_channel_bindings",
                     new=AsyncMock(side_effect=agent_registry_api.agent_specialist_repository.ChannelOwnershipConflictError(
                         "This channel already has an inbound owner."
@@ -1245,6 +1615,10 @@ class AgentRegistryApiRouteTests(unittest.TestCase):
             with (
                 patch("server_modules.agent_registry_api.enforce_workspace_access", return_value="workspace-1"),
                 patch("server_modules.agent_registry_api.workspace_tenant_id", return_value="tenant-1"),
+                patch(
+                    "server_modules.agent_registry_api.agent_specialist_repository.get_workspace_specialist",
+                    new=AsyncMock(return_value={"id": "install-2", "specialist_mode": "owner_edit", "metadata": {"specialist_mode": "owner_edit"}}),
+                ),
                 patch(
                     "server_modules.agent_registry_api.agent_specialist_repository.save_workspace_specialist_runtime_profile",
                     new=AsyncMock(side_effect=agent_registry_api.agent_specialist_repository.RuntimeProfileValidationError(

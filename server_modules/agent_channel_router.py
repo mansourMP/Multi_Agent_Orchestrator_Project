@@ -10,13 +10,15 @@ from server_modules import (
     channel_concurrency_service,
     control_plane_repository,
     safe_mode_service,
-    thread_service,
-    universal_operator,
 )
+from server_modules.agent_turn import build_inbound_agent_turn_request
 
 
 SUPPORTED_CHANNEL_KEYS = frozenset({"telegram", "whatsapp", "email", "phone", "web_chat"})
+SUPPORTED_FULL_SHELL_KEYS = frozenset({"mobile", "web", "desktop"})
 WEB_CHAT_DEFAULT_ENDPOINT_KEY = "workspace-default"
+FULL_SHELL_CLASS = "full_shell"
+CHANNEL_SHELL_CLASS = "channel_shell"
 
 
 class ChannelIngressValidationError(Exception):
@@ -29,6 +31,67 @@ class ChannelOwnerNotFoundError(Exception):
 
 class ChannelSecurityDeniedError(Exception):
     pass
+
+
+def full_shell_contract(shell_key: str) -> Dict[str, Any]:
+    normalized = str(shell_key or "").strip().lower()
+    if normalized not in SUPPORTED_FULL_SHELL_KEYS:
+        raise ChannelIngressValidationError("Unsupported shell.")
+    return {
+        "shell_key": normalized,
+        "surface_class": FULL_SHELL_CLASS,
+        "control_depth": "full",
+        "allowed_capabilities": [
+            "conversation",
+            "summaries",
+            "notifications",
+            "approval_center",
+            "application_navigation",
+            "settings_profile",
+        ],
+        "forbidden_capabilities": [
+            "separate_product_brain",
+            "separate_policy_engine",
+        ],
+        "shares_captain_identity": True,
+        "uses_shared_run_engine": True,
+    }
+
+
+def channel_shell_contract(channel_key: str) -> Dict[str, Any]:
+    normalized = _normalize_channel_key(channel_key)
+    if normalized not in SUPPORTED_CHANNEL_KEYS:
+        raise ChannelIngressValidationError("Unsupported channel.")
+    lightweight_approvals = normalized in {"telegram", "whatsapp", "web_chat"}
+    return {
+        "channel_key": normalized,
+        "surface_class": CHANNEL_SHELL_CLASS,
+        "control_depth": "lightweight",
+        "allowed_capabilities": [
+            "conversation",
+            "notifications",
+            "summary_visibility",
+            *(["lightweight_approvals"] if lightweight_approvals else []),
+        ],
+        "forbidden_capabilities": [
+            "connector_management",
+            "provider_management",
+            "deep_application_configuration",
+            "deep_admin_surface",
+            "separate_product_brain",
+            "separate_policy_engine",
+        ],
+        "shares_captain_identity": True,
+        "uses_shared_run_engine": True,
+        "deep_connector_control_surface": False,
+    }
+
+
+def shell_surface_contract(surface_key: str) -> Dict[str, Any]:
+    normalized = str(surface_key or "").strip().lower()
+    if normalized in SUPPORTED_FULL_SHELL_KEYS:
+        return full_shell_contract(normalized)
+    return channel_shell_contract(_normalize_channel_key(normalized))
 
 
 def _duplicate_ignored_reply() -> str:
@@ -133,6 +196,173 @@ def _runtime_profile_id(install: Dict[str, Any]) -> Optional[str]:
     runtime_profile = _coerce_dict(install.get("runtime_profile"))
     token = str(runtime_profile.get("id") or install.get("runtime_profile_id") or "").strip()
     return token or None
+
+
+def _agent_role_token(*, install: Dict[str, Any], manifest: Any) -> Optional[str]:
+    install_metadata = _coerce_dict(install.get("metadata"))
+    install_agent = _coerce_dict(install.get("agent_definition"))
+    candidates = (
+        install_metadata.get("agent_role"),
+        install_agent.get("slug"),
+        getattr(getattr(manifest, "identity", None), "role", None),
+        install.get("label"),
+    )
+    for candidate in candidates:
+        token = _safe_slug(candidate, fallback="").replace("-", "_").strip("_")
+        if token:
+            return token
+    return None
+
+
+def _channel_turn_owner_user(*, install: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "auth_type": "api_key",
+        "role": "owner",
+        "is_admin": True,
+        "user_id": str(install.get("owner_user_id") or "").strip(),
+        "email": str(install.get("owner_email") or "").strip().lower(),
+    }
+
+
+def _build_channel_turn_request(
+    *,
+    tenant_id: str,
+    workspace_id: str,
+    channel_key: str,
+    actor_id: str,
+    actor_display_name: str,
+    message: str,
+    thread_id: str,
+    session_id: str,
+    install: Dict[str, Any],
+    manifest: Any,
+    shared_metadata: Dict[str, Any],
+    master_install_id: Optional[str],
+    runtime_mode: str,
+    runtime_profile_id: Optional[str],
+    request_id: Optional[str],
+    privileged_runtime_approved: bool,
+    seed_demo_if_empty: bool,
+) -> Any:
+    runtime_profile = _coerce_dict(install.get("runtime_profile"))
+    metadata = {
+        **shared_metadata,
+        "workspace_agent_install_id": str(install.get("id") or "").strip() or None,
+        "active_agent_install_id": str(install.get("id") or "").strip() or None,
+        "master_agent_install_id": str(master_install_id or install.get("id") or "").strip() or None,
+        "runtime_mode": str(runtime_mode or "").strip().lower() or None,
+        "runtime_profile_id": runtime_profile_id,
+        "runtime_profile_label": str(runtime_profile.get("label") or "").strip() or None,
+        "runtime_id": str(runtime_profile.get("runtime_id") or "").strip() or None,
+        "machine_id": str(runtime_profile.get("machine_id") or "").strip() or None,
+        "agent_role": _agent_role_token(install=install, manifest=manifest),
+        "agent_role_source": "channel_owner_binding",
+        "seed_demo_if_empty": bool(seed_demo_if_empty),
+    }
+    return build_inbound_agent_turn_request(
+        tenant_id=tenant_id,
+        workspace_id=workspace_id,
+        session_id=session_id,
+        thread_id=thread_id,
+        channel=channel_key,
+        actor_type="user",
+        actor_id=actor_id,
+        actor_display_name=actor_display_name,
+        message=message,
+        context_hints={
+            "source": "external_channel_ingress",
+            "request_id": request_id,
+            "metadata": {key: value for key, value in metadata.items() if value not in (None, "", [], {})},
+        },
+        execution_mode="durable",
+        response_mode="channel_reply",
+        machine_target=str(shared_metadata.get("machine_target") or "").strip() or None,
+        policy_context={
+            "execution_target": str(shared_metadata.get("execution_target") or "").strip() or None,
+            "trust_mode": str(shared_metadata.get("trust_mode") or "").strip() or None,
+            "privileged_runtime_approved": bool(privileged_runtime_approved),
+        },
+    )
+
+
+async def execute_canonical_channel_turn(
+    *,
+    turn_request: Any,
+    current_user: Dict[str, Any],
+) -> Dict[str, Any]:
+    from server_modules.agent_turn import execute_system_agent_turn
+    import server as _server
+
+    run_execution_services = _server._run_execution_services()
+    return await asyncio.to_thread(
+        execute_system_agent_turn,
+        turn_request=turn_request,
+        current_user=current_user,
+        run_execution_services=run_execution_services,
+    )
+
+
+def _canonical_run_reply(*, status: str, run_id: Optional[str]) -> str:
+    normalized = str(status or "").strip().lower()
+    base = {
+        "accepted": "Run accepted.",
+        "queued": "Run queued.",
+        "queued_local": "Run queued for local companion.",
+        "running": "Run started.",
+        "running_local": "Run started on local companion.",
+        "waiting_for_input": "Run is waiting for required input.",
+    }.get(normalized, "")
+    if not base and normalized:
+        base = f"Run {normalized}."
+    if not base:
+        base = "Run accepted."
+    if str(run_id or "").strip():
+        return f"{base} run_id: {run_id}"
+    return base
+
+
+def _normalize_canonical_channel_result(
+    *,
+    execution_result: Dict[str, Any],
+) -> Dict[str, Any]:
+    if str(execution_result.get("kind") or "").strip() == "durable_run":
+        durable = _coerce_dict(execution_result.get("result"))
+        run_id = str(durable.get("run_id") or "").strip() or None
+        status = str(durable.get("status") or "accepted").strip().lower() or "accepted"
+        reply = _canonical_run_reply(status=status, run_id=run_id)
+        return {
+            "status": status,
+            "reply": reply,
+            "run_id": run_id,
+            "artifact": None,
+            "steps": [],
+            "critic": None,
+            "limit_reason": None,
+            "retry_after_seconds": None,
+            "quota_snapshot": None,
+            "metadata": {
+                "kind": "durable_run",
+                "engine": durable.get("engine"),
+                "route": durable.get("route"),
+                "doctor_preflight": durable.get("doctor_preflight"),
+                "created_run": durable.get("created_run"),
+            },
+            "event_type": "run_started",
+        }
+    reply = str(execution_result.get("reply") or "").strip()
+    return {
+        "status": str(execution_result.get("status") or "completed").strip().lower() or "completed",
+        "reply": reply,
+        "run_id": str(execution_result.get("run_id") or "").strip() or None,
+        "artifact": execution_result.get("artifact"),
+        "steps": list(execution_result.get("steps") or []),
+        "critic": execution_result.get("critic"),
+        "limit_reason": execution_result.get("limit_reason"),
+        "retry_after_seconds": execution_result.get("retry_after_seconds"),
+        "quota_snapshot": execution_result.get("quota_snapshot"),
+        "metadata": _coerce_dict(execution_result.get("metadata")),
+        "event_type": "response",
+    }
 
 
 async def route_inbound_channel_message(
@@ -378,42 +608,26 @@ async def route_inbound_channel_message(
             },
         }
 
-    await thread_service.ensure_master_thread(
-        thread_id=resolved_thread_id,
+    turn_request = _build_channel_turn_request(
         tenant_id=tenant_id,
         workspace_id=workspace_id,
-        owner_user_id=str(install.get("owner_user_id") or "").strip() or None,
-        master_agent_install_id=master_install_id,
-        channel=resolved_channel_key,
-        title=responder_label,
-        metadata=shared_metadata,
-    )
-    await control_plane_repository.upsert_agent_session(
+        channel_key=resolved_channel_key,
+        actor_id=resolved_actor_id,
+        actor_display_name=resolved_actor_display_name,
+        message=resolved_message,
+        thread_id=resolved_thread_id,
         session_id=resolved_session_key,
-        tenant_id=tenant_id,
-        workspace_id=workspace_id,
-        thread_id=resolved_thread_id,
-        channel=resolved_channel_key,
-        actor=actor_payload,
-        master_agent_install_id=master_install_id,
+        install=install,
+        manifest=manifest,
+        shared_metadata=shared_metadata,
+        master_install_id=master_install_id,
+        runtime_mode=runtime_mode,
         runtime_profile_id=runtime_profile_id,
-        metadata=shared_metadata,
+        request_id=str(_coerce_dict(inbound_event).get("id") or "").strip() or None,
+        privileged_runtime_approved=privileged_runtime_approved,
+        seed_demo_if_empty=seed_demo_if_empty,
     )
-    await thread_service.record_user_turn(
-        thread_id=resolved_thread_id,
-        tenant_id=tenant_id,
-        workspace_id=workspace_id,
-        session_id=resolved_session_key,
-        actor=actor_payload,
-        content=resolved_message,
-        runtime_profile_id=runtime_profile_id,
-        metadata={
-            **shared_metadata,
-            "request_id": str(_coerce_dict(inbound_event).get("id") or "").strip() or None,
-            "event_id": str(_coerce_dict(inbound_event).get("id") or "").strip() or None,
-        },
-    )
-
+    execution_owner = _channel_turn_owner_user(install=install)
     try:
         async with channel_concurrency_service.channel_execution_slot(
             tenant_id=tenant_id,
@@ -432,20 +646,14 @@ async def route_inbound_channel_message(
                 1,
             )
             try:
-                result = await asyncio.wait_for(
-                    universal_operator.execute_customer_turn(
-                        manifest=manifest,
-                        tenant_id=tenant_id,
-                        workspace_id=workspace_id,
-                        goal=resolved_message,
-                        seed_demo_if_empty=seed_demo_if_empty,
-                        runtime_mode=runtime_mode,
-                        runtime_profile=runtime_profile or None,
-                        privileged_runtime_approved=privileged_runtime_approved,
-                        active_agent_install_id=responder_install_id,
+                execution_result = await asyncio.wait_for(
+                    execute_canonical_channel_turn(
+                        turn_request=turn_request,
+                        current_user=execution_owner,
                     ),
                     timeout=timeout_seconds,
                 )
+                result = _normalize_canonical_channel_result(execution_result=execution_result)
             except asyncio.TimeoutError:
                 result = channel_concurrency_service.build_runtime_capped_result(
                     quota_snapshot=quota_snapshot,
@@ -459,25 +667,6 @@ async def route_inbound_channel_message(
         "id": responder_install_id or getattr(manifest, "manifest_id", "agent"),
         "display_name": responder_label,
     }
-    await thread_service.record_assistant_turn(
-        thread_id=resolved_thread_id,
-        tenant_id=tenant_id,
-        workspace_id=workspace_id,
-        session_id=resolved_session_key,
-        actor=assistant_actor,
-        reply=reply,
-        status=str(result.get("status") or "completed"),
-        active_agent_install_id=responder_install_id,
-        runtime_profile_id=runtime_profile_id,
-        metadata={
-            **shared_metadata,
-            "request_id": str(_coerce_dict(inbound_event).get("id") or "").strip() or None,
-            "needed_skill_id": result.get("needed_skill_id"),
-            "limit_reason": result.get("limit_reason"),
-            "retry_after_seconds": result.get("retry_after_seconds"),
-            "quota_snapshot": result.get("quota_snapshot"),
-        },
-    )
     outbound_event = await control_plane_repository.append_agent_channel_event(
         tenant_id=tenant_id,
         workspace_id=workspace_id,
@@ -487,7 +676,7 @@ async def route_inbound_channel_message(
         thread_id=resolved_thread_id,
         responder_install_id=responder_install_id,
         direction="outbound",
-        event_type="response",
+        event_type=str(result.get("event_type") or "response").strip() or "response",
         message_id=None,
         parent_event_id=str(_coerce_dict(inbound_event).get("id") or "").strip() or None,
         actor=assistant_actor,
@@ -500,6 +689,8 @@ async def route_inbound_channel_message(
             "limit_reason": result.get("limit_reason"),
             "retry_after_seconds": result.get("retry_after_seconds"),
             "quota_snapshot": result.get("quota_snapshot"),
+            "run_id": result.get("run_id"),
+            "metadata": result.get("metadata"),
         },
         metadata=shared_metadata,
         status=str(result.get("status") or "completed").strip().lower() or "completed",
@@ -586,12 +777,14 @@ async def route_inbound_channel_message(
         },
         "status": result.get("status"),
         "reply": reply,
+        "run_id": result.get("run_id"),
         "artifact": result.get("artifact"),
         "steps": result.get("steps"),
         "critic": result.get("critic"),
         "limit_reason": result.get("limit_reason"),
         "retry_after_seconds": result.get("retry_after_seconds"),
         "quota_snapshot": result.get("quota_snapshot"),
+        "metadata": result.get("metadata"),
         "audit": {
             "inbound_event_id": str(_coerce_dict(inbound_event).get("id") or "").strip() or None,
             "outbound_event_id": str(_coerce_dict(outbound_event).get("id") or "").strip() or None,

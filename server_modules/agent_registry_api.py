@@ -27,6 +27,7 @@ from server_modules import unified_memory_service
 from server_modules import runtime_attachment_service
 from server_modules import activity_ledger_service
 from server_modules import specialist_service
+from server_modules import shared_operational_board_service
 
 
 def _late_server_export(name: str):
@@ -44,6 +45,47 @@ def _refresh_server_exports():
 
 def _coerce_dict(value: Any) -> Dict[str, Any]:
     return dict(value) if isinstance(value, dict) else {}
+
+
+def _coerce_list(value: Any) -> list[Any]:
+    return list(value) if isinstance(value, list) else []
+
+
+def _normalize_install_contract_metadata(
+    *,
+    install_id: Optional[str],
+    label: Optional[str],
+    agent_kind: str,
+    metadata: Dict[str, Any],
+) -> Dict[str, Any]:
+    try:
+        return agent_registry_repository.normalize_install_contract_metadata(
+            install_id=install_id,
+            label=label,
+            agent_kind=agent_kind,
+            metadata=metadata,
+        )
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+
+
+def _specialist_mode_token(install: Dict[str, Any]) -> str:
+    token = str(
+        install.get("specialist_mode")
+        or _coerce_dict(install.get("metadata")).get("specialist_mode")
+        or agent_registry_repository.DEFAULT_SPECIALIST_MODE
+    ).strip().lower()
+    return token or agent_registry_repository.DEFAULT_SPECIALIST_MODE
+
+
+def _require_specialist_config_editable(install: Dict[str, Any]) -> None:
+    mode = _specialist_mode_token(install)
+    if mode == "owner_edit":
+        return
+    raise HTTPException(
+        status_code=409,
+        detail=f"Specialist mode '{mode}' does not allow prompt/config edits. Switch to owner_edit first.",
+    )
 
 
 class AgentInstallRunRequest(BaseModel):
@@ -121,6 +163,18 @@ class SpecialistRuntimeProfileUpdateRequest(BaseModel):
     workspace_id: str
     runtime_profile_id: Optional[str] = None
     runtime_mode: Literal["hosted_secure", "local_secure", "privileged_device"] = "hosted_secure"
+
+
+class SharedOperationalBoardWriteRequest(BaseModel):
+    workspace_id: str
+    action: Literal["propose_update", "publish_update"] = "propose_update"
+    entry_id: Optional[str] = None
+    entry_kind: Literal["shared_instruction", "sop_playbook", "handoff_note", "shared_artifact_link"]
+    title: str
+    body: Optional[str] = None
+    links: list[Dict[str, Any]] = Field(default_factory=list)
+    artifacts: list[Dict[str, Any]] = Field(default_factory=list)
+    metadata: Dict[str, Any] = Field(default_factory=dict)
 
 
 class AgentCustomerInventoryPreviewRequest(BaseModel):
@@ -253,6 +307,15 @@ def _tenant_id_for_request(current_user: Any, workspace_id: str) -> str:
     return workspace_tenant_id(current_user, workspace_id)
 
 
+def _shared_board_permission_for_actor(current_user: Any) -> str:
+    role = str((current_user or {}).get("role") or "").strip().lower()
+    if bool((current_user or {}).get("is_admin")) or role in {"owner", "admin"}:
+        return "publish_update"
+    if role in {"member"}:
+        return "propose_update"
+    return "read"
+
+
 def _run_execution_services():
     return build_server_run_execution_services(
         stamp_request_owner=runtime_run_access_service.stamp_request_owner,
@@ -318,6 +381,287 @@ def _raise_runtime_attachment_error(error: Exception) -> None:
 def _normalized_runtime_mode(install: Dict[str, Any]) -> str:
     token = str(install.get("runtime_mode") or "").strip().lower()
     return token if token in {"hosted_secure", "local_secure", "privileged_device"} else "hosted_secure"
+
+
+def _install_is_active(install: Dict[str, Any]) -> bool:
+    return bool(install.get("enabled", True)) and str(install.get("status") or "active").strip().lower() == "active"
+
+
+def _install_capability_tokens(install: Dict[str, Any]) -> set[str]:
+    tokens: set[str] = set()
+    version = _coerce_dict(install.get("agent_definition_version"))
+    capability_manifest = _coerce_dict(version.get("capability_manifest"))
+    definition = _coerce_dict(install.get("agent_definition"))
+
+    def _add(value: Any) -> None:
+        token = str(value or "").strip().lower()
+        if token:
+            tokens.add(token)
+
+    for item in _coerce_list(capability_manifest.get("summary")):
+        _add(item)
+    for toggle in _coerce_list(capability_manifest.get("toggles")):
+        if isinstance(toggle, dict):
+            _add(toggle.get("id"))
+            _add(toggle.get("label"))
+        else:
+            _add(toggle)
+    _add(definition.get("slug"))
+    _add(install.get("label"))
+    return tokens
+
+
+async def resolve_specialist_install_for_app_bridge(
+    *,
+    tenant_id: str,
+    workspace_id: str,
+    target_install_id: Optional[str] = None,
+    target_capability: Optional[str] = None,
+) -> Dict[str, Any]:
+    resolved_install_id = str(target_install_id or "").strip()
+    if resolved_install_id:
+        install = await agent_registry_repository.get_workspace_agent_install_bundle(
+            resolved_install_id,
+            tenant_id=tenant_id,
+            workspace_id=workspace_id,
+        )
+        if not isinstance(install, dict) or str(_coerce_dict(install.get("agent_definition")).get("agent_kind") or "").strip().lower() == "master":
+            raise HTTPException(status_code=404, detail="Specialist target not found.")
+        if not _install_is_active(install):
+            raise HTTPException(status_code=409, detail="Specialist target is not active.")
+        return install
+
+    capability_token = str(target_capability or "").strip().lower()
+    if not capability_token:
+        raise HTTPException(status_code=400, detail="Specialist bridge target requires target_install_id or target_capability.")
+
+    installs = await agent_registry_repository.list_workspace_agent_installs(
+        tenant_id=tenant_id,
+        workspace_id=workspace_id,
+        include_master=False,
+    )
+    for install in installs:
+        if not isinstance(install, dict) or not _install_is_active(install):
+            continue
+        if capability_token not in _install_capability_tokens(install):
+            continue
+        resolved_install_id = str(install.get("id") or "").strip()
+        if not resolved_install_id:
+            continue
+        resolved_install = await agent_registry_repository.get_workspace_agent_install_bundle(
+            resolved_install_id,
+            tenant_id=tenant_id,
+            workspace_id=workspace_id,
+        )
+        if isinstance(resolved_install, dict):
+            return resolved_install
+        return install
+
+    raise HTTPException(status_code=404, detail=f"No active specialist found for capability '{capability_token}'.")
+
+
+async def _resolve_install_thread_binding(
+    *,
+    install: Dict[str, Any],
+    current_user: Any,
+    workspace_id: str,
+    tenant_id: str,
+    channel: str,
+    thread_id: Optional[str] = None,
+    session_id: Optional[str] = None,
+) -> Dict[str, str]:
+    requested_thread_id = str(thread_id or "").strip()
+    requested_session_id = str(session_id or "").strip()
+    install_id = str(install.get("id") or "").strip()
+    definition = _coerce_dict(install.get("agent_definition"))
+    if str(definition.get("agent_kind") or "").strip().lower() == "master":
+        owner_user_id = str((current_user or {}).get("user_id") or install.get("owner_user_id") or "").strip() or None
+        resolved_thread_id = requested_thread_id or agent_registry_repository.build_master_thread_id(
+            workspace_id=workspace_id,
+            owner_user_id=owner_user_id,
+        )
+        await thread_service.ensure_master_thread(
+            thread_id=resolved_thread_id,
+            tenant_id=tenant_id,
+            workspace_id=workspace_id,
+            owner_user_id=owner_user_id,
+            master_agent_install_id=install_id or None,
+            channel=str(channel or "web").strip() or "web",
+            title="Sage",
+            metadata={
+                "source": "master_chat_context",
+                "system_agent": True,
+                "workspace_master": True,
+            },
+        )
+        return {
+            "thread_id": resolved_thread_id,
+            "session_id": requested_session_id or resolved_thread_id,
+        }
+    resolved_thread_id = requested_thread_id or str(install.get("thread_id") or "").strip() or f"install-thread-{install_id}"
+    return {
+        "thread_id": resolved_thread_id,
+        "session_id": requested_session_id or resolved_thread_id,
+    }
+
+
+async def execute_install_agent_turn(
+    *,
+    install_id: str,
+    current_user: Any,
+    message: Optional[str] = None,
+    thread_id: Optional[str] = None,
+    session_id: Optional[str] = None,
+    channel: str = "web",
+    execution_mode: Literal["sync", "durable"] = "durable",
+    response_mode: Literal["stream", "artifact", "channel_reply"] = "artifact",
+    machine_target: Optional[str] = None,
+    policy_context: Optional[Dict[str, Any]] = None,
+    metadata_overrides: Optional[Dict[str, Any]] = None,
+    force_recompile: bool = False,
+) -> ApiAgentTurnResponse:
+    _refresh_server_exports()
+    compiled = await template_compiler_service.ensure_install_compiled_artifact(
+        install_id,
+        compiled_by_user_id=str((current_user or {}).get("user_id") or "").strip() or None,
+        force_recompile=bool(force_recompile),
+    )
+    install = compiled.get("install") if isinstance(compiled.get("install"), dict) else {}
+    workspace_id = enforce_workspace_access(
+        current_user,
+        str(install.get("workspace_id") or "").strip(),
+        tenant_id=str(install.get("tenant_id") or "").strip() or None,
+        minimum_role="member",
+    )
+    runtime_profile = install.get("runtime_profile") if isinstance(install.get("runtime_profile"), dict) else {}
+    workflow_snapshot = compiled.get("workflow_snapshot") if isinstance(compiled.get("workflow_snapshot"), dict) else {}
+    workflow_id = str(compiled.get("workflow_id") or workflow_snapshot.get("id") or install.get("compiled_workflow_id") or "").strip()
+    workflow_version_id = str(
+        compiled.get("workflow_version_id")
+        or workflow_snapshot.get("workflowVersionId")
+        or install.get("compiled_workflow_version_id")
+        or ""
+    ).strip()
+    if not workflow_id or not workflow_version_id:
+        raise HTTPException(status_code=409, detail="Installed agent is missing a compiled workflow artifact.")
+
+    actor = _current_actor(current_user)
+    runtime_scope = execution_sandbox_service.runtime_scope(
+        runtime_mode=_normalized_runtime_mode(install),
+        runtime_profile=runtime_profile,
+        install=install,
+    )
+    normalized_policy_context = {
+        key: value
+        for key, value in _coerce_dict(policy_context).items()
+        if value not in ("", [], {})
+    }
+    try:
+        runtime_selection = await runtime_attachment_service.resolve_install_runtime_plan(
+            tenant_id=str(install.get("tenant_id") or "").strip(),
+            workspace_id=workspace_id,
+            install=install,
+            requested_machine_target=str(machine_target or "").strip() or None,
+            policy_context=normalized_policy_context,
+        )
+    except Exception as error:
+        _raise_runtime_attachment_error(error)
+        raise
+    thread_binding = await _resolve_install_thread_binding(
+        install=install,
+        current_user=current_user,
+        workspace_id=workspace_id,
+        tenant_id=str(install.get("tenant_id") or "").strip(),
+        channel=channel,
+        thread_id=thread_id,
+        session_id=session_id,
+    )
+    merged_metadata = {
+        **(compiled.get("run_metadata") if isinstance(compiled.get("run_metadata"), dict) else {}),
+        **_coerce_dict(metadata_overrides),
+        "source": str(_coerce_dict(metadata_overrides).get("source") or "agent_install_run").strip() or "agent_install_run",
+        "workspace_agent_install_id": str(install.get("id") or install_id).strip(),
+        "active_agent_install_id": str(install.get("id") or install_id).strip(),
+        "master_agent_install_id": str(install.get("id") or install_id).strip(),
+        "agent_definition_id": install.get("agent_definition_id"),
+        "agent_definition_version_id": install.get("agent_definition_version_id"),
+        "runtime_profile_id": install.get("runtime_profile_id"),
+        "runtime_mode": _normalized_runtime_mode(install),
+        "runtime_profile_label": runtime_profile.get("label"),
+        "runtime_id": runtime_profile.get("runtime_id"),
+        "machine_id": runtime_profile.get("machine_id"),
+        "runtime_scope": runtime_scope,
+        "runtime_selection": runtime_selection,
+        "runtime_attachment_id": runtime_selection.get("selected_attachment", {}).get("attachment_id"),
+        "runtime_attachment_kind": runtime_selection.get("selected_attachment", {}).get("attachment_kind"),
+        "workspace_runtime_deployment_mode": runtime_selection.get("deployment_mode"),
+        "compiled_workflow_id": workflow_id,
+        "compiled_workflow_version_id": workflow_version_id,
+        "workflow_snapshot": workflow_snapshot,
+        "workflow_definition": workflow_snapshot.get("definition") if isinstance(workflow_snapshot.get("definition"), dict) else None,
+        "owner_user_id": str((current_user or {}).get("user_id") or "").strip() or None,
+        "owner_email": str((current_user or {}).get("email") or "").strip() or None,
+    }
+    if _normalized_runtime_mode(install) == "hosted_secure":
+        merged_metadata["root_folder_uri"] = None
+        merged_metadata["folder_grants"] = []
+        merged_metadata["file_mount_grants"] = []
+        merged_metadata["machine_id"] = None
+        merged_metadata["execution_target"] = str(runtime_selection.get("execution_target_selected") or "cloud")
+        merged_metadata["execution_target_selected"] = str(runtime_selection.get("execution_target_selected") or "cloud")
+    else:
+        merged_metadata["root_folder_uri"] = str(install.get("root_folder_uri") or runtime_profile.get("root_folder_uri") or "").strip() or None
+        merged_metadata["folder_grants"] = list(install.get("folder_grants") or []) if isinstance(install.get("folder_grants"), list) else []
+        merged_metadata["execution_target_selected"] = str(runtime_selection.get("execution_target_selected") or "local_companion")
+
+    resolved_message = str(message or "").strip() or str(install.get("label") or install.get("agent_definition", {}).get("name") or "Run installed agent").strip()
+    resolved_machine_target = str(runtime_selection.get("machine_target") or "").strip() or None
+    runtime_mode = _normalized_runtime_mode(install)
+    if runtime_mode in {"local_secure", "privileged_device"} and str(runtime_profile.get("runtime_class") or "").strip() != "desktop_companion":
+        raise HTTPException(status_code=409, detail="This specialist requires a desktop companion runtime profile.")
+    if runtime_mode == "privileged_device" and not bool(normalized_policy_context.get("privileged_runtime_approved")):
+        raise HTTPException(status_code=409, detail="Privileged device execution requires explicit owner approval.")
+    turn_request = AgentTurnRequest(
+        tenant_id=str(install.get("tenant_id") or "").strip(),
+        workspace_id=workspace_id,
+        thread_id=thread_binding["thread_id"],
+        session_id=thread_binding["session_id"],
+        channel=str(channel or "web").strip() or "web",
+        actor=actor,
+        message=resolved_message,
+        attachments=[],
+        context_hints={
+            "engine": "orion",
+            "workflow_id": workflow_id,
+            "workflow_version_id": workflow_version_id,
+            "agent_role": str(install.get("agent_definition", {}).get("slug") or "").strip() or None,
+            "metadata": {
+                **{key: value for key, value in merged_metadata.items() if value not in ("", [], {})},
+                **{
+                    key: merged_metadata.get(key)
+                    for key in (
+                        "root_folder_uri",
+                        "folder_grants",
+                        "file_mount_grants",
+                        "runtime_scope",
+                        "execution_target",
+                        "execution_target_selected",
+                    )
+                    if key in merged_metadata
+                },
+            },
+        },
+        execution_mode=execution_mode,
+        response_mode=response_mode,
+        machine_target=resolved_machine_target,
+        policy_context=normalized_policy_context,
+    )
+    result = await execute_canonical_agent_turn(
+        turn_request=turn_request,
+        current_user=current_user,
+        run_execution_services=_run_execution_services(),
+    )
+    return normalize_agent_turn_result(result, turn_request=turn_request)
 
 
 def _inventory_preview_manifest(*, agent_label: str, hard_context: str, operational_policy: str) -> AgentManifest:
@@ -438,6 +782,12 @@ def register_agent_registry_routes(app) -> None:
             minimum_role="member",
         )
         tenant_id = _tenant_id_for_request(current_user, resolved_workspace_id)
+        normalized_metadata = _normalize_install_contract_metadata(
+            install_id=None,
+            label=str(body.label or body.manifest.identity.name or "").strip() or None,
+            agent_kind=agent_registry_repository.SPECIALIST_AGENT_KIND,
+            metadata=_coerce_dict(body.metadata),
+        )
         try:
             install = await agent_specialist_repository.create_workspace_specialist(
                 tenant_id=tenant_id,
@@ -449,7 +799,7 @@ def register_agent_registry_routes(app) -> None:
                 runtime_mode=str(body.runtime_mode or "hosted_secure").strip() or "hosted_secure",
                 connector_bindings=_coerce_dict(body.connector_bindings),
                 channel_bindings=_coerce_dict(body.channel_bindings),
-                metadata=_coerce_dict(body.metadata),
+                metadata=normalized_metadata,
             )
         except Exception as error:
             _raise_specialist_write_error(error)
@@ -500,6 +850,20 @@ def register_agent_registry_routes(app) -> None:
             minimum_role="member",
         )
         tenant_id = _tenant_id_for_request(current_user, resolved_workspace_id)
+        existing = await agent_specialist_repository.get_workspace_specialist(
+            install_id,
+            tenant_id=tenant_id,
+            workspace_id=resolved_workspace_id,
+        )
+        if not isinstance(existing, dict):
+            raise HTTPException(status_code=404, detail="Specialist not found.")
+        _require_specialist_config_editable(existing)
+        normalized_metadata = _normalize_install_contract_metadata(
+            install_id=install_id,
+            label=str(existing.get("label") or body.manifest.identity.name or "").strip() or None,
+            agent_kind=agent_registry_repository.SPECIALIST_AGENT_KIND,
+            metadata={**_coerce_dict(existing.get("metadata")), **_coerce_dict(body.metadata)},
+        )
         try:
             record = await agent_specialist_repository.update_workspace_specialist_manifest(
                 install_id,
@@ -511,7 +875,7 @@ def register_agent_registry_routes(app) -> None:
                 runtime_mode=str(body.runtime_mode or "").strip() or None,
                 connector_bindings=_coerce_dict(body.connector_bindings),
                 channel_bindings=_coerce_dict(body.channel_bindings),
-                metadata=_coerce_dict(body.metadata),
+                metadata=normalized_metadata,
             )
         except Exception as error:
             _raise_specialist_write_error(error)
@@ -532,6 +896,14 @@ def register_agent_registry_routes(app) -> None:
             minimum_role="member",
         )
         tenant_id = _tenant_id_for_request(current_user, resolved_workspace_id)
+        existing = await agent_specialist_repository.get_workspace_specialist(
+            install_id,
+            tenant_id=tenant_id,
+            workspace_id=resolved_workspace_id,
+        )
+        if not isinstance(existing, dict):
+            raise HTTPException(status_code=404, detail="Specialist not found.")
+        _require_specialist_config_editable(existing)
         record = await agent_specialist_repository.save_workspace_specialist_bible(
             install_id,
             tenant_id=tenant_id,
@@ -556,6 +928,14 @@ def register_agent_registry_routes(app) -> None:
             minimum_role="member",
         )
         tenant_id = _tenant_id_for_request(current_user, resolved_workspace_id)
+        existing = await agent_specialist_repository.get_workspace_specialist(
+            install_id,
+            tenant_id=tenant_id,
+            workspace_id=resolved_workspace_id,
+        )
+        if not isinstance(existing, dict):
+            raise HTTPException(status_code=404, detail="Specialist not found.")
+        _require_specialist_config_editable(existing)
         record = await agent_specialist_repository.save_workspace_specialist_skill_bindings(
             install_id,
             tenant_id=tenant_id,
@@ -580,6 +960,14 @@ def register_agent_registry_routes(app) -> None:
             minimum_role="member",
         )
         tenant_id = _tenant_id_for_request(current_user, resolved_workspace_id)
+        existing = await agent_specialist_repository.get_workspace_specialist(
+            install_id,
+            tenant_id=tenant_id,
+            workspace_id=resolved_workspace_id,
+        )
+        if not isinstance(existing, dict):
+            raise HTTPException(status_code=404, detail="Specialist not found.")
+        _require_specialist_config_editable(existing)
         record = await agent_specialist_repository.save_workspace_specialist_connector_bindings(
             install_id,
             tenant_id=tenant_id,
@@ -604,6 +992,14 @@ def register_agent_registry_routes(app) -> None:
             minimum_role="member",
         )
         tenant_id = _tenant_id_for_request(current_user, resolved_workspace_id)
+        existing = await agent_specialist_repository.get_workspace_specialist(
+            install_id,
+            tenant_id=tenant_id,
+            workspace_id=resolved_workspace_id,
+        )
+        if not isinstance(existing, dict):
+            raise HTTPException(status_code=404, detail="Specialist not found.")
+        _require_specialist_config_editable(existing)
         try:
             record = await agent_specialist_repository.save_workspace_specialist_channel_bindings(
                 install_id,
@@ -631,6 +1027,14 @@ def register_agent_registry_routes(app) -> None:
             minimum_role="member",
         )
         tenant_id = _tenant_id_for_request(current_user, resolved_workspace_id)
+        existing = await agent_specialist_repository.get_workspace_specialist(
+            install_id,
+            tenant_id=tenant_id,
+            workspace_id=resolved_workspace_id,
+        )
+        if not isinstance(existing, dict):
+            raise HTTPException(status_code=404, detail="Specialist not found.")
+        _require_specialist_config_editable(existing)
         try:
             record = await agent_specialist_repository.save_workspace_specialist_runtime_profile(
                 install_id,
@@ -1129,6 +1533,11 @@ def register_agent_registry_routes(app) -> None:
             tenant_id=tenant_id,
             workspace_id=resolved_workspace_id,
         )
+        runtime_targets = runtime_attachment_service.build_workspace_runtime_targets(
+            tenant_id=tenant_id,
+            workspace_id=resolved_workspace_id,
+            inventory=runtime_attachments,
+        )
         scheduler_status = await bounded_scheduler_service.scheduler_status_snapshot(
             tenant_id=tenant_id,
             workspace_id=resolved_workspace_id,
@@ -1155,6 +1564,7 @@ def register_agent_registry_routes(app) -> None:
             "personal_context": personal_context,
             "unified_memory": unified_memory,
             "runtime_attachments": runtime_attachments,
+            "runtime_targets": runtime_targets,
             "scheduler": scheduler_status,
             "recent_activity": recent_activity,
         }
@@ -1175,6 +1585,124 @@ def register_agent_registry_routes(app) -> None:
             workspace_id=resolved_workspace_id,
         )
 
+    @app.get("/agent-registry/runtime-targets", dependencies=[Depends(member_dependency)])
+    async def list_runtime_targets(
+        workspace_id: Optional[str] = None,
+        current_user=Depends(member_dependency),
+    ):
+        resolved_workspace_id = enforce_workspace_access(
+            current_user,
+            _workspace_id_from_query_or_body(query_workspace_id=workspace_id),
+            minimum_role="viewer",
+        )
+        tenant_id = _tenant_id_for_request(current_user, resolved_workspace_id)
+        return await runtime_attachment_service.list_workspace_runtime_targets(
+            tenant_id=tenant_id,
+            workspace_id=resolved_workspace_id,
+        )
+
+    @app.get("/agent-registry/shared-board", dependencies=[Depends(member_dependency)])
+    async def list_shared_operational_board(
+        workspace_id: Optional[str] = None,
+        include_proposed: bool = False,
+        entry_kind: Optional[str] = None,
+        current_user=Depends(member_dependency),
+    ):
+        resolved_workspace_id = enforce_workspace_access(
+            current_user,
+            _workspace_id_from_query_or_body(query_workspace_id=workspace_id),
+            minimum_role="viewer",
+        )
+        tenant_id = _tenant_id_for_request(current_user, resolved_workspace_id)
+        permission = _shared_board_permission_for_actor(current_user)
+        entries = memory_service.list_shared_operational_board_entries(
+            resolved_workspace_id,
+            actor_permission=permission,
+            include_proposed=bool(include_proposed),
+            entry_kind=str(entry_kind or "").strip() or None,
+            limit=100,
+        )
+        return {
+            "workspace_id": resolved_workspace_id,
+            "tenant_id": tenant_id,
+            "entries": entries,
+            "summary": {
+                "count": len(entries),
+                "permission_tier": permission,
+                "includes_proposed": bool(include_proposed),
+            },
+        }
+
+    @app.get("/agent-registry/shared-board/{entry_id}/history", dependencies=[Depends(member_dependency)])
+    async def get_shared_operational_board_history(
+        entry_id: str,
+        workspace_id: Optional[str] = None,
+        include_proposed: bool = False,
+        current_user=Depends(member_dependency),
+    ):
+        resolved_workspace_id = enforce_workspace_access(
+            current_user,
+            _workspace_id_from_query_or_body(query_workspace_id=workspace_id),
+            minimum_role="viewer",
+        )
+        tenant_id = _tenant_id_for_request(current_user, resolved_workspace_id)
+        permission = _shared_board_permission_for_actor(current_user)
+        history = memory_service.get_shared_operational_board_history(
+            resolved_workspace_id,
+            entry_id,
+            actor_permission=permission,
+            include_proposed=bool(include_proposed),
+        )
+        return {
+            "workspace_id": resolved_workspace_id,
+            "tenant_id": tenant_id,
+            "entry_id": str(entry_id or "").strip(),
+            "history": history,
+            "summary": {
+                "count": len(history),
+                "permission_tier": permission,
+                "includes_proposed": bool(include_proposed),
+            },
+        }
+
+    @app.post("/agent-registry/shared-board", dependencies=[Depends(member_dependency)])
+    async def write_shared_operational_board(
+        body: SharedOperationalBoardWriteRequest,
+        current_user=Depends(member_dependency),
+    ):
+        resolved_workspace_id = enforce_workspace_access(
+            current_user,
+            _workspace_id_from_query_or_body(query_workspace_id=None, body_workspace_id=body.workspace_id),
+            minimum_role="member",
+        )
+        tenant_id = _tenant_id_for_request(current_user, resolved_workspace_id)
+        permission = _shared_board_permission_for_actor(current_user)
+        result = await shared_operational_board_service.write_shared_operational_board_entry(
+            resolved_workspace_id,
+            tenant_id=tenant_id,
+            actor_permission=permission,
+            action=str(body.action or "").strip() or "propose_update",
+            actor={
+                "type": "user",
+                "id": str((current_user or {}).get("user_id") or "").strip() or None,
+                "display_name": str((current_user or {}).get("email") or "").strip() or None,
+                "role": str((current_user or {}).get("role") or "").strip() or None,
+            },
+            entry_id=str(body.entry_id or "").strip() or None,
+            entry_kind=body.entry_kind,
+            title=str(body.title or "").strip(),
+            body=str(body.body or "").strip() or None,
+            links=_coerce_list(body.links),
+            artifacts=_coerce_list(body.artifacts),
+            metadata=_coerce_dict(body.metadata),
+        )
+        return {
+            "workspace_id": resolved_workspace_id,
+            "tenant_id": tenant_id,
+            "permission_tier": permission,
+            **result,
+        }
+
     @app.post("/agent-registry/installs", dependencies=[Depends(member_dependency)])
     async def create_agent_install(
         body: AgentInstallUpsertRequest,
@@ -1187,6 +1715,19 @@ def register_agent_registry_routes(app) -> None:
             minimum_role="member",
         )
         tenant_id = _tenant_id_for_request(current_user, resolved_workspace_id)
+        definition = await agent_registry_repository.get_agent_definition(
+            str(body.agent_definition_id or "").strip(),
+            tenant_id=tenant_id,
+            workspace_id=resolved_workspace_id,
+        )
+        if not isinstance(definition, dict):
+            raise HTTPException(status_code=404, detail="Agent definition not found for installation.")
+        normalized_metadata = _normalize_install_contract_metadata(
+            install_id=None,
+            label=str(body.label or definition.get("name") or "").strip() or None,
+            agent_kind=str(definition.get("agent_kind") or "").strip() or agent_registry_repository.SPECIALIST_AGENT_KIND,
+            metadata=_coerce_dict(body.metadata),
+        )
         install = await agent_registry_repository.create_workspace_agent_install(
             tenant_id=tenant_id,
             workspace_id=resolved_workspace_id,
@@ -1202,7 +1743,7 @@ def register_agent_registry_routes(app) -> None:
             connector_bindings=_coerce_dict(body.connector_bindings),
             memory_scope_overrides=_coerce_dict(body.memory_scope_overrides),
             policy_context_overrides=_coerce_dict(body.policy_context_overrides),
-            metadata=_coerce_dict(body.metadata),
+            metadata=normalized_metadata,
         )
         if not isinstance(install, dict):
             raise HTTPException(status_code=404, detail="Agent definition not found for installation.")
@@ -1294,6 +1835,23 @@ def register_agent_registry_routes(app) -> None:
             minimum_role="member",
         )
         tenant_id = _tenant_id_for_request(current_user, resolved_workspace_id)
+        existing = await agent_registry_repository.get_workspace_agent_install_bundle(
+            install_id,
+            tenant_id=tenant_id,
+            workspace_id=resolved_workspace_id,
+        )
+        if not isinstance(existing, dict):
+            raise HTTPException(status_code=404, detail="Installed agent not found.")
+        normalized_metadata = _normalize_install_contract_metadata(
+            install_id=install_id,
+            label=(
+                str(body.label or existing.get("label") or _coerce_dict(existing.get("agent_definition")).get("name") or "").strip()
+                or None
+            ),
+            agent_kind=str(_coerce_dict(existing.get("agent_definition")).get("agent_kind") or "").strip()
+            or agent_registry_repository.SPECIALIST_AGENT_KIND,
+            metadata={**_coerce_dict(existing.get("metadata")), **_coerce_dict(body.metadata)},
+        )
         install = await agent_registry_repository.update_workspace_agent_install(
             install_id,
             tenant_id=tenant_id,
@@ -1308,7 +1866,7 @@ def register_agent_registry_routes(app) -> None:
             policy_context_overrides=_coerce_dict(body.policy_context_overrides),
             enabled=body.enabled,
             status=str(body.status or "").strip() or None,
-            metadata=_coerce_dict(body.metadata),
+            metadata=normalized_metadata,
         )
         if not isinstance(install, dict):
             raise HTTPException(status_code=404, detail="Installed agent not found.")
@@ -1327,137 +1885,17 @@ def register_agent_registry_routes(app) -> None:
         body: AgentInstallRunRequest,
         current_user=Depends(member_dependency),
     ):
-        _refresh_server_exports()
-        compiled = await template_compiler_service.ensure_install_compiled_artifact(
-            install_id,
-            compiled_by_user_id=str((current_user or {}).get("user_id") or "").strip() or None,
-            force_recompile=bool(body.force_recompile),
-        )
-        install = compiled.get("install") if isinstance(compiled.get("install"), dict) else {}
-        workspace_id = enforce_workspace_access(
-            current_user,
-            str(install.get("workspace_id") or "").strip(),
-            tenant_id=str(install.get("tenant_id") or "").strip() or None,
-            minimum_role="member",
-        )
-        runtime_profile = install.get("runtime_profile") if isinstance(install.get("runtime_profile"), dict) else {}
-        workflow_snapshot = compiled.get("workflow_snapshot") if isinstance(compiled.get("workflow_snapshot"), dict) else {}
-        workflow_id = str(compiled.get("workflow_id") or workflow_snapshot.get("id") or install.get("compiled_workflow_id") or "").strip()
-        workflow_version_id = str(
-            compiled.get("workflow_version_id")
-            or workflow_snapshot.get("workflowVersionId")
-            or install.get("compiled_workflow_version_id")
-            or ""
-        ).strip()
-        if not workflow_id or not workflow_version_id:
-            raise HTTPException(status_code=409, detail="Installed agent is missing a compiled workflow artifact.")
-
-        actor = _current_actor(current_user)
-        thread_id = (
-            str(body.thread_id or "").strip()
-            or str(install.get("thread_id") or "").strip()
-            or f"install-thread-{str(install.get('id') or install_id).strip()}"
-        )
-        session_id = str(body.session_id or "").strip() or thread_id
-        compiled_run_metadata = compiled.get("run_metadata") if isinstance(compiled.get("run_metadata"), dict) else {}
-        runtime_scope = execution_sandbox_service.runtime_scope(
-            runtime_mode=_normalized_runtime_mode(install),
-            runtime_profile=runtime_profile,
-            install=install,
-        )
-        try:
-            runtime_selection = await runtime_attachment_service.resolve_install_runtime_plan(
-                tenant_id=str(install.get("tenant_id") or "").strip(),
-                workspace_id=workspace_id,
-                install=install,
-                requested_machine_target=str(body.machine_target or "").strip() or None,
-                policy_context=_coerce_dict(body.policy_context),
-            )
-        except Exception as error:
-            _raise_runtime_attachment_error(error)
-            raise
-        merged_metadata = {
-            **compiled_run_metadata,
-            **_coerce_dict(body.metadata),
-            "source": "agent_install_run",
-            "workspace_agent_install_id": str(install.get("id") or install_id).strip(),
-            "active_agent_install_id": str(install.get("id") or install_id).strip(),
-            "master_agent_install_id": str(install.get("id") or install_id).strip(),
-            "agent_definition_id": install.get("agent_definition_id"),
-            "agent_definition_version_id": install.get("agent_definition_version_id"),
-            "runtime_profile_id": install.get("runtime_profile_id"),
-            "runtime_mode": _normalized_runtime_mode(install),
-            "runtime_profile_label": runtime_profile.get("label"),
-            "runtime_id": runtime_profile.get("runtime_id"),
-            "machine_id": runtime_profile.get("machine_id"),
-            "runtime_scope": runtime_scope,
-            "runtime_selection": runtime_selection,
-            "runtime_attachment_id": runtime_selection.get("selected_attachment", {}).get("attachment_id"),
-            "runtime_attachment_kind": runtime_selection.get("selected_attachment", {}).get("attachment_kind"),
-            "workspace_runtime_deployment_mode": runtime_selection.get("deployment_mode"),
-            "compiled_workflow_id": workflow_id,
-            "compiled_workflow_version_id": workflow_version_id,
-            "workflow_snapshot": workflow_snapshot,
-            "workflow_definition": workflow_snapshot.get("definition") if isinstance(workflow_snapshot.get("definition"), dict) else None,
-            "owner_user_id": str((current_user or {}).get("user_id") or "").strip() or None,
-            "owner_email": str((current_user or {}).get("email") or "").strip() or None,
-        }
-        if _normalized_runtime_mode(install) == "hosted_secure":
-            merged_metadata["root_folder_uri"] = None
-            merged_metadata["folder_grants"] = []
-            merged_metadata["file_mount_grants"] = []
-            merged_metadata["machine_id"] = None
-            merged_metadata["execution_target"] = str(runtime_selection.get("execution_target_selected") or "cloud")
-            merged_metadata["execution_target_selected"] = str(runtime_selection.get("execution_target_selected") or "cloud")
-        else:
-            merged_metadata["root_folder_uri"] = str(install.get("root_folder_uri") or runtime_profile.get("root_folder_uri") or "").strip() or None
-            merged_metadata["folder_grants"] = list(install.get("folder_grants") or []) if isinstance(install.get("folder_grants"), list) else []
-            merged_metadata["execution_target_selected"] = str(runtime_selection.get("execution_target_selected") or "local_companion")
-        message = str(body.message or "").strip() or str(install.get("label") or install.get("agent_definition", {}).get("name") or "Run installed agent").strip()
-        machine_target = str(runtime_selection.get("machine_target") or "").strip() or None
-        runtime_mode = _normalized_runtime_mode(install)
-        if runtime_mode in {"local_secure", "privileged_device"} and str(runtime_profile.get("runtime_class") or "").strip() != "desktop_companion":
-            raise HTTPException(status_code=409, detail="This specialist requires a desktop companion runtime profile.")
-        if runtime_mode == "privileged_device" and not bool(body.policy_context.get("privileged_runtime_approved")):
-            raise HTTPException(status_code=409, detail="Privileged device execution requires explicit owner approval.")
-        turn_request = AgentTurnRequest(
-            tenant_id=str(install.get("tenant_id") or "").strip(),
-            workspace_id=workspace_id,
-            thread_id=thread_id,
-            session_id=session_id,
-            channel=str(body.channel or "web").strip() or "web",
-            actor=actor,
-            message=message,
-            attachments=[],
-            context_hints={
-                "engine": "orion",
-                "workflow_id": workflow_id,
-                "workflow_version_id": workflow_version_id,
-                "agent_role": str(install.get("agent_definition", {}).get("slug") or "").strip() or None,
-                "metadata": {
-                    **{key: value for key, value in merged_metadata.items() if value not in ("", [], {})},
-                    **{
-                        key: merged_metadata.get(key)
-                        for key in (
-                            "root_folder_uri",
-                            "folder_grants",
-                            "file_mount_grants",
-                            "runtime_scope",
-                            "execution_target",
-                            "execution_target_selected",
-                        )
-                        if key in merged_metadata
-                    },
-                },
-            },
+        return await execute_install_agent_turn(
+            install_id=install_id,
+            current_user=current_user,
+            message=body.message,
+            thread_id=body.thread_id,
+            session_id=body.session_id,
+            channel=body.channel,
             execution_mode=body.execution_mode,
             response_mode=body.response_mode,
-            machine_target=machine_target,
-            policy_context={key: value for key, value in body.policy_context.items() if value not in ("", [], {})},
+            machine_target=body.machine_target,
+            policy_context=body.policy_context,
+            metadata_overrides=body.metadata,
+            force_recompile=body.force_recompile,
         )
-        result = await execute_canonical_agent_turn(
-            turn_request=turn_request,
-            current_user=current_user,
-            run_execution_services=_run_execution_services(),
-        )
-        return normalize_agent_turn_result(result, turn_request=turn_request)

@@ -7,6 +7,7 @@ from server_modules.agent_turn import (
     agent_turn,
     bind_agent_turn_request_meta,
     bind_agent_turn_metadata,
+    build_agent_turn_request,
     build_agent_turn_session_context,
     build_direct_chat_turn_request,
     build_discord_turn_request,
@@ -18,6 +19,7 @@ from server_modules.agent_turn import (
     build_run_start_turn_request,
     ensure_direct_chat_turn_request,
     normalize_turn_policy_context,
+    normalize_server_owned_turn_request,
     resolve_direct_chat_turn_request,
     resolve_agent_turn_request,
     resolve_agent_turn_request_from_runtime_context,
@@ -117,7 +119,6 @@ class AgentTurnTests(unittest.TestCase):
                 "provider": "openai",
                 "model": "gpt-test",
                 "reasoning_effort": "high",
-                "attachments": [{"kind": "file", "uri": "artifact://demo", "name": "demo.txt"}],
             },
             workspace_id="workspace-1",
             thread_id="thread-1",
@@ -131,7 +132,6 @@ class AgentTurnTests(unittest.TestCase):
         self.assertEqual(request.response_mode, "stream")
         self.assertEqual(request.execution_mode, "sync")
         self.assertEqual(request.context_hints["provider"], "openai")
-        self.assertEqual(request.attachments[0].uri, "artifact://demo")
 
     def test_build_run_start_turn_request_and_bind_metadata(self):
         run_request = RunStartRequest(
@@ -153,11 +153,26 @@ class AgentTurnTests(unittest.TestCase):
 
         self.assertEqual(turn_request.execution_mode, "durable")
         self.assertEqual(turn_request.response_mode, "artifact")
-        self.assertEqual(turn_request.machine_target, "local_companion")
+        self.assertIsNone(turn_request.machine_target)
         self.assertEqual(metadata["source"], "runs/start")
         self.assertEqual(metadata["agent_turn_contract_version"], 1)
         self.assertEqual(metadata["agent_turn_request"]["workspace_id"], "workspace-1")
         self.assertEqual(metadata["agent_turn_request"]["actor"]["id"], "user-1")
+
+    def test_build_run_start_turn_request_preserves_explicit_machine_target_only(self):
+        run_request = RunStartRequest(
+            engine="orion",
+            workspace_id="workspace-1",
+            user_goal="Write file demo.txt",
+            metadata={
+                "execution_target": "local_companion",
+                "machine_target": "local-worker-1",
+            },
+        )
+
+        turn_request = build_run_start_turn_request(run_request)
+
+        self.assertEqual(turn_request.machine_target, "local-worker-1")
 
     def test_build_direct_chat_turn_request_tracks_client_request_id_in_context_hints(self):
         request = build_direct_chat_turn_request(
@@ -170,6 +185,53 @@ class AgentTurnTests(unittest.TestCase):
         )
 
         self.assertEqual(request.context_hints["request_id"], "req-123")
+
+    def test_build_direct_chat_turn_request_promotes_serious_task_to_durable_run(self):
+        request = build_direct_chat_turn_request(
+            current_user={"user_id": "user-1", "email": "user@example.com"},
+            body={},
+            workspace_id="workspace-1",
+            thread_id="thread-1",
+            client_request_id="req-serious",
+            message="Research the latest project blockers and draft a summary.",
+        )
+
+        self.assertEqual(request.execution_mode, "durable")
+        self.assertEqual(request.response_mode, "artifact")
+        self.assertEqual(request.context_hints["metadata"]["primary_engine_path"], "durable_run")
+        self.assertEqual(request.context_hints["metadata"]["primary_engine_reason"], "task_markers")
+
+    def test_build_direct_chat_turn_request_keeps_lightweight_question_as_direct_chat(self):
+        request = build_direct_chat_turn_request(
+            current_user={"user_id": "user-1", "email": "user@example.com"},
+            body={},
+            workspace_id="workspace-1",
+            thread_id="thread-1",
+            client_request_id="req-light",
+            message="What model are you using right now?",
+        )
+
+        self.assertEqual(request.execution_mode, "sync")
+        self.assertEqual(request.response_mode, "stream")
+
+    def test_build_agent_turn_request_respects_force_direct_chat_override(self):
+        request = build_agent_turn_request(
+            {
+                "tenant_id": "default",
+                "workspace_id": "workspace-1",
+                "thread_id": "thread-1",
+                "session_id": "thread-1",
+                "channel": "web",
+                "actor": {"type": "user", "id": "user-1"},
+                "message": "Research the latest project blockers and draft a summary.",
+                "execution_mode": "sync",
+                "response_mode": "stream",
+                "context_hints": {"metadata": {"force_direct_chat": True}},
+            }
+        )
+
+        self.assertEqual(request.execution_mode, "sync")
+        self.assertEqual(request.response_mode, "stream")
 
     def test_build_telegram_turn_request_shapes_channel_identity(self):
         request = build_telegram_turn_request(
@@ -487,12 +549,107 @@ class AgentTurnTests(unittest.TestCase):
     def test_resolve_direct_chat_turn_request_normalizes_api_inputs(self):
         resolved = resolve_direct_chat_turn_request(
             current_user={"user_id": "user-1"},
-            body={"message": "hello", "workspace_id": "workspace-1", "thread_id": "thread-1"},
+            body={
+                "message": "hello",
+                "workspace_id": "workspace-1",
+                "thread_id": "thread-1",
+                "channel": "mobile",
+                "metadata": {
+                    "source": "mobile_chat",
+                    "agent_id": "research-agent",
+                },
+            },
             request_signature_fn=lambda body: "req-1",
         )
 
         self.assertEqual(resolved.workspace_id, "workspace-1")
         self.assertEqual(resolved.thread_id, "thread-1")
+
+    def test_resolve_direct_chat_turn_request_rebinds_master_mobile_thread_server_side(self):
+        with patch(
+            "server_modules.agent_turn.agent_registry_repository.build_master_thread_id",
+            return_value="thread-sage",
+        ):
+            resolved = resolve_direct_chat_turn_request(
+                current_user={"user_id": "user-1"},
+                body={
+                    "message": "hello",
+                    "workspace_id": "workspace-1",
+                    "channel": "mobile",
+                    "session_id": "session-1",
+                    "metadata": {
+                        "source": "mobile_chat",
+                        "agent_id": "assistant",
+                    },
+                },
+                request_signature_fn=lambda body: "req-1",
+            )
+
+        self.assertEqual(resolved.workspace_id, "workspace-1")
+        self.assertEqual(resolved.thread_id, "thread-sage")
+        self.assertEqual(resolved.turn_request.thread_id, "thread-sage")
+        self.assertEqual(resolved.turn_request.session_id, "session-1")
+
+    def test_normalize_server_owned_turn_request_rebinds_master_web_thread(self):
+        request = AgentTurnRequest(
+            tenant_id="tenant-1",
+            workspace_id="workspace-1",
+            thread_id="client-thread",
+            session_id="session-1",
+            channel="web",
+            actor=TurnActor(type="user", id="user-1", display_name="Alice"),
+            message="hello",
+            execution_mode="sync",
+            response_mode="stream",
+            context_hints={
+                "metadata": {
+                    "source": "direct_chat",
+                    "master_agent_install_id": "install-1",
+                },
+            },
+        )
+
+        with patch(
+            "server_modules.agent_turn.agent_registry_repository.build_master_thread_id",
+            return_value="thread-sage",
+        ):
+            normalized = normalize_server_owned_turn_request(
+                current_user={"user_id": "user-1"},
+                turn_request=request,
+            )
+
+        self.assertEqual(normalized.thread_id, "thread-sage")
+        self.assertEqual(normalized.session_id, "session-1")
+        self.assertEqual(normalized.context_hints["thread_id"], "thread-sage")
+        self.assertEqual(normalized.context_hints["metadata"]["client_thread_id"], "client-thread")
+        self.assertTrue(normalized.context_hints["metadata"]["server_owned_thread"])
+
+    def test_normalize_server_owned_turn_request_preserves_specialist_mobile_thread(self):
+        request = AgentTurnRequest(
+            tenant_id="tenant-1",
+            workspace_id="workspace-1",
+            thread_id="specialist-thread",
+            session_id="session-1",
+            channel="mobile",
+            actor=TurnActor(type="user", id="user-1", display_name="Alice"),
+            message="hello",
+            execution_mode="sync",
+            response_mode="stream",
+            context_hints={
+                "metadata": {
+                    "source": "mobile_chat",
+                    "agent_id": "research-agent",
+                },
+            },
+        )
+
+        normalized = normalize_server_owned_turn_request(
+            current_user={"user_id": "user-1"},
+            turn_request=request,
+        )
+
+        self.assertEqual(normalized.thread_id, "specialist-thread")
+        self.assertNotIn("thread_id", normalized.context_hints)
 
     def test_build_discord_turn_request_preserves_channel_metadata(self):
         request = build_discord_turn_request(

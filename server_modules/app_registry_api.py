@@ -277,6 +277,16 @@ def resolve_app_permissions(app_id: str) -> List[str]:
     return [str(item).strip().lower() for item in permissions if str(item).strip()]
 
 
+def _model_to_dict(value: Any) -> Dict[str, Any]:
+    if value is None:
+        return {}
+    if hasattr(value, "model_dump"):
+        return dict(value.model_dump())
+    if hasattr(value, "dict"):
+        return dict(value.dict())
+    return dict(value) if isinstance(value, dict) else {}
+
+
 def register_app_registry_routes(app) -> None:
     import server as _server
 
@@ -382,11 +392,13 @@ def register_app_registry_routes(app) -> None:
     @app.post("/apps/bridge/captain", dependencies=[Depends(require_api_key)])
     async def app_bridge_captain(body: AppCaptainBridgeRequest, current_user=Depends(require_api_key)):
         from server_modules import app_bridge_service
+        from server_modules import agent_registry_api
         from server_modules.auth import enforce_workspace_access, workspace_tenant_id
 
         payload = body.model_dump() if hasattr(body, "model_dump") else body.dict()
         workspace_id = enforce_workspace_access(current_user, payload.get("workspace_id"), minimum_role="viewer")
         tenant_id = workspace_tenant_id(current_user, workspace_id)
+        request_text = str(payload.get("request_text") or "").strip()
         bridge = app_bridge_service.normalize_bridge_contract(
             app_id=str(payload.get("app_id") or "").strip(),
             bridge_kind="app_to_sage",
@@ -394,10 +406,34 @@ def register_app_registry_routes(app) -> None:
             context_envelope=payload.get("context_envelope") if isinstance(payload.get("context_envelope"), dict) else None,
             metadata={
                 **(dict(payload.get("metadata") or {}) if isinstance(payload.get("metadata"), dict) else {}),
-                "request_text": str(payload.get("request_text") or "").strip() or None,
+                "request_text": request_text or None,
             },
             installed_only=True,
         )
+        turn_payload: Dict[str, Any] = {}
+        if request_text:
+            master_install = await agent_registry_api.agent_registry_repository.get_workspace_master_agent_install(
+                tenant_id=tenant_id,
+                workspace_id=workspace_id,
+                created_by_user_id=str((current_user or {}).get("user_id") or "").strip() or None,
+            )
+            if not isinstance(master_install, dict):
+                raise HTTPException(status_code=500, detail="Workspace master agent is unavailable.")
+            turn_result = await agent_registry_api.execute_install_agent_turn(
+                install_id=str(master_install.get("id") or "").strip(),
+                current_user=current_user,
+                message=request_text,
+                channel="web",
+                execution_mode="durable",
+                response_mode="artifact",
+                metadata_overrides={
+                    "source": "apps.bridge.captain",
+                    "app_id": bridge.get("app_id"),
+                    "app_bridge": bridge,
+                    "app_context_envelope": bridge.get("context_envelope"),
+                },
+            )
+            turn_payload = _model_to_dict(turn_result)
         audit = await app_bridge_service.record_app_bridge_audit(
             tenant_id=tenant_id,
             workspace_id=workspace_id,
@@ -420,16 +456,22 @@ def register_app_registry_routes(app) -> None:
                 "app_context_envelope": bridge.get("context_envelope"),
             },
             "audit": {"activity_event_id": str((audit or {}).get("id") or "").strip() or None},
+            "turn_result": turn_payload,
+            "run_id": str(turn_payload.get("run_id") or "").strip() or None,
+            "thread_id": str(turn_payload.get("thread_id") or "").strip() or None,
+            "session_id": str(turn_payload.get("session_id") or "").strip() or None,
         }
 
     @app.post("/apps/bridge/specialist", dependencies=[Depends(require_api_key)])
     async def app_bridge_specialist(body: AppSpecialistBridgeRequest, current_user=Depends(require_api_key)):
         from server_modules import app_bridge_service
+        from server_modules import agent_registry_api
         from server_modules.auth import enforce_workspace_access, workspace_tenant_id
 
         payload = body.model_dump() if hasattr(body, "model_dump") else body.dict()
         workspace_id = enforce_workspace_access(current_user, payload.get("workspace_id"), minimum_role="viewer")
         tenant_id = workspace_tenant_id(current_user, workspace_id)
+        request_text = str(payload.get("request_text") or "").strip()
         bridge = app_bridge_service.normalize_bridge_contract(
             app_id=str(payload.get("app_id") or "").strip(),
             bridge_kind="app_to_specialist",
@@ -441,10 +483,40 @@ def register_app_registry_routes(app) -> None:
             context_envelope=payload.get("context_envelope") if isinstance(payload.get("context_envelope"), dict) else None,
             metadata={
                 **(dict(payload.get("metadata") or {}) if isinstance(payload.get("metadata"), dict) else {}),
-                "request_text": str(payload.get("request_text") or "").strip() or None,
+                "request_text": request_text or None,
             },
             installed_only=True,
         )
+        resolved_target = dict(bridge.get("target") or {}) if isinstance(bridge.get("target"), dict) else {}
+        if request_text:
+            target_install = await agent_registry_api.resolve_specialist_install_for_app_bridge(
+                tenant_id=tenant_id,
+                workspace_id=workspace_id,
+                target_install_id=str(resolved_target.get("target_install_id") or "").strip() or None,
+                target_capability=str(resolved_target.get("target_capability") or "").strip() or None,
+            )
+            resolved_target["target_install_id"] = str(target_install.get("id") or "").strip() or resolved_target.get("target_install_id")
+        bridge = {
+            **bridge,
+            "target": resolved_target,
+        }
+        turn_payload: Dict[str, Any] = {}
+        if request_text:
+            turn_result = await agent_registry_api.execute_install_agent_turn(
+                install_id=str(resolved_target.get("target_install_id") or "").strip(),
+                current_user=current_user,
+                message=request_text,
+                channel="web",
+                execution_mode="durable",
+                response_mode="artifact",
+                metadata_overrides={
+                    "source": "apps.bridge.specialist",
+                    "app_id": bridge.get("app_id"),
+                    "app_bridge": bridge,
+                    "app_context_envelope": bridge.get("context_envelope"),
+                },
+            )
+            turn_payload = _model_to_dict(turn_result)
         audit = await app_bridge_service.record_app_bridge_audit(
             tenant_id=tenant_id,
             workspace_id=workspace_id,
@@ -467,6 +539,10 @@ def register_app_registry_routes(app) -> None:
                 "app_context_envelope": bridge.get("context_envelope"),
             },
             "audit": {"activity_event_id": str((audit or {}).get("id") or "").strip() or None},
+            "turn_result": turn_payload,
+            "run_id": str(turn_payload.get("run_id") or "").strip() or None,
+            "thread_id": str(turn_payload.get("thread_id") or "").strip() or None,
+            "session_id": str(turn_payload.get("session_id") or "").strip() or None,
         }
 
     @app.post("/apps/bridge/runtime-action", dependencies=[Depends(require_api_key)])

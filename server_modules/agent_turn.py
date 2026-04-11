@@ -2,8 +2,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 import logging
+import re
 from typing import Any, Dict, List, Literal, Optional, Protocol
 
+from server_modules import agent_registry_repository
 from server_modules import session_service
 from server_modules import thread_service
 from server_modules.telemetry import get_tracer, set_span_attributes
@@ -15,6 +17,72 @@ SessionMode = Literal["copilot", "agent"]
 
 LOGGER = logging.getLogger(__name__)
 VALID_SESSION_MODES = {"copilot", "agent"}
+LIGHTWEIGHT_DIRECT_CHAT_PREFIXES = (
+    "what ",
+    "what's ",
+    "whats ",
+    "why ",
+    "how ",
+    "who ",
+    "when ",
+    "where ",
+    "which ",
+    "is ",
+    "are ",
+    "can ",
+    "could ",
+    "would ",
+    "will ",
+    "should ",
+    "do ",
+    "does ",
+    "did ",
+    "tell me ",
+    "explain ",
+)
+SERIOUS_TASK_MARKERS = (
+    "research",
+    "draft",
+    "prepare",
+    "create",
+    "generate",
+    "build",
+    "write",
+    "review",
+    "summarize",
+    "summarise",
+    "analyze",
+    "analyse",
+    "investigate",
+    "inspect",
+    "check",
+    "organize",
+    "compile",
+    "open",
+    "run",
+    "send",
+)
+SERIOUS_SEQUENCE_MARKERS = (
+    " and ",
+    " then ",
+    " after ",
+    " before ",
+)
+SERIOUS_OUTCOME_MARKERS = (
+    " summary",
+    " report",
+    " plan",
+    " draft",
+    " checklist",
+    " artifact",
+    " file",
+    " slides",
+    " presentation",
+    " email",
+    " notes",
+)
+SERVER_OWNED_DIRECT_CHAT_CHANNELS = {"web", "mobile"}
+MASTER_DIRECT_CHAT_AGENT_IDS = {"assistant", "sage"}
 
 
 @dataclass(slots=True)
@@ -95,13 +163,21 @@ def _metadata_dict(value: Any) -> Dict[str, Any]:
     return dict(value) if isinstance(value, dict) else {}
 
 
+def _direct_chat_request_metadata(body: Dict[str, Any]) -> Dict[str, Any]:
+    context_hints = body.get("context_hints") if isinstance(body.get("context_hints"), dict) else {}
+    metadata = context_hints.get("metadata") if isinstance(context_hints.get("metadata"), dict) else {}
+    if metadata:
+        return dict(metadata)
+    return _metadata_dict(body.get("metadata"))
+
+
 def _current_user_is_owner(current_user: Any) -> bool:
     if not isinstance(current_user, dict):
         return False
     if bool(current_user.get("is_admin")):
         return True
     auth_type = str(current_user.get("auth_type") or "").strip().lower()
-    if auth_type in {"api_key", "disabled"}:
+    if auth_type == "api_key":
         return True
     return str(current_user.get("role") or "").strip().lower() == "owner"
 
@@ -223,6 +299,50 @@ def _request_actor_display_name(current_user: Any, actor_id: str) -> str:
     return actor_id
 
 
+def _should_server_own_direct_chat_thread(
+    *,
+    channel: Any,
+    execution_mode: Any = "sync",
+    response_mode: Any = "stream",
+    metadata: Optional[Dict[str, Any]] = None,
+) -> bool:
+    if normalize_channel(channel) not in SERVER_OWNED_DIRECT_CHAT_CHANNELS:
+        return False
+    if str(execution_mode or "").strip().lower() != "sync":
+        return False
+    if str(response_mode or "").strip().lower() != "stream":
+        return False
+    payload = _metadata_dict(metadata)
+    agent_id = str(payload.get("agent_id") or "").strip().lower()
+    if agent_id and agent_id not in MASTER_DIRECT_CHAT_AGENT_IDS:
+        return False
+    if str(payload.get("master_agent_install_id") or payload.get("workspace_agent_install_id") or "").strip():
+        return True
+    if agent_id in MASTER_DIRECT_CHAT_AGENT_IDS:
+        return True
+    source = str(payload.get("source") or "").strip().lower()
+    return source in {"", "direct_chat", "mobile_chat"}
+
+
+def _canonical_direct_chat_thread_id(
+    *,
+    current_user: Any,
+    workspace_id: str,
+    fallback_thread_id: str = "",
+    fallback_actor_id: str = "",
+) -> str:
+    owner_user_id = (
+        str((current_user or {}).get("user_id") or "").strip()
+        or str(fallback_actor_id or "").strip()
+    )
+    if owner_user_id:
+        return agent_registry_repository.build_master_thread_id(
+            workspace_id=str(workspace_id or "default").strip() or "default",
+            owner_user_id=owner_user_id,
+        )
+    return str(fallback_thread_id or "direct-chat").strip() or "direct-chat"
+
+
 def serialize_turn_actor(actor: TurnActor) -> Dict[str, Any]:
     return {
         "type": str(actor.type or "").strip() or "user",
@@ -289,9 +409,81 @@ def resolve_agent_turn_request_from_runtime_context(
     )
 
 
+def _compact_turn_text(value: Any) -> str:
+    return re.sub(r"\s+", " ", str(value or "")).strip().lower()
+
+
+def _looks_like_lightweight_direct_chat(compact_message: str) -> bool:
+    if not compact_message:
+        return True
+    if compact_message.endswith("?"):
+        return True
+    return any(compact_message.startswith(prefix) for prefix in LIGHTWEIGHT_DIRECT_CHAT_PREFIXES)
+
+
+def _serious_task_marker_count(compact_message: str) -> int:
+    if not compact_message:
+        return 0
+    count = 0
+    for marker in SERIOUS_TASK_MARKERS:
+        if re.search(rf"\b{re.escape(marker)}\b", compact_message):
+            count += 1
+    return count
+
+
+def _promote_turn_request_to_primary_engine_path(request: AgentTurnRequest) -> AgentTurnRequest:
+    if request.execution_mode != "sync" or request.response_mode != "stream":
+        return request
+    compact_message = _compact_turn_text(request.message)
+    if not compact_message:
+        return request
+    context_hints = dict(request.context_hints or {})
+    metadata = _metadata_dict(context_hints.get("metadata"))
+    if bool(context_hints.get("force_direct_chat")) or bool(metadata.get("force_direct_chat")):
+        return request
+
+    promotion_reason = ""
+    if bool(context_hints.get("force_durable_run")) or bool(metadata.get("force_durable_run")):
+        promotion_reason = "explicit_override"
+    elif request.attachments:
+        promotion_reason = "attachments_present"
+    else:
+        marker_count = _serious_task_marker_count(compact_message)
+        sequence_requested = any(marker in compact_message for marker in SERIOUS_SEQUENCE_MARKERS)
+        outcome_requested = any(marker in compact_message for marker in SERIOUS_OUTCOME_MARKERS)
+        if not _looks_like_lightweight_direct_chat(compact_message):
+            if marker_count >= 2:
+                promotion_reason = "task_markers"
+            elif marker_count >= 1 and (sequence_requested or outcome_requested or len(compact_message) >= 48):
+                promotion_reason = "task_markers"
+
+    if not promotion_reason:
+        return request
+
+    next_metadata = dict(metadata)
+    next_metadata["primary_engine_path"] = "durable_run"
+    next_metadata["primary_engine_reason"] = promotion_reason
+    context_hints["metadata"] = next_metadata
+    return AgentTurnRequest(
+        tenant_id=request.tenant_id,
+        workspace_id=request.workspace_id,
+        thread_id=request.thread_id,
+        session_id=request.session_id,
+        channel=request.channel,
+        actor=request.actor,
+        message=request.message,
+        attachments=list(request.attachments or []),
+        context_hints=context_hints,
+        execution_mode="durable",
+        response_mode="artifact",
+        machine_target=request.machine_target,
+        policy_context=dict(request.policy_context or {}),
+    )
+
+
 def build_agent_turn_request(payload: Dict[str, Any]) -> AgentTurnRequest:
     actor_payload = payload.get("actor") if isinstance(payload.get("actor"), dict) else {}
-    return AgentTurnRequest(
+    request = AgentTurnRequest(
         tenant_id=str(payload.get("tenant_id") or "").strip(),
         workspace_id=str(payload.get("workspace_id") or "").strip(),
         thread_id=(
@@ -317,6 +509,7 @@ def build_agent_turn_request(payload: Dict[str, Any]) -> AgentTurnRequest:
         machine_target=str(payload.get("machine_target") or "").strip() or None,
         policy_context=payload.get("policy_context") if isinstance(payload.get("policy_context"), dict) else {},
     )
+    return _promote_turn_request_to_primary_engine_path(request)
 
 
 def build_inbound_agent_turn_request(
@@ -324,6 +517,7 @@ def build_inbound_agent_turn_request(
     tenant_id: str = "",
     workspace_id: str,
     session_id: str,
+    thread_id: Optional[str] = None,
     channel: str,
     actor_type: str,
     actor_id: str,
@@ -336,11 +530,13 @@ def build_inbound_agent_turn_request(
     machine_target: Optional[str] = None,
     policy_context: Optional[Dict[str, Any]] = None,
 ) -> AgentTurnRequest:
+    resolved_session_id = str(session_id or "agent-turn").strip() or "agent-turn"
+    resolved_thread_id = str(thread_id or resolved_session_id).strip() or resolved_session_id
     return AgentTurnRequest(
         tenant_id=str(tenant_id or actor_id or "default").strip() or "default",
         workspace_id=str(workspace_id or "default").strip() or "default",
-        thread_id=str(session_id or "agent-turn").strip() or "agent-turn",
-        session_id=str(session_id or "agent-turn").strip() or "agent-turn",
+        thread_id=resolved_thread_id,
+        session_id=resolved_session_id,
         channel=normalize_channel(channel),
         actor=TurnActor(
             type=str(actor_type or "user").strip() or "user",
@@ -379,7 +575,7 @@ def build_direct_chat_turn_request(
         "max_iterations": body.get("max_iterations"),
         "metadata": body_metadata,
     }
-    return AgentTurnRequest(
+    request = AgentTurnRequest(
         tenant_id=str(body.get("tenant_id") or actor_id or "default").strip() or "default",
         workspace_id=str(workspace_id or "default").strip() or "default",
         thread_id=str(thread_id or client_request_id or "direct-chat").strip() or "direct-chat",
@@ -401,6 +597,56 @@ def build_direct_chat_turn_request(
         response_mode="stream",
         machine_target=str(body.get("machine_target") or "").strip() or None,
         policy_context=policy_context,
+    )
+    return _promote_turn_request_to_primary_engine_path(request)
+
+
+def normalize_server_owned_turn_request(
+    *,
+    current_user: Any,
+    turn_request: AgentTurnRequest,
+) -> AgentTurnRequest:
+    metadata = _metadata_dict(turn_request.context_hints.get("metadata"))
+    if not _should_server_own_direct_chat_thread(
+        channel=turn_request.channel,
+        execution_mode=turn_request.execution_mode,
+        response_mode=turn_request.response_mode,
+        metadata=metadata,
+    ):
+        return turn_request
+
+    resolved_thread_id = _canonical_direct_chat_thread_id(
+        current_user=current_user,
+        workspace_id=turn_request.workspace_id,
+        fallback_thread_id=turn_request.thread_id or turn_request.session_id,
+        fallback_actor_id=turn_request.actor.id,
+    )
+    if resolved_thread_id == str(turn_request.thread_id or "").strip():
+        return turn_request
+
+    next_metadata = dict(metadata)
+    client_thread_id = str(turn_request.thread_id or "").strip()
+    if client_thread_id:
+        next_metadata["client_thread_id"] = client_thread_id
+    next_metadata["server_owned_thread"] = True
+
+    next_context_hints = dict(turn_request.context_hints or {})
+    next_context_hints["thread_id"] = resolved_thread_id
+    next_context_hints["metadata"] = next_metadata
+    return AgentTurnRequest(
+        tenant_id=turn_request.tenant_id,
+        workspace_id=turn_request.workspace_id,
+        thread_id=resolved_thread_id,
+        session_id=turn_request.session_id,
+        channel=turn_request.channel,
+        actor=turn_request.actor,
+        message=turn_request.message,
+        attachments=list(turn_request.attachments or []),
+        context_hints=next_context_hints,
+        execution_mode=turn_request.execution_mode,
+        response_mode=turn_request.response_mode,
+        machine_target=turn_request.machine_target,
+        policy_context=dict(turn_request.policy_context or {}),
     )
 
 
@@ -604,7 +850,23 @@ def resolve_direct_chat_turn_request(
     if not message:
         raise ValueError("Chat message is required.")
     workspace_id = str(body.get("workspace_id") or "default").strip() or "default"
-    thread_id = str(body.get("thread_id") or "").strip() or "direct-chat"
+    metadata = _direct_chat_request_metadata(body)
+    requested_thread_id = str(body.get("thread_id") or "").strip()
+    request_body = dict(body)
+    if _should_server_own_direct_chat_thread(
+        channel=body.get("channel") or "web",
+        metadata=metadata,
+    ):
+        thread_id = _canonical_direct_chat_thread_id(
+            current_user=current_user,
+            workspace_id=workspace_id,
+            fallback_thread_id=requested_thread_id,
+            fallback_actor_id=_request_actor_id(current_user, metadata),
+        )
+        if requested_thread_id and not str(request_body.get("session_id") or "").strip():
+            request_body["session_id"] = requested_thread_id
+    else:
+        thread_id = requested_thread_id or "direct-chat"
     client_request_id = (
         str(body.get("client_request_id") or "").strip()
         or str(request_signature_fn(body) if callable(request_signature_fn) else "").strip()
@@ -612,7 +874,7 @@ def resolve_direct_chat_turn_request(
     )
     turn_request = build_direct_chat_turn_request(
         current_user=current_user,
-        body=body,
+        body=request_body,
         workspace_id=workspace_id,
         thread_id=thread_id,
         client_request_id=client_request_id,
@@ -717,8 +979,6 @@ def build_run_start_turn_request(req: Any) -> AgentTurnRequest:
         response_mode="artifact",
         machine_target=(
             str(metadata.get("machine_target") or "").strip()
-            or str(metadata.get("execution_target_selected") or "").strip()
-            or str(metadata.get("execution_target") or "").strip()
             or None
         ),
         policy_context={key: value for key, value in policy_context.items() if value not in (None, "", [], {})},

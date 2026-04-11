@@ -43,6 +43,12 @@ class LocalRuntimeStateSnapshot:
     runtime_registrations: Dict[str, Dict[str, Any]] = field(default_factory=dict)
 
 
+class OutboxRetryLater(RuntimeError):
+    def __init__(self, message: str, *, retry_delay_seconds: int = 5) -> None:
+        super().__init__(str(message or "retry later"))
+        self.retry_delay_seconds = max(1, int(retry_delay_seconds or 1))
+
+
 def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
@@ -331,6 +337,40 @@ def emit_notification_event(
     )
 
 
+def emit_channel_run_delivery_event(
+    *,
+    channel: str,
+    tenant_id: str,
+    workspace_id: str,
+    run_id: str,
+    connector_id: str,
+    payload: Optional[Dict[str, Any]] = None,
+    trace_id: str = "",
+    idempotency_key: str = "",
+    persist_outbox_event_fn: Optional[Callable[..., Any]] = None,
+) -> OutboxEvent:
+    channel_token = str(channel or "").strip().lower()
+    connector_token = str(connector_id or "").strip()
+    run_token = str(run_id or "").strip()
+    if not channel_token or not connector_token or not run_token:
+        raise ValueError("Channel delivery outbox events require channel, connector_id, and run_id.")
+    resolved_payload = dict(payload or {})
+    resolved_payload.setdefault("channel", channel_token)
+    resolved_payload.setdefault("connector_id", connector_token)
+    resolved_payload.setdefault("run_id", run_token)
+    resolved_payload.setdefault("emitted_at", _utc_now_iso())
+    return emit_runtime_event(
+        event_type="channel_run_delivery",
+        tenant_id=tenant_id,
+        workspace_id=workspace_id,
+        run_id=run_token,
+        trace_id=trace_id,
+        idempotency_key=idempotency_key or f"channel_run_delivery:{channel_token}:{connector_token}:{run_token}",
+        payload=resolved_payload,
+        persist_outbox_event_fn=persist_outbox_event_fn,
+    )
+
+
 def _outbox_event_from_item(item: Mapping[str, Any]) -> Optional[OutboxEvent]:
     if not isinstance(item, Mapping):
         return None
@@ -359,6 +399,9 @@ def _outbox_event_from_item(item: Mapping[str, Any]) -> Optional[OutboxEvent]:
 
 def _delivery_text_for_event(event: OutboxEvent) -> str:
     payload = event.payload if isinstance(event.payload, dict) else {}
+    if event.event_type == "channel_run_delivery":
+        channel = str(payload.get("channel") or "").strip() or "channel"
+        return f"Pending {channel} delivery for run {event.run_id or 'unknown'}."
     if event.event_type == "approval_requested":
         prompt = str(payload.get("prompt") or "").strip()
         return prompt or f"Approval requested for run {event.run_id or 'unknown'}."
@@ -385,6 +428,14 @@ def deliver_outbox_event(
     *,
     append_channel_event_item_fn: Optional[Callable[..., Any]] = None,
 ) -> bool:
+    if event.event_type == "channel_run_delivery":
+        try:
+            from server_modules.connectors.channel_delivery_outbox_service import (
+                deliver_channel_run_delivery_outbox_event,
+            )
+        except Exception as exc:
+            raise RuntimeError(f"channel delivery outbox service unavailable: {exc}") from exc
+        return bool(deliver_channel_run_delivery_outbox_event(event))
     if append_channel_event_item_fn is None:
         try:
             from server_modules import runtime_events
@@ -506,6 +557,7 @@ def deliver_due_outbox_events_once(
 
     delivered_ids: list[str] = []
     failed_ids: list[str] = []
+    deferred_ids: list[str] = []
     poisoned_ids: list[str] = []
     items = list_undelivered_outbox_events_fn(
         older_than_seconds=max(0, int(older_than_seconds or 0)),
@@ -519,6 +571,21 @@ def deliver_due_outbox_events_once(
             delivered = bool(deliver_event_fn(event))
             if not delivered:
                 raise RuntimeError("delivery sink returned false")
+        except OutboxRetryLater as exc:
+            retry_delay_seconds = max(1, int(exc.retry_delay_seconds or 1))
+            error_message = str(exc or "retry later").strip() or "retry later"
+            try:
+                record_outbox_delivery_failure_fn(
+                    event.event_id,
+                    error_text=error_message,
+                    retry_delay_seconds=retry_delay_seconds,
+                    poison=False,
+                    increment_retry=False,
+                )
+            except Exception as failure_exc:
+                LOGGER.warning("Failed to defer outbox event %s: %s", event.event_id, failure_exc)
+            deferred_ids.append(event.event_id)
+            continue
         except Exception as exc:
             next_attempt = event.retry_count + 1
             retry_delay_seconds = _delivery_retry_delay_for_attempt(next_attempt)
@@ -530,6 +597,7 @@ def deliver_due_outbox_events_once(
                     error_text=error_message,
                     retry_delay_seconds=retry_delay_seconds,
                     poison=poison,
+                    increment_retry=True,
                 )
             except Exception as failure_exc:
                 LOGGER.warning("Failed to record outbox delivery failure for %s: %s", event.event_id, failure_exc)
@@ -554,9 +622,10 @@ def deliver_due_outbox_events_once(
         }
     )
     return {
-        "attempted": len(delivered_ids) + len(failed_ids),
+        "attempted": len(delivered_ids) + len(failed_ids) + len(deferred_ids),
         "delivered_ids": delivered_ids,
         "failed_ids": failed_ids,
+        "deferred_ids": deferred_ids,
         "poisoned_ids": poisoned_ids,
         "status": status,
     }

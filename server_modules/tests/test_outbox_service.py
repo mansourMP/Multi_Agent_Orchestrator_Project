@@ -45,6 +45,24 @@ class OutboxServiceTests(unittest.TestCase):
         self.assertEqual(event.event_type, "artifact_created")
         self.assertEqual(persisted[0]["payload"]["artifact_path"], "/tmp/shot.png")
 
+    def test_emit_channel_run_delivery_event_persists_outbox_payload(self) -> None:
+        persisted = []
+
+        event = outbox_service.emit_channel_run_delivery_event(
+            channel="telegram",
+            tenant_id="tenant-1",
+            workspace_id="ws-1",
+            run_id="run-1",
+            connector_id="conn-1",
+            trace_id="trace-1",
+            payload={"chat_id": "chat-1"},
+            persist_outbox_event_fn=lambda **kwargs: persisted.append(kwargs),
+        )
+
+        self.assertEqual(event.event_type, "channel_run_delivery")
+        self.assertEqual(persisted[0]["payload"]["channel"], "telegram")
+        self.assertEqual(persisted[0]["payload"]["connector_id"], "conn-1")
+
     def test_persist_local_runtime_state_builds_normalized_snapshot(self) -> None:
         captured = {}
 
@@ -184,6 +202,35 @@ class OutboxServiceTests(unittest.TestCase):
         self.assertEqual(result["delivered_ids"], ["evt-good"])
         self.assertEqual(result["status"]["last_delivery_error"]["event_id"], "evt-bad")
         self.assertEqual(result["status"]["poisoned_count"], 1)
+
+    def test_deliver_due_outbox_events_once_defers_retry_later_without_increment(self) -> None:
+        failures = []
+        result = outbox_service.deliver_due_outbox_events_once(
+            list_undelivered_outbox_events_fn=lambda **kwargs: [
+                {
+                    "event_id": "evt-pending",
+                    "event_type": "channel_run_delivery",
+                    "tenant_id": "tenant-1",
+                    "workspace_id": "ws-1",
+                    "run_id": "run-1",
+                    "trace_id": "trace-1",
+                    "idempotency_key": "channel_run_delivery:telegram:conn-1:run-1",
+                    "payload": {"channel": "telegram", "connector_id": "conn-1"},
+                    "retry_count": 0,
+                }
+            ],
+            mark_outbox_event_delivered_fn=lambda event_id: None,
+            record_outbox_delivery_failure_fn=lambda event_id, **kwargs: failures.append((event_id, kwargs)),
+            deliver_event_fn=lambda event: (_ for _ in ()).throw(
+                outbox_service.OutboxRetryLater("pending terminal state", retry_delay_seconds=3)
+            ),
+            get_outbox_delivery_status_fn=lambda: {"undelivered_count": 1, "poisoned_count": 0},
+        )
+
+        self.assertEqual(result["deferred_ids"], ["evt-pending"])
+        self.assertEqual(failures[0][0], "evt-pending")
+        self.assertEqual(failures[0][1]["retry_delay_seconds"], 3)
+        self.assertFalse(failures[0][1]["increment_retry"])
 
     def test_deliver_outbox_event_uses_stable_ids_for_duplicate_safety(self) -> None:
         channel_events = []

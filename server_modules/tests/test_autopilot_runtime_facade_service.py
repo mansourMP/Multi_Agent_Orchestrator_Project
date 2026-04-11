@@ -76,6 +76,11 @@ class _FakeWebhookBridge:
         return {"webhook": kwargs}
 
 
+class _FakeTelegramWebhookBridge:
+    def handle_webhook(self, **kwargs):
+        return {"telegram_webhook": kwargs}
+
+
 class AutopilotRuntimeFacadeServiceTests(unittest.TestCase):
     def _service(self, *, namespace=None, server=None):
         namespace = namespace or {"existing": "value"}
@@ -83,6 +88,7 @@ class AutopilotRuntimeFacadeServiceTests(unittest.TestCase):
         event_bridge = _FakeEventBridge()
         terminal_bridge = _FakeTerminalBridge()
         webhook_bridge = _FakeWebhookBridge()
+        telegram_webhook_bridge = _FakeTelegramWebhookBridge()
         server_box = {"value": server}
         imported = types.SimpleNamespace(
             EXPORTED_FLAG=True,
@@ -99,8 +105,19 @@ class AutopilotRuntimeFacadeServiceTests(unittest.TestCase):
             event_bridge_service=lambda: event_bridge,
             terminal_bridge_service=lambda: terminal_bridge,
             webhook_bridge_service=lambda: webhook_bridge,
+            telegram_webhook_bridge_service=lambda: telegram_webhook_bridge,
         )
-        return service, namespace, server_box, imported, state_bridge, event_bridge, terminal_bridge, webhook_bridge
+        return (
+            service,
+            namespace,
+            server_box,
+            imported,
+            state_bridge,
+            event_bridge,
+            terminal_bridge,
+            webhook_bridge,
+            telegram_webhook_bridge,
+        )
 
     def test_init_runtime_imports_server_once_and_syncs_selected_globals(self) -> None:
         service, namespace, server_box, imported, *_ = self._service()
@@ -114,7 +131,7 @@ class AutopilotRuntimeFacadeServiceTests(unittest.TestCase):
         self.assertEqual(namespace["WHATSAPP_AUTOPILOT_STATE"], {"active": True})
 
     def test_state_wrappers_delegate_to_state_bridge(self) -> None:
-        service, _namespace, _server_box, _imported, state_bridge, _event_bridge, _terminal_bridge, _webhook_bridge = self._service()
+        service, _namespace, _server_box, _imported, state_bridge, _event_bridge, _terminal_bridge, _webhook_bridge, _telegram_webhook_bridge = self._service()
 
         service.load_telegram_autopilot_state()
         service.load_whatsapp_autopilot_state()
@@ -133,7 +150,7 @@ class AutopilotRuntimeFacadeServiceTests(unittest.TestCase):
         self.assertEqual(service.whatsapp_autopilot_snapshot(), {"whatsapp": True})
 
     def test_event_wrappers_delegate_to_event_bridge(self) -> None:
-        service, _namespace, _server_box, _imported, _state_bridge, event_bridge, _terminal_bridge, _webhook_bridge = self._service()
+        service, _namespace, _server_box, _imported, _state_bridge, event_bridge, _terminal_bridge, _webhook_bridge, _telegram_webhook_bridge = self._service()
 
         event_payload = service.record_channel_event(
             channel="telegram",
@@ -161,15 +178,24 @@ class AutopilotRuntimeFacadeServiceTests(unittest.TestCase):
         self.assertEqual([kind for kind, _kwargs in event_bridge.calls], ["record", "dead", "throttled"])
 
     def test_terminal_and_webhook_wrappers_delegate(self) -> None:
-        service, _namespace, _server_box, _imported, _state_bridge, _event_bridge, terminal_bridge, _webhook_bridge = self._service()
+        service, _namespace, _server_box, _imported, _state_bridge, _event_bridge, terminal_bridge, _webhook_bridge, _telegram_webhook_bridge = self._service()
 
         send_payload = asyncio.run(service.handle_telegram_send_message(text="hello"))
         test_payload = asyncio.run(service.handle_telegram_autopilot_test_message(text="world"))
         webhook_payload = asyncio.run(
             service.handle_whatsapp_webhook(
                 raw_body=b"Body=hello",
+                request_url="https://public.example.com/channels/whatsapp/twilio/webhook",
+                twilio_signature="sig-1",
                 query_secret="secret-1",
                 header_secret="secret-2",
+            )
+        )
+        telegram_webhook_payload = asyncio.run(
+            service.handle_telegram_webhook(
+                raw_body=b'{"update_id": 7}',
+                connector_id="tg-1",
+                header_secret="telegram-secret",
             )
         )
         service.run_telegram_autopilot_forever()
@@ -179,7 +205,10 @@ class AutopilotRuntimeFacadeServiceTests(unittest.TestCase):
 
         self.assertEqual(send_payload["kind"], "send")
         self.assertEqual(test_payload["kind"], "test")
+        self.assertEqual(webhook_payload["webhook"]["request_url"], "https://public.example.com/channels/whatsapp/twilio/webhook")
+        self.assertEqual(webhook_payload["webhook"]["twilio_signature"], "sig-1")
         self.assertEqual(webhook_payload["webhook"]["query_secret"], "secret-1")
+        self.assertEqual(telegram_webhook_payload["telegram_webhook"]["connector_id"], "tg-1")
         self.assertTrue(terminal_bridge.forever)
         self.assertEqual(telegram_status, {"telegram": True})
         self.assertEqual(whatsapp_status, {"whatsapp": True})

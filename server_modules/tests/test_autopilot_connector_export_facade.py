@@ -17,15 +17,30 @@ class _FakeRuntimeFacade:
         )
 
 
+class _FakeRegistryFacade:
+    def __init__(self):
+        self.calls = []
+
+    def whatsapp_service_registry(self):
+        self.calls.append("whatsapp")
+        return {"whatsapp": True}
+
+    def channel_registry_bridge_service(self):
+        raise AssertionError("channel registry bridge should not be used on the direct export path")
+
+
 class _FakeShell:
-    def __init__(self, runtime_facade):
+    def __init__(self, runtime_facade, registry_facade=None):
         self._runtime_facade = runtime_facade
+        self._registry_facade = registry_facade
 
     def runtime_facade_service(self):
         return self._runtime_facade
 
     def registry_facade_service(self):
-        raise AssertionError("registry facade should not be used in this test")
+        if self._registry_facade is None:
+            raise AssertionError("registry facade should not be used in this test")
+        return self._registry_facade
 
     def bridge_facade_service(self):
         raise AssertionError("bridge facade should not be used in this test")
@@ -54,6 +69,19 @@ class AutopilotConnectorExportFacadeTests(unittest.TestCase):
         self.assertEqual(len(runtime_facade.calls), 1)
         self.assertEqual(len(seen), 1)
         self.assertEqual(seen[0]["event_type"], "error")
+
+    def test_whatsapp_registry_export_uses_registry_facade_directly(self) -> None:
+        runtime_facade = _FakeRuntimeFacade()
+        registry_facade = _FakeRegistryFacade()
+        namespace = {
+            "_autopilot_connector_shell_service": lambda: _FakeShell(runtime_facade, registry_facade),
+        }
+        facade = AutopilotConnectorExportFacade(global_namespace=namespace)
+
+        result = facade.whatsapp_service_registry()
+
+        self.assertEqual(result, {"whatsapp": True})
+        self.assertEqual(registry_facade.calls, ["whatsapp"])
 
 
 if __name__ == "__main__":

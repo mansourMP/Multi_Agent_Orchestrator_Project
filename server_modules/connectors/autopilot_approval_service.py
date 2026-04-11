@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Callable, Dict, List
+from typing import Any, Callable, Dict, List, Optional
 
 
 class AutopilotApprovalService:
@@ -14,6 +14,7 @@ class AutopilotApprovalService:
         normalize_string_list: Callable[[Any], List[str]],
         utc_now_iso: Callable[[], str],
         send_message: Callable[..., Any],
+        ensure_workspace_approvals_access: Optional[Callable[[str], Any]] = None,
     ) -> None:
         self.default_chat_prefix = str(default_chat_prefix or "").strip()
         self.cognitive_module = cognitive_module
@@ -22,8 +23,14 @@ class AutopilotApprovalService:
         self.normalize_string_list = normalize_string_list
         self.utc_now_iso = utc_now_iso
         self.send_message = send_message
+        self.ensure_workspace_approvals_access = ensure_workspace_approvals_access
 
-    def approvals_list(self, limit: int = 5) -> Dict[str, Any]:
+    def approvals_list(self, limit: int = 5, workspace_id: Optional[str] = None) -> Dict[str, Any]:
+        if workspace_id and callable(self.ensure_workspace_approvals_access):
+            try:
+                self.ensure_workspace_approvals_access(str(workspace_id or "").strip())
+            except Exception as exc:
+                return {"ok": False, "error": getattr(exc, "detail", str(exc) or "approvals_unavailable")}
         mod = self.cognitive_module()
         if mod is None:
             return {"ok": False, "error": "cognitive_daemon_unavailable"}
@@ -38,7 +45,18 @@ class AutopilotApprovalService:
         except Exception as exc:
             return {"ok": False, "error": str(exc)}
 
-    def approval_resolve(self, event_id: str, approved: bool, note: str = "") -> Dict[str, Any]:
+    def approval_resolve(
+        self,
+        event_id: str,
+        approved: bool,
+        note: str = "",
+        workspace_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        if workspace_id and callable(self.ensure_workspace_approvals_access):
+            try:
+                self.ensure_workspace_approvals_access(str(workspace_id or "").strip())
+            except Exception as exc:
+                return {"ok": False, "error": getattr(exc, "detail", str(exc) or "approvals_unavailable")}
         mod = self.cognitive_module()
         if mod is None:
             return {"ok": False, "error": "cognitive_daemon_unavailable"}
@@ -114,7 +132,7 @@ class AutopilotApprovalService:
     ) -> Dict[str, Any]:
         patch: Dict[str, Any] = {}
         prefix = str(profile.get("prefix") or self.default_chat_prefix)
-        payload = self.approvals_list(limit=20)
+        payload = self.approvals_list(limit=20, workspace_id=workspace_id)
         if not bool(payload.get("ok")):
             reason = str(payload.get("error") or "unable to load approvals").strip() or "unable to load approvals"
             if reason != str(connector_state.get("last_approval_notify_error") or "").strip():

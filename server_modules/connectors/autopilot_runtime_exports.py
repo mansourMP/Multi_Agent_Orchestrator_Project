@@ -76,11 +76,55 @@ def _whatsapp_autopilot_activate() -> None:
     _autopilot_connector_shell_service().runtime_facade_service().whatsapp_autopilot_activate()
 
 
+def _whatsapp_webhook_secrets(request) -> dict[str, str]:
+    return {
+        "query_secret": str(request.query_params.get("secret") or "").strip(),
+        "header_secret": str(
+            request.headers.get("x-orion-webhook-secret")
+            or request.headers.get("X-Orion-Webhook-Secret")
+            or ""
+        ).strip(),
+        "twilio_signature": str(
+            request.headers.get("x-twilio-signature")
+            or request.headers.get("X-Twilio-Signature")
+            or ""
+        ).strip(),
+    }
+
+
+def _whatsapp_public_request_url(request) -> str:
+    public_base_url = str(os.getenv("ORION_WHATSAPP_AUTOPILOT_PUBLIC_BASE_URL") or "").strip().rstrip("/")
+    path = str(getattr(request.url, "path", "") or "").strip()
+    query = str(getattr(request.url, "query", "") or "").strip()
+    if public_base_url and path:
+        url = f"{public_base_url}{path}"
+        if query:
+            url = f"{url}?{query}"
+        return url
+    return str(request.url)
+
+
 async def handle_whatsapp_twilio_webhook(request):
+    secrets = _whatsapp_webhook_secrets(request)
     return await _autopilot_connector_shell_service().runtime_facade_service().handle_whatsapp_webhook(
         raw_body=await request.body(),
-        query_secret=str(request.query_params.get("secret") or ""),
-        header_secret=str(request.headers.get("x-orion-webhook-secret") or ""),
+        request_url=_whatsapp_public_request_url(request),
+        twilio_signature=secrets["twilio_signature"],
+        query_secret=secrets["query_secret"],
+        header_secret=secrets["header_secret"],
+    )
+
+
+async def handle_telegram_webhook(request, connector_id: str):
+    header_secret = str(
+        request.headers.get("x-telegram-bot-api-secret-token")
+        or request.headers.get("X-Telegram-Bot-Api-Secret-Token")
+        or ""
+    ).strip()
+    return await _autopilot_connector_shell_service().runtime_facade_service().handle_telegram_webhook(
+        raw_body=await request.body(),
+        connector_id=str(connector_id or "").strip(),
+        header_secret=header_secret,
     )
 
 

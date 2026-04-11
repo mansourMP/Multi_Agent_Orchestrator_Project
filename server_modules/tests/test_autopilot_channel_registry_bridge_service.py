@@ -343,6 +343,7 @@ class AutopilotChannelRegistryBridgeServiceTests(unittest.TestCase):
             telegram_media_max_items=4,
             telegram_max_updates=10,
             telegram_poll_seconds=2.0,
+            telegram_delivery_mode="webhook",
             telegram_run_timeout_seconds=180,
             telegram_max_reply_chars=1200,
             telegram_send_ack=True,
@@ -358,6 +359,9 @@ class AutopilotChannelRegistryBridgeServiceTests(unittest.TestCase):
             whatsapp_run_timeout_seconds=90,
             whatsapp_max_reply_chars=800,
             whatsapp_send_ack=False,
+            whatsapp_require_explicit_opt_in=True,
+            whatsapp_redact_event_text=True,
+            whatsapp_retention_days=30,
             whatsapp_trust_mode_value="full",
             whatsapp_execution_target_value="cloud",
             telegram_state={},
@@ -399,6 +403,7 @@ class AutopilotChannelRegistryBridgeServiceTests(unittest.TestCase):
         self.assertEqual(len(_FakeTelegramRegistry.instances), 1)
         kwargs = first.kwargs
         self.assertEqual(kwargs["default_workspace_id"], "default")
+        self.assertEqual(kwargs["delivery_mode"], "webhook")
         self.assertEqual(kwargs["classify_error"]("boom"), "classified:boom")
         self.assertEqual(kwargs["resolve_profile"]({"id": "conn-1"}), {"kind": "telegram", "entry": {"id": "conn-1"}})
         self.assertEqual(kwargs["help_text"]({"id": "ops"}), "help:ops")
@@ -426,6 +431,9 @@ class AutopilotChannelRegistryBridgeServiceTests(unittest.TestCase):
         self.assertEqual(kwargs["classify_error"]("down"), "classified:down")
         self.assertEqual(kwargs["help_text"]({"id": "support"}), "wa-help:support")
         self.assertEqual(kwargs["safe_path_token"]("abc"), "safe:abc")
+        self.assertTrue(kwargs["require_explicit_opt_in"])
+        self.assertTrue(kwargs["redact_event_text"])
+        self.assertEqual(kwargs["retention_days"], 30)
         self.assertEqual(
             kwargs["create_run"](goal="reply"),
             {

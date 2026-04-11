@@ -62,7 +62,7 @@ class AutopilotConnectorExportFacade:
         return self._bridge_facade().autopilot_event_service()
 
     def whatsapp_service_registry(self) -> Any:
-        return self.autopilot_channel_registry_bridge_service().whatsapp_service_registry()
+        return self._registry_facade().whatsapp_service_registry()
 
     def autopilot_profile_service(self) -> Any:
         return self.autopilot_support_service_registry().profile_service()
@@ -254,10 +254,40 @@ class AutopilotConnectorExportFacade:
         return await self._runtime_facade().handle_telegram_autopilot_test_message(**self._forward_kwargs(locals()))
 
     async def handle_whatsapp_twilio_webhook(self, request: Any) -> Any:
+        public_base_url = str(self._g("os").getenv("ORION_WHATSAPP_AUTOPILOT_PUBLIC_BASE_URL") or "").strip().rstrip("/")
+        path = str(getattr(request.url, "path", "") or "").strip()
+        query = str(getattr(request.url, "query", "") or "").strip()
+        if public_base_url and path:
+            request_url = f"{public_base_url}{path}"
+            if query:
+                request_url = f"{request_url}?{query}"
+        else:
+            request_url = str(request.url)
         return await self._runtime_facade().handle_whatsapp_webhook(
             raw_body=await request.body(),
+            request_url=request_url,
+            twilio_signature=str(
+                request.headers.get("x-twilio-signature")
+                or request.headers.get("X-Twilio-Signature")
+                or ""
+            ).strip(),
             query_secret=str(request.query_params.get("secret") or ""),
-            header_secret=str(request.headers.get("x-orion-webhook-secret") or ""),
+            header_secret=str(
+                request.headers.get("x-orion-webhook-secret")
+                or request.headers.get("X-Orion-Webhook-Secret")
+                or ""
+            ).strip(),
+        )
+
+    async def handle_telegram_webhook(self, request: Any, connector_id: str) -> Any:
+        return await self._runtime_facade().handle_telegram_webhook(
+            raw_body=await request.body(),
+            connector_id=str(connector_id or "").strip(),
+            header_secret=str(
+                request.headers.get("x-telegram-bot-api-secret-token")
+                or request.headers.get("X-Telegram-Bot-Api-Secret-Token")
+                or ""
+            ).strip(),
         )
 
     def run_telegram_autopilot_forever(self) -> None:

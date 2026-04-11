@@ -44,6 +44,7 @@ class AutopilotTerminalBridgeServiceTests(unittest.TestCase):
             telegram_enabled=True,
             telegram_default_profile="assistant",
             telegram_catalog={"assistant": {}},
+            telegram_webhook_path="/channels/telegram/webhook/{connector_id}",
             whatsapp_enabled=True,
             whatsapp_default_profile="assistant",
             whatsapp_catalog={"assistant": {}},
@@ -75,6 +76,22 @@ class AutopilotTerminalBridgeServiceTests(unittest.TestCase):
         self.assertEqual(whatsapp_payload["channel"], "whatsapp")
         self.assertTrue(profiles_payload["profiles"])
         self.assertIn(("run_forever", None), calls)
+        self.assertIn(
+            (
+                "profiles",
+                {
+                    "telegram_enabled": True,
+                    "telegram_default_profile": "assistant",
+                    "telegram_catalog": {"assistant": {}},
+                    "telegram_webhook_path": "/channels/telegram/webhook/{connector_id}",
+                    "whatsapp_enabled": True,
+                    "whatsapp_default_profile": "assistant",
+                    "whatsapp_catalog": {"assistant": {}},
+                    "whatsapp_webhook_path": "/channels/whatsapp/twilio/webhook",
+                },
+            ),
+            calls,
+        )
 
 
 if __name__ == "__main__":

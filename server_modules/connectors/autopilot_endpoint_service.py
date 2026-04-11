@@ -20,6 +20,7 @@ class AutopilotEndpointService:
         telegram_enabled: bool,
         telegram_default_profile: str,
         telegram_catalog: Dict[str, Dict[str, Any]],
+        telegram_webhook_path: str,
         whatsapp_enabled: bool,
         whatsapp_default_profile: str,
         whatsapp_catalog: Dict[str, Dict[str, Any]],
@@ -30,6 +31,7 @@ class AutopilotEndpointService:
                 "telegram": {
                     "enabled": bool(telegram_enabled),
                     "default_profile": telegram_default_profile,
+                    "webhook_path": telegram_webhook_path,
                     "profiles": [
                         self._profile_payload(profile_id, info if isinstance(info, dict) else {})
                         for profile_id, info in telegram_catalog.items()
@@ -47,19 +49,70 @@ class AutopilotEndpointService:
             }
         }
 
+    def telegram_webhook_auth_result(
+        self,
+        *,
+        enabled: bool,
+        delivery_mode: str,
+        configured_secret: str,
+        header_secret: str = "",
+    ) -> Dict[str, Any]:
+        if not enabled:
+            return {"status_code": 503, "content": "Empyralis Telegram autopilot is disabled."}
+        resolved_delivery_mode = str(delivery_mode or "").strip().lower() or "polling"
+        if resolved_delivery_mode != "webhook":
+            return {
+                "status_code": 503,
+                "content": "Empyralis Telegram webhook mode is disabled. Set ORION_TELEGRAM_AUTOPILOT_DELIVERY_MODE=webhook for cloud production.",
+            }
+        expected_secret = str(configured_secret or "").strip()
+        if not expected_secret:
+            return {"status_code": 503, "content": "Empyralis Telegram webhook is not configured: no webhook secret is available."}
+        provided_header_secret = str(header_secret or "").strip()
+        if not provided_header_secret:
+            return {"status_code": 401, "content": "Telegram webhook secret header is required."}
+        if expected_secret != provided_header_secret:
+            return {"status_code": 403, "content": "Telegram webhook secret is invalid."}
+        return {"status_code": 200}
+
+    def whatsapp_webhook_auth_result(
+        self,
+        *,
+        enabled: bool,
+        configured_secret: str,
+        query_secret: str = "",
+        header_secret: str = "",
+    ) -> Dict[str, Any]:
+        if not enabled:
+            return {"status_code": 503, "content": "Empyralis WhatsApp autopilot is disabled."}
+        expected_secret = str(configured_secret or "").strip()
+        if not expected_secret:
+            return {"status_code": 503, "content": "Empyralis WhatsApp webhook is not configured: no webhook secret is available."}
+        provided_query_secret = str(query_secret or "").strip()
+        provided_header_secret = str(header_secret or "").strip()
+        if not provided_query_secret and not provided_header_secret:
+            return {"status_code": 401, "content": "WhatsApp webhook secret is required."}
+        if expected_secret not in {provided_query_secret, provided_header_secret}:
+            return {"status_code": 403, "content": "WhatsApp webhook secret is invalid."}
+        return {"status_code": 200}
+
     def whatsapp_webhook_result(
         self,
         *,
         enabled: bool,
         configured_secret: str,
-        provided_secret: str,
-        form: Dict[str, str],
-        handle_inbound: Callable[[Dict[str, str]], str],
+        query_secret: str = "",
+        header_secret: str = "",
+        form: Optional[Dict[str, str]] = None,
+        handle_inbound: Optional[Callable[[Dict[str, str]], str]] = None,
     ) -> Dict[str, Any]:
-        if not enabled:
-            return {"status_code": 200, "text": "Empyralis WhatsApp autopilot is disabled."}
-        expected_secret = str(configured_secret or "").strip()
-        if expected_secret and str(provided_secret or "").strip() != expected_secret:
-            return {"status_code": 403, "content": "forbidden"}
-        response_text = handle_inbound(form)
+        auth_result = self.whatsapp_webhook_auth_result(
+            enabled=enabled,
+            configured_secret=configured_secret,
+            query_secret=query_secret,
+            header_secret=header_secret,
+        )
+        if int(auth_result.get("status_code") or 200) != 200 or handle_inbound is None:
+            return auth_result
+        response_text = handle_inbound(form if isinstance(form, dict) else {})
         return {"status_code": 200, "text": response_text}

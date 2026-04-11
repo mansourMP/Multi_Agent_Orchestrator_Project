@@ -25,9 +25,16 @@ class AutopilotSharedServiceRegistry:
         telegram_snapshot: Callable[[], Dict[str, Any]],
         telegram_list_entries: Callable[[], List[Dict[str, Any]]],
         resolve_telegram_profile: Callable[[Dict[str, Any]], Dict[str, Any]],
+        telegram_webhook_path: str = "/channels/telegram/webhook/{connector_id}",
+        telegram_public_base_url: Any = "",
+        telegram_webhook_secret_configured: Any = False,
+        telegram_delivery_mode: Any = "polling",
         whatsapp_snapshot: Callable[[], Dict[str, Any]],
         whatsapp_list_entries: Callable[[], List[Dict[str, Any]]],
         resolve_whatsapp_profile: Callable[[Dict[str, Any]], Dict[str, Any]],
+        whatsapp_webhook_path: str = "/channels/whatsapp/twilio/webhook",
+        whatsapp_public_base_url: Any = "",
+        whatsapp_webhook_secret_configured: Any = False,
     ) -> None:
         self.normalize_workspace_id = normalize_workspace_id
         self.append_channel_event = append_channel_event
@@ -43,9 +50,16 @@ class AutopilotSharedServiceRegistry:
         self.telegram_snapshot = telegram_snapshot
         self.telegram_list_entries = telegram_list_entries
         self.resolve_telegram_profile = resolve_telegram_profile
+        self.telegram_webhook_path = str(telegram_webhook_path or "/channels/telegram/webhook/{connector_id}")
+        self.telegram_public_base_url = telegram_public_base_url
+        self.telegram_webhook_secret_configured = telegram_webhook_secret_configured
+        self.telegram_delivery_mode = telegram_delivery_mode
         self.whatsapp_snapshot = whatsapp_snapshot
         self.whatsapp_list_entries = whatsapp_list_entries
         self.resolve_whatsapp_profile = resolve_whatsapp_profile
+        self.whatsapp_webhook_path = str(whatsapp_webhook_path or "/channels/whatsapp/twilio/webhook")
+        self.whatsapp_public_base_url = whatsapp_public_base_url
+        self.whatsapp_webhook_secret_configured = whatsapp_webhook_secret_configured
 
         self._event_service: Optional[AutopilotEventService] = None
         self._status_service: Optional[AutopilotStatusService] = None
@@ -75,9 +89,16 @@ class AutopilotSharedServiceRegistry:
                 telegram_snapshot=self.telegram_snapshot,
                 telegram_list_entries=self.telegram_list_entries,
                 resolve_telegram_profile=self.resolve_telegram_profile,
+                telegram_webhook_path=self.telegram_webhook_path,
+                telegram_public_base_url=self.telegram_public_base_url,
+                telegram_webhook_secret_configured=self.telegram_webhook_secret_configured,
+                telegram_delivery_mode=self.telegram_delivery_mode,
                 whatsapp_snapshot=self.whatsapp_snapshot,
                 whatsapp_list_entries=self.whatsapp_list_entries,
                 resolve_whatsapp_profile=self.resolve_whatsapp_profile,
+                whatsapp_webhook_path=self.whatsapp_webhook_path,
+                whatsapp_public_base_url=self.whatsapp_public_base_url,
+                whatsapp_webhook_secret_configured=self.whatsapp_webhook_secret_configured,
             )
         return self._status_service
 

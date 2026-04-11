@@ -16,6 +16,7 @@ class AutopilotRuntimeFacadeService:
         event_bridge_service: Callable[[], Any],
         terminal_bridge_service: Callable[[], Any],
         webhook_bridge_service: Callable[[], Any],
+        telegram_webhook_bridge_service: Callable[[], Any],
     ) -> None:
         self.global_namespace = global_namespace
         self.sync_server_globals = tuple(sync_server_globals)
@@ -26,6 +27,7 @@ class AutopilotRuntimeFacadeService:
         self.event_bridge_service = event_bridge_service
         self.terminal_bridge_service = terminal_bridge_service
         self.webhook_bridge_service = webhook_bridge_service
+        self.telegram_webhook_bridge_service = telegram_webhook_bridge_service
 
     def init_runtime(self) -> None:
         server = self.server_getter()
@@ -202,12 +204,29 @@ class AutopilotRuntimeFacadeService:
         self,
         *,
         raw_body: bytes,
+        request_url: str,
+        twilio_signature: str,
         query_secret: str,
         header_secret: str,
     ) -> Any:
         return self.webhook_bridge_service().handle_webhook(
             raw_body=raw_body,
+            request_url=request_url,
+            twilio_signature=twilio_signature,
             query_secret=query_secret,
+            header_secret=header_secret,
+        )
+
+    async def handle_telegram_webhook(
+        self,
+        *,
+        raw_body: bytes,
+        connector_id: str,
+        header_secret: str,
+    ) -> Any:
+        return self.telegram_webhook_bridge_service().handle_webhook(
+            raw_body=raw_body,
+            connector_id=connector_id,
             header_secret=header_secret,
         )
 

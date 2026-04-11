@@ -15,6 +15,7 @@ class AutopilotTerminalBridgeService:
         telegram_enabled: bool,
         telegram_default_profile: str,
         telegram_catalog: Dict[str, Any],
+        telegram_webhook_path: str,
         whatsapp_enabled: bool,
         whatsapp_default_profile: str,
         whatsapp_catalog: Dict[str, Any],
@@ -28,6 +29,7 @@ class AutopilotTerminalBridgeService:
         self.telegram_enabled = bool(telegram_enabled)
         self.telegram_default_profile = str(telegram_default_profile or "")
         self.telegram_catalog = telegram_catalog
+        self.telegram_webhook_path = str(telegram_webhook_path or "")
         self.whatsapp_enabled = bool(whatsapp_enabled)
         self.whatsapp_default_profile = str(whatsapp_default_profile or "")
         self.whatsapp_catalog = whatsapp_catalog
@@ -89,6 +91,7 @@ class AutopilotTerminalBridgeService:
             telegram_enabled=self.telegram_enabled,
             telegram_default_profile=self.telegram_default_profile,
             telegram_catalog=self.telegram_catalog,
+            telegram_webhook_path=self.telegram_webhook_path,
             whatsapp_enabled=self.whatsapp_enabled,
             whatsapp_default_profile=self.whatsapp_default_profile,
             whatsapp_catalog=self.whatsapp_catalog,

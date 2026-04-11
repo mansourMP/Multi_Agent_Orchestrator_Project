@@ -36,6 +36,10 @@ class AutopilotBridgeRegistryServiceTests(unittest.TestCase):
             telegram_snapshot=lambda: {"telegram": True},
             telegram_list_entries=lambda: [{"id": "tg-1"}],
             resolve_telegram_profile=lambda entry: {"profile": entry.get("id")},
+            telegram_webhook_path="/channels/telegram/webhook/{connector_id}",
+            telegram_public_base_url="https://public.example.com",
+            telegram_webhook_secret_configured=True,
+            telegram_delivery_mode="webhook",
             whatsapp_snapshot=lambda: {"whatsapp": True},
             whatsapp_list_entries=lambda: [{"id": "wa-1"}],
             resolve_whatsapp_profile=lambda entry: {"profile": entry.get("id")},
@@ -52,6 +56,8 @@ class AutopilotBridgeRegistryServiceTests(unittest.TestCase):
             whatsapp_default_profile="support",
             whatsapp_catalog={"support": {}},
             whatsapp_webhook_path="/channels/whatsapp/twilio/webhook",
+            whatsapp_public_base_url="https://public.example.com",
+            whatsapp_webhook_secret_configured=True,
             telegram_state_service=lambda: {"state": True},
             whatsapp_state_service=lambda: {"state": True},
             telegram_runtime_service=lambda: {"runtime": True},
@@ -67,11 +73,18 @@ class AutopilotBridgeRegistryServiceTests(unittest.TestCase):
             extract_message=lambda update: update.get("message"),
             build_goal_with_attachments=lambda goal, attachments: f"{goal}|{len(attachments)}",
             route_message=lambda raw_text, profile: {"text": raw_text, "profile": profile.get("id")},
+            telegram_parse_update=lambda raw: {"update_id": 1, "raw": raw.decode("utf-8")},
+            telegram_webhook_auth_result=lambda **kwargs: {"status_code": 200, "kwargs": kwargs},
+            telegram_handle_inbound=lambda connector_id, update: {"connector_id": connector_id, "update": update},
             parse_form_urlencoded=lambda raw: {"Body": raw.decode("utf-8")},
-            webhook_result=lambda **kwargs: {"status_code": 200, "text": "ok", "kwargs": kwargs},
-            handle_inbound=lambda payload: payload,
+            webhook_auth_result=lambda **kwargs: {"status_code": 200, "kwargs": kwargs},
+            resolve_inbound_connector=lambda payload: {"connector_id": "conn-1"},
+            validate_webhook_signature=lambda request_url, form, signature, auth_token: True,
+            handle_inbound=lambda payload, matched=None: {"payload": payload, "matched": matched},
             twiml_response=lambda text: {"twiml": text},
-            forbidden_response=lambda content: {"forbidden": content},
+            error_response=lambda status_code, content: {"status_code": status_code, "content": content},
+            telegram_webhook_enabled=True,
+            telegram_configured_webhook_secret="telegram-secret",
             webhook_enabled=True,
             configured_webhook_secret="secret-1",
             shared_registry_class=_FakeSharedRegistry,
@@ -79,6 +92,7 @@ class AutopilotBridgeRegistryServiceTests(unittest.TestCase):
             terminal_bridge_class=_FakeBridge,
             state_bridge_class=_FakeBridge,
             compatibility_bridge_class=_FakeBridge,
+            telegram_webhook_bridge_class=_FakeBridge,
             webhook_bridge_class=_FakeBridge,
         )
 
@@ -93,11 +107,14 @@ class AutopilotBridgeRegistryServiceTests(unittest.TestCase):
         self.assertIs(service.terminal_bridge_service(), service.terminal_bridge_service())
         self.assertIs(service.state_bridge_service(), service.state_bridge_service())
         self.assertIs(service.compatibility_bridge_service(), service.compatibility_bridge_service())
+        self.assertIs(service.telegram_webhook_bridge_service(), service.telegram_webhook_bridge_service())
         self.assertIs(service.webhook_bridge_service(), service.webhook_bridge_service())
 
         self.assertEqual(shared_first.kwargs["dead_letter_limit"], 100)
         self.assertEqual(service.compatibility_bridge_service().kwargs["safe_path_token"]("abc"), "safe:abc")
+        self.assertEqual(service.telegram_webhook_bridge_service().kwargs["configured_secret"], "telegram-secret")
         self.assertEqual(service.webhook_bridge_service().kwargs["configured_secret"], "secret-1")
+        self.assertIsNotNone(service.webhook_bridge_service().kwargs["resolve_inbound_connector"])
 
 
 if __name__ == "__main__":

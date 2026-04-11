@@ -36,6 +36,7 @@ class AutopilotApprovalServiceTests(unittest.TestCase):
             normalize_string_list=overrides.pop("normalize_string_list", lambda value: list(value) if isinstance(value, list) else []),
             utc_now_iso=overrides.pop("utc_now_iso", lambda: "2026-04-05T00:00:00Z"),
             send_message=overrides.pop("send_message", lambda **kwargs: self.messages.append(kwargs)),
+            ensure_workspace_approvals_access=overrides.pop("ensure_workspace_approvals_access", None),
         )
 
     def test_approvals_text_formats_items(self):
@@ -62,6 +63,16 @@ class AutopilotApprovalServiceTests(unittest.TestCase):
         service = self._make_service()
         text = service.approval_result_text({"ok": False, "error": "bad"}, approved=True)
         self.assertEqual(text, "Approval update failed: bad")
+
+    def test_approvals_list_rejects_workspace_without_capability(self):
+        service = self._make_service(
+            ensure_workspace_approvals_access=lambda workspace_id: (_ for _ in ()).throw(RuntimeError("Approvals are not included in this workspace plan."))
+        )
+
+        payload = service.approvals_list(limit=5, workspace_id="workspace-free")
+
+        self.assertFalse(payload["ok"])
+        self.assertEqual(payload["error"], "Approvals are not included in this workspace plan.")
 
 
 if __name__ == "__main__":

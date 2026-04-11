@@ -20,9 +20,16 @@ class AutopilotSharedServiceRegistryTests(unittest.TestCase):
             telegram_snapshot=lambda: {"enabled": True},
             telegram_list_entries=lambda: [{"id": "tg-1"}],
             resolve_telegram_profile=lambda entry: {"id": "assistant"},
+            telegram_webhook_path="/channels/telegram/webhook/{connector_id}",
+            telegram_public_base_url="https://public.example.com",
+            telegram_webhook_secret_configured=True,
+            telegram_delivery_mode="webhook",
             whatsapp_snapshot=lambda: {"enabled": True},
             whatsapp_list_entries=lambda: [{"id": "wa-1"}],
             resolve_whatsapp_profile=lambda entry: {"id": "assistant"},
+            whatsapp_webhook_path="/channels/whatsapp/twilio/webhook",
+            whatsapp_public_base_url="https://public.example.com",
+            whatsapp_webhook_secret_configured=True,
         )
 
     def test_registry_caches_status_and_endpoint_services(self) -> None:

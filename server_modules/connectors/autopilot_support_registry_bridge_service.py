@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, Optional
 
 from server_modules.automation_intents import classify_automation_intent
+from server_modules import entitlements_service
 from server_modules.connectors.autopilot_approval_service import AutopilotApprovalService
 from server_modules.connectors.autopilot_channel_support_service import AutopilotChannelSupportService
 from server_modules.connectors.autopilot_common_support_service import AutopilotCommonSupportService
@@ -132,6 +133,14 @@ class AutopilotSupportRegistryBridgeService:
                     import_cognitive_module=_import_cognitive_module,
                 )
 
+            def _ensure_workspace_approvals_access(workspace_id: str) -> None:
+                payload = entitlements_service.workspace_entitlement_payload_for_workspace_id(
+                    workspace_id=str(workspace_id or "").strip() or "default",
+                )
+                capabilities = payload.get("capabilities") if isinstance(payload.get("capabilities"), dict) else {}
+                if not bool(capabilities.get("approvals_enabled")):
+                    raise RuntimeError("Approvals are not included in this workspace plan.")
+
             self._support_registry = self.support_registry_class(
                 build_profile_service=lambda: self.profile_service_class(
                     default_chat_prefix=self.default_chat_prefix,
@@ -185,6 +194,7 @@ class AutopilotSupportRegistryBridgeService:
                     normalize_string_list=self.normalize_string_list,
                     utc_now_iso=self.utc_now_iso,
                     send_message=self.send_message,
+                    ensure_workspace_approvals_access=_ensure_workspace_approvals_access,
                 ),
                 build_common_support_service=_build_common_support_service,
                 build_skill_service=lambda: self.skill_service_class(

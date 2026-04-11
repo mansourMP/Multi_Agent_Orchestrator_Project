@@ -178,6 +178,7 @@ class AutopilotConnectorShellService:
                 telegram_media_max_items=self.telegram_media_max_items,
                 telegram_max_updates=self.telegram_max_updates,
                 telegram_poll_seconds=self.telegram_poll_seconds,
+                telegram_delivery_mode_getter=lambda: str(self._g("ORION_TELEGRAM_AUTOPILOT_DELIVERY_MODE") or "polling"),
                 telegram_run_timeout_seconds_getter=lambda: int(self._g("ORION_TELEGRAM_AUTOPILOT_RUN_TIMEOUT_SECONDS") or 180),
                 telegram_max_reply_chars_getter=lambda: int(self._g("ORION_TELEGRAM_AUTOPILOT_MAX_REPLY_CHARS") or 1200),
                 telegram_send_ack_getter=lambda: bool(self._g("ORION_TELEGRAM_AUTOPILOT_SEND_ACK")),
@@ -343,9 +344,13 @@ class AutopilotConnectorShellService:
                 build_goal_with_attachments=lambda goal, attachments: self.telegram_helper_registry().media_service().build_goal_with_attachments(goal, attachments),
                 route_message=lambda raw_text, profile: self.telegram_helper_registry().routing_service().route_message(raw_text, profile),
                 parse_form_urlencoded=lambda raw: self.whatsapp_service_registry().whatsapp_webhook_service().parse_form_urlencoded(raw),
-                forbidden_response=lambda content: self._g("Response")(status_code=403, content=content),
+                error_response=lambda status_code, content: self._g("Response")(status_code=status_code, content=content),
+                telegram_delivery_mode_getter=lambda: str(self._g("ORION_TELEGRAM_AUTOPILOT_DELIVERY_MODE") or "polling"),
+                telegram_configured_webhook_secret_getter=lambda: str(self._g("ORION_TELEGRAM_AUTOPILOT_WEBHOOK_SECRET") or ""),
+                telegram_public_base_url_getter=lambda: str(os.getenv("ORION_TELEGRAM_AUTOPILOT_PUBLIC_BASE_URL") or self.runtime_url or ""),
                 webhook_enabled_getter=lambda: bool(self._g("ORION_WHATSAPP_AUTOPILOT_ENABLED", False)),
                 configured_webhook_secret_getter=lambda: str(self._g("ORION_WHATSAPP_AUTOPILOT_WEBHOOK_SECRET") or ""),
+                whatsapp_public_base_url_getter=lambda: str(os.getenv("ORION_WHATSAPP_AUTOPILOT_PUBLIC_BASE_URL") or self.runtime_url or ""),
             )
         return self._bridge_facade
 
@@ -361,6 +366,7 @@ class AutopilotConnectorShellService:
                 event_bridge_service=self.event_bridge_service,
                 terminal_bridge_service=self.terminal_bridge_service,
                 webhook_bridge_service=self.webhook_bridge_service,
+                telegram_webhook_bridge_service=self.telegram_webhook_bridge_service,
             )
         return self._runtime_facade
 
@@ -447,3 +453,6 @@ class AutopilotConnectorShellService:
 
     def webhook_bridge_service(self) -> Any:
         return self.bridge_facade_service().webhook_bridge_service()
+
+    def telegram_webhook_bridge_service(self) -> Any:
+        return self.bridge_facade_service().telegram_webhook_bridge_service()

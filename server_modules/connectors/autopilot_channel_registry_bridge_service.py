@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional
 
+from server_modules import outbox_service
 from server_modules.connectors.telegram_autopilot_service_registry import TelegramAutopilotServiceRegistry
 from server_modules.connectors.whatsapp_autopilot_service_registry import WhatsAppAutopilotServiceRegistry
 
@@ -21,6 +22,7 @@ class AutopilotChannelRegistryBridgeService:
         telegram_media_max_items: int,
         telegram_max_updates: int,
         telegram_poll_seconds: float,
+        telegram_delivery_mode: str,
         telegram_run_timeout_seconds: int,
         telegram_max_reply_chars: int,
         telegram_send_ack: bool,
@@ -36,6 +38,9 @@ class AutopilotChannelRegistryBridgeService:
         whatsapp_run_timeout_seconds: int,
         whatsapp_max_reply_chars: int,
         whatsapp_send_ack: bool,
+        whatsapp_require_explicit_opt_in: bool,
+        whatsapp_redact_event_text: bool,
+        whatsapp_retention_days: int,
         whatsapp_trust_mode_value: str,
         whatsapp_execution_target_value: str,
         telegram_state: Dict[str, Any],
@@ -76,6 +81,7 @@ class AutopilotChannelRegistryBridgeService:
         self.telegram_media_max_items = int(telegram_media_max_items)
         self.telegram_max_updates = int(telegram_max_updates)
         self.telegram_poll_seconds = float(telegram_poll_seconds)
+        self.telegram_delivery_mode = str(telegram_delivery_mode or "").strip().lower() or "polling"
         self.telegram_run_timeout_seconds = int(telegram_run_timeout_seconds)
         self.telegram_max_reply_chars = int(telegram_max_reply_chars)
         self.telegram_send_ack = bool(telegram_send_ack)
@@ -91,6 +97,9 @@ class AutopilotChannelRegistryBridgeService:
         self.whatsapp_run_timeout_seconds = int(whatsapp_run_timeout_seconds)
         self.whatsapp_max_reply_chars = int(whatsapp_max_reply_chars)
         self.whatsapp_send_ack = bool(whatsapp_send_ack)
+        self.whatsapp_require_explicit_opt_in = bool(whatsapp_require_explicit_opt_in)
+        self.whatsapp_redact_event_text = bool(whatsapp_redact_event_text)
+        self.whatsapp_retention_days = max(1, int(whatsapp_retention_days or 30))
         self.whatsapp_trust_mode_value = str(whatsapp_trust_mode_value or "")
         self.whatsapp_execution_target_value = str(whatsapp_execution_target_value or "")
         self.telegram_state = telegram_state
@@ -141,6 +150,7 @@ class AutopilotChannelRegistryBridgeService:
                 media_max_items=self.telegram_media_max_items,
                 max_updates=self.telegram_max_updates,
                 poll_seconds=self.telegram_poll_seconds,
+                delivery_mode=self.telegram_delivery_mode,
                 run_timeout_seconds=self.telegram_run_timeout_seconds,
                 max_reply_chars=self.telegram_max_reply_chars,
                 send_ack=self.telegram_send_ack,
@@ -228,12 +238,16 @@ class AutopilotChannelRegistryBridgeService:
                     field_name,
                 ),
                 runtime_status_text=lambda workspace_id: support_registry.runtime_status_service().runtime_status_text(workspace_id),
-                approvals_list=lambda limit: support_registry.approval_service().approvals_list(limit=limit),
+                approvals_list=lambda limit, workspace_id=None: support_registry.approval_service().approvals_list(
+                    limit=limit,
+                    workspace_id=workspace_id,
+                ),
                 approvals_text=lambda payload, prefix: support_registry.approval_service().approvals_text(payload, prefix=prefix),
-                approval_resolve=lambda event_id, approved, note: support_registry.approval_service().approval_resolve(
+                approval_resolve=lambda event_id, approved, note, workspace_id=None: support_registry.approval_service().approval_resolve(
                     event_id=event_id,
                     approved=approved,
                     note=note,
+                    workspace_id=workspace_id,
                 ),
                 approval_result_text=lambda payload, approved: support_registry.approval_service().approval_result_text(
                     payload,
@@ -325,6 +339,7 @@ class AutopilotChannelRegistryBridgeService:
                 local_companion_snapshot=lambda: runtime_registry.runtime_support_service().local_companion_snapshot(),
                 can_auto_approve_wait=lambda run: runtime_registry.run_entry_service().can_auto_approve_wait(run),
                 pending_confirmation_payload=lambda run: runtime_registry.run_entry_service().pending_confirmation_payload(run),
+                emit_channel_run_delivery_event=outbox_service.emit_channel_run_delivery_event,
                 sleep=self.sleep,
             )
         return self._telegram_service_registry
@@ -357,9 +372,8 @@ class AutopilotChannelRegistryBridgeService:
                 send_ack=self.whatsapp_send_ack,
                 include_run_meta=lambda: support_registry.channel_support_service().include_run_meta(),
                 truncate_one_line=lambda text, limit: support_registry.channel_support_service().truncate_one_line(text, limit),
-                wait_for_run_terminal_status=lambda run_id, timeout_seconds=None, max_reply_chars=None: self.telegram_service_registry().telegram_run_dispatch_service().wait_for_terminal_status(
+                poll_run_terminal_result=lambda run_id, max_reply_chars=None: self.telegram_service_registry().telegram_run_dispatch_service().poll_run_terminal_result(
                     run_id,
-                    timeout_seconds=timeout_seconds,
                     max_reply_chars=max_reply_chars,
                 ),
                 run_reply_text=lambda status, run_id, summary: self.telegram_service_registry().telegram_run_dispatch_service().run_reply_text(
@@ -367,6 +381,7 @@ class AutopilotChannelRegistryBridgeService:
                     run_id,
                     summary,
                 ),
+                emit_channel_run_delivery_event=outbox_service.emit_channel_run_delivery_event,
                 append_dead_letter=lambda **kwargs: event_bridge.append_channel_dead_letter(**kwargs),
                 record_channel_event=lambda **kwargs: event_bridge.record_channel_event(**kwargs),
                 log_error=lambda message: print(f"[whatsapp-autopilot {self.utc_now_iso()}] {message}", flush=True),
@@ -375,12 +390,16 @@ class AutopilotChannelRegistryBridgeService:
                 route_message=lambda body, profile: helper_registry.routing_service().route_message(body, profile),
                 help_text=lambda profile: support_registry.profile_service().whatsapp_help_text(profile),
                 runtime_status_text=lambda workspace_id: support_registry.runtime_status_service().runtime_status_text(workspace_id),
-                approvals_list=lambda limit: support_registry.approval_service().approvals_list(limit=limit),
+                approvals_list=lambda limit, workspace_id=None: support_registry.approval_service().approvals_list(
+                    limit=limit,
+                    workspace_id=workspace_id,
+                ),
                 approvals_text=lambda payload, prefix: support_registry.approval_service().approvals_text(payload, prefix=prefix),
-                approval_resolve=lambda event_id, approved, note: support_registry.approval_service().approval_resolve(
+                approval_resolve=lambda event_id, approved, note, workspace_id=None: support_registry.approval_service().approval_resolve(
                     event_id=event_id,
                     approved=approved,
                     note=note,
+                    workspace_id=workspace_id,
                 ),
                 approval_result_text=lambda payload, approved: support_registry.approval_service().approval_result_text(
                     payload,
@@ -396,5 +415,8 @@ class AutopilotChannelRegistryBridgeService:
                     inbound_to,
                 ),
                 default_chat_prefix=self.default_chat_prefix,
+                require_explicit_opt_in=self.whatsapp_require_explicit_opt_in,
+                redact_event_text=self.whatsapp_redact_event_text,
+                retention_days=self.whatsapp_retention_days,
             )
         return self._whatsapp_service_registry

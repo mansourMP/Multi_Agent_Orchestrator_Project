@@ -1,5 +1,6 @@
 import unittest
 
+from server_modules.connectors.autopilot_channel_registry_bridge_service import AutopilotChannelRegistryBridgeService
 from server_modules.connectors.autopilot_registry_facade_service import AutopilotRegistryFacadeService
 
 
@@ -143,11 +144,29 @@ class _FakeBridgeFacade:
         return _EventBridge()
 
 
+class _FakeDirectTelegramRegistry:
+    instances = []
+
+    def __init__(self, **kwargs):
+        self.kwargs = kwargs
+        type(self).instances.append(self)
+
+
+class _FakeDirectWhatsAppRegistry:
+    instances = []
+
+    def __init__(self, **kwargs):
+        self.kwargs = kwargs
+        type(self).instances.append(self)
+
+
 class AutopilotRegistryFacadeServiceTests(unittest.TestCase):
     def setUp(self) -> None:
         _FakeBridge.instances.clear()
+        _FakeDirectTelegramRegistry.instances.clear()
+        _FakeDirectWhatsAppRegistry.instances.clear()
 
-    def _service(self, patched):
+    def _service(self, patched, **overrides):
         return AutopilotRegistryFacadeService(
             project_root="/tmp/project",
             default_chat_prefix="/empyralis",
@@ -159,6 +178,7 @@ class AutopilotRegistryFacadeServiceTests(unittest.TestCase):
             telegram_media_max_items=4,
             telegram_max_updates=5,
             telegram_poll_seconds=2.0,
+            telegram_delivery_mode_getter=lambda: patched["telegram_delivery_mode"],
             telegram_run_timeout_seconds_getter=lambda: patched["telegram_timeout"],
             telegram_max_reply_chars_getter=lambda: patched["telegram_max_reply_chars"],
             telegram_send_ack_getter=lambda: patched["telegram_send_ack"],
@@ -255,10 +275,18 @@ class AutopilotRegistryFacadeServiceTests(unittest.TestCase):
             runtime_builtin_skills_getter=lambda: [],
             runtime_skills_snapshot_getter=lambda: [],
             bridge_facade_getter=lambda: _FakeBridgeFacade(),
-            channel_registry_bridge_class=_FakeBridge,
-            helper_registry_bridge_class=_FakeBridge,
-            support_registry_bridge_class=_FakeBridge,
-            runtime_registry_bridge_class=_FakeBridge,
+            channel_registry_bridge_class=overrides.get("channel_registry_bridge_class", _FakeBridge),
+            helper_registry_bridge_class=overrides.get("helper_registry_bridge_class", _FakeBridge),
+            support_registry_bridge_class=overrides.get("support_registry_bridge_class", _FakeBridge),
+            runtime_registry_bridge_class=overrides.get("runtime_registry_bridge_class", _FakeBridge),
+            telegram_service_registry_class=overrides.get(
+                "telegram_service_registry_class",
+                _FakeDirectTelegramRegistry,
+            ),
+            whatsapp_service_registry_class=overrides.get(
+                "whatsapp_service_registry_class",
+                _FakeDirectWhatsAppRegistry,
+            ),
         )
 
     def test_facade_caches_bridge_builders_and_preserves_late_bound_values(self) -> None:
@@ -269,6 +297,7 @@ class AutopilotRegistryFacadeServiceTests(unittest.TestCase):
             "telegram_timeout": 180,
             "telegram_max_reply_chars": 1200,
             "telegram_send_ack": False,
+            "telegram_delivery_mode": "webhook",
             "telegram_enabled": True,
             "telegram_profile": "ops",
             "telegram_trust_mode": "workspace_write",
@@ -296,6 +325,10 @@ class AutopilotRegistryFacadeServiceTests(unittest.TestCase):
 
         self.assertEqual(len(_FakeBridge.instances), 4)
         self.assertEqual(channel_first.kwargs["telegram_default_workspace_id"], "default")
+        self.assertEqual(channel_first.kwargs["telegram_delivery_mode"], "webhook")
+        self.assertTrue(channel_first.kwargs["whatsapp_require_explicit_opt_in"])
+        self.assertTrue(channel_first.kwargs["whatsapp_redact_event_text"])
+        self.assertEqual(channel_first.kwargs["whatsapp_retention_days"], 30)
         self.assertEqual(helper_first.kwargs["default_chat_prefix"], "/empyralis")
         self.assertEqual(support_first.kwargs["workflow_api_url"], "http://workflow")
         self.assertEqual(runtime_first.kwargs["telegram_engine"], "orion")
@@ -306,6 +339,47 @@ class AutopilotRegistryFacadeServiceTests(unittest.TestCase):
         self.assertEqual(service.profile_service(), {"profile": True})
         self.assertEqual(service.runtime_status_service(), {"status": True})
         self.assertEqual(service.terminal_service(), {"terminal": True})
+
+    def test_facade_direct_channel_registries_skip_bridge_holder_on_default_path(self) -> None:
+        patched = {
+            "telegram_workspace_id": "workspace-123",
+            "telegram_require_prefix": False,
+            "telegram_prefix": "/empyralis",
+            "telegram_timeout": 180,
+            "telegram_max_reply_chars": 1200,
+            "telegram_send_ack": False,
+            "telegram_delivery_mode": "webhook",
+            "telegram_enabled": True,
+            "telegram_profile": "ops",
+            "telegram_trust_mode": "workspace_write",
+            "telegram_execution_target": "local",
+            "whatsapp_enabled": True,
+            "whatsapp_profile": "support",
+            "whatsapp_require_prefix": False,
+            "whatsapp_prefix": "/empyralis",
+            "whatsapp_timeout": 180,
+            "whatsapp_max_reply_chars": 1200,
+            "whatsapp_send_ack": False,
+            "whatsapp_trust_mode": "workspace_write",
+            "whatsapp_execution_target": "local",
+        }
+        service = self._service(
+            patched,
+            channel_registry_bridge_class=AutopilotChannelRegistryBridgeService,
+        )
+
+        telegram_registry = service.telegram_service_registry()
+        whatsapp_registry = service.whatsapp_service_registry()
+
+        self.assertIs(telegram_registry, service.telegram_service_registry())
+        self.assertIs(whatsapp_registry, service.whatsapp_service_registry())
+        self.assertEqual(len(_FakeBridge.instances), 3)
+        self.assertEqual(len(_FakeDirectTelegramRegistry.instances), 1)
+        self.assertEqual(len(_FakeDirectWhatsAppRegistry.instances), 1)
+        self.assertEqual(telegram_registry.kwargs["default_workspace_id"], "workspace-123")
+        self.assertEqual(telegram_registry.kwargs["delivery_mode"], "webhook")
+        self.assertEqual(whatsapp_registry.kwargs["default_profile"], "support")
+        self.assertTrue(whatsapp_registry.kwargs["enabled"])
 
 
 if __name__ == "__main__":

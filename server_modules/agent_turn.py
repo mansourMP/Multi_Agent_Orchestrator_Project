@@ -1082,9 +1082,23 @@ async def agent_turn(
     session_record = None
     if preferred_session_id:
         binding_metadata = _metadata_dict(resolved_turn_request.context_hints.get("metadata"))
-        session_record = await session_service.get_session(preferred_session_id)
-        if isinstance(session_record, dict) and str(session_record.get("status") or "").strip().lower() != "expired":
-            await session_service.extend_session(preferred_session_id)
+        session_record = await session_service.get_session_scoped(
+            preferred_session_id,
+            workspace_id=turn_request.workspace_id,
+            tenant_id=turn_request.tenant_id,
+            channel=turn_request.channel,
+            thread_id=resolved_thread_id,
+        )
+        scope_mismatch = isinstance(session_record, dict) and isinstance(session_record.get("_scope_mismatch"), dict)
+        if (
+            isinstance(session_record, dict)
+            and not scope_mismatch
+            and str(session_record.get("status") or "").strip().lower() != "expired"
+        ):
+            await session_service.extend_session(
+                preferred_session_id,
+                metadata_updates={"thread_id": resolved_thread_id},
+            )
         else:
             resolved_turn_request.session_id = await session_service.create_session(
                 workspace_id=turn_request.workspace_id,
@@ -1098,7 +1112,7 @@ async def agent_turn(
                     "master_agent_install_id": str(binding_metadata.get("master_agent_install_id") or binding_metadata.get("workspace_agent_install_id") or "").strip() or None,
                     "runtime_profile_id": str(binding_metadata.get("runtime_profile_id") or "").strip() or None,
                 },
-                session_id=preferred_session_id,
+                session_id=None if scope_mismatch else preferred_session_id,
             )
             session_record = await session_service.get_session(resolved_turn_request.session_id)
     else:

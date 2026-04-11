@@ -1,5 +1,9 @@
+import sys
+import types
 import unittest
 from unittest.mock import AsyncMock, Mock, patch
+
+from fastapi import HTTPException
 
 from server_modules import runtime_runs_api
 from server_modules.agent_turn import build_direct_chat_turn_request
@@ -7,6 +11,7 @@ from server_modules.direct_chat_service import DirectChatExecutionServices, buil
 from server_modules.run_service import RunExecutionServices
 from server_modules.runtime_models import RunStartRequest
 from server_modules import turn_runtime
+from server_modules import session_service
 from server_modules.turn_runtime import (
     TurnExecutionServices,
     build_turn_execution_services,
@@ -42,7 +47,66 @@ class _DummyManager:
         }
 
 
+class _FakeApp:
+    def __init__(self) -> None:
+        self.routes = {}
+
+    def _register(self, method, path, **kwargs):
+        def _decorator(fn):
+            self.routes[(method, path)] = fn
+            return fn
+
+        return _decorator
+
+    def get(self, path, **kwargs):
+        return self._register("GET", path, **kwargs)
+
+    def post(self, path, **kwargs):
+        return self._register("POST", path, **kwargs)
+
+    def delete(self, path, **kwargs):
+        return self._register("DELETE", path, **kwargs)
+
+
+class _FakeRequest:
+    def __init__(self, payload=None, *, headers=None) -> None:
+        self._payload = payload or {}
+        self.headers = headers or {}
+
+    async def json(self):
+        return self._payload
+
+
 class RuntimeRunsApiSessionManagerTests(unittest.TestCase):
+    def _current_user(self):
+        return {
+            "user_id": "user-1",
+            "email": "user@example.com",
+            "auth_type": "bearer",
+            "role": "owner",
+            "is_admin": True,
+            "workspace_ids": ["default"],
+            "workspace_access": {
+                "default": {
+                    "workspace_id": "default",
+                    "tenant_id": "default",
+                    "role": "owner",
+                    "tenant_role": "owner",
+                    "capabilities": {"allow": [], "deny": []},
+                    "tenant_capabilities": {"allow": [], "deny": []},
+                    "workspace_capabilities": {"allow": [], "deny": []},
+                    "dangerous_action_classes": {"allow": [], "deny": []},
+                    "tenant_dangerous_action_classes": {"allow": [], "deny": []},
+                    "workspace_dangerous_action_classes": {"allow": [], "deny": []},
+                    "connectors": {"allow": [], "deny": []},
+                    "tenant_connectors": {"allow": [], "deny": []},
+                    "workspace_connectors": {"allow": [], "deny": []},
+                    "machine_enrollment_scope": "workspace",
+                    "trusted_owner_machine_ids": [],
+                }
+            },
+        }
+
     def test_builder_helpers_preserve_turn_runtime_callbacks(self):
         run_execution = RunExecutionServices(
             stamp_request_owner=lambda req, current_user: req,
@@ -256,6 +320,79 @@ class RuntimeRunsApiSessionManagerTests(unittest.TestCase):
 
         self.assertEqual(result["run_id"], "run-3")
         self.assertIs(captured["stamped"], original)
+
+    def test_turn_route_normalizes_session_scope_violation_to_http_conflict(self):
+        fake_server = types.ModuleType("server")
+        fake_server.require_api_key = object()
+        fake_server.require_admin_api_key = object()
+        fake_server.ORION_SINGLE_AGENT_MODE = False
+        fake_server.runs = {}
+        fake_server.iter_logs_for_run = lambda run_id: []
+        fake_server._get_replay_payload = lambda run_id: {}
+
+        previous_server = sys.modules.get("server")
+        sys.modules["server"] = fake_server
+        original_register = runtime_runs_api.runtime_route_registration_service.register_runtime_run_routes_from_api
+        original_refresh = runtime_runs_api._refresh_server_exports
+        original_stamp = runtime_runs_api._stamp_workspace_authorization_on_turn_payload
+        original_turn = runtime_runs_api.execute_canonical_agent_turn
+        original_run_services = runtime_runs_api._run_execution_services
+        original_direct_chat_services = runtime_runs_api._direct_chat_execution_services
+        try:
+            runtime_runs_api.runtime_route_registration_service.register_runtime_run_routes_from_api = lambda *args, **kwargs: None
+            runtime_runs_api._refresh_server_exports = lambda: fake_server
+            runtime_runs_api._stamp_workspace_authorization_on_turn_payload = lambda payload, **kwargs: payload
+            runtime_runs_api._run_execution_services = lambda: "run-services"
+            runtime_runs_api._direct_chat_execution_services = lambda: "chat-services"
+            runtime_runs_api.execute_canonical_agent_turn = AsyncMock(
+                side_effect=session_service.SessionScopeViolationError("scope mismatch")
+            )
+
+            app = _FakeApp()
+            runtime_runs_api.register_run_routes(app)
+
+            with self.assertRaises(HTTPException) as ctx:
+                __import__("asyncio").run(
+                    app.routes[("POST", "/turn")](
+                        _FakeRequest(
+                            {
+                                "thread_id": "thread-1",
+                                "workspace_id": "default",
+                                "session_id": "thread-1",
+                                "channel": "web",
+                                "actor": {"type": "user", "id": "user-1"},
+                                "message": "hello",
+                                "execution_mode": "durable",
+                                "response_mode": "artifact",
+                            }
+                        ),
+                        {
+                            "thread_id": "thread-1",
+                            "workspace_id": "default",
+                            "session_id": "thread-1",
+                            "channel": "web",
+                            "actor": {"type": "user", "id": "user-1"},
+                            "message": "hello",
+                            "execution_mode": "durable",
+                            "response_mode": "artifact",
+                        },
+                        current_user=self._current_user(),
+                    )
+                )
+
+            self.assertEqual(ctx.exception.status_code, 409)
+            self.assertEqual(ctx.exception.detail["code"], "session_scope_mismatch")
+        finally:
+            runtime_runs_api.runtime_route_registration_service.register_runtime_run_routes_from_api = original_register
+            runtime_runs_api._refresh_server_exports = original_refresh
+            runtime_runs_api._stamp_workspace_authorization_on_turn_payload = original_stamp
+            runtime_runs_api.execute_canonical_agent_turn = original_turn
+            runtime_runs_api._run_execution_services = original_run_services
+            runtime_runs_api._direct_chat_execution_services = original_direct_chat_services
+            if previous_server is not None:
+                sys.modules["server"] = previous_server
+            else:
+                sys.modules.pop("server", None)
 
     def test_execute_built_unowned_system_run_start_request_via_turn_runtime_builds_services(self):
         request = RunStartRequest(engine="orion", workspace_id="default", user_goal="hello")

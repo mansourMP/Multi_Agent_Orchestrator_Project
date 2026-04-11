@@ -22,6 +22,8 @@ from server_modules.runtime_state_store import (
 LOGGER = logging.getLogger(__name__)
 
 DEFAULT_SESSION_TTL_SECONDS = max(60, int(str(os.getenv("ORION_SESSION_TTL_SECONDS") or "86400").strip() or "86400"))
+SERVER_RUNTIME_SESSION_AUTHORITY = "postgres"
+SQLITE_RUNTIME_SESSION_CHECKPOINT_ROLE = "sqlite_checkpoint"
 _SCHEMA_READY = False
 _SCHEMA_LOCK: asyncio.Lock = asyncio.Lock()
 _RUNTIME_SESSIONS_SCHEMA_SQL = """
@@ -38,6 +40,14 @@ CREATE TABLE IF NOT EXISTS runtime_sessions (
 CREATE INDEX IF NOT EXISTS idx_runtime_sessions_workspace_expires
     ON runtime_sessions(workspace_id, expires_at DESC);
 """
+
+
+class SessionScopeViolationError(ValueError):
+    def __init__(self, detail: str, *, code: str = "session_scope_mismatch", mismatch: Optional[Dict[str, Any]] = None) -> None:
+        super().__init__(detail)
+        self.code = str(code or "session_scope_mismatch").strip() or "session_scope_mismatch"
+        self.detail = str(detail or "Session scope mismatch.").strip() or "Session scope mismatch."
+        self.mismatch = dict(mismatch or {})
 
 
 def _utc_now() -> datetime:
@@ -85,6 +95,16 @@ def _coerce_actor(value: Any) -> Dict[str, Any]:
     }
 
 
+def _scope_enforcement_enabled() -> bool:
+    raw = str(os.getenv("ORION_ENFORCE_SCOPED_SESSION_RESUME") or "1").strip().lower()
+    return raw not in {"0", "false", "no", "off"}
+
+
+def _sqlite_session_compatibility_fallback_enabled() -> bool:
+    raw = str(os.getenv("ORION_ALLOW_SERVER_SESSION_SQLITE_FALLBACK") or "0").strip().lower()
+    return raw in {"1", "true", "yes", "on"}
+
+
 def _metadata_binding_token(metadata: Any, key: str) -> Optional[str]:
     payload = _coerce_dict(metadata)
     token = str(payload.get(key) or "").strip()
@@ -103,6 +123,8 @@ def _canonical_session_record(
     metadata: Any,
     status: str = "active",
 ) -> Dict[str, Any]:
+    normalized_metadata = _coerce_dict(metadata)
+    normalized_metadata.setdefault("thread_id", str(session_id or "").strip())
     return {
         "session_id": str(session_id or "").strip(),
         "workspace_id": str(workspace_id or "default").strip() or "default",
@@ -111,7 +133,7 @@ def _canonical_session_record(
         "actor": _coerce_actor(actor),
         "created_at": str(created_at or "").strip() or _utc_now_iso(),
         "expires_at": str(expires_at or "").strip() or _expires_at_iso(DEFAULT_SESSION_TTL_SECONDS),
-        "metadata": _coerce_dict(metadata),
+        "metadata": normalized_metadata,
         "status": str(status or "active").strip() or "active",
     }
 
@@ -177,6 +199,39 @@ def _session_from_pg(row: Any) -> Optional[Dict[str, Any]]:
     )
 
 
+def _effective_thread_id(record: Dict[str, Any]) -> str:
+    metadata = _coerce_dict(record.get("metadata"))
+    return str(metadata.get("thread_id") or record.get("session_id") or "").strip()
+
+
+def _scope_mismatch(
+    record: Dict[str, Any],
+    *,
+    workspace_id: str,
+    tenant_id: str,
+    channel: str,
+    thread_id: str,
+) -> Dict[str, Dict[str, str]]:
+    expected = {
+        "workspace_id": str(workspace_id or "default").strip() or "default",
+        "tenant_id": str(tenant_id or "default").strip() or "default",
+        "channel": str(channel or "web").strip().lower() or "web",
+        "thread_id": str(thread_id or record.get("session_id") or "").strip(),
+    }
+    actual = {
+        "workspace_id": str(record.get("workspace_id") or "default").strip() or "default",
+        "tenant_id": str(record.get("tenant_id") or "default").strip() or "default",
+        "channel": str(record.get("channel") or "web").strip().lower() or "web",
+        "thread_id": _effective_thread_id(record),
+    }
+    mismatch: Dict[str, Dict[str, str]] = {}
+    for key, expected_value in expected.items():
+        actual_value = actual.get(key) or ""
+        if expected_value and actual_value != expected_value:
+            mismatch[key] = {"expected": expected_value, "actual": actual_value}
+    return mismatch
+
+
 def _is_expired(record: Dict[str, Any]) -> bool:
     expires_at = str(record.get("expires_at") or "").strip()
     if not expires_at:
@@ -222,6 +277,31 @@ def _delete_sqlite_session(session_id: str) -> None:
         delete_runtime_session(db_path, session_id)
     except Exception as exc:
         LOGGER.warning("SQLite session mirror delete failed for %s: %s", session_id, exc)
+
+
+async def get_checkpoint_session(session_id: str) -> Optional[Dict[str, Any]]:
+    token = str(session_id or "").strip()
+    if not token:
+        return None
+    try:
+        db_path = _normalized_runtime_state_db_path()
+        init_runtime_state_db(db_path)
+        record = _session_from_sqlite(get_sqlite_runtime_session(db_path, token))
+        if isinstance(record, dict):
+            record["status"] = "expired" if _is_expired(record) else str(record.get("status") or "active")
+        return record
+    except Exception as exc:
+        LOGGER.warning("SQLite checkpoint session read failed for %s: %s", token, exc)
+        return None
+
+
+async def _get_session_sqlite_compatibility(session_id: str, *, reason: str) -> Optional[Dict[str, Any]]:
+    LOGGER.warning(
+        "Authoritative runtime_sessions read fell back to SQLite compatibility mode for %s: %s",
+        session_id,
+        reason,
+    )
+    return await get_checkpoint_session(session_id)
 
 
 async def create_session(
@@ -303,39 +383,84 @@ async def get_session(session_id: str) -> Optional[Dict[str, Any]]:
     if not token:
         return None
     pool = await _ensure_runtime_sessions_table()
-    if pool is not None:
-        try:
-            row = await pool.fetchrow(
-                """
-                SELECT session_id, workspace_id, tenant_id, channel, actor, created_at, expires_at, metadata
-                FROM runtime_sessions
-                WHERE session_id = $1
-                LIMIT 1
-                """,
-                token,
-            )
-            record = _session_from_pg(row)
-            if isinstance(record, dict):
-                record["status"] = "expired" if _is_expired(record) else "active"
-                return record
-        except Exception as exc:
-            LOGGER.warning("Postgres get_session failed for %s: %s", token, exc)
-    try:
-        db_path = _normalized_runtime_state_db_path()
-        init_runtime_state_db(db_path)
-        record = _session_from_sqlite(get_sqlite_runtime_session(db_path, token))
-        if isinstance(record, dict):
-            record["status"] = "expired" if _is_expired(record) else str(record.get("status") or "active")
-        return record
-    except Exception as exc:
-        LOGGER.warning("SQLite get_session fallback failed for %s: %s", token, exc)
+    if pool is None:
+        if _sqlite_session_compatibility_fallback_enabled():
+            return await _get_session_sqlite_compatibility(token, reason="authoritative_postgres_unavailable")
+        LOGGER.warning(
+            "Authoritative runtime_sessions store unavailable for %s; refusing silent SQLite fallback",
+            token,
+        )
         return None
+    try:
+        row = await pool.fetchrow(
+            """
+            SELECT session_id, workspace_id, tenant_id, channel, actor, created_at, expires_at, metadata
+            FROM runtime_sessions
+            WHERE session_id = $1
+            LIMIT 1
+            """,
+            token,
+        )
+    except Exception as exc:
+        if _sqlite_session_compatibility_fallback_enabled():
+            return await _get_session_sqlite_compatibility(token, reason=f"postgres_read_error:{exc}")
+        LOGGER.warning(
+            "Authoritative runtime_sessions read failed for %s; refusing silent SQLite fallback: %s",
+            token,
+            exc,
+        )
+        return None
+    record = _session_from_pg(row)
+    if isinstance(record, dict):
+        record["status"] = "expired" if _is_expired(record) else "active"
+        return record
+    if _sqlite_session_compatibility_fallback_enabled():
+        return await _get_session_sqlite_compatibility(token, reason="postgres_row_missing")
+    return None
 
 
-async def extend_session(session_id: str) -> Optional[Dict[str, Any]]:
+async def get_session_scoped(
+    session_id: str,
+    *,
+    workspace_id: str,
+    tenant_id: str,
+    channel: str,
+    thread_id: str,
+    enforce: Optional[bool] = None,
+) -> Optional[Dict[str, Any]]:
+    record = await get_session(session_id)
+    if not isinstance(record, dict):
+        return None
+    mismatch = _scope_mismatch(
+        record,
+        workspace_id=workspace_id,
+        tenant_id=tenant_id,
+        channel=channel,
+        thread_id=thread_id,
+    )
+    if not mismatch:
+        return record
+    LOGGER.warning("Scoped session mismatch for %s: %s", session_id, mismatch)
+    if enforce is None:
+        enforce = _scope_enforcement_enabled()
+    if enforce:
+        raise SessionScopeViolationError(
+            "Provided session_id does not belong to the requested workspace, channel, or thread scope.",
+            mismatch=mismatch,
+        )
+    shadow_record = dict(record)
+    shadow_record["_scope_mismatch"] = mismatch
+    return shadow_record
+
+
+async def extend_session(session_id: str, *, metadata_updates: Any = None) -> Optional[Dict[str, Any]]:
     existing = await get_session(session_id)
     if not isinstance(existing, dict):
         return None
+    if isinstance(metadata_updates, dict) and metadata_updates:
+        merged_metadata = _coerce_dict(existing.get("metadata"))
+        merged_metadata.update({key: value for key, value in metadata_updates.items() if value is not None})
+        existing["metadata"] = merged_metadata
     existing["expires_at"] = _expires_at_iso(DEFAULT_SESSION_TTL_SECONDS)
     existing["status"] = "active"
     pool = await _ensure_runtime_sessions_table()

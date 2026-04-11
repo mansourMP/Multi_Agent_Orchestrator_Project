@@ -2,8 +2,8 @@
 
 import Link from 'next/link';
 
-import { WorkspaceScope } from '@/app/(account)/w/[workspaceId]/WorkspaceScope';
 import { useWorkspaceBoundary } from '@/lib/workspace/workspace-boundary';
+import { WorkspaceFeatureSurface } from '@/lib/workspace/workspace-feature-surface';
 import type { WorkspaceRouteId } from '@/lib/workspace/workspace-shell';
 
 export function WorkspaceSurfacePage({
@@ -41,10 +41,6 @@ export function WorkspaceSurfacePage({
   }
 
   return (
-    <WorkspaceScope
-      workspaceId={workspaceId}
-      surface={surface}
-      routeKind="workspace_surface"
-    />
+    <WorkspaceFeatureSurface featureId={surface} />
   );
 }

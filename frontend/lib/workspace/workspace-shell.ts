@@ -9,7 +9,9 @@ export type WorkspaceRouteId =
   | 'chat'
   | 'workstation'
   | 'runs'
+  | 'approvals'
   | 'artifacts'
+  | 'notifications'
   | 'applications'
   | 'agents'
   | 'activity'
@@ -102,11 +104,24 @@ const ROUTE_DEFINITIONS: RouteDefinition[] = [
     href: (workspaceId) => `/w/${workspaceId}/runs`,
   },
   {
+    id: 'approvals',
+    label: 'Approvals',
+    groupId: 'primary',
+    href: (workspaceId) => `/w/${workspaceId}/approvals`,
+    requiredCapabilities: ['approvals_enabled'],
+  },
+  {
     id: 'artifacts',
     label: 'Artifacts',
     groupId: 'workspace',
     href: (workspaceId) => `/w/${workspaceId}/artifacts`,
     requiredCapabilities: ['artifacts_enabled'],
+  },
+  {
+    id: 'notifications',
+    label: 'Notifications',
+    groupId: 'workspace',
+    href: (workspaceId) => `/w/${workspaceId}/notifications`,
   },
   {
     id: 'applications',

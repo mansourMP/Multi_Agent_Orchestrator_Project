@@ -3,6 +3,7 @@ import { enforceBffRouteGuard } from '@/lib/server/bffRouteGuard';
 import {
   requireControlPlaneSession,
   requireControlPlaneWorkspaceAccess,
+  resolveRuntimeWorkspaceId,
 } from '@/lib/server/controlPlaneSession';
 import { runtimeJsonRequest } from '@/lib/server/runtimeControlPlane';
 
@@ -20,10 +21,11 @@ export async function GET(request: NextRequest) {
   const workspaceId = queryWorkspaceId(request);
   const workspaceFailure = await requireControlPlaneWorkspaceAccess(request, workspaceId, 'viewer');
   if (workspaceFailure) return workspaceFailure;
+  const runtimeWorkspaceId = await resolveRuntimeWorkspaceId(request, workspaceId);
 
   try {
     const { status, payload } = await runtimeJsonRequest(
-      `/agent-registry/chat-context?workspace_id=${encodeURIComponent(workspaceId)}`,
+      `/agent-registry/chat-context?workspace_id=${encodeURIComponent(runtimeWorkspaceId)}`,
       { method: 'GET' },
     );
     return Response.json(payload, { status });

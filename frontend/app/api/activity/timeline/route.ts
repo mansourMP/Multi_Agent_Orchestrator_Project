@@ -3,6 +3,7 @@ import { enforceBffRouteGuard } from '@/lib/server/bffRouteGuard';
 import {
   requireControlPlaneSession,
   requireControlPlaneWorkspaceAccess,
+  resolveRuntimeWorkspaceId,
 } from '@/lib/server/controlPlaneSession';
 import { runtimeJsonRequest } from '@/lib/server/runtimeControlPlane';
 
@@ -12,9 +13,11 @@ function sanitizeQuery(request: NextRequest): URLSearchParams {
   const query = new URLSearchParams();
   const workspaceId = String(request.nextUrl.searchParams.get('workspace_id') || 'default').trim() || 'default';
   query.set('workspace_id', workspaceId);
-  const limit = String(request.nextUrl.searchParams.get('limit') || '').trim();
-  if (limit) {
-    query.set('limit', limit);
+  for (const key of ['limit', 'run_id', 'event_class', 'detail_level', 'actor_type', 'actor_id', 'install_id', 'app_id', 'thread_id']) {
+    const value = String(request.nextUrl.searchParams.get(key) || '').trim();
+    if (value) {
+      query.set(key, value);
+    }
   }
   return query;
 }
@@ -28,6 +31,7 @@ export async function GET(request: NextRequest) {
   const workspaceId = query.get('workspace_id') || 'default';
   const workspaceFailure = await requireControlPlaneWorkspaceAccess(request, workspaceId, 'viewer');
   if (workspaceFailure) return workspaceFailure;
+  query.set('workspace_id', await resolveRuntimeWorkspaceId(request, workspaceId));
 
   try {
     const { status, payload } = await runtimeJsonRequest(`/activity/timeline?${query.toString()}`, { method: 'GET' });

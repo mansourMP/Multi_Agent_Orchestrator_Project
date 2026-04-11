@@ -47,6 +47,7 @@ import {
 } from '@/lib/commandRegistry';
 import { BRAND } from '@/lib/brand';
 import { controlPlaneSignInUrl, ensureControlPlaneSession } from '@/lib/controlPlaneSession';
+import { shouldUseDurableRunForTaskRequest } from '@/lib/primaryRunPath';
 import { RUN_COMPLETED_STATUS_COPY, RUN_FAILED_STATUS_COPY } from '@/lib/runStartCopy';
 
 type ChatDepthValue = 'low' | 'medium' | 'high';
@@ -117,6 +118,20 @@ function sortChatMessages(messages: ChatMessageRecord[]): ChatMessageRecord[] {
     }
     return left.id.localeCompare(right.id);
   });
+}
+
+function mapStartedRunStatusToChatMessageStatus(status: string): ChatMessageRecord['status'] {
+  if (status === 'waiting' || status === 'waiting_for_input') return 'waiting';
+  if (status === 'queued_local') return 'running';
+  if (status === 'failed' || status === 'timeout') return 'error';
+  return 'running';
+}
+
+function mapStartedRunStatusToRunCardStatus(status: string): ChatRunCardStatus {
+  if (status === 'waiting' || status === 'waiting_for_input') return 'waiting';
+  if (status === 'queued_local') return 'preparing';
+  if (status === 'failed' || status === 'timeout') return 'failed';
+  return 'running';
 }
 
 function createInitialChatStore(): ChatStoreRecord {
@@ -214,6 +229,15 @@ function formatRuntimeDeploymentMode(value: string | null | undefined): string {
   if (normalized === 'hybrid') return 'Hybrid captain';
   if (normalized === 'self_hosted_business') return 'Self-hosted';
   return 'Connected workspace';
+}
+
+function formatRuntimeTargetLabel(value: string | null | undefined): string {
+  const normalized = String(value || '').trim().toLowerCase();
+  if (!normalized) return 'Cloud default';
+  if (normalized === 'cloud_default') return 'Cloud default';
+  if (normalized === 'local_companion') return 'Local companion';
+  if (normalized === 'self_host_runtime') return 'Self-host runtime';
+  return humanizeScopeLabel(value);
 }
 
 function humanizeScopeLabel(value: string | null | undefined): string {
@@ -1057,7 +1081,7 @@ function SageWorkspace() {
         let streamedReply = '';
         const payload = await sendOperatorChat('__approval_confirmed__', {
           reasoningEffort: simpleChatDepth,
-          threadId: masterThreadId || sessionId,
+          clientSessionKey: sessionId,
           masterAgentInstallId: sageInstall?.id || selectedChatSession?.masterAgentInstallId || null,
           runtimeProfileId: sageInstall?.runtime_profile?.id || sageInstall?.runtime_profile_id || null,
           approvedAction: {
@@ -1239,6 +1263,7 @@ function SageWorkspace() {
     const text = goal.trim();
     const sessionId = selectedChatSession?.id;
     if (!text || !sessionId) return;
+    const shouldStartDurableRun = shouldUseDurableRunForTaskRequest(text);
     const priorMessages = selectedChatMessages
       .filter((message) => {
         const content = normalizeChatContent(message.content);
@@ -1278,12 +1303,82 @@ function SageWorkspace() {
     setGoal('');
     setTopError(null);
 
+    if (shouldStartDurableRun) {
+      setPendingSimpleChat(null);
+      setPendingSimpleRun({ sessionId, messageId: placeholderId, runId: null, goal: text });
+      try {
+        const payload = await startOperatorRun({
+          goal: text,
+          metadata: {
+            source: 'simple_chat_primary_run',
+            direct_chat: false,
+          },
+        });
+        setChatAuthRequiredMessage(null);
+        setChatNoProviderStatus(false);
+        setTopError(null);
+        if (!payload || typeof payload !== 'object') {
+          throw new Error('Failed to start durable run.');
+        }
+        const runRecord = payload as Record<string, unknown>;
+        const startedRunId = String(runRecord.run_id || '').trim() || null;
+        const startedStatus = String(runRecord.status || 'running').trim().toLowerCase();
+        const startedSummary = String(runRecord.started_message || '').trim()
+          || (startedStatus === 'queued_local'
+            ? 'Preparing execution on your machine.'
+            : startedStatus === 'waiting' || startedStatus === 'waiting_for_input'
+              ? 'Waiting for confirmation to continue.'
+              : 'Working on this now.');
+        if (startedRunId) {
+          setPendingSimpleRun((current) => (
+            current && current.messageId === placeholderId
+              ? { ...current, runId: startedRunId }
+              : current
+          ));
+        }
+        patchSimpleChatMessage(sessionId, placeholderId, {
+          content: '',
+          status: mapStartedRunStatusToChatMessageStatus(startedStatus),
+          run_id: startedRunId,
+          approvalRequests: [],
+          runCard: {
+            title: truncateRunCardTitle(text),
+            summary: startedSummary,
+            status: mapStartedRunStatusToRunCardStatus(startedStatus),
+            runId: startedRunId,
+            sourceGoal: text,
+            meta: [],
+            evidence: [],
+            approval: null,
+          },
+          ts: new Date().toISOString(),
+        });
+        return;
+      } catch (error) {
+        setPendingSimpleRun(null);
+        if (isNoProviderChatError(error)) {
+          setChatNoProviderStatus(true);
+          removeSimpleChatMessage(sessionId, placeholderId);
+          return;
+        }
+        if (isAuthRequiredChatError(error)) {
+          setChatAuthRequiredMessage(error.message || 'Continue in your browser to sign in.');
+          removeSimpleChatMessage(sessionId, placeholderId);
+          return;
+        }
+        const message = error instanceof Error ? error.message : 'Failed to start durable run.';
+        removeSimpleChatMessage(sessionId, placeholderId);
+        setTopError(message);
+        return;
+      }
+    }
+
     let streamedSteps: NonNullable<ChatMessageRecord['steps']> = [];
     try {
       let streamedReply = '';
       const payload = await sendOperatorChat(text, {
         reasoningEffort: simpleChatDepth,
-        threadId: masterThreadId || sessionId,
+        clientSessionKey: sessionId,
         masterAgentInstallId: sageInstall?.id || selectedChatSession?.masterAgentInstallId || null,
         runtimeProfileId: sageInstall?.runtime_profile?.id || sageInstall?.runtime_profile_id || null,
         priorMessages,
@@ -1351,6 +1446,7 @@ function SageWorkspace() {
     selectedChatMessages,
     selectedChatSession?.id,
     selectedChatSession?.masterAgentInstallId,
+    startOperatorRun,
     sendOperatorChat,
     sageInstall?.id,
     sageInstall?.runtime_profile?.id,
@@ -1431,12 +1527,24 @@ function SageWorkspace() {
     const attachments = Array.isArray(masterContext?.runtime_attachments?.attachments)
       ? masterContext.runtime_attachments.attachments
       : [];
+    const runtimeTargets = Array.isArray(masterContext?.runtime_targets?.targets)
+      ? masterContext.runtime_targets.targets
+      : [];
     const localAttachments = attachments.filter((item) => String(item.attachment_kind || '').trim() === 'local_companion');
     const hostedAttachments = attachments.filter((item) => String(item.attachment_kind || '').trim() !== 'local_companion');
     const healthyAttachments = attachments.filter((item) => item.healthy !== false && item.online !== false);
     const healthyLocalCount = localAttachments.filter((item) => item.healthy !== false && item.online !== false).length;
+    const defaultTargetId = typeof masterContext?.runtime_targets?.default_target_id === 'string'
+      ? masterContext.runtime_targets.default_target_id
+      : null;
+    const defaultTarget = runtimeTargets.find((item) => String(item.target_id || '').trim() === String(defaultTargetId || '').trim());
+    const availableTargets = runtimeTargets.filter((item) => item.available !== false);
     return {
       deploymentMode: formatRuntimeDeploymentMode(masterContext?.runtime_attachments?.deployment_mode),
+      defaultTarget: String(defaultTarget?.label || formatRuntimeTargetLabel(defaultTargetId)).trim(),
+      availableTargetSummary: availableTargets.length > 0
+        ? availableTargets.map((item) => String(item.label || formatRuntimeTargetLabel(String(item.target_id || ''))).trim()).filter(Boolean).join(' · ')
+        : 'No workspace runtime targets reported yet',
       attachmentCount: attachments.length,
       healthyCount: healthyAttachments.length,
       localCount: localAttachments.length,
@@ -1536,14 +1644,19 @@ function SageWorkspace() {
         note: 'Desktop keeps the deeper control layer, but Sage uses the same runtime and policy rules across phone and desktop.',
         items: [
           { label: 'Deployment', value: runtimeSurfaceState.deploymentMode, priority: 'high' },
+          { label: 'Default target', value: runtimeSurfaceState.defaultTarget },
           {
             label: 'Placement visibility',
             value: `${runtimeSurfaceState.healthyCount}/${runtimeSurfaceState.attachmentCount} attachments healthy · ${runtimeSurfaceState.localCount} local · ${runtimeSurfaceState.hostedCount} hosted`,
             tone: runtimeSurfaceState.degradedLocal ? 'warning' : 'success',
           },
           {
+            label: 'Workspace targets',
+            value: runtimeSurfaceState.availableTargetSummary,
+          },
+          {
             label: 'Parity rule',
-            value: 'Execution capability follows runtime, policy, memory scope, connector scope, and approvals, not surface origin.',
+            value: 'Mobile enters through the platform first. Execution capability follows workspace runtime targets, policy, memory scope, connector scope, and approvals, not surface origin.',
           },
         ],
       });

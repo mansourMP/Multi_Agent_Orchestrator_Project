@@ -28,6 +28,7 @@ import {
   type ChatInterventionRecord,
   type ChatMessageActionRecord,
   type ChatMessageRecord,
+  type ChatRunCardRecord,
   type ChatSessionRecord,
   type ChatStepRecord,
 } from './chatSchema';
@@ -725,6 +726,67 @@ function ChatMessageToolbar({
           <FileText size={13} />
           <span>{artifactCount === 1 ? 'Artifact' : `Artifacts (${artifactCount})`}</span>
         </button>
+      ) : null}
+    </div>
+  );
+}
+
+function humanizeRunCardStatus(status: ChatRunCardRecord['status']): string {
+  const normalized = String(status || '').trim().toLowerCase();
+  if (normalized === 'preparing') return 'Preparing';
+  if (normalized === 'running') return 'Running';
+  if (normalized === 'waiting') return 'Waiting';
+  if (normalized === 'completed') return 'Completed';
+  if (normalized === 'needs_attention') return 'Needs attention';
+  if (normalized === 'failed') return 'Failed';
+  return 'Running';
+}
+
+function ChatRunCard({ runCard }: { runCard: ChatRunCardRecord }) {
+  const status = String(runCard.status || 'preparing').trim().toLowerCase();
+  const approvalTags = [
+    ...(Array.isArray(runCard.approval?.labels) ? runCard.approval.labels : []),
+    ...(Array.isArray(runCard.approval?.actions) ? runCard.approval.actions : []),
+  ].filter(Boolean);
+
+  return (
+    <div className={`orion-chat-v2-run-card is-${status}`}>
+      <div className="orion-chat-v2-run-card-header">
+        <div className="orion-chat-v2-run-card-title">{runCard.title}</div>
+        <div className={`orion-chat-v2-run-card-status is-${status}`}>{humanizeRunCardStatus(runCard.status)}</div>
+      </div>
+      {runCard.summary ? <div className="orion-chat-v2-run-card-summary">{runCard.summary}</div> : null}
+      {Array.isArray(runCard.meta) && runCard.meta.length > 0 ? (
+        <div className="orion-chat-v2-run-card-meta">
+          {runCard.meta.map((entry) => (
+            <div key={entry.id} className="orion-chat-v2-run-card-meta-item">
+              <span className="orion-chat-v2-run-card-meta-label">{entry.label}</span>
+              <span className="orion-chat-v2-run-card-meta-value">{entry.value}</span>
+            </div>
+          ))}
+        </div>
+      ) : null}
+      {Array.isArray(runCard.evidence) && runCard.evidence.length > 0 ? (
+        <div className="orion-chat-v2-run-card-evidence">
+          {runCard.evidence.map((entry) => (
+            <div key={entry.id} className="orion-chat-v2-run-card-evidence-item">
+              <span className="orion-chat-v2-run-card-evidence-label">{entry.label}</span>
+              <span className="orion-chat-v2-run-card-evidence-value">{entry.value}</span>
+            </div>
+          ))}
+        </div>
+      ) : null}
+      {runCard.approval ? (
+        <div className="orion-chat-v2-run-card-approval">
+          <div className="orion-chat-v2-run-card-approval-copy">{runCard.approval.prompt}</div>
+          {approvalTags.length > 0 ? (
+            <div className="orion-chat-v2-run-card-approval-tags">
+              {approvalTags.map((entry) => (
+                <div key={entry} className="orion-chat-v2-run-card-approval-tag">{entry}</div>
+              ))}
+            </div>
+          ) : null}
+        </div>
       ) : null}
     </div>
   );
@@ -1880,13 +1942,14 @@ export function ChatSurface({
               const displayContent = isUser ? message.content : normalizeAssembledAssistantText(normalizeAssistantDisplayText(message.content));
               const suppressBody = !isUser && shouldSuppressAssistantBody(displayContent, message.status);
               const isFirstAssistantEntry = !isUser && isFirstThread && index <= 1;
+              const hasRunCard = Boolean(message.runCard);
               const artifactsForMessage = !isUser ? messageArtifacts.byMessage.get(message.id) || [] : [];
               const codeArtifacts = artifactsForMessage.filter((artifact) => artifact.source === 'code');
               const previewArtifacts = artifactsForMessage.filter(
                 (artifact) => artifact.source === 'manifest' || artifact.source === 'file',
               );
               const activityEntries = !isUser ? buildInlineActivity(message) : [];
-              if (!isUser && suppressBody && artifactsForMessage.length === 0 && (!message.approvalRequests || message.approvalRequests.length === 0) && (!message.interventions || message.interventions.length === 0)) {
+              if (!isUser && suppressBody && !hasRunCard && artifactsForMessage.length === 0 && (!message.approvalRequests || message.approvalRequests.length === 0) && (!message.interventions || message.interventions.length === 0)) {
                 return null;
               }
               let codeArtifactIndex = 0;
@@ -1964,6 +2027,7 @@ export function ChatSurface({
                       {activityEntries.length > 0 ? (
                         <ChatInlineActivityLog entries={activityEntries} />
                       ) : null}
+                      {message.runCard ? <ChatRunCard runCard={message.runCard} /> : null}
                       {previewArtifacts.length > 0 ? (
                         <div style={{ display: 'grid', gap: 12 }}>
                           {previewArtifacts.map((artifact) => (

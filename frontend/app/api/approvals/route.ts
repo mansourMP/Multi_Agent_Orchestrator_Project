@@ -4,6 +4,7 @@ import {
   requireControlPlaneRole,
   requireControlPlaneSession,
   requireControlPlaneWorkspaceAccess,
+  resolveRuntimeWorkspaceId,
 } from '@/lib/server/controlPlaneSession';
 import { runtimeJsonRequest } from '@/lib/server/runtimeControlPlane';
 
@@ -27,8 +28,8 @@ export async function GET(request: NextRequest) {
       'approvals.read',
     );
     if (workspaceFailure) return workspaceFailure;
+    query.set('workspace_id', await resolveRuntimeWorkspaceId(request, workspaceId));
   }
-  if (workspaceId) query.set('workspace_id', workspaceId);
 
   try {
     const suffix = query.toString() ? `?${query.toString()}` : '';

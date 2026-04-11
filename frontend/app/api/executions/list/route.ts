@@ -1,6 +1,6 @@
 import type { NextRequest } from 'next/server';
 import { enforceBffRouteGuard } from '@/lib/server/bffRouteGuard';
-import { getControlPlaneSession, requireControlPlaneSession } from '@/lib/server/controlPlaneSession';
+import { getControlPlaneSession, requireControlPlaneSession, resolveRuntimeWorkspaceId } from '@/lib/server/controlPlaneSession';
 import { backendJsonRequest } from '@/lib/server/backendControlPlane';
 import { runtimeJsonRequest } from '@/lib/server/runtimeControlPlane';
 
@@ -42,11 +42,12 @@ export async function GET(request: NextRequest) {
   if (authFailure) return authFailure;
   const session = await getControlPlaneSession(request);
   const ownerUserId = String(session?.sub || '').trim();
+  const workspaceId = await resolveRuntimeWorkspaceId(request, 'default');
 
   try {
     const [{ status, payload }, history] = await Promise.all([
       backendJsonRequest('/executions', { method: 'GET' }),
-      runtimeJsonRequest('/history/runs?limit=200&workspace_id=default', { method: 'GET' }),
+      runtimeJsonRequest(`/history/runs?limit=200&workspace_id=${encodeURIComponent(workspaceId)}`, { method: 'GET' }),
     ]);
     const ownedRunIds = ownedRunIdsFromHistoryPayload(history.payload, ownerUserId);
     return Response.json(filterExecutionList(payload, ownedRunIds, ownerUserId), { status });

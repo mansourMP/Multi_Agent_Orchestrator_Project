@@ -225,6 +225,29 @@ function isAuthRequiredError(message: string): boolean {
   return lower.includes('sign in') || lower.includes('requires login') || lower.includes('continue in your browser');
 }
 
+function resolvePreferredWorkspaceId(
+  accessItems: PlatformWorkspaceAccess[],
+  options?: {
+    currentWorkspaceId?: string | null;
+    defaultWorkspaceId?: string | null;
+    fallbackWorkspaceId?: string | null;
+  },
+): string {
+  const currentWorkspaceId = String(options?.currentWorkspaceId || '').trim();
+  const defaultWorkspaceId = String(options?.defaultWorkspaceId || '').trim();
+  const fallbackWorkspaceId = String(options?.fallbackWorkspaceId || '').trim();
+  if (currentWorkspaceId && accessItems.some((item) => item.workspaceId === currentWorkspaceId)) {
+    return currentWorkspaceId;
+  }
+  if (defaultWorkspaceId && accessItems.some((item) => item.workspaceId === defaultWorkspaceId)) {
+    return defaultWorkspaceId;
+  }
+  if (fallbackWorkspaceId && accessItems.some((item) => item.workspaceId === fallbackWorkspaceId)) {
+    return fallbackWorkspaceId;
+  }
+  return accessItems[0]?.workspaceId || DEFAULT_WORKSPACE_ID;
+}
+
 export function PlatformShellProvider({ children }: { children: React.ReactNode }) {
   const [accessMode, setAccessMode] = useState<PlatformAccessMode>('default');
   const [status, setStatus] = useState<PlatformShellStatus>(INITIAL_STATUS);
@@ -348,7 +371,10 @@ export function PlatformShellProvider({ children }: { children: React.ReactNode 
               })
               .filter((item: PlatformWorkspaceAccess | null): item is PlatformWorkspaceAccess => Boolean(item))
           : [];
-        const nextActiveWorkspaceId = accessItems[0]?.workspaceId || DEFAULT_WORKSPACE_ID;
+        const nextActiveWorkspaceId = resolvePreferredWorkspaceId(accessItems, {
+          currentWorkspaceId: String(profilePayload?.current_workspace_id || '').trim() || null,
+          defaultWorkspaceId: String(profilePayload?.default_workspace_id || '').trim() || null,
+        });
         const nextActiveTenantId = accessItems.find((item: PlatformWorkspaceAccess) => item.workspaceId === nextActiveWorkspaceId)?.tenantId
           || accessItems[0]?.tenantId
           || DEFAULT_TENANT_ID;
@@ -368,9 +394,11 @@ export function PlatformShellProvider({ children }: { children: React.ReactNode 
         }
 
         if (alive) {
-          const nextSelectedWorkspaceId = accessItems.some((item: PlatformWorkspaceAccess) => item.workspaceId === activeWorkspaceId)
-            ? activeWorkspaceId
-            : nextActiveWorkspaceId;
+          const nextSelectedWorkspaceId = resolvePreferredWorkspaceId(accessItems, {
+            currentWorkspaceId: String(profilePayload?.current_workspace_id || '').trim() || null,
+            defaultWorkspaceId: String(profilePayload?.default_workspace_id || '').trim() || null,
+            fallbackWorkspaceId: activeWorkspaceId,
+          });
           setWorkspaceAccess(accessItems);
           setActiveWorkspaceId(nextSelectedWorkspaceId);
           setActiveTenantId(

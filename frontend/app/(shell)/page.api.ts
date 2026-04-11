@@ -1270,7 +1270,7 @@ export function usePlatformApi(
   const refreshCredentials = useCallback(async () => {
     setIsCredentialsLoading(true);
     try {
-      const res = await controlPlaneFetch('/api/control-plane/credentials?workspace_id=default');
+      const res = await controlPlaneFetch(`/api/control-plane/credentials?workspace_id=${encodeURIComponent(activeWorkspaceId)}`);
       if (!res.ok) {
         const text = await res.text().catch(() => '');
         throw new Error(text || 'Failed to load connected accounts.');
@@ -1316,12 +1316,12 @@ export function usePlatformApi(
     } finally {
       setIsCredentialsLoading(false);
     }
-  }, [connectionMode, controlPlaneFetch, credentialId, hasRuntimeProviderAccount, provider, setIsCredentialsLoading, setCredentials, setCredentialId, setSetupStatus, setTopError]);
+  }, [activeWorkspaceId, connectionMode, controlPlaneFetch, credentialId, hasRuntimeProviderAccount, provider, setIsCredentialsLoading, setCredentials, setCredentialId, setSetupStatus, setTopError]);
 
   const refreshConnectors = useCallback(async () => {
     setIsConnectorsLoading(true);
     try {
-      const res = await controlPlaneFetch('/api/control-plane/connectors?workspace_id=default');
+      const res = await controlPlaneFetch(`/api/control-plane/connectors?workspace_id=${encodeURIComponent(activeWorkspaceId)}`);
       if (!res.ok) {
         const text = await res.text().catch(() => '');
         throw new Error(text || 'Failed to load connectors.');
@@ -1352,7 +1352,7 @@ export function usePlatformApi(
     } finally {
       setIsConnectorsLoading(false);
     }
-  }, [connectorCredentialId, controlPlaneFetch, setIsConnectorsLoading, setConnectorCredentials, setConnectorCredentialId, setConnectorType, setTopError]);
+  }, [activeWorkspaceId, connectorCredentialId, controlPlaneFetch, setIsConnectorsLoading, setConnectorCredentials, setConnectorCredentialId, setConnectorType, setTopError]);
 
   const saveConnector = useCallback(async () => {
     const label = connectorLabel.trim() || DEFAULT_CONNECTOR_LABELS[connectorType];
@@ -1524,7 +1524,7 @@ export function usePlatformApi(
     setSetupBusy('test');
     setTopError(null);
     try {
-      const res = await controlPlaneFetch(`/api/control-plane/connectors/${encodeURIComponent(connectorCredentialId)}/test?workspace_id=default`, {
+      const res = await controlPlaneFetch(`/api/control-plane/connectors/${encodeURIComponent(connectorCredentialId)}/test?workspace_id=${encodeURIComponent(activeWorkspaceId)}`, {
         method: 'POST',
       });
       if (!res.ok) {
@@ -1539,7 +1539,7 @@ export function usePlatformApi(
     } finally {
       setSetupBusy(null);
     }
-  }, [appendLog, connectorCredentialId, controlPlaneFetch, setSetupBusy, setTopError]);
+  }, [activeWorkspaceId, appendLog, connectorCredentialId, controlPlaneFetch, setSetupBusy, setTopError]);
 
   const runRuntimeCheck = useCallback(async () => {
     setSetupBusy('runtime');
@@ -1963,7 +1963,7 @@ export function usePlatformApi(
         }
       } else if (connectionMode === 'byok') {
         if (!credentialId) throw new Error('Choose a saved account first.');
-        const res = await controlPlaneFetch(`/api/control-plane/credentials/${encodeURIComponent(credentialId)}/test?workspace_id=default`, {
+        const res = await controlPlaneFetch(`/api/control-plane/credentials/${encodeURIComponent(credentialId)}/test?workspace_id=${encodeURIComponent(activeWorkspaceId)}`, {
           method: 'POST',
         });
         if (!res.ok) {
@@ -1993,6 +1993,7 @@ export function usePlatformApi(
       setSetupBusy(null);
     }
   }, [
+    activeWorkspaceId,
     appendLog,
     connectionMode,
     controlPlaneFetch,
@@ -2177,6 +2178,7 @@ export function usePlatformApi(
     message: string,
     options?: {
       reasoningEffort?: string | null;
+      clientSessionKey?: string | null;
       threadId?: string | null;
       masterAgentInstallId?: string | null;
       runtimeProfileId?: string | null;
@@ -2191,7 +2193,8 @@ export function usePlatformApi(
     const effectiveTrustMode: TrustMode = guidedDefaultsEnabled ? 'guarded' : trustMode;
     const policyContext = buildOperatorChatPolicyContext(effectiveTrustMode);
     await ensureControlPlaneSession();
-    const clientSessionKey = String(options?.threadId || '').trim() || `direct-chat:${createStreamRequestId()}`;
+    const clientSessionKey = String(options?.clientSessionKey || options?.threadId || '').trim()
+      || `direct-chat:${createStreamRequestId()}`;
     const runtimeSessionId = await ensureRuntimeSessionId({
       clientSessionKey,
       channel: 'web',
@@ -2200,7 +2203,6 @@ export function usePlatformApi(
       workspaceId: activeWorkspaceId,
       metadata: {
         source: 'direct_chat',
-        thread_id: clientSessionKey,
         ...(String(options?.masterAgentInstallId || '').trim()
           ? { master_agent_install_id: String(options?.masterAgentInstallId || '').trim() }
           : {}),
@@ -2276,7 +2278,6 @@ export function usePlatformApi(
         const turnRequest: AgentTurnRequest = {
           tenant_id: activeTenantId,
           workspace_id: activeWorkspaceId,
-          thread_id: clientSessionKey,
           session_id: runtimeSessionId,
           channel: 'web',
           actor: buildWebActor(runtimeSessionId),

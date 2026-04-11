@@ -42,11 +42,11 @@ export async function POST(request: NextRequest) {
   }
 
   const resolution =
-    decision.toLowerCase() === 'proceed' ? 'approved'
-      : decision.toLowerCase() === 'hold' ? 'rejected'
+    decision.toLowerCase() === 'proceed' || decision.toLowerCase() === 'approved' ? 'approved'
+      : decision.toLowerCase() === 'hold' || decision.toLowerCase() === 'rejected' ? 'rejected'
       : '';
   if (!resolution) {
-    return Response.json({ detail: 'Decision must be Proceed or Hold.' }, { status: 400 });
+    return Response.json({ detail: 'Decision must be Proceed, Hold, approved, or rejected.' }, { status: 400 });
   }
 
   try {

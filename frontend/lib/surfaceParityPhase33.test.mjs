@@ -40,7 +40,7 @@ test('mobile home and status use shared captain context for continuity and safe 
   assert.match(homeSource, /useMobileChatContext/);
   assert.match(homeSource, /SectionTitle title="Continuity"/);
   assert.match(homeSource, /SectionTitle title="Recent Captain Activity"/);
-  assert.match(homeSource, /Execution capability follows runtime/);
+  assert.match(homeSource, /Capability comes from the attached runtimes, not from the phone surface/);
   assert.match(statusSource, /useMobileChatContext/);
   assert.match(statusSource, /title="Runtime Topology"/);
   assert.match(statusSource, /title="Memory Boundary"/);

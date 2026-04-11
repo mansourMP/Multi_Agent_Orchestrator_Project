@@ -7,6 +7,7 @@ import {
   requireControlPlaneRole,
   requireControlPlaneSession,
   requireControlPlaneWorkspaceAccess,
+  resolveRuntimeWorkspaceId,
 } from '@/lib/server/controlPlaneSession';
 import { runtimeAuthorizedFetch, runtimeJsonRequest } from '@/lib/server/runtimeControlPlane';
 
@@ -36,10 +37,13 @@ async function stampTurnOwnerBody(request: NextRequest, rawBody: string): Promis
   if (!ownerUserId) return rawBody;
 
   const identity = await getAdminBrowserIdentity(request);
-  const workspaceId = String(parsed.workspace_id || 'default').trim() || 'default';
+  const requestedWorkspaceId = String(parsed.workspace_id || 'default').trim() || 'default';
+  const workspaceId = await resolveRuntimeWorkspaceId(request, requestedWorkspaceId);
+  const tenantId = workspaceId === requestedWorkspaceId
+    ? String(parsed.tenant_id || 'default').trim() || 'default'
+    : 'default';
   let masterAgentInstallId = String((parsed.context_hints?.metadata as { master_agent_install_id?: unknown } | undefined)?.master_agent_install_id || '').trim();
-  let threadId = String(parsed.thread_id || '').trim();
-  if (!masterAgentInstallId || !threadId) {
+  if (!masterAgentInstallId) {
     try {
       const { payload } = await runtimeJsonRequest(
         `/agent-registry/chat-context?workspace_id=${encodeURIComponent(workspaceId)}`,
@@ -51,9 +55,6 @@ async function stampTurnOwnerBody(request: NextRequest, rawBody: string): Promis
         : {};
       if (!masterAgentInstallId) {
         masterAgentInstallId = String(masterInstall.id || '').trim();
-      }
-      if (!threadId) {
-        threadId = String(context.thread_id || '').trim();
       }
     } catch {
       // Leave the request intact when Sage context is unavailable.
@@ -68,7 +69,8 @@ async function stampTurnOwnerBody(request: NextRequest, rawBody: string): Promis
 
   return JSON.stringify({
     ...parsed,
-    ...(threadId ? { thread_id: threadId } : {}),
+    tenant_id: tenantId,
+    workspace_id: workspaceId,
     context_hints: {
       ...(parsed.context_hints || {}),
       metadata,

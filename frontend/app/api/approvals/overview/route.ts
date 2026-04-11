@@ -1,6 +1,6 @@
 import type { NextRequest } from 'next/server';
 import { enforceBffRouteGuard } from '@/lib/server/bffRouteGuard';
-import { getControlPlaneSession, requireControlPlaneRole, requireControlPlaneSession } from '@/lib/server/controlPlaneSession';
+import { getControlPlaneSession, requireControlPlaneRole, requireControlPlaneSession, resolveRuntimeWorkspaceId } from '@/lib/server/controlPlaneSession';
 import { runtimeJsonRequest } from '@/lib/server/runtimeControlPlane';
 
 export const dynamic = 'force-dynamic';
@@ -101,11 +101,12 @@ export async function GET(request: NextRequest) {
   const session = await getControlPlaneSession(request);
   const ownerUserId = String(session?.sub || '').trim();
   const role = String(session?.role || '').trim().toLowerCase();
+  const workspaceId = await resolveRuntimeWorkspaceId(request, 'default');
 
   try {
     const [pending, history, audit] = await Promise.all([
-      runtimeJsonRequest('/approvals?limit=40&workspace_id=default', { method: 'GET' }),
-      runtimeJsonRequest('/history/runs?limit=40&workspace_id=default', { method: 'GET' }),
+      runtimeJsonRequest(`/approvals?limit=40&workspace_id=${encodeURIComponent(workspaceId)}`, { method: 'GET' }),
+      runtimeJsonRequest(`/history/runs?limit=40&workspace_id=${encodeURIComponent(workspaceId)}`, { method: 'GET' }),
       runtimeJsonRequest('/approvals/audit?limit=24', { method: 'GET' }),
     ]);
 

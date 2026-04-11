@@ -1,6 +1,6 @@
 import type { NextRequest } from 'next/server';
 import { enforceBffRouteGuard } from '@/lib/server/bffRouteGuard';
-import { getControlPlaneSession, requireControlPlaneRole, requireControlPlaneSession } from '@/lib/server/controlPlaneSession';
+import { getControlPlaneSession, requireControlPlaneRole, requireControlPlaneSession, resolveRuntimeWorkspaceId } from '@/lib/server/controlPlaneSession';
 import { runtimeJsonRequest } from '@/lib/server/runtimeControlPlane';
 
 export const dynamic = 'force-dynamic';
@@ -25,10 +25,11 @@ export async function GET(request: NextRequest) {
   const session = await getControlPlaneSession(request);
   const ownerUserId = String(session?.sub || '').trim();
   const role = String(session?.role || '').trim().toLowerCase();
+  const workspaceId = await resolveRuntimeWorkspaceId(request, 'default');
 
   const query = sanitizeAuditQuery(request);
   const runtimePath = `/approvals/audit${query ? `?${query}` : ''}`;
-  const historyPath = '/history/runs?limit=200&workspace_id=default';
+  const historyPath = `/history/runs?limit=200&workspace_id=${encodeURIComponent(workspaceId)}`;
 
   try {
     const [audit, history] = await Promise.all([

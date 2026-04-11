@@ -613,6 +613,7 @@ export function useSagePlatformApi(options: UseSagePlatformApiOptions) {
     message: string,
     options?: {
       reasoningEffort?: string | null;
+      clientSessionKey?: string | null;
       threadId?: string | null;
       masterAgentInstallId?: string | null;
       runtimeProfileId?: string | null;
@@ -633,7 +634,8 @@ export function useSagePlatformApi(options: UseSagePlatformApiOptions) {
           .filter((item) => item.content)
       : [];
     await ensureControlPlaneSession();
-    const clientSessionKey = String(options?.threadId || '').trim() || `direct-chat:${createStreamRequestId()}`;
+    const clientSessionKey = String(options?.clientSessionKey || options?.threadId || '').trim()
+      || `direct-chat:${createStreamRequestId()}`;
     const runtimeSessionId = await ensureRuntimeSessionId({
       clientSessionKey,
       channel: 'web',
@@ -642,7 +644,6 @@ export function useSagePlatformApi(options: UseSagePlatformApiOptions) {
       workspaceId: activeWorkspaceId,
       metadata: {
         source: 'direct_chat',
-        thread_id: clientSessionKey,
         ...(String(options?.masterAgentInstallId || '').trim()
           ? { master_agent_install_id: String(options?.masterAgentInstallId || '').trim() }
           : {}),
@@ -689,7 +690,6 @@ export function useSagePlatformApi(options: UseSagePlatformApiOptions) {
       const turnRequest: AgentTurnRequest = {
         tenant_id: activeTenantId,
         workspace_id: activeWorkspaceId,
-        thread_id: clientSessionKey,
         session_id: runtimeSessionId,
         channel: 'web',
         actor: buildWebActor(runtimeSessionId),
@@ -943,14 +943,19 @@ export function useSagePlatformApi(options: UseSagePlatformApiOptions) {
             setStatus('error');
           }
           if (evt === 'run_complete') {
-            setStatus('completed');
             setPendingApprovalId(null);
-            void fetchRunResult(nextRunId);
+            void (async () => {
+              const synced = await fetchRunResult(nextRunId);
+              setStatus(synced || 'completed');
+            })();
           }
           if (evt === 'run_error') {
-            setStatus('error');
             setPendingApprovalId(null);
-            setTopError(msg || 'Run failed.');
+            void (async () => {
+              const synced = await fetchRunResult(nextRunId);
+              setStatus(synced || 'error');
+              setTopError(msg || 'Run failed.');
+            })();
           }
         },
         onError: () => {

@@ -547,6 +547,12 @@ export type MasterChatContextRecord = {
         attachments: Array<Record<string, unknown>>;
         selection_policy: Record<string, unknown>;
     } | null;
+    runtime_targets: {
+        deployment_mode?: string | null;
+        default_target_id?: string | null;
+        targets: Array<Record<string, unknown>>;
+        routing_contract: Record<string, unknown>;
+    } | null;
     scheduler: Record<string, unknown> | null;
     recent_activity: {
         items: Array<Record<string, unknown>>;
@@ -556,6 +562,9 @@ export type MasterChatContextRecord = {
 
 export type ActivityTimelineRecord = {
     id: string;
+    run_id?: string | null;
+    status?: string | null;
+    detail_level?: string | null;
     actor_type?: string | null;
     actor_id?: string | null;
     install_id?: string | null;
@@ -636,6 +645,22 @@ function normalizeMasterChatContext(payload: unknown): MasterChatContextRecord {
                     : {},
             }
             : null,
+        runtime_targets: isRecord(record.runtime_targets)
+            ? {
+                deployment_mode: typeof record.runtime_targets.deployment_mode === 'string'
+                    ? record.runtime_targets.deployment_mode
+                    : null,
+                default_target_id: typeof record.runtime_targets.default_target_id === 'string'
+                    ? record.runtime_targets.default_target_id
+                    : null,
+                targets: Array.isArray(record.runtime_targets.targets)
+                    ? record.runtime_targets.targets.filter((item): item is Record<string, unknown> => isRecord(item))
+                    : [],
+                routing_contract: isRecord(record.runtime_targets.routing_contract)
+                    ? record.runtime_targets.routing_contract
+                    : {},
+            }
+            : null,
         scheduler: isRecord(record.scheduler) ? record.scheduler : null,
         recent_activity: isRecord(record.recent_activity)
             ? {
@@ -656,23 +681,49 @@ function normalizeActivityTimeline(payload: unknown): ActivityTimelinePayload {
         summary: isRecord(record.summary) ? record.summary : {},
         items: items
             .filter((item): item is Record<string, unknown> => isRecord(item))
-            .map((item) => ({
-                id: String(item.id || '').trim(),
-                actor_type: typeof item.actor_type === 'string' ? item.actor_type : null,
-                actor_id: typeof item.actor_id === 'string' ? item.actor_id : null,
-                install_id: typeof item.install_id === 'string' ? item.install_id : null,
-                app_id: typeof item.app_id === 'string' ? item.app_id : null,
-                event_class: typeof item.event_class === 'string' ? item.event_class : null,
-                action: typeof item.action === 'string' ? item.action : null,
-                title: typeof item.title === 'string' ? item.title : null,
-                summary: typeof item.summary === 'string' ? item.summary : null,
-                created_at: typeof item.created_at === 'string' ? item.created_at : null,
-                review_required: item.review_required === true,
-                artifacts: Array.isArray(item.artifacts)
-                    ? item.artifacts.filter((artifact): artifact is Record<string, unknown> => isRecord(artifact))
-                    : [],
-                metadata: isRecord(item.metadata) ? item.metadata : {},
-            }))
+            .map((item) => {
+                const actor = isRecord(item.actor) ? item.actor : {};
+                return {
+                    id: String(item.id || '').trim(),
+                    run_id: typeof item.run_id === 'string' ? item.run_id : null,
+                    status: typeof item.status === 'string' ? item.status : null,
+                    detail_level: typeof item.detail_level === 'string' ? item.detail_level : null,
+                    actor_type: typeof item.actor_type === 'string'
+                        ? item.actor_type
+                        : typeof actor.type === 'string'
+                            ? actor.type
+                            : null,
+                    actor_id: typeof item.actor_id === 'string'
+                        ? item.actor_id
+                        : typeof actor.id === 'string'
+                            ? actor.id
+                            : null,
+                    install_id: typeof item.install_id === 'string'
+                        ? item.install_id
+                        : typeof actor.install_id === 'string'
+                            ? actor.install_id
+                            : null,
+                    app_id: typeof item.app_id === 'string'
+                        ? item.app_id
+                        : typeof actor.app_id === 'string'
+                            ? actor.app_id
+                            : null,
+                    event_class: typeof item.event_class === 'string' ? item.event_class : null,
+                    action: typeof item.action === 'string' ? item.action : null,
+                    title: typeof item.title === 'string' ? item.title : null,
+                    summary: typeof item.summary === 'string' ? item.summary : null,
+                    created_at: typeof item.created_at === 'string'
+                        ? item.created_at
+                        : typeof item.ts === 'string'
+                            ? item.ts
+                            : null,
+                    review_required: item.review_required === true,
+                    artifacts: Array.isArray(item.artifacts)
+                        ? item.artifacts.filter((artifact): artifact is Record<string, unknown> => isRecord(artifact))
+                        : [],
+                    metadata: isRecord(item.metadata) ? item.metadata : {},
+                };
+            })
             .filter((item) => item.id.length > 0),
     };
 }

@@ -5,16 +5,20 @@ import {
   requireControlPlaneRole,
   requireControlPlaneSession,
   requireControlPlaneWorkspaceAccess,
+  resolveRuntimeWorkspaceId,
 } from '@/lib/server/controlPlaneSession';
 import { runtimeJsonRequest } from '@/lib/server/runtimeControlPlane';
 
 export const dynamic = 'force-dynamic';
 
-function sanitizeRunsQuery(request: NextRequest): string {
+function sanitizeRunsQuery(request: NextRequest, runtimeWorkspaceId?: string | null): string {
   const next = new URLSearchParams();
   for (const key of ['workspace_id', 'status', 'pack_id']) {
     const value = String(request.nextUrl.searchParams.get(key) || '').trim();
     if (value) next.set(key, value);
+  }
+  if (runtimeWorkspaceId) {
+    next.set('workspace_id', runtimeWorkspaceId);
   }
   for (const key of ['limit', 'offset']) {
     const raw = String(request.nextUrl.searchParams.get(key) || '').trim();
@@ -49,8 +53,11 @@ export async function GET(request: NextRequest) {
   const session = await getControlPlaneSession(request);
   const ownerUserId = String(session?.sub || '').trim();
   const role = String(session?.role || '').trim().toLowerCase();
+  const runtimeWorkspaceId = requestedWorkspaceId
+    ? await resolveRuntimeWorkspaceId(request, requestedWorkspaceId)
+    : null;
 
-  const query = sanitizeRunsQuery(request);
+  const query = sanitizeRunsQuery(request, runtimeWorkspaceId);
   const runtimePath = `/runs${query ? `?${query}` : ''}`;
 
   try {

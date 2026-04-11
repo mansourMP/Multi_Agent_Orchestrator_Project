@@ -18,11 +18,23 @@ _POOLS_BY_LOOP: dict[int, tuple[Any, Any, str]] = {}
 _POOL_INIT_FAILED = False
 _MISSING_DSN_LOGGED = False
 _ENV_DSN_LOADED = False
+_LOCAL_ENV_TOKENS = {"dev", "development", "local", "test", "testing"}
+
+
+def _resolved_environment() -> str:
+    return str(os.getenv("ORION_ENV") or os.getenv("ENV") or "").strip().lower()
+
+
+def _allow_database_url_backfill() -> bool:
+    return _resolved_environment() in _LOCAL_ENV_TOKENS
 
 
 def _load_database_url_from_backend_env() -> None:
     global _ENV_DSN_LOADED
     if _ENV_DSN_LOADED or str(os.getenv("DATABASE_URL") or "").strip():
+        _ENV_DSN_LOADED = True
+        return
+    if not _allow_database_url_backfill():
         _ENV_DSN_LOADED = True
         return
     try:

@@ -102,12 +102,23 @@ async def db_health():
     }
 
 
+async def public_health():
+    payload = await core.health()
+    return {"ok": bool((payload or {}).get("ok"))}
+
+
+async def internal_health():
+    return await core.health()
+
+
 router.add_api_route("/contract", core.runtime_contract, methods=['GET'], dependencies=[Depends(get_current_user)])
 router.add_api_route("/memory/health", core.memory_health, methods=['GET'], dependencies=[Depends(require_api_key)])
 router.add_api_route("/memory/search", memory_search, methods=['POST'])
 router.add_api_route("/memory/upsert", memory_upsert, methods=['POST'])
-router.add_api_route("/health", core.health, methods=['GET'])
-router.add_api_route("/health/db", db_health, methods=['GET'])
+router.add_api_route("/health", public_health, methods=['GET'])
+router.add_api_route("/health/db", db_health, methods=['GET'], dependencies=[Depends(require_api_key)])
+router.add_api_route("/health/internal", internal_health, methods=['GET'], dependencies=[Depends(require_api_key)])
+router.add_api_route("/health/internal/db", db_health, methods=['GET'], dependencies=[Depends(require_api_key)])
 router.add_api_route("/mobile/handoff", core.mobile_handoff, methods=['GET'], dependencies=[Depends(get_current_user)])
 router.add_api_route("/validation/latest", core.validation_latest, methods=['GET'], dependencies=[Depends(require_api_key)])
 router.add_api_route("/validation/history", core.validation_history, methods=['GET'], dependencies=[Depends(require_api_key)])

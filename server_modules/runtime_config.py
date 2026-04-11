@@ -355,8 +355,19 @@ try:
     from python_engine.memory_manager import MemoryManager as RuntimeMemoryManager
 except Exception:
     RuntimeMemoryManager = None  # type: ignore[assignment]
+
+
+def _resolved_environment() -> str:
+    return str(os.getenv("ORION_ENV") or os.getenv("ENV") or "").strip().lower()
+
+
+def _should_load_dotenv() -> bool:
+    return _resolved_environment() in {"dev", "development", "local", "test", "testing"}
+
+
 # 1. Load Secrets
-load_dotenv()
+if _should_load_dotenv():
+    load_dotenv()
 # Avoid interactive trace prompts and color issues in headless runtime
 os.environ.setdefault("RICH_DISABLE_COLOR", "1")
 os.environ.setdefault("RICH_NO_COLOR", "1")
@@ -433,6 +444,46 @@ ORION_SCHEDULER_ENABLED = config_bool("ORION_SCHEDULER_ENABLED", True)
 ORION_SCHEDULER_POLL_SECONDS = config_int("ORION_SCHEDULER_POLL_SECONDS", 20)
 ORION_LOCAL_COMPANION_ENABLED = config_bool("ORION_LOCAL_COMPANION_ENABLED", True)
 ORION_LOCAL_LEASE_SECONDS = config_int("ORION_LOCAL_LEASE_SECONDS", 120)
+
+# Wave 2 authority map. This is the declared source-of-truth contract for
+# runtime state classes and is intentionally explicit so server code does not
+# treat SQLite or JSON side stores as peer authorities.
+RUNTIME_STATE_AUTHORITIES: Dict[str, str] = {
+    "live_runs": "postgres",
+    "run_approvals": "postgres",
+    "runtime_outbox": "postgres",
+    "local_queue_claims": "postgres",
+    "server_runtime_sessions": "postgres",
+    "local_runtime_checkpoint": "sqlite_checkpoint",
+    "channel_events_checkpoint": "sqlite_checkpoint",
+    "chat_stream_checkpoint": "sqlite_checkpoint",
+    "notification_checkpoint": "sqlite_checkpoint",
+    "artifact_records_and_objects": "artifact_service",
+}
+
+RUNTIME_STATE_JSON_SIDE_STORES: Dict[str, str] = {
+    "ORION_HISTORY_FILE": "legacy_json_mirror",
+    "ORION_CHANNEL_EVENTS_FILE": "legacy_json_mirror",
+    "ORION_CHANNEL_DEAD_LETTER_FILE": "legacy_json_mirror",
+    "ORION_APPROVAL_AUDIT_FILE": "legacy_json_mirror",
+    "ORION_SCHEDULES_FILE": "config_state",
+    "ORION_WEBHOOK_TRIGGERS_FILE": "config_state",
+    "ORION_SETUP_SESSIONS_FILE": "config_state",
+    "ORION_PROVIDER_PROFILES_FILE": "config_state",
+    "ORION_RUNTIME_SKILLS_FILE": "config_state",
+    "ORION_TOOL_STATE_FILE": "config_state",
+    "ORION_APP_REGISTRY_FILE": "config_state",
+    "ORION_IDEMPOTENCY_FILE": "legacy_json_mirror",
+}
+
+ACTIVE_GOVERNANCE_MIGRATION_DISCIPLINE: Dict[str, Any] = {
+    "id": "bootstrap_schema_manifest_v1",
+    "mode": "bootstrap_schema_manifest_v1",
+    "control_plane_initializer": "server_modules.control_plane_repository.ensure_control_plane_schema",
+    "runtime_initializer": "server_modules.run_state_repository.ensure_live_run_tables",
+    "checkpoint_initializer": "server_modules.runtime_state_store.init_runtime_state_db",
+    "artifact_authority": "server_modules.artifact_service",
+}
 
 
 def _compat_env(primary: str, legacy: str, default: str) -> str:
@@ -791,3 +842,87 @@ RUNTIME_BUILTIN_SKILLS: List[Dict[str, Any]] = [
         "category": "Learning",
     },
 ]
+
+
+def build_governance_backup_restore_manifest(
+    runtime_checkpoint_db_path: Optional[Path] = None,
+) -> Dict[str, Any]:
+    from server_modules.artifact_service import build_artifact_backup_manifest
+    from server_modules.runtime_state_store import build_runtime_checkpoint_manifest
+
+    checkpoint_path = Path(runtime_checkpoint_db_path or ORION_RUNTIME_STATE_DB).expanduser().resolve()
+    postgres_configured = bool(str(os.getenv("DATABASE_URL") or "").strip())
+    return {
+        "manifest_version": "governance_restore_manifest_v1",
+        "generated_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        "migration_discipline": dict(ACTIVE_GOVERNANCE_MIGRATION_DISCIPLINE),
+        "stores": [
+            {
+                "store_id": "control_plane_postgres",
+                "authority_mode": "postgres_authoritative",
+                "connection_env": "DATABASE_URL",
+                "configured": postgres_configured,
+                "restore_mode": "operator_managed_external_restore",
+                "authoritative_tables": [
+                    "tenants",
+                    "users",
+                    "workspaces",
+                    "workspace_memberships",
+                    "agent_threads",
+                    "agent_sessions",
+                    "agent_turns",
+                    "workspace_agent_installs",
+                    "agent_channel_events",
+                    "activity_ledger_events",
+                    "governance_holds",
+                ],
+            },
+            {
+                "store_id": "runtime_postgres",
+                "authority_mode": "postgres_authoritative",
+                "connection_env": "DATABASE_URL",
+                "configured": postgres_configured,
+                "restore_mode": "operator_managed_external_restore",
+                "authoritative_state_classes": sorted(
+                    [
+                        state_class
+                        for state_class, authority in RUNTIME_STATE_AUTHORITIES.items()
+                        if authority == "postgres"
+                    ]
+                ),
+            },
+            build_runtime_checkpoint_manifest(checkpoint_path),
+            build_artifact_backup_manifest(),
+        ],
+        "json_side_stores": dict(RUNTIME_STATE_JSON_SIDE_STORES),
+    }
+
+
+def run_governance_restore_rehearsal(
+    runtime_checkpoint_db_path: Optional[Path] = None,
+) -> Dict[str, Any]:
+    from server_modules.artifact_service import rehearse_artifact_restore
+    from server_modules.runtime_state_store import rehearse_runtime_checkpoint_restore
+
+    manifest = build_governance_backup_restore_manifest(runtime_checkpoint_db_path)
+    checkpoint_path = Path(runtime_checkpoint_db_path or ORION_RUNTIME_STATE_DB).expanduser().resolve()
+    runtime_checkpoint = rehearse_runtime_checkpoint_restore(checkpoint_path)
+    artifact_restore = rehearse_artifact_restore()
+    postgres_manifest_checks = {
+        "ok": all(
+            bool(store.get("configured"))
+            for store in manifest["stores"]
+            if store.get("store_id") in {"control_plane_postgres", "runtime_postgres"}
+        ),
+        "mode": "operator_managed_external_restore",
+        "required_store_ids": ["control_plane_postgres", "runtime_postgres"],
+    }
+    return {
+        "ok": bool(runtime_checkpoint.get("ok")) and bool(artifact_restore.get("ok")) and bool(postgres_manifest_checks["ok"]),
+        "manifest": manifest,
+        "rehearsals": {
+            "runtime_checkpoint_sqlite": runtime_checkpoint,
+            "artifact_store": artifact_restore,
+            "postgres_manifest_checks": postgres_manifest_checks,
+        },
+    }

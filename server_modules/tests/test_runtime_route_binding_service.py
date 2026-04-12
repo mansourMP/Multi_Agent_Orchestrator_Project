@@ -1,6 +1,6 @@
 import unittest
 
-from server_modules import runtime_route_binding_service
+from server_modules import runtime_route_registration_service
 
 
 class RuntimeRouteBindingServiceTests(unittest.TestCase):
@@ -18,7 +18,7 @@ class RuntimeRouteBindingServiceTests(unittest.TestCase):
             "_begin_run_pending_confirmation": object(),
         }
 
-        bindings = runtime_route_binding_service.build_runtime_route_bindings(
+        bindings = runtime_route_registration_service.build_runtime_route_bindings(
             late_server_export=lambda name: markers[name],
             enforce_run_owner_access=lambda *args, **kwargs: None,
             normalize_agent_role=lambda value: str(value or ""),

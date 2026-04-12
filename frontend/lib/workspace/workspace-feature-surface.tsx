@@ -9,7 +9,11 @@ import {
 } from 'react';
 
 import { useWorkspaceBoundary } from '@/lib/workspace/workspace-boundary';
-import { useWorkspaceServices } from '@/lib/workspace/workspace-services';
+import { WorkstationChatPane } from '@/lib/workspace/workstation-chat-pane';
+import { useWorkspaceServices, useWorkstationStreamState } from '@/lib/workspace/workspace-services';
+import {
+  type WorkstationTurnResponse,
+} from '@/lib/workspace/workstation-client';
 import type { WorkspaceRouteId } from '@/lib/workspace/workspace-shell';
 
 type WorkspaceFeatureViewMode = 'summary' | 'detail';
@@ -47,27 +51,6 @@ type CanonicalChatThreadState = {
   messages: CanonicalChatMessage[];
 };
 
-type CanonicalSessionRecord = {
-  session_id: string;
-  workspace_id?: string;
-  tenant_id?: string;
-  channel?: string;
-  actor?: Record<string, unknown>;
-  metadata?: Record<string, unknown>;
-  status?: string;
-};
-
-type CanonicalTurnResponse = {
-  status?: string;
-  reply?: string;
-  run_id?: string | null;
-  thread_id?: string | null;
-  session_id?: string | null;
-  approvals?: Record<string, unknown>[];
-  interventions?: Record<string, unknown>[];
-  metadata?: Record<string, unknown>;
-};
-
 type CanonicalRunSummary = Record<string, unknown> & {
   run_id?: string | null;
   status?: string | null;
@@ -80,19 +63,6 @@ type CanonicalApprovalSummary = Record<string, unknown> & {
   status?: string | null;
   prompt?: string | null;
 };
-
-class WorkspaceSurfaceRequestError extends Error {
-  readonly status: number;
-
-  readonly detail: unknown;
-
-  constructor(message: string, status: number, detail: unknown) {
-    super(message);
-    this.name = 'WorkspaceSurfaceRequestError';
-    this.status = status;
-    this.detail = detail;
-  }
-}
 
 const FEATURE_DEFINITIONS: Record<WorkspaceRouteId, WorkspaceFeatureDefinition> = {
   chat: {
@@ -127,9 +97,9 @@ const FEATURE_DEFINITIONS: Record<WorkspaceRouteId, WorkspaceFeatureDefinition> 
   },
   notifications: {
     title: 'Notifications',
-    description: 'Notification surface using boundary-scoped realtime helpers and local workspace state.',
+    description: 'Notification surface using the kernel-owned stream manager and local workspace state.',
     sectionTitle: 'Restored notification scaffolds',
-    sectionItems: ['poller registration', 'workspace-scoped activity note', 'safe route entry'],
+    sectionItems: ['kernel stream state', 'workspace-scoped activity note', 'safe route entry'],
   },
   applications: {
     title: 'Applications',
@@ -319,23 +289,6 @@ function useArtifactPreviewUrl(featureId: WorkspaceRouteId, payload: unknown) {
   return url;
 }
 
-function useNotificationPoller(featureId: WorkspaceRouteId) {
-  const services = useWorkspaceServices();
-  const [pulseCount, setPulseCount] = useState(0);
-
-  useEffect(() => {
-    if (featureId !== 'notifications') {
-      return;
-    }
-
-    return services.realtime.registerPoller(() => {
-      setPulseCount((value) => value + 1);
-    }, 30000);
-  }, [featureId, services]);
-
-  return pulseCount;
-}
-
 function normalizeCanonicalChatThread(
   payload: unknown,
   threadId: string,
@@ -384,37 +337,6 @@ function normalizeCanonicalApprovalItems(payload: unknown): CanonicalApprovalSum
   }
   const items = (payload as Record<string, unknown>).items;
   return Array.isArray(items) ? items.filter((item): item is CanonicalApprovalSummary => Boolean(item) && typeof item === 'object') : [];
-}
-
-async function requestWorkspaceJson<T>(
-  services: ReturnType<typeof useWorkspaceServices>,
-  path: string,
-  init: RequestInit = {},
-): Promise<T> {
-  const response = await services.transport.request(path, init);
-  let payload: unknown = null;
-  const text = await response.text();
-  if (text.trim()) {
-    try {
-      payload = JSON.parse(text);
-    } catch {
-      payload = text;
-    }
-  }
-
-  if (!response.ok) {
-    const detail =
-      payload && typeof payload === 'object' && 'detail' in (payload as Record<string, unknown>)
-        ? (payload as Record<string, unknown>).detail
-        : payload;
-    const message =
-      typeof detail === 'string'
-        ? detail
-        : `Workspace transport request failed with status ${response.status}.`;
-    throw new WorkspaceSurfaceRequestError(message, response.status, detail);
-  }
-
-  return payload as T;
 }
 
 function createCanonicalAssistantMessage(
@@ -466,479 +388,8 @@ function createCanonicalUserMessage(text: string, threadId: string): CanonicalCh
   };
 }
 
-function buildCanonicalTurnRequestBody({
-  bootstrap,
-  sessionId,
-  threadId,
-  message,
-}: {
-  bootstrap: ReturnType<typeof useWorkspaceBoundary>['bootstrap'];
-  sessionId: string;
-  threadId: string;
-  message: string;
-}) {
-  return {
-    tenant_id: bootstrap.workspace.tenantId,
-    workspace_id: bootstrap.workspace.id,
-    thread_id: threadId,
-    session_id: sessionId,
-    channel: 'web',
-    actor: {
-      type: 'user',
-      id: bootstrap.account.id,
-      display_name: bootstrap.account.displayName ?? bootstrap.account.email,
-    },
-    message,
-    attachments: [],
-    context_hints: {
-      source: 'workspace_surface_chat',
-      thread_id: threadId,
-    },
-    execution_mode: 'sync',
-    response_mode: 'artifact',
-    policy_context: {},
-  };
-}
-
 function WorkspaceCanonicalChatSurface() {
-  const { bootstrap, routeManifest } = useWorkspaceBoundary();
-  const services = useWorkspaceServices();
-  const threadId = 'primary';
-  const threadQueryKey = `chat:canonical:thread:${threadId}`;
-  const threadPersistenceKey = `chat:canonical:thread:${threadId}`;
-  const draftPersistenceKey = `chat:canonical:draft:${threadId}`;
-  const sessionPersistenceKey = `chat:canonical:session:${threadId}`;
-  const runsQueryKey = 'chat:canonical:runs';
-  const approvalsQueryKey = 'chat:canonical:approvals';
-
-  const initialThread = services.persistence.getJson<CanonicalChatThreadState>(threadPersistenceKey) ?? {
-    threadId,
-    title: 'Chat',
-    messages: [],
-  };
-  const initialDraft = services.persistence.getJson<{ text?: string }>(draftPersistenceKey)?.text ?? '';
-  const initialRuns = services.persistence.getJson<CanonicalRunSummary[]>(runsQueryKey) ?? [];
-  const initialApprovals = services.persistence.getJson<CanonicalApprovalSummary[]>(approvalsQueryKey) ?? [];
-
-  const [thread, setThread] = useState<CanonicalChatThreadState>(initialThread);
-  const [draft, setDraft] = useState(initialDraft);
-  const [runs, setRuns] = useState<CanonicalRunSummary[]>(initialRuns);
-  const [approvals, setApprovals] = useState<CanonicalApprovalSummary[]>(initialApprovals);
-  const [statusMessage, setStatusMessage] = useState<string | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
-  const [isSending, setIsSending] = useState(false);
-
-  useEffect(() => {
-    if (draft.trim()) {
-      services.persistence.setJson(draftPersistenceKey, {
-        text: draft,
-        updatedAt: new Date().toISOString(),
-      });
-      return;
-    }
-    services.persistence.remove(draftPersistenceKey);
-  }, [draft, draftPersistenceKey, services]);
-
-  const writeThreadState = (nextThread: CanonicalChatThreadState) => {
-    services.queryClient.set(threadQueryKey, nextThread);
-    services.persistence.setJson(threadPersistenceKey, nextThread);
-    setThread(nextThread);
-  };
-
-  const writeOverview = ({
-    nextRuns,
-    nextApprovals,
-  }: {
-    nextRuns: CanonicalRunSummary[];
-    nextApprovals: CanonicalApprovalSummary[];
-  }) => {
-    services.queryClient.set(runsQueryKey, nextRuns);
-    services.persistence.setJson(runsQueryKey, nextRuns);
-    services.queryClient.set(approvalsQueryKey, nextApprovals);
-    services.persistence.setJson(approvalsQueryKey, nextApprovals);
-    setRuns(nextRuns);
-    setApprovals(nextApprovals);
-  };
-
-  const loadThread = async () => {
-    const payload = await requestWorkspaceJson<Record<string, unknown> | null>(
-      services,
-      `/api/threads/${encodeURIComponent(threadId)}`,
-    ).catch((error) => {
-      if (error instanceof WorkspaceSurfaceRequestError && error.status === 404) {
-        return null;
-      }
-      throw error;
-    });
-    const nextThread = normalizeCanonicalChatThread(payload, threadId);
-    writeThreadState(nextThread);
-    return nextThread;
-  };
-
-  const loadOverview = async () => {
-    const runsRequest = requestWorkspaceJson<Record<string, unknown>>(
-      services,
-      `/api/runs?workspace_id=${encodeURIComponent(bootstrap.workspace.id)}&limit=12`,
-    ).then(normalizeCanonicalRunItems);
-    const approvalsRequest = routeManifest.routeIndex.approvals
-      ? requestWorkspaceJson<Record<string, unknown>>(
-          services,
-          `/api/approvals?workspace_id=${encodeURIComponent(bootstrap.workspace.id)}`,
-        ).then(normalizeCanonicalApprovalItems)
-      : Promise.resolve([]);
-    const [nextRuns, nextApprovals] = await Promise.all([runsRequest, approvalsRequest]);
-    writeOverview({ nextRuns, nextApprovals });
-  };
-
-  const ensureSession = async (forceNew = false) => {
-    if (!forceNew) {
-      const cachedSession =
-        services.queryClient.peek<CanonicalSessionRecord>(sessionPersistenceKey)
-        ?? services.persistence.getJson<CanonicalSessionRecord>(sessionPersistenceKey);
-      if (cachedSession?.session_id) {
-        return cachedSession;
-      }
-    }
-
-    const session = await requestWorkspaceJson<CanonicalSessionRecord>(
-      services,
-      '/api/sessions',
-      {
-        method: 'POST',
-        headers: {
-          'content-type': 'application/json',
-        },
-        body: JSON.stringify({
-          tenant_id: bootstrap.workspace.tenantId,
-          workspace_id: bootstrap.workspace.id,
-          channel: 'web',
-          actor: {
-            type: 'user',
-            id: bootstrap.account.id,
-            display_name: bootstrap.account.displayName ?? bootstrap.account.email,
-          },
-          metadata: {
-            thread_id: threadId,
-            source: 'workspace_surface_chat',
-          },
-        }),
-      },
-    );
-    services.queryClient.set(sessionPersistenceKey, session);
-    services.persistence.setJson(sessionPersistenceKey, session);
-    return session;
-  };
-
-  useEffect(() => {
-    let cancelled = false;
-
-    (async () => {
-      try {
-        setIsLoading(true);
-        await Promise.all([loadThread(), loadOverview()]);
-        if (!cancelled) {
-          setStatusMessage(null);
-        }
-      } catch (error) {
-        if (!cancelled) {
-          setStatusMessage(error instanceof Error ? error.message : 'Chat is unavailable right now.');
-        }
-      } finally {
-        if (!cancelled) {
-          setIsLoading(false);
-        }
-      }
-    })();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [bootstrap.workspace.id, routeManifest.routeIndex.approvals, services]);
-
-  const sendMessage = async () => {
-    const message = draft.trim();
-    if (!message || isSending) {
-      return;
-    }
-
-    setIsSending(true);
-    setStatusMessage(null);
-
-    try {
-      let session = await ensureSession(false);
-      let response: CanonicalTurnResponse;
-
-      try {
-        response = await requestWorkspaceJson<CanonicalTurnResponse>(
-          services,
-          '/api/turn',
-          {
-            method: 'POST',
-            headers: {
-              'content-type': 'application/json',
-            },
-            body: JSON.stringify(
-              buildCanonicalTurnRequestBody({
-                bootstrap,
-                sessionId: String(session.session_id),
-                threadId,
-                message,
-              }),
-            ),
-          },
-        );
-      } catch (error) {
-        if (error instanceof WorkspaceSurfaceRequestError && error.status === 409) {
-          session = await ensureSession(true);
-          response = await requestWorkspaceJson<CanonicalTurnResponse>(
-            services,
-            '/api/turn',
-            {
-              method: 'POST',
-              headers: {
-                'content-type': 'application/json',
-              },
-              body: JSON.stringify(
-                buildCanonicalTurnRequestBody({
-                  bootstrap,
-                  sessionId: String(session.session_id),
-                  threadId,
-                  message,
-                }),
-              ),
-            },
-          );
-        } else {
-          throw error;
-        }
-      }
-
-      const nextMessages = [
-        ...thread.messages,
-        createCanonicalUserMessage(message, threadId),
-      ];
-      const assistantMessage = createCanonicalAssistantMessage(response, threadId);
-      if (assistantMessage) {
-        nextMessages.push(assistantMessage);
-      }
-
-      writeThreadState({
-        ...thread,
-        threadId: String(response.thread_id ?? thread.threadId ?? threadId),
-        messages: nextMessages,
-      });
-      setDraft('');
-      services.persistence.remove(draftPersistenceKey);
-      await loadOverview();
-      setStatusMessage(
-        Array.isArray(response.approvals) && response.approvals.length > 0
-          ? 'Turn submitted. Approval is now pending in the canonical approval queue.'
-          : null,
-      );
-    } catch (error) {
-      setStatusMessage(error instanceof Error ? error.message : 'Could not send this message.');
-    } finally {
-      setIsSending(false);
-    }
-  };
-
-  return (
-    <main
-      style={{
-        minHeight: '100vh',
-        padding: '2rem 3rem',
-        display: 'grid',
-        gap: '1.5rem',
-      }}
-    >
-      <header style={{ display: 'grid', gap: '0.5rem' }}>
-        <h1 style={{ margin: 0, fontSize: '1.6rem' }}>Chat</h1>
-        <p style={{ margin: 0, maxWidth: '58rem', lineHeight: 1.6 }}>
-          This surface talks to the canonical runtime contract through <code>/api/sessions</code>, <code>/api/turn</code>, <code>/api/runs</code>, and <code>/api/approvals</code>.
-        </p>
-      </header>
-
-      <section
-        style={{
-          display: 'grid',
-          gridTemplateColumns: 'minmax(0, 2fr) minmax(18rem, 1fr)',
-          gap: '1rem',
-          alignItems: 'start',
-        }}
-      >
-        <div
-          style={{
-            display: 'grid',
-            gap: '0.85rem',
-            padding: '1rem',
-            borderRadius: '1rem',
-            border: '1px solid #cbd5e1',
-            background: '#ffffff',
-          }}
-        >
-          <div style={{ display: 'flex', justifyContent: 'space-between', gap: '1rem', flexWrap: 'wrap' }}>
-            <div style={{ display: 'grid', gap: '0.25rem' }}>
-              <strong>{bootstrap.workspace.label}</strong>
-              <span style={{ color: '#475569' }}>
-                Thread <code>{thread.threadId}</code> scoped to <code>{services.scopeKey}</code>
-              </span>
-            </div>
-            <button
-              type="button"
-              onClick={() => {
-                void Promise.all([loadThread(), loadOverview()]).catch((error) => {
-                  setStatusMessage(error instanceof Error ? error.message : 'Refresh failed.');
-                });
-              }}
-              style={{
-                border: '1px solid #94a3b8',
-                borderRadius: '999px',
-                background: '#f8fafc',
-                padding: '0.45rem 0.8rem',
-                cursor: 'pointer',
-              }}
-            >
-              Refresh thread
-            </button>
-          </div>
-
-          <div
-            style={{
-              display: 'grid',
-              gap: '0.75rem',
-              padding: '0.75rem',
-              borderRadius: '0.85rem',
-              background: '#f8fafc',
-              minHeight: '22rem',
-            }}
-          >
-            {isLoading && thread.messages.length === 0 ? (
-              <p style={{ margin: 0, color: '#475569' }}>Loading canonical thread history…</p>
-            ) : null}
-            {thread.messages.length === 0 ? (
-              <p style={{ margin: 0, color: '#475569' }}>
-                No turns have been written yet. The first send will create the canonical thread history.
-              </p>
-            ) : (
-              thread.messages.map((message) => (
-                <article
-                  key={message.id}
-                  style={{
-                    justifySelf: message.role === 'user' ? 'end' : 'start',
-                    maxWidth: '85%',
-                    padding: '0.85rem 1rem',
-                    borderRadius: '1rem',
-                    background: message.role === 'user' ? '#dbeafe' : '#e2e8f0',
-                    display: 'grid',
-                    gap: '0.35rem',
-                  }}
-                >
-                  <strong style={{ textTransform: 'capitalize' }}>{message.role}</strong>
-                  <span style={{ whiteSpace: 'pre-wrap', lineHeight: 1.5 }}>{message.content}</span>
-                  <span style={{ fontSize: '0.8rem', color: '#475569' }}>
-                    {message.status ?? 'completed'}
-                    {message.runId ? ` · run ${message.runId}` : ''}
-                  </span>
-                </article>
-              ))
-            )}
-          </div>
-
-          <label style={{ display: 'grid', gap: '0.45rem' }}>
-            <span style={{ fontWeight: 600 }}>Message</span>
-            <textarea
-              value={draft}
-              onChange={(event) => setDraft(event.currentTarget.value)}
-              rows={5}
-              placeholder="Ask the canonical chat surface to do real work."
-              style={{
-                width: '100%',
-                resize: 'vertical',
-                borderRadius: '0.85rem',
-                border: '1px solid #cbd5e1',
-                padding: '0.8rem 0.9rem',
-                font: 'inherit',
-              }}
-            />
-          </label>
-
-          <div style={{ display: 'flex', justifyContent: 'space-between', gap: '1rem', flexWrap: 'wrap' }}>
-            <span style={{ color: statusMessage ? '#92400e' : '#475569' }}>
-              {statusMessage ?? 'Canonical chat is ready.'}
-            </span>
-            <button
-              type="button"
-              onClick={() => {
-                void sendMessage();
-              }}
-              disabled={isSending || !draft.trim()}
-              style={{
-                border: '1px solid #0f172a',
-                borderRadius: '999px',
-                background: isSending || !draft.trim() ? '#cbd5e1' : '#0f172a',
-                color: '#ffffff',
-                padding: '0.55rem 0.95rem',
-                cursor: isSending || !draft.trim() ? 'not-allowed' : 'pointer',
-              }}
-            >
-              {isSending ? 'Sending…' : 'Send canonical turn'}
-            </button>
-          </div>
-        </div>
-
-        <aside
-          style={{
-            display: 'grid',
-            gap: '1rem',
-          }}
-        >
-          <section
-            style={{
-              display: 'grid',
-              gap: '0.65rem',
-              padding: '1rem',
-              borderRadius: '1rem',
-              border: '1px solid #cbd5e1',
-              background: '#ffffff',
-            }}
-          >
-            <strong>Recent runs</strong>
-            {runs.length === 0 ? (
-              <span style={{ color: '#475569' }}>No live runs recorded for this workspace yet.</span>
-            ) : runs.slice(0, 5).map((item) => (
-              <div key={String(item.run_id ?? JSON.stringify(item))} style={{ display: 'grid', gap: '0.2rem' }}>
-                <span style={{ fontWeight: 600 }}>{String(item.run_id ?? 'run')}</span>
-                <span style={{ color: '#475569' }}>{String(item.status ?? 'unknown')}</span>
-              </div>
-            ))}
-            <Link href={routeManifest.routeIndex.runs?.href ?? routeManifest.defaultRoute}>Open runs</Link>
-          </section>
-
-          <section
-            style={{
-              display: 'grid',
-              gap: '0.65rem',
-              padding: '1rem',
-              borderRadius: '1rem',
-              border: '1px solid #cbd5e1',
-              background: '#ffffff',
-            }}
-          >
-            <strong>Pending approvals</strong>
-            {approvals.length === 0 ? (
-              <span style={{ color: '#475569' }}>No pending approvals for this workspace.</span>
-            ) : approvals.slice(0, 5).map((item) => (
-              <div key={String(item.approval_id ?? item.id ?? JSON.stringify(item))} style={{ display: 'grid', gap: '0.2rem' }}>
-                <span style={{ fontWeight: 600 }}>{String(item.prompt ?? item.id ?? 'approval')}</span>
-                <span style={{ color: '#475569' }}>{String(item.status ?? 'pending')}</span>
-              </div>
-            ))}
-            <Link href={routeManifest.routeIndex.approvals?.href ?? routeManifest.defaultRoute}>Open approvals</Link>
-          </section>
-        </aside>
-      </section>
-    </main>
-  );
+  return <WorkstationChatPane />;
 }
 
 export function WorkspaceFeatureSurface({
@@ -971,8 +422,8 @@ function WorkspaceFeatureScaffold({
     toggleViewMode,
     updateNote,
   } = useWorkspaceFeatureState(featureId);
+  const streamState = useWorkstationStreamState();
   const artifactPreviewUrl = useArtifactPreviewUrl(featureId, summary);
-  const notificationPulseCount = useNotificationPoller(featureId);
 
   return (
     <main
@@ -1101,7 +552,7 @@ function WorkspaceFeatureScaffold({
               state,
               routeManifest,
               serviceSnapshot: services.snapshot(),
-              notificationPulseCount,
+              streamSnapshot: streamState,
             },
             null,
             2,

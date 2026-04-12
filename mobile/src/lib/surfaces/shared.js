@@ -12,14 +12,14 @@ export function resolveMobileWorkspaceApiPaths(workspaceId, overrides = {}) {
     workspaceEntry: `/w/${workspaceId}`,
     sessionCreate: '/api/sessions',
     chatThread: (threadId = 'primary') =>
-      `/api/threads/${encodeURIComponent(threadId)}`,
+      `/api/threads/${encodeURIComponent(threadId)}?workspace_id=${encodeURIComponent(workspaceId)}`,
     chatSend: '/api/turn',
     runs: `/api/runs?workspace_id=${encodeURIComponent(workspaceId)}`,
     approvals: `/api/approvals?workspace_id=${encodeURIComponent(workspaceId)}`,
     approvalAction: (approvalId) =>
-      `/api/approvals/${encodeURIComponent(approvalId)}/resolve`,
-    notifications: `/api/workspaces/${workspaceId}/notifications`,
-    artifacts: `/api/workspaces/${workspaceId}/artifacts`,
+      `/api/approvals/${encodeURIComponent(approvalId)}/resolve?workspace_id=${encodeURIComponent(workspaceId)}`,
+    notifications: `/api/notifications?workspace_id=${encodeURIComponent(workspaceId)}`,
+    artifacts: `/api/artifacts?workspace_id=${encodeURIComponent(workspaceId)}`,
   };
 
   return {

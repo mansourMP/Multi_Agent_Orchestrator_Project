@@ -23,8 +23,6 @@ use url::Url;
 
 const RUNTIME_HOST: &str = "127.0.0.1";
 const RUNTIME_PORT: &str = "8001";
-const BACKEND_HOST: &str = "127.0.0.1";
-const BACKEND_PORT: &str = "8080";
 const NEXT_HOST: &str = "localhost";
 const NEXT_PORT: &str = "3000";
 const OVERLAY_BRIDGE_HOST: &str = "127.0.0.1";
@@ -521,25 +519,11 @@ async fn openai_codex_oauth_login() -> Result<OpenAiCodexOauthResult, String> {
 #[derive(Default)]
 struct Sidecars {
     runtime: Option<Child>,
-    backend: Option<Child>,
     worker: Option<Child>,
     next: Option<Child>,
 }
 
 struct SidecarState(Mutex<Sidecars>);
-
-pub struct PythonBackendSidecarGuard {
-    child: Option<Child>,
-}
-
-impl Drop for PythonBackendSidecarGuard {
-    fn drop(&mut self) {
-        if let Some(mut child) = self.child.take() {
-            let _ = child.kill();
-            let _ = child.wait();
-        }
-    }
-}
 
 fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -918,16 +902,8 @@ fn frontend_dir() -> PathBuf {
     repo_root().join("frontend")
 }
 
-fn backend_dir() -> PathBuf {
-    repo_root().join("backend")
-}
-
 fn frontend_build_dir() -> PathBuf {
     frontend_dir().join(".next")
-}
-
-fn backend_entrypoint() -> PathBuf {
-    backend_dir().join("dist").join("main.js")
 }
 
 fn runtime_binary_names() -> Vec<&'static str> {
@@ -1047,14 +1023,6 @@ fn runtime_health_url() -> String {
     format!("{}/health", runtime_url())
 }
 
-fn backend_base_url() -> String {
-    format!("http://{BACKEND_HOST}:{BACKEND_PORT}/api/v1")
-}
-
-fn backend_health_url() -> String {
-    format!("{}/health", backend_base_url())
-}
-
 fn next_url() -> String {
     format!("http://{NEXT_HOST}:{NEXT_PORT}")
 }
@@ -1065,6 +1033,20 @@ fn overlay_url() -> String {
 
 fn next_health_url() -> String {
     next_url()
+}
+
+fn workstation_public_api_url() -> String {
+    runtime_url()
+}
+
+fn workstation_next_envs() -> Vec<(&'static str, String)> {
+    let api_url = workstation_public_api_url();
+    vec![
+        ("ORION_API_URL", api_url.clone()),
+        ("EMPYRALIS_API_URL", api_url.clone()),
+        ("NEXT_PUBLIC_API_URL", api_url.clone()),
+        ("NEXT_PUBLIC_ORION_API_URL", api_url),
+    ]
 }
 
 fn runtime_get_json(runtime_base_url: &str, path: &str, runtime_key: &str) -> Result<Value, String> {
@@ -1370,37 +1352,6 @@ fn spawn_runtime<Rt: Runtime, M: Manager<Rt>>(app: &M, runtime_key: &str) -> Res
         .map_err(|error| format!("Failed to start runtime sidecar: {error}"))
 }
 
-fn spawn_backend(runtime_key: &str) -> Result<Child, String> {
-    let backend_main = backend_entrypoint();
-    if !backend_main.exists() {
-        return Err(format!(
-            "Supported desktop launch requires a built backend entrypoint at {}. Build backend/dist before launching the desktop shell.",
-            backend_main.display()
-        ));
-    }
-
-    let mut command = Command::new(node_binary());
-
-    command
-        .arg("--enable-source-maps")
-        .arg(&backend_main)
-        .current_dir(backend_dir())
-        .env("PORT", BACKEND_PORT)
-        .env("RUNTIME_KEY", runtime_key)
-        .env("ORION_API_KEY", runtime_key)
-        .env("ORION_API_URL", runtime_url())
-        .stdout(Stdio::inherit())
-        .stderr(Stdio::inherit());
-
-    if let Some(openai_api_key) = resolved_openai_api_key() {
-        command.env("OPENAI_API_KEY", openai_api_key);
-    }
-
-    command
-        .spawn()
-        .map_err(|error| format!("Failed to start backend sidecar: {error}"))
-}
-
 fn spawn_next() -> Result<Child, String> {
     let frontend = frontend_dir();
     let frontend_build = frontend_build_dir();
@@ -1435,15 +1386,12 @@ fn spawn_next() -> Result<Child, String> {
         .current_dir(frontend)
         .env("NEXT_TELEMETRY_DISABLED", "1")
         .env("EMPYRALIS_TAURI_DESKTOP", "1")
-        .env("ORION_API_URL", runtime_url())
-        .env("NEXT_PUBLIC_API_URL", backend_base_url())
-        .env(
-            "NEXT_PUBLIC_WS_URL",
-            format!("ws://{BACKEND_HOST}:{BACKEND_PORT}"),
-        )
-        .env("NEXT_PUBLIC_ORION_API_URL", runtime_url())
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit());
+
+    for (key, value) in workstation_next_envs() {
+        command.env(key, value);
+    }
 
     command
         .spawn()
@@ -1805,7 +1753,6 @@ fn stop_sidecars(state: &SidecarState) {
     };
     stop_child("frontend", &mut guard.next);
     stop_child("worker", &mut guard.worker);
-    stop_child("backend", &mut guard.backend);
     stop_child("runtime", &mut guard.runtime);
 }
 
@@ -2084,25 +2031,6 @@ pub fn run() {
                 return Err(Box::new(std::io::Error::other(error)));
             }
 
-            if let Err(error) = ensure_service(
-                &state,
-                "backend",
-                BACKEND_PORT,
-                &backend_health_url(),
-                false,
-                "backend",
-                || spawn_backend(&runtime_key),
-                |sidecars, child| {
-                    let _ = write_service_pid_file("backend", child.id());
-                    sidecars.backend = Some(child);
-                },
-            ) {
-                stop_sidecars(&state);
-                release_desktop_start_metadata(&start_meta_path);
-                release_desktop_shell_lock(&lock_path);
-                return Err(Box::new(std::io::Error::other(error)));
-            }
-
             if let Err(error) = ensure_worker(&state, &runtime_key) {
                 stop_sidecars(&state);
                 release_desktop_start_metadata(&start_meta_path);
@@ -2237,7 +2165,7 @@ mod tests {
         touch(&bundled_binary);
         touch(&dist_binary);
 
-        let resolved = resolve_runtime_launcher_candidates(true, Some(&resource_dir), &repo_root, &[])
+        let resolved = resolve_runtime_launcher_candidates(true, Some(&resource_dir), &repo_root)
             .expect("bundled binary should resolve");
 
         assert_eq!(resolved.0, bundled_binary);
@@ -2269,5 +2197,21 @@ mod tests {
         let resolved = resolve_runtime_launcher_candidates(false, None, &repo_root);
 
         assert!(resolved.is_none());
+    }
+
+    #[test]
+    fn workstation_next_envs_point_public_api_vars_at_runtime() {
+        let expected = runtime_url();
+        let vars = workstation_next_envs()
+            .into_iter()
+            .collect::<std::collections::HashMap<_, _>>();
+
+        assert_eq!(vars.get("ORION_API_URL").map(String::as_str), Some(expected.as_str()));
+        assert_eq!(vars.get("EMPYRALIS_API_URL").map(String::as_str), Some(expected.as_str()));
+        assert_eq!(vars.get("NEXT_PUBLIC_API_URL").map(String::as_str), Some(expected.as_str()));
+        assert_eq!(
+            vars.get("NEXT_PUBLIC_ORION_API_URL").map(String::as_str),
+            Some(expected.as_str())
+        );
     }
 }

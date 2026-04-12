@@ -922,6 +922,14 @@ fn backend_dir() -> PathBuf {
     repo_root().join("backend")
 }
 
+fn frontend_build_dir() -> PathBuf {
+    frontend_dir().join(".next")
+}
+
+fn backend_entrypoint() -> PathBuf {
+    backend_dir().join("dist").join("main.js")
+}
+
 fn runtime_binary_names() -> Vec<&'static str> {
     let mut names = Vec::new();
 
@@ -989,7 +997,6 @@ fn resolve_runtime_launcher_candidates(
     prefer_bundled: bool,
     resource_dir: Option<&Path>,
     repo_root: &Path,
-    path_dirs: &[PathBuf],
 ) -> Option<(PathBuf, Vec<String>)> {
     if prefer_bundled {
         if let Some(resource_dir) = resource_dir {
@@ -1001,38 +1008,6 @@ fn resolve_runtime_launcher_candidates(
                 return Some((path, Vec::new()));
             }
         }
-    }
-
-    let uvicorn_candidates = [
-        venv_executable(repo_root, "venv", "uvicorn"),
-        venv_executable(repo_root, ".venv", "uvicorn"),
-    ];
-    if let Some(path) = first_existing_path(uvicorn_candidates) {
-        return Some((path, Vec::new()));
-    }
-
-    #[cfg(target_os = "windows")]
-    let uvicorn_path_names = ["uvicorn.exe", "uvicorn"];
-    #[cfg(not(target_os = "windows"))]
-    let uvicorn_path_names = ["uvicorn"];
-    if let Some(path) = executable_from_dirs(&uvicorn_path_names, path_dirs) {
-        return Some((path, Vec::new()));
-    }
-
-    let python_candidates = [
-        venv_executable(repo_root, "venv", "python"),
-        venv_executable(repo_root, ".venv", "python"),
-    ];
-    if let Some(path) = first_existing_path(python_candidates) {
-        return Some((path, vec!["-m".into(), "uvicorn".into()]));
-    }
-
-    #[cfg(target_os = "windows")]
-    let python_path_names = ["python.exe", "py.exe", "python", "py"];
-    #[cfg(not(target_os = "windows"))]
-    let python_path_names = ["python3", "python"];
-    if let Some(path) = executable_from_dirs(&python_path_names, path_dirs) {
-        return Some((path, vec!["-m".into(), "uvicorn".into()]));
     }
 
     let dist_dir = repo_root.join("dist");
@@ -1309,9 +1284,6 @@ fn bundled_runtime_launcher<Rt: Runtime, M: Manager<Rt>>(
         prefer_bundled_runtime_launcher(),
         app.path().resource_dir().ok().as_deref(),
         &repo_root(),
-        &std::env::var_os("PATH")
-            .map(|value| std::env::split_paths(&value).collect::<Vec<_>>())
-            .unwrap_or_default(),
     ))
 }
 
@@ -1321,22 +1293,9 @@ fn runtime_launcher<Rt: Runtime, M: Manager<Rt>>(app: &M) -> Result<(PathBuf, Ve
     }
 
     Err(
-        "Could not resolve an Empyralis runtime launcher. Checked bundled binaries, dist/ binaries, uvicorn, and python -m uvicorn."
+        "Could not resolve an Empyralis runtime launcher. Supported desktop launch requires a bundled runtime binary or a repo-local dist/empyralis-backend* binary."
             .into(),
     )
-}
-
-fn backend_mode() -> BackendMode {
-    if backend_dir().join("dist").join("main.js").exists() {
-        BackendMode::Dist
-    } else {
-        BackendMode::Dev
-    }
-}
-
-enum BackendMode {
-    Dist,
-    Dev,
 }
 
 fn service_ready(url: &str, accept_client_errors: bool) -> bool {
@@ -1412,20 +1371,19 @@ fn spawn_runtime<Rt: Runtime, M: Manager<Rt>>(app: &M, runtime_key: &str) -> Res
 }
 
 fn spawn_backend(runtime_key: &str) -> Result<Child, String> {
-    let mut command = match backend_mode() {
-        BackendMode::Dist => {
-            let mut cmd = Command::new(node_binary());
-            cmd.arg("--enable-source-maps").arg("dist/main.js");
-            cmd
-        }
-        BackendMode::Dev => {
-            let mut cmd = Command::new(npm_binary());
-            cmd.arg("run").arg("start:dev");
-            cmd
-        }
-    };
+    let backend_main = backend_entrypoint();
+    if !backend_main.exists() {
+        return Err(format!(
+            "Supported desktop launch requires a built backend entrypoint at {}. Build backend/dist before launching the desktop shell.",
+            backend_main.display()
+        ));
+    }
+
+    let mut command = Command::new(node_binary());
 
     command
+        .arg("--enable-source-maps")
+        .arg(&backend_main)
         .current_dir(backend_dir())
         .env("PORT", BACKEND_PORT)
         .env("RUNTIME_KEY", runtime_key)
@@ -1445,6 +1403,7 @@ fn spawn_backend(runtime_key: &str) -> Result<Child, String> {
 
 fn spawn_next() -> Result<Child, String> {
     let frontend = frontend_dir();
+    let frontend_build = frontend_build_dir();
     let next_cli = next_cli_path();
     if !frontend.exists() {
         return Err(format!(
@@ -1452,9 +1411,15 @@ fn spawn_next() -> Result<Child, String> {
             frontend.display()
         ));
     }
+    if !frontend_build.exists() || !frontend_build.join("BUILD_ID").exists() {
+        return Err(format!(
+            "Supported desktop launch requires a built frontend at {}. Run `npm run build --prefix frontend` before launching the desktop shell.",
+            frontend_build.display()
+        ));
+    }
     if !next_cli.exists() {
         return Err(format!(
-            "Next.js CLI not found at {}. Run npm install in frontend/ first.",
+            "Supported desktop launch requires the repo-local Next.js CLI at {}. Run npm install in frontend/ first.",
             next_cli.display()
         ));
     }
@@ -1462,11 +1427,7 @@ fn spawn_next() -> Result<Child, String> {
     let mut command = Command::new(node_binary());
     command
         .arg(next_cli)
-        .arg(if cfg!(debug_assertions) {
-            "dev"
-        } else {
-            "start"
-        })
+        .arg("start")
         .arg("-H")
         .arg(NEXT_HOST)
         .arg("-p")
@@ -2284,46 +2245,29 @@ mod tests {
     }
 
     #[test]
-    fn runtime_resolver_uses_venv_uvicorn_before_path_python() {
+    fn runtime_resolver_uses_repo_dist_binary_when_bundled_binary_missing() {
         let tree = TempTree::new();
         let repo_root = tree.root.join("repo");
         fs::create_dir_all(&repo_root).expect("repo root should exist");
 
-        let venv_uvicorn = venv_executable(&repo_root, "venv", "uvicorn");
-        let path_python_dir = tree.root.join("path-bin");
-        let path_python = path_python_dir.join(if cfg!(target_os = "windows") {
-            "python.exe"
-        } else {
-            "python3"
-        });
-        touch(&venv_uvicorn);
-        touch(&path_python);
+        let dist_binary = repo_root.join("dist").join(runtime_binary_names()[0]);
+        touch(&dist_binary);
 
-        let resolved = resolve_runtime_launcher_candidates(false, None, &repo_root, &[path_python_dir])
-            .expect("venv uvicorn should resolve");
+        let resolved =
+            resolve_runtime_launcher_candidates(false, None, &repo_root).expect("repo dist binary should resolve");
 
-        assert_eq!(resolved.0, venv_uvicorn);
+        assert_eq!(resolved.0, dist_binary);
         assert!(resolved.1.is_empty());
     }
 
     #[test]
-    fn runtime_resolver_falls_back_to_python_module_launcher() {
+    fn runtime_resolver_returns_none_when_supported_runtime_binary_is_missing() {
         let tree = TempTree::new();
         let repo_root = tree.root.join("repo");
-        let path_python_dir = tree.root.join("path-bin");
         fs::create_dir_all(&repo_root).expect("repo root should exist");
 
-        let path_python = path_python_dir.join(if cfg!(target_os = "windows") {
-            "python.exe"
-        } else {
-            "python3"
-        });
-        touch(&path_python);
+        let resolved = resolve_runtime_launcher_candidates(false, None, &repo_root);
 
-        let resolved = resolve_runtime_launcher_candidates(false, None, &repo_root, &[path_python_dir])
-            .expect("python -m uvicorn should resolve");
-
-        assert_eq!(resolved.0, path_python);
-        assert_eq!(resolved.1, vec!["-m".to_string(), "uvicorn".to_string()]);
+        assert!(resolved.is_none());
     }
 }

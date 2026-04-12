@@ -9,7 +9,7 @@ import {
 
 import {
   type WorkspaceBootstrapPayload,
-  createWorkspaceBoundaryKey,
+  createWorkstationKernelKey,
 } from '@/lib/workspace/workspace-bootstrap';
 import {
   buildRouteManifest,
@@ -19,11 +19,12 @@ import {
   type WorkspaceRouteManifest,
   type WorkspaceShellProfile,
 } from '@/lib/workspace/workspace-shell';
-import { WorkspaceServicesProvider } from '@/lib/workspace/workspace-services';
+import { WorkstationKernelProvider } from '@/lib/workspace/workspace-services';
 
 export type WorkspaceBoundaryState = {
   workspaceId: string;
   boundaryKey: string;
+  kernelKey: string;
   shellProfileId: string;
   shellProfile: WorkspaceShellProfile;
   routeManifest: WorkspaceRouteManifest;
@@ -50,17 +51,21 @@ export function WorkspaceBoundary({
   const shellProfile = deriveShellProfile(bootstrap);
   const routeManifest = buildRouteManifest(shellProfile, bootstrap);
   const shellProfileId = shellProfile.id;
-  const boundaryKey = createWorkspaceBoundaryKey(
+  const kernelKey = createWorkstationKernelKey({
+    accountId: bootstrap.account.id,
+    tenantId: bootstrap.workspace.tenantId,
     workspaceId,
-    bootstrap.membership.version,
+    membershipVersion: bootstrap.membership.version,
     shellProfileId,
-  );
+  });
+  const boundaryKey = kernelKey;
 
   return (
     <WorkspaceBoundaryInstance
       key={boundaryKey}
       workspaceId={workspaceId}
       boundaryKey={boundaryKey}
+      kernelKey={kernelKey}
       shellProfileId={shellProfileId}
       shellProfile={shellProfile}
       routeManifest={routeManifest}
@@ -74,6 +79,7 @@ export function WorkspaceBoundary({
 function WorkspaceBoundaryInstance({
   workspaceId,
   boundaryKey,
+  kernelKey,
   shellProfileId,
   shellProfile,
   routeManifest,
@@ -84,6 +90,7 @@ function WorkspaceBoundaryInstance({
     () => ({
       workspaceId,
       boundaryKey,
+      kernelKey,
       shellProfileId,
       shellProfile,
       routeManifest,
@@ -91,20 +98,21 @@ function WorkspaceBoundaryInstance({
       hasCapability: (capability) => hasWorkspaceCapability(bootstrap, capability),
       canAccessRoute: (routeId) => Boolean(routeManifest.routeIndex[routeId]),
     }),
-    [bootstrap, boundaryKey, routeManifest, shellProfile, shellProfileId, workspaceId],
+    [bootstrap, boundaryKey, kernelKey, routeManifest, shellProfile, shellProfileId, workspaceId],
   );
 
   return (
     <WorkspaceBoundaryContext.Provider value={value}>
-      <WorkspaceServicesProvider boundaryKey={boundaryKey} bootstrap={bootstrap}>
+      <WorkstationKernelProvider kernelKey={kernelKey} shellProfileId={shellProfileId} bootstrap={bootstrap}>
         <div
           data-workspace-boundary={boundaryKey}
+          data-workstation-kernel={kernelKey}
           data-workspace-id={workspaceId}
           data-shell-profile={shellProfileId}
         >
           {children}
         </div>
-      </WorkspaceServicesProvider>
+      </WorkstationKernelProvider>
     </WorkspaceBoundaryContext.Provider>
   );
 }

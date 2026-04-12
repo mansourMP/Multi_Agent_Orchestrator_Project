@@ -176,10 +176,34 @@ export function parseWorkspaceBootstrapPayload(payload: unknown): WorkspaceBoots
   };
 }
 
+export type WorkstationKernelKeyParts = {
+  accountId: string;
+  tenantId: string;
+  workspaceId: string;
+  membershipVersion: string;
+  shellProfileId: string;
+};
+
+export function createWorkstationKernelKey({
+  accountId,
+  tenantId,
+  workspaceId,
+  membershipVersion,
+  shellProfileId,
+}: WorkstationKernelKeyParts): string {
+  return `${accountId}:${tenantId}:${workspaceId}:${membershipVersion}:${shellProfileId}`;
+}
+
 export function createWorkspaceBoundaryKey(
   workspaceId: string,
   membershipVersion: string,
   shellProfileId: string,
 ): string {
-  return `${workspaceId}:${membershipVersion}:${shellProfileId}`;
+  return createWorkstationKernelKey({
+    accountId: 'anonymous',
+    tenantId: 'default',
+    workspaceId,
+    membershipVersion,
+    shellProfileId,
+  });
 }

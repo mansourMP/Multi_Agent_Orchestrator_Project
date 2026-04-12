@@ -6,9 +6,19 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useSyncExternalStore,
 } from 'react';
 
 import type { WorkspaceBootstrapPayload } from '@/lib/workspace/workspace-bootstrap';
+import {
+  createWorkstationClient,
+  type WorkstationClient,
+} from '@/lib/workspace/workstation-client';
+import {
+  createWorkstationStreamManager,
+  type WorkstationStreamManager,
+  type WorkstationStreamState,
+} from '@/lib/workspace/workstation-stream-manager';
 
 type QueryExecutor<T> = (context: { signal: AbortSignal; cacheKey: string }) => Promise<T>;
 type StoreListener<T> = (state: T) => void;
@@ -22,14 +32,21 @@ function normalizeStorageKey(prefix: string, key: string): string {
   return `${prefix}:persist:${key}`;
 }
 
-function resolveApiBaseUrl(): string {
+export function resolveWorkspaceApiBaseUrl(
+  env: Partial<Record<'NEXT_PUBLIC_ORION_API_URL' | 'NEXT_PUBLIC_API_URL', string | undefined>> = process.env,
+  windowOrigin?: string,
+): string {
   const envBase =
-    process.env.NEXT_PUBLIC_API_URL
-    ?? process.env.NEXT_PUBLIC_ORION_API_URL
+    env.NEXT_PUBLIC_ORION_API_URL
+    ?? env.NEXT_PUBLIC_API_URL
     ?? '';
 
   if (envBase.trim()) {
     return envBase.replace(/\/+$/, '');
+  }
+
+  if (windowOrigin && windowOrigin.trim()) {
+    return windowOrigin.replace(/\/+$/, '');
   }
 
   if (typeof window !== 'undefined') {
@@ -37,6 +54,36 @@ function resolveApiBaseUrl(): string {
   }
 
   return '';
+}
+
+function resolveApiBaseUrl(): string {
+  return resolveWorkspaceApiBaseUrl(
+    process.env,
+    typeof window !== 'undefined' ? window.location.origin : undefined,
+  );
+}
+
+export type WorkstationKernelScope = {
+  accountId: string;
+  tenantId: string;
+  workspaceId: string;
+  membershipVersion: string;
+  shellProfileId: string;
+  kernelKey: string;
+};
+
+const WORKSTATION_UI_PREFERENCE_PATTERNS: RegExp[] = [
+  /^feature:[^:]+:surface$/i,
+  /^ui:/i,
+  /^layout:/i,
+  /^pane:/i,
+  /^rail:/i,
+  /^switcher:/i,
+  /^workstation:/i,
+];
+
+export function isWorkstationPreferencePersistenceKey(key: string): boolean {
+  return WORKSTATION_UI_PREFERENCE_PATTERNS.some((pattern) => pattern.test(key));
 }
 
 class WorkspaceDisposableRegistry {
@@ -158,8 +205,14 @@ class WorkspaceDisposableRegistry {
 class WorkspacePersistenceNamespace {
   private readonly indexKey: string;
 
-  constructor(private readonly prefix: string) {
+  constructor(
+    private readonly prefix: string,
+    private readonly isAllowedKey: (key: string) => boolean,
+    private readonly legacyPrefixes: string[] = [],
+  ) {
     this.indexKey = `${prefix}:persist-index`;
+    this.purgeLegacyPrefixes();
+    this.purgeDisallowedEntries();
   }
 
   keyFor(key: string): string {
@@ -197,8 +250,71 @@ class WorkspacePersistenceNamespace {
     window.localStorage.setItem(this.indexKey, JSON.stringify(Array.from(new Set(entries))));
   }
 
+  private storageKeyToLogicalKey(storageKey: string): string | null {
+    const prefix = `${this.prefix}:persist:`;
+    if (!storageKey.startsWith(prefix)) {
+      return null;
+    }
+    return storageKey.slice(prefix.length);
+  }
+
+  private dropStorageKey(storageKey: string): void {
+    if (!this.canUseStorage()) {
+      return;
+    }
+
+    window.localStorage.removeItem(storageKey);
+    this.writeIndex(this.readIndex().filter((entry) => entry !== storageKey));
+  }
+
+  private dropKey(key: string): void {
+    this.dropStorageKey(this.keyFor(key));
+  }
+
+  private purgeLegacyPrefixes(): void {
+    if (!this.canUseStorage()) {
+      return;
+    }
+
+    if (this.legacyPrefixes.length === 0) {
+      return;
+    }
+
+    const keys: string[] = [];
+    for (let index = 0; index < window.localStorage.length; index += 1) {
+      const key = window.localStorage.key(index);
+      if (key) {
+        keys.push(key);
+      }
+    }
+
+    for (const key of keys) {
+      if (this.legacyPrefixes.some((prefix) => key.startsWith(prefix))) {
+        window.localStorage.removeItem(key);
+      }
+    }
+  }
+
+  private purgeDisallowedEntries(): void {
+    if (!this.canUseStorage()) {
+      return;
+    }
+
+    for (const storageKey of this.readIndex()) {
+      const logicalKey = this.storageKeyToLogicalKey(storageKey);
+      if (!logicalKey || !this.isAllowedKey(logicalKey)) {
+        this.dropStorageKey(storageKey);
+      }
+    }
+  }
+
   getJson<T>(key: string): T | null {
     if (!this.canUseStorage()) {
+      return null;
+    }
+
+    if (!this.isAllowedKey(key)) {
+      this.dropKey(key);
       return null;
     }
 
@@ -221,6 +337,11 @@ class WorkspacePersistenceNamespace {
       return;
     }
 
+    if (!this.isAllowedKey(key)) {
+      this.dropKey(key);
+      return;
+    }
+
     const storageKey = this.keyFor(key);
     window.localStorage.setItem(storageKey, JSON.stringify(value));
     this.writeIndex([...this.readIndex(), storageKey]);
@@ -231,9 +352,7 @@ class WorkspacePersistenceNamespace {
       return;
     }
 
-    const storageKey = this.keyFor(key);
-    window.localStorage.removeItem(storageKey);
-    this.writeIndex(this.readIndex().filter((entry) => entry !== storageKey));
+    this.dropKey(key);
   }
 
   clear(): void {
@@ -248,9 +367,14 @@ class WorkspacePersistenceNamespace {
   }
 
   snapshot() {
+    const entries = this.readIndex();
     return {
       prefix: this.prefix,
-      trackedKeyCount: this.readIndex().length,
+      trackedKeyCount: entries.length,
+      disallowedKeyCount: entries.reduce((count, storageKey) => {
+        const logicalKey = this.storageKeyToLogicalKey(storageKey);
+        return count + (!logicalKey || !this.isAllowedKey(logicalKey) ? 1 : 0);
+      }, 0),
     };
   }
 }
@@ -459,7 +583,14 @@ class WorkspaceStoreFactory {
 }
 
 export type WorkspaceServices = {
+  kernelKey: string;
   scopeKey: string;
+  scope: WorkstationKernelScope;
+  client: WorkstationClient;
+  streams: WorkstationStreamManager;
+  storagePolicy: {
+    preferencePersistenceOnly: true;
+  };
   queryClient: WorkspaceQueryClient;
   transport: WorkspaceTransportAdapter;
   realtime: WorkspaceRealtimeAdapter;
@@ -467,7 +598,14 @@ export type WorkspaceServices = {
   disposables: WorkspaceDisposableRegistry;
   stores: WorkspaceStoreFactory;
   snapshot: () => {
+    kernelKey: string;
     scopeKey: string;
+    scope: WorkstationKernelScope;
+    client: ReturnType<WorkstationClient['snapshot']>;
+    streams: ReturnType<WorkstationStreamManager['snapshot']>;
+    storagePolicy: {
+      preferencePersistenceOnly: true;
+    };
     persistence: ReturnType<WorkspacePersistenceNamespace['snapshot']>;
     queryClient: ReturnType<WorkspaceQueryClient['snapshot']>;
     transport: ReturnType<WorkspaceTransportAdapter['snapshot']>;
@@ -480,28 +618,65 @@ export type WorkspaceServices = {
 
 const WorkspaceServicesContext = createContext<WorkspaceServices | null>(null);
 
-function createWorkspaceServices(
-  boundaryKey: string,
+function createWorkstationKernel(
+  kernelKey: string,
+  shellProfileId: string,
   bootstrap: WorkspaceBootstrapPayload,
 ): WorkspaceServices {
-  const scopeKey = `${bootstrap.account.id}:${bootstrap.workspace.id}:${boundaryKey}`;
-  const persistencePrefix = `empyralis.workspace.v2:${bootstrap.account.id}:${bootstrap.workspace.id}`;
+  const scope: WorkstationKernelScope = {
+    accountId: bootstrap.account.id,
+    tenantId: bootstrap.workspace.tenantId,
+    workspaceId: bootstrap.workspace.id,
+    membershipVersion: bootstrap.membership.version,
+    shellProfileId,
+    kernelKey,
+  };
+  const scopeKey = kernelKey;
+  const persistencePrefix = `empyralis.workspace.ui.v3:${scope.accountId}:${scope.tenantId}:${scope.workspaceId}`;
   const disposables = new WorkspaceDisposableRegistry();
-  const persistence = new WorkspacePersistenceNamespace(persistencePrefix);
+  const persistence = new WorkspacePersistenceNamespace(
+    persistencePrefix,
+    isWorkstationPreferencePersistenceKey,
+    [
+      `empyralis.workspace.v2:${scope.accountId}:${scope.workspaceId}:persist:`,
+      `empyralis.workspace.v2:${scope.accountId}:${scope.workspaceId}:persist-index`,
+    ],
+  );
   const transport = new WorkspaceTransportAdapter(
     resolveApiBaseUrl(),
     bootstrap.workspace.id,
     disposables,
   );
   const queryClient = new WorkspaceQueryClient(
-    `${bootstrap.account.id}:${bootstrap.workspace.id}`,
+    kernelKey,
     disposables,
   );
   const realtime = new WorkspaceRealtimeAdapter(disposables);
+  const client = createWorkstationClient({
+    scope: {
+      workspaceId: scope.workspaceId,
+      tenantId: scope.tenantId,
+      kernelKey: scope.kernelKey,
+    },
+    transport,
+    queryClient,
+    realtime,
+    getApiBaseUrl: () => transport.snapshot().apiBaseUrl,
+  });
+  const streams = createWorkstationStreamManager({
+    client,
+  });
   const stores = new WorkspaceStoreFactory();
 
   return {
+    kernelKey,
     scopeKey,
+    scope,
+    client,
+    streams,
+    storagePolicy: {
+      preferencePersistenceOnly: true,
+    },
     queryClient,
     transport,
     realtime,
@@ -509,7 +684,14 @@ function createWorkspaceServices(
     disposables,
     stores,
     snapshot: () => ({
+      kernelKey,
       scopeKey,
+      scope,
+      client: client.snapshot(),
+      streams: streams.snapshot(),
+      storagePolicy: {
+        preferencePersistenceOnly: true,
+      },
       persistence: persistence.snapshot(),
       queryClient: queryClient.snapshot(),
       transport: transport.snapshot(),
@@ -518,6 +700,7 @@ function createWorkspaceServices(
       stores: stores.snapshot(),
     }),
     dispose: () => {
+      streams.dispose();
       queryClient.dispose();
       transport.dispose();
       realtime.dispose();
@@ -525,6 +708,35 @@ function createWorkspaceServices(
       disposables.dispose();
     },
   };
+}
+
+export function WorkstationKernelProvider({
+  kernelKey,
+  shellProfileId,
+  bootstrap,
+  children,
+}: PropsWithChildren<{
+  kernelKey: string;
+  shellProfileId: string;
+  bootstrap: WorkspaceBootstrapPayload;
+}>) {
+  const services = useMemo(
+    () => createWorkstationKernel(kernelKey, shellProfileId, bootstrap),
+    [bootstrap, kernelKey, shellProfileId],
+  );
+
+  useEffect(() => {
+    services.streams.start();
+    return () => {
+      services.dispose();
+    };
+  }, [services]);
+
+  return (
+    <WorkspaceServicesContext.Provider value={services}>
+      {children}
+    </WorkspaceServicesContext.Provider>
+  );
 }
 
 export function WorkspaceServicesProvider({
@@ -535,26 +747,34 @@ export function WorkspaceServicesProvider({
   boundaryKey: string;
   bootstrap: WorkspaceBootstrapPayload;
 }>) {
-  const services = useMemo(
-    () => createWorkspaceServices(boundaryKey, bootstrap),
-    [boundaryKey, bootstrap],
-  );
-
-  useEffect(() => () => {
-    services.dispose();
-  }, [services]);
-
   return (
-    <WorkspaceServicesContext.Provider value={services}>
+    <WorkstationKernelProvider
+      kernelKey={boundaryKey}
+      shellProfileId={bootstrap.shellHints.preferredProfile || 'unknown'}
+      bootstrap={bootstrap}
+    >
       {children}
-    </WorkspaceServicesContext.Provider>
+    </WorkstationKernelProvider>
   );
 }
 
-export function useWorkspaceServices(): WorkspaceServices {
+export function useWorkstationKernel(): WorkspaceServices {
   const value = useContext(WorkspaceServicesContext);
   if (!value) {
-    throw new Error('useWorkspaceServices must be used inside WorkspaceServicesProvider.');
+    throw new Error('useWorkstationKernel must be used inside WorkstationKernelProvider.');
   }
   return value;
+}
+
+export function useWorkspaceServices(): WorkspaceServices {
+  return useWorkstationKernel();
+}
+
+export function useWorkstationStreamState(): WorkstationStreamState {
+  const services = useWorkstationKernel();
+  return useSyncExternalStore(
+    services.streams.subscribe.bind(services.streams),
+    services.streams.getState.bind(services.streams),
+    services.streams.getState.bind(services.streams),
+  );
 }

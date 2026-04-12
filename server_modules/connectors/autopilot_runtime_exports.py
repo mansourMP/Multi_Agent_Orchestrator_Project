@@ -21,7 +21,6 @@ from server_modules.connectors.autopilot_connector_config import (
     ORION_TELEGRAM_MEDIA_MAX_ITEMS,
     ORION_WHATSAPP_AUTOPILOT_STATE_FILE,
 )
-from server_modules.connectors.autopilot_connector_export_facade import AutopilotConnectorExportFacade
 from server_modules.connectors.autopilot_connector_shell_builder import build_autopilot_connector_shell_service
 from server_modules.connectors.autopilot_connector_shell_service import AutopilotConnectorShellService
 
@@ -32,7 +31,6 @@ _SYNC_SERVER_GLOBALS = (
     "WHATSAPP_AUTOPILOT_STATE",
 )
 _AUTOPILOT_CONNECTOR_SHELL_SERVICE: Optional[AutopilotConnectorShellService] = None
-_AUTOPILOT_EXPORT_FACADE = AutopilotConnectorExportFacade(global_namespace=globals())
 ORION_TELEGRAM_AUTOPILOT_TRUST_MODE = str(os.getenv("ORION_TELEGRAM_AUTOPILOT_TRUST_MODE", "guarded")).strip().lower() or "guarded"
 ORION_TELEGRAM_AUTOPILOT_EXECUTION_TARGET = (
     str(os.getenv("ORION_TELEGRAM_AUTOPILOT_EXECUTION_TARGET", "local_companion")).strip().lower() or "local_companion"
@@ -185,8 +183,8 @@ def _init() -> None:
 
 
 def _telegram_run_dispatch_service():
-    return _AUTOPILOT_EXPORT_FACADE.telegram_run_dispatch_service()
+    return _autopilot_connector_shell_service().registry_facade_service().telegram_service_registry().telegram_run_dispatch_service()
 
 
 def _autopilot_run_entry_service():
-    return _AUTOPILOT_EXPORT_FACADE.autopilot_run_entry_service()
+    return _autopilot_connector_shell_service().registry_facade_service().runtime_service_registry().run_entry_service()

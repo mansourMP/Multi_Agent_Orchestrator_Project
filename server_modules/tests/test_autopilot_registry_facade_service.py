@@ -1,147 +1,287 @@
 import unittest
 
-from server_modules.connectors.autopilot_channel_registry_bridge_service import AutopilotChannelRegistryBridgeService
 from server_modules.connectors.autopilot_registry_facade_service import AutopilotRegistryFacadeService
 
 
-class _FakeBridge:
+class _FakeHelperBridge:
     instances = []
 
     def __init__(self, **kwargs):
         self.kwargs = kwargs
         type(self).instances.append(self)
 
-    def telegram_service_registry(self):
-        return {"telegram": True, "kwargs": self.kwargs}
-
-    def whatsapp_service_registry(self):
-        return {"whatsapp": True, "kwargs": self.kwargs}
-
     def telegram_helper_registry(self):
-        return {"helper": True, "kwargs": self.kwargs}
-
-    def support_service_registry(self):
-        class _SupportRegistry:
+        class _Registry:
             def profile_service(self_inner):
-                return {"profile": True}
-
-            def runtime_status_service(self_inner):
-                return {"status": True}
-
-            def workflow_setup_service(self_inner):
-                return {"workflow": True}
-
-            def connector_context_service(self_inner):
-                return {"context": True}
-
-            def approval_service(self_inner):
-                return {"approval": True}
-
-            def common_support_service(self_inner):
-                class _Common:
-                    def cognitive_module(self):
-                        return "module"
-
-                    def cognitive_defaults(self):
-                        return {"ok": True}
-
-                    def normalize_string_list(self, value):
+                class _Profile:
+                    def normalize_profile_field(self, value):
                         return value
 
-                    def chat_id_from_session_key(self, key):
-                        return key
+                    def get_profile(self, workspace_id, chat_id):
+                        return {"workspace_id": workspace_id, "chat_id": chat_id}
 
-                return _Common()
+                    def build_goal_with_profile(self, goal, profile):
+                        return {"goal": goal, "profile": profile}
 
-            def skill_service(self_inner):
-                class _Skill:
-                    def select_skill_from_text(self, text):
-                        return {"text": text}
+                    def onboarding_prompt(self, step_index, retry=False):
+                        return {"step_index": step_index, "retry": retry}
 
-                    def telegram_skill_goal(self, skill):
-                        return f"goal:{skill}"
+                    def start_onboarding(self, workspace_id, chat_id):
+                        return {"workspace_id": workspace_id, "chat_id": chat_id}
 
-                return _Skill()
+                    def profile_text(self, profile, chat_profile):
+                        return {"profile": profile, "chat_profile": chat_profile}
 
-            def channel_support_service(self_inner):
-                class _Channel:
-                    def truncate_one_line(self, text, limit):
-                        return str(text)[:limit]
+                    def profile_help_text(self, profile):
+                        return profile
 
-                    def telegram_session_key(self, chat_id):
-                        return f"tg:{chat_id}"
+                    def set_profile_field(self, workspace_id, chat_id, field_name, value):
+                        return {"workspace_id": workspace_id, "chat_id": chat_id, "field_name": field_name, "value": value}
 
-                    def whatsapp_session_key(self, a, b):
-                        return f"wa:{a}:{b}"
+                    def clear_profile(self, workspace_id, chat_id, field_name):
+                        return {"workspace_id": workspace_id, "chat_id": chat_id, "field_name": field_name}
 
-                return _Channel()
+                    def get_onboarding_state(self, workspace_id, chat_id):
+                        return {"workspace_id": workspace_id, "chat_id": chat_id}
 
-        return _SupportRegistry()
+                    def onboarding_consume_answer(self, workspace_id, chat_id, text):
+                        return {"workspace_id": workspace_id, "chat_id": chat_id, "text": text}
 
-    def runtime_service_registry(self):
-        class _RuntimeRegistry:
-            def connector_support_service(self_inner):
-                class _Connector:
-                    def bool_from_any(self, value, default=False):
-                        return bool(value) if value is not None else default
+                    def profile_has_context(self, profile):
+                        return bool(profile)
 
-                    def get_secret(self, entry):
-                        return entry
+                return _Profile()
 
-                    def connector_assigned_agent_role(self, entry):
-                        return "assistant"
+            def routing_service(self_inner):
+                class _Routing:
+                    def help_text(self, profile):
+                        return profile
 
-                return _Connector()
+                    def route_message(self, text, profile):
+                        return {"text": text, "profile": profile}
 
-            def transport_service(self_inner):
-                class _Transport:
-                    def api_request(self, *args, **kwargs):
-                        return {"args": args, "kwargs": kwargs}
+                    def is_explicit_run_command(self, raw_text):
+                        return raw_text.startswith("/run")
 
-                    def send_message(self, **kwargs):
+                return _Routing()
+
+            def media_service(self_inner):
+                class _Media:
+                    def extract_message(self, update):
+                        return update.get("message")
+
+                    def store_attachments(self, **kwargs):
                         return kwargs
 
-                return _Transport()
+                    def build_goal_with_attachments(self, goal, attachments):
+                        return {"goal": goal, "attachments": attachments}
 
-            def terminal_service(self_inner):
-                return {"terminal": True}
+                return _Media()
 
-            def run_entry_service(self_inner):
-                return {"run_entry": True}
+            def camera_setup_service(self_inner):
+                return {"camera": True}
 
-            def runtime_support_service(self_inner):
-                class _RuntimeSupport:
-                    def local_companion_snapshot(self):
-                        return {"local": True}
-
-                    def current_runtime_metrics(self):
-                        return {"metrics": True}
-
-                    def latest_runtime_run_summary(self):
-                        return "summary"
-
-                return _RuntimeSupport()
-
-            def menu_service(self_inner):
-                class _Menu:
-                    def reply_keyboard(self, profile):
-                        return {"profile": profile}
-
-                return _Menu()
-
-        return _RuntimeRegistry()
+        return _Registry()
 
 
-class _FakeBridgeFacade:
-    def event_bridge_service(self):
-        class _EventBridge:
-            def append_channel_dead_letter(self, **kwargs):
+class _FakeSupportRegistry:
+    instances = []
+
+    def __init__(self, **kwargs):
+        self.kwargs = kwargs
+        type(self).instances.append(self)
+
+    def profile_service(self):
+        return {"profile": True}
+
+    def runtime_status_service(self):
+        return {"status": True}
+
+    def workflow_setup_service(self):
+        class _Workflow:
+            def handle_telegram_guided_automation_setup(self, **kwargs):
                 return kwargs
 
-            def record_channel_event(self, **kwargs):
+        return _Workflow()
+
+    def connector_context_service(self):
+        class _Context:
+            def workspace_connector_context(self, **kwargs):
                 return kwargs
 
-        return _EventBridge()
+            def build_goal_with_connector_context(self, goal, prompt):
+                return {"goal": goal, "prompt": prompt}
+
+            def installed_skill_query(self, **kwargs):
+                return kwargs
+
+        return _Context()
+
+    def approval_service(self):
+        return {"approval": True}
+
+    def common_support_service(self):
+        class _Common:
+            def cognitive_module(self):
+                return "module"
+
+            def cognitive_defaults(self):
+                return {"ok": True}
+
+            def normalize_string_list(self, value):
+                return value
+
+            def chat_id_from_session_key(self, key):
+                return key
+
+        return _Common()
+
+    def skill_service(self):
+        class _Skill:
+            def select_skill_from_text(self, text):
+                return {"text": text}
+
+            def telegram_skill_goal(self, skill):
+                return f"goal:{skill}"
+
+            def telegram_skills_menu_text(self, profile):
+                return f"skills:{profile}"
+
+        return _Skill()
+
+    def channel_support_service(self):
+        class _Channel:
+            def truncate_one_line(self, text, limit):
+                return str(text)[:limit]
+
+            def classify_error(self, detail):
+                return detail
+
+            def iso_from_epoch(self, ts):
+                return ts
+
+            def telegram_autopilot_log(self, message):
+                return message
+
+            def telegram_session_key(self, chat_id):
+                return f"tg:{chat_id}"
+
+            def whatsapp_session_key(self, inbound_from, inbound_to):
+                return f"wa:{inbound_from}:{inbound_to}"
+
+            def telegram_trace_id(self, chat_id, update_id, message_id):
+                return f"{chat_id}:{update_id}:{message_id}"
+
+            def include_run_meta(self):
+                return True
+
+        return _Channel()
+
+
+class _FakeRuntimeRegistry:
+    instances = []
+
+    def __init__(self, **kwargs):
+        self.kwargs = kwargs
+        type(self).instances.append(self)
+
+    def connector_support_service(self):
+        class _Connector:
+            def resolve_allow_from(self, entry, allow_from):
+                return allow_from
+
+            def get_secret(self, entry):
+                return entry
+
+            def connector_paused(self, item):
+                return False
+
+            def chat_matches(self, configured_chat_id, chat):
+                return configured_chat_id == chat
+
+            def sender_allowed(self, sender, allow_from):
+                return True
+
+            def connector_assigned_agent_role(self, entry):
+                return "assistant"
+
+            def bool_from_any(self, value, default=False):
+                return bool(value) if value is not None else default
+
+        return _Connector()
+
+    def transport_service(self):
+        class _Transport:
+            def api_request(self, *args, **kwargs):
+                return {"args": args, "kwargs": kwargs}
+
+            def send_message(self, **kwargs):
+                return kwargs
+
+            def send_chat_action(self, *args, **kwargs):
+                return {"args": args, "kwargs": kwargs}
+
+            def edit_message(self, *args, **kwargs):
+                return {"args": args, "kwargs": kwargs}
+
+        return _Transport()
+
+    def terminal_service(self):
+        return {"terminal": True}
+
+    def run_entry_service(self):
+        class _RunEntry:
+            def create_telegram_run(self, **kwargs):
+                return kwargs
+
+            def create_whatsapp_run(self, **kwargs):
+                return kwargs
+
+            def can_auto_approve_wait(self, run):
+                return False
+
+            def pending_confirmation_payload(self, run):
+                return run
+
+        return _RunEntry()
+
+    def runtime_support_service(self):
+        class _RuntimeSupport:
+            def local_companion_snapshot(self):
+                return {"local": True}
+
+            def current_runtime_metrics(self):
+                return {"metrics": True}
+
+            def latest_runtime_run_summary(self):
+                return "summary"
+
+            def humanize_telegram_run_summary(self, text):
+                return text
+
+            def latest_run_error_message(self, run):
+                return run
+
+            def is_non_retryable_run_error(self, error):
+                return False
+
+            def friendly_run_error(self, error):
+                return error
+
+            def summarize_run_terminal_result(self, run, limit):
+                return {"run": run, "limit": limit}
+
+        return _RuntimeSupport()
+
+    def menu_service(self):
+        class _Menu:
+            def menu_keyboard(self, profile, menu_id):
+                return {"profile": profile, "menu_id": menu_id}
+
+            def reply_keyboard(self, profile):
+                return {"profile": profile}
+
+        return _Menu()
 
 
 class _FakeDirectTelegramRegistry:
@@ -160,13 +300,30 @@ class _FakeDirectWhatsAppRegistry:
         type(self).instances.append(self)
 
 
+class _FakeBridgeFacade:
+    def event_bridge_service(self):
+        class _EventBridge:
+            def append_channel_dead_letter(self, **kwargs):
+                return kwargs
+
+            def record_channel_event(self, **kwargs):
+                return kwargs
+
+            def record_channel_event_throttled(self, **kwargs):
+                return kwargs
+
+        return _EventBridge()
+
+
 class AutopilotRegistryFacadeServiceTests(unittest.TestCase):
     def setUp(self) -> None:
-        _FakeBridge.instances.clear()
+        _FakeHelperBridge.instances.clear()
+        _FakeSupportRegistry.instances.clear()
+        _FakeRuntimeRegistry.instances.clear()
         _FakeDirectTelegramRegistry.instances.clear()
         _FakeDirectWhatsAppRegistry.instances.clear()
 
-    def _service(self, patched, **overrides):
+    def _service(self, patched):
         return AutopilotRegistryFacadeService(
             project_root="/tmp/project",
             default_chat_prefix="/empyralis",
@@ -275,72 +432,14 @@ class AutopilotRegistryFacadeServiceTests(unittest.TestCase):
             runtime_builtin_skills_getter=lambda: [],
             runtime_skills_snapshot_getter=lambda: [],
             bridge_facade_getter=lambda: _FakeBridgeFacade(),
-            channel_registry_bridge_class=overrides.get("channel_registry_bridge_class", _FakeBridge),
-            helper_registry_bridge_class=overrides.get("helper_registry_bridge_class", _FakeBridge),
-            support_registry_bridge_class=overrides.get("support_registry_bridge_class", _FakeBridge),
-            runtime_registry_bridge_class=overrides.get("runtime_registry_bridge_class", _FakeBridge),
-            telegram_service_registry_class=overrides.get(
-                "telegram_service_registry_class",
-                _FakeDirectTelegramRegistry,
-            ),
-            whatsapp_service_registry_class=overrides.get(
-                "whatsapp_service_registry_class",
-                _FakeDirectWhatsAppRegistry,
-            ),
+            helper_registry_bridge_class=_FakeHelperBridge,
+            telegram_service_registry_class=_FakeDirectTelegramRegistry,
+            whatsapp_service_registry_class=_FakeDirectWhatsAppRegistry,
+            support_registry_class=_FakeSupportRegistry,
+            runtime_registry_class=_FakeRuntimeRegistry,
         )
 
-    def test_facade_caches_bridge_builders_and_preserves_late_bound_values(self) -> None:
-        patched = {
-            "telegram_workspace_id": "default",
-            "telegram_require_prefix": False,
-            "telegram_prefix": "/empyralis",
-            "telegram_timeout": 180,
-            "telegram_max_reply_chars": 1200,
-            "telegram_send_ack": False,
-            "telegram_delivery_mode": "webhook",
-            "telegram_enabled": True,
-            "telegram_profile": "ops",
-            "telegram_trust_mode": "workspace_write",
-            "telegram_execution_target": "local",
-            "whatsapp_enabled": True,
-            "whatsapp_profile": "support",
-            "whatsapp_require_prefix": False,
-            "whatsapp_prefix": "/empyralis",
-            "whatsapp_timeout": 180,
-            "whatsapp_max_reply_chars": 1200,
-            "whatsapp_send_ack": False,
-            "whatsapp_trust_mode": "workspace_write",
-            "whatsapp_execution_target": "local",
-        }
-        service = self._service(patched)
-
-        channel_first = service.channel_registry_bridge_service()
-        self.assertIs(channel_first, service.channel_registry_bridge_service())
-        helper_first = service.helper_registry_bridge_service()
-        self.assertIs(helper_first, service.helper_registry_bridge_service())
-        support_first = service.support_registry_bridge_service()
-        self.assertIs(support_first, service.support_registry_bridge_service())
-        runtime_first = service.runtime_registry_bridge_service()
-        self.assertIs(runtime_first, service.runtime_registry_bridge_service())
-
-        self.assertEqual(len(_FakeBridge.instances), 4)
-        self.assertEqual(channel_first.kwargs["telegram_default_workspace_id"], "default")
-        self.assertEqual(channel_first.kwargs["telegram_delivery_mode"], "webhook")
-        self.assertTrue(channel_first.kwargs["whatsapp_require_explicit_opt_in"])
-        self.assertTrue(channel_first.kwargs["whatsapp_redact_event_text"])
-        self.assertEqual(channel_first.kwargs["whatsapp_retention_days"], 30)
-        self.assertEqual(helper_first.kwargs["default_chat_prefix"], "/empyralis")
-        self.assertEqual(support_first.kwargs["workflow_api_url"], "http://workflow")
-        self.assertEqual(runtime_first.kwargs["telegram_engine"], "orion")
-
-        self.assertEqual(service.telegram_service_registry()["telegram"], True)
-        self.assertEqual(service.whatsapp_service_registry()["whatsapp"], True)
-        self.assertEqual(service.telegram_helper_registry()["helper"], True)
-        self.assertEqual(service.profile_service(), {"profile": True})
-        self.assertEqual(service.runtime_status_service(), {"status": True})
-        self.assertEqual(service.terminal_service(), {"terminal": True})
-
-    def test_facade_direct_channel_registries_skip_bridge_holder_on_default_path(self) -> None:
+    def test_facade_builds_direct_registries_without_channel_support_runtime_bridges(self) -> None:
         patched = {
             "telegram_workspace_id": "workspace-123",
             "telegram_require_prefix": False,
@@ -363,23 +462,25 @@ class AutopilotRegistryFacadeServiceTests(unittest.TestCase):
             "whatsapp_trust_mode": "workspace_write",
             "whatsapp_execution_target": "local",
         }
-        service = self._service(
-            patched,
-            channel_registry_bridge_class=AutopilotChannelRegistryBridgeService,
-        )
+        service = self._service(patched)
 
         telegram_registry = service.telegram_service_registry()
         whatsapp_registry = service.whatsapp_service_registry()
 
         self.assertIs(telegram_registry, service.telegram_service_registry())
         self.assertIs(whatsapp_registry, service.whatsapp_service_registry())
-        self.assertEqual(len(_FakeBridge.instances), 3)
+        self.assertEqual(len(_FakeHelperBridge.instances), 1)
+        self.assertEqual(len(_FakeSupportRegistry.instances), 1)
+        self.assertEqual(len(_FakeRuntimeRegistry.instances), 1)
         self.assertEqual(len(_FakeDirectTelegramRegistry.instances), 1)
         self.assertEqual(len(_FakeDirectWhatsAppRegistry.instances), 1)
         self.assertEqual(telegram_registry.kwargs["default_workspace_id"], "workspace-123")
         self.assertEqual(telegram_registry.kwargs["delivery_mode"], "webhook")
         self.assertEqual(whatsapp_registry.kwargs["default_profile"], "support")
         self.assertTrue(whatsapp_registry.kwargs["enabled"])
+        self.assertEqual(service.profile_service(), {"profile": True})
+        self.assertEqual(service.runtime_status_service(), {"status": True})
+        self.assertEqual(service.terminal_service(), {"terminal": True})
 
 
 if __name__ == "__main__":

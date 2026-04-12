@@ -88,9 +88,6 @@ class _FakeSharedServiceRegistry:
             def whatsapp_webhook_auth_result(self, **kwargs):
                 return kwargs
 
-            def whatsapp_webhook_result(self, **kwargs):
-                return kwargs
-
         return _Endpoint()
 
     def autopilot_event_service(self):
@@ -145,39 +142,8 @@ class _FakeDirectWhatsAppWebhookBridgeService:
         type(self).instances.append(self)
 
 
-class _FakeBridgeRegistry:
-    instances = []
-
-    def __init__(self, **kwargs):
-        self.kwargs = kwargs
-        self.shared = _FakeSharedServiceRegistry()
-        type(self).instances.append(self)
-
-    def shared_service_registry(self):
-        return self.shared
-
-    def event_bridge_service(self):
-        return {"event_bridge": True}
-
-    def terminal_bridge_service(self):
-        return {"terminal_bridge": True}
-
-    def state_bridge_service(self):
-        return {"state_bridge": True}
-
-    def compatibility_bridge_service(self):
-        return {"compatibility_bridge": True}
-
-    def telegram_webhook_bridge_service(self):
-        return {"telegram_webhook_bridge": True}
-
-    def webhook_bridge_service(self):
-        return {"webhook_bridge": True}
-
-
 class AutopilotBridgeFacadeServiceTests(unittest.TestCase):
     def setUp(self) -> None:
-        _FakeBridgeRegistry.instances.clear()
         _FakeSharedServiceRegistry.instances.clear()
         _FakeDirectEventBridgeService.instances.clear()
         _FakeDirectTerminalBridgeService.instances.clear()
@@ -186,78 +152,7 @@ class AutopilotBridgeFacadeServiceTests(unittest.TestCase):
         _FakeDirectTelegramWebhookBridgeService.instances.clear()
         _FakeDirectWhatsAppWebhookBridgeService.instances.clear()
 
-    def test_facade_caches_bridge_registry_and_exposes_services(self) -> None:
-        service = AutopilotBridgeFacadeService(
-            normalize_workspace_id=lambda value: str(value or "default"),
-            append_channel_event=lambda **kwargs: kwargs,
-            utc_now_iso=lambda: "2026-04-05T00:00:00Z",
-            truncate_one_line=lambda text, limit: str(text)[:limit],
-            json_safe=lambda value: value,
-            dead_letter_lock=object(),
-            read_dead_letter_json=lambda path, default: default,
-            write_dead_letter_json=lambda path, payload: payload,
-            dead_letter_file="/tmp/dead.json",
-            dead_letter_limit=100,
-            collapse_whitespace=lambda text: " ".join(str(text).split()),
-            telegram_workspace_id="default",
-            whatsapp_workspace_id="default",
-            telegram_service_registry=lambda: _FakeRegistryDeps(),
-            whatsapp_service_registry=lambda: _FakeRegistryDeps(),
-            autopilot_profile_service=lambda: _FakeProfileService(),
-            init_runtime=lambda: None,
-            telegram_terminal_service=lambda: {"terminal": True},
-            telegram_enabled_getter=lambda: True,
-            telegram_default_profile_getter=lambda: "ops",
-            telegram_catalog_getter=lambda: {"ops": {}},
-            whatsapp_enabled_getter=lambda: True,
-            whatsapp_default_profile_getter=lambda: "support",
-            whatsapp_catalog_getter=lambda: {"support": {}},
-            telegram_state_getter=lambda: {"active": True},
-            telegram_lock_getter=lambda: object(),
-            safe_path_token=lambda value: f"safe:{value}",
-            build_goal_with_profile=lambda goal, profile: f"{goal}|{profile}",
-            workspace_connector_context=lambda goal, workspace_id, connector_id: {
-                "goal": goal,
-                "workspace_id": workspace_id,
-                "connector_id": connector_id,
-            },
-            extract_message=lambda update: update.get("message"),
-            build_goal_with_attachments=lambda goal, attachments: f"{goal}|{len(attachments)}",
-            route_message=lambda text, profile: {"text": text, "profile": profile},
-            parse_form_urlencoded=lambda raw: {"Body": raw.decode("utf-8")},
-            error_response=lambda status_code, content: {"status_code": status_code, "content": content},
-            telegram_delivery_mode_getter=lambda: "webhook",
-            telegram_configured_webhook_secret_getter=lambda: "telegram-secret",
-            telegram_public_base_url_getter=lambda: "https://public.example.com",
-            webhook_enabled_getter=lambda: True,
-            configured_webhook_secret_getter=lambda: "secret-1",
-            whatsapp_public_base_url_getter=lambda: "https://public.example.com",
-            bridge_registry_class=_FakeBridgeRegistry,
-        )
-
-        first = service.bridge_registry_service()
-        second = service.bridge_registry_service()
-
-        self.assertIs(first, second)
-        self.assertEqual(len(_FakeBridgeRegistry.instances), 1)
-        self.assertEqual(service.autopilot_status_service(), {"status": True})
-        self.assertEqual(service.autopilot_event_service(), {"event": True})
-        self.assertEqual(service.event_bridge_service(), {"event_bridge": True})
-        self.assertEqual(service.terminal_bridge_service(), {"terminal_bridge": True})
-        self.assertEqual(service.state_bridge_service(), {"state_bridge": True})
-        self.assertEqual(service.compatibility_bridge_service(), {"compatibility_bridge": True})
-        self.assertEqual(service.telegram_webhook_bridge_service(), {"telegram_webhook_bridge": True})
-        self.assertEqual(service.webhook_bridge_service(), {"webhook_bridge": True})
-        self.assertTrue(first.kwargs["telegram_enabled"])
-        self.assertEqual(first.kwargs["telegram_default_profile"], "ops")
-        self.assertEqual(first.kwargs["telegram_delivery_mode"], "webhook")
-        self.assertEqual(first.kwargs["telegram_configured_webhook_secret"], "telegram-secret")
-        self.assertEqual(first.kwargs["configured_webhook_secret"], "secret-1")
-        self.assertEqual(first.kwargs["whatsapp_public_base_url"], "https://public.example.com")
-        self.assertIsNotNone(first.kwargs["resolve_inbound_connector"])
-        self.assertTrue(first.kwargs["validate_webhook_signature"]("https://public.example.com/hook", {"Body": "hi"}, "sig", "token") in {True, False})
-
-    def test_facade_direct_bridge_services_skip_bridge_holder_on_default_path(self) -> None:
+    def test_facade_builds_direct_bridge_services_without_registry_shell(self) -> None:
         service = AutopilotBridgeFacadeService(
             normalize_workspace_id=lambda value: str(value or "default"),
             append_channel_event=lambda **kwargs: kwargs,
@@ -327,7 +222,6 @@ class AutopilotBridgeFacadeServiceTests(unittest.TestCase):
         self.assertIs(compatibility_bridge, service.compatibility_bridge_service())
         self.assertIs(telegram_webhook_bridge, service.telegram_webhook_bridge_service())
         self.assertIs(whatsapp_webhook_bridge, service.webhook_bridge_service())
-        self.assertEqual(len(_FakeBridgeRegistry.instances), 0)
         self.assertEqual(len(_FakeSharedServiceRegistry.instances), 1)
         self.assertEqual(len(_FakeDirectEventBridgeService.instances), 1)
         self.assertEqual(len(_FakeDirectTerminalBridgeService.instances), 1)
@@ -336,7 +230,6 @@ class AutopilotBridgeFacadeServiceTests(unittest.TestCase):
         self.assertEqual(len(_FakeDirectTelegramWebhookBridgeService.instances), 1)
         self.assertEqual(len(_FakeDirectWhatsAppWebhookBridgeService.instances), 1)
         self.assertEqual(shared_registry.kwargs["telegram_delivery_mode"], "webhook")
-        self.assertEqual(event_bridge.kwargs["init_runtime"](), None)
         self.assertEqual(terminal_bridge.kwargs["telegram_default_profile"], "ops")
         self.assertEqual(state_bridge.kwargs["telegram_state"], {"active": True})
         self.assertEqual(telegram_webhook_bridge.kwargs["configured_secret"], "telegram-secret")

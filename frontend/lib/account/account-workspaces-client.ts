@@ -3,7 +3,7 @@
 import { buildCookieAuthHeaders } from '@/lib/auth/csrf';
 import type { AccountShellBootstrap } from '@/lib/shell/account-shell-store';
 import { parseAccountShellPayload } from '@/lib/shell/account-shell-payload';
-import { resolveWorkspaceApiBaseUrl } from '@/lib/workspace/workspace-services';
+import { resolveWorkspaceApiBaseUrl, type WorkspaceApiEnv } from '@/lib/workspace/workspace-services';
 
 export type WorkspaceSetupType = 'personal' | 'professional' | 'team';
 export type WorkspaceShellProfileId =
@@ -38,7 +38,7 @@ export type UpdateWorkspaceInput = Partial<CreateWorkspaceInput> & {
 
 function apiBaseUrl(): string {
   return resolveWorkspaceApiBaseUrl(
-    process.env,
+    process.env as WorkspaceApiEnv,
     typeof window !== 'undefined' ? window.location.origin : undefined,
   );
 }

@@ -1,6 +1,6 @@
 'use client';
 
-import { usePathname, useRouter, useSearchParams } from 'next/navigation';
+import { usePathname, useRouter, useSearchParams, type ReadonlyURLSearchParams } from 'next/navigation';
 import { useEffect, useMemo, useState } from 'react';
 
 import { AppButton, AppNotice } from '@/lib/ui/primitives';
@@ -267,22 +267,9 @@ function renderSelectionSpecificSections(selection: StageSelection) {
         </StageDetailSection>
         {capabilities.length > 0 ? (
           <StageDetailSection title="Required capabilities">
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.45rem' }}>
+            <div className="app-inline-actions app-inline-actions--tight">
               {capabilities.map((capability) => (
-                <span
-                  key={String(capability)}
-                  style={{
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    minHeight: '1.8rem',
-                    padding: '0.24rem 0.55rem',
-                    borderRadius: '999px',
-                    border: '1px solid var(--app-border-subtle)',
-                    background: 'color-mix(in srgb, var(--app-bg-panel-elevated) 80%, var(--app-bg-overlay) 20%)',
-                    color: 'var(--app-text-secondary)',
-                    fontSize: '0.78rem',
-                  }}
-                >
+                <span key={String(capability)} className="app-data-badge app-data-badge--neutral">
                   {String(capability)}
                 </span>
               ))}
@@ -331,7 +318,7 @@ function renderSelectionSwitcher(
 
   return (
     <StageDetailSection title="Available selections">
-      <div style={{ display: 'grid', gap: '0.55rem' }}>
+      <div className="app-stack-3">
         {items.map((item) => {
           const isActive = item.id === activeSelectionId;
           const href = writeWorkstationStageRouteState(pathname, searchParams, {
@@ -347,21 +334,10 @@ function renderSelectionSwitcher(
               onClick={() => {
                 router.replace(href, { scroll: false });
               }}
-              style={{
-                display: 'grid',
-                gap: '0.2rem',
-                textAlign: 'left',
-                padding: '0.8rem 0.9rem',
-                borderRadius: '0.95rem',
-                border: isActive ? '1px solid var(--app-border-accent)' : '1px solid var(--app-border-subtle)',
-                background: isActive
-                  ? 'color-mix(in srgb, var(--app-accent-muted) 76%, var(--app-bg-panel) 24%)'
-                  : 'color-mix(in srgb, var(--app-bg-panel) 88%, var(--app-bg-overlay) 12%)',
-                cursor: 'pointer',
-              }}
+              className={`app-card-button${isActive ? ' app-card-button--selected' : ''}`}
             >
-              <strong style={{ color: 'var(--app-text-primary)' }}>{item.label}</strong>
-              <span style={{ color: 'var(--app-text-secondary)', fontSize: '0.82rem' }}>{item.subtitle}</span>
+              <strong className="app-card-button__title">{item.label}</strong>
+              <span className="app-card-button__subtitle">{item.subtitle}</span>
             </button>
           );
         })}
@@ -661,7 +637,7 @@ export function WorkstationStagePane() {
 
   if (!state.activeSelection) {
     return (
-      <div data-workstation-stage="pane" style={{ display: 'grid', gap: '0.9rem', padding: '1rem' }}>
+      <div data-workstation-stage="pane" className="app-stack-4">
         {state.blockedMessage ? (
           <AppNotice tone="warning">{state.blockedMessage}</AppNotice>
         ) : null}
@@ -677,7 +653,7 @@ export function WorkstationStagePane() {
   }
 
   return (
-    <div data-workstation-stage="pane" style={{ display: 'grid', gap: '0.9rem', padding: '1rem' }}>
+    <div data-workstation-stage="pane" className="app-stack-4">
       <StageDetailLayout
         eyebrow={viewTitle(state.activeView)}
         title={state.activeSelection.label}

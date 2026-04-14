@@ -2,56 +2,82 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
+import { useEffect, useMemo, useState } from 'react';
 
+import { joinClassNames } from '@/lib/ui/primitives';
 import { useWorkspaceBoundary } from '@/lib/workspace/workspace-boundary';
-import { resolveRouteIdFromHref } from '@/lib/workspace/workspace-shell';
+import {
+  type WorkspaceNavDestinationId,
+  resolveRouteIdFromHref,
+} from '@/lib/workspace/workspace-shell';
 
 export function WorkstationCommandBar() {
   const pathname = usePathname();
   const { routeManifest, workspaceId } = useWorkspaceBoundary();
   const activeRouteId = resolveRouteIdFromHref(workspaceId, pathname);
+  const [expandedDestinationId, setExpandedDestinationId] = useState<WorkspaceNavDestinationId | null>(null);
+  const activeDestination = routeManifest.navGroups.find((group) =>
+    group.routes.some((route) => route.id === activeRouteId),
+  ) ?? null;
+  const visibleDestination = useMemo(
+    () =>
+      (expandedDestinationId
+        ? routeManifest.navGroups.find((group) => group.id === expandedDestinationId) ?? null
+        : null) ?? activeDestination,
+    [activeDestination, expandedDestinationId, routeManifest.navGroups],
+  );
+
+  useEffect(() => {
+    setExpandedDestinationId(activeDestination?.id ?? null);
+  }, [activeDestination?.id]);
 
   return (
     <nav
       aria-label="Workstation navigation"
       data-workstation-command-bar="root"
-      style={{
-        display: 'grid',
-        gap: '0.7rem',
-        padding: '0.85rem 1rem 0.9rem',
-        borderRadius: '1.05rem',
-        border: '1px solid var(--app-border-subtle)',
-        background: 'color-mix(in srgb, var(--app-bg-panel) 86%, var(--app-bg-overlay) 14%)',
-      }}
+      className="workstation-command-bar"
     >
-      {routeManifest.navGroups.map((group) => (
-        <div
-          key={group.id}
-          style={{
-            display: 'grid',
-            gap: '0.45rem',
-          }}
-        >
-          <span
-            style={{
-              color: 'var(--app-text-tertiary)',
-              fontSize: '0.72rem',
-              fontWeight: 650,
-              letterSpacing: '0.08em',
-              textTransform: 'uppercase',
-            }}
-          >
-            {group.label}
-          </span>
+      <div className="workstation-command-bar__group">
+        <span className="workstation-command-bar__label">Destinations</span>
 
-          <div
-            style={{
-              display: 'flex',
-              flexWrap: 'wrap',
-              gap: '0.5rem',
-            }}
-          >
-            {group.routes.map((route) => {
+        <div className="workstation-command-bar__routes">
+          {routeManifest.navGroups.map((group) => {
+            const active = group.id === activeDestination?.id;
+            const expanded = group.id === visibleDestination?.id;
+            return (
+              <Link
+                key={group.id}
+                href={group.href}
+                prefetch
+                aria-current={active ? 'page' : undefined}
+                aria-expanded={group.direct ? undefined : expanded}
+                onClick={() => {
+                  setExpandedDestinationId(group.id);
+                }}
+                onFocus={() => {
+                  setExpandedDestinationId(group.id);
+                }}
+                onMouseEnter={() => {
+                  setExpandedDestinationId(group.id);
+                }}
+                className={joinClassNames(
+                  'workstation-command-bar__link',
+                  active && 'workstation-command-bar__link--active',
+                )}
+              >
+                {group.label}
+              </Link>
+            );
+          })}
+        </div>
+      </div>
+
+      {visibleDestination && !visibleDestination.direct && visibleDestination.routes.length > 1 ? (
+        <div className="workstation-command-bar__group">
+          <span className="workstation-command-bar__label">{visibleDestination.label}</span>
+
+          <div className="workstation-command-bar__routes">
+            {visibleDestination.routes.map((route) => {
               const active = route.id === activeRouteId;
               return (
                 <Link
@@ -59,24 +85,10 @@ export function WorkstationCommandBar() {
                   href={route.href}
                   prefetch
                   aria-current={active ? 'page' : undefined}
-                  style={{
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    gap: '0.4rem',
-                    minHeight: '2rem',
-                    padding: '0.38rem 0.72rem',
-                    borderRadius: '999px',
-                    border: active ? '1px solid var(--app-border-accent)' : '1px solid var(--app-border-subtle)',
-                    background: active
-                      ? 'color-mix(in srgb, var(--app-accent-muted) 78%, var(--app-bg-panel) 22%)'
-                      : 'color-mix(in srgb, var(--app-bg-panel-elevated) 76%, var(--app-bg-overlay) 24%)',
-                    color: active ? 'var(--app-accent-text)' : 'var(--app-text-secondary)',
-                    fontSize: '0.82rem',
-                    fontWeight: active ? 640 : 560,
-                    textDecoration: 'none',
-                    transition:
-                      'background var(--app-motion-fast) ease, border-color var(--app-motion-fast) ease, color var(--app-motion-fast) ease',
-                  }}
+                  className={joinClassNames(
+                    'workstation-command-bar__link',
+                    active && 'workstation-command-bar__link--active',
+                  )}
                 >
                   {route.label}
                 </Link>
@@ -84,7 +96,7 @@ export function WorkstationCommandBar() {
             })}
           </div>
         </div>
-      ))}
+      ) : null}
     </nav>
   );
 }

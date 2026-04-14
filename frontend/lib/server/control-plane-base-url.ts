@@ -1,10 +1,12 @@
 import 'server-only';
 
+type ControlPlaneEnv = Partial<Record<
+  'EMPYRALIS_API_URL' | 'ORION_API_URL' | 'NEXT_PUBLIC_ORION_API_URL' | 'NEXT_PUBLIC_API_URL',
+  string | undefined
+>>;
+
 export function resolveControlPlaneBaseUrl(
-  env: Partial<Record<
-    'EMPYRALIS_API_URL' | 'ORION_API_URL' | 'NEXT_PUBLIC_ORION_API_URL' | 'NEXT_PUBLIC_API_URL',
-    string | undefined
-  >> = process.env,
+  env: ControlPlaneEnv = process.env as ControlPlaneEnv,
 ): string {
   const rawValue =
     env.EMPYRALIS_API_URL
@@ -23,5 +25,5 @@ export function resolveControlPlaneBaseUrl(
 }
 
 export function controlPlaneBaseUrl(): string {
-  return resolveControlPlaneBaseUrl(process.env);
+  return resolveControlPlaneBaseUrl(process.env as ControlPlaneEnv);
 }

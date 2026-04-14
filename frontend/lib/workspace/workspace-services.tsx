@@ -24,6 +24,7 @@ import {
 type QueryExecutor<T> = (context: { signal: AbortSignal; cacheKey: string }) => Promise<T>;
 type StoreListener<T> = (state: T) => void;
 type DisposeFn = () => void;
+export type WorkspaceApiEnv = Partial<Record<'NEXT_PUBLIC_ORION_API_URL' | 'NEXT_PUBLIC_API_URL', string | undefined>>;
 
 function normalizeCacheKey(prefix: string, key: string): string {
   return `${prefix}:query:${key}`;
@@ -34,7 +35,7 @@ function normalizeStorageKey(prefix: string, key: string): string {
 }
 
 export function resolveWorkspaceApiBaseUrl(
-  env: Partial<Record<'NEXT_PUBLIC_ORION_API_URL' | 'NEXT_PUBLIC_API_URL', string | undefined>> = process.env,
+  env: WorkspaceApiEnv = process.env as WorkspaceApiEnv,
   windowOrigin?: string,
 ): string {
   if (windowOrigin && windowOrigin.trim()) {
@@ -59,7 +60,7 @@ export function resolveWorkspaceApiBaseUrl(
 
 function resolveApiBaseUrl(): string {
   return resolveWorkspaceApiBaseUrl(
-    process.env,
+    process.env as WorkspaceApiEnv,
     typeof window !== 'undefined' ? window.location.origin : undefined,
   );
 }

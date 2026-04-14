@@ -1,9 +1,11 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
+import { usePathname, useRouter } from 'next/navigation';
 
 import { AppButton } from '@/lib/ui/primitives';
 import { useWorkspaceBoundary } from '@/lib/workspace/workspace-boundary';
+import { resolveRouteIdFromHref } from '@/lib/workspace/workspace-shell';
 import { useWorkstationKernel, useWorkstationStreamState } from '@/lib/workspace/workspace-services';
 import { useWorkstationStageIntentState, type WorkstationStageIntentKind } from '@/lib/workspace/workstation-stage-intent';
 
@@ -181,7 +183,9 @@ function buildRosterSections({
 }
 
 export function WorkstationRosterPane() {
-  const { bootstrap, routeManifest, shellProfile } = useWorkspaceBoundary();
+  const pathname = usePathname();
+  const router = useRouter();
+  const { bootstrap, routeManifest, shellProfile, workspaceId } = useWorkspaceBoundary();
   const services = useWorkstationKernel();
   const streamState = useWorkstationStreamState();
   const { intent, setIntent, clearIntent } = useWorkstationStageIntentState();
@@ -208,6 +212,11 @@ export function WorkstationRosterPane() {
     services.queryClient.set('workstation:roster:sections', sections);
   }, [sections, services]);
 
+  const activeRouteId = useMemo(
+    () => resolveRouteIdFromHref(workspaceId, pathname),
+    [pathname, workspaceId],
+  );
+
   const visibleSections = useMemo(() => {
     return sections
       .map((section) => {
@@ -229,36 +238,12 @@ export function WorkstationRosterPane() {
   const totalItemCount = sections.reduce((count, section) => count + section.items.length, 0);
 
   return (
-    <div
-      data-workstation-roster="pane"
-      style={{
-        display: 'grid',
-        gap: '1rem',
-        padding: '1rem',
-      }}
-    >
-      <section
-        style={{
-          display: 'grid',
-          gap: '0.8rem',
-          padding: '0.95rem 1rem',
-          borderRadius: '1rem',
-          border: '1px solid var(--app-border-subtle)',
-          background: 'color-mix(in srgb, var(--app-bg-panel-elevated) 78%, var(--app-bg-overlay) 22%)',
-        }}
-      >
-        <div
-          style={{
-            display: 'flex',
-            justifyContent: 'space-between',
-            gap: '0.75rem',
-            alignItems: 'start',
-            flexWrap: 'wrap',
-          }}
-        >
-          <div style={{ display: 'grid', gap: '0.2rem' }}>
-            <strong style={{ color: 'var(--app-text-primary)' }}>Inventory</strong>
-            <span style={{ color: 'var(--app-text-secondary)', fontSize: '0.84rem', lineHeight: 1.5 }}>
+    <div data-workstation-roster="pane" className="app-stack-4">
+      <section className="workstation-diagnostics">
+        <div className="app-inline-actions app-inline-actions--between app-inline-actions--start">
+          <div className="app-stack-1">
+            <strong className="workstation-pane__title">Inventory</strong>
+            <span className="app-meta-value app-meta-value--secondary">
               {totalItemCount} items available · {streamState.notifications.unreadCount} unread · {streamState.activity.totalCount} recent events
             </span>
           </div>
@@ -276,7 +261,7 @@ export function WorkstationRosterPane() {
           ) : null}
         </div>
 
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.45rem' }}>
+        <div className="app-inline-actions app-inline-actions--tight">
           {[
             ['all', 'All'],
             ['agent', 'Agents'],
@@ -294,19 +279,7 @@ export function WorkstationRosterPane() {
                     filter: value as WorkstationRosterFilter,
                   }));
                 }}
-                style={{
-                  minHeight: '2rem',
-                  padding: '0.34rem 0.72rem',
-                  borderRadius: '999px',
-                  border: active ? '1px solid var(--app-border-accent)' : '1px solid var(--app-border-subtle)',
-                  background: active
-                    ? 'color-mix(in srgb, var(--app-accent-muted) 76%, var(--app-bg-panel) 24%)'
-                    : 'color-mix(in srgb, var(--app-bg-panel) 84%, var(--app-bg-overlay) 16%)',
-                  color: active ? 'var(--app-accent-text)' : 'var(--app-text-secondary)',
-                  fontSize: '0.8rem',
-                  fontWeight: 620,
-                  cursor: 'pointer',
-                }}
+                className={`workstation-command-bar__link${active ? ' workstation-command-bar__link--active' : ''}`}
               >
                 {label}
               </button>
@@ -321,17 +294,7 @@ export function WorkstationRosterPane() {
                 showOfflineRuntimeTargets: !current.showOfflineRuntimeTargets,
               }));
             }}
-            style={{
-              minHeight: '2rem',
-              padding: '0.34rem 0.72rem',
-              borderRadius: '999px',
-              border: '1px solid var(--app-border-subtle)',
-              background: 'color-mix(in srgb, var(--app-bg-panel) 84%, var(--app-bg-overlay) 16%)',
-              color: 'var(--app-text-secondary)',
-              fontSize: '0.8rem',
-              fontWeight: 620,
-              cursor: 'pointer',
-            }}
+            className="workstation-command-bar__link"
           >
             {uiState.showOfflineRuntimeTargets ? 'Hide offline runtime targets' : 'Show offline runtime targets'}
           </button>
@@ -339,28 +302,28 @@ export function WorkstationRosterPane() {
       </section>
 
       {visibleSections.map((section) => (
-        <section
-          key={section.id}
-          style={{
-            display: 'grid',
-            gap: '0.75rem',
-          }}
-        >
-          <div style={{ display: 'grid', gap: '0.18rem' }}>
-            <strong style={{ color: 'var(--app-text-primary)' }}>{section.label}</strong>
-            <span style={{ color: 'var(--app-text-tertiary)', fontSize: '0.8rem' }}>
+        <section key={section.id} className="app-stack-3">
+          <div className="app-stack-1">
+            <strong className="workstation-pane__title">{section.label}</strong>
+            <span className="app-card-button__meta">
               {section.items.length} visible
             </span>
           </div>
 
-          <div style={{ display: 'grid', gap: '0.65rem' }}>
+          <div className="app-stack-3">
             {section.items.map((item) => {
-              const isSelected = intent?.id === item.id;
+              const itemRouteId =
+                item.kind === 'application' && typeof item.metadata?.['routeId'] === 'string'
+                  ? item.metadata['routeId']
+                  : null;
+              const routeSelected = itemRouteId === activeRouteId;
+              const isSelected = routeSelected || intent?.id === item.id;
               return (
                 <button
                   key={item.id}
                   type="button"
                   aria-pressed={isSelected}
+                  aria-current={routeSelected ? 'page' : undefined}
                   data-workstation-roster-item={item.id}
                   onClick={() => {
                     setIntent({
@@ -373,60 +336,35 @@ export function WorkstationRosterPane() {
                       href: item.href ?? null,
                       metadata: item.metadata,
                     });
+                    if (item.href && itemRouteId && itemRouteId !== activeRouteId) {
+                      router.push(item.href);
+                    }
                   }}
-                  style={{
-                    display: 'grid',
-                    gap: '0.45rem',
-                    textAlign: 'left',
-                    padding: '0.9rem 0.95rem',
-                    borderRadius: '0.95rem',
-                    border: isSelected ? '1px solid var(--app-border-accent)' : '1px solid var(--app-border-subtle)',
-                    background: isSelected
-                      ? 'color-mix(in srgb, var(--app-accent-muted) 76%, var(--app-bg-panel) 24%)'
-                      : 'color-mix(in srgb, var(--app-bg-panel) 88%, var(--app-bg-overlay) 12%)',
-                    cursor: 'pointer',
-                  }}
+                  className={`app-card-button${isSelected ? ' app-card-button--selected' : ''}`}
                 >
-                  <div style={{ display: 'flex', justifyContent: 'space-between', gap: '0.6rem', alignItems: 'start' }}>
-                    <div style={{ display: 'grid', gap: '0.15rem', minWidth: 0 }}>
-                      <strong style={{ color: 'var(--app-text-primary)' }}>{item.label}</strong>
-                      <span style={{ color: 'var(--app-text-secondary)', fontSize: '0.82rem' }}>{item.subtitle}</span>
+                  <div className="app-inline-actions app-inline-actions--between app-inline-actions--start">
+                    <div className="app-stack-1">
+                      <strong className="app-card-button__title">{item.label}</strong>
+                      <span className="app-card-button__subtitle">{item.subtitle}</span>
                     </div>
-                    <span
-                      style={{
-                        padding: '0.18rem 0.5rem',
-                        borderRadius: '999px',
-                        border: '1px solid var(--app-border-subtle)',
-                        background: 'color-mix(in srgb, var(--app-bg-panel-elevated) 80%, var(--app-bg-overlay) 20%)',
-                        color: 'var(--app-text-secondary)',
-                        fontSize: '0.72rem',
-                        fontWeight: 700,
-                        textTransform: 'uppercase',
-                      }}
-                    >
+                    <span className="app-data-badge app-data-badge--neutral">
                       {item.kind.replace('_', ' ')}
                     </span>
                   </div>
 
-                  <span style={{ color: 'var(--app-text-secondary)', fontSize: '0.86rem', lineHeight: 1.55 }}>
+                  <span className="app-card-button__subtitle">
                     {item.description}
                   </span>
 
                   {(item.statusLabel || item.href) ? (
-                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.45rem' }}>
+                    <div className="app-inline-actions app-inline-actions--tight">
                       {item.statusLabel ? (
-                        <span
-                          style={{
-                            color: item.statusLabel === 'online' ? 'var(--app-success)' : 'var(--app-warning)',
-                            fontSize: '0.78rem',
-                            fontWeight: 620,
-                          }}
-                        >
+                        <span className={`app-card-button__meta${item.statusLabel === 'online' ? ' workstation-desktop-status__detail--ready' : ''}`}>
                           {item.statusLabel}
                         </span>
                       ) : null}
                       {item.href ? (
-                        <span style={{ color: 'var(--app-text-tertiary)', fontSize: '0.78rem', overflowWrap: 'anywhere' }}>
+                        <span className="app-card-button__meta">
                           {item.href}
                         </span>
                       ) : null}

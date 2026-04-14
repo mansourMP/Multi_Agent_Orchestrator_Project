@@ -52,6 +52,8 @@ type ChannelOperationsProviderRecord = {
   issues: ChannelIssueRecord[];
   workspace_configured: boolean;
   vault_error?: string | null;
+  profile_issue?: string | null;
+  last_error?: string | null;
 };
 
 type DeliveryPendingRecord = {
@@ -294,7 +296,7 @@ export function WorkspaceChannelOperationsConsole() {
         {statusMessage ? <StateBanner tone="success" title="Updated" detail={statusMessage} /> : null}
         {errorMessage ? <StateBanner tone="danger" title="Operator state degraded" detail={errorMessage} /> : null}
         {loading && !payload ? (
-          <div style={{ display: 'grid', gap: '0.7rem' }}>
+          <div className="app-stack-3">
             <SkeletonBlock height="3rem" />
             <SkeletonBlock height="6rem" />
             <SkeletonBlock height="6rem" />
@@ -303,7 +305,7 @@ export function WorkspaceChannelOperationsConsole() {
 
         <ListDetailColumns
           primary={(
-            <div style={{ display: 'grid', gap: '1rem' }}>
+            <div className="app-stack-4">
               <ListDetailPanel
                 eyebrow="Providers"
                 title="Provider health"
@@ -434,7 +436,7 @@ export function WorkspaceChannelOperationsConsole() {
             </div>
           )}
           secondary={(
-            <div style={{ display: 'grid', gap: '1rem' }}>
+            <div className="app-stack-4">
               <ListDetailPanel
                 eyebrow="Queue"
                 title="Delivery summary"
@@ -459,7 +461,7 @@ export function WorkspaceChannelOperationsConsole() {
                     body="No Telegram or WhatsApp issues are currently recorded for this workspace."
                   />
                 ) : (
-                  <div style={{ display: 'grid', gap: '0.65rem' }}>
+                  <div className="app-stack-3">
                     {providers.flatMap((provider) =>
                       provider.issues.map((issue) => (
                         <StateBanner
@@ -487,7 +489,7 @@ export function WorkspaceChannelOperationsConsole() {
                     body="Pairing failures and dead-letter events will surface here when intervention is required."
                   />
                 ) : (
-                  <div style={{ display: 'grid', gap: '0.65rem' }}>
+                  <div className="app-stack-3">
                     {payload?.events.pairing_failures.slice(0, 6).map((event) => (
                       <StateBanner
                         key={`pairing:${event.id}`}

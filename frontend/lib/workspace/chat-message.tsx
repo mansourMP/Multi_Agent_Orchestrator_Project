@@ -101,7 +101,7 @@ export function ChatMessage({
 
           {message.approvals.map((item, index) => {
             const approvalId = String(item.approval_id ?? item.id ?? '').trim();
-            const isResolving = approvalId && resolvingApprovalId === approvalId;
+            const isResolving = Boolean(approvalId) && resolvingApprovalId === approvalId;
             return (
               <ChatInlineStateCard
                 key={approvalId || `${message.id}:approval:${index}`}
@@ -111,7 +111,7 @@ export function ChatMessage({
                 meta={readApprovalStatus(item)}
                 actions={
                   onResolveApproval && approvalId ? (
-                    <div style={{ display: 'flex', gap: '0.45rem', flexWrap: 'wrap' }}>
+                    <div className="app-inline-actions app-inline-actions--tight">
                       <AppButton
                         type="button"
                         tone="secondary"

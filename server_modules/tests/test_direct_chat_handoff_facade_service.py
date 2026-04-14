@@ -31,6 +31,19 @@ class DirectChatHandoffFacadeServiceTests(unittest.TestCase):
         self.assertEqual(payload["metadata"]["execution_target"], "local_companion")
 
     @patch(
+        "server_modules.turn_runtime.execute_unowned_system_run_start_request_via_turn_runtime",
+        return_value={"run_id": "run-2", "status": "starting"},
+    )
+    def test_start_run_dependencies_builds_canonical_runtime_executor(self, execute_mock) -> None:
+        executor, request_cls = direct_chat_handoff_facade_service._start_run_dependencies()
+        request = request_cls(engine="orion", workspace_id="default", user_goal="hello")
+
+        result = executor(request)
+
+        self.assertEqual(result["run_id"], "run-2")
+        execute_mock.assert_called_once()
+
+    @patch(
         "server_modules.direct_chat_handoff_facade_service._snapshot_dependencies",
         return_value=(
             {"run-1": {"status": "completed", "result": "Done"}},

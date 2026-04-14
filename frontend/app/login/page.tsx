@@ -63,11 +63,6 @@ export default function LoginPage() {
         <AppButton type="submit" disabled={submitting}>
           {submitting ? 'Signing in…' : 'Log in'}
         </AppButton>
-        <div className="app-inline-actions">
-          <Link href="/preview" className="app-link-button">
-            View public preview
-          </Link>
-        </div>
         <p className="app-auth-footer">
           Need an account? <Link href="/signup">Sign up</Link>
         </p>

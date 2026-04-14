@@ -1285,7 +1285,7 @@ class RunServiceTests(unittest.TestCase):
         self.assertIn("lease cleanup broke", result["summary"])
         self.assertEqual(updates[0]["status"], "error")
 
-    def test_execute_workflow_human_node_bypasses_approval_for_full_trust(self):
+    def test_execute_workflow_human_node_requires_explicit_approval_even_for_full_trust(self):
         updates = []
         emitted = []
         state = {}
@@ -1301,7 +1301,12 @@ class RunServiceTests(unittest.TestCase):
             context={"metadata": {}},
             log_queue=queue.Queue(),
             update_node_state_fn=lambda *args, **kwargs: updates.append((args, kwargs)),
-            wait_for_human_response_fn=lambda *args, **kwargs: self.fail("approval wait should be bypassed"),
+            wait_for_human_response_fn=lambda *args, **kwargs: {
+                "decision": "proceed",
+                "raw_decision": "Proceed",
+                "note": "Approved explicitly",
+                "approved": True,
+            },
             agent_machine_full_trust_for_context_fn=lambda context: True,
             node_preview_text_fn=lambda value: str(value),
             json_safe_fn=lambda value: value,
@@ -1310,9 +1315,10 @@ class RunServiceTests(unittest.TestCase):
 
         self.assertEqual(result, "Approve draft: approved")
         self.assertEqual(state["last_data"]["decision"], "proceed")
-        self.assertEqual(emitted[0][1]["event"], "workflow_human_bypassed")
-        self.assertEqual(updates[0][1]["status"], "succeeded")
-        self.assertFalse(updates[0][1]["waiting_for_approval"])
+        self.assertEqual(emitted[0][1]["event"], "workflow_human_resolved")
+        self.assertEqual(updates[0][1]["status"], "waiting_human")
+        self.assertEqual(updates[1][1]["status"], "succeeded")
+        self.assertFalse(updates[1][1]["waiting_for_approval"])
 
     def test_execute_workflow_human_node_resolves_review_reply(self):
         updates = []
@@ -3765,13 +3771,11 @@ class RunServiceTests(unittest.TestCase):
                 "_create_run_from_request": create,
             },
             execute_system_run_start_request_via_turn_runtime_fn="turn-runtime",
-            create_run_from_request_fn=create,
-            execute_built_legacy_unowned_system_run_start_request_via_turn_runtime_fn=lambda request, **kwargs: captured.update(
+            execute_built_unowned_system_run_start_request_via_turn_runtime_fn=lambda request, **kwargs: captured.update(
                 {
                     "request": request,
                     "execute_system": kwargs["execute_system_run_start_request_via_turn_runtime_fn"],
                     "services": kwargs["build_run_execution_services_fn"](),
-                    "create_run": kwargs["create_run_from_request_fn"],
                 }
             )
             or {"status": "starting"},
@@ -3781,7 +3785,6 @@ class RunServiceTests(unittest.TestCase):
         self.assertEqual(captured["execute_system"], "turn-runtime")
         self.assertIs(captured["services"].prepare_run_start_request, prepare)
         self.assertIs(captured["services"].create_run_from_request, create)
-        self.assertIs(captured["create_run"], create)
 
     def test_execute_run_start_request_via_turn_runtime_returns_result_payload(self):
         request = RunStartRequest(engine="orion", workspace_id="default", user_goal="hello")
@@ -3916,7 +3919,7 @@ class RunServiceTests(unittest.TestCase):
         self.assertEqual(captured["stamped"], "req")
         self.assertIs(captured["services"], built_services)
 
-    def test_execute_built_legacy_unowned_system_run_start_request_via_turn_runtime_bypasses_mocked_create(self):
+    def test_execute_built_legacy_unowned_system_run_start_request_via_turn_runtime_uses_runtime_even_with_mock(self):
         request = RunStartRequest(engine="orion", workspace_id="default", user_goal="hello")
         create_run = unittest.mock.Mock(return_value={"run_id": "run-5", "status": "starting"})
         built_services = RunExecutionServices(
@@ -3928,6 +3931,7 @@ class RunServiceTests(unittest.TestCase):
         with patch(
             "server_modules.run_service.execute_built_unowned_system_run_start_request_via_turn_runtime"
         ) as execute_built:
+            execute_built.return_value = {"run_id": "run-5", "status": "starting"}
             result = execute_built_legacy_unowned_system_run_start_request_via_turn_runtime(
                 request,
                 execute_system_run_start_request_via_turn_runtime_fn=lambda *args, **kwargs: {"run_id": "unexpected"},
@@ -3936,8 +3940,8 @@ class RunServiceTests(unittest.TestCase):
             )
 
         self.assertEqual(result["run_id"], "run-5")
-        create_run.assert_called_once_with(request)
-        execute_built.assert_not_called()
+        create_run.assert_not_called()
+        execute_built.assert_called_once()
 
     def test_execute_built_legacy_unowned_system_run_start_request_via_turn_runtime_uses_runtime_when_not_mocked(self):
         request = RunStartRequest(engine="orion", workspace_id="default", user_goal="hello")

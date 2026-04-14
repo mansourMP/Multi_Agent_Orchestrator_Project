@@ -211,7 +211,7 @@ function viewTitle(kind: WorkstationStageViewKind | null): string {
     return 'Agent';
   }
   if (kind === 'application_detail') {
-    return 'Application';
+    return 'Surface';
   }
   if (kind === 'runtime_target_detail') {
     return 'Runtime target';
@@ -463,7 +463,7 @@ export function WorkstationStagePane() {
       );
       applyState({
         isLoading: false,
-        statusMessage: applicationCatalog.length === 0 ? 'No application detail is available for this workspace.' : null,
+        statusMessage: applicationCatalog.length === 0 ? 'No workspace surface detail is available for this workspace.' : null,
         blockedMessage,
         activeView: activeSelection ? 'application_detail' : null,
         activeSelection,

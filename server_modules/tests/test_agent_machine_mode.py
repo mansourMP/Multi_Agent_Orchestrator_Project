@@ -67,7 +67,7 @@ class AgentMachineModeTests(unittest.TestCase):
             with patch.object(runtime_config, "AGENT_MACHINE_OWNER", "user-123"):
                 self.assertEqual(runtime_config.agent_machine_inherited_owner_user_id(""), "")
 
-    def test_wait_for_human_decision_bypasses_prompt_for_matching_owner(self):
+    def test_wait_for_human_decision_still_requires_prompt_for_matching_owner(self):
         run_id = "agent-machine-run"
         previous = runs_engine.runs.get(run_id)
         runs_engine.runs[run_id] = {
@@ -77,9 +77,8 @@ class AgentMachineModeTests(unittest.TestCase):
         try:
             with patch.object(runtime_config, "AGENT_MACHINE_MODE", "agent"):
                 with patch.object(runtime_config, "AGENT_MACHINE_OWNER", "user-123"):
-                    with patch("server_modules.runs_core.emit_log") as emit_log_mock:
-                        with patch("server_modules.runs_engine.wait_for_human_response") as wait_mock:
-                            approved = runs_engine.wait_for_human_decision(run_id, "Confirm send")
+                    with patch("server_modules.runs_engine.wait_for_human_response", return_value={"approved": True}) as wait_mock:
+                        approved = runs_engine.wait_for_human_decision(run_id, "Confirm send")
         finally:
             if previous is None:
                 runs_engine.runs.pop(run_id, None)
@@ -87,10 +86,9 @@ class AgentMachineModeTests(unittest.TestCase):
                 runs_engine.runs[run_id] = previous
 
         self.assertTrue(approved)
-        wait_mock.assert_not_called()
-        emit_log_mock.assert_called_once()
+        wait_mock.assert_called_once()
 
-    def test_direct_tool_approval_payload_skips_prompt_for_matching_owner(self):
+    def test_direct_tool_approval_payload_still_requires_prompt_for_matching_owner(self):
         with patch.object(runtime_config, "AGENT_MACHINE_MODE", "agent"):
             with patch.object(runtime_config, "AGENT_MACHINE_OWNER", "user-123"):
                 payload = operator_chat._build_direct_tool_approval_response(
@@ -104,7 +102,7 @@ class AgentMachineModeTests(unittest.TestCase):
                     session_ctx={"user_id": "user-123"},
                 )
 
-        self.assertIsNone(payload)
+        self.assertIsNotNone(payload)
 
     def test_direct_tool_approval_payload_still_requires_prompt_for_owner_mismatch(self):
         with patch.object(runtime_config, "AGENT_MACHINE_MODE", "agent"):
@@ -172,7 +170,7 @@ class AgentMachineModeTests(unittest.TestCase):
         self.assertEqual(getattr(turn_request, "workspace_id", None), "default")
         self.assertEqual(getattr(turn_request, "session_id", None), "thread-1")
 
-    def test_runs_core_create_run_from_request_bypasses_local_confirmation_for_agent_machine(self):
+    def test_runs_core_create_run_from_request_requires_local_confirmation_for_agent_machine(self):
         request = RunStartRequest(
             engine="orion",
             workspace_id="default",
@@ -214,18 +212,19 @@ class AgentMachineModeTests(unittest.TestCase):
                             with patch("server_modules.runs_execution.create_run", return_value="run-agent-local") as create_run_mock:
                                 with patch.object(runs_core, "agent_machine_inherited_owner_user_id", return_value="user-123"):
                                     with patch.object(runs_core, "agent_machine_full_trust_enabled", return_value=True):
-                                        result = runs_core._create_run_from_request(request)
+                                        with patch("server_modules.runs_core._begin_run_pending_confirmation", return_value={"approval_id": "approval-local-1"}):
+                                            result = runs_core._create_run_from_request(request)
 
-        self.assertEqual(result["status"], "starting")
-        self.assertIsNone(result["pending_approval"])
+        self.assertEqual(result["status"], "waiting_for_input")
+        self.assertEqual(result["pending_approval"]["approval_id"], "approval-local-1")
         create_kwargs = create_run_mock.call_args.kwargs
-        self.assertFalse(create_kwargs["defer_local_enqueue"])
+        self.assertTrue(create_kwargs["defer_local_enqueue"])
         metadata = create_kwargs["context"]["metadata"]
         self.assertEqual(metadata["owner_user_id"], "user-123")
-        self.assertEqual(metadata["tool_policy_precheck"]["approval_required_count"], 0)
-        self.assertTrue(metadata["browser_reviewed_approved"])
-        self.assertNotIn("local_execution_waiting_confirmation", metadata)
-        self.assertNotIn("local_execution_waiting_approval", metadata)
+        self.assertEqual(metadata["tool_policy_precheck"]["approval_required_count"], 1)
+        self.assertTrue(metadata["local_execution_waiting_confirmation"])
+        self.assertTrue(metadata["local_execution_waiting_approval"])
+        self.assertNotIn("browser_reviewed_approved", metadata)
 
     def test_runs_core_create_run_from_request_keeps_local_confirmation_for_owner_mismatch(self):
         request = RunStartRequest(
@@ -281,7 +280,7 @@ class AgentMachineModeTests(unittest.TestCase):
         self.assertTrue(metadata["local_execution_waiting_approval"])
         self.assertNotIn("browser_reviewed_approved", metadata)
 
-    def test_wait_for_run_terminal_status_auto_approves_matching_owner_confirmation(self):
+    def test_wait_for_run_terminal_status_does_not_auto_approve_matching_owner_confirmation(self):
         run_id = "run-autopilot-auto-approve"
         run = {
             "status": "waiting_for_input",
@@ -295,13 +294,13 @@ class AgentMachineModeTests(unittest.TestCase):
                 autopilot_connectors._init()
                 dispatch_service = autopilot_connectors._telegram_run_dispatch_service()
                 with patch.object(autopilot_connectors, "runs", {run_id: run}, create=True):
-                    with patch.object(dispatch_service, "time_now", side_effect=[0, 0, 1]):
+                    with patch.object(dispatch_service, "time_now", side_effect=[0, 0, 31, 31, 31]):
                         with patch.object(dispatch_service, "sleep", return_value=None):
-                            result = dispatch_service.wait_for_terminal_status(run_id)
+                            result = dispatch_service.wait_for_terminal_status(run_id, timeout_seconds=30)
 
-        self.assertEqual(result["status"], "completed")
-        self.assertTrue(result["auto_approved"])
-        self.assertEqual(run["input_queue"].items, [{"approval_id": "approval-1", "decision": "proceed"}])
+        self.assertEqual(result["status"], "timeout")
+        self.assertFalse(result["auto_approved"])
+        self.assertEqual(run["input_queue"].items, [])
 
     def test_wait_for_run_terminal_status_does_not_auto_approve_owner_mismatch(self):
         run_id = "run-autopilot-owner-mismatch"

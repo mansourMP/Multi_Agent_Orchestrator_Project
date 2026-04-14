@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hmac
 from typing import Any, Callable, Dict, Optional
 
 
@@ -71,7 +72,7 @@ class AutopilotEndpointService:
         provided_header_secret = str(header_secret or "").strip()
         if not provided_header_secret:
             return {"status_code": 401, "content": "Telegram webhook secret header is required."}
-        if expected_secret != provided_header_secret:
+        if not hmac.compare_digest(expected_secret, provided_header_secret):
             return {"status_code": 403, "content": "Telegram webhook secret is invalid."}
         return {"status_code": 200}
 
@@ -89,10 +90,9 @@ class AutopilotEndpointService:
         if not expected_secret:
             return {"status_code": 503, "content": "Empyralis WhatsApp webhook is not configured: no webhook secret is available."}
         provided_query_secret = str(query_secret or "").strip()
-        provided_header_secret = str(header_secret or "").strip()
-        if not provided_query_secret and not provided_header_secret:
-            return {"status_code": 401, "content": "WhatsApp webhook secret is required."}
-        if expected_secret not in {provided_query_secret, provided_header_secret}:
+        if not provided_query_secret:
+            return {"status_code": 401, "content": "WhatsApp webhook query secret is required."}
+        if not hmac.compare_digest(expected_secret, provided_query_secret):
             return {"status_code": 403, "content": "WhatsApp webhook secret is invalid."}
         return {"status_code": 200}
 

@@ -127,7 +127,7 @@ def _context_from_prepared(prepared: Dict[str, Any] | ChannelRoutingContext) -> 
         prior_messages=payload.get("prior_messages") if isinstance(payload.get("prior_messages"), list) else None,
         business_plan=str(payload.get("business_plan") or "").strip() or None,
         health_safety_context=coerce_dict(payload.get("health_safety_context")) or {"enabled": False},
-        allow_master_fallback=bool(payload.get("allow_master_fallback", True)),
+        allow_master_fallback=bool(payload.get("allow_master_fallback", False)),
         privileged_runtime_approved=bool(payload.get("privileged_runtime_approved", False)),
         seed_demo_if_empty=bool(payload.get("seed_demo_if_empty", False)),
     )
@@ -152,6 +152,7 @@ def prepare_canonical_channel_turn(
     runtime_mode: Optional[str] = None,
     runtime_profile_id: Optional[str] = None,
     request_id: Optional[str] = None,
+    allow_master_fallback: bool = False,
     privileged_runtime_approved: bool = False,
     seed_demo_if_empty: bool = False,
 ) -> Dict[str, Any]:
@@ -173,6 +174,7 @@ def prepare_canonical_channel_turn(
         runtime_mode=runtime_mode,
         runtime_profile_id=runtime_profile_id,
         request_id=request_id,
+        allow_master_fallback=allow_master_fallback,
         privileged_runtime_approved=privileged_runtime_approved,
         seed_demo_if_empty=seed_demo_if_empty,
     )
@@ -240,6 +242,7 @@ async def route_transport_channel_message(
     master_install_id: Optional[str] = None,
     runtime_mode: Optional[str] = None,
     runtime_profile_id: Optional[str] = None,
+    allow_master_fallback: bool = False,
     privileged_runtime_approved: bool = False,
     seed_demo_if_empty: bool = False,
 ) -> Dict[str, Any]:
@@ -260,6 +263,7 @@ async def route_transport_channel_message(
         master_install_id=master_install_id,
         runtime_mode=runtime_mode,
         runtime_profile_id=runtime_profile_id,
+        allow_master_fallback=allow_master_fallback,
         privileged_runtime_approved=privileged_runtime_approved,
         seed_demo_if_empty=seed_demo_if_empty,
     )
@@ -302,7 +306,7 @@ async def route_inbound_channel_message(
     actor_id: Optional[str] = None,
     actor_display_name: Optional[str] = None,
     metadata: Optional[Dict[str, Any]] = None,
-    allow_master_fallback: bool = True,
+    allow_master_fallback: bool = False,
     privileged_runtime_approved: bool = False,
     seed_demo_if_empty: bool = False,
 ) -> Dict[str, Any]:

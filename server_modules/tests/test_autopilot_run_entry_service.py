@@ -210,13 +210,13 @@ class AutopilotRunEntryServiceTests(unittest.TestCase):
                 update_id=1,
             )
 
-    def test_can_auto_approve_wait_requires_matching_owner_and_approval(self) -> None:
+    def test_can_auto_approve_wait_is_disabled(self) -> None:
         service = self._make_service()
         run = {
             "context": {"metadata": {"owner_user_id": "user-123", "local_execution_waiting_confirmation": True}},
             "pending_confirmation": {"approval_id": "approval-1", "source": "runtime_wait"},
         }
-        self.assertTrue(service.can_auto_approve_wait(run))
+        self.assertFalse(service.can_auto_approve_wait(run))
         run["context"]["metadata"]["owner_user_id"] = "user-999"
         self.assertFalse(service.can_auto_approve_wait(run))
 

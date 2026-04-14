@@ -137,7 +137,6 @@ def _execute_delegated_run_request(req: RunStartRequest) -> Dict[str, Any]:
         req,
         namespace=globals(),
         execute_system_run_start_request_via_turn_runtime_fn=execute_system_run_start_request_via_turn_runtime,
-        create_run_from_request_fn=_create_run_from_request,
     )
 
 

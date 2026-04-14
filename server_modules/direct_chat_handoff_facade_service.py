@@ -6,10 +6,17 @@ from server_modules import direct_chat_handoff_service
 
 
 def _start_run_dependencies() -> tuple[Callable[[Any], Dict[str, Any]], Any]:
-    from server_modules.runs_delegation import _create_run_from_request
+    from server_modules.runs_delegation import _delegation_run_execution_services
     from server_modules.runtime_models import RunStartRequest
+    from server_modules.turn_runtime import execute_unowned_system_run_start_request_via_turn_runtime
 
-    return _create_run_from_request, RunStartRequest
+    return (
+        lambda request: execute_unowned_system_run_start_request_via_turn_runtime(
+            request,
+            services=_delegation_run_execution_services(),
+        ),
+        RunStartRequest,
+    )
 
 
 def _snapshot_dependencies() -> tuple[Dict[str, Any], Callable[[str], Any], Callable[[str, Dict[str, Any]], Dict[str, Any]]]:
@@ -63,7 +70,7 @@ def start_direct_chat_run_handoff(
     max_iterations: Optional[int],
     safe_positive_int_fn: Callable[[Any, int], int],
 ) -> Dict[str, Any]:
-    create_run_from_request_fn, run_start_request_cls = _start_run_dependencies()
+    start_run_request_fn, run_start_request_cls = _start_run_dependencies()
     return direct_chat_handoff_service.start_direct_chat_run_handoff(
         message=message,
         workspace_id=workspace_id,
@@ -72,7 +79,7 @@ def start_direct_chat_run_handoff(
         thread_id=thread_id,
         availability=availability,
         max_iterations=max_iterations,
-        create_run_from_request_fn=create_run_from_request_fn,
+        start_run_request_fn=start_run_request_fn,
         run_start_request_cls=run_start_request_cls,
         safe_positive_int_fn=safe_positive_int_fn,
     )

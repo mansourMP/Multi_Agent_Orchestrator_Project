@@ -274,8 +274,6 @@ def build_direct_tool_approval_response(
     services: NoProviderExecutionServices,
     session_ctx: dict[str, Any] | None = None,
 ) -> Dict[str, Any] | None:
-    if services.agent_machine_full_trust_for_session(session_ctx):
-        return None
     approval_actions: list[dict[str, Any]] = []
     approvals: list[dict[str, Any]] = []
     for index, call in enumerate(tool_calls, start=1):

@@ -33,6 +33,16 @@ EMPYRALIST_WORKFLOW_API_URL = (
     ).strip().rstrip("/")
     or "http://127.0.0.1:8001"
 )
+_LOCAL_ENV_TOKENS = {"", "dev", "development", "local", "test", "testing"}
+
+
+def _resolved_environment() -> str:
+    return str(os.getenv("ORION_ENV") or os.getenv("ENV") or "").strip().lower()
+
+
+def _control_plane_origins_required() -> bool:
+    return _resolved_environment() not in _LOCAL_ENV_TOKENS
+
 
 def metrics_inc(key: str, amount: float = 1):
     with METRICS_LOCK:
@@ -102,9 +112,20 @@ def _extract_request_api_key(request: Request) -> str:
 def _check_control_plane_origin(request: Request) -> Optional[JSONResponse]:
     if not _is_control_plane_mutation(request):
         return None
-    if not CONTROL_PLANE_ORIGINS:
-        return None
     origin = request.headers.get("origin")
+    if not CONTROL_PLANE_ORIGINS:
+        if origin and _control_plane_origins_required():
+            return error_response_service.json_response_from_platform_error(
+                error_response_service.platform_error(
+                    code="origin_configuration_required",
+                    message="CONTROL_PLANE_ORIGINS must be configured before browser write access is enabled.",
+                    error_class=AUTHORIZATION_ERROR,
+                    retryable=False,
+                    status_code=503,
+                    request_id=error_response_service.request_id_from_request(request),
+                )
+            )
+        return None
     if not origin:
         return None
     if origin not in CONTROL_PLANE_ORIGINS:

@@ -33,7 +33,7 @@ class ChannelRoutingContext:
     prior_messages: Optional[List[Dict[str, Any]]] = None
     business_plan: Optional[str] = None
     health_safety_context: Dict[str, Any] = field(default_factory=lambda: {"enabled": False})
-    allow_master_fallback: bool = True
+    allow_master_fallback: bool = False
     privileged_runtime_approved: bool = False
     seed_demo_if_empty: bool = False
 

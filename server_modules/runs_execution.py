@@ -145,7 +145,6 @@ def _execute_workflow_child_run_request(request: Any) -> Dict[str, Any]:
         request,
         execute_system_run_start_request_via_turn_runtime_fn=execute_system_run_start_request_via_turn_runtime,
         build_run_execution_services_fn=_workflow_child_run_execution_services,
-        create_run_from_request_fn=_runs_delegation._create_run_from_request,
     )
 
 
@@ -225,19 +224,7 @@ def _apply_agent_machine_bypass_to_tool_policy_evaluation(
     *,
     context: Optional[Dict[str, Any]],
 ) -> Dict[str, Any]:
-    if not isinstance(evaluation, dict) or not _agent_machine_full_trust_for_context(context):
-        return evaluation
-    execution_decision = str(evaluation.get("execution_decision") or "").strip().lower()
-    if execution_decision not in {"require_confirmation", "approval_required"}:
-        return evaluation
-    patched = dict(evaluation)
-    patched["execution_decision"] = "allow"
-    patched["decision"] = "allow"
-    reason = str(patched.get("reason") or "").strip()
-    bypass_reason = "Agent machine mode bypassed confirmation."
-    patched["reason"] = f"{reason} {bypass_reason}".strip() if reason else bypass_reason
-    patched["approval_bypassed"] = True
-    return patched
+    return evaluation
 
 
 def _apply_agent_machine_bypass_to_action_policy(
@@ -245,36 +232,7 @@ def _apply_agent_machine_bypass_to_action_policy(
     *,
     context: Optional[Dict[str, Any]],
 ) -> Dict[str, Any]:
-    if not isinstance(action_policy, dict) or not _agent_machine_full_trust_for_context(context):
-        return action_policy
-    if not bool(action_policy.get("requires_confirmation")):
-        return action_policy
-    patched = dict(action_policy)
-    evaluated: List[Dict[str, Any]] = []
-    for item in action_policy.get("evaluated") if isinstance(action_policy.get("evaluated"), list) else []:
-        if not isinstance(item, dict):
-            continue
-        execution_decision = str(item.get("execution_decision") or "").strip().lower()
-        if execution_decision in {"require_confirmation", "approval_required"}:
-            next_item = dict(item)
-            next_item["execution_decision"] = "allow"
-            next_item["decision"] = "allow"
-            reason = str(next_item.get("reason") or "").strip()
-            bypass_reason = "Agent machine mode bypassed confirmation."
-            next_item["reason"] = f"{reason} {bypass_reason}".strip() if reason else bypass_reason
-            next_item["approval_bypassed"] = True
-            evaluated.append(next_item)
-        else:
-            evaluated.append(item)
-    patched["evaluated"] = evaluated
-    patched["confirmation_required_actions"] = []
-    patched["approval_actions"] = []
-    patched["requires_confirmation"] = False
-    patched["confirmation_reason"] = ""
-    patched["requires_approval"] = False
-    patched["approval_reason"] = ""
-    patched["approval_bypassed"] = True
-    return patched
+    return action_policy
 
 
 def _workflow_definition_from_context(context: Dict[str, Any]) -> Optional[Dict[str, Any]]:

@@ -54,7 +54,7 @@ class TelegramRunDispatchServiceTests(unittest.TestCase):
             "⬢ completed\nrun_id: run-1\nDone",
         )
 
-    def test_wait_for_terminal_status_auto_approves_waiting_run(self) -> None:
+    def test_wait_for_terminal_status_does_not_auto_approve_waiting_run(self) -> None:
         queue = _Queue()
         run = {
             "status": "waiting_for_input",
@@ -67,8 +67,8 @@ class TelegramRunDispatchServiceTests(unittest.TestCase):
         result = service.wait_for_terminal_status("run-1", timeout_seconds=60)
 
         self.assertEqual(result["status"], "timeout")
-        self.assertTrue(result["auto_approved"])
-        self.assertEqual(queue.items, [{"approval_id": "ap-1", "decision": "proceed"}])
+        self.assertFalse(result["auto_approved"])
+        self.assertEqual(queue.items, [])
 
     def test_dispatch_run_action_sends_ack_and_schedules_durable_delivery(self) -> None:
         emitted = []

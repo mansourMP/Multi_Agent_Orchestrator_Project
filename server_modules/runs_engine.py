@@ -291,26 +291,6 @@ def wait_for_human_decision(
     source: str = "runtime_wait",
     metadata: Optional[Dict[str, Any]] = None,
 ) -> bool:
-    run = runs.get(run_id)
-    if isinstance(run, dict):
-        context = run.get("context") if isinstance(run.get("context"), dict) else {}
-        context_metadata = context.get("metadata") if isinstance(context.get("metadata"), dict) else {}
-        owner_user_id = str(context_metadata.get("owner_user_id") or "").strip()
-        if agent_machine_full_trust_enabled(owner_user_id):
-            from server_modules.runs_core import emit_log
-
-            emit_log(
-                run.get("logs"),
-                "info",
-                "Agent machine mode bypassed confirmation.",
-                event="approval_bypassed",
-                data={
-                    "run_id": run_id,
-                    "owner_user_id": owner_user_id,
-                    "prompt": str(prompt or "").strip()[:240],
-                },
-            )
-            return True
     response = wait_for_human_response(run_id, prompt, source=source, metadata=metadata)
     return bool(response.get("approved"))
 

@@ -74,18 +74,7 @@ class AutopilotRunEntryService:
         return {}
 
     def can_auto_approve_wait(self, run: Dict[str, Any]) -> bool:
-        if not self.full_trust_for_run(run):
-            return False
-        pending = self.pending_confirmation_payload(run)
-        approval_id = str(pending.get("approval_id") or "").strip()
-        if not approval_id:
-            return False
-        source = str(pending.get("source") or "").strip().lower()
-        if source in {"runtime_wait", "local_execution_start"}:
-            return True
-        context = run.get("context") if isinstance(run.get("context"), dict) else {}
-        metadata = context.get("metadata") if isinstance(context.get("metadata"), dict) else {}
-        return bool(metadata.get("local_execution_waiting_confirmation") or metadata.get("local_execution_waiting_approval"))
+        return False
 
     def _connector_metadata(self, connector_entry: Optional[Dict[str, Any]]) -> Dict[str, Any]:
         return connector_entry.get("metadata") if isinstance((connector_entry or {}).get("metadata"), dict) else {}

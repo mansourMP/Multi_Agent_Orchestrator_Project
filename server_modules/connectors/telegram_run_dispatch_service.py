@@ -82,7 +82,6 @@ class TelegramRunDispatchService:
         wait_timeout = max(30, int(timeout_seconds if timeout_seconds is not None else self.default_timeout_seconds))
         summary_limit = int(max_reply_chars if max_reply_chars is not None else self.default_max_reply_chars)
         deadline = self.time_now() + wait_timeout
-        auto_approved = False
         last_status = "starting"
         no_worker_since: Optional[float] = None
         no_worker_grace_seconds = max(8.0, min(20.0, float(wait_timeout) * 0.2))
@@ -95,7 +94,7 @@ class TelegramRunDispatchService:
                 return {
                     "status": "failed",
                     "summary": self.friendly_run_error(latest_error),
-                    "auto_approved": auto_approved,
+                    "auto_approved": False,
                 }
             status = str(run.get("status") or "").strip().lower()
             if status:
@@ -105,7 +104,7 @@ class TelegramRunDispatchService:
                 return {
                     "status": status,
                     "summary": summary,
-                    "auto_approved": auto_approved,
+                    "auto_approved": False,
                 }
             if status in {"queued_local", "running_local"}:
                 local_state = self.local_companion_snapshot()
@@ -121,17 +120,10 @@ class TelegramRunDispatchService:
                                 f"online_workers={local_state['online_workers']}. "
                                 f"Start it with: {stack_start_command_hint(self.project_root)}"
                             ),
-                            "auto_approved": auto_approved,
+                            "auto_approved": False,
                         }
                 else:
                     no_worker_since = None
-            if status == "waiting_for_input" and not auto_approved and self.can_auto_approve_wait(run):
-                pending = self.pending_confirmation_payload(run)
-                approval_id = str(pending.get("approval_id") or "").strip()
-                input_queue = run.get("input_queue")
-                if approval_id and hasattr(input_queue, "put"):
-                    input_queue.put({"approval_id": approval_id, "decision": "proceed"})
-                    auto_approved = True
             self.sleep(1.0)
         run = self.runs_get(run_id)
         if isinstance(run, dict):
@@ -140,7 +132,7 @@ class TelegramRunDispatchService:
                 return {
                     "status": "failed",
                     "summary": self.friendly_run_error(latest_error),
-                    "auto_approved": auto_approved,
+                    "auto_approved": False,
                 }
         if last_status in {"queued_local", "running_local"}:
             local_state = self.local_companion_snapshot()
@@ -151,13 +143,13 @@ class TelegramRunDispatchService:
                     f"last_status={last_status} pending={local_state['pending_runs']} "
                     f"claimed={local_state['claimed_runs']} online_workers={local_state['online_workers']}."
                 ),
-                "auto_approved": auto_approved,
+                "auto_approved": False,
             }
         if last_status:
             return {
                 "status": "timeout",
                 "summary": f"Run timed out while waiting for completion (last_status={last_status}).",
-                "auto_approved": auto_approved,
+                "auto_approved": False,
             }
         return {"status": "timeout", "summary": "Run timed out while waiting for completion."}
 
@@ -187,19 +179,11 @@ class TelegramRunDispatchService:
                 "summary": self.summarize_run_terminal_result(run, summary_limit),
                 "auto_approved": False,
             }
-        auto_approved = False
-        if status == "waiting_for_input" and self.can_auto_approve_wait(run):
-            pending = self.pending_confirmation_payload(run)
-            approval_id = str(pending.get("approval_id") or "").strip()
-            input_queue = run.get("input_queue")
-            if approval_id and hasattr(input_queue, "put"):
-                input_queue.put({"approval_id": approval_id, "decision": "proceed"})
-                auto_approved = True
         return {
             "ready": False,
             "status": status or "starting",
             "summary": "",
-            "auto_approved": auto_approved,
+            "auto_approved": False,
         }
 
     def schedule_final_delivery(

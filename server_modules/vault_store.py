@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any, Dict
 
 _server = None  # populated by _init()
+_LOCAL_ENV_TOKENS = {"", "dev", "development", "local", "test", "testing"}
 
 
 def _init():
@@ -31,12 +32,22 @@ def _safe_write_json(path: Path, payload: Dict[str, Any]):
     return _server._safe_write_json(path, payload)
 
 
+def _resolved_environment() -> str:
+    return str(os.getenv("ORION_ENV") or os.getenv("ENV") or "").strip().lower()
+
+
+def _vault_requires_explicit_env_key() -> bool:
+    return _resolved_environment() not in _LOCAL_ENV_TOKENS
+
+
 def _vault_passphrase() -> str:
     _init()
     vault_key_env = _server.VAULT_KEY_ENV
     vault_key_file = _server.VAULT_KEY_FILE
     if vault_key_env and vault_key_env.strip():
         return vault_key_env.strip()
+    if _vault_requires_explicit_env_key():
+        raise RuntimeError("CREDENTIAL_VAULT_KEY is required outside local development environments.")
 
     if not vault_key_file.exists():
         key_parent = vault_key_file.parent if vault_key_file.parent != Path("") else Path(".")
@@ -253,4 +264,3 @@ def save_vault(vault: Dict[str, Any]):
         os.chmod(vault_file, 0o600)
     except Exception:
         pass
-

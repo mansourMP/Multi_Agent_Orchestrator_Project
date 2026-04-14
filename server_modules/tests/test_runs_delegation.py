@@ -222,10 +222,12 @@ class RunsDelegationTests(unittest.TestCase):
     @patch("server_modules.runs_delegation.decide_execution_target", create=True)
     @patch("server_modules.runs_delegation._prepare_run_start_request")
     @patch("server_modules.runs_delegation._compute_tool_policy_precheck", create=True)
+    @patch("server_modules.runs_delegation._begin_run_pending_confirmation", create=True)
     @patch("server_modules.runs_delegation.create_run", create=True)
-    def test_create_run_from_request_bypasses_local_confirmation_for_agent_machine(
+    def test_create_run_from_request_requires_local_confirmation_for_agent_machine(
         self,
         create_run_mock,
+        pending_confirmation_mock,
         precheck_mock,
         prepare_mock,
         decide_route_mock,
@@ -264,6 +266,7 @@ class RunsDelegationTests(unittest.TestCase):
             "browser_automation_policy": {"reviewed_approval_required": True},
         }
         create_run_mock.return_value = "run-agent-delegation"
+        pending_confirmation_mock.return_value = {"approval_id": "approval-local-1"}
 
         request = runs_delegation.RunStartRequest(
             engine="orion",
@@ -281,16 +284,16 @@ class RunsDelegationTests(unittest.TestCase):
             with patch.object(runs_delegation, "agent_machine_full_trust_enabled", return_value=True):
                 result = runs_delegation._create_run_from_request(request)
 
-        self.assertEqual(result["status"], "starting")
-        self.assertIsNone(result["pending_approval"])
+        self.assertEqual(result["status"], "waiting_for_input")
+        self.assertEqual(result["pending_approval"]["approval_id"], "approval-local-1")
         create_kwargs = create_run_mock.call_args.kwargs
-        self.assertFalse(create_kwargs["defer_local_enqueue"])
+        self.assertTrue(create_kwargs["defer_local_enqueue"])
         metadata = create_kwargs["context"]["metadata"]
         self.assertEqual(metadata["owner_user_id"], "user-123")
-        self.assertEqual(metadata["tool_policy_precheck"]["approval_required_count"], 0)
-        self.assertTrue(metadata["browser_reviewed_approved"])
-        self.assertNotIn("local_execution_waiting_confirmation", metadata)
-        self.assertNotIn("local_execution_waiting_approval", metadata)
+        self.assertEqual(metadata["tool_policy_precheck"]["approval_required_count"], 1)
+        self.assertTrue(metadata["local_execution_waiting_confirmation"])
+        self.assertTrue(metadata["local_execution_waiting_approval"])
+        self.assertNotIn("browser_reviewed_approved", metadata)
 
     @patch.object(runs_delegation.threading, "Timer", _ImmediateTimer)
     def test_child_run_auto_retries_on_failure(self):

@@ -3,6 +3,7 @@ import {
   WORKSPACE_NAV_DESTINATIONS,
   buildWorkspaceRouteHref,
   getWorkspaceNavDestinationDefinition,
+  getWorkspaceNavRouteDefinition,
   resolveWorkspaceRouteIdFromSegment,
   WORKSPACE_ROUTE_ID_SET,
   WORKSPACE_WEB_ROUTE_DEFINITIONS,
@@ -67,8 +68,8 @@ const SHELL_PROFILE_DEFINITIONS: Record<WorkspaceShellProfileId, WorkspaceShellP
   operations_admin_shell: {
     id: 'operations_admin_shell',
     label: 'Operations Admin Shell',
-    description: 'Admin-first operations shell for billing, routing, and governance.',
-    homeRouteId: 'admin/routing',
+    description: 'Operations-aware shell with Sage as the default landing surface.',
+    homeRouteId: 'workstation',
   },
 };
 
@@ -137,6 +138,10 @@ function routeMatchesCapabilities(
   );
 }
 
+function routeVisibleInNavigation(routeId: WorkspaceRouteId): boolean {
+  return getWorkspaceNavRouteDefinition(routeId).web.hiddenFromNavigation !== true;
+}
+
 export function resolveRouteIdFromHref(
   workspaceId: string,
   href: string | null | undefined,
@@ -189,10 +194,21 @@ export function buildRouteManifest(
     {},
   );
 
+  const visibleRoutes = allowedRoutes.filter((route) => routeVisibleInNavigation(route.id));
+  const visibleRouteIndex = visibleRoutes.reduce<Partial<Record<WorkspaceRouteId, WorkspaceRouteManifestEntry>>>(
+    (accumulator, route) => {
+      accumulator[route.id] = route;
+      return accumulator;
+    },
+    {},
+  );
+
   const preferredDefaultRouteId =
     resolveRouteIdFromHref(workspaceId, bootstrap.shellHints.defaultRoute) ?? shellProfile.homeRouteId;
   const defaultRoute =
-    routeIndex[preferredDefaultRouteId]?.href
+    visibleRouteIndex[preferredDefaultRouteId]?.href
+    ?? visibleRouteIndex[shellProfile.homeRouteId]?.href
+    ?? visibleRoutes[0]?.href
     ?? routeIndex[shellProfile.homeRouteId]?.href
     ?? allowedRoutes[0]?.href
     ?? buildWorkspaceRouteHref(workspaceId, 'chat');
@@ -200,7 +216,7 @@ export function buildRouteManifest(
   const navGroups = WORKSPACE_NAV_DESTINATIONS.flatMap((destination) => {
     const routes = destination.childRouteIds.flatMap((routeId) => {
       const route = routeIndex[routeId];
-      return route ? [route] : [];
+      return route && routeVisibleInNavigation(route.id) ? [route] : [];
     });
 
     if (routes.length === 0) {
@@ -208,7 +224,7 @@ export function buildRouteManifest(
     }
 
     const destinationDefinition = getWorkspaceNavDestinationDefinition(destination.id);
-    const defaultRoute = routeIndex[destinationDefinition.defaultRouteId] ?? routes[0];
+    const defaultRoute = routes.find((route) => route.id === destinationDefinition.defaultRouteId) ?? routes[0];
 
     return [
       {

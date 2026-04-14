@@ -98,6 +98,25 @@ class RuntimeCommonRateLimitTests(unittest.TestCase):
         self.assertIn("\"class\":\"authorization_error\"", payload)
         self.assertIn("\"request_id\":\"req-1\"", payload)
 
+    def test_control_plane_origin_configuration_is_required_outside_local_env(self) -> None:
+        with (
+            patch.object(runtime_common, "CONTROL_PLANE_ORIGINS", []),
+            patch.dict("os.environ", {"ORION_ENV": "beta"}, clear=True),
+        ):
+            response = runtime_common._check_control_plane_origin(
+                _request(
+                    "/api/workspaces",
+                    extra_headers={"origin": "https://app.example", "x-request-id": "req-2"},
+                )
+            )
+
+        self.assertIsNotNone(response)
+        assert response is not None
+        self.assertEqual(response.status_code, 503)
+        payload = response.body.decode("utf-8")
+        self.assertIn("\"code\":\"origin_configuration_required\"", payload)
+        self.assertIn("CONTROL_PLANE_ORIGINS must be configured", payload)
+
     def test_fetch_workflow_snapshot_uses_control_plane_service(self) -> None:
         with patch(
             "server_modules.workflow_service.fetch_workflow_snapshot_sync",

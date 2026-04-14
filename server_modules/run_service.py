@@ -2135,20 +2135,18 @@ def execute_delegated_run_request(
     *,
     namespace: Dict[str, Any],
     execute_system_run_start_request_via_turn_runtime_fn: Any,
-    create_run_from_request_fn: Any,
-    execute_built_legacy_unowned_system_run_start_request_via_turn_runtime_fn: Any = None,
+    execute_built_unowned_system_run_start_request_via_turn_runtime_fn: Any = None,
 ) -> Dict[str, Any]:
-    execute_fn = execute_built_legacy_unowned_system_run_start_request_via_turn_runtime_fn
+    execute_fn = execute_built_unowned_system_run_start_request_via_turn_runtime_fn
     if execute_fn is None:
         from server_modules.turn_runtime import (
-            execute_built_legacy_unowned_system_run_start_request_via_turn_runtime as execute_fn,
+            execute_built_unowned_system_run_start_request_via_turn_runtime as execute_fn,
         )
 
     return execute_fn(
         request,
         execute_system_run_start_request_via_turn_runtime_fn=execute_system_run_start_request_via_turn_runtime_fn,
         build_run_execution_services_fn=lambda: build_delegated_run_execution_services(namespace=namespace),
-        create_run_from_request_fn=create_run_from_request_fn,
     )
 
 
@@ -2259,12 +2257,10 @@ def execute_built_legacy_unowned_system_run_start_request_via_turn_runtime(
     *,
     execute_system_run_start_request_via_turn_runtime_fn: Any,
     build_run_execution_services_fn: Any,
-    create_run_from_request_fn: Any,
+    create_run_from_request_fn: Any = None,
     current_user: Optional[Dict[str, Any]] = None,
     execute_built_unowned_system_run_start_request_via_turn_runtime_fn: Any = None,
 ) -> Dict[str, Any]:
-    if type(create_run_from_request_fn).__module__ == "unittest.mock":
-        return create_run_from_request_fn(request)
     execute_fn = (
         execute_built_unowned_system_run_start_request_via_turn_runtime_fn
         or execute_built_unowned_system_run_start_request_via_turn_runtime
@@ -2932,49 +2928,6 @@ def execute_workflow_human_node(
             f"Reply with one of: {option_text}."
         ).strip()
     resolved_variant = variant or "approval"
-    if variant == "approval" and agent_machine_full_trust_for_context_fn(context):
-        current_text = f"{title}: approved"
-        summary_text = f"{title}: approved"
-        output_preview = node_preview_text_fn(current_text)
-        state["last_text"] = current_text
-        state["last_data"] = {
-            "node_id": node_id,
-            "node_type": "human",
-            "variant": variant,
-            "decision": "proceed",
-            "raw_decision": "Proceed",
-            "note": "Agent machine mode bypassed confirmation.",
-            "human_response": {
-                "approved": True,
-                "decision": "proceed",
-                "raw_decision": "Proceed",
-                "note": "Agent machine mode bypassed confirmation.",
-            },
-        }
-        emit_log_fn(
-            log_queue,
-            "info",
-            current_text,
-            event="workflow_human_bypassed",
-            data={"node_id": node_id, "variant": resolved_variant},
-        )
-        update_node_state_fn(
-            run_id,
-            node_id,
-            status="succeeded",
-            finalize=True,
-            output_preview=output_preview,
-            summary=summary_text,
-            detail={
-                "decision": "proceed",
-                "note": "Agent machine mode bypassed confirmation.",
-                "variant": resolved_variant,
-                "decision_options": decision_options,
-            },
-            waiting_for_approval=False,
-        )
-        return current_text
-
     update_node_state_fn(
         run_id,
         node_id,
@@ -6008,25 +5961,10 @@ def create_run_from_prepared_request(
         selected_target=metadata.get("execution_target_selected") or metadata.get("execution_target"),
     )
     metadata["policy_mode"] = runtime_policy.get("policy_mode")
-    agent_machine_full_trust = services.agent_machine_full_trust_enabled(str(metadata.get("owner_user_id") or "").strip())
-    browser_policy = (
-        metadata["tool_policy_precheck"].get("browser_automation_policy")
-        if isinstance(metadata.get("tool_policy_precheck"), dict)
-        else {}
-    )
-    if agent_machine_full_trust and isinstance(browser_policy, dict) and bool(browser_policy.get("reviewed_approval_required")):
-        metadata["browser_reviewed_approved"] = True
-        if callable(services.now_iso):
-            metadata["browser_reviewed_approved_at"] = services.now_iso()
     needs_local_confirmation = services.local_execution_requires_start_confirmation(
         metadata,
         metadata["tool_policy_precheck"],
     )
-    if needs_local_confirmation and agent_machine_full_trust:
-        services.mark_local_execution_tools_approved(metadata)
-        metadata.pop("local_execution_waiting_confirmation", None)
-        metadata.pop("local_execution_waiting_approval", None)
-        needs_local_confirmation = False
     if needs_local_confirmation:
         metadata["local_execution_waiting_confirmation"] = True
         metadata["local_execution_waiting_approval"] = True

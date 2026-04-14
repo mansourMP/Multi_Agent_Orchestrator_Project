@@ -104,15 +104,16 @@ class AutopilotEndpointServiceTests(unittest.TestCase):
             enabled=True,
             configured_secret="secret",
             query_secret="",
-            header_secret="",
+            header_secret="secret",
         )
         self.assertEqual(missing_provided["status_code"], 401)
+        self.assertEqual(missing_provided["content"], "WhatsApp webhook query secret is required.")
 
         forbidden = service.whatsapp_webhook_auth_result(
             enabled=True,
             configured_secret="secret",
             query_secret="wrong",
-            header_secret="",
+            header_secret="secret",
         )
         self.assertEqual(forbidden["status_code"], 403)
         self.assertEqual(forbidden["content"], "WhatsApp webhook secret is invalid.")
@@ -120,8 +121,8 @@ class AutopilotEndpointServiceTests(unittest.TestCase):
         success = service.whatsapp_webhook_auth_result(
             enabled=True,
             configured_secret="secret",
-            query_secret="",
-            header_secret="secret",
+            query_secret="secret",
+            header_secret="ignored",
         )
         self.assertEqual(success["status_code"], 200)
 

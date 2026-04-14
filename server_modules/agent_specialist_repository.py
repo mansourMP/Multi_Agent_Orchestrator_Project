@@ -1082,7 +1082,7 @@ async def resolve_active_inbound_channel_owner(
     workspace_id: str,
     channel_key: str,
     endpoint_key: str,
-    allow_master_fallback: bool = True,
+    allow_master_fallback: bool = False,
 ) -> Optional[Dict[str, Any]]:
     normalized_channel_key = str(channel_key or "").strip().lower()
     normalized_endpoint_key = _normalize_endpoint_key(endpoint_key)

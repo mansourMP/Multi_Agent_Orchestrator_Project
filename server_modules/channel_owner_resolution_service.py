@@ -28,7 +28,7 @@ async def resolve_public_channel_owner(
     actor_id: Optional[str] = None,
     actor_display_name: Optional[str] = None,
     metadata: Optional[Dict[str, Any]] = None,
-    allow_master_fallback: bool = True,
+    allow_master_fallback: bool = False,
     privileged_runtime_approved: bool = False,
     seed_demo_if_empty: bool = False,
 ):
@@ -117,6 +117,7 @@ async def resolve_public_channel_owner(
         master_install_id=master_install_id,
         runtime_mode=runtime_mode,
         runtime_profile_id=runtime_profile_id,
+        allow_master_fallback=allow_master_fallback,
         privileged_runtime_approved=privileged_runtime_approved,
         seed_demo_if_empty=seed_demo_if_empty,
         validate_preflight=False,

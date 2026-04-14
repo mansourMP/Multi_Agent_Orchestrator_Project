@@ -171,7 +171,7 @@ function buildRosterSections({
     },
     {
       id: 'application',
-      label: 'Applications',
+      label: 'Workspace surfaces',
       items: buildApplicationItems(routeManifest),
     },
     {
@@ -265,7 +265,7 @@ export function WorkstationRosterPane() {
           {[
             ['all', 'All'],
             ['agent', 'Agents'],
-            ['application', 'Applications'],
+            ['application', 'Surfaces'],
             ['runtime_target', 'Runtime'],
           ].map(([value, label]) => {
             const active = uiState.filter === value;

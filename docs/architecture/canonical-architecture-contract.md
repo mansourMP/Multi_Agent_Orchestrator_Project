@@ -247,26 +247,24 @@ the canonical boundaries in later prompts.
 
 1. Direct construction of `AgentTurnRequest` outside `agent_turn.py` request
    builders.
-   Current violation: `server_modules/agent_registry_api.py`
+   Current repo status: no known production-code violations.
 
 2. Direct execution of canonical turns from route/controller code outside the
    canonical ingress surfaces.
-   Current violation: `server_modules/agent_registry_api.py`
+   Current repo status: no known production-code violations.
 
 3. Direct `create_run()` from connector flows for user-facing work.
+   Compatibility callback names are allowed only when they resolve into
+   `turn_runtime` run-start bridging or canonical channel routing.
    Current violations:
    - `server_modules/connectors/whatsapp_webhook_service.py`
-   - `server_modules/connectors/telegram_terminal_service.py`
-   - `server_modules/connectors/telegram_run_dispatch_service.py`
-   - `server_modules/connectors/autopilot_run_entry_service.py`
    - `server_modules/connectors/discord_connector.py`
    - `server_modules/runs_execution.py`
 
 4. Connector bootstrap code calling system turn/run execution directly.
+   Compatibility bootstrap wrappers are acceptable only when they delegate
+   immediately into `turn_ingress_service` or `turn_runtime`.
    Current violations:
-   - `server_modules/connectors_actions.py`
-   - `server_modules/connectors/autopilot_connector_shell_service.py`
-   - `server_modules/runtime_heartbeat_service.py`
    - `server_modules/runtime_run_delegation_service.py`
    - `server_modules/runtime_run_replay_service.py`
    - `server_modules/runtime_webhook_trigger_service.py`

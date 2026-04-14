@@ -12,7 +12,7 @@ class DirectChatHandoffServiceTests(unittest.TestCase):
     def test_start_direct_chat_run_handoff_builds_request_metadata(self) -> None:
         captured = {}
 
-        def fake_create_run(request):
+        def fake_start_run(request):
             captured["request"] = request
             return {"run_id": "run-1", "status": "queued_local"}
 
@@ -24,7 +24,7 @@ class DirectChatHandoffServiceTests(unittest.TestCase):
             thread_id="thread-1",
             availability={"connection_mode": "local_companion"},
             max_iterations=12,
-            create_run_from_request_fn=fake_create_run,
+            start_run_request_fn=fake_start_run,
             run_start_request_cls=_DummyRunStartRequest,
             safe_positive_int_fn=lambda value, _default: int(value),
         )

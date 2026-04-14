@@ -165,6 +165,7 @@ def build_routing_context(
     request_id: Optional[str] = None,
     privileged_runtime_approved: bool = False,
     seed_demo_if_empty: bool = False,
+    allow_master_fallback: bool = False,
     validate_preflight: bool = True,
 ) -> ChannelRoutingContext:
     if validate_preflight:
@@ -264,7 +265,7 @@ def build_routing_context(
         shared_metadata=shared_metadata,
         turn_request=turn_request,
         execution_owner=channel_turn_owner_user(install=install_payload),
-        allow_master_fallback=True,
+        allow_master_fallback=bool(allow_master_fallback),
         privileged_runtime_approved=bool(privileged_runtime_approved),
         seed_demo_if_empty=bool(seed_demo_if_empty),
     )

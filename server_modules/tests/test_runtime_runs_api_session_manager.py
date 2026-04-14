@@ -251,10 +251,9 @@ class RuntimeRunsApiSessionManagerTests(unittest.TestCase):
             create_run_from_request=lambda req: {"run_id": "unused"},
         )
 
-        with patch.object(
-            turn_runtime,
-            "execute_durable_turn_request",
-            new=AsyncMock(return_value={"result": {"run_id": "run-1", "status": "starting"}}),
+        with patch(
+            "server_modules.turn_ingress_service.start_run_start",
+            new=AsyncMock(return_value={"run_id": "run-1", "status": "starting"}),
         ):
             result = __import__("asyncio").run(
                 execute_run_start_request_via_turn_runtime(
@@ -276,9 +275,8 @@ class RuntimeRunsApiSessionManagerTests(unittest.TestCase):
             captured["current_user"] = dict(current_user or {})
             return {"run_id": "run-2", "status": "starting"}
 
-        with patch.object(
-            turn_runtime,
-            "execute_run_start_request_via_turn_runtime",
+        with patch(
+            "server_modules.turn_ingress_service.start_run_start",
             side_effect=_fake_execute,
         ):
             result = execute_system_run_start_request_via_turn_runtime(
@@ -338,6 +336,7 @@ class RuntimeRunsApiSessionManagerTests(unittest.TestCase):
         original_turn = runtime_runs_api.execute_canonical_agent_turn
         original_run_services = runtime_runs_api._run_execution_services
         original_direct_chat_services = runtime_runs_api._direct_chat_execution_services
+        original_start_turn = runtime_runs_api.turn_ingress_service.start_turn
         try:
             runtime_runs_api.runtime_route_registration_service.register_runtime_run_routes_from_api = lambda *args, **kwargs: None
             runtime_runs_api._refresh_server_exports = lambda: fake_server
@@ -345,6 +344,9 @@ class RuntimeRunsApiSessionManagerTests(unittest.TestCase):
             runtime_runs_api._run_execution_services = lambda: "run-services"
             runtime_runs_api._direct_chat_execution_services = lambda: "chat-services"
             runtime_runs_api.execute_canonical_agent_turn = AsyncMock(
+                side_effect=session_service.SessionScopeViolationError("scope mismatch")
+            )
+            runtime_runs_api.turn_ingress_service.start_turn = AsyncMock(
                 side_effect=session_service.SessionScopeViolationError("scope mismatch")
             )
 
@@ -389,6 +391,7 @@ class RuntimeRunsApiSessionManagerTests(unittest.TestCase):
             runtime_runs_api.execute_canonical_agent_turn = original_turn
             runtime_runs_api._run_execution_services = original_run_services
             runtime_runs_api._direct_chat_execution_services = original_direct_chat_services
+            runtime_runs_api.turn_ingress_service.start_turn = original_start_turn
             if previous_server is not None:
                 sys.modules["server"] = previous_server
             else:
@@ -418,7 +421,7 @@ class RuntimeRunsApiSessionManagerTests(unittest.TestCase):
         self.assertEqual(captured["stamped"], "req")
         self.assertIs(captured["services"], built_services)
 
-    def test_execute_built_legacy_unowned_system_run_start_request_via_turn_runtime_bypasses_mocked_create(self):
+    def test_execute_built_legacy_unowned_system_run_start_request_via_turn_runtime_uses_runtime_even_with_mock(self):
         request = RunStartRequest(engine="orion", workspace_id="default", user_goal="hello")
         create_run = Mock(return_value={"run_id": "run-5", "status": "starting"})
         built_services = RunExecutionServices(
@@ -430,6 +433,7 @@ class RuntimeRunsApiSessionManagerTests(unittest.TestCase):
         with patch(
             "server_modules.turn_runtime.execute_built_unowned_system_run_start_request_via_turn_runtime"
         ) as execute_built:
+            execute_built.return_value = {"run_id": "run-5", "status": "starting"}
             result = execute_built_legacy_unowned_system_run_start_request_via_turn_runtime(
                 request,
                 execute_system_run_start_request_via_turn_runtime_fn=lambda *args, **kwargs: {"run_id": "unexpected"},
@@ -438,8 +442,8 @@ class RuntimeRunsApiSessionManagerTests(unittest.TestCase):
             )
 
         self.assertEqual(result["run_id"], "run-5")
-        create_run.assert_called_once_with(request)
-        execute_built.assert_not_called()
+        create_run.assert_not_called()
+        execute_built.assert_called_once()
 
     def test_execute_built_legacy_unowned_system_run_start_request_via_turn_runtime_uses_runtime_when_not_mocked(self):
         request = RunStartRequest(engine="orion", workspace_id="default", user_goal="hello")

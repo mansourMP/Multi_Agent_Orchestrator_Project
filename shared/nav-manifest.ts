@@ -108,7 +108,7 @@ export const WORKSPACE_NAV_DESTINATIONS = [
     id: 'build',
     label: 'Build',
     iconName: 'boxes',
-    defaultRouteId: 'agents',
+    defaultRouteId: 'deployed-agents',
     childRouteIds: ['agents', 'deployed-agents', 'applications', 'integrations'],
     direct: false,
   },
@@ -236,13 +236,17 @@ export const WORKSPACE_ROUTE_DEFINITIONS: readonly WorkspaceNavRouteDefinition[]
     label: 'Agents',
     segment: 'agents',
     destinationId: 'build',
-    web: {},
+    requiredCapabilities: ['workspace_admin_enabled'],
+    web: {
+      hiddenFromNavigation: true,
+    },
   },
   {
     id: 'deployed-agents',
     label: 'Deployed Agents',
     segment: 'deployed-agents',
     destinationId: 'build',
+    requiredCapabilities: ['workspace_admin_enabled'],
     web: {},
   },
   {
@@ -250,14 +254,17 @@ export const WORKSPACE_ROUTE_DEFINITIONS: readonly WorkspaceNavRouteDefinition[]
     label: 'Applications',
     segment: 'applications',
     destinationId: 'build',
-    web: {},
+    requiredCapabilities: ['workspace_admin_enabled'],
+    web: {
+      hiddenFromNavigation: true,
+    },
   },
   {
     id: 'integrations',
     label: 'Integrations',
     segment: 'integrations',
     destinationId: 'build',
-    requiredCapabilities: ['channel_pairing_enabled'],
+    requiredCapabilities: ['workspace_admin_enabled', 'channel_pairing_enabled'],
     web: {},
   },
   {

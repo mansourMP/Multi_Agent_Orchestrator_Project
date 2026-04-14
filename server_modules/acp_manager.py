@@ -299,12 +299,12 @@ class _PersistentStateDict(_PersistentDict):
         super().__init__({}, callback=callback)
         self._loading = False
 
-    def reload(self, items: Dict[str, Any]) -> None:
+    def reload(self, items: Optional[Dict[str, Any]]) -> None:
         self._loading = True
         self._suspend_notifications = True
         try:
             dict.clear(self)
-            for key, value in items.items():
+            for key, value in (items or {}).items():
                 dict.__setitem__(self, str(key), self._wrap(value))
         finally:
             self._suspend_notifications = False
@@ -316,12 +316,12 @@ class _PersistentStateList(_PersistentList):
         super().__init__([], callback=callback)
         self._loading = False
 
-    def reload(self, items: Iterable[Any]) -> None:
+    def reload(self, items: Optional[Iterable[Any]]) -> None:
         self._loading = True
         self._suspend_notifications = True
         try:
             list.clear(self)
-            for item in items:
+            for item in items or []:
                 list.append(self, self._wrap(item))
         finally:
             self._suspend_notifications = False

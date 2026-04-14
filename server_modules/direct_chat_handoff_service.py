@@ -79,7 +79,7 @@ def start_direct_chat_run_handoff(
     thread_id: str,
     availability: Dict[str, Any],
     max_iterations: Optional[int] = None,
-    create_run_from_request_fn: Callable[[Any], Dict[str, Any]],
+    start_run_request_fn: Callable[[Any], Dict[str, Any]],
     run_start_request_cls: Any,
     safe_positive_int_fn: Callable[[Any, int], int],
 ) -> Dict[str, Any]:
@@ -101,7 +101,7 @@ def start_direct_chat_run_handoff(
             "connection_mode": connection_mode,
         },
     )
-    return create_run_from_request_fn(req)
+    return start_run_request_fn(req)
 
 
 def direct_chat_run_handoff_reply(

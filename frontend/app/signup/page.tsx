@@ -1,24 +1,28 @@
 'use client';
 
 import Link from 'next/link';
-import { useRouter, useSearchParams } from 'next/navigation';
-import { FormEvent, useState } from 'react';
+import { useRouter } from 'next/navigation';
+import { FormEvent, useEffect, useState } from 'react';
 
 import { signup } from '@/lib/auth/auth-client';
 import { AppButton, AppInput } from '@/lib/ui/primitives';
 
 export default function SignupPage() {
   const router = useRouter();
-  const searchParams = useSearchParams();
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const channelAttribution = String(searchParams.get('channel_attribution') || '').trim();
+  const [channelAttribution, setChannelAttribution] = useState('');
   const loginHref = channelAttribution
     ? `/login?channel_attribution=${encodeURIComponent(channelAttribution)}`
     : '/login';
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    setChannelAttribution(String(params.get('channel_attribution') || '').trim());
+  }, []);
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();

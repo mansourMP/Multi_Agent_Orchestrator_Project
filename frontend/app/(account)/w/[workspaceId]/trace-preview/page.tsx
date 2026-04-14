@@ -196,49 +196,16 @@ export default function WorkspaceTracePreviewPage() {
   );
 
   return (
-    <main
-      data-workstation-surface="trace-preview"
-      style={{
-        minHeight: '100%',
-        display: 'grid',
-        gap: '1rem',
-        padding: '1rem 1.1rem 1.15rem',
-      }}
-    >
-      <section
-        style={{
-          display: 'grid',
-          gap: '0.45rem',
-        }}
-      >
-        <span
-          style={{
-            color: 'var(--app-text-tertiary)',
-            fontSize: '0.72rem',
-            fontWeight: 650,
-            letterSpacing: '0.08em',
-            textTransform: 'uppercase',
-          }}
-        >
-          Trace Preview
-        </span>
-        <h1
-          style={{
-            margin: 0,
-            color: 'var(--app-text-primary)',
-            fontSize: '1.18rem',
-            fontWeight: 680,
-            letterSpacing: '-0.02em',
-          }}
-        >
-          Sage Trace View Harness
-        </h1>
+    <main data-workstation-surface="trace-preview" className="app-stack-4">
+      <section className="app-stack-2">
+        <span className="app-meta-label">Trace Preview</span>
+        <h1 className="stage-detail-layout__title">Sage Trace View Harness</h1>
         <AppNotice>
           This route is an internal harness for the reusable trace component. It is intentionally not registered in workstation navigation.
         </AppNotice>
       </section>
 
-      <section style={{ display: 'flex', gap: '0.65rem', flexWrap: 'wrap' }}>
+      <section className="app-inline-actions">
         <AppButton
           type="button"
           tone="secondary"

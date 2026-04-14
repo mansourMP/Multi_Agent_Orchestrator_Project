@@ -45,6 +45,12 @@ function extractWorkspaceIdFromRoute(route: string | null | undefined): string |
 }
 
 function normalizeWorkspaceRoute(route: string): string {
+  if (route.endsWith('/workstation')) {
+    return `${route.slice(0, -12)}/home`;
+  }
+  if (route === '/workstation') {
+    return '/home';
+  }
   if (route.endsWith('/dashboard')) {
     return `${route.slice(0, -10)}/admin`;
   }

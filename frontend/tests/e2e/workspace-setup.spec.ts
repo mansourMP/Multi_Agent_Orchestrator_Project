@@ -12,10 +12,10 @@ test.describe('workspace setup', () => {
     await expect(page).toHaveURL(/\/onboarding/);
     await page.getByLabel('Workspace name').fill('Acme Deal Room');
     await page.getByLabel('Shell profile').selectOption('document_workstation_shell');
-    await page.getByLabel('Default route').selectOption(/workstation$/);
+    await page.getByLabel('Default route').selectOption(/home$/);
     await page.getByRole('button', { name: /save workspace setup/i }).click();
 
-    await page.waitForURL(/\/w\/[^/]+\/workstation$/);
+    await page.waitForURL(/\/w\/[^/]+\/home$/);
   });
 
   test('existing users can create a second workspace and see it in the switcher', async ({ page }) => {

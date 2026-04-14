@@ -3,6 +3,7 @@ import { Redirect, Tabs } from 'expo-router';
 import { mobileAppRuntime, useMobileRuntimeState } from '../../src/lib/mobile-runtime.js';
 import { AppErrorState, AppLoadingState } from '../../src/ui/primitives';
 import { appTokens } from '../../src/ui/tokens';
+import { WORKSPACE_MOBILE_BOTTOM_TABS } from '../../../shared/nav-manifest';
 
 function routeEnabled(state, routeId) {
   return Boolean(state.foundation?.routeManifest?.routeIndex?.[routeId]);
@@ -57,32 +58,22 @@ export default function WorkspaceLayout() {
       }}
     >
       <Tabs.Screen name="index" options={{ href: null }} />
-      <Tabs.Screen
-        name="chat"
-        options={{ title: 'Chat', href: routeEnabled(state, 'chat') ? undefined : null }}
-        listeners={{ focus: () => mobileAppRuntime.rememberRoute('chat') }}
-      />
-      <Tabs.Screen
-        name="runs"
-        options={{ title: 'Work', href: routeEnabled(state, 'runs') ? undefined : null }}
-        listeners={{ focus: () => mobileAppRuntime.rememberRoute('runs') }}
-      />
-      <Tabs.Screen
-        name="approvals"
-        options={{ title: 'Approvals', href: routeEnabled(state, 'approvals') ? undefined : null }}
-        listeners={{ focus: () => mobileAppRuntime.rememberRoute('approvals') }}
-      />
-      <Tabs.Screen
-        name="notifications"
-        options={{ title: 'Inbox', href: routeEnabled(state, 'notifications') ? undefined : null }}
-        listeners={{ focus: () => mobileAppRuntime.rememberRoute('notifications') }}
-      />
-      <Tabs.Screen
-        name="artifacts"
-        options={{ title: 'Artifacts', href: routeEnabled(state, 'artifacts') ? undefined : null }}
-        listeners={{ focus: () => mobileAppRuntime.rememberRoute('artifacts') }}
-      />
-      <Tabs.Screen name="account" options={{ title: 'Account' }} />
+      {WORKSPACE_MOBILE_BOTTOM_TABS.map((tab) => (
+        <Tabs.Screen
+          key={tab.routeId}
+          name={tab.screenName}
+          options={{ title: tab.label, href: routeEnabled(state, tab.routeId) ? undefined : null }}
+          listeners={{
+            tabPress: () => {
+              mobileAppRuntime.rememberRoute(tab.routeId);
+            },
+            focus: () => {
+              mobileAppRuntime.rememberRoute(tab.routeId);
+            },
+          }}
+        />
+      ))}
+      <Tabs.Screen name="account" options={{ title: 'Account', href: null }} />
       <Tabs.Screen name="switcher" options={{ href: null }} />
     </Tabs>
   );

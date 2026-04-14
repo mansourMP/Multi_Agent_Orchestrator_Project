@@ -1,3 +1,11 @@
+import {
+  WORKSPACE_MOBILE_BOTTOM_TABS,
+  WORKSPACE_MOBILE_NAV_GROUP_LABELS,
+  WORKSPACE_MOBILE_ROUTE_DEFINITIONS,
+  WORKSPACE_ROUTE_ID_SET,
+  resolveWorkspaceRouteIdFromSegment,
+} from '../../../shared/nav-manifest';
+
 export const SHELL_PROFILE_DEFINITIONS = {
   personal_shell: {
     id: 'personal_shell',
@@ -19,41 +27,6 @@ export const SHELL_PROFILE_DEFINITIONS = {
   },
 };
 
-const ROUTE_DEFINITIONS = [
-  {
-    id: 'chat',
-    label: 'Chat',
-    groupId: 'primary',
-    screen: '/(workspace)/chat',
-  },
-  {
-    id: 'runs',
-    label: 'Runs',
-    groupId: 'primary',
-    screen: '/(workspace)/runs',
-  },
-  {
-    id: 'approvals',
-    label: 'Approvals',
-    groupId: 'primary',
-    screen: '/(workspace)/approvals',
-    requiredCapabilities: ['approvals_enabled'],
-  },
-  {
-    id: 'notifications',
-    label: 'Inbox',
-    groupId: 'secondary',
-    screen: '/(workspace)/notifications',
-  },
-  {
-    id: 'artifacts',
-    label: 'Artifacts',
-    groupId: 'secondary',
-    screen: '/(workspace)/artifacts',
-    requiredCapabilities: ['artifacts_enabled'],
-  },
-];
-
 function normalizeShellProfileId(value) {
   if (
     value === 'personal_shell'
@@ -67,14 +40,11 @@ function normalizeShellProfileId(value) {
 }
 
 function groupLabel(groupId) {
-  if (groupId === 'secondary') {
-    return 'Workspace';
-  }
-  return 'Primary';
+  return WORKSPACE_MOBILE_NAV_GROUP_LABELS[groupId] ?? 'Primary';
 }
 
 function isKnownRouteId(value) {
-  return ROUTE_DEFINITIONS.some((definition) => definition.id === value);
+  return WORKSPACE_ROUTE_ID_SET.has(value);
 }
 
 function extractRouteIdFromWorkspacePath(workspaceId, candidate) {
@@ -91,7 +61,7 @@ function extractRouteIdFromWorkspacePath(workspaceId, candidate) {
     return null;
   }
 
-  return segments.slice(2).join('/');
+  return resolveWorkspaceRouteIdFromSegment(segments.slice(2).join('/'));
 }
 
 export function hasWorkspaceCapability(bootstrap, capability) {
@@ -147,12 +117,13 @@ export function resolveRouteIdFromTarget(workspaceId, candidate) {
   }
 
   const normalized = candidate.trim();
-  if (isKnownRouteId(normalized)) {
-    return normalized;
+  const directRouteId = resolveWorkspaceRouteIdFromSegment(normalized) ?? normalized;
+  if (isKnownRouteId(directRouteId)) {
+    return directRouteId;
   }
 
   if (normalized.startsWith('/(workspace)/')) {
-    const routeId = normalized.slice('/(workspace)/'.length);
+    const routeId = resolveWorkspaceRouteIdFromSegment(normalized.slice('/(workspace)/'.length));
     return isKnownRouteId(routeId) ? routeId : null;
   }
 
@@ -162,7 +133,7 @@ export function resolveRouteIdFromTarget(workspaceId, candidate) {
   }
 
   if (normalized.startsWith('/')) {
-    const routeId = normalized.replace(/^\/+/, '');
+    const routeId = resolveWorkspaceRouteIdFromSegment(normalized.replace(/^\/+/, ''));
     return isKnownRouteId(routeId) ? routeId : null;
   }
 
@@ -174,7 +145,7 @@ export function resolveRouteIdFromHref(workspaceId, href) {
 }
 
 export function buildRouteManifest(shellProfile, bootstrap) {
-  const allowedRoutes = ROUTE_DEFINITIONS.flatMap((definition) => {
+  const allowedRoutes = WORKSPACE_MOBILE_ROUTE_DEFINITIONS.flatMap((definition) => {
     if (!routeMatchesProfile(definition, shellProfile.id)) {
       return [];
     }
@@ -184,9 +155,9 @@ export function buildRouteManifest(shellProfile, bootstrap) {
 
     return [{
       id: definition.id,
-      label: definition.label,
-      screen: definition.screen,
-      groupId: definition.groupId,
+      label: definition.mobile.tabLabel ?? definition.label,
+      screen: definition.mobile.screen,
+      groupId: definition.mobile.groupId,
       requiredCapabilities: [...(definition.requiredCapabilities ?? [])],
     }];
   });
@@ -228,3 +199,5 @@ export function buildRouteManifest(shellProfile, bootstrap) {
     navGroups,
   };
 }
+
+export { WORKSPACE_MOBILE_BOTTOM_TABS };

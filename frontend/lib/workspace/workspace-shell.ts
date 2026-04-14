@@ -1,29 +1,22 @@
 import type { WorkspaceBootstrapPayload } from '@/lib/workspace/workspace-bootstrap';
+import {
+  WORKSPACE_NAV_DESTINATIONS,
+  buildWorkspaceRouteHref,
+  getWorkspaceNavDestinationDefinition,
+  resolveWorkspaceRouteIdFromSegment,
+  WORKSPACE_ROUTE_ID_SET,
+  WORKSPACE_WEB_ROUTE_DEFINITIONS,
+  type WorkspaceNavDestinationId,
+  type WorkspaceNavRouteDefinition,
+  type WorkspaceRouteId,
+  type WorkspaceShellProfileId,
+} from '../../../shared/nav-manifest';
 
-export type WorkspaceShellProfileId =
-  | 'personal_shell'
-  | 'document_workstation_shell'
-  | 'operations_admin_shell';
-
-export type WorkspaceRouteId =
-  | 'chat'
-  | 'workstation'
-  | 'runs'
-  | 'approvals'
-  | 'artifacts'
-  | 'notifications'
-  | 'applications'
-  | 'agents'
-  | 'deployed-agents'
-  | 'activity'
-  | 'integrations'
-  | 'settings'
-  | 'admin'
-  | 'admin/platform'
-  | 'admin/billing'
-  | 'admin/routing'
-  | 'admin/members'
-  | 'admin/policies';
+export type {
+  WorkspaceNavDestinationId,
+  WorkspaceRouteId,
+  WorkspaceShellProfileId,
+} from '../../../shared/nav-manifest';
 
 export type WorkspaceShellProfile = {
   id: WorkspaceShellProfileId;
@@ -36,13 +29,17 @@ export type WorkspaceRouteManifestEntry = {
   id: WorkspaceRouteId;
   label: string;
   href: string;
-  groupId: string;
+  destinationId: WorkspaceNavDestinationId;
   requiredCapabilities: string[];
 };
 
 export type WorkspaceRouteManifestGroup = {
-  id: string;
+  id: WorkspaceNavDestinationId;
   label: string;
+  iconName: string;
+  href: string;
+  defaultRouteId: WorkspaceRouteId;
+  direct: boolean;
   routes: WorkspaceRouteManifestEntry[];
 };
 
@@ -52,15 +49,6 @@ export type WorkspaceRouteManifest = {
   routeIds: WorkspaceRouteId[];
   routeIndex: Partial<Record<WorkspaceRouteId, WorkspaceRouteManifestEntry>>;
   navGroups: WorkspaceRouteManifestGroup[];
-};
-
-type RouteDefinition = {
-  id: WorkspaceRouteId;
-  label: string;
-  groupId: string;
-  href: (workspaceId: string) => string;
-  requiredCapabilities?: string[];
-  profileIds?: WorkspaceShellProfileId[];
 };
 
 const SHELL_PROFILE_DEFINITIONS: Record<WorkspaceShellProfileId, WorkspaceShellProfile> = {
@@ -84,157 +72,11 @@ const SHELL_PROFILE_DEFINITIONS: Record<WorkspaceShellProfileId, WorkspaceShellP
   },
 };
 
-const HIDDEN_NAV_ROUTE_IDS = new Set<WorkspaceRouteId>([
-  'applications',
-  'agents',
-  'deployed-agents',
-  'activity',
-  'integrations',
-  'admin',
-  'admin/platform',
-  'admin/billing',
-]);
-
-export function isWorkspaceRouteHiddenFromNavigation(routeId: WorkspaceRouteId): boolean {
-  return HIDDEN_NAV_ROUTE_IDS.has(routeId);
-}
-
-const ROUTE_DEFINITIONS: RouteDefinition[] = [
-  {
-    id: 'chat',
-    label: 'Chat',
-    groupId: 'primary',
-    href: (workspaceId) => `/w/${workspaceId}/chat`,
-  },
-  {
-    id: 'workstation',
-    label: 'Workstation',
-    groupId: 'primary',
-    href: (workspaceId) => `/w/${workspaceId}/workstation`,
-    requiredCapabilities: ['document_workstation_enabled'],
-    profileIds: ['document_workstation_shell'],
-  },
-  {
-    id: 'runs',
-    label: 'Runs',
-    groupId: 'primary',
-    href: (workspaceId) => `/w/${workspaceId}/runs`,
-  },
-  {
-    id: 'approvals',
-    label: 'Approvals',
-    groupId: 'primary',
-    href: (workspaceId) => `/w/${workspaceId}/approvals`,
-    requiredCapabilities: ['approvals_enabled'],
-  },
-  {
-    id: 'artifacts',
-    label: 'Artifacts',
-    groupId: 'workspace',
-    href: (workspaceId) => `/w/${workspaceId}/artifacts`,
-    requiredCapabilities: ['artifacts_enabled'],
-  },
-  {
-    id: 'notifications',
-    label: 'Notifications',
-    groupId: 'workspace',
-    href: (workspaceId) => `/w/${workspaceId}/notifications`,
-  },
-  {
-    id: 'applications',
-    label: 'Applications',
-    groupId: 'workspace',
-    href: (workspaceId) => `/w/${workspaceId}/applications`,
-  },
-  {
-    id: 'agents',
-    label: 'Agents',
-    groupId: 'workspace',
-    href: (workspaceId) => `/w/${workspaceId}/agents`,
-  },
-  {
-    id: 'deployed-agents',
-    label: 'Deployed Agents',
-    groupId: 'workspace',
-    href: (workspaceId) => `/w/${workspaceId}/deployed-agents`,
-  },
-  {
-    id: 'activity',
-    label: 'Activity',
-    groupId: 'workspace',
-    href: (workspaceId) => `/w/${workspaceId}/activity`,
-  },
-  {
-    id: 'integrations',
-    label: 'Integrations',
-    groupId: 'workspace',
-    href: (workspaceId) => `/w/${workspaceId}/integrations`,
-  },
-  {
-    id: 'settings',
-    label: 'Settings',
-    groupId: 'workspace',
-    href: (workspaceId) => `/w/${workspaceId}/settings`,
-  },
-  {
-    id: 'admin',
-    label: 'Admin',
-    groupId: 'operations',
-    href: (workspaceId) => `/w/${workspaceId}/admin`,
-    requiredCapabilities: ['workspace_admin_enabled'],
-  },
-  {
-    id: 'admin/platform',
-    label: 'Platform',
-    groupId: 'operations',
-    href: (workspaceId) => `/w/${workspaceId}/admin/platform`,
-    requiredCapabilities: ['platform_admin_enabled'],
-  },
-  {
-    id: 'admin/billing',
-    label: 'Billing',
-    groupId: 'operations',
-    href: (workspaceId) => `/w/${workspaceId}/admin/billing`,
-    requiredCapabilities: ['billing_read_enabled'],
-  },
-  {
-    id: 'admin/routing',
-    label: 'Routing',
-    groupId: 'operations',
-    href: (workspaceId) => `/w/${workspaceId}/admin/routing`,
-    requiredCapabilities: ['routing_read_enabled'],
-  },
-  {
-    id: 'admin/members',
-    label: 'Members',
-    groupId: 'operations',
-    href: (workspaceId) => `/w/${workspaceId}/admin/members`,
-    requiredCapabilities: ['workspace_admin_enabled'],
-  },
-  {
-    id: 'admin/policies',
-    label: 'Policies',
-    groupId: 'operations',
-    href: (workspaceId) => `/w/${workspaceId}/admin/policies`,
-    requiredCapabilities: ['workspace_admin_enabled'],
-  },
-];
-
 function normalizeShellProfileId(value: string | null | undefined): WorkspaceShellProfileId | null {
   if (value === 'personal_shell' || value === 'document_workstation_shell' || value === 'operations_admin_shell') {
     return value;
   }
   return null;
-}
-
-function groupLabel(groupId: string): string {
-  if (groupId === 'operations') {
-    return 'Operations';
-  }
-  if (groupId === 'workspace') {
-    return 'Workspace';
-  }
-  return 'Primary';
 }
 
 export function hasWorkspaceCapability(
@@ -277,7 +119,7 @@ export function deriveShellProfile(
 }
 
 function routeMatchesProfile(
-  definition: RouteDefinition,
+  definition: WorkspaceNavRouteDefinition,
   shellProfileId: WorkspaceShellProfileId,
 ): boolean {
   if (!definition.profileIds || definition.profileIds.length === 0) {
@@ -287,7 +129,7 @@ function routeMatchesProfile(
 }
 
 function routeMatchesCapabilities(
-  definition: RouteDefinition,
+  definition: WorkspaceNavRouteDefinition,
   bootstrap: WorkspaceBootstrapPayload,
 ): boolean {
   return (definition.requiredCapabilities ?? []).every((capability) =>
@@ -308,8 +150,11 @@ export function resolveRouteIdFromHref(
     return null;
   }
 
-  const routeId = href.slice(prefix.length) as WorkspaceRouteId;
-  return ROUTE_DEFINITIONS.some((definition) => definition.id === routeId) ? routeId : null;
+  const routeSegment = href
+    .slice(prefix.length)
+    .split(/[?#]/, 1)[0] ?? '';
+  const routeId = resolveWorkspaceRouteIdFromSegment(routeSegment);
+  return routeId && WORKSPACE_ROUTE_ID_SET.has(routeId) ? routeId : null;
 }
 
 export function buildRouteManifest(
@@ -317,10 +162,7 @@ export function buildRouteManifest(
   bootstrap: WorkspaceBootstrapPayload,
 ): WorkspaceRouteManifest {
   const workspaceId = bootstrap.workspace.id;
-  const allowedRoutes = ROUTE_DEFINITIONS.flatMap((definition) => {
-    if (isWorkspaceRouteHiddenFromNavigation(definition.id)) {
-      return [];
-    }
+  const allowedRoutes = WORKSPACE_WEB_ROUTE_DEFINITIONS.flatMap((definition) => {
     if (!routeMatchesProfile(definition, shellProfile.id)) {
       return [];
     }
@@ -332,8 +174,8 @@ export function buildRouteManifest(
       {
         id: definition.id,
         label: definition.label,
-        href: definition.href(workspaceId),
-        groupId: definition.groupId,
+        href: buildWorkspaceRouteHref(workspaceId, definition.id),
+        destinationId: definition.destinationId,
         requiredCapabilities: [...(definition.requiredCapabilities ?? [])],
       } satisfies WorkspaceRouteManifestEntry,
     ];
@@ -353,20 +195,33 @@ export function buildRouteManifest(
     routeIndex[preferredDefaultRouteId]?.href
     ?? routeIndex[shellProfile.homeRouteId]?.href
     ?? allowedRoutes[0]?.href
-    ?? `/w/${workspaceId}/chat`;
+    ?? buildWorkspaceRouteHref(workspaceId, 'chat');
 
-  const navGroups = Array.from(
-    allowedRoutes.reduce<Map<string, WorkspaceRouteManifestEntry[]>>((accumulator, route) => {
-      const groupRoutes = accumulator.get(route.groupId) ?? [];
-      groupRoutes.push(route);
-      accumulator.set(route.groupId, groupRoutes);
-      return accumulator;
-    }, new Map()),
-  ).map(([groupId, routes]) => ({
-    id: groupId,
-    label: groupLabel(groupId),
-    routes,
-  }));
+  const navGroups = WORKSPACE_NAV_DESTINATIONS.flatMap((destination) => {
+    const routes = destination.childRouteIds.flatMap((routeId) => {
+      const route = routeIndex[routeId];
+      return route ? [route] : [];
+    });
+
+    if (routes.length === 0) {
+      return [];
+    }
+
+    const destinationDefinition = getWorkspaceNavDestinationDefinition(destination.id);
+    const defaultRoute = routeIndex[destinationDefinition.defaultRouteId] ?? routes[0];
+
+    return [
+      {
+        id: destinationDefinition.id,
+        label: destinationDefinition.label,
+        iconName: destinationDefinition.iconName,
+        href: defaultRoute.href,
+        defaultRouteId: defaultRoute.id,
+        direct: destinationDefinition.direct,
+        routes,
+      } satisfies WorkspaceRouteManifestGroup,
+    ];
+  });
 
   return {
     shellProfileId: shellProfile.id,

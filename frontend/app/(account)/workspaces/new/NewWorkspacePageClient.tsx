@@ -40,16 +40,8 @@ export function NewWorkspacePageClient() {
   }
 
   return (
-    <main
-      style={{
-        minHeight: '100vh',
-        padding: '2rem',
-        display: 'grid',
-        placeItems: 'center',
-        background: 'linear-gradient(180deg, #f8fafc 0%, #e2e8f0 100%)',
-      }}
-    >
-      <div style={{ width: 'min(100%, 40rem)' }}>
+    <main className="app-page-shell">
+      <div className="app-page-shell__content">
         <WorkspaceSetupForm
           workspaceId={NEW_WORKSPACE_FORM_ID}
           routeMode="relative"

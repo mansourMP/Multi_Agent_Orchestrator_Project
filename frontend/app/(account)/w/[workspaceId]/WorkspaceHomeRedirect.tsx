@@ -18,7 +18,9 @@ export function WorkspaceHomeRedirect({
   const rememberedRoute = actions.resolveWorkspaceHref(workspaceId);
   const rememberedRouteId = resolveRouteIdFromHref(workspaceId, rememberedRoute);
   const nextRoute =
-    (rememberedRouteId && canAccessRoute(rememberedRouteId) ? rememberedRoute : null)
+    (rememberedRouteId && canAccessRoute(rememberedRouteId)
+      ? routeManifest.routeIndex[rememberedRouteId]?.href ?? null
+      : null)
     ?? routeManifest.defaultRoute;
 
   useEffect(() => {
@@ -38,20 +40,13 @@ function WorkspaceScopeRedirectMessage({
   nextRoute: string;
 }) {
   return (
-    <main
-      style={{
-        minHeight: '100vh',
-        padding: '2.5rem',
-        display: 'grid',
-        placeItems: 'center',
-      }}
-    >
-      <div style={{ display: 'grid', gap: '0.45rem', textAlign: 'center', maxWidth: '32rem' }}>
-        <h1 style={{ margin: 0, fontSize: '1.35rem' }}>Opening workspace</h1>
-        <p style={{ margin: 0, color: '#475569', lineHeight: 1.6 }}>
+    <main className="app-page-message">
+      <div className="app-page-message__content">
+        <h1 className="app-page-message__title">Opening workspace</h1>
+        <p className="app-page-message__body">
           Resolving the safe entry route for <code>{workspaceId}</code>.
         </p>
-        <p style={{ margin: 0, color: '#64748b' }}>
+        <p className="app-page-message__meta">
           Next route: <code>{nextRoute}</code>
         </p>
       </div>

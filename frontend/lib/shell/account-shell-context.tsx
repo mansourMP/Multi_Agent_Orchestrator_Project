@@ -5,17 +5,20 @@ import {
   createContext,
   useContext,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useReducer,
   useRef,
 } from 'react';
 import { usePathname } from 'next/navigation';
 
+import { AppThemeProvider } from '@/lib/ui/app-theme';
 import {
   type AccountShellBootstrap,
   type AccountShellState,
   createAccountShellSnapshot,
   createInitialAccountShellState,
+  reconcileAccountShellSnapshot,
   reduceAccountShellState,
   resolveWorkspaceNavigationTarget,
 } from '@/lib/shell/account-shell-store';
@@ -39,6 +42,42 @@ type AccountShellContextValue = {
 
 const AccountShellContext = createContext<AccountShellContextValue | null>(null);
 
+function normalizePersistedSnapshot(
+  persistedSnapshot: ReturnType<typeof readAccountShellSnapshot> | null | undefined,
+  session: AccountShellBootstrap | null,
+) {
+  if (!persistedSnapshot) {
+    return null;
+  }
+
+  if (!session) {
+    return {
+      accountId: null,
+      selectedWorkspaceId: null,
+      lastVisitedWorkspaceRouteById: {},
+      workspaceRouteStateById: {},
+      globalTheme: persistedSnapshot.globalTheme,
+      globalChromePreferences: persistedSnapshot.globalChromePreferences,
+    };
+  }
+
+  return reconcileAccountShellSnapshot(persistedSnapshot, session);
+}
+
+function createHydratedAccountShellState({
+  initialSession,
+  persistedSnapshot,
+}: {
+  initialSession: AccountShellBootstrap | null;
+  persistedSnapshot: ReturnType<typeof readAccountShellSnapshot> | null;
+}): AccountShellState {
+  return reduceAccountShellState(createInitialAccountShellState(), {
+    type: 'hydrate_session',
+    payload: initialSession,
+    persistedSnapshot: normalizePersistedSnapshot(persistedSnapshot, initialSession),
+  });
+}
+
 function extractWorkspaceIdFromPathname(pathname: string | null): string | null {
   if (!pathname) {
     return null;
@@ -57,24 +96,39 @@ export function AccountShellProvider({
   initialSession = null,
 }: PropsWithChildren<{ initialSession?: AccountShellBootstrap | null }>) {
   const persistedSnapshotRef = useRef<ReturnType<typeof readAccountShellSnapshot> | null>(null);
+  const persistedSnapshotLoadedRef = useRef(false);
 
-  if (persistedSnapshotRef.current === null && typeof window !== 'undefined') {
+  if (!persistedSnapshotLoadedRef.current && typeof window !== 'undefined') {
     persistedSnapshotRef.current = readAccountShellSnapshot();
+    persistedSnapshotLoadedRef.current = true;
   }
 
   const [state, dispatch] = useReducer(
     reduceAccountShellState,
-    undefined,
-    createInitialAccountShellState,
+    {
+      initialSession,
+      persistedSnapshot: persistedSnapshotRef.current,
+    },
+    createHydratedAccountShellState,
   );
 
   const pathname = usePathname();
 
+  useLayoutEffect(() => {
+    if (!initialSession || persistedSnapshotRef.current?.accountId === initialSession.account.id) {
+      return;
+    }
+    clearAccountShellSnapshot();
+    persistedSnapshotRef.current = normalizePersistedSnapshot(persistedSnapshotRef.current, initialSession);
+  }, [initialSession]);
+
   useEffect(() => {
+    const persistedSnapshot = normalizePersistedSnapshot(persistedSnapshotRef.current, initialSession);
+    persistedSnapshotRef.current = persistedSnapshot;
     dispatch({
       type: 'hydrate_session',
       payload: initialSession,
-      persistedSnapshot: persistedSnapshotRef.current,
+      persistedSnapshot,
     });
   }, [initialSession]);
 
@@ -104,13 +158,18 @@ export function AccountShellProvider({
         dispatch({ type: 'set_tenant_switcher_collapsed', collapsed });
       },
       replaceSession(session) {
+        persistedSnapshotRef.current = normalizePersistedSnapshot(
+          readAccountShellSnapshot() ?? persistedSnapshotRef.current,
+          session,
+        );
         dispatch({
           type: 'hydrate_session',
           payload: session,
-          persistedSnapshot: readAccountShellSnapshot(),
+          persistedSnapshot: persistedSnapshotRef.current,
         });
       },
       clearSession() {
+        persistedSnapshotRef.current = null;
         dispatch({ type: 'clear_session' });
       },
       resolveWorkspaceHref(workspaceId) {
@@ -128,7 +187,11 @@ export function AccountShellProvider({
     [actions, state],
   );
 
-  return <AccountShellContext.Provider value={value}>{children}</AccountShellContext.Provider>;
+  return (
+    <AccountShellContext.Provider value={value}>
+      <AppThemeProvider preference={state.globalTheme}>{children}</AppThemeProvider>
+    </AccountShellContext.Provider>
+  );
 }
 
 export function useAccountShell(): AccountShellContextValue {

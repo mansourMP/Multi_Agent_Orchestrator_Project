@@ -2,18 +2,129 @@ import 'server-only';
 
 import { NextRequest, NextResponse } from 'next/server';
 
+import {
+  AUTH_ACCESS_COOKIE_NAME,
+  AUTH_CSRF_COOKIE_NAME,
+  AUTH_CSRF_HEADER_NAME,
+  AUTH_REFRESH_COOKIE_NAME,
+  browserCsrfProtectedMethod,
+} from '@/lib/auth/csrf';
 import { controlPlaneBaseUrl } from '@/lib/server/control-plane-base-url';
 
-function copyIfPresent(
-  targetHeaders: Headers,
-  requestHeaders: Headers,
-  sourceName: string,
-  targetName: string = sourceName,
-): void {
-  const value = requestHeaders.get(sourceName);
-  if (value) {
-    targetHeaders.set(targetName, value);
+const HOP_BY_HOP_REQUEST_HEADERS = new Set([
+  'connection',
+  'content-length',
+  'host',
+  'keep-alive',
+  'proxy-authenticate',
+  'proxy-authorization',
+  'te',
+  'trailer',
+  'transfer-encoding',
+  'upgrade',
+]);
+
+const HOP_BY_HOP_RESPONSE_HEADERS = new Set([
+  'connection',
+  'content-length',
+  'content-encoding',
+  'keep-alive',
+  'proxy-authenticate',
+  'proxy-authorization',
+  'te',
+  'trailer',
+  'transfer-encoding',
+  'upgrade',
+]);
+
+function hasBrowserSessionCookie(request: NextRequest): boolean {
+  return Boolean(
+    request.cookies.get(AUTH_ACCESS_COOKIE_NAME)
+    || request.cookies.get(AUTH_REFRESH_COOKIE_NAME)
+    || request.cookies.get(AUTH_CSRF_COOKIE_NAME),
+  );
+}
+
+function validateBrowserCsrf(request: NextRequest): NextResponse | null {
+  if (!browserCsrfProtectedMethod(request.method)) {
+    return null;
   }
+  if (!hasBrowserSessionCookie(request)) {
+    return null;
+  }
+  const csrfCookie = request.cookies.get(AUTH_CSRF_COOKIE_NAME)?.value?.trim() || '';
+  const csrfHeader = request.headers.get(AUTH_CSRF_HEADER_NAME)?.trim() || '';
+  if (!csrfCookie || !csrfHeader || csrfCookie !== csrfHeader) {
+    return new NextResponse(JSON.stringify({ detail: 'CSRF validation failed.' }), {
+      status: 403,
+      headers: { 'content-type': 'application/json' },
+    });
+  }
+  return null;
+}
+
+function copyForwardableRequestHeaders(
+  request: NextRequest,
+  targetHeaders: Headers,
+  initHeaders?: HeadersInit,
+): void {
+  for (const [name, value] of request.headers.entries()) {
+    const normalizedName = name.toLowerCase();
+    if (HOP_BY_HOP_REQUEST_HEADERS.has(normalizedName)) {
+      continue;
+    }
+    targetHeaders.set(name, value);
+  }
+
+  if (!targetHeaders.has('x-forwarded-host')) {
+    const host = request.headers.get('host');
+    if (host) {
+      targetHeaders.set('x-forwarded-host', host);
+    }
+  }
+  if (!targetHeaders.has('x-forwarded-proto')) {
+    targetHeaders.set('x-forwarded-proto', request.nextUrl.protocol.replace(':', '') || 'http');
+  }
+
+  if (!initHeaders) {
+    return;
+  }
+
+  const overrideHeaders = new Headers(initHeaders);
+  for (const [name, value] of overrideHeaders.entries()) {
+    targetHeaders.set(name, value);
+  }
+}
+
+function copyForwardableResponseHeaders(response: Response): Headers {
+  const headers = new Headers();
+  for (const [name, value] of response.headers.entries()) {
+    const normalizedName = name.toLowerCase();
+    if (HOP_BY_HOP_RESPONSE_HEADERS.has(normalizedName) || normalizedName === 'set-cookie') {
+      continue;
+    }
+    headers.append(name, value);
+  }
+
+  const responseHeaders = response.headers as Headers & {
+    getSetCookie?: () => string[];
+  };
+  const setCookieValues =
+    typeof responseHeaders.getSetCookie === 'function'
+      ? responseHeaders.getSetCookie()
+      : [];
+  if (setCookieValues.length > 0) {
+    for (const cookie of setCookieValues) {
+      headers.append('set-cookie', cookie);
+    }
+  } else {
+    const setCookieHeader = response.headers.get('set-cookie');
+    if (setCookieHeader) {
+      headers.append('set-cookie', setCookieHeader);
+    }
+  }
+
+  return headers;
 }
 
 export async function forwardControlPlaneRequest(
@@ -21,24 +132,16 @@ export async function forwardControlPlaneRequest(
   upstreamPath: string,
   init: RequestInit = {},
 ): Promise<NextResponse> {
+  const csrfFailure = validateBrowserCsrf(request);
+  if (csrfFailure) {
+    return csrfFailure;
+  }
+
   const upstreamUrl = `${controlPlaneBaseUrl()}${upstreamPath}`;
-  const headers = new Headers(init.headers ?? {});
+  const headers = new Headers();
+  copyForwardableRequestHeaders(request, headers, init.headers);
 
-  copyIfPresent(headers, request.headers, 'accept');
-  copyIfPresent(headers, request.headers, 'authorization');
-  copyIfPresent(headers, request.headers, 'cookie');
-  copyIfPresent(headers, request.headers, 'content-type');
-  copyIfPresent(headers, request.headers, 'x-forwarded-host');
-  copyIfPresent(headers, request.headers, 'x-forwarded-proto');
-
-  if (!headers.has('x-forwarded-host')) {
-    copyIfPresent(headers, request.headers, 'host', 'x-forwarded-host');
-  }
-  if (!headers.has('x-forwarded-proto')) {
-    headers.set('x-forwarded-proto', request.nextUrl.protocol.replace(':', '') || 'https');
-  }
-
-  const bodyText =
+  const body =
     init.body !== undefined
       ? init.body
       : request.method === 'GET' || request.method === 'HEAD'
@@ -48,19 +151,13 @@ export async function forwardControlPlaneRequest(
   const response = await fetch(upstreamUrl, {
     method: init.method ?? request.method,
     cache: 'no-store',
+    redirect: 'manual',
     headers,
-    body: bodyText === '' ? undefined : bodyText,
+    body: body === '' ? undefined : body,
   });
 
-  const responseText = await response.text();
-  const responseHeaders = new Headers();
-  const contentType = response.headers.get('content-type');
-  if (contentType) {
-    responseHeaders.set('content-type', contentType);
-  }
-
-  return new NextResponse(responseText, {
+  return new NextResponse(response.body, {
     status: response.status,
-    headers: responseHeaders,
+    headers: copyForwardableResponseHeaders(response),
   });
 }

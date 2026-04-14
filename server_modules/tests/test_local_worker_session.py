@@ -334,7 +334,7 @@ class LocalWorkerSessionTests(TestCase):
 
         self.assertEqual(verified["runtime_id"], "worker-shadow")
         self.assertEqual(
-            registry["worker-shadow"]["session_scope_mismatch"]["current"]["workspace_id"],
+            verified["session_scope_mismatch"]["current"]["workspace_id"],
             "ws-2",
         )
 

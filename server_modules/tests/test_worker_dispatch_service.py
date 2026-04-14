@@ -205,6 +205,65 @@ class WorkerDispatchServiceTests(unittest.TestCase):
         self.assertEqual(runtime_state_persisted, [True])
         self.assertEqual(seen, [("worker-1", None, "idle", "completed_run")])
         self.assertEqual(events[1][2]["event"], "run_complete")
+        self.assertIsNone(run.get("usage_accounting"))
+
+    def test_complete_local_run_persists_usage_accounting_when_present(self) -> None:
+        run = {
+            "status": "running_local",
+            "logs": queue.Queue(),
+            "context": {"metadata": {}},
+        }
+        claimed_runs = {"run-1": {"worker_id": "worker-1"}}
+        usage_masked = {
+            "provider": "openai",
+            "model": "gpt-4.1",
+            "prompt_tokens": 100,
+            "completion_tokens": 25,
+            "total_tokens": 125,
+            "estimated_cost_usd": 0.0004,
+            "usage_accounting": {
+                "usage_record_id": "uacct_run-1",
+                "run_id": "run-1",
+                "tenant_id": "tenant-1",
+                "workspace_id": "ws-1",
+                "deployed_agent_id": None,
+                "source_surface": "durable_run",
+                "requested_provider": "openai",
+                "effective_provider": "openai",
+                "requested_model": "gpt-4.1",
+                "effective_model": "gpt-4.1",
+                "input_tokens": 100,
+                "output_tokens": 25,
+                "total_tokens": 125,
+                "estimated_cost_usd": 0.0004,
+                "pricing_known": True,
+                "pricing_registry_version": "2026-04-13",
+                "pricing_source": "https://platform.openai.com/pricing",
+                "estimation_mode": "provider_reported",
+                "completed_at": "2026-04-13T00:00:00Z",
+                "metadata": {},
+            },
+        }
+
+        result = worker_dispatch_service.complete_local_run(
+            "run-1",
+            worker_id="worker-1",
+            result_text="Completed locally",
+            result_data={"summary": "Completed locally"},
+            usage_masked=usage_masked,
+            runs_by_id={"run-1": run},
+            local_queue_lock=threading.Lock(),
+            claimed_runs=claimed_runs,
+            emit_log_fn=lambda *args, **kwargs: None,
+            mark_local_worker_seen_fn=lambda *args, **kwargs: None,
+            set_run_status_fn=lambda *args, **kwargs: None,
+            persist_run_memory_fn=lambda *args, **kwargs: None,
+            persist_local_runtime_state_fn=lambda: None,
+        )
+
+        self.assertEqual(result["status"], "ok")
+        self.assertEqual(run["usage_accounting"]["usage_record_id"], "uacct_run-1")
+        self.assertEqual(run["usage_accounting"]["effective_provider"], "openai")
 
     def test_heartbeat_local_worker_touches_durable_claim(self) -> None:
         touched = []

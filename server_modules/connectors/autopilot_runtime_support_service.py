@@ -190,4 +190,17 @@ class AutopilotRuntimeSupportService:
                 summary = self.friendly_run_error(latest_error)
         if not summary:
             summary = "Run finished."
+        context = run.get("context") if isinstance(run.get("context"), dict) else {}
+        metadata = context.get("metadata") if isinstance(context.get("metadata"), dict) else {}
+        from server_modules import healthguide_safety_service
+
+        safety_context = healthguide_safety_service.resolve_health_safety_context(metadata=metadata)
+        if safety_context.get("enabled"):
+            safety_result = healthguide_safety_service.apply_health_safety_to_reply(
+                reply=summary,
+                user_message=context.get("user_goal") or "",
+                assistant_name=str(safety_context.get("assistant_name") or "").strip() or None,
+                response_payload=run.get("result_data") if isinstance(run.get("result_data"), dict) else None,
+            )
+            summary = str(safety_result.get("reply") or summary).strip()
         return self.truncate_one_line(summary, summary_limit)

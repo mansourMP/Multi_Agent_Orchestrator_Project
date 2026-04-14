@@ -11,7 +11,7 @@ import time
 import uuid
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -107,6 +107,66 @@ CREATE TABLE IF NOT EXISTS workspace_memberships (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     UNIQUE(tenant_id, workspace_id, user_id)
 );
+
+CREATE TABLE IF NOT EXISTS workspace_member_invites (
+    id TEXT PRIMARY KEY,
+    tenant_id TEXT NOT NULL,
+    workspace_id TEXT NOT NULL,
+    email TEXT NOT NULL,
+    role TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending',
+    invited_by_user_id TEXT NULL,
+    accepted_by_user_id TEXT NULL,
+    metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    accepted_at TIMESTAMPTZ NULL,
+    revoked_at TIMESTAMPTZ NULL
+);
+
+CREATE TABLE IF NOT EXISTS workspace_billing_accounts (
+    id TEXT PRIMARY KEY,
+    tenant_id TEXT NOT NULL,
+    workspace_id TEXT NOT NULL UNIQUE,
+    provider TEXT NOT NULL DEFAULT 'stripe',
+    billing_email TEXT NULL,
+    provider_customer_id TEXT NULL,
+    default_currency TEXT NOT NULL DEFAULT 'usd',
+    status TEXT NOT NULL DEFAULT 'active',
+    metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS workspace_billing_subscriptions (
+    id TEXT PRIMARY KEY,
+    tenant_id TEXT NOT NULL,
+    workspace_id TEXT NOT NULL,
+    provider TEXT NOT NULL DEFAULT 'stripe',
+    plan_id TEXT NOT NULL DEFAULT 'free',
+    status TEXT NOT NULL DEFAULT 'active',
+    provider_subscription_id TEXT NULL,
+    provider_price_id TEXT NULL,
+    provider_product_id TEXT NULL,
+    provider_customer_id TEXT NULL,
+    checkout_session_id TEXT NULL,
+    checkout_url TEXT NULL,
+    portal_url TEXT NULL,
+    currency TEXT NOT NULL DEFAULT 'usd',
+    billing_interval TEXT NULL,
+    current_period_start TIMESTAMPTZ NULL,
+    current_period_end TIMESTAMPTZ NULL,
+    cancel_at_period_end BOOLEAN NOT NULL DEFAULT FALSE,
+    canceled_at TIMESTAMPTZ NULL,
+    trial_ends_at TIMESTAMPTZ NULL,
+    metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE(provider, provider_subscription_id)
+);
+
+CREATE INDEX IF NOT EXISTS workspace_billing_subscriptions_workspace_idx
+    ON workspace_billing_subscriptions (workspace_id, updated_at DESC);
 
 CREATE TABLE IF NOT EXISTS agent_threads (
     id TEXT PRIMARY KEY,
@@ -394,6 +454,186 @@ CREATE TABLE IF NOT EXISTS agent_runtime_profiles (
     UNIQUE(agent_install_id)
 );
 
+CREATE TABLE IF NOT EXISTS deployed_agents (
+    id TEXT PRIMARY KEY,
+    tenant_id TEXT NOT NULL,
+    owner_workspace_id TEXT NOT NULL,
+    backing_install_id TEXT NOT NULL REFERENCES workspace_agent_installs(id) ON DELETE CASCADE,
+    created_by_user_id TEXT NULL,
+    name TEXT NOT NULL,
+    avatar TEXT NULL,
+    persona TEXT NOT NULL DEFAULT '',
+    system_prompt TEXT NOT NULL DEFAULT '',
+    deployment_state TEXT NOT NULL DEFAULT 'draft',
+    channels JSONB NOT NULL DEFAULT '{}'::jsonb,
+    knowledge_sources JSONB NOT NULL DEFAULT '[]'::jsonb,
+    runtime_target TEXT NOT NULL DEFAULT 'cloud',
+    billing_plan TEXT NOT NULL DEFAULT 'free',
+    metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+    operational_state JSONB NOT NULL DEFAULT '{}'::jsonb,
+    last_deployed_at TIMESTAMPTZ NULL,
+    last_paused_at TIMESTAMPTZ NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE(backing_install_id)
+);
+
+ALTER TABLE deployed_agents
+ADD COLUMN IF NOT EXISTS operational_state JSONB NOT NULL DEFAULT '{}'::jsonb;
+
+CREATE TABLE IF NOT EXISTS deployed_agent_daily_message_usage (
+    id TEXT PRIMARY KEY,
+    tenant_id TEXT NOT NULL,
+    workspace_id TEXT NOT NULL,
+    deployed_agent_id TEXT NOT NULL REFERENCES deployed_agents(id) ON DELETE CASCADE,
+    channel_key TEXT NOT NULL,
+    external_user_id TEXT NOT NULL,
+    usage_day DATE NOT NULL,
+    message_count INTEGER NOT NULL DEFAULT 0,
+    metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+    last_message_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE(tenant_id, workspace_id, deployed_agent_id, channel_key, external_user_id, usage_day)
+);
+
+CREATE TABLE IF NOT EXISTS deployed_agent_monthly_cost_ledger (
+    id TEXT PRIMARY KEY,
+    tenant_id TEXT NOT NULL,
+    workspace_id TEXT NOT NULL,
+    deployed_agent_id TEXT NOT NULL REFERENCES deployed_agents(id) ON DELETE CASCADE,
+    usage_month DATE NOT NULL,
+    run_id TEXT NOT NULL,
+    run_status TEXT NOT NULL DEFAULT '',
+    provider TEXT NULL,
+    model TEXT NULL,
+    prompt_tokens INTEGER NOT NULL DEFAULT 0,
+    completion_tokens INTEGER NOT NULL DEFAULT 0,
+    total_tokens INTEGER NOT NULL DEFAULT 0,
+    estimated_cost_usd DOUBLE PRECISION NOT NULL DEFAULT 0,
+    completed_at TIMESTAMPTZ NULL,
+    metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE(tenant_id, workspace_id, deployed_agent_id, run_id)
+);
+
+CREATE TABLE IF NOT EXISTS channel_user_acquisition_touches (
+    id TEXT PRIMARY KEY,
+    tenant_id TEXT NOT NULL,
+    workspace_id TEXT NOT NULL,
+    deployed_agent_id TEXT NOT NULL REFERENCES deployed_agents(id) ON DELETE CASCADE,
+    channel_key TEXT NOT NULL,
+    endpoint_key TEXT NOT NULL DEFAULT '',
+    external_user_id TEXT NOT NULL,
+    source TEXT NOT NULL DEFAULT '',
+    campaign_token TEXT NOT NULL DEFAULT '',
+    start_count INTEGER NOT NULL DEFAULT 1,
+    metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+    converted_user_id TEXT NULL,
+    converted_email TEXT NULL,
+    converted_auth_flow TEXT NULL,
+    converted_at TIMESTAMPTZ NULL,
+    first_started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    last_started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE(tenant_id, workspace_id, deployed_agent_id, channel_key, external_user_id)
+);
+
+CREATE TABLE IF NOT EXISTS deployed_agent_conversation_memory (
+    id TEXT PRIMARY KEY,
+    tenant_id TEXT NOT NULL,
+    workspace_id TEXT NOT NULL,
+    deployed_agent_id TEXT NOT NULL REFERENCES deployed_agents(id) ON DELETE CASCADE,
+    channel_key TEXT NOT NULL,
+    external_user_id TEXT NOT NULL,
+    session_key TEXT NULL,
+    summary_text TEXT NOT NULL DEFAULT '',
+    recent_message_count INTEGER NOT NULL DEFAULT 0,
+    source_message_count INTEGER NOT NULL DEFAULT 0,
+    metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE(tenant_id, workspace_id, deployed_agent_id, channel_key, external_user_id)
+);
+
+CREATE TABLE IF NOT EXISTS external_user_privacy_requests (
+    id TEXT PRIMARY KEY,
+    tenant_id TEXT NOT NULL,
+    workspace_id TEXT NOT NULL,
+    deployed_agent_id TEXT NOT NULL REFERENCES deployed_agents(id) ON DELETE CASCADE,
+    channel_key TEXT NOT NULL,
+    external_user_id TEXT NOT NULL,
+    request_source TEXT NOT NULL DEFAULT '',
+    requested_via TEXT NOT NULL DEFAULT '',
+    session_key TEXT NULL,
+    requested_event_id TEXT NULL,
+    status TEXT NOT NULL DEFAULT 'requested',
+    note TEXT NOT NULL DEFAULT '',
+    metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+    first_requested_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    last_requested_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    completed_at TIMESTAMPTZ NULL,
+    completed_by_user_id TEXT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE(tenant_id, workspace_id, deployed_agent_id, channel_key, external_user_id)
+);
+
+CREATE TABLE IF NOT EXISTS external_user_privacy_delete_audits (
+    id TEXT PRIMARY KEY,
+    tenant_id TEXT NOT NULL,
+    workspace_id TEXT NOT NULL,
+    deployed_agent_id TEXT NOT NULL REFERENCES deployed_agents(id) ON DELETE CASCADE,
+    channel_key TEXT NOT NULL,
+    external_user_id TEXT NOT NULL,
+    request_id TEXT NULL REFERENCES external_user_privacy_requests(id) ON DELETE SET NULL,
+    actor_user_id TEXT NULL,
+    operation TEXT NOT NULL DEFAULT 'purge',
+    status TEXT NOT NULL DEFAULT 'completed',
+    deleted_channel_event_count INTEGER NOT NULL DEFAULT 0,
+    deleted_memory_count INTEGER NOT NULL DEFAULT 0,
+    deleted_daily_usage_count INTEGER NOT NULL DEFAULT 0,
+    deleted_acquisition_touch_count INTEGER NOT NULL DEFAULT 0,
+    metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS agent_traces (
+    id TEXT PRIMARY KEY,
+    tenant_id TEXT NOT NULL,
+    workspace_id TEXT NOT NULL,
+    thread_id TEXT NULL REFERENCES agent_threads(id) ON DELETE SET NULL,
+    run_id TEXT NULL,
+    root_agent_id TEXT NOT NULL,
+    surface TEXT NOT NULL,
+    runtime_target TEXT NOT NULL DEFAULT '',
+    provider TEXT NOT NULL DEFAULT '',
+    model TEXT NOT NULL DEFAULT '',
+    started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    finished_at TIMESTAMPTZ NULL,
+    outcome TEXT NULL,
+    final_message_id TEXT NULL
+);
+
+CREATE TABLE IF NOT EXISTS agent_trace_events (
+    id TEXT PRIMARY KEY,
+    trace_id TEXT NOT NULL REFERENCES agent_traces(id) ON DELETE CASCADE,
+    seq INTEGER NOT NULL,
+    parent_id TEXT NULL,
+    ts TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    event_type TEXT NOT NULL,
+    persisted BOOLEAN NOT NULL DEFAULT TRUE,
+    agent_id TEXT NOT NULL,
+    item_id TEXT NULL,
+    tool_call_id TEXT NULL,
+    child_run_id TEXT NULL,
+    approval_id TEXT NULL,
+    artifact_id TEXT NULL,
+    payload JSONB NOT NULL DEFAULT '{}'::jsonb
+);
+
 CREATE TABLE IF NOT EXISTS personal_context_events (
     id TEXT PRIMARY KEY,
     tenant_id TEXT NOT NULL,
@@ -600,6 +840,8 @@ ALTER TABLE workspace_agent_installs
 
 CREATE INDEX IF NOT EXISTS idx_users_workspace ON users(tenant_id, workspace_id);
 CREATE INDEX IF NOT EXISTS idx_workspace_memberships_user ON workspace_memberships(user_id, tenant_id, workspace_id);
+CREATE INDEX IF NOT EXISTS idx_workspace_member_invites_workspace_created ON workspace_member_invites(tenant_id, workspace_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_workspace_member_invites_email_status ON workspace_member_invites(lower(email), status, updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_workspaces_tenant ON workspaces(tenant_id, workspace_id);
 CREATE INDEX IF NOT EXISTS idx_threads_workspace_updated ON agent_threads(tenant_id, workspace_id, updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_agent_threads_master_install ON agent_threads(tenant_id, workspace_id, master_agent_install_id);
@@ -631,6 +873,36 @@ CREATE INDEX IF NOT EXISTS idx_agent_skill_bindings_install ON agent_skill_bindi
 CREATE INDEX IF NOT EXISTS idx_agent_connector_bindings_install ON agent_connector_bindings(tenant_id, workspace_id, agent_install_id, enabled);
 CREATE INDEX IF NOT EXISTS idx_agent_channel_bindings_install ON agent_channel_bindings(tenant_id, workspace_id, agent_install_id, enabled);
 CREATE INDEX IF NOT EXISTS idx_agent_runtime_profiles_install ON agent_runtime_profiles(tenant_id, workspace_id, agent_install_id);
+CREATE INDEX IF NOT EXISTS idx_deployed_agents_workspace_created ON deployed_agents(tenant_id, owner_workspace_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_deployed_agents_backing_install ON deployed_agents(tenant_id, backing_install_id);
+CREATE INDEX IF NOT EXISTS idx_deployed_agents_workspace_state ON deployed_agents(tenant_id, owner_workspace_id, deployment_state);
+CREATE INDEX IF NOT EXISTS idx_deployed_agent_daily_message_usage_scope_day
+    ON deployed_agent_daily_message_usage(tenant_id, workspace_id, deployed_agent_id, usage_day DESC);
+CREATE INDEX IF NOT EXISTS idx_deployed_agent_daily_message_usage_external_user
+    ON deployed_agent_daily_message_usage(tenant_id, workspace_id, channel_key, external_user_id, usage_day DESC);
+CREATE INDEX IF NOT EXISTS idx_deployed_agent_monthly_cost_ledger_scope_month
+    ON deployed_agent_monthly_cost_ledger(tenant_id, workspace_id, deployed_agent_id, usage_month DESC);
+CREATE INDEX IF NOT EXISTS idx_deployed_agent_monthly_cost_ledger_run
+    ON deployed_agent_monthly_cost_ledger(tenant_id, workspace_id, run_id);
+CREATE INDEX IF NOT EXISTS idx_channel_user_acquisition_touches_deployment
+    ON channel_user_acquisition_touches(tenant_id, workspace_id, deployed_agent_id, last_started_at DESC);
+CREATE INDEX IF NOT EXISTS idx_channel_user_acquisition_touches_conversion
+    ON channel_user_acquisition_touches(tenant_id, workspace_id, converted_user_id, converted_at DESC);
+CREATE INDEX IF NOT EXISTS idx_deployed_agent_conversation_memory_scope
+    ON deployed_agent_conversation_memory(tenant_id, workspace_id, deployed_agent_id, channel_key, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_deployed_agent_conversation_memory_external_user
+    ON deployed_agent_conversation_memory(tenant_id, workspace_id, channel_key, external_user_id, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_external_user_privacy_requests_scope
+    ON external_user_privacy_requests(tenant_id, workspace_id, deployed_agent_id, channel_key, last_requested_at DESC);
+CREATE INDEX IF NOT EXISTS idx_external_user_privacy_requests_status
+    ON external_user_privacy_requests(tenant_id, workspace_id, status, last_requested_at DESC);
+CREATE INDEX IF NOT EXISTS idx_external_user_privacy_delete_audits_scope
+    ON external_user_privacy_delete_audits(tenant_id, workspace_id, deployed_agent_id, channel_key, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_agent_traces_trace_seq ON agent_trace_events(trace_id, seq);
+CREATE INDEX IF NOT EXISTS idx_agent_traces_workspace_started ON agent_traces(workspace_id, started_at DESC);
+CREATE INDEX IF NOT EXISTS idx_agent_traces_run ON agent_traces(run_id);
+CREATE INDEX IF NOT EXISTS idx_agent_trace_events_tool_call ON agent_trace_events(tool_call_id);
+CREATE INDEX IF NOT EXISTS idx_agent_trace_events_type ON agent_trace_events(event_type);
 CREATE INDEX IF NOT EXISTS idx_personal_context_events_scope_created ON personal_context_events(tenant_id, workspace_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_personal_context_events_unseen ON personal_context_events(tenant_id, workspace_id, seen_by_sage_at, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_personal_context_events_type_source ON personal_context_events(tenant_id, workspace_id, event_type, source_app, created_at DESC);
@@ -866,11 +1138,23 @@ def _utc_now_ts() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def _iso(value: Any) -> Optional[str]:
+    timestamp = _coerce_timestamptz(value)
+    if timestamp is None:
+        return None
+    return timestamp.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
 def _coerce_timestamptz(value: Any) -> Optional[datetime]:
     if value is None:
         return None
     if isinstance(value, datetime):
         return value.astimezone(timezone.utc) if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
+    if isinstance(value, (int, float)):
+        try:
+            return datetime.fromtimestamp(float(value), tz=timezone.utc)
+        except (TypeError, ValueError, OSError):
+            return None
     token = str(value or "").strip()
     if not token:
         return None
@@ -879,6 +1163,31 @@ def _coerce_timestamptz(value: Any) -> Optional[datetime]:
     except ValueError:
         return None
     return parsed.astimezone(timezone.utc) if parsed.tzinfo is not None else parsed.replace(tzinfo=timezone.utc)
+
+
+def _coerce_date(value: Any) -> Optional[date]:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        if value.tzinfo is not None:
+            return value.astimezone(timezone.utc).date()
+        return value.date()
+    if isinstance(value, date):
+        return value
+    token = str(value or "").strip()
+    if not token:
+        return None
+    try:
+        return date.fromisoformat(token)
+    except ValueError:
+        return None
+
+
+def _coerce_month_start_date(value: Any) -> Optional[date]:
+    resolved = _coerce_date(value)
+    if resolved is None:
+        return None
+    return resolved.replace(day=1)
 
 
 def _slugify(value: str, fallback: str) -> str:
@@ -893,6 +1202,688 @@ def _coerce_dict(value: Any) -> Dict[str, Any]:
 def _to_json(value: Any, *, default: Any) -> str:
     payload = value if value is not None else default
     return json.dumps(payload, ensure_ascii=False, separators=(",", ":"), default=str)
+
+
+def _decode_json_object(raw: Any) -> Dict[str, Any]:
+    if isinstance(raw, dict):
+        return dict(raw)
+    token = str(raw or "").strip()
+    if not token:
+        return {}
+    try:
+        parsed = json.loads(token)
+    except Exception:
+        return {}
+    return dict(parsed) if isinstance(parsed, dict) else {}
+
+
+def _decode_json_array(raw: Any) -> List[Any]:
+    if isinstance(raw, list):
+        return list(raw)
+    token = str(raw or "").strip()
+    if not token:
+        return []
+    try:
+        parsed = json.loads(token)
+    except Exception:
+        return []
+    return list(parsed) if isinstance(parsed, list) else []
+
+
+def _row_to_deployed_agent(row: Any) -> Optional[Dict[str, Any]]:
+    if row is None:
+        return None
+    payload = dict(row)
+    return {
+        "id": str(payload.get("id") or "").strip(),
+        "tenant_id": str(payload.get("tenant_id") or "").strip() or None,
+        "owner_workspace_id": str(payload.get("owner_workspace_id") or "").strip() or None,
+        "backing_install_id": str(payload.get("backing_install_id") or "").strip() or None,
+        "created_by_user_id": str(payload.get("created_by_user_id") or "").strip() or None,
+        "name": str(payload.get("name") or "").strip(),
+        "avatar": str(payload.get("avatar") or "").strip() or None,
+        "persona": str(payload.get("persona") or "").strip(),
+        "system_prompt": str(payload.get("system_prompt") or "").strip(),
+        "deployment_state": str(payload.get("deployment_state") or "").strip().lower() or "draft",
+        "channels": _decode_json_object(payload.get("channels")),
+        "knowledge_sources": _decode_json_array(payload.get("knowledge_sources")),
+        "runtime_target": str(payload.get("runtime_target") or "").strip() or "cloud",
+        "billing_plan": str(payload.get("billing_plan") or "").strip() or "free",
+        "metadata": _decode_json_object(payload.get("metadata")),
+        "operational_state": _decode_json_object(payload.get("operational_state")),
+        "last_deployed_at": _iso(payload.get("last_deployed_at")),
+        "last_paused_at": _iso(payload.get("last_paused_at")),
+        "created_at": _iso(payload.get("created_at")),
+        "updated_at": _iso(payload.get("updated_at")),
+    }
+
+
+def _row_to_deployed_agent_daily_message_usage(row: Any) -> Optional[Dict[str, Any]]:
+    if row is None:
+        return None
+    payload = dict(row)
+    usage_day = payload.get("usage_day")
+    return {
+        "id": str(payload.get("id") or "").strip(),
+        "tenant_id": str(payload.get("tenant_id") or "").strip() or None,
+        "workspace_id": str(payload.get("workspace_id") or "").strip() or None,
+        "deployed_agent_id": str(payload.get("deployed_agent_id") or "").strip() or None,
+        "channel_key": str(payload.get("channel_key") or "").strip().lower() or None,
+        "external_user_id": str(payload.get("external_user_id") or "").strip() or None,
+        "usage_day": usage_day.isoformat() if isinstance(usage_day, date) else str(usage_day or "").strip() or None,
+        "message_count": int(payload.get("message_count") or 0),
+        "metadata": _decode_json_object(payload.get("metadata")),
+        "last_message_at": _iso(payload.get("last_message_at")),
+        "created_at": _iso(payload.get("created_at")),
+        "updated_at": _iso(payload.get("updated_at")),
+        "quota_consumed": bool(payload.get("quota_consumed")),
+    }
+
+
+def _row_to_deployed_agent_monthly_cost_ledger_entry(row: Any) -> Optional[Dict[str, Any]]:
+    if row is None:
+        return None
+    payload = dict(row)
+    usage_month = payload.get("usage_month")
+    return {
+        "id": str(payload.get("id") or "").strip(),
+        "tenant_id": str(payload.get("tenant_id") or "").strip() or None,
+        "workspace_id": str(payload.get("workspace_id") or "").strip() or None,
+        "deployed_agent_id": str(payload.get("deployed_agent_id") or "").strip() or None,
+        "usage_month": usage_month.isoformat() if isinstance(usage_month, date) else str(usage_month or "").strip() or None,
+        "run_id": str(payload.get("run_id") or "").strip() or None,
+        "run_status": str(payload.get("run_status") or "").strip().lower() or None,
+        "provider": str(payload.get("provider") or "").strip().lower() or None,
+        "model": str(payload.get("model") or "").strip() or None,
+        "prompt_tokens": int(payload.get("prompt_tokens") or 0),
+        "completion_tokens": int(payload.get("completion_tokens") or 0),
+        "total_tokens": int(payload.get("total_tokens") or 0),
+        "estimated_cost_usd": round(float(payload.get("estimated_cost_usd") or 0.0), 6),
+        "completed_at": _iso(payload.get("completed_at")),
+        "metadata": _decode_json_object(payload.get("metadata")),
+        "created_at": _iso(payload.get("created_at")),
+        "updated_at": _iso(payload.get("updated_at")),
+    }
+
+
+def _row_to_deployed_agent_activity_rollup(row: Any) -> Optional[Dict[str, Any]]:
+    if row is None:
+        return None
+    payload = dict(row)
+    return {
+        "deployed_agent_id": str(payload.get("deployed_agent_id") or "").strip() or None,
+        "active_users_30d": int(payload.get("active_users_30d") or 0),
+        "session_count_30d": int(payload.get("session_count_30d") or 0),
+        "message_count_day": int(payload.get("message_count_day") or 0),
+        "message_count_week": int(payload.get("message_count_week") or 0),
+        "message_count_month": int(payload.get("message_count_month") or 0),
+        "latest_message_at": _iso(payload.get("latest_message_at")),
+    }
+
+
+def _row_to_deployed_agent_session_analytics(row: Any) -> Optional[Dict[str, Any]]:
+    if row is None:
+        return None
+    payload = dict(row)
+    return {
+        "session_id": str(payload.get("session_id") or "").strip() or None,
+        "latest_run_id": str(payload.get("latest_run_id") or "").strip() or None,
+        "had_escalation": bool(payload.get("had_escalation")),
+        "latest_outcome": str(payload.get("latest_outcome") or "").strip().lower() or None,
+        "last_activity_at": _iso(payload.get("last_activity_at")),
+    }
+
+
+def _row_to_channel_user_acquisition_touch(row: Any) -> Optional[Dict[str, Any]]:
+    if row is None:
+        return None
+    payload = dict(row)
+    return {
+        "id": str(payload.get("id") or "").strip(),
+        "tenant_id": str(payload.get("tenant_id") or "").strip() or None,
+        "workspace_id": str(payload.get("workspace_id") or "").strip() or None,
+        "deployed_agent_id": str(payload.get("deployed_agent_id") or "").strip() or None,
+        "channel_key": str(payload.get("channel_key") or "").strip().lower() or None,
+        "endpoint_key": str(payload.get("endpoint_key") or "").strip().lower() or None,
+        "external_user_id": str(payload.get("external_user_id") or "").strip() or None,
+        "source": str(payload.get("source") or "").strip() or None,
+        "campaign_token": str(payload.get("campaign_token") or "").strip() or None,
+        "start_count": int(payload.get("start_count") or 0),
+        "metadata": _decode_json_object(payload.get("metadata")),
+        "converted_user_id": str(payload.get("converted_user_id") or "").strip() or None,
+        "converted_email": str(payload.get("converted_email") or "").strip().lower() or None,
+        "converted_auth_flow": str(payload.get("converted_auth_flow") or "").strip().lower() or None,
+        "converted_at": _iso(payload.get("converted_at")),
+        "first_started_at": _iso(payload.get("first_started_at")),
+        "last_started_at": _iso(payload.get("last_started_at")),
+        "created_at": _iso(payload.get("created_at")),
+        "updated_at": _iso(payload.get("updated_at")),
+    }
+
+
+def _row_to_deployed_agent_conversation_memory(row: Any) -> Optional[Dict[str, Any]]:
+    if row is None:
+        return None
+    payload = dict(row)
+    return {
+        "id": str(payload.get("id") or "").strip(),
+        "tenant_id": str(payload.get("tenant_id") or "").strip() or None,
+        "workspace_id": str(payload.get("workspace_id") or "").strip() or None,
+        "deployed_agent_id": str(payload.get("deployed_agent_id") or "").strip() or None,
+        "channel_key": str(payload.get("channel_key") or "").strip().lower() or None,
+        "external_user_id": str(payload.get("external_user_id") or "").strip() or None,
+        "session_key": str(payload.get("session_key") or "").strip() or None,
+        "summary_text": str(payload.get("summary_text") or "").strip(),
+        "recent_message_count": int(payload.get("recent_message_count") or 0),
+        "source_message_count": int(payload.get("source_message_count") or 0),
+        "metadata": _decode_json_object(payload.get("metadata")),
+        "created_at": _iso(payload.get("created_at")),
+        "updated_at": _iso(payload.get("updated_at")),
+    }
+
+
+def _row_to_external_user_privacy_request(row: Any) -> Optional[Dict[str, Any]]:
+    if row is None:
+        return None
+    payload = dict(row)
+    return {
+        "id": str(payload.get("id") or "").strip(),
+        "tenant_id": str(payload.get("tenant_id") or "").strip() or None,
+        "workspace_id": str(payload.get("workspace_id") or "").strip() or None,
+        "deployed_agent_id": str(payload.get("deployed_agent_id") or "").strip() or None,
+        "channel_key": str(payload.get("channel_key") or "").strip().lower() or None,
+        "external_user_id": str(payload.get("external_user_id") or "").strip() or None,
+        "request_source": str(payload.get("request_source") or "").strip().lower() or None,
+        "requested_via": str(payload.get("requested_via") or "").strip().lower() or None,
+        "session_key": str(payload.get("session_key") or "").strip() or None,
+        "requested_event_id": str(payload.get("requested_event_id") or "").strip() or None,
+        "status": str(payload.get("status") or "").strip().lower() or None,
+        "note": str(payload.get("note") or "").strip(),
+        "metadata": _decode_json_object(payload.get("metadata")),
+        "first_requested_at": _iso(payload.get("first_requested_at")),
+        "last_requested_at": _iso(payload.get("last_requested_at")),
+        "completed_at": _iso(payload.get("completed_at")),
+        "completed_by_user_id": str(payload.get("completed_by_user_id") or "").strip() or None,
+        "created_at": _iso(payload.get("created_at")),
+        "updated_at": _iso(payload.get("updated_at")),
+    }
+
+
+def _row_to_external_user_privacy_delete_audit(row: Any) -> Optional[Dict[str, Any]]:
+    if row is None:
+        return None
+    payload = dict(row)
+    return {
+        "id": str(payload.get("id") or "").strip(),
+        "tenant_id": str(payload.get("tenant_id") or "").strip() or None,
+        "workspace_id": str(payload.get("workspace_id") or "").strip() or None,
+        "deployed_agent_id": str(payload.get("deployed_agent_id") or "").strip() or None,
+        "channel_key": str(payload.get("channel_key") or "").strip().lower() or None,
+        "external_user_id": str(payload.get("external_user_id") or "").strip() or None,
+        "request_id": str(payload.get("request_id") or "").strip() or None,
+        "actor_user_id": str(payload.get("actor_user_id") or "").strip() or None,
+        "operation": str(payload.get("operation") or "").strip().lower() or None,
+        "status": str(payload.get("status") or "").strip().lower() or None,
+        "deleted_channel_event_count": int(payload.get("deleted_channel_event_count") or 0),
+        "deleted_memory_count": int(payload.get("deleted_memory_count") or 0),
+        "deleted_daily_usage_count": int(payload.get("deleted_daily_usage_count") or 0),
+        "deleted_acquisition_touch_count": int(payload.get("deleted_acquisition_touch_count") or 0),
+        "metadata": _decode_json_object(payload.get("metadata")),
+        "created_at": _iso(payload.get("created_at")),
+    }
+
+
+def _row_to_agent_trace(row: Any) -> Optional[Dict[str, Any]]:
+    if row is None:
+        return None
+    payload = dict(row)
+    return {
+        "id": str(payload.get("id") or "").strip(),
+        "tenant_id": str(payload.get("tenant_id") or "").strip() or None,
+        "workspace_id": str(payload.get("workspace_id") or "").strip() or None,
+        "thread_id": str(payload.get("thread_id") or "").strip() or None,
+        "run_id": str(payload.get("run_id") or "").strip() or None,
+        "root_agent_id": str(payload.get("root_agent_id") or "").strip() or None,
+        "surface": str(payload.get("surface") or "").strip().lower() or None,
+        "runtime_target": str(payload.get("runtime_target") or "").strip() or None,
+        "provider": str(payload.get("provider") or "").strip() or None,
+        "model": str(payload.get("model") or "").strip() or None,
+        "started_at": _iso(payload.get("started_at")),
+        "finished_at": _iso(payload.get("finished_at")),
+        "outcome": str(payload.get("outcome") or "").strip().lower() or None,
+        "final_message_id": str(payload.get("final_message_id") or "").strip() or None,
+    }
+
+
+def _row_to_agent_trace_event(row: Any) -> Optional[Dict[str, Any]]:
+    if row is None:
+        return None
+    payload = dict(row)
+    return {
+        "id": str(payload.get("id") or "").strip(),
+        "trace_id": str(payload.get("trace_id") or "").strip() or None,
+        "seq": int(payload.get("seq") or 0),
+        "parent_id": str(payload.get("parent_id") or "").strip() or None,
+        "ts": _iso(payload.get("ts")),
+        "event_type": str(payload.get("event_type") or "").strip() or None,
+        "persisted": bool(payload.get("persisted")),
+        "agent_id": str(payload.get("agent_id") or "").strip() or None,
+        "item_id": str(payload.get("item_id") or "").strip() or None,
+        "tool_call_id": str(payload.get("tool_call_id") or "").strip() or None,
+        "child_run_id": str(payload.get("child_run_id") or "").strip() or None,
+        "approval_id": str(payload.get("approval_id") or "").strip() or None,
+        "artifact_id": str(payload.get("artifact_id") or "").strip() or None,
+        "payload": _decode_json_object(payload.get("payload")),
+    }
+
+
+def _row_to_agent_channel_event(row: Any) -> Optional[Dict[str, Any]]:
+    if row is None:
+        return None
+    payload = dict(row)
+    return {
+        "id": str(payload.get("id") or "").strip(),
+        "tenant_id": str(payload.get("tenant_id") or "").strip() or None,
+        "workspace_id": str(payload.get("workspace_id") or "").strip() or None,
+        "channel_key": str(payload.get("channel_key") or "").strip().lower() or None,
+        "endpoint_key": str(payload.get("endpoint_key") or "").strip().lower() or None,
+        "session_key": str(payload.get("session_key") or "").strip() or None,
+        "thread_id": str(payload.get("thread_id") or "").strip() or None,
+        "responder_install_id": str(payload.get("responder_install_id") or "").strip() or None,
+        "direction": str(payload.get("direction") or "").strip().lower() or None,
+        "event_type": str(payload.get("event_type") or "").strip().lower() or None,
+        "message_id": str(payload.get("message_id") or "").strip() or None,
+        "parent_event_id": str(payload.get("parent_event_id") or "").strip() or None,
+        "run_id": str(payload.get("run_id") or "").strip() or None,
+        "actor": _decode_json_object(payload.get("actor")),
+        "text": str(payload.get("text") or ""),
+        "payload": _decode_json_object(payload.get("payload")),
+        "metadata": _decode_json_object(payload.get("metadata")),
+        "status": str(payload.get("status") or "").strip().lower() or None,
+        "created_at": _iso(payload.get("created_at")),
+        "updated_at": _iso(payload.get("updated_at")),
+    }
+
+
+def _row_to_deployed_agent_conversation_summary(row: Any) -> Optional[Dict[str, Any]]:
+    if row is None:
+        return None
+    payload = dict(row)
+    return {
+        "session_id": str(payload.get("session_id") or "").strip() or None,
+        "channel": str(payload.get("channel") or "").strip().lower() or None,
+        "endpoint_key": str(payload.get("endpoint_key") or "").strip().lower() or None,
+        "thread_id": str(payload.get("thread_id") or "").strip() or None,
+        "latest_run_id": str(payload.get("latest_run_id") or "").strip() or None,
+        "last_message": str(payload.get("last_message") or "").strip() or None,
+        "last_message_at": _iso(payload.get("last_message_at")),
+        "customer_actor": _decode_json_object(payload.get("customer_actor")),
+    }
+
+
+def _normalize_workspace_type(value: Any, *, default: str = "personal") -> str:
+    token = str(value or "").strip().lower()
+    if token in {"personal", "professional", "team", "shared"}:
+        return token
+    fallback = str(default or "personal").strip().lower()
+    return fallback if fallback in {"personal", "professional", "team", "shared"} else "personal"
+
+
+def _workspace_shell_metadata(
+    metadata: Optional[Dict[str, Any]],
+    *,
+    preferred_shell_profile: Optional[str] = None,
+    default_route: Optional[str] = None,
+    setup_completed: Optional[bool] = None,
+) -> Dict[str, Any]:
+    next_metadata = _coerce_dict(metadata)
+    shell = _coerce_dict(next_metadata.get("shell"))
+    if preferred_shell_profile is not None:
+        token = str(preferred_shell_profile or "").strip()
+        if token:
+            shell["preferredProfile"] = token
+        else:
+            shell.pop("preferredProfile", None)
+    if default_route is not None:
+        token = str(default_route or "").strip()
+        if token:
+            shell["defaultRoute"] = token
+        else:
+            shell.pop("defaultRoute", None)
+    if setup_completed is not None:
+        shell["setupCompleted"] = bool(setup_completed)
+    next_metadata["shell"] = shell
+    return next_metadata
+
+
+def _extract_workspace_id_from_route(route: Any) -> Optional[str]:
+    token = str(route or "").strip()
+    if not token.startswith("/w/"):
+        return None
+    suffix = token[3:]
+    workspace_token = suffix.split("/", 1)[0].strip()
+    return workspace_token or None
+
+
+def _normalize_workspace_default_route(workspace_id: str, route: Any) -> str:
+    clean_workspace_id = str(workspace_id or "").strip()
+    clean_route = str(route or "").strip()
+    fallback_route = f"/w/{clean_workspace_id}/chat" if clean_workspace_id else "/chat"
+    if not clean_workspace_id:
+        return fallback_route
+    if not clean_route or not clean_route.startswith("/") or clean_route.startswith("//"):
+        return fallback_route
+    route_workspace_id = _extract_workspace_id_from_route(clean_route)
+    if clean_route.startswith("/w/") and route_workspace_id is None:
+        return fallback_route
+    if route_workspace_id and route_workspace_id != clean_workspace_id:
+        return fallback_route
+    normalized_route = clean_route if route_workspace_id else f"/w/{clean_workspace_id}{clean_route}"
+    if normalized_route == f"/w/{clean_workspace_id}/dashboard":
+        return f"/w/{clean_workspace_id}/admin"
+    if normalized_route.endswith("/dashboard") and _extract_workspace_id_from_route(normalized_route) == clean_workspace_id:
+        return normalized_route[:-10] + "/admin"
+    return normalized_route
+
+
+def _local_workspace_record_from_row(row: Any) -> Optional[Dict[str, Any]]:
+    if row is None:
+        return None
+    workspace_id = str(row["workspace_id"] or "").strip()
+    tenant_id = str(row["tenant_id"] or "").strip() or None
+    metadata = _decode_json_object(row["metadata_json"])
+    name = str(row["name"] or "").strip() or workspace_id
+    return {
+        "id": workspace_id,
+        "tenant_id": tenant_id,
+        "workspace_id": workspace_id,
+        "slug": workspace_id,
+        "name": name,
+        "workspace_type": _normalize_workspace_type(row["workspace_type"], default="personal"),
+        "status": "active",
+        "created_by_user_id": None,
+        "metadata": metadata,
+        "created_at": int(row["created_at"]) if row["created_at"] is not None else None,
+        "updated_at": int(row["updated_at"]) if row["updated_at"] is not None else None,
+    }
+
+
+def _ts_or_none(value: Any) -> Optional[int]:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return int(value.timestamp())
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _local_workspace_billing_account_from_row(row: Any) -> Optional[Dict[str, Any]]:
+    if row is None:
+        return None
+    keys = set(row.keys()) if hasattr(row, "keys") else set()
+    raw_metadata = (
+        row["metadata_json"] if "metadata_json" in keys
+        else row["metadata"] if "metadata" in keys
+        else row.get("metadata_json") if isinstance(row, dict)
+        else row.get("metadata") if isinstance(row, dict)
+        else {}
+    )
+    return {
+        "workspace_id": str(row["workspace_id"] or "").strip(),
+        "tenant_id": str(row["tenant_id"] or "").strip() or None,
+        "provider": str(row["provider"] or "stripe").strip() or "stripe",
+        "billing_email": str(row["billing_email"] or "").strip().lower() or None,
+        "provider_customer_id": str(row["provider_customer_id"] or "").strip() or None,
+        "default_currency": str(row["default_currency"] or "usd").strip().lower() or "usd",
+        "status": str(row["status"] or "active").strip().lower() or "active",
+        "metadata": _decode_json_object(raw_metadata),
+        "created_at": _ts_or_none(row["created_at"]),
+        "updated_at": _ts_or_none(row["updated_at"]),
+    }
+
+
+def _billing_row_metadata(row: Any) -> Dict[str, Any]:
+    if row is None:
+        return {}
+    keys = set(row.keys()) if hasattr(row, "keys") else set()
+    raw = (
+        row["metadata_json"] if "metadata_json" in keys
+        else row["metadata"] if "metadata" in keys
+        else row.get("metadata_json") if isinstance(row, dict)
+        else row.get("metadata") if isinstance(row, dict)
+        else {}
+    )
+    return _decode_json_object(raw)
+
+
+def _workspace_billing_subscription_from_row(row: Any) -> Optional[Dict[str, Any]]:
+    if row is None:
+        return None
+    return {
+        "id": str(row["id"] or "").strip(),
+        "workspace_id": str(row["workspace_id"] or "").strip(),
+        "tenant_id": str(row["tenant_id"] or "").strip() or None,
+        "provider": str(row["provider"] or "stripe").strip() or "stripe",
+        "plan_id": str(row["plan_id"] or "free").strip().lower() or "free",
+        "status": str(row["status"] or "active").strip().lower() or "active",
+        "provider_subscription_id": str(row["provider_subscription_id"] or "").strip() or None,
+        "provider_price_id": str(row["provider_price_id"] or "").strip() or None,
+        "provider_product_id": str(row["provider_product_id"] or "").strip() or None,
+        "provider_customer_id": str(row["provider_customer_id"] or "").strip() or None,
+        "checkout_session_id": str(row["checkout_session_id"] or "").strip() or None,
+        "checkout_url": str(row["checkout_url"] or "").strip() or None,
+        "portal_url": str(row["portal_url"] or "").strip() or None,
+        "currency": str(row["currency"] or "usd").strip().lower() or "usd",
+        "billing_interval": str(row["billing_interval"] or "").strip().lower() or None,
+        "current_period_start": _ts_or_none(row["current_period_start"]),
+        "current_period_end": _ts_or_none(row["current_period_end"]),
+        "cancel_at_period_end": bool(row["cancel_at_period_end"]),
+        "canceled_at": _ts_or_none(row["canceled_at"]),
+        "trial_ends_at": _ts_or_none(row["trial_ends_at"]),
+        "metadata": _billing_row_metadata(row),
+        "created_at": _ts_or_none(row["created_at"]),
+        "updated_at": _ts_or_none(row["updated_at"]),
+    }
+
+
+def _upsert_local_workspace_registry(
+    connection: sqlite3.Connection,
+    *,
+    workspace_id: str,
+    tenant_id: str,
+    name: Optional[str] = None,
+    workspace_type: Optional[str] = None,
+    metadata: Optional[Dict[str, Any]] = None,
+    created_at_ts: Optional[int] = None,
+) -> None:
+    clean_workspace_id = str(workspace_id or "").strip()
+    clean_tenant_id = str(tenant_id or "").strip()
+    if not clean_workspace_id or not clean_tenant_id:
+        return
+    existing = connection.execute(
+        """
+        SELECT workspace_id, tenant_id, name, workspace_type, metadata_json, created_at, updated_at
+        FROM workspace_registry
+        WHERE workspace_id = ?
+        LIMIT 1
+        """,
+        (clean_workspace_id,),
+    ).fetchone()
+    existing_record = _local_workspace_record_from_row(existing)
+    effective_created_at_ts = (
+        int(existing["created_at"])
+        if existing is not None and existing["created_at"] is not None
+        else int(created_at_ts or time.time())
+    )
+    effective_name = (
+        str(name or "").strip()
+        or str((existing_record or {}).get("name") or "").strip()
+        or clean_workspace_id
+    )
+    effective_workspace_type = _normalize_workspace_type(
+        workspace_type,
+        default=str((existing_record or {}).get("workspace_type") or "personal"),
+    )
+    effective_metadata = _coerce_dict((existing_record or {}).get("metadata"))
+    if metadata is not None:
+        effective_metadata = _coerce_dict(metadata)
+    connection.execute(
+        """
+        INSERT OR REPLACE INTO workspace_registry (
+            workspace_id, tenant_id, name, workspace_type, metadata_json, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            clean_workspace_id,
+            clean_tenant_id,
+            effective_name,
+            effective_workspace_type,
+            _to_json(effective_metadata, default={}),
+            effective_created_at_ts,
+            int(time.time()),
+        ),
+    )
+
+
+def _upsert_local_workspace_billing_account(
+    connection: sqlite3.Connection,
+    *,
+    workspace_id: str,
+    tenant_id: str,
+    billing_email: Optional[str] = None,
+    provider_customer_id: Optional[str] = None,
+    default_currency: str = "usd",
+    status: str = "active",
+    metadata: Optional[Dict[str, Any]] = None,
+    created_at_ts: Optional[int] = None,
+) -> None:
+    clean_workspace_id = str(workspace_id or "").strip()
+    clean_tenant_id = str(tenant_id or "").strip()
+    if not clean_workspace_id or not clean_tenant_id:
+        return
+    ts = int(time.time())
+    existing = connection.execute(
+        "SELECT created_at FROM workspace_billing_accounts WHERE workspace_id = ? LIMIT 1",
+        (clean_workspace_id,),
+    ).fetchone()
+    created_at = int(existing["created_at"]) if existing is not None else int(created_at_ts or ts)
+    connection.execute(
+        """
+        INSERT OR REPLACE INTO workspace_billing_accounts (
+            workspace_id, tenant_id, provider, billing_email, provider_customer_id, default_currency, status, metadata_json, created_at, updated_at
+        ) VALUES (?, ?, 'stripe', ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            clean_workspace_id,
+            clean_tenant_id,
+            str(billing_email or "").strip().lower() or None,
+            str(provider_customer_id or "").strip() or None,
+            str(default_currency or "usd").strip().lower() or "usd",
+            str(status or "active").strip().lower() or "active",
+            _to_json(metadata, default={}),
+            created_at,
+            ts,
+        ),
+    )
+
+
+def _upsert_local_workspace_billing_subscription(
+    connection: sqlite3.Connection,
+    *,
+    subscription_id: Optional[str] = None,
+    workspace_id: str,
+    tenant_id: str,
+    plan_id: str,
+    status: str,
+    provider_subscription_id: Optional[str] = None,
+    provider_price_id: Optional[str] = None,
+    provider_product_id: Optional[str] = None,
+    provider_customer_id: Optional[str] = None,
+    checkout_session_id: Optional[str] = None,
+    checkout_url: Optional[str] = None,
+    portal_url: Optional[str] = None,
+    currency: str = "usd",
+    billing_interval: Optional[str] = None,
+    current_period_start: Optional[int] = None,
+    current_period_end: Optional[int] = None,
+    cancel_at_period_end: bool = False,
+    canceled_at: Optional[int] = None,
+    trial_ends_at: Optional[int] = None,
+    metadata: Optional[Dict[str, Any]] = None,
+    created_at_ts: Optional[int] = None,
+) -> str:
+    clean_workspace_id = str(workspace_id or "").strip()
+    clean_tenant_id = str(tenant_id or "").strip()
+    if not clean_workspace_id or not clean_tenant_id:
+        return str(subscription_id or "").strip()
+    ts = int(time.time())
+    created_at = int(created_at_ts or ts)
+    effective_id = str(subscription_id or "").strip()
+    if provider_subscription_id:
+        existing = connection.execute(
+            """
+            SELECT id, created_at
+            FROM workspace_billing_subscriptions
+            WHERE provider = 'stripe' AND provider_subscription_id = ?
+            LIMIT 1
+            """,
+            (str(provider_subscription_id or "").strip(),),
+        ).fetchone()
+        if existing is not None:
+            effective_id = str(existing["id"] or "").strip() or effective_id
+            created_at = int(existing["created_at"] or created_at)
+    if not effective_id:
+        existing = connection.execute(
+            """
+            SELECT id, created_at
+            FROM workspace_billing_subscriptions
+            WHERE workspace_id = ?
+            ORDER BY updated_at DESC, created_at DESC
+            LIMIT 1
+            """,
+            (clean_workspace_id,),
+        ).fetchone()
+        if existing is not None:
+            effective_id = str(existing["id"] or "").strip() or str(uuid.uuid4())
+            created_at = int(existing["created_at"] or created_at)
+        else:
+            effective_id = str(uuid.uuid4())
+    connection.execute(
+        """
+        INSERT OR REPLACE INTO workspace_billing_subscriptions (
+            id, tenant_id, workspace_id, provider, plan_id, status, provider_subscription_id, provider_price_id, provider_product_id,
+            provider_customer_id, checkout_session_id, checkout_url, portal_url, currency, billing_interval,
+            current_period_start, current_period_end, cancel_at_period_end, canceled_at, trial_ends_at, metadata_json, created_at, updated_at
+        ) VALUES (?, ?, ?, 'stripe', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            effective_id,
+            clean_tenant_id,
+            clean_workspace_id,
+            str(plan_id or "free").strip().lower() or "free",
+            str(status or "active").strip().lower() or "active",
+            str(provider_subscription_id or "").strip() or None,
+            str(provider_price_id or "").strip() or None,
+            str(provider_product_id or "").strip() or None,
+            str(provider_customer_id or "").strip() or None,
+            str(checkout_session_id or "").strip() or None,
+            str(checkout_url or "").strip() or None,
+            str(portal_url or "").strip() or None,
+            str(currency or "usd").strip().lower() or "usd",
+            str(billing_interval or "").strip().lower() or None,
+            current_period_start,
+            current_period_end,
+            1 if cancel_at_period_end else 0,
+            canceled_at,
+            trial_ends_at,
+            _to_json(metadata, default={}),
+            created_at,
+            ts,
+        ),
+    )
+    return effective_id
 
 
 def _connect_local_identity_db() -> sqlite3.Connection:
@@ -928,6 +1919,73 @@ def _connect_local_identity_db() -> sqlite3.Connection:
         CREATE TABLE IF NOT EXISTS workspace_registry (
             workspace_id TEXT PRIMARY KEY,
             tenant_id TEXT NOT NULL,
+            name TEXT,
+            workspace_type TEXT NOT NULL DEFAULT 'personal',
+            metadata_json TEXT NOT NULL DEFAULT '{}',
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL
+        )
+        """
+    )
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS workspace_member_invites (
+            id TEXT PRIMARY KEY,
+            tenant_id TEXT NOT NULL,
+            workspace_id TEXT NOT NULL,
+            email TEXT NOT NULL,
+            role TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'pending',
+            invited_by_user_id TEXT,
+            accepted_by_user_id TEXT,
+            metadata_json TEXT NOT NULL DEFAULT '{}',
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL,
+            accepted_at INTEGER,
+            revoked_at INTEGER
+        )
+        """
+    )
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS workspace_billing_accounts (
+            workspace_id TEXT PRIMARY KEY,
+            tenant_id TEXT NOT NULL,
+            provider TEXT NOT NULL DEFAULT 'stripe',
+            billing_email TEXT,
+            provider_customer_id TEXT,
+            default_currency TEXT NOT NULL DEFAULT 'usd',
+            status TEXT NOT NULL DEFAULT 'active',
+            metadata_json TEXT NOT NULL DEFAULT '{}',
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL
+        )
+        """
+    )
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS workspace_billing_subscriptions (
+            id TEXT PRIMARY KEY,
+            tenant_id TEXT NOT NULL,
+            workspace_id TEXT NOT NULL,
+            provider TEXT NOT NULL DEFAULT 'stripe',
+            plan_id TEXT NOT NULL DEFAULT 'free',
+            status TEXT NOT NULL DEFAULT 'active',
+            provider_subscription_id TEXT,
+            provider_price_id TEXT,
+            provider_product_id TEXT,
+            provider_customer_id TEXT,
+            checkout_session_id TEXT,
+            checkout_url TEXT,
+            portal_url TEXT,
+            currency TEXT NOT NULL DEFAULT 'usd',
+            billing_interval TEXT,
+            current_period_start INTEGER,
+            current_period_end INTEGER,
+            cancel_at_period_end INTEGER NOT NULL DEFAULT 0,
+            canceled_at INTEGER,
+            trial_ends_at INTEGER,
+            metadata_json TEXT NOT NULL DEFAULT '{}',
             created_at INTEGER NOT NULL,
             updated_at INTEGER NOT NULL
         )
@@ -939,6 +1997,36 @@ def _connect_local_identity_db() -> sqlite3.Connection:
     }
     if "avatar_url" not in user_columns:
         connection.execute("ALTER TABLE users ADD COLUMN avatar_url TEXT")
+    workspace_registry_columns = {
+        str(row["name"] or "").strip().lower()
+        for row in connection.execute("PRAGMA table_info(workspace_registry)").fetchall()
+    }
+    if "name" not in workspace_registry_columns:
+        connection.execute("ALTER TABLE workspace_registry ADD COLUMN name TEXT")
+    if "workspace_type" not in workspace_registry_columns:
+        connection.execute(
+            "ALTER TABLE workspace_registry ADD COLUMN workspace_type TEXT NOT NULL DEFAULT 'personal'"
+        )
+    if "metadata_json" not in workspace_registry_columns:
+        connection.execute(
+            "ALTER TABLE workspace_registry ADD COLUMN metadata_json TEXT NOT NULL DEFAULT '{}'"
+        )
+    billing_account_columns = {
+        str(row["name"] or "").strip().lower()
+        for row in connection.execute("PRAGMA table_info(workspace_billing_accounts)").fetchall()
+    }
+    if "metadata_json" not in billing_account_columns:
+        connection.execute(
+            "ALTER TABLE workspace_billing_accounts ADD COLUMN metadata_json TEXT NOT NULL DEFAULT '{}'"
+        )
+    billing_subscription_columns = {
+        str(row["name"] or "").strip().lower()
+        for row in connection.execute("PRAGMA table_info(workspace_billing_subscriptions)").fetchall()
+    }
+    if "metadata_json" not in billing_subscription_columns:
+        connection.execute(
+            "ALTER TABLE workspace_billing_subscriptions ADD COLUMN metadata_json TEXT NOT NULL DEFAULT '{}'"
+        )
     return connection
 
 
@@ -995,7 +2083,8 @@ def _local_workspace_membership_rows(connection: sqlite3.Connection, user_id: st
             wm.role,
             wm.created_at,
             wm.updated_at,
-            wr.tenant_id
+            wr.tenant_id,
+            wr.name AS workspace_name
         FROM workspace_memberships wm
         LEFT JOIN workspace_registry wr ON wr.workspace_id = wm.workspace_id
         WHERE wm.user_id = ?
@@ -1014,10 +2103,39 @@ def _local_workspace_membership_rows(connection: sqlite3.Connection, user_id: st
             "metadata": {},
             "created_at": int(row["created_at"]) if row["created_at"] is not None else None,
             "updated_at": int(row["updated_at"]) if row["updated_at"] is not None else None,
-            "workspace_name": None,
+            "workspace_name": str(row["workspace_name"] or "").strip() or None,
         }
         for row in rows
     ]
+
+
+def _workspace_invite_record_from_row(row: Any) -> Optional[Dict[str, Any]]:
+    if row is None:
+        return None
+    keys = set(row.keys()) if hasattr(row, "keys") else set()
+    raw_metadata = (
+        row["metadata_json"] if "metadata_json" in keys
+        else row["metadata"] if "metadata" in keys
+        else row.get("metadata_json") if isinstance(row, dict)
+        else row.get("metadata") if isinstance(row, dict)
+        else {}
+    )
+    metadata = _decode_json_object(raw_metadata)
+    return {
+        "id": str(row["id"] or "").strip(),
+        "tenant_id": str(row["tenant_id"] or "").strip() or None,
+        "workspace_id": str(row["workspace_id"] or "").strip(),
+        "email": str(row["email"] or "").strip().lower(),
+        "role": str(row["role"] or "").strip() or "member",
+        "status": str(row["status"] or "").strip() or "pending",
+        "invited_by_user_id": str(row["invited_by_user_id"] or "").strip() or None,
+        "accepted_by_user_id": str(row["accepted_by_user_id"] or "").strip() or None,
+        "metadata": metadata,
+        "created_at": int(row["created_at"]) if row["created_at"] is not None else None,
+        "updated_at": int(row["updated_at"]) if row["updated_at"] is not None else None,
+        "accepted_at": int(row["accepted_at"]) if row["accepted_at"] is not None else None,
+        "revoked_at": int(row["revoked_at"]) if row["revoked_at"] is not None else None,
+    }
 
 
 async def ensure_control_plane_schema() -> Any:
@@ -1120,6 +2238,10 @@ async def create_local_password_account(
     workspace_name = f"{display_label or email_prefix}'s Workspace".strip()
     auth_identity_id = str(uuid.uuid4())
     membership_id = str(uuid.uuid4())
+    workspace_metadata = _workspace_shell_metadata(
+        {"billing": {"plan_id": "personal"}},
+        setup_completed=False,
+    )
 
     async with _scoped_connection(bypass_rls=True) as connection:
         if connection is None:
@@ -1139,10 +2261,18 @@ async def create_local_password_account(
                     fallback.execute(
                         """
                         INSERT OR REPLACE INTO workspace_registry (
-                            workspace_id, tenant_id, created_at, updated_at
-                        ) VALUES (?, ?, COALESCE((SELECT created_at FROM workspace_registry WHERE workspace_id = ?), ?), ?)
+                            workspace_id, tenant_id, name, workspace_type, metadata_json, created_at, updated_at
+                        ) VALUES (?, ?, ?, 'personal', ?, COALESCE((SELECT created_at FROM workspace_registry WHERE workspace_id = ?), ?), ?)
                         """,
-                        (resolved_workspace_id, resolved_tenant_id, resolved_workspace_id, created_at_ts, created_at_ts),
+                        (
+                            resolved_workspace_id,
+                            resolved_tenant_id,
+                            workspace_name,
+                            _to_json(workspace_metadata, default={}),
+                            resolved_workspace_id,
+                            created_at_ts,
+                            created_at_ts,
+                        ),
                     )
                     fallback.execute(
                         """
@@ -1163,6 +2293,11 @@ async def create_local_password_account(
                         ),
                     )
                     fallback.commit()
+            await ensure_workspace_billing_defaults(
+                resolved_workspace_id,
+                tenant_id=resolved_tenant_id,
+                billing_email=normalized_email,
+            )
             return await get_user_bundle_by_id(resolved_user_id)
         existing_user = await connection.fetchrow(
             """
@@ -1194,7 +2329,7 @@ async def create_local_password_account(
             """
             INSERT INTO workspaces (
                 id, tenant_id, workspace_id, slug, name, workspace_type, status, created_by_user_id, metadata, created_at, updated_at
-            ) VALUES ($1, $2, $3, $4, $5, 'personal', 'active', $6, '{}'::jsonb, $7::timestamptz, $7::timestamptz)
+            ) VALUES ($1, $2, $3, $4, $5, 'personal', 'active', $6, $7::jsonb, $8::timestamptz, $8::timestamptz)
             """,
             resolved_workspace_id,
             resolved_tenant_id,
@@ -1202,6 +2337,7 @@ async def create_local_password_account(
             workspace_slug,
             workspace_name,
             resolved_user_id,
+            _to_json(workspace_metadata, default={}),
             created_at,
         )
         await connection.execute(
@@ -1244,6 +2380,11 @@ async def create_local_password_account(
             str(role or "owner").strip().lower() or "owner",
             created_at,
         )
+    await ensure_workspace_billing_defaults(
+        resolved_workspace_id,
+        tenant_id=resolved_tenant_id,
+        billing_email=normalized_email,
+    )
     return await get_user_bundle_by_id(resolved_user_id)
 
 
@@ -1290,10 +2431,26 @@ async def ensure_workspace_membership(
                     fallback.execute(
                         """
                         INSERT OR REPLACE INTO workspace_registry (
-                            workspace_id, tenant_id, created_at, updated_at
-                        ) VALUES (?, ?, COALESCE((SELECT created_at FROM workspace_registry WHERE workspace_id = ?), ?), ?)
+                            workspace_id, tenant_id, name, workspace_type, metadata_json, created_at, updated_at
+                        ) VALUES (
+                            ?, ?, COALESCE((SELECT name FROM workspace_registry WHERE workspace_id = ?), ?),
+                            COALESCE((SELECT workspace_type FROM workspace_registry WHERE workspace_id = ?), 'personal'),
+                            COALESCE((SELECT metadata_json FROM workspace_registry WHERE workspace_id = ?), '{}'),
+                            COALESCE((SELECT created_at FROM workspace_registry WHERE workspace_id = ?), ?),
+                            ?
+                        )
                         """,
-                        (resolved_workspace_id, resolved_tenant_id, resolved_workspace_id, created_at_ts, created_at_ts),
+                        (
+                            resolved_workspace_id,
+                            resolved_tenant_id,
+                            resolved_workspace_id,
+                            resolved_workspace_id,
+                            resolved_workspace_id,
+                            resolved_workspace_id,
+                            resolved_workspace_id,
+                            created_at_ts,
+                            created_at_ts,
+                        ),
                     )
                     fallback.execute(
                         """
@@ -1432,6 +2589,11 @@ async def ensure_workspace_membership(
             str(role or "member").strip().lower() or "member",
             created_at,
         )
+    await ensure_workspace_billing_defaults(
+        resolved_workspace_id,
+        tenant_id=resolved_tenant_id,
+        billing_email=normalized_email,
+    )
     return await get_user_bundle_by_id(resolved_user_id)
 
 
@@ -1581,6 +2743,1186 @@ async def list_workspace_memberships_for_user(user_id: str) -> List[Dict[str, An
     return [dict(row) for row in rows]
 
 
+async def list_workspaces_for_user(user_id: str) -> List[Dict[str, Any]]:
+    clean_user_id = str(user_id or "").strip()
+    if not clean_user_id:
+        return []
+    async with _scoped_connection(bypass_rls=True) as connection:
+        if connection is None:
+            with _LOCAL_IDENTITY_LOCK:
+                with _connect_local_identity_db() as fallback:
+                    rows = fallback.execute(
+                        """
+                        SELECT
+                            wr.workspace_id,
+                            wr.tenant_id,
+                            wr.name,
+                            wr.workspace_type,
+                            wr.metadata_json,
+                            wr.created_at,
+                            wr.updated_at
+                        FROM workspace_memberships wm
+                        JOIN workspace_registry wr ON wr.workspace_id = wm.workspace_id
+                        WHERE wm.user_id = ?
+                        ORDER BY wm.created_at ASC, wr.workspace_id ASC
+                        """,
+                        (clean_user_id,),
+                    ).fetchall()
+            return [
+                record
+                for record in (_local_workspace_record_from_row(row) for row in rows)
+                if isinstance(record, dict)
+            ]
+        rows = await connection.fetch(
+            """
+            SELECT
+                w.id,
+                w.tenant_id,
+                w.workspace_id,
+                w.slug,
+                w.name,
+                w.workspace_type,
+                w.status,
+                w.created_by_user_id,
+                w.metadata,
+                w.created_at,
+                w.updated_at
+            FROM workspace_memberships wm
+            JOIN workspaces w ON w.workspace_id = wm.workspace_id
+            WHERE wm.user_id = $1
+            ORDER BY wm.created_at ASC, w.workspace_id ASC
+            """,
+            clean_user_id,
+        )
+    return [dict(row) for row in rows]
+
+
+async def create_workspace_for_user(
+    user_id: str,
+    tenant_id: Optional[str],
+    name: str,
+    workspace_type: str,
+    preferred_shell_profile: str,
+    default_route: str,
+) -> Optional[Dict[str, Any]]:
+    clean_user_id = str(user_id or "").strip()
+    clean_name = str(name or "").strip()
+    clean_workspace_type = _normalize_workspace_type(workspace_type, default="personal")
+    clean_preferred_shell_profile = str(preferred_shell_profile or "").strip()
+    clean_default_route = str(default_route or "").strip()
+    if not clean_user_id or not clean_name:
+        return None
+    if not clean_preferred_shell_profile or not clean_default_route:
+        return None
+
+    created_at = _utc_now_ts()
+    created_at_ts = int(time.time())
+    resolved_workspace_id = f"ws_{uuid.uuid4().hex[:12]}"
+    clean_tenant_id = f"tenant_{uuid.uuid4().hex[:12]}"
+    tenant_slug = _slugify(f"{clean_name}-{clean_tenant_id[:8]}", f"tenant-{clean_tenant_id[:8]}")
+    workspace_slug = _slugify(f"{clean_name}-{resolved_workspace_id[:8]}", f"workspace-{resolved_workspace_id[:8]}")
+    metadata = _workspace_shell_metadata(
+        {},
+        preferred_shell_profile=clean_preferred_shell_profile,
+        default_route=_normalize_workspace_default_route(resolved_workspace_id, clean_default_route),
+        setup_completed=True,
+    )
+
+    async with _scoped_connection(bypass_rls=True) as connection:
+        if connection is None:
+            with _LOCAL_IDENTITY_LOCK:
+                with _connect_local_identity_db() as fallback:
+                    user_row = _local_user_row(fallback, user_id=clean_user_id)
+                    if user_row is None:
+                        return None
+                    _upsert_local_workspace_registry(
+                        fallback,
+                        workspace_id=resolved_workspace_id,
+                        tenant_id=clean_tenant_id,
+                        name=clean_name,
+                        workspace_type=clean_workspace_type,
+                        metadata=metadata,
+                        created_at_ts=created_at_ts,
+                    )
+                    fallback.execute(
+                        """
+                        INSERT OR REPLACE INTO workspace_memberships (
+                            user_id, workspace_id, role, created_at, updated_at
+                        ) VALUES (
+                            ?, ?, 'owner', COALESCE((SELECT created_at FROM workspace_memberships WHERE user_id = ? AND workspace_id = ?), ?), ?
+                        )
+                        """,
+                        (
+                            clean_user_id,
+                            resolved_workspace_id,
+                            clean_user_id,
+                            resolved_workspace_id,
+                            created_at_ts,
+                            created_at_ts,
+                        ),
+                    )
+                    fallback.commit()
+            await ensure_workspace_billing_defaults(
+                resolved_workspace_id,
+                tenant_id=clean_tenant_id,
+            )
+            return await get_workspace_by_id(resolved_workspace_id)
+
+        user_row = await connection.fetchrow(
+            """
+            SELECT id
+            FROM users
+            WHERE id = $1
+            LIMIT 1
+            """,
+            clean_user_id,
+        )
+        if user_row is None:
+            return None
+
+        await connection.execute(
+            """
+            INSERT INTO tenants (
+                id, tenant_id, workspace_id, slug, name, status, created_by_user_id, metadata, created_at, updated_at
+            ) VALUES ($1, $2, $3, $4, $5, 'active', $6, '{}'::jsonb, $7::timestamptz, $7::timestamptz)
+            """,
+            clean_tenant_id,
+            clean_tenant_id,
+            resolved_workspace_id,
+            tenant_slug,
+            clean_name,
+            clean_user_id,
+            created_at,
+        )
+        await connection.execute(
+            """
+            INSERT INTO workspaces (
+                id, tenant_id, workspace_id, slug, name, workspace_type, status, created_by_user_id, metadata, created_at, updated_at
+            ) VALUES ($1, $2, $3, $4, $5, $6, 'active', $7, $8::jsonb, $9::timestamptz, $9::timestamptz)
+            """,
+            resolved_workspace_id,
+            clean_tenant_id,
+            resolved_workspace_id,
+            workspace_slug,
+            clean_name,
+            clean_workspace_type,
+            clean_user_id,
+            _to_json(metadata, default={}),
+            created_at,
+        )
+        await connection.execute(
+            """
+            INSERT INTO workspace_memberships (
+                id, tenant_id, workspace_id, user_id, role, status, metadata, created_at, updated_at
+            ) VALUES ($1, $2, $3, $4, 'owner', 'active', '{}'::jsonb, $5::timestamptz, $5::timestamptz)
+            """,
+            str(uuid.uuid4()),
+            clean_tenant_id,
+            resolved_workspace_id,
+            clean_user_id,
+            created_at,
+        )
+    await ensure_workspace_billing_defaults(
+        resolved_workspace_id,
+        tenant_id=clean_tenant_id,
+    )
+    return await get_workspace_by_id(resolved_workspace_id)
+
+
+async def update_workspace_profile(workspace_id: str, updates: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    clean_workspace_id = str(workspace_id or "").strip()
+    if not clean_workspace_id:
+        return None
+    created_at_ts = int(time.time())
+
+    async with _scoped_connection(bypass_rls=True) as connection:
+        if connection is None:
+            with _LOCAL_IDENTITY_LOCK:
+                with _connect_local_identity_db() as fallback:
+                    existing = fallback.execute(
+                        """
+                        SELECT workspace_id, tenant_id, name, workspace_type, metadata_json, created_at, updated_at
+                        FROM workspace_registry
+                        WHERE workspace_id = ?
+                        LIMIT 1
+                        """,
+                        (clean_workspace_id,),
+                    ).fetchone()
+                    existing_record = _local_workspace_record_from_row(existing)
+                    if existing_record is None:
+                        return None
+                    next_metadata = _coerce_dict(updates.get("metadata")) if "metadata" in updates else _workspace_shell_metadata(
+                        _coerce_dict(existing_record.get("metadata")),
+                        preferred_shell_profile=updates.get("preferred_shell_profile")
+                        if "preferred_shell_profile" in updates
+                        else None,
+                        default_route=_normalize_workspace_default_route(
+                            clean_workspace_id,
+                            updates.get("default_route"),
+                        )
+                        if "default_route" in updates
+                        else None,
+                        setup_completed=updates.get("setup_completed")
+                        if "setup_completed" in updates
+                        else None,
+                    )
+                    _upsert_local_workspace_registry(
+                        fallback,
+                        workspace_id=clean_workspace_id,
+                        tenant_id=str(existing_record.get("tenant_id") or "").strip(),
+                        name=str(updates.get("name") or "").strip() or str(existing_record.get("name") or "").strip(),
+                        workspace_type=updates.get("workspace_type") or existing_record.get("workspace_type"),
+                        metadata=next_metadata,
+                        created_at_ts=int(existing_record.get("created_at") or created_at_ts),
+                    )
+                    fallback.commit()
+            return await get_workspace_by_id(clean_workspace_id)
+
+        existing = await connection.fetchrow(
+            """
+            SELECT id, tenant_id, workspace_id, slug, name, workspace_type, status, created_by_user_id, metadata, created_at, updated_at
+            FROM workspaces
+            WHERE workspace_id = $1
+            LIMIT 1
+            """,
+            clean_workspace_id,
+        )
+        if existing is None:
+            return None
+        existing_record = dict(existing)
+        next_name = str(updates.get("name") or "").strip() or str(existing_record.get("name") or "").strip()
+        next_workspace_type = _normalize_workspace_type(
+            updates.get("workspace_type"),
+            default=str(existing_record.get("workspace_type") or "personal"),
+        )
+        next_metadata = _coerce_dict(updates.get("metadata")) if "metadata" in updates else _workspace_shell_metadata(
+            _coerce_dict(existing_record.get("metadata")),
+            preferred_shell_profile=updates.get("preferred_shell_profile")
+            if "preferred_shell_profile" in updates
+            else None,
+            default_route=_normalize_workspace_default_route(
+                clean_workspace_id,
+                updates.get("default_route"),
+            )
+            if "default_route" in updates
+            else None,
+            setup_completed=updates.get("setup_completed") if "setup_completed" in updates else None,
+        )
+        updated_at = _utc_now_ts()
+        await connection.execute(
+            """
+            UPDATE workspaces
+            SET name = $2,
+                workspace_type = $3,
+                metadata = $4::jsonb,
+                updated_at = $5::timestamptz
+            WHERE workspace_id = $1
+            """,
+            clean_workspace_id,
+            next_name,
+            next_workspace_type,
+            _to_json(next_metadata, default={}),
+            updated_at,
+        )
+    return await get_workspace_by_id(clean_workspace_id)
+
+
+async def list_workspace_members(workspace_id: str) -> List[Dict[str, Any]]:
+    clean_workspace_id = str(workspace_id or "").strip()
+    if not clean_workspace_id:
+        return []
+    async with _scoped_connection(bypass_rls=True) as connection:
+        if connection is None:
+            with _LOCAL_IDENTITY_LOCK:
+                with _connect_local_identity_db() as fallback:
+                    rows = fallback.execute(
+                        """
+                        SELECT
+                            wm.user_id,
+                            wm.workspace_id,
+                            wm.role,
+                            wm.created_at,
+                            wm.updated_at,
+                            u.email,
+                            u.name AS display_name,
+                            u.avatar_url
+                        FROM workspace_memberships wm
+                        LEFT JOIN users u ON u.id = wm.user_id
+                        WHERE wm.workspace_id = ?
+                        ORDER BY wm.created_at ASC, wm.user_id ASC
+                        """,
+                        (clean_workspace_id,),
+                    ).fetchall()
+            return [
+                {
+                    "id": f"{row['user_id']}:{row['workspace_id']}",
+                    "workspace_id": str(row["workspace_id"] or "").strip(),
+                    "user_id": str(row["user_id"] or "").strip(),
+                    "role": str(row["role"] or "").strip() or "member",
+                    "status": "active",
+                    "created_at": int(row["created_at"]) if row["created_at"] is not None else None,
+                    "updated_at": int(row["updated_at"]) if row["updated_at"] is not None else None,
+                    "email": str(row["email"] or "").strip().lower() or None,
+                    "display_name": str(row["display_name"] or "").strip() or None,
+                    "avatar_url": str(row["avatar_url"] or "").strip() or None,
+                }
+                for row in rows
+            ]
+        rows = await connection.fetch(
+            """
+            SELECT
+                wm.id,
+                wm.workspace_id,
+                wm.user_id,
+                wm.role,
+                wm.status,
+                wm.created_at,
+                wm.updated_at,
+                u.email,
+                u.display_name,
+                u.avatar_url
+            FROM workspace_memberships wm
+            LEFT JOIN users u ON u.id = wm.user_id
+            WHERE wm.workspace_id = $1
+            ORDER BY wm.created_at ASC, wm.user_id ASC
+            """,
+            clean_workspace_id,
+        )
+    return [dict(row) for row in rows]
+
+
+async def list_workspace_invites(workspace_id: str) -> List[Dict[str, Any]]:
+    clean_workspace_id = str(workspace_id or "").strip()
+    if not clean_workspace_id:
+        return []
+    async with _scoped_connection(bypass_rls=True) as connection:
+        if connection is None:
+            with _LOCAL_IDENTITY_LOCK:
+                with _connect_local_identity_db() as fallback:
+                    rows = fallback.execute(
+                        """
+                        SELECT
+                            id,
+                            tenant_id,
+                            workspace_id,
+                            email,
+                            role,
+                            status,
+                            invited_by_user_id,
+                            accepted_by_user_id,
+                            metadata_json,
+                            created_at,
+                            updated_at,
+                            accepted_at,
+                            revoked_at
+                        FROM workspace_member_invites
+                        WHERE workspace_id = ?
+                        ORDER BY created_at DESC, id DESC
+                        """,
+                        (clean_workspace_id,),
+                    ).fetchall()
+            return [item for item in (_workspace_invite_record_from_row(row) for row in rows) if item]
+        rows = await connection.fetch(
+            """
+            SELECT
+                id,
+                tenant_id,
+                workspace_id,
+                email,
+                role,
+                status,
+                invited_by_user_id,
+                accepted_by_user_id,
+                metadata,
+                created_at,
+                updated_at,
+                accepted_at,
+                revoked_at
+            FROM workspace_member_invites
+            WHERE workspace_id = $1
+            ORDER BY created_at DESC, id DESC
+            """,
+            clean_workspace_id,
+        )
+    return [dict(row) for row in rows]
+
+
+async def get_workspace_invite(workspace_id: str, invite_id: str) -> Optional[Dict[str, Any]]:
+    clean_workspace_id = str(workspace_id or "").strip()
+    clean_invite_id = str(invite_id or "").strip()
+    if not clean_workspace_id or not clean_invite_id:
+        return None
+    async with _scoped_connection(bypass_rls=True) as connection:
+        if connection is None:
+            with _LOCAL_IDENTITY_LOCK:
+                with _connect_local_identity_db() as fallback:
+                    row = fallback.execute(
+                        """
+                        SELECT
+                            id,
+                            tenant_id,
+                            workspace_id,
+                            email,
+                            role,
+                            status,
+                            invited_by_user_id,
+                            accepted_by_user_id,
+                            metadata_json,
+                            created_at,
+                            updated_at,
+                            accepted_at,
+                            revoked_at
+                        FROM workspace_member_invites
+                        WHERE workspace_id = ?
+                          AND id = ?
+                        LIMIT 1
+                        """,
+                        (clean_workspace_id, clean_invite_id),
+                    ).fetchone()
+            return _workspace_invite_record_from_row(row)
+        row = await connection.fetchrow(
+            """
+            SELECT
+                id,
+                tenant_id,
+                workspace_id,
+                email,
+                role,
+                status,
+                invited_by_user_id,
+                accepted_by_user_id,
+                metadata,
+                created_at,
+                updated_at,
+                accepted_at,
+                revoked_at
+            FROM workspace_member_invites
+            WHERE workspace_id = $1
+              AND id = $2
+            LIMIT 1
+            """,
+            clean_workspace_id,
+            clean_invite_id,
+        )
+    return dict(row) if row is not None else None
+
+
+async def list_pending_workspace_invites_for_email(email: str) -> List[Dict[str, Any]]:
+    email_token = str(email or "").strip().lower()
+    if not email_token:
+        return []
+    async with _scoped_connection(bypass_rls=True) as connection:
+        if connection is None:
+            with _LOCAL_IDENTITY_LOCK:
+                with _connect_local_identity_db() as fallback:
+                    rows = fallback.execute(
+                        """
+                        SELECT
+                            id,
+                            tenant_id,
+                            workspace_id,
+                            email,
+                            role,
+                            status,
+                            invited_by_user_id,
+                            accepted_by_user_id,
+                            metadata_json,
+                            created_at,
+                            updated_at,
+                            accepted_at,
+                            revoked_at
+                        FROM workspace_member_invites
+                        WHERE lower(email) = lower(?)
+                          AND status = 'pending'
+                        ORDER BY created_at ASC, id ASC
+                        """,
+                        (email_token,),
+                    ).fetchall()
+            return [item for item in (_workspace_invite_record_from_row(row) for row in rows) if item]
+        rows = await connection.fetch(
+            """
+            SELECT
+                id,
+                tenant_id,
+                workspace_id,
+                email,
+                role,
+                status,
+                invited_by_user_id,
+                accepted_by_user_id,
+                metadata,
+                created_at,
+                updated_at,
+                accepted_at,
+                revoked_at
+            FROM workspace_member_invites
+            WHERE lower(email) = lower($1)
+              AND status = 'pending'
+            ORDER BY created_at ASC, id ASC
+            """,
+            email_token,
+        )
+    return [dict(row) for row in rows]
+
+
+async def create_workspace_invite(
+    *,
+    workspace_id: str,
+    email: str,
+    role: str,
+    invited_by_user_id: Optional[str] = None,
+    metadata: Optional[Dict[str, Any]] = None,
+) -> Optional[Dict[str, Any]]:
+    clean_workspace_id = str(workspace_id or "").strip()
+    email_token = str(email or "").strip().lower()
+    clean_role = str(role or "").strip().lower() or "member"
+    if not clean_workspace_id or not email_token:
+        return None
+    workspace = await get_workspace_by_id(clean_workspace_id)
+    tenant_id = str((workspace or {}).get("tenant_id") or "").strip()
+    if not tenant_id:
+        return None
+    invite_id = f"invite_{uuid.uuid4().hex}"
+    metadata_payload = dict(metadata or {})
+    async with _scoped_connection(bypass_rls=True) as connection:
+        if connection is None:
+            now_ts = int(time.time())
+            with _LOCAL_IDENTITY_LOCK:
+                with _connect_local_identity_db() as fallback:
+                    existing = fallback.execute(
+                        """
+                        SELECT id, created_at
+                        FROM workspace_member_invites
+                        WHERE workspace_id = ?
+                          AND lower(email) = lower(?)
+                          AND status = 'pending'
+                        ORDER BY created_at DESC
+                        LIMIT 1
+                        """,
+                        (clean_workspace_id, email_token),
+                    ).fetchone()
+                    effective_invite_id = str(existing["id"] or "").strip() if existing is not None else invite_id
+                    created_at = int(existing["created_at"]) if existing is not None and existing["created_at"] is not None else now_ts
+                    fallback.execute(
+                        """
+                        INSERT OR REPLACE INTO workspace_member_invites (
+                            id, tenant_id, workspace_id, email, role, status, invited_by_user_id, accepted_by_user_id,
+                            metadata_json, created_at, updated_at, accepted_at, revoked_at
+                        ) VALUES (?, ?, ?, ?, ?, 'pending', ?, NULL, ?, ?, ?, NULL, NULL)
+                        """,
+                        (
+                            effective_invite_id,
+                            tenant_id,
+                            clean_workspace_id,
+                            email_token,
+                            clean_role,
+                            str(invited_by_user_id or "").strip() or None,
+                            _to_json(metadata_payload, default={}),
+                            created_at,
+                            now_ts,
+                        ),
+                    )
+                    row = fallback.execute(
+                        "SELECT * FROM workspace_member_invites WHERE id = ? LIMIT 1",
+                        (effective_invite_id,),
+                    ).fetchone()
+                    fallback.commit()
+            return _workspace_invite_record_from_row(row)
+        existing = await connection.fetchrow(
+            """
+            SELECT id, created_at
+            FROM workspace_member_invites
+            WHERE workspace_id = $1
+              AND lower(email) = lower($2)
+              AND status = 'pending'
+            ORDER BY created_at DESC
+            LIMIT 1
+            """,
+            clean_workspace_id,
+            email_token,
+        )
+        effective_invite_id = str(existing["id"] or "").strip() if existing is not None else invite_id
+        created_at = existing["created_at"] if existing is not None else _utc_now_ts()
+        updated_at = _utc_now_ts()
+        await connection.execute(
+            """
+            INSERT INTO workspace_member_invites (
+                id, tenant_id, workspace_id, email, role, status, invited_by_user_id, accepted_by_user_id,
+                metadata, created_at, updated_at, accepted_at, revoked_at
+            ) VALUES (
+                $1, $2, $3, $4, $5, 'pending', $6, NULL, $7::jsonb, $8::timestamptz, $9::timestamptz, NULL, NULL
+            )
+            ON CONFLICT (id) DO UPDATE SET
+                role = EXCLUDED.role,
+                invited_by_user_id = EXCLUDED.invited_by_user_id,
+                metadata = EXCLUDED.metadata,
+                updated_at = EXCLUDED.updated_at,
+                status = 'pending',
+                accepted_by_user_id = NULL,
+                accepted_at = NULL,
+                revoked_at = NULL
+            """,
+            effective_invite_id,
+            tenant_id,
+            clean_workspace_id,
+            email_token,
+            clean_role,
+            str(invited_by_user_id or "").strip() or None,
+            _to_json(metadata_payload, default={}),
+            created_at,
+            updated_at,
+        )
+        row = await connection.fetchrow(
+            "SELECT * FROM workspace_member_invites WHERE id = $1 LIMIT 1",
+            effective_invite_id,
+        )
+    return dict(row) if row is not None else None
+
+
+async def accept_workspace_invite(
+    *,
+    invite_id: str,
+    accepted_by_user_id: str,
+) -> Optional[Dict[str, Any]]:
+    clean_invite_id = str(invite_id or "").strip()
+    clean_user_id = str(accepted_by_user_id or "").strip()
+    if not clean_invite_id or not clean_user_id:
+        return None
+    async with _scoped_connection(bypass_rls=True) as connection:
+        if connection is None:
+            now_ts = int(time.time())
+            with _LOCAL_IDENTITY_LOCK:
+                with _connect_local_identity_db() as fallback:
+                    fallback.execute(
+                        """
+                        UPDATE workspace_member_invites
+                        SET status = 'accepted',
+                            accepted_by_user_id = ?,
+                            accepted_at = ?,
+                            updated_at = ?,
+                            revoked_at = NULL
+                        WHERE id = ?
+                        """,
+                        (clean_user_id, now_ts, now_ts, clean_invite_id),
+                    )
+                    row = fallback.execute(
+                        "SELECT * FROM workspace_member_invites WHERE id = ? LIMIT 1",
+                        (clean_invite_id,),
+                    ).fetchone()
+                    fallback.commit()
+            return _workspace_invite_record_from_row(row)
+        await connection.execute(
+            """
+            UPDATE workspace_member_invites
+            SET status = 'accepted',
+                accepted_by_user_id = $2,
+                accepted_at = $3::timestamptz,
+                updated_at = $3::timestamptz,
+                revoked_at = NULL
+            WHERE id = $1
+            """,
+            clean_invite_id,
+            clean_user_id,
+            _utc_now_ts(),
+        )
+        row = await connection.fetchrow(
+            "SELECT * FROM workspace_member_invites WHERE id = $1 LIMIT 1",
+            clean_invite_id,
+        )
+    return dict(row) if row is not None else None
+
+
+async def revoke_workspace_invite(invite_id: str) -> Optional[Dict[str, Any]]:
+    clean_invite_id = str(invite_id or "").strip()
+    if not clean_invite_id:
+        return None
+    async with _scoped_connection(bypass_rls=True) as connection:
+        if connection is None:
+            now_ts = int(time.time())
+            with _LOCAL_IDENTITY_LOCK:
+                with _connect_local_identity_db() as fallback:
+                    fallback.execute(
+                        """
+                        UPDATE workspace_member_invites
+                        SET status = 'revoked',
+                            revoked_at = ?,
+                            updated_at = ?
+                        WHERE id = ?
+                        """,
+                        (now_ts, now_ts, clean_invite_id),
+                    )
+                    row = fallback.execute(
+                        "SELECT * FROM workspace_member_invites WHERE id = ? LIMIT 1",
+                        (clean_invite_id,),
+                    ).fetchone()
+                    fallback.commit()
+            return _workspace_invite_record_from_row(row)
+        await connection.execute(
+            """
+            UPDATE workspace_member_invites
+            SET status = 'revoked',
+                revoked_at = $2::timestamptz,
+                updated_at = $2::timestamptz
+            WHERE id = $1
+            """,
+            clean_invite_id,
+            _utc_now_ts(),
+        )
+        row = await connection.fetchrow(
+            "SELECT * FROM workspace_member_invites WHERE id = $1 LIMIT 1",
+            clean_invite_id,
+        )
+    return dict(row) if row is not None else None
+
+
+async def update_workspace_policy_metadata(
+    workspace_id: str,
+    metadata: Dict[str, Any],
+) -> Optional[Dict[str, Any]]:
+    clean_workspace_id = str(workspace_id or "").strip()
+    if not clean_workspace_id:
+        return None
+    payload = dict(metadata or {})
+    workspace = await get_workspace_by_id(clean_workspace_id)
+    if not isinstance(workspace, dict):
+        return None
+    existing_metadata = _coerce_dict(workspace.get("metadata"))
+    next_metadata = {
+        **existing_metadata,
+        "policies": payload,
+    }
+    return await update_workspace_profile(
+        clean_workspace_id,
+        {
+            "name": str(workspace.get("name") or "").strip() or str(workspace.get("workspace_id") or "").strip(),
+            "workspace_type": str(workspace.get("workspace_type") or workspace.get("kind") or "personal"),
+            "preferred_shell_profile": _workspace_shell_metadata(existing_metadata).get("preferredProfile"),
+            "default_route": _workspace_shell_metadata(existing_metadata).get("defaultRoute"),
+            "setup_completed": _workspace_shell_metadata(existing_metadata).get("setupCompleted"),
+            "metadata": next_metadata,
+        },
+    )
+
+
+async def update_workspace_admin_defaults_metadata(
+    workspace_id: str,
+    metadata: Dict[str, Any],
+) -> Optional[Dict[str, Any]]:
+    clean_workspace_id = str(workspace_id or "").strip()
+    if not clean_workspace_id:
+        return None
+    payload = dict(metadata or {})
+    workspace = await get_workspace_by_id(clean_workspace_id)
+    if not isinstance(workspace, dict):
+        return None
+    existing_metadata = _coerce_dict(workspace.get("metadata"))
+    next_metadata = {
+        **existing_metadata,
+        "admin_defaults": payload,
+    }
+    return await update_workspace_profile(
+        clean_workspace_id,
+        {
+            "name": str(workspace.get("name") or "").strip() or str(workspace.get("workspace_id") or "").strip(),
+            "workspace_type": str(workspace.get("workspace_type") or workspace.get("kind") or "personal"),
+            "preferred_shell_profile": _workspace_shell_metadata(existing_metadata).get("preferredProfile"),
+            "default_route": _workspace_shell_metadata(existing_metadata).get("defaultRoute"),
+            "setup_completed": _workspace_shell_metadata(existing_metadata).get("setupCompleted"),
+            "metadata": next_metadata,
+        },
+    )
+
+
+async def ensure_workspace_billing_defaults(
+    workspace_id: str,
+    *,
+    tenant_id: Optional[str] = None,
+    billing_email: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    clean_workspace_id = str(workspace_id or "").strip()
+    if not clean_workspace_id:
+        return None
+    workspace = await get_workspace_by_id(clean_workspace_id)
+    if not isinstance(workspace, dict):
+        return None
+    resolved_tenant_id = str(tenant_id or workspace.get("tenant_id") or "").strip()
+    if not resolved_tenant_id:
+        return None
+    now_dt = _utc_now_ts()
+    now_ts = int(time.time())
+
+    async with _scoped_connection(bypass_rls=True) as connection:
+        if connection is None:
+            with _LOCAL_IDENTITY_LOCK:
+                with _connect_local_identity_db() as fallback:
+                    existing_account = fallback.execute(
+                        "SELECT * FROM workspace_billing_accounts WHERE workspace_id = ? LIMIT 1",
+                        (clean_workspace_id,),
+                    ).fetchone()
+                    if existing_account is None:
+                        _upsert_local_workspace_billing_account(
+                            fallback,
+                            workspace_id=clean_workspace_id,
+                            tenant_id=resolved_tenant_id,
+                            billing_email=billing_email,
+                            metadata={},
+                            created_at_ts=now_ts,
+                        )
+                    existing_subscription = fallback.execute(
+                        """
+                        SELECT *
+                        FROM workspace_billing_subscriptions
+                        WHERE workspace_id = ?
+                        ORDER BY updated_at DESC, created_at DESC
+                        LIMIT 1
+                        """,
+                        (clean_workspace_id,),
+                    ).fetchone()
+                    if existing_subscription is None:
+                        _upsert_local_workspace_billing_subscription(
+                            fallback,
+                            workspace_id=clean_workspace_id,
+                            tenant_id=resolved_tenant_id,
+                            plan_id="free",
+                            status="active",
+                            currency="usd",
+                            metadata={"source": "workspace_default"},
+                            created_at_ts=now_ts,
+                        )
+                    fallback.commit()
+            return await get_workspace_billing_summary(clean_workspace_id)
+
+        existing_account = await connection.fetchrow(
+            """
+            SELECT *
+            FROM workspace_billing_accounts
+            WHERE workspace_id = $1
+            LIMIT 1
+            """,
+            clean_workspace_id,
+        )
+        if existing_account is None:
+            await connection.execute(
+                """
+                INSERT INTO workspace_billing_accounts (
+                    id, tenant_id, workspace_id, provider, billing_email, provider_customer_id, default_currency, status, metadata, created_at, updated_at
+                ) VALUES ($1, $2, $3, 'stripe', $4, NULL, 'usd', 'active', '{}'::jsonb, $5::timestamptz, $5::timestamptz)
+                """,
+                str(uuid.uuid4()),
+                resolved_tenant_id,
+                clean_workspace_id,
+                str(billing_email or "").strip().lower() or None,
+                now_dt,
+            )
+        existing_subscription = await connection.fetchrow(
+            """
+            SELECT *
+            FROM workspace_billing_subscriptions
+            WHERE workspace_id = $1
+            ORDER BY updated_at DESC, created_at DESC
+            LIMIT 1
+            """,
+            clean_workspace_id,
+        )
+        if existing_subscription is None:
+            await connection.execute(
+                """
+                INSERT INTO workspace_billing_subscriptions (
+                    id, tenant_id, workspace_id, provider, plan_id, status, currency, metadata, created_at, updated_at
+                ) VALUES ($1, $2, $3, 'stripe', 'free', 'active', 'usd', $4::jsonb, $5::timestamptz, $5::timestamptz)
+                """,
+                str(uuid.uuid4()),
+                resolved_tenant_id,
+                clean_workspace_id,
+                _to_json({"source": "workspace_default"}, default={}),
+                now_dt,
+            )
+    return await get_workspace_billing_summary(clean_workspace_id)
+
+
+async def get_workspace_billing_summary(workspace_id: str) -> Optional[Dict[str, Any]]:
+    clean_workspace_id = str(workspace_id or "").strip()
+    if not clean_workspace_id:
+        return None
+    workspace = await get_workspace_by_id(clean_workspace_id)
+    if not isinstance(workspace, dict):
+        return None
+    resolved_tenant_id = str(workspace.get("tenant_id") or "").strip() or None
+
+    async with _scoped_connection(bypass_rls=True) as connection:
+        if connection is None:
+            with _LOCAL_IDENTITY_LOCK:
+                with _connect_local_identity_db() as fallback:
+                    account_row = fallback.execute(
+                        "SELECT * FROM workspace_billing_accounts WHERE workspace_id = ? LIMIT 1",
+                        (clean_workspace_id,),
+                    ).fetchone()
+                    subscription_row = fallback.execute(
+                        """
+                        SELECT *
+                        FROM workspace_billing_subscriptions
+                        WHERE workspace_id = ?
+                        ORDER BY updated_at DESC, created_at DESC
+                        LIMIT 1
+                        """,
+                        (clean_workspace_id,),
+                    ).fetchone()
+            account = _local_workspace_billing_account_from_row(account_row)
+            subscription = _workspace_billing_subscription_from_row(subscription_row)
+        else:
+            account_row = await connection.fetchrow(
+                """
+                SELECT *
+                FROM workspace_billing_accounts
+                WHERE workspace_id = $1
+                LIMIT 1
+                """,
+                clean_workspace_id,
+            )
+            subscription_row = await connection.fetchrow(
+                """
+                SELECT *
+                FROM workspace_billing_subscriptions
+                WHERE workspace_id = $1
+                ORDER BY updated_at DESC, created_at DESC
+                LIMIT 1
+                """,
+                clean_workspace_id,
+            )
+            account = _local_workspace_billing_account_from_row(account_row)
+            subscription = _workspace_billing_subscription_from_row(subscription_row)
+
+    return {
+        "workspace_id": clean_workspace_id,
+        "tenant_id": resolved_tenant_id,
+        "workspace_name": str(workspace.get("name") or "").strip() or clean_workspace_id,
+        "account": account,
+        "subscription": subscription,
+    }
+
+
+async def upsert_workspace_billing_account(
+    workspace_id: str,
+    *,
+    tenant_id: Optional[str] = None,
+    billing_email: Optional[str] = None,
+    provider_customer_id: Optional[str] = None,
+    default_currency: str = "usd",
+    status: str = "active",
+    metadata: Optional[Dict[str, Any]] = None,
+) -> Optional[Dict[str, Any]]:
+    clean_workspace_id = str(workspace_id or "").strip()
+    if not clean_workspace_id:
+        return None
+    workspace = await get_workspace_by_id(clean_workspace_id)
+    if not isinstance(workspace, dict):
+        return None
+    resolved_tenant_id = str(tenant_id or workspace.get("tenant_id") or "").strip()
+    if not resolved_tenant_id:
+        return None
+    now_dt = _utc_now_ts()
+    now_ts = int(time.time())
+
+    async with _scoped_connection(bypass_rls=True) as connection:
+        if connection is None:
+            with _LOCAL_IDENTITY_LOCK:
+                with _connect_local_identity_db() as fallback:
+                    _upsert_local_workspace_billing_account(
+                        fallback,
+                        workspace_id=clean_workspace_id,
+                        tenant_id=resolved_tenant_id,
+                        billing_email=billing_email,
+                        provider_customer_id=provider_customer_id,
+                        default_currency=default_currency,
+                        status=status,
+                        metadata=metadata,
+                        created_at_ts=now_ts,
+                    )
+                    fallback.commit()
+            return await get_workspace_billing_summary(clean_workspace_id)
+
+        existing = await connection.fetchrow(
+            "SELECT id, created_at FROM workspace_billing_accounts WHERE workspace_id = $1 LIMIT 1",
+            clean_workspace_id,
+        )
+        existing_record = dict(existing) if existing is not None else {}
+        account_id = str(existing_record.get("id") or uuid.uuid4()).strip()
+        created_at = _coerce_timestamptz(existing_record.get("created_at")) or now_dt
+        await connection.execute(
+            """
+            INSERT INTO workspace_billing_accounts (
+                id, tenant_id, workspace_id, provider, billing_email, provider_customer_id, default_currency, status, metadata, created_at, updated_at
+            ) VALUES ($1, $2, $3, 'stripe', $4, $5, $6, $7, $8::jsonb, $9::timestamptz, $10::timestamptz)
+            ON CONFLICT (workspace_id) DO UPDATE SET
+                tenant_id = EXCLUDED.tenant_id,
+                billing_email = EXCLUDED.billing_email,
+                provider_customer_id = COALESCE(EXCLUDED.provider_customer_id, workspace_billing_accounts.provider_customer_id),
+                default_currency = EXCLUDED.default_currency,
+                status = EXCLUDED.status,
+                metadata = EXCLUDED.metadata,
+                updated_at = EXCLUDED.updated_at
+            """,
+            account_id,
+            resolved_tenant_id,
+            clean_workspace_id,
+            str(billing_email or "").strip().lower() or None,
+            str(provider_customer_id or "").strip() or None,
+            str(default_currency or "usd").strip().lower() or "usd",
+            str(status or "active").strip().lower() or "active",
+            _to_json(metadata, default={}),
+            created_at,
+            now_dt,
+        )
+    return await get_workspace_billing_summary(clean_workspace_id)
+
+
+async def upsert_workspace_billing_subscription(
+    workspace_id: str,
+    *,
+    tenant_id: Optional[str] = None,
+    plan_id: str,
+    status: str,
+    provider_subscription_id: Optional[str] = None,
+    provider_price_id: Optional[str] = None,
+    provider_product_id: Optional[str] = None,
+    provider_customer_id: Optional[str] = None,
+    checkout_session_id: Optional[str] = None,
+    checkout_url: Optional[str] = None,
+    portal_url: Optional[str] = None,
+    currency: str = "usd",
+    billing_interval: Optional[str] = None,
+    current_period_start: Optional[int] = None,
+    current_period_end: Optional[int] = None,
+    cancel_at_period_end: bool = False,
+    canceled_at: Optional[int] = None,
+    trial_ends_at: Optional[int] = None,
+    metadata: Optional[Dict[str, Any]] = None,
+) -> Optional[Dict[str, Any]]:
+    clean_workspace_id = str(workspace_id or "").strip()
+    if not clean_workspace_id:
+        return None
+    workspace = await get_workspace_by_id(clean_workspace_id)
+    if not isinstance(workspace, dict):
+        return None
+    resolved_tenant_id = str(tenant_id or workspace.get("tenant_id") or "").strip()
+    if not resolved_tenant_id:
+        return None
+    now_dt = _utc_now_ts()
+    now_ts = int(time.time())
+
+    async with _scoped_connection(bypass_rls=True) as connection:
+        if connection is None:
+            with _LOCAL_IDENTITY_LOCK:
+                with _connect_local_identity_db() as fallback:
+                    _upsert_local_workspace_billing_subscription(
+                        fallback,
+                        workspace_id=clean_workspace_id,
+                        tenant_id=resolved_tenant_id,
+                        plan_id=plan_id,
+                        status=status,
+                        provider_subscription_id=provider_subscription_id,
+                        provider_price_id=provider_price_id,
+                        provider_product_id=provider_product_id,
+                        provider_customer_id=provider_customer_id,
+                        checkout_session_id=checkout_session_id,
+                        checkout_url=checkout_url,
+                        portal_url=portal_url,
+                        currency=currency,
+                        billing_interval=billing_interval,
+                        current_period_start=current_period_start,
+                        current_period_end=current_period_end,
+                        cancel_at_period_end=cancel_at_period_end,
+                        canceled_at=canceled_at,
+                        trial_ends_at=trial_ends_at,
+                        metadata=metadata,
+                        created_at_ts=now_ts,
+                    )
+                    fallback.commit()
+            return await get_workspace_billing_summary(clean_workspace_id)
+
+        existing = None
+        if provider_subscription_id:
+            existing = await connection.fetchrow(
+                """
+                SELECT id, created_at
+                FROM workspace_billing_subscriptions
+                WHERE provider = 'stripe' AND provider_subscription_id = $1
+                LIMIT 1
+                """,
+                str(provider_subscription_id or "").strip(),
+            )
+        if existing is None:
+            existing = await connection.fetchrow(
+                """
+                SELECT id, created_at
+                FROM workspace_billing_subscriptions
+                WHERE workspace_id = $1
+                ORDER BY updated_at DESC, created_at DESC
+                LIMIT 1
+                """,
+                clean_workspace_id,
+            )
+        existing_record = dict(existing) if existing is not None else {}
+        subscription_id = str(existing_record.get("id") or uuid.uuid4()).strip()
+        created_at = _coerce_timestamptz(existing_record.get("created_at")) or now_dt
+        await connection.execute(
+            """
+            INSERT INTO workspace_billing_subscriptions (
+                id, tenant_id, workspace_id, provider, plan_id, status, provider_subscription_id, provider_price_id, provider_product_id,
+                provider_customer_id, checkout_session_id, checkout_url, portal_url, currency, billing_interval,
+                current_period_start, current_period_end, cancel_at_period_end, canceled_at, trial_ends_at, metadata, created_at, updated_at
+            ) VALUES (
+                $1, $2, $3, 'stripe', $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14,
+                $15::timestamptz, $16::timestamptz, $17, $18::timestamptz, $19::timestamptz, $20::jsonb, $21::timestamptz, $22::timestamptz
+            )
+            ON CONFLICT (id) DO UPDATE SET
+                tenant_id = EXCLUDED.tenant_id,
+                workspace_id = EXCLUDED.workspace_id,
+                plan_id = EXCLUDED.plan_id,
+                status = EXCLUDED.status,
+                provider_subscription_id = COALESCE(EXCLUDED.provider_subscription_id, workspace_billing_subscriptions.provider_subscription_id),
+                provider_price_id = COALESCE(EXCLUDED.provider_price_id, workspace_billing_subscriptions.provider_price_id),
+                provider_product_id = COALESCE(EXCLUDED.provider_product_id, workspace_billing_subscriptions.provider_product_id),
+                provider_customer_id = COALESCE(EXCLUDED.provider_customer_id, workspace_billing_subscriptions.provider_customer_id),
+                checkout_session_id = COALESCE(EXCLUDED.checkout_session_id, workspace_billing_subscriptions.checkout_session_id),
+                checkout_url = COALESCE(EXCLUDED.checkout_url, workspace_billing_subscriptions.checkout_url),
+                portal_url = COALESCE(EXCLUDED.portal_url, workspace_billing_subscriptions.portal_url),
+                currency = EXCLUDED.currency,
+                billing_interval = COALESCE(EXCLUDED.billing_interval, workspace_billing_subscriptions.billing_interval),
+                current_period_start = COALESCE(EXCLUDED.current_period_start, workspace_billing_subscriptions.current_period_start),
+                current_period_end = COALESCE(EXCLUDED.current_period_end, workspace_billing_subscriptions.current_period_end),
+                cancel_at_period_end = EXCLUDED.cancel_at_period_end,
+                canceled_at = COALESCE(EXCLUDED.canceled_at, workspace_billing_subscriptions.canceled_at),
+                trial_ends_at = COALESCE(EXCLUDED.trial_ends_at, workspace_billing_subscriptions.trial_ends_at),
+                metadata = EXCLUDED.metadata,
+                updated_at = EXCLUDED.updated_at
+            """,
+            subscription_id,
+            resolved_tenant_id,
+            clean_workspace_id,
+            str(plan_id or "free").strip().lower() or "free",
+            str(status or "active").strip().lower() or "active",
+            str(provider_subscription_id or "").strip() or None,
+            str(provider_price_id or "").strip() or None,
+            str(provider_product_id or "").strip() or None,
+            str(provider_customer_id or "").strip() or None,
+            str(checkout_session_id or "").strip() or None,
+            str(checkout_url or "").strip() or None,
+            str(portal_url or "").strip() or None,
+            str(currency or "usd").strip().lower() or "usd",
+            str(billing_interval or "").strip().lower() or None,
+            _coerce_timestamptz(current_period_start),
+            _coerce_timestamptz(current_period_end),
+            bool(cancel_at_period_end),
+            _coerce_timestamptz(canceled_at),
+            _coerce_timestamptz(trial_ends_at),
+            _to_json(metadata, default={}),
+            created_at,
+            now_dt,
+        )
+    return await get_workspace_billing_summary(clean_workspace_id)
+
+
 async def get_workspace_by_id(workspace_id: str) -> Optional[Dict[str, Any]]:
     async with _scoped_connection(bypass_rls=True) as connection:
         if connection is None:
@@ -1588,28 +3930,14 @@ async def get_workspace_by_id(workspace_id: str) -> Optional[Dict[str, Any]]:
                 with _connect_local_identity_db() as fallback:
                     row = fallback.execute(
                         """
-                        SELECT workspace_id, tenant_id, created_at, updated_at
+                        SELECT workspace_id, tenant_id, name, workspace_type, metadata_json, created_at, updated_at
                         FROM workspace_registry
                         WHERE workspace_id = ?
                         LIMIT 1
                         """,
                         (str(workspace_id or "").strip(),),
                     ).fetchone()
-            if row is None:
-                return None
-            return {
-                "id": str(row["workspace_id"] or "").strip(),
-                "tenant_id": str(row["tenant_id"] or "").strip() or None,
-                "workspace_id": str(row["workspace_id"] or "").strip(),
-                "slug": str(row["workspace_id"] or "").strip(),
-                "name": str(row["workspace_id"] or "").strip(),
-                "workspace_type": "shared",
-                "status": "active",
-                "created_by_user_id": None,
-                "metadata": {},
-                "created_at": int(row["created_at"]) if row["created_at"] is not None else None,
-                "updated_at": int(row["updated_at"]) if row["updated_at"] is not None else None,
-            }
+            return _local_workspace_record_from_row(row)
         row = await connection.fetchrow(
             """
             SELECT id, tenant_id, workspace_id, slug, name, workspace_type, status, created_by_user_id, metadata, created_at, updated_at
@@ -1620,6 +3948,1445 @@ async def get_workspace_by_id(workspace_id: str) -> Optional[Dict[str, Any]]:
             str(workspace_id or "").strip(),
         )
     return dict(row) if row is not None else None
+
+
+async def create_deployed_agent(
+    *,
+    tenant_id: str,
+    owner_workspace_id: str,
+    backing_install_id: str,
+    created_by_user_id: Optional[str],
+    name: str,
+    avatar: Optional[str] = None,
+    persona: str = "",
+    system_prompt: str = "",
+    deployment_state: str = "draft",
+    channels: Optional[Dict[str, Any]] = None,
+    knowledge_sources: Optional[List[Dict[str, Any]]] = None,
+    runtime_target: str = "cloud",
+    billing_plan: str = "free",
+    metadata: Optional[Dict[str, Any]] = None,
+    operational_state: Optional[Dict[str, Any]] = None,
+    deployed_agent_id: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    resolved_tenant_id = str(tenant_id or "").strip()
+    resolved_workspace_id = str(owner_workspace_id or "").strip()
+    resolved_install_id = str(backing_install_id or "").strip()
+    resolved_name = str(name or "").strip()
+    if not resolved_tenant_id or not resolved_workspace_id or not resolved_install_id or not resolved_name:
+        return None
+    record_id = str(deployed_agent_id or f"dagent_{uuid.uuid4().hex[:16]}").strip()
+    async with _scoped_connection(tenant_id=resolved_tenant_id, workspace_id=resolved_workspace_id) as connection:
+        if connection is None:
+            return None
+        row = await connection.fetchrow(
+            """
+            INSERT INTO deployed_agents (
+                id, tenant_id, owner_workspace_id, backing_install_id, created_by_user_id,
+                name, avatar, persona, system_prompt, deployment_state, channels, knowledge_sources,
+                runtime_target, billing_plan, metadata, operational_state, created_at, updated_at
+            ) VALUES (
+                $1, $2, $3, $4, $5,
+                $6, $7, $8, $9, $10, $11::jsonb, $12::jsonb,
+                $13, $14, $15::jsonb, $16::jsonb, NOW(), NOW()
+            )
+            RETURNING *
+            """,
+            record_id,
+            resolved_tenant_id,
+            resolved_workspace_id,
+            resolved_install_id,
+            str(created_by_user_id or "").strip() or None,
+            resolved_name,
+            str(avatar or "").strip() or None,
+            str(persona or "").strip(),
+            str(system_prompt or "").strip(),
+            str(deployment_state or "draft").strip().lower() or "draft",
+            _to_json(channels, default={}),
+            _to_json(knowledge_sources, default=[]),
+            str(runtime_target or "cloud").strip() or "cloud",
+            str(billing_plan or "free").strip() or "free",
+            _to_json(metadata, default={}),
+            _to_json(operational_state, default={}),
+        )
+    return _row_to_deployed_agent(row)
+
+
+async def get_deployed_agent_daily_message_usage(
+    *,
+    tenant_id: str,
+    workspace_id: str,
+    deployed_agent_id: str,
+    channel_key: str,
+    external_user_id: str,
+    usage_day: Optional[Any] = None,
+) -> Optional[Dict[str, Any]]:
+    resolved_tenant_id = _require_scope_token(tenant_id, "tenant_id")
+    resolved_workspace_id = _require_scope_token(workspace_id, "workspace_id")
+    resolved_deployed_agent_id = _require_scope_token(deployed_agent_id, "deployed_agent_id")
+    resolved_channel_key = _require_scope_token(channel_key, "channel_key").lower()
+    resolved_external_user_id = _require_scope_token(external_user_id, "external_user_id")
+    resolved_usage_day = _coerce_date(usage_day)
+    if usage_day is not None and resolved_usage_day is None:
+        raise ValueError("usage_day must be an ISO date string or date value.")
+    resolved_usage_day = resolved_usage_day or datetime.now(timezone.utc).date()
+    async with _scoped_connection(tenant_id=resolved_tenant_id, workspace_id=resolved_workspace_id) as connection:
+        if connection is None:
+            return None
+        row = await connection.fetchrow(
+            """
+            SELECT *
+            FROM deployed_agent_daily_message_usage
+            WHERE tenant_id = $1
+              AND workspace_id = $2
+              AND deployed_agent_id = $3
+              AND channel_key = $4
+              AND external_user_id = $5
+              AND usage_day = $6::date
+            LIMIT 1
+            """,
+            resolved_tenant_id,
+            resolved_workspace_id,
+            resolved_deployed_agent_id,
+            resolved_channel_key,
+            resolved_external_user_id,
+            resolved_usage_day,
+        )
+    return _row_to_deployed_agent_daily_message_usage(row)
+
+
+async def consume_deployed_agent_daily_message_quota(
+    *,
+    tenant_id: str,
+    workspace_id: str,
+    deployed_agent_id: str,
+    channel_key: str,
+    external_user_id: str,
+    limit: int,
+    usage_day: Optional[Any] = None,
+    metadata: Optional[Dict[str, Any]] = None,
+) -> Optional[Dict[str, Any]]:
+    resolved_tenant_id = _require_scope_token(tenant_id, "tenant_id")
+    resolved_workspace_id = _require_scope_token(workspace_id, "workspace_id")
+    resolved_deployed_agent_id = _require_scope_token(deployed_agent_id, "deployed_agent_id")
+    resolved_channel_key = _require_scope_token(channel_key, "channel_key").lower()
+    resolved_external_user_id = _require_scope_token(external_user_id, "external_user_id")
+    resolved_limit = max(0, int(limit or 0))
+    if resolved_limit <= 0:
+        raise ValueError("limit must be a positive integer.")
+    resolved_usage_day = _coerce_date(usage_day)
+    if usage_day is not None and resolved_usage_day is None:
+        raise ValueError("usage_day must be an ISO date string or date value.")
+    resolved_usage_day = resolved_usage_day or datetime.now(timezone.utc).date()
+    now_ts = _utc_now_ts()
+    record_id = f"dusage_{uuid.uuid4().hex[:16]}"
+    async with _scoped_connection(tenant_id=resolved_tenant_id, workspace_id=resolved_workspace_id) as connection:
+        if connection is None:
+            return None
+        row = await connection.fetchrow(
+            """
+            WITH consumed AS (
+                INSERT INTO deployed_agent_daily_message_usage (
+                    id, tenant_id, workspace_id, deployed_agent_id, channel_key, external_user_id,
+                    usage_day, message_count, metadata, last_message_at, created_at, updated_at
+                ) VALUES (
+                    $1, $2, $3, $4, $5, $6,
+                    $7::date, 1, $8::jsonb, $9::timestamptz, $9::timestamptz, $9::timestamptz
+                )
+                ON CONFLICT (tenant_id, workspace_id, deployed_agent_id, channel_key, external_user_id, usage_day)
+                DO UPDATE SET
+                    message_count = deployed_agent_daily_message_usage.message_count + 1,
+                    metadata = deployed_agent_daily_message_usage.metadata || EXCLUDED.metadata,
+                    last_message_at = EXCLUDED.last_message_at,
+                    updated_at = EXCLUDED.updated_at
+                WHERE deployed_agent_daily_message_usage.message_count < $10
+                RETURNING deployed_agent_daily_message_usage.*, TRUE AS quota_consumed
+            )
+            SELECT *
+            FROM consumed
+            UNION ALL
+            SELECT existing.*, FALSE AS quota_consumed
+            FROM deployed_agent_daily_message_usage AS existing
+            WHERE existing.tenant_id = $2
+              AND existing.workspace_id = $3
+              AND existing.deployed_agent_id = $4
+              AND existing.channel_key = $5
+              AND existing.external_user_id = $6
+              AND existing.usage_day = $7::date
+              AND NOT EXISTS (SELECT 1 FROM consumed)
+            LIMIT 1
+            """,
+            record_id,
+            resolved_tenant_id,
+            resolved_workspace_id,
+            resolved_deployed_agent_id,
+            resolved_channel_key,
+            resolved_external_user_id,
+            resolved_usage_day,
+            _to_json(metadata, default={}),
+            now_ts,
+            resolved_limit,
+        )
+    return _row_to_deployed_agent_daily_message_usage(row)
+
+
+async def get_deployed_agent_by_id(
+    deployed_agent_id: str,
+    *,
+    tenant_id: Optional[str] = None,
+    owner_workspace_id: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    resolved_id = str(deployed_agent_id or "").strip()
+    if not resolved_id:
+        return None
+    scoped_kwargs: Dict[str, Any] = {"bypass_rls": True}
+    if tenant_id is not None and owner_workspace_id is not None:
+        scoped_kwargs = {
+            "tenant_id": str(tenant_id or "").strip(),
+            "workspace_id": str(owner_workspace_id or "").strip(),
+        }
+    async with _scoped_connection(**scoped_kwargs) as connection:
+        if connection is None:
+            return None
+        row = await connection.fetchrow(
+            """
+            SELECT *
+            FROM deployed_agents
+            WHERE id = $1
+              AND ($2 = '' OR tenant_id = $2)
+              AND ($3 = '' OR owner_workspace_id = $3)
+            LIMIT 1
+            """,
+            resolved_id,
+            str(tenant_id or "").strip(),
+            str(owner_workspace_id or "").strip(),
+        )
+    return _row_to_deployed_agent(row)
+
+
+async def record_deployed_agent_monthly_cost_ledger_entry(
+    *,
+    tenant_id: str,
+    workspace_id: str,
+    deployed_agent_id: str,
+    usage_month: Optional[Any] = None,
+    run_id: str,
+    run_status: str,
+    provider: Optional[str] = None,
+    model: Optional[str] = None,
+    prompt_tokens: int = 0,
+    completion_tokens: int = 0,
+    total_tokens: int = 0,
+    estimated_cost_usd: float = 0.0,
+    completed_at: Optional[Any] = None,
+    metadata: Optional[Dict[str, Any]] = None,
+    ledger_entry_id: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    resolved_tenant_id = _require_scope_token(tenant_id, "tenant_id")
+    resolved_workspace_id = _require_scope_token(workspace_id, "workspace_id")
+    resolved_deployed_agent_id = _require_scope_token(deployed_agent_id, "deployed_agent_id")
+    resolved_run_id = _require_scope_token(run_id, "run_id")
+    resolved_usage_month = _coerce_month_start_date(usage_month)
+    if usage_month is not None and resolved_usage_month is None:
+        raise ValueError("usage_month must be an ISO date string or date value.")
+    resolved_usage_month = resolved_usage_month or datetime.now(timezone.utc).date().replace(day=1)
+    record_id = str(ledger_entry_id or f"dcost_{uuid.uuid4().hex[:16]}").strip()
+    now_ts = _utc_now_ts()
+    async with _scoped_connection(tenant_id=resolved_tenant_id, workspace_id=resolved_workspace_id) as connection:
+        if connection is None:
+            return None
+        row = await connection.fetchrow(
+            """
+            INSERT INTO deployed_agent_monthly_cost_ledger (
+                id, tenant_id, workspace_id, deployed_agent_id, usage_month, run_id,
+                run_status, provider, model, prompt_tokens, completion_tokens, total_tokens,
+                estimated_cost_usd, completed_at, metadata, created_at, updated_at
+            ) VALUES (
+                $1, $2, $3, $4, $5::date, $6,
+                $7, $8, $9, $10, $11, $12,
+                $13, $14::timestamptz, $15::jsonb, $16::timestamptz, $16::timestamptz
+            )
+            ON CONFLICT (tenant_id, workspace_id, deployed_agent_id, run_id)
+            DO UPDATE SET
+                usage_month = EXCLUDED.usage_month,
+                run_status = EXCLUDED.run_status,
+                provider = EXCLUDED.provider,
+                model = EXCLUDED.model,
+                prompt_tokens = EXCLUDED.prompt_tokens,
+                completion_tokens = EXCLUDED.completion_tokens,
+                total_tokens = EXCLUDED.total_tokens,
+                estimated_cost_usd = EXCLUDED.estimated_cost_usd,
+                completed_at = COALESCE(EXCLUDED.completed_at, deployed_agent_monthly_cost_ledger.completed_at),
+                metadata = deployed_agent_monthly_cost_ledger.metadata || EXCLUDED.metadata,
+                updated_at = EXCLUDED.updated_at
+            RETURNING *
+            """,
+            record_id,
+            resolved_tenant_id,
+            resolved_workspace_id,
+            resolved_deployed_agent_id,
+            resolved_usage_month,
+            resolved_run_id,
+            str(run_status or "").strip().lower() or "completed",
+            str(provider or "").strip().lower() or None,
+            str(model or "").strip() or None,
+            max(0, int(prompt_tokens or 0)),
+            max(0, int(completion_tokens or 0)),
+            max(0, int(total_tokens or 0)),
+            round(float(estimated_cost_usd or 0.0), 6),
+            _coerce_timestamptz(completed_at),
+            _to_json(metadata, default={}),
+            now_ts,
+        )
+    return _row_to_deployed_agent_monthly_cost_ledger_entry(row)
+
+
+async def upsert_channel_user_acquisition_touch(
+    *,
+    tenant_id: str,
+    workspace_id: str,
+    deployed_agent_id: str,
+    channel_key: str,
+    endpoint_key: Optional[str],
+    external_user_id: str,
+    source: Optional[str] = None,
+    campaign_token: Optional[str] = None,
+    metadata: Optional[Dict[str, Any]] = None,
+    touch_id: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    resolved_tenant_id = _require_scope_token(tenant_id, "tenant_id")
+    resolved_workspace_id = _require_scope_token(workspace_id, "workspace_id")
+    resolved_deployed_agent_id = _require_scope_token(deployed_agent_id, "deployed_agent_id")
+    resolved_channel_key = _require_scope_token(channel_key, "channel_key").lower()
+    resolved_external_user_id = _require_scope_token(external_user_id, "external_user_id")
+    resolved_touch_id = str(touch_id or f"acq_{uuid.uuid4().hex[:16]}").strip()
+    resolved_endpoint_key = str(endpoint_key or "").strip().lower()
+    resolved_source = str(source or "").strip().lower()
+    resolved_campaign_token = str(campaign_token or "").strip()
+    now_ts = _utc_now_ts()
+    async with _scoped_connection(tenant_id=resolved_tenant_id, workspace_id=resolved_workspace_id) as connection:
+        if connection is None:
+            return None
+        row = await connection.fetchrow(
+            """
+            INSERT INTO channel_user_acquisition_touches (
+                id, tenant_id, workspace_id, deployed_agent_id, channel_key, endpoint_key,
+                external_user_id, source, campaign_token, start_count, metadata,
+                first_started_at, last_started_at, created_at, updated_at
+            ) VALUES (
+                $1, $2, $3, $4, $5, $6,
+                $7, $8, $9, 1, $10::jsonb,
+                $11::timestamptz, $11::timestamptz, $11::timestamptz, $11::timestamptz
+            )
+            ON CONFLICT (tenant_id, workspace_id, deployed_agent_id, channel_key, external_user_id)
+            DO UPDATE SET
+                endpoint_key = CASE
+                    WHEN EXCLUDED.endpoint_key <> '' THEN EXCLUDED.endpoint_key
+                    ELSE channel_user_acquisition_touches.endpoint_key
+                END,
+                source = CASE
+                    WHEN EXCLUDED.source <> '' THEN EXCLUDED.source
+                    ELSE channel_user_acquisition_touches.source
+                END,
+                campaign_token = CASE
+                    WHEN EXCLUDED.campaign_token <> '' THEN EXCLUDED.campaign_token
+                    ELSE channel_user_acquisition_touches.campaign_token
+                END,
+                start_count = channel_user_acquisition_touches.start_count + 1,
+                metadata = channel_user_acquisition_touches.metadata || EXCLUDED.metadata,
+                last_started_at = EXCLUDED.last_started_at,
+                updated_at = EXCLUDED.updated_at
+            RETURNING *
+            """,
+            resolved_touch_id,
+            resolved_tenant_id,
+            resolved_workspace_id,
+            resolved_deployed_agent_id,
+            resolved_channel_key,
+            resolved_endpoint_key,
+            resolved_external_user_id,
+            resolved_source,
+            resolved_campaign_token,
+            _to_json(metadata, default={}),
+            now_ts,
+        )
+    return _row_to_channel_user_acquisition_touch(row)
+
+
+async def get_channel_user_acquisition_touch_by_id(
+    touch_id: str,
+    *,
+    tenant_id: Optional[str] = None,
+    workspace_id: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    resolved_touch_id = str(touch_id or "").strip()
+    if not resolved_touch_id:
+        return None
+    scoped_kwargs: Dict[str, Any] = {"bypass_rls": True}
+    if tenant_id is not None and workspace_id is not None:
+        scoped_kwargs = {
+            "tenant_id": str(tenant_id or "").strip(),
+            "workspace_id": str(workspace_id or "").strip(),
+        }
+    async with _scoped_connection(**scoped_kwargs) as connection:
+        if connection is None:
+            return None
+        row = await connection.fetchrow(
+            """
+            SELECT *
+            FROM channel_user_acquisition_touches
+            WHERE id = $1
+            LIMIT 1
+            """,
+            resolved_touch_id,
+        )
+    return _row_to_channel_user_acquisition_touch(row)
+
+
+async def mark_channel_user_acquisition_touch_converted(
+    *,
+    touch_id: str,
+    tenant_id: str,
+    workspace_id: str,
+    converted_user_id: str,
+    converted_email: Optional[str] = None,
+    auth_flow: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    resolved_touch_id = _require_scope_token(touch_id, "touch_id")
+    resolved_tenant_id = _require_scope_token(tenant_id, "tenant_id")
+    resolved_workspace_id = _require_scope_token(workspace_id, "workspace_id")
+    resolved_user_id = _require_scope_token(converted_user_id, "converted_user_id")
+    now_ts = _utc_now_ts()
+    async with _scoped_connection(tenant_id=resolved_tenant_id, workspace_id=resolved_workspace_id) as connection:
+        if connection is None:
+            return None
+        row = await connection.fetchrow(
+            """
+            UPDATE channel_user_acquisition_touches
+            SET
+                converted_user_id = $4,
+                converted_email = COALESCE(NULLIF($5, ''), converted_email),
+                converted_auth_flow = COALESCE(NULLIF($6, ''), converted_auth_flow),
+                converted_at = COALESCE(converted_at, $7::timestamptz),
+                updated_at = $7::timestamptz
+            WHERE id = $1
+              AND tenant_id = $2
+              AND workspace_id = $3
+              AND (converted_user_id IS NULL OR converted_user_id = $4)
+            RETURNING *
+            """,
+            resolved_touch_id,
+            resolved_tenant_id,
+            resolved_workspace_id,
+            resolved_user_id,
+            str(converted_email or "").strip().lower(),
+            str(auth_flow or "").strip().lower(),
+            now_ts,
+        )
+        if row is None:
+            row = await connection.fetchrow(
+                """
+                SELECT *
+                FROM channel_user_acquisition_touches
+                WHERE id = $1
+                  AND tenant_id = $2
+                  AND workspace_id = $3
+                LIMIT 1
+                """,
+                resolved_touch_id,
+                resolved_tenant_id,
+                resolved_workspace_id,
+            )
+    return _row_to_channel_user_acquisition_touch(row)
+
+
+async def get_deployed_agent_conversation_memory(
+    *,
+    tenant_id: str,
+    workspace_id: str,
+    deployed_agent_id: str,
+    channel_key: str,
+    external_user_id: str,
+) -> Optional[Dict[str, Any]]:
+    resolved_tenant_id = _require_scope_token(tenant_id, "tenant_id")
+    resolved_workspace_id = _require_scope_token(workspace_id, "workspace_id")
+    resolved_deployed_agent_id = _require_scope_token(deployed_agent_id, "deployed_agent_id")
+    resolved_channel_key = _require_scope_token(channel_key, "channel_key").lower()
+    resolved_external_user_id = _require_scope_token(external_user_id, "external_user_id")
+    async with _scoped_connection(tenant_id=resolved_tenant_id, workspace_id=resolved_workspace_id) as connection:
+        if connection is None:
+            return None
+        row = await connection.fetchrow(
+            """
+            SELECT *
+            FROM deployed_agent_conversation_memory
+            WHERE tenant_id = $1
+              AND workspace_id = $2
+              AND deployed_agent_id = $3
+              AND channel_key = $4
+              AND external_user_id = $5
+            LIMIT 1
+            """,
+            resolved_tenant_id,
+            resolved_workspace_id,
+            resolved_deployed_agent_id,
+            resolved_channel_key,
+            resolved_external_user_id,
+        )
+    return _row_to_deployed_agent_conversation_memory(row)
+
+
+async def upsert_deployed_agent_conversation_memory(
+    *,
+    tenant_id: str,
+    workspace_id: str,
+    deployed_agent_id: str,
+    channel_key: str,
+    external_user_id: str,
+    session_key: Optional[str] = None,
+    summary_text: str = "",
+    recent_message_count: int = 0,
+    source_message_count: int = 0,
+    metadata: Optional[Dict[str, Any]] = None,
+    memory_id: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    resolved_tenant_id = _require_scope_token(tenant_id, "tenant_id")
+    resolved_workspace_id = _require_scope_token(workspace_id, "workspace_id")
+    resolved_deployed_agent_id = _require_scope_token(deployed_agent_id, "deployed_agent_id")
+    resolved_channel_key = _require_scope_token(channel_key, "channel_key").lower()
+    resolved_external_user_id = _require_scope_token(external_user_id, "external_user_id")
+    resolved_memory_id = str(memory_id or f"dmem_{uuid.uuid4().hex[:16]}").strip()
+    now_ts = _utc_now_ts()
+    async with _scoped_connection(tenant_id=resolved_tenant_id, workspace_id=resolved_workspace_id) as connection:
+        if connection is None:
+            return None
+        row = await connection.fetchrow(
+            """
+            INSERT INTO deployed_agent_conversation_memory (
+                id, tenant_id, workspace_id, deployed_agent_id, channel_key, external_user_id,
+                session_key, summary_text, recent_message_count, source_message_count, metadata,
+                created_at, updated_at
+            ) VALUES (
+                $1, $2, $3, $4, $5, $6,
+                $7, $8, $9, $10, $11::jsonb,
+                $12::timestamptz, $12::timestamptz
+            )
+            ON CONFLICT (tenant_id, workspace_id, deployed_agent_id, channel_key, external_user_id)
+            DO UPDATE SET
+                session_key = COALESCE(NULLIF(EXCLUDED.session_key, ''), deployed_agent_conversation_memory.session_key),
+                summary_text = EXCLUDED.summary_text,
+                recent_message_count = EXCLUDED.recent_message_count,
+                source_message_count = EXCLUDED.source_message_count,
+                metadata = deployed_agent_conversation_memory.metadata || EXCLUDED.metadata,
+                updated_at = EXCLUDED.updated_at
+            RETURNING *
+            """,
+            resolved_memory_id,
+            resolved_tenant_id,
+            resolved_workspace_id,
+            resolved_deployed_agent_id,
+            resolved_channel_key,
+            resolved_external_user_id,
+            str(session_key or "").strip() or None,
+            str(summary_text or "").strip(),
+            max(0, int(recent_message_count or 0)),
+            max(0, int(source_message_count or 0)),
+            _to_json(metadata, default={}),
+            now_ts,
+        )
+    return _row_to_deployed_agent_conversation_memory(row)
+
+
+async def upsert_external_user_privacy_request(
+    *,
+    tenant_id: str,
+    workspace_id: str,
+    deployed_agent_id: str,
+    channel_key: str,
+    external_user_id: str,
+    request_source: Optional[str] = None,
+    requested_via: Optional[str] = None,
+    session_key: Optional[str] = None,
+    requested_event_id: Optional[str] = None,
+    status: str = "requested",
+    note: str = "",
+    metadata: Optional[Dict[str, Any]] = None,
+    completed_by_user_id: Optional[str] = None,
+    request_id: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    resolved_tenant_id = _require_scope_token(tenant_id, "tenant_id")
+    resolved_workspace_id = _require_scope_token(workspace_id, "workspace_id")
+    resolved_deployed_agent_id = _require_scope_token(deployed_agent_id, "deployed_agent_id")
+    resolved_channel_key = _require_scope_token(channel_key, "channel_key").lower()
+    resolved_external_user_id = _require_scope_token(external_user_id, "external_user_id")
+    resolved_request_id = str(request_id or f"privreq_{uuid.uuid4().hex[:16]}").strip()
+    resolved_status = str(status or "requested").strip().lower() or "requested"
+    if resolved_status not in {"requested", "completed"}:
+        resolved_status = "requested"
+    now_ts = _utc_now_ts()
+    completed_at = now_ts if resolved_status == "completed" else None
+    async with _scoped_connection(tenant_id=resolved_tenant_id, workspace_id=resolved_workspace_id) as connection:
+        if connection is None:
+            return None
+        row = await connection.fetchrow(
+            """
+            INSERT INTO external_user_privacy_requests (
+                id, tenant_id, workspace_id, deployed_agent_id, channel_key, external_user_id,
+                request_source, requested_via, session_key, requested_event_id, status, note,
+                metadata, first_requested_at, last_requested_at, completed_at, completed_by_user_id,
+                created_at, updated_at
+            ) VALUES (
+                $1, $2, $3, $4, $5, $6,
+                $7, $8, $9, $10, $11, $12,
+                $13::jsonb, $14::timestamptz, $14::timestamptz, $15::timestamptz, $16,
+                $14::timestamptz, $14::timestamptz
+            )
+            ON CONFLICT (tenant_id, workspace_id, deployed_agent_id, channel_key, external_user_id)
+            DO UPDATE SET
+                request_source = CASE
+                    WHEN EXCLUDED.request_source <> '' THEN EXCLUDED.request_source
+                    ELSE external_user_privacy_requests.request_source
+                END,
+                requested_via = CASE
+                    WHEN EXCLUDED.requested_via <> '' THEN EXCLUDED.requested_via
+                    ELSE external_user_privacy_requests.requested_via
+                END,
+                session_key = COALESCE(NULLIF(EXCLUDED.session_key, ''), external_user_privacy_requests.session_key),
+                requested_event_id = COALESCE(NULLIF(EXCLUDED.requested_event_id, ''), external_user_privacy_requests.requested_event_id),
+                status = EXCLUDED.status,
+                note = CASE
+                    WHEN EXCLUDED.note <> '' THEN EXCLUDED.note
+                    ELSE external_user_privacy_requests.note
+                END,
+                metadata = external_user_privacy_requests.metadata || EXCLUDED.metadata,
+                last_requested_at = EXCLUDED.last_requested_at,
+                completed_at = CASE
+                    WHEN EXCLUDED.status = 'completed' THEN COALESCE(EXCLUDED.completed_at, external_user_privacy_requests.completed_at)
+                    ELSE NULL
+                END,
+                completed_by_user_id = CASE
+                    WHEN EXCLUDED.status = 'completed' AND EXCLUDED.completed_by_user_id <> '' THEN EXCLUDED.completed_by_user_id
+                    WHEN EXCLUDED.status = 'completed' THEN external_user_privacy_requests.completed_by_user_id
+                    ELSE NULL
+                END,
+                updated_at = EXCLUDED.updated_at
+            RETURNING *
+            """,
+            resolved_request_id,
+            resolved_tenant_id,
+            resolved_workspace_id,
+            resolved_deployed_agent_id,
+            resolved_channel_key,
+            resolved_external_user_id,
+            str(request_source or "").strip().lower(),
+            str(requested_via or "").strip().lower(),
+            str(session_key or "").strip() or None,
+            str(requested_event_id or "").strip() or None,
+            resolved_status,
+            str(note or "").strip(),
+            _to_json(metadata, default={}),
+            now_ts,
+            completed_at,
+            str(completed_by_user_id or "").strip() or None,
+        )
+    return _row_to_external_user_privacy_request(row)
+
+
+async def append_external_user_privacy_delete_audit(
+    *,
+    tenant_id: str,
+    workspace_id: str,
+    deployed_agent_id: str,
+    channel_key: str,
+    external_user_id: str,
+    request_id: Optional[str] = None,
+    actor_user_id: Optional[str] = None,
+    operation: str = "purge",
+    status: str = "completed",
+    deleted_channel_event_count: int = 0,
+    deleted_memory_count: int = 0,
+    deleted_daily_usage_count: int = 0,
+    deleted_acquisition_touch_count: int = 0,
+    metadata: Optional[Dict[str, Any]] = None,
+    audit_id: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    resolved_tenant_id = _require_scope_token(tenant_id, "tenant_id")
+    resolved_workspace_id = _require_scope_token(workspace_id, "workspace_id")
+    resolved_deployed_agent_id = _require_scope_token(deployed_agent_id, "deployed_agent_id")
+    resolved_channel_key = _require_scope_token(channel_key, "channel_key").lower()
+    resolved_external_user_id = _require_scope_token(external_user_id, "external_user_id")
+    resolved_audit_id = str(audit_id or f"privaudit_{uuid.uuid4().hex[:16]}").strip()
+    now_ts = _utc_now_ts()
+    async with _scoped_connection(tenant_id=resolved_tenant_id, workspace_id=resolved_workspace_id) as connection:
+        if connection is None:
+            return None
+        row = await connection.fetchrow(
+            """
+            INSERT INTO external_user_privacy_delete_audits (
+                id, tenant_id, workspace_id, deployed_agent_id, channel_key, external_user_id,
+                request_id, actor_user_id, operation, status, deleted_channel_event_count, deleted_memory_count,
+                deleted_daily_usage_count, deleted_acquisition_touch_count, metadata, created_at
+            ) VALUES (
+                $1, $2, $3, $4, $5, $6,
+                $7, $8, $9, $10, $11, $12,
+                $13, $14, $15::jsonb, $16::timestamptz
+            )
+            RETURNING *
+            """,
+            resolved_audit_id,
+            resolved_tenant_id,
+            resolved_workspace_id,
+            resolved_deployed_agent_id,
+            resolved_channel_key,
+            resolved_external_user_id,
+            str(request_id or "").strip() or None,
+            str(actor_user_id or "").strip() or None,
+            str(operation or "purge").strip().lower() or "purge",
+            str(status or "completed").strip().lower() or "completed",
+            max(0, int(deleted_channel_event_count or 0)),
+            max(0, int(deleted_memory_count or 0)),
+            max(0, int(deleted_daily_usage_count or 0)),
+            max(0, int(deleted_acquisition_touch_count or 0)),
+            _to_json(metadata, default={}),
+            now_ts,
+        )
+    return _row_to_external_user_privacy_delete_audit(row)
+
+
+async def delete_deployed_agent_external_user_data(
+    *,
+    tenant_id: str,
+    workspace_id: str,
+    deployed_agent_id: str,
+    channel_key: str,
+    external_user_id: str,
+) -> Dict[str, int]:
+    resolved_tenant_id = _require_scope_token(tenant_id, "tenant_id")
+    resolved_workspace_id = _require_scope_token(workspace_id, "workspace_id")
+    resolved_deployed_agent_id = _require_scope_token(deployed_agent_id, "deployed_agent_id")
+    resolved_channel_key = _require_scope_token(channel_key, "channel_key").lower()
+    resolved_external_user_id = _require_scope_token(external_user_id, "external_user_id")
+    async with _scoped_connection(tenant_id=resolved_tenant_id, workspace_id=resolved_workspace_id) as connection:
+        if connection is None:
+            return {
+                "deleted_channel_event_count": 0,
+                "deleted_memory_count": 0,
+                "deleted_daily_usage_count": 0,
+                "deleted_acquisition_touch_count": 0,
+            }
+        row = await connection.fetchrow(
+            """
+            WITH matching_sessions AS (
+                SELECT DISTINCT session_key
+                FROM agent_channel_events
+                WHERE tenant_id = $1
+                  AND workspace_id = $2
+                  AND channel_key = $3
+                  AND COALESCE(metadata->>'deployed_agent_id', '') = $4
+                  AND direction = 'inbound'
+                  AND COALESCE(actor->>'id', '') = $5
+                  AND COALESCE(session_key, '') <> ''
+            ),
+            deleted_events AS (
+                DELETE FROM agent_channel_events
+                WHERE tenant_id = $1
+                  AND workspace_id = $2
+                  AND channel_key = $3
+                  AND COALESCE(metadata->>'deployed_agent_id', '') = $4
+                  AND (
+                    COALESCE(actor->>'id', '') = $5
+                    OR session_key IN (SELECT session_key FROM matching_sessions)
+                  )
+                RETURNING 1
+            ),
+            deleted_memory AS (
+                DELETE FROM deployed_agent_conversation_memory
+                WHERE tenant_id = $1
+                  AND workspace_id = $2
+                  AND deployed_agent_id = $4
+                  AND channel_key = $3
+                  AND external_user_id = $5
+                RETURNING 1
+            ),
+            deleted_daily_usage AS (
+                DELETE FROM deployed_agent_daily_message_usage
+                WHERE tenant_id = $1
+                  AND workspace_id = $2
+                  AND deployed_agent_id = $4
+                  AND channel_key = $3
+                  AND external_user_id = $5
+                RETURNING 1
+            ),
+            deleted_acquisition AS (
+                DELETE FROM channel_user_acquisition_touches
+                WHERE tenant_id = $1
+                  AND workspace_id = $2
+                  AND deployed_agent_id = $4
+                  AND channel_key = $3
+                  AND external_user_id = $5
+                RETURNING 1
+            )
+            SELECT
+                (SELECT COUNT(*)::int FROM deleted_events) AS deleted_channel_event_count,
+                (SELECT COUNT(*)::int FROM deleted_memory) AS deleted_memory_count,
+                (SELECT COUNT(*)::int FROM deleted_daily_usage) AS deleted_daily_usage_count,
+                (SELECT COUNT(*)::int FROM deleted_acquisition) AS deleted_acquisition_touch_count
+            """,
+            resolved_tenant_id,
+            resolved_workspace_id,
+            resolved_channel_key,
+            resolved_deployed_agent_id,
+            resolved_external_user_id,
+        )
+    payload = dict(row or {})
+    return {
+        "deleted_channel_event_count": int(payload.get("deleted_channel_event_count") or 0),
+        "deleted_memory_count": int(payload.get("deleted_memory_count") or 0),
+        "deleted_daily_usage_count": int(payload.get("deleted_daily_usage_count") or 0),
+        "deleted_acquisition_touch_count": int(payload.get("deleted_acquisition_touch_count") or 0),
+    }
+
+
+async def summarize_deployed_agent_monthly_cost_ledger(
+    *,
+    tenant_id: str,
+    workspace_id: str,
+    deployed_agent_id: str,
+    usage_month: Optional[Any] = None,
+) -> Dict[str, Any]:
+    resolved_tenant_id = _require_scope_token(tenant_id, "tenant_id")
+    resolved_workspace_id = _require_scope_token(workspace_id, "workspace_id")
+    resolved_deployed_agent_id = _require_scope_token(deployed_agent_id, "deployed_agent_id")
+    resolved_usage_month = _coerce_month_start_date(usage_month)
+    if usage_month is not None and resolved_usage_month is None:
+        raise ValueError("usage_month must be an ISO date string or date value.")
+    resolved_usage_month = resolved_usage_month or datetime.now(timezone.utc).date().replace(day=1)
+    async with _scoped_connection(tenant_id=resolved_tenant_id, workspace_id=resolved_workspace_id) as connection:
+        if connection is None:
+            return {
+                "tenant_id": resolved_tenant_id,
+                "workspace_id": resolved_workspace_id,
+                "deployed_agent_id": resolved_deployed_agent_id,
+                "usage_month": resolved_usage_month.isoformat(),
+                "runs_count": 0,
+                "total_cost_usd": 0.0,
+                "last_run_id": None,
+                "last_run_completed_at": None,
+            }
+        totals = await connection.fetchrow(
+            """
+            SELECT
+                COUNT(*)::integer AS runs_count,
+                COALESCE(SUM(estimated_cost_usd), 0)::double precision AS total_cost_usd,
+                MAX(completed_at) AS last_run_completed_at
+            FROM deployed_agent_monthly_cost_ledger
+            WHERE tenant_id = $1
+              AND workspace_id = $2
+              AND deployed_agent_id = $3
+              AND usage_month = $4::date
+            """,
+            resolved_tenant_id,
+            resolved_workspace_id,
+            resolved_deployed_agent_id,
+            resolved_usage_month,
+        )
+        latest = await connection.fetchrow(
+            """
+            SELECT run_id, completed_at
+            FROM deployed_agent_monthly_cost_ledger
+            WHERE tenant_id = $1
+              AND workspace_id = $2
+              AND deployed_agent_id = $3
+              AND usage_month = $4::date
+            ORDER BY COALESCE(completed_at, updated_at, created_at) DESC, run_id DESC
+            LIMIT 1
+            """,
+            resolved_tenant_id,
+            resolved_workspace_id,
+            resolved_deployed_agent_id,
+            resolved_usage_month,
+        )
+    total_payload = dict(totals) if totals is not None else {}
+    latest_payload = dict(latest) if latest is not None else {}
+    return {
+        "tenant_id": resolved_tenant_id,
+        "workspace_id": resolved_workspace_id,
+        "deployed_agent_id": resolved_deployed_agent_id,
+        "usage_month": resolved_usage_month,
+        "runs_count": int(total_payload.get("runs_count") or 0),
+        "total_cost_usd": round(float(total_payload.get("total_cost_usd") or 0.0), 6),
+        "last_run_id": str(latest_payload.get("run_id") or "").strip() or None,
+        "last_run_completed_at": _iso(latest_payload.get("completed_at") or total_payload.get("last_run_completed_at")),
+    }
+
+
+async def summarize_deployed_agent_activity_rollup(
+    *,
+    tenant_id: str,
+    workspace_id: str,
+    deployed_agent_id: str,
+    backing_install_id: str,
+) -> Dict[str, Any]:
+    resolved_tenant_id = _require_scope_token(tenant_id, "tenant_id")
+    resolved_workspace_id = _require_scope_token(workspace_id, "workspace_id")
+    resolved_deployed_agent_id = str(deployed_agent_id or "").strip()
+    resolved_backing_install_id = str(backing_install_id or "").strip()
+    if not resolved_deployed_agent_id or not resolved_backing_install_id:
+        return {
+            "deployed_agent_id": resolved_deployed_agent_id or None,
+            "active_users_30d": 0,
+            "session_count_30d": 0,
+            "message_count_day": 0,
+            "message_count_week": 0,
+            "message_count_month": 0,
+            "latest_message_at": None,
+        }
+    async with _scoped_connection(tenant_id=resolved_tenant_id, workspace_id=resolved_workspace_id) as connection:
+        if connection is None:
+            return {
+                "deployed_agent_id": resolved_deployed_agent_id,
+                "active_users_30d": 0,
+                "session_count_30d": 0,
+                "message_count_day": 0,
+                "message_count_week": 0,
+                "message_count_month": 0,
+                "latest_message_at": None,
+            }
+        row = await connection.fetchrow(
+            """
+            WITH filtered_events AS (
+                SELECT
+                    *,
+                    COALESCE(
+                        NULLIF(BTRIM(actor->>'id'), ''),
+                        NULLIF(BTRIM(payload->>'external_user_id'), ''),
+                        NULLIF(BTRIM(metadata->>'external_user_id'), ''),
+                        NULLIF(BTRIM(session_key), '')
+                    ) AS external_user_key
+                FROM agent_channel_events
+                WHERE tenant_id = $1
+                  AND workspace_id = $2
+                  AND (
+                    COALESCE(metadata->>'deployed_agent_id', '') = $3
+                    OR responder_install_id = $4
+                  )
+            )
+            SELECT
+                $3::text AS deployed_agent_id,
+                COUNT(DISTINCT external_user_key) FILTER (
+                    WHERE direction = 'inbound'
+                      AND COALESCE(external_user_key, '') <> ''
+                      AND created_at >= NOW() - INTERVAL '30 days'
+                )::int AS active_users_30d,
+                COUNT(DISTINCT session_key) FILTER (
+                    WHERE COALESCE(session_key, '') <> ''
+                      AND created_at >= NOW() - INTERVAL '30 days'
+                )::int AS session_count_30d,
+                COUNT(*) FILTER (
+                    WHERE event_type = 'message'
+                      AND created_at >= NOW() - INTERVAL '1 day'
+                )::int AS message_count_day,
+                COUNT(*) FILTER (
+                    WHERE event_type = 'message'
+                      AND created_at >= NOW() - INTERVAL '7 days'
+                )::int AS message_count_week,
+                COUNT(*) FILTER (
+                    WHERE event_type = 'message'
+                      AND created_at >= NOW() - INTERVAL '30 days'
+                )::int AS message_count_month,
+                MAX(created_at) AS latest_message_at
+            FROM filtered_events
+            """,
+            resolved_tenant_id,
+            resolved_workspace_id,
+            resolved_deployed_agent_id,
+            resolved_backing_install_id,
+        )
+    return _row_to_deployed_agent_activity_rollup(row) or {
+        "deployed_agent_id": resolved_deployed_agent_id,
+        "active_users_30d": 0,
+        "session_count_30d": 0,
+        "message_count_day": 0,
+        "message_count_week": 0,
+        "message_count_month": 0,
+        "latest_message_at": None,
+    }
+
+
+async def list_deployed_agents_for_workspace(
+    owner_workspace_id: str,
+    *,
+    tenant_id: Optional[str] = None,
+    deployment_state: Optional[str] = None,
+    limit: int = 100,
+) -> List[Dict[str, Any]]:
+    resolved_workspace_id = str(owner_workspace_id or "").strip()
+    if not resolved_workspace_id:
+        return []
+    scoped_kwargs: Dict[str, Any] = {"bypass_rls": True}
+    if tenant_id is not None:
+        scoped_kwargs = {
+            "tenant_id": str(tenant_id or "").strip(),
+            "workspace_id": resolved_workspace_id,
+        }
+    async with _scoped_connection(**scoped_kwargs) as connection:
+        if connection is None:
+            return []
+        rows = await connection.fetch(
+            """
+            SELECT *
+            FROM deployed_agents
+            WHERE owner_workspace_id = $1
+              AND ($2 = '' OR tenant_id = $2)
+              AND ($3 = '' OR deployment_state = $3)
+            ORDER BY created_at DESC, id DESC
+            LIMIT $4
+            """,
+            resolved_workspace_id,
+            str(tenant_id or "").strip(),
+            str(deployment_state or "").strip().lower(),
+            max(1, int(limit)),
+        )
+    return [item for item in (_row_to_deployed_agent(row) for row in rows) if item]
+
+
+async def list_platform_deployed_agents(
+    *,
+    deployment_state: Optional[str] = None,
+    limit: int = 500,
+) -> List[Dict[str, Any]]:
+    async with _scoped_connection(bypass_rls=True) as connection:
+        if connection is None:
+            return []
+        rows = await connection.fetch(
+            """
+            SELECT *
+            FROM deployed_agents
+            WHERE ($1 = '' OR deployment_state = $1)
+            ORDER BY created_at DESC, id DESC
+            LIMIT $2
+            """,
+            str(deployment_state or "").strip().lower(),
+            max(1, int(limit)),
+        )
+    return [item for item in (_row_to_deployed_agent(row) for row in rows) if item]
+
+
+async def list_platform_deployed_agent_monthly_cost_ledger_entries(
+    *,
+    usage_month: Optional[Any] = None,
+    limit: int = 5000,
+) -> List[Dict[str, Any]]:
+    resolved_usage_month = _coerce_month_start_date(usage_month)
+    if usage_month is not None and resolved_usage_month is None:
+        raise ValueError("usage_month must be an ISO date string or date value.")
+    resolved_usage_month = resolved_usage_month or datetime.now(timezone.utc).date().replace(day=1)
+    async with _scoped_connection(bypass_rls=True) as connection:
+        if connection is None:
+            return []
+        rows = await connection.fetch(
+            """
+            SELECT *
+            FROM deployed_agent_monthly_cost_ledger
+            WHERE ($1 = '' OR usage_month = $1::date)
+            ORDER BY estimated_cost_usd DESC, updated_at DESC, id DESC
+            LIMIT $2
+            """,
+            resolved_usage_month,
+            max(1, int(limit)),
+        )
+    return [item for item in (_row_to_deployed_agent_monthly_cost_ledger_entry(row) for row in rows) if item]
+
+
+async def update_deployed_agent(
+    deployed_agent_id: str,
+    *,
+    tenant_id: str,
+    owner_workspace_id: str,
+    updates: Dict[str, Any],
+) -> Optional[Dict[str, Any]]:
+    resolved_id = str(deployed_agent_id or "").strip()
+    resolved_tenant_id = str(tenant_id or "").strip()
+    resolved_workspace_id = str(owner_workspace_id or "").strip()
+    if not resolved_id or not resolved_tenant_id or not resolved_workspace_id:
+        return None
+    allowed_columns = {
+        "name": "name",
+        "avatar": "avatar",
+        "persona": "persona",
+        "system_prompt": "system_prompt",
+        "deployment_state": "deployment_state",
+        "channels": "channels",
+        "knowledge_sources": "knowledge_sources",
+        "runtime_target": "runtime_target",
+        "billing_plan": "billing_plan",
+        "metadata": "metadata",
+        "operational_state": "operational_state",
+        "last_deployed_at": "last_deployed_at",
+        "last_paused_at": "last_paused_at",
+    }
+    params: List[Any] = [resolved_id, resolved_tenant_id, resolved_workspace_id]
+    set_clauses: List[str] = []
+    parameter_index = 4
+    for key, column in allowed_columns.items():
+        if key not in updates:
+            continue
+        value = updates.get(key)
+        if key in {"channels", "metadata", "operational_state"}:
+            set_clauses.append(f"{column} = ${parameter_index}::jsonb")
+            params.append(_to_json(value, default={}))
+        elif key == "knowledge_sources":
+            set_clauses.append(f"{column} = ${parameter_index}::jsonb")
+            params.append(_to_json(value, default=[]))
+        elif key in {"last_deployed_at", "last_paused_at"}:
+            set_clauses.append(f"{column} = ${parameter_index}::timestamptz")
+            params.append(_coerce_timestamptz(value))
+        else:
+            set_clauses.append(f"{column} = ${parameter_index}")
+            params.append(value)
+        parameter_index += 1
+    if not set_clauses:
+        return await get_deployed_agent_by_id(
+            resolved_id,
+            tenant_id=resolved_tenant_id,
+            owner_workspace_id=resolved_workspace_id,
+        )
+    set_clauses.append("updated_at = NOW()")
+    query = f"""
+        UPDATE deployed_agents
+        SET {", ".join(set_clauses)}
+        WHERE id = $1 AND tenant_id = $2 AND owner_workspace_id = $3
+        RETURNING *
+    """
+    async with _scoped_connection(tenant_id=resolved_tenant_id, workspace_id=resolved_workspace_id) as connection:
+        if connection is None:
+            return None
+        row = await connection.fetchrow(query, *params)
+    return _row_to_deployed_agent(row)
+
+
+async def set_deployed_agent_state(
+    deployed_agent_id: str,
+    *,
+    tenant_id: str,
+    owner_workspace_id: str,
+    deployment_state: str,
+    last_deployed_at: Optional[Any] = None,
+    last_paused_at: Optional[Any] = None,
+    operational_state: Optional[Dict[str, Any]] = None,
+) -> Optional[Dict[str, Any]]:
+    return await update_deployed_agent(
+        deployed_agent_id,
+        tenant_id=tenant_id,
+        owner_workspace_id=owner_workspace_id,
+        updates={
+            "deployment_state": str(deployment_state or "").strip().lower() or "draft",
+            **({"last_deployed_at": last_deployed_at} if last_deployed_at is not None else {}),
+            **({"last_paused_at": last_paused_at} if last_paused_at is not None else {}),
+            **({"operational_state": operational_state} if operational_state is not None else {}),
+        },
+    )
+
+
+async def get_deployed_agent_by_backing_install_id(
+    backing_install_id: str,
+    *,
+    tenant_id: Optional[str] = None,
+    owner_workspace_id: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    resolved_install_id = str(backing_install_id or "").strip()
+    if not resolved_install_id:
+        return None
+    scoped_kwargs: Dict[str, Any] = {"bypass_rls": True}
+    if tenant_id is not None and owner_workspace_id is not None:
+        scoped_kwargs = {
+            "tenant_id": str(tenant_id or "").strip(),
+            "workspace_id": str(owner_workspace_id or "").strip(),
+        }
+    async with _scoped_connection(**scoped_kwargs) as connection:
+        if connection is None:
+            return None
+        row = await connection.fetchrow(
+            """
+            SELECT *
+            FROM deployed_agents
+            WHERE backing_install_id = $1
+              AND ($2 = '' OR tenant_id = $2)
+              AND ($3 = '' OR owner_workspace_id = $3)
+            LIMIT 1
+            """,
+            resolved_install_id,
+            str(tenant_id or "").strip(),
+            str(owner_workspace_id or "").strip(),
+        )
+    return _row_to_deployed_agent(row)
+
+
+async def create_agent_trace(
+    *,
+    tenant_id: str,
+    workspace_id: str,
+    root_agent_id: str,
+    surface: str,
+    thread_id: Optional[str] = None,
+    run_id: Optional[str] = None,
+    runtime_target: Optional[str] = None,
+    provider: Optional[str] = None,
+    model: Optional[str] = None,
+    started_at: Optional[Any] = None,
+    trace_id: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    resolved_tenant_id = _require_scope_token(tenant_id, "tenant_id")
+    resolved_workspace_id = _require_scope_token(workspace_id, "workspace_id")
+    resolved_root_agent_id = str(root_agent_id or "").strip()
+    resolved_surface = str(surface or "").strip().lower()
+    if not resolved_root_agent_id or not resolved_surface:
+        return None
+    resolved_trace_id = str(trace_id or f"trace_{uuid.uuid4().hex[:24]}").strip()
+    resolved_started_at = _coerce_timestamptz(started_at) or _utc_now_ts()
+    async with _scoped_connection(tenant_id=resolved_tenant_id, workspace_id=resolved_workspace_id) as connection:
+        if connection is None:
+            return None
+        row = await connection.fetchrow(
+            """
+            INSERT INTO agent_traces (
+                id, tenant_id, workspace_id, thread_id, run_id, root_agent_id, surface,
+                runtime_target, provider, model, started_at, finished_at, outcome, final_message_id
+            ) VALUES (
+                $1, $2, $3, $4, $5, $6, $7,
+                $8, $9, $10, $11::timestamptz, NULL, NULL, NULL
+            )
+            RETURNING *
+            """,
+            resolved_trace_id,
+            resolved_tenant_id,
+            resolved_workspace_id,
+            str(thread_id or "").strip() or None,
+            str(run_id or "").strip() or None,
+            resolved_root_agent_id,
+            resolved_surface,
+            str(runtime_target or "").strip(),
+            str(provider or "").strip(),
+            str(model or "").strip(),
+            resolved_started_at,
+        )
+    return _row_to_agent_trace(row)
+
+
+async def append_agent_trace_event(
+    *,
+    trace_id: str,
+    tenant_id: str,
+    workspace_id: str,
+    seq: int,
+    event_type: str,
+    persisted: bool,
+    agent_id: str,
+    payload: Optional[Dict[str, Any]] = None,
+    parent_id: Optional[str] = None,
+    item_id: Optional[str] = None,
+    tool_call_id: Optional[str] = None,
+    child_run_id: Optional[str] = None,
+    approval_id: Optional[str] = None,
+    artifact_id: Optional[str] = None,
+    ts: Optional[Any] = None,
+    event_id: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    resolved_trace_id = str(trace_id or "").strip()
+    resolved_tenant_id = _require_scope_token(tenant_id, "tenant_id")
+    resolved_workspace_id = _require_scope_token(workspace_id, "workspace_id")
+    resolved_event_type = str(event_type or "").strip()
+    resolved_agent_id = str(agent_id or "").strip()
+    if not resolved_trace_id or seq <= 0 or not resolved_event_type or not resolved_agent_id:
+        return None
+    resolved_event_id = str(event_id or f"tevent_{uuid.uuid4().hex[:24]}").strip()
+    resolved_ts = _coerce_timestamptz(ts) or _utc_now_ts()
+    async with _scoped_connection(tenant_id=resolved_tenant_id, workspace_id=resolved_workspace_id) as connection:
+        if connection is None:
+            return None
+        row = await connection.fetchrow(
+            """
+            INSERT INTO agent_trace_events (
+                id, trace_id, seq, parent_id, ts, event_type, persisted, agent_id,
+                item_id, tool_call_id, child_run_id, approval_id, artifact_id, payload
+            ) VALUES (
+                $1, $2, $3, $4, $5::timestamptz, $6, $7, $8,
+                $9, $10, $11, $12, $13, $14::jsonb
+            )
+            RETURNING *
+            """,
+            resolved_event_id,
+            resolved_trace_id,
+            int(seq),
+            str(parent_id or "").strip() or None,
+            resolved_ts,
+            resolved_event_type,
+            bool(persisted),
+            resolved_agent_id,
+            str(item_id or "").strip() or None,
+            str(tool_call_id or "").strip() or None,
+            str(child_run_id or "").strip() or None,
+            str(approval_id or "").strip() or None,
+            str(artifact_id or "").strip() or None,
+            _to_json(payload, default={}),
+        )
+    return _row_to_agent_trace_event(row)
+
+
+async def get_agent_trace_by_id(
+    trace_id: str,
+    *,
+    tenant_id: str,
+    workspace_id: str,
+) -> Optional[Dict[str, Any]]:
+    resolved_trace_id = str(trace_id or "").strip()
+    resolved_tenant_id = _require_scope_token(tenant_id, "tenant_id")
+    resolved_workspace_id = _require_scope_token(workspace_id, "workspace_id")
+    if not resolved_trace_id:
+        return None
+    async with _scoped_connection(tenant_id=resolved_tenant_id, workspace_id=resolved_workspace_id) as connection:
+        if connection is None:
+            return None
+        row = await connection.fetchrow(
+            """
+            SELECT *
+            FROM agent_traces
+            WHERE id = $1
+              AND tenant_id = $2
+              AND workspace_id = $3
+            LIMIT 1
+            """,
+            resolved_trace_id,
+            resolved_tenant_id,
+            resolved_workspace_id,
+        )
+    return _row_to_agent_trace(row)
+
+
+async def get_agent_trace_events(
+    trace_id: str,
+    *,
+    tenant_id: str,
+    workspace_id: str,
+    persisted_only: bool = False,
+    limit: int = 1000,
+) -> List[Dict[str, Any]]:
+    resolved_trace_id = str(trace_id or "").strip()
+    resolved_tenant_id = _require_scope_token(tenant_id, "tenant_id")
+    resolved_workspace_id = _require_scope_token(workspace_id, "workspace_id")
+    if not resolved_trace_id:
+        return []
+    params: List[Any] = [resolved_trace_id, resolved_tenant_id, resolved_workspace_id]
+    conditions = [
+        "events.trace_id = $1",
+        "traces.tenant_id = $2",
+        "traces.workspace_id = $3",
+    ]
+    if persisted_only:
+        conditions.append("events.persisted = TRUE")
+    params.append(max(1, int(limit or 1000)))
+    async with _scoped_connection(tenant_id=resolved_tenant_id, workspace_id=resolved_workspace_id) as connection:
+        if connection is None:
+            return []
+        rows = await connection.fetch(
+            f"""
+            SELECT events.*
+            FROM agent_trace_events AS events
+            JOIN agent_traces AS traces ON traces.id = events.trace_id
+            WHERE {' AND '.join(conditions)}
+            ORDER BY events.seq ASC, events.ts ASC, events.id ASC
+            LIMIT ${len(params)}
+            """,
+            *params,
+        )
+    return [item for item in (_row_to_agent_trace_event(row) for row in rows) if item]
+
+
+async def finish_agent_trace(
+    trace_id: str,
+    *,
+    tenant_id: str,
+    workspace_id: str,
+    outcome: str,
+    final_message_id: Optional[str] = None,
+    finished_at: Optional[Any] = None,
+) -> Optional[Dict[str, Any]]:
+    resolved_trace_id = str(trace_id or "").strip()
+    resolved_tenant_id = _require_scope_token(tenant_id, "tenant_id")
+    resolved_workspace_id = _require_scope_token(workspace_id, "workspace_id")
+    resolved_outcome = str(outcome or "").strip().lower()
+    if not resolved_trace_id or not resolved_outcome:
+        return None
+    resolved_finished_at = _coerce_timestamptz(finished_at) or _utc_now_ts()
+    async with _scoped_connection(tenant_id=resolved_tenant_id, workspace_id=resolved_workspace_id) as connection:
+        if connection is None:
+            return None
+        row = await connection.fetchrow(
+            """
+            UPDATE agent_traces
+            SET outcome = $4,
+                final_message_id = $5,
+                finished_at = $6::timestamptz
+            WHERE id = $1
+              AND tenant_id = $2
+              AND workspace_id = $3
+            RETURNING *
+            """,
+            resolved_trace_id,
+            resolved_tenant_id,
+            resolved_workspace_id,
+            resolved_outcome,
+            str(final_message_id or "").strip() or None,
+            resolved_finished_at,
+        )
+    return _row_to_agent_trace(row)
+
+
+async def list_agent_traces(
+    *,
+    tenant_id: str,
+    workspace_id: str,
+    thread_id: Optional[str] = None,
+    run_id: Optional[str] = None,
+    surface: Optional[str] = None,
+    outcome: Optional[str] = None,
+    root_agent_id: Optional[str] = None,
+    limit: int = 100,
+) -> List[Dict[str, Any]]:
+    resolved_tenant_id = _require_scope_token(tenant_id, "tenant_id")
+    resolved_workspace_id = _require_scope_token(workspace_id, "workspace_id")
+    params: List[Any] = [resolved_tenant_id, resolved_workspace_id]
+    conditions = ["tenant_id = $1", "workspace_id = $2"]
+    if thread_id:
+        params.append(str(thread_id or "").strip())
+        conditions.append(f"thread_id = ${len(params)}")
+    if run_id:
+        params.append(str(run_id or "").strip())
+        conditions.append(f"run_id = ${len(params)}")
+    if surface:
+        params.append(str(surface or "").strip().lower())
+        conditions.append(f"surface = ${len(params)}")
+    if outcome:
+        params.append(str(outcome or "").strip().lower())
+        conditions.append(f"outcome = ${len(params)}")
+    if root_agent_id:
+        params.append(str(root_agent_id or "").strip())
+        conditions.append(f"root_agent_id = ${len(params)}")
+    params.append(max(1, int(limit or 100)))
+    async with _scoped_connection(tenant_id=resolved_tenant_id, workspace_id=resolved_workspace_id) as connection:
+        if connection is None:
+            return []
+        rows = await connection.fetch(
+            f"""
+            SELECT *
+            FROM agent_traces
+            WHERE {' AND '.join(conditions)}
+            ORDER BY started_at DESC, id DESC
+            LIMIT ${len(params)}
+            """,
+            *params,
+        )
+    return [item for item in (_row_to_agent_trace(row) for row in rows) if item]
 
 
 async def tenant_id_for_workspace(workspace_id: str) -> Optional[str]:
@@ -1668,13 +5435,12 @@ async def ensure_workspace_tenant_binding(
         if connection is None:
             with _LOCAL_IDENTITY_LOCK:
                 with _connect_local_identity_db() as fallback:
-                    fallback.execute(
-                        """
-                        INSERT OR REPLACE INTO workspace_registry (
-                            workspace_id, tenant_id, created_at, updated_at
-                        ) VALUES (?, ?, COALESCE((SELECT created_at FROM workspace_registry WHERE workspace_id = ?), ?), ?)
-                        """,
-                        (resolved_workspace_id, resolved_tenant_id, resolved_workspace_id, created_at_ts, created_at_ts),
+                    _upsert_local_workspace_registry(
+                        fallback,
+                        workspace_id=resolved_workspace_id,
+                        tenant_id=resolved_tenant_id,
+                        workspace_type="shared",
+                        created_at_ts=created_at_ts,
                     )
                     fallback.commit()
             return {"workspace_id": resolved_workspace_id, "tenant_id": resolved_tenant_id}
@@ -2174,6 +5940,7 @@ async def append_agent_channel_event(
     text: str = "",
     payload: Optional[Dict[str, Any]] = None,
     metadata: Optional[Dict[str, Any]] = None,
+    deployed_agent_id: Optional[str] = None,
     status: str = "logged",
     event_id: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
@@ -2188,6 +5955,10 @@ async def append_agent_channel_event(
     now_ts = _utc_now_ts()
     resolved_direction = str(direction or "").strip().lower() or "system"
     resolved_message_id = str(message_id or "").strip() or None
+    resolved_metadata = _decode_json_object(metadata)
+    resolved_deployed_agent_id = str(deployed_agent_id or "").strip() or None
+    if resolved_deployed_agent_id:
+        resolved_metadata["deployed_agent_id"] = resolved_deployed_agent_id
     async with _scoped_connection(tenant_id=resolved_tenant_id, workspace_id=resolved_workspace_id) as connection:
         if connection is None:
             return None
@@ -2223,13 +5994,13 @@ async def append_agent_channel_event(
             _to_json(actor, default={}),
             str(text or ""),
             _to_json(payload, default={}),
-            _to_json(metadata, default={}),
+            _to_json(resolved_metadata, default={}),
             str(status or "logged").strip().lower() or "logged",
             now_ts,
         )
     if row is None:
         return None
-    item = dict(row)
+    item = _row_to_agent_channel_event(row) or {}
     if resolved_direction == "inbound" and resolved_message_id:
         item["_duplicate_hit"] = str(item.get("id") or "").strip() != resolved_event_id
     return item
@@ -3059,7 +6830,262 @@ async def list_agent_channel_events(
             """,
             *params,
         )
-    return [dict(row) for row in rows]
+    return [item for item in (_row_to_agent_channel_event(row) for row in rows) if item]
+
+
+async def list_deployed_agent_conversation_sessions(
+    *,
+    tenant_id: str,
+    workspace_id: str,
+    deployed_agent_id: str,
+    backing_install_id: str,
+    offset: int = 0,
+    limit: int = 50,
+) -> List[Dict[str, Any]]:
+    resolved_tenant_id = _require_scope_token(tenant_id, "tenant_id")
+    resolved_workspace_id = _require_scope_token(workspace_id, "workspace_id")
+    resolved_deployed_agent_id = str(deployed_agent_id or "").strip()
+    resolved_backing_install_id = str(backing_install_id or "").strip()
+    if not resolved_deployed_agent_id or not resolved_backing_install_id:
+        return []
+    safe_offset = max(0, int(offset or 0))
+    safe_limit = max(1, int(limit or 50))
+    async with _scoped_connection(tenant_id=resolved_tenant_id, workspace_id=resolved_workspace_id) as connection:
+        if connection is None:
+            return []
+        rows = await connection.fetch(
+            """
+            WITH filtered_events AS (
+                SELECT *
+                FROM agent_channel_events
+                WHERE tenant_id = $1
+                  AND workspace_id = $2
+                  AND COALESCE(session_key, '') <> ''
+                  AND (
+                    metadata->>'deployed_agent_id' = $3
+                    OR responder_install_id = $4
+                  )
+            ),
+            latest_event AS (
+                SELECT DISTINCT ON (session_key)
+                    session_key,
+                    channel_key,
+                    endpoint_key,
+                    thread_id,
+                    run_id,
+                    text,
+                    payload,
+                    created_at,
+                    id
+                FROM filtered_events
+                ORDER BY session_key, created_at DESC, id DESC
+            ),
+            latest_inbound AS (
+                SELECT DISTINCT ON (session_key)
+                    session_key,
+                    actor
+                FROM filtered_events
+                WHERE direction = 'inbound'
+                ORDER BY session_key, created_at DESC, id DESC
+            )
+            SELECT
+                latest_event.session_key AS session_id,
+                latest_event.channel_key AS channel,
+                latest_event.endpoint_key AS endpoint_key,
+                latest_event.thread_id AS thread_id,
+                latest_event.run_id AS latest_run_id,
+                COALESCE(
+                    NULLIF(BTRIM(latest_event.text), ''),
+                    NULLIF(BTRIM(latest_event.payload->>'text'), ''),
+                    NULLIF(BTRIM(latest_event.payload->>'summary'), ''),
+                    NULLIF(BTRIM(latest_event.payload->>'message'), '')
+                ) AS last_message,
+                latest_event.created_at AS last_message_at,
+                COALESCE(latest_inbound.actor, '{}'::jsonb) AS customer_actor
+            FROM latest_event
+            LEFT JOIN latest_inbound USING (session_key)
+            ORDER BY latest_event.created_at DESC, latest_event.session_key DESC
+            LIMIT $5 OFFSET $6
+            """,
+            resolved_tenant_id,
+            resolved_workspace_id,
+            resolved_deployed_agent_id,
+            resolved_backing_install_id,
+            safe_limit,
+            safe_offset,
+        )
+    return [item for item in (_row_to_deployed_agent_conversation_summary(row) for row in rows) if item]
+
+
+async def list_deployed_agent_conversation_events(
+    *,
+    tenant_id: str,
+    workspace_id: str,
+    deployed_agent_id: str,
+    backing_install_id: str,
+    session_id: str,
+    limit: int = 500,
+) -> List[Dict[str, Any]]:
+    resolved_tenant_id = _require_scope_token(tenant_id, "tenant_id")
+    resolved_workspace_id = _require_scope_token(workspace_id, "workspace_id")
+    resolved_deployed_agent_id = str(deployed_agent_id or "").strip()
+    resolved_backing_install_id = str(backing_install_id or "").strip()
+    resolved_session_id = str(session_id or "").strip()
+    if not resolved_deployed_agent_id or not resolved_backing_install_id or not resolved_session_id:
+        return []
+    safe_limit = max(1, int(limit or 500))
+    async with _scoped_connection(tenant_id=resolved_tenant_id, workspace_id=resolved_workspace_id) as connection:
+        if connection is None:
+            return []
+        rows = await connection.fetch(
+            """
+            SELECT *
+            FROM agent_channel_events
+            WHERE tenant_id = $1
+              AND workspace_id = $2
+              AND session_key = $3
+              AND (
+                metadata->>'deployed_agent_id' = $4
+                OR responder_install_id = $5
+              )
+            ORDER BY created_at ASC, id ASC
+            LIMIT $6
+            """,
+            resolved_tenant_id,
+            resolved_workspace_id,
+            resolved_session_id,
+            resolved_deployed_agent_id,
+            resolved_backing_install_id,
+            safe_limit,
+        )
+    return [item for item in (_row_to_agent_channel_event(row) for row in rows) if item]
+
+
+async def list_deployed_agent_session_analytics(
+    *,
+    tenant_id: str,
+    workspace_id: str,
+    deployed_agent_id: str,
+    backing_install_id: str,
+) -> List[Dict[str, Any]]:
+    resolved_tenant_id = _require_scope_token(tenant_id, "tenant_id")
+    resolved_workspace_id = _require_scope_token(workspace_id, "workspace_id")
+    resolved_deployed_agent_id = str(deployed_agent_id or "").strip()
+    resolved_backing_install_id = str(backing_install_id or "").strip()
+    if not resolved_deployed_agent_id or not resolved_backing_install_id:
+        return []
+    async with _scoped_connection(tenant_id=resolved_tenant_id, workspace_id=resolved_workspace_id) as connection:
+        if connection is None:
+            return []
+        rows = await connection.fetch(
+            """
+            WITH filtered_events AS (
+                SELECT *
+                FROM agent_channel_events
+                WHERE tenant_id = $1
+                  AND workspace_id = $2
+                  AND COALESCE(session_key, '') <> ''
+                  AND (
+                    COALESCE(metadata->>'deployed_agent_id', '') = $3
+                    OR responder_install_id = $4
+                  )
+            ),
+            latest_event AS (
+                SELECT DISTINCT ON (session_key)
+                    session_key,
+                    run_id,
+                    created_at
+                FROM filtered_events
+                ORDER BY session_key, created_at DESC, id DESC
+            ),
+            filtered_activity AS (
+                SELECT *
+                FROM activity_ledger_events
+                WHERE tenant_id = $1
+                  AND workspace_id = $2
+                  AND install_id = $4
+            ),
+            session_activity AS (
+                SELECT
+                    latest_event.session_key,
+                    latest_event.run_id,
+                    latest_event.created_at AS latest_message_at,
+                    activity.id,
+                    activity.created_at,
+                    activity.event_class,
+                    activity.action,
+                    activity.status,
+                    activity.payload,
+                    activity.metadata
+                FROM latest_event
+                LEFT JOIN filtered_activity AS activity
+                  ON activity.session_key = latest_event.session_key
+            ),
+            rollups AS (
+                SELECT
+                    session_key,
+                    run_id,
+                    latest_message_at,
+                    MAX(created_at) AS last_activity_at,
+                    BOOL_OR(
+                        COALESCE(event_class, '') = 'blocked_action'
+                        OR COALESCE(event_class, '') = 'approval'
+                        OR COALESCE(action, '') IN ('approval_requested', 'escalate', 'escalated')
+                        OR COALESCE(
+                            NULLIF(BTRIM(payload->>'resolution'), ''),
+                            NULLIF(BTRIM(metadata->>'resolution'), '')
+                        ) IN ('requested', 'escalated')
+                        OR COALESCE(payload->>'escalated', 'false') = 'true'
+                        OR COALESCE(metadata->>'escalated', 'false') = 'true'
+                    ) AS had_escalation,
+                    (ARRAY_REMOVE(
+                        ARRAY_AGG(
+                            CASE
+                                WHEN COALESCE(event_class, '') = 'run_status'
+                                  AND NULLIF(BTRIM(action), '') IS NOT NULL
+                                THEN LOWER(action)
+                                WHEN COALESCE(
+                                    NULLIF(BTRIM(payload->>'resolution'), ''),
+                                    NULLIF(BTRIM(metadata->>'resolution'), '')
+                                ) IS NOT NULL
+                                THEN LOWER(
+                                    COALESCE(
+                                        NULLIF(BTRIM(payload->>'resolution'), ''),
+                                        NULLIF(BTRIM(metadata->>'resolution'), '')
+                                    )
+                                )
+                                WHEN NULLIF(BTRIM(status), '') IS NOT NULL
+                                THEN LOWER(status)
+                                ELSE NULL
+                            END
+                            ORDER BY created_at DESC NULLS LAST, id DESC
+                        ),
+                        NULL
+                    ))[1] AS latest_outcome
+                FROM session_activity
+                GROUP BY session_key, run_id, latest_message_at
+            )
+            SELECT
+                session_key AS session_id,
+                run_id AS latest_run_id,
+                COALESCE(had_escalation, FALSE) AS had_escalation,
+                NULLIF(BTRIM(COALESCE(latest_outcome, '')), '') AS latest_outcome,
+                GREATEST(
+                    COALESCE(last_activity_at, latest_message_at),
+                    latest_message_at
+                ) AS last_activity_at
+            FROM rollups
+            ORDER BY GREATEST(
+                COALESCE(last_activity_at, latest_message_at),
+                latest_message_at
+            ) DESC NULLS LAST, session_key DESC
+            """,
+            resolved_tenant_id,
+            resolved_workspace_id,
+            resolved_deployed_agent_id,
+            resolved_backing_install_id,
+        )
+    return [item for item in (_row_to_deployed_agent_session_analytics(row) for row in rows) if item]
 
 
 async def upsert_security_control_state(

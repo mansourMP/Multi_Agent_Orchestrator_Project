@@ -49,7 +49,11 @@ def import_runtime_run_route_dependencies(
     )
     agent_turn = import_module(
         "server_modules.agent_turn",
-        fromlist=["build_inbound_agent_turn_request", "execute_system_agent_turn"],
+        fromlist=["build_inbound_agent_turn_request"],
+    )
+    turn_ingress = import_module(
+        "server_modules.turn_ingress_service",
+        fromlist=["start_system_turn"],
     )
     workspace_context = import_module(
         "server_modules.workspace_context",
@@ -66,7 +70,7 @@ def import_runtime_run_route_dependencies(
     return RuntimeRunRouteDependencies(
         run_start_request_class=runtime_models.RunStartRequest,
         build_inbound_agent_turn_request=agent_turn.build_inbound_agent_turn_request,
-        execute_system_agent_turn=agent_turn.execute_system_agent_turn,
+        execute_system_agent_turn=turn_ingress.start_system_turn,
         handle_telegram_send_message=connectors.handle_telegram_send_message,
         delete_memory=memory_service.delete_memory,
         workspace_memory_snapshot=memory_service.workspace_memory_snapshot,

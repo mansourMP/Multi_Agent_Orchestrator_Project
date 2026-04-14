@@ -33,10 +33,226 @@ export type WorkstationTurnResponse = {
   metadata?: Record<string, unknown>;
 };
 
+export type WorkstationTurnStreamEvent = {
+  id?: string | null;
+  event: string;
+  payload: Record<string, unknown>;
+};
+
+function readString(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+export type WorkstationRunDetailPayload = Record<string, unknown> & {
+  run_id?: string | null;
+  status?: string | null;
+  archived?: boolean;
+  diagnostics?: Record<string, unknown> | null;
+  pending_confirmation?: Record<string, unknown> | null;
+  result_summary?: string | null;
+};
+
+export type WorkstationApprovalDetailPayload = Record<string, unknown> & {
+  approval_id?: string | null;
+  run_id?: string | null;
+  prompt?: string | null;
+  status?: string | null;
+  resolution?: string | null;
+  requested_at?: string | null;
+  resolved_at?: string | null;
+  run?: Record<string, unknown> | null;
+};
+
+export type WorkstationArtifactDetailPayload = Record<string, unknown> & {
+  artifact_id?: string | null;
+  label?: string | null;
+  file_name?: string | null;
+  kind?: string | null;
+  media_type?: string | null;
+  preview_kind?: string | null;
+  text_preview?: string | null;
+  byte_size?: number | null;
+  run_id?: string | null;
+  created_at?: string | null;
+  workspace_id?: string | null;
+  tenant_id?: string | null;
+  uri?: string | null;
+  machine_id?: string | null;
+  step_id?: string | null;
+  step_index?: number | null;
+  step_number?: number | null;
+  retention?: Record<string, unknown> | null;
+  metadata?: Record<string, unknown> | null;
+};
+
+export type WorkstationAgentTraceRecord = Record<string, unknown> & {
+  id?: string | null;
+  tenant_id?: string | null;
+  workspace_id?: string | null;
+  thread_id?: string | null;
+  run_id?: string | null;
+  root_agent_id?: string | null;
+  surface?: string | null;
+  runtime_target?: string | null;
+  provider?: string | null;
+  model?: string | null;
+  started_at?: string | null;
+  finished_at?: string | null;
+  outcome?: string | null;
+  final_message_id?: string | null;
+};
+
+export type WorkstationAgentTraceEvent = Record<string, unknown> & {
+  id?: string | null;
+  trace_id?: string | null;
+  seq?: number | null;
+  ts?: string | null;
+  event_type?: string | null;
+  persisted?: boolean;
+  agent_id?: string | null;
+  parent_id?: string | null;
+  item_id?: string | null;
+  tool_call_id?: string | null;
+  child_run_id?: string | null;
+  approval_id?: string | null;
+  artifact_id?: string | null;
+  data?: Record<string, unknown> | null;
+};
+
+export type WorkstationAgentTraceReplayPayload = Record<string, unknown> & {
+  trace?: WorkstationAgentTraceRecord | null;
+  events?: WorkstationAgentTraceEvent[] | null;
+};
+
+export type WorkstationAgentTraceListFilters = {
+  threadId?: string | null;
+  runId?: string | null;
+  surface?: string | null;
+  outcome?: string | null;
+  rootAgentId?: string | null;
+  limit?: number;
+};
+
+export type DeployedAgentRecord = Record<string, unknown> & {
+  id?: string | null;
+  owner_workspace_id?: string | null;
+  backing_install_id?: string | null;
+  name?: string | null;
+  avatar?: string | null;
+  persona?: string | null;
+  system_prompt?: string | null;
+  deployment_state?: string | null;
+  channels?: Record<string, unknown> | null;
+  knowledge_sources?: Record<string, unknown>[] | null;
+  runtime_target?: string | null;
+  billing_plan?: string | null;
+  provider?: string | null;
+  model?: string | null;
+  config?: Record<string, unknown> | null;
+  operational_state?: Record<string, unknown> | null;
+  metadata?: Record<string, unknown> | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+};
+
+export type ProviderCatalogModelRecord = Record<string, unknown> & {
+  id?: string | null;
+  label?: string | null;
+  provider?: string | null;
+  context_window_tokens?: number | null;
+  input_cost_per_1k_usd?: number | null;
+  output_cost_per_1k_usd?: number | null;
+  supports_tools?: boolean | null;
+  supports_reasoning?: boolean | null;
+  local_self_hosted_compatible?: boolean | null;
+  capability_labels?: string[] | null;
+};
+
+export type ProviderCatalogRecord = Record<string, unknown> & {
+  id?: string | null;
+  label?: string | null;
+  state?: string | null;
+  default_model?: string | null;
+  privacy_posture?: string | null;
+  jurisdiction?: string | null;
+  residency?: string | null;
+  local_self_hosted_compatible?: boolean | null;
+  capability_labels?: string[] | null;
+  models?: ProviderCatalogModelRecord[] | null;
+};
+
+export type DeployedAgentConversationRecord = Record<string, unknown> & {
+  session_id?: string | null;
+  channel?: string | null;
+  last_message?: string | null;
+  last_message_at?: string | null;
+  customer?: Record<string, unknown> | null;
+  latest_run_id?: string | null;
+  escalation_state?: string | null;
+  outcome?: string | null;
+};
+
+export type DeployedAgentConversationDetail = Record<string, unknown> & {
+  deployed_agent_id?: string | null;
+  session_id?: string | null;
+  channel?: string | null;
+  thread_id?: string | null;
+  run_ids?: string[] | null;
+  customer?: Record<string, unknown> | null;
+  messages?: Record<string, unknown>[] | null;
+  tool_calls?: Record<string, unknown>[] | null;
+  approval_events?: Record<string, unknown>[] | null;
+  escalation_events?: Record<string, unknown>[] | null;
+  entries?: Record<string, unknown>[] | null;
+  outcome?: string | null;
+};
+
+export type DeployedAgentAnalyticsRecord = Record<string, unknown> & {
+  deployed_agent_id?: string | null;
+  active_users_last_30d?: number | null;
+  message_volume?: Record<string, unknown> | null;
+  escalation?: Record<string, unknown> | null;
+  outcomes?: Record<string, unknown> | null;
+  cost_burn?: Record<string, unknown> | null;
+};
+
+export type WorkstationPlatformAnalyticsDeploymentRecord = Record<string, unknown> & {
+  deployed_agent_id?: string | null;
+  name?: string | null;
+  deployment_state?: string | null;
+  provider?: string | null;
+  model?: string | null;
+  deployment_billing_plan?: string | null;
+  workspace?: Record<string, unknown> | null;
+  message_volume?: Record<string, unknown> | null;
+  cost_burn?: Record<string, unknown> | null;
+  billing_proxy?: Record<string, unknown> | null;
+};
+
+export type WorkstationPlatformAnalyticsCostRecord = Record<string, unknown> & {
+  provider?: string | null;
+  model?: string | null;
+  runs_count?: number | null;
+  total_tokens?: number | null;
+  total_cost_usd?: number | null;
+  share_percent?: number | null;
+};
+
+export type WorkstationPlatformAnalyticsPayload = Record<string, unknown> & {
+  summary?: Record<string, unknown> | null;
+  deployments?: WorkstationPlatformAnalyticsDeploymentRecord[] | null;
+  most_active_deployed_agents?: WorkstationPlatformAnalyticsDeploymentRecord[] | null;
+  model_cost_breakdown?: WorkstationPlatformAnalyticsCostRecord[] | null;
+};
+
 export type WorkstationClientDependencies = {
   scope: WorkstationClientScope;
   transport: {
-    request: (path: string, init?: RequestInit) => Promise<Response>;
+    request: (
+      path: string,
+      init?: RequestInit,
+      policy?: WorkstationRequestPolicy,
+    ) => Promise<Response>;
   };
   queryClient: {
     peek: <T>(key: string) => T | null;
@@ -48,10 +264,18 @@ export type WorkstationClientDependencies = {
   getApiBaseUrl: () => string;
 };
 
+export type WorkstationRequestPolicy = {
+  timeoutMs?: number;
+  retryCount?: number;
+  retryOnStatuses?: number[];
+  refreshSessionOn401?: boolean;
+};
+
 export type WorkstationClientRequestOptions = {
   path: string;
   init?: RequestInit;
   allowStatuses?: number[];
+  policy?: WorkstationRequestPolicy;
 };
 
 export type WorkstationClientStreamOptions = {
@@ -67,10 +291,49 @@ export type WorkstationClientPaths = {
   turnSubmit: string;
   thread: (threadId: string) => string;
   runs: (limit?: number) => string;
+  runDetail: (runId: string) => string;
   approvals: (limit?: number) => string;
+  approvalDetail: (approvalId: string) => string;
   approvalResolve: (approvalId: string, runId?: string | null) => string;
   artifacts: (limit?: number) => string;
+  artifactDetail: (artifactId: string) => string;
+  artifactFile: (artifactId: string) => string;
+  artifactContent: (artifactId: string) => string;
   notifications: (limit?: number) => string;
+  activity: (limit?: number) => string;
+  appsInstalled: string;
+  appsStore: string;
+  appsUpdates: string;
+  appsInstall: string;
+  appsUninstall: string;
+  appsUpdate: string;
+  agentDefinitions: string;
+  agentInstalls: string;
+  runtimeTargets: string;
+  providersCatalog: string;
+  runInstalledAgent: (installId: string) => string;
+  agentTraces: (filters?: WorkstationAgentTraceListFilters) => string;
+  agentTraceDetail: (traceId: string) => string;
+  agentTraceStream: (traceId: string) => string;
+  deployedAgents: (deploymentState?: string | null) => string;
+  deployedAgentDetail: (deployedAgentId: string) => string;
+  deployedAgentDeploy: (deployedAgentId: string) => string;
+  deployedAgentPause: (deployedAgentId: string) => string;
+  deployedAgentAnalyticsRoster: string;
+  deployedAgentAnalyticsDetail: (deployedAgentId: string) => string;
+  deployedAgentConversations: (deployedAgentId: string, limit?: number, offset?: number) => string;
+  deployedAgentConversationDetail: (deployedAgentId: string, sessionId: string) => string;
+  deployedAgentExternalUserDelete: (deployedAgentId: string, externalUserId: string) => string;
+  platformAnalytics: string;
+  workspaceRouting: string;
+  workspaceMembers: string;
+  workspaceMemberInvites: string;
+  workspaceMemberInvite: (inviteId: string) => string;
+  workspaceMember: (userId: string) => string;
+  workspacePolicies: string;
+  billingSummary: string;
+  billingCheckout: string;
+  billingPortal: string;
   notificationsStream: (options?: WorkstationClientStreamOptions) => string;
   channelEventsStream: (options?: WorkstationClientStreamOptions) => string;
 };
@@ -97,8 +360,131 @@ export type WorkstationClient = {
   requestJson: <T>(options: WorkstationClientRequestOptions) => Promise<T | null>;
   getThread: (options: { threadId: string; allowMissing?: boolean }) => Promise<Record<string, unknown> | null>;
   listRuns: (options?: { limit?: number }) => Promise<Record<string, unknown>>;
+  getRunDetail: (options: { runId: string; allowMissing?: boolean }) => Promise<Record<string, unknown> | null>;
   listApprovals: (options?: { limit?: number }) => Promise<Record<string, unknown>>;
+  getApprovalDetail: (options: { approvalId: string; allowMissing?: boolean }) => Promise<Record<string, unknown> | null>;
   listArtifacts: (options?: { limit?: number }) => Promise<Record<string, unknown>>;
+  getArtifactDetail: (options: { artifactId: string; allowMissing?: boolean }) => Promise<Record<string, unknown> | null>;
+  artifactFileUrl: (artifactId: string) => string;
+  artifactDownloadUrl: (artifactId: string) => string;
+  listNotifications: (options?: { limit?: number }) => Promise<Record<string, unknown>>;
+  markNotificationsRead: (options?: {
+    notificationIds?: string[];
+    markAll?: boolean;
+  }) => Promise<Record<string, unknown> | null>;
+  listActivityTimeline: (options?: { limit?: number }) => Promise<Record<string, unknown>>;
+  listInstalledApps: () => Promise<Record<string, unknown>>;
+  listStoreApps: () => Promise<Record<string, unknown>>;
+  listAppUpdates: () => Promise<Record<string, unknown>>;
+  installApp: (options: {
+    appId: string;
+    packageId?: string | null;
+    releaseChannel?: string | null;
+    installSource?: string | null;
+  }) => Promise<Record<string, unknown> | null>;
+  uninstallApp: (options: { appId: string }) => Promise<Record<string, unknown> | null>;
+  updateApp: (options: {
+    appId: string;
+    packageId?: string | null;
+    releaseChannel?: string | null;
+    installSource?: string | null;
+  }) => Promise<Record<string, unknown> | null>;
+  listAgentDefinitions: () => Promise<Record<string, unknown>>;
+  listAgentInstalls: () => Promise<Record<string, unknown>>;
+  listRuntimeTargets: () => Promise<Record<string, unknown>>;
+  listProviderCatalog: () => Promise<Record<string, unknown>>;
+  runInstalledAgent: (options: {
+    installId: string;
+    message?: string;
+    threadId?: string | null;
+    sessionId?: string | null;
+  }) => Promise<Record<string, unknown> | null>;
+  listTraces: (filters?: WorkstationAgentTraceListFilters) => Promise<Record<string, unknown>>;
+  getTraceReplay: (options: {
+    traceId: string;
+    allowMissing?: boolean;
+  }) => Promise<Record<string, unknown> | null>;
+  listDeployedAgents: (options?: { deploymentState?: string | null }) => Promise<Record<string, unknown>>;
+  createDeployedAgent: (options: {
+    name: string;
+    avatar?: string | null;
+    persona?: string | null;
+    systemPrompt?: string | null;
+    channels?: Record<string, unknown>;
+    knowledgeSources?: Record<string, unknown>[];
+    runtimeTarget?: string | null;
+    billingPlan?: string | null;
+    config?: Record<string, unknown>;
+    metadata?: Record<string, unknown>;
+    runtimeProfileId?: string | null;
+    provider?: string | null;
+    model?: string | null;
+  }) => Promise<Record<string, unknown> | null>;
+  getDeployedAgent: (options: {
+    deployedAgentId: string;
+    allowMissing?: boolean;
+  }) => Promise<Record<string, unknown> | null>;
+  updateDeployedAgent: (options: {
+    deployedAgentId: string;
+    name?: string | null;
+    avatar?: string | null;
+    persona?: string | null;
+    systemPrompt?: string | null;
+    deploymentState?: string | null;
+    channels?: Record<string, unknown>;
+    knowledgeSources?: Record<string, unknown>[];
+    runtimeTarget?: string | null;
+    billingPlan?: string | null;
+    config?: Record<string, unknown>;
+    metadata?: Record<string, unknown>;
+    provider?: string | null;
+    model?: string | null;
+  }) => Promise<Record<string, unknown> | null>;
+  deployDeployedAgent: (options: { deployedAgentId: string }) => Promise<Record<string, unknown> | null>;
+  pauseDeployedAgent: (options: { deployedAgentId: string }) => Promise<Record<string, unknown> | null>;
+  listDeployedAgentAnalytics: () => Promise<Record<string, unknown>>;
+  getDeployedAgentAnalytics: (options: {
+    deployedAgentId: string;
+    allowMissing?: boolean;
+  }) => Promise<Record<string, unknown> | null>;
+  listDeployedAgentConversations: (options: {
+    deployedAgentId: string;
+    limit?: number;
+    offset?: number;
+  }) => Promise<Record<string, unknown>>;
+  getDeployedAgentConversationDetail: (options: {
+    deployedAgentId: string;
+    sessionId: string;
+    allowMissing?: boolean;
+  }) => Promise<Record<string, unknown> | null>;
+  deleteDeployedAgentExternalUserData: (options: {
+    deployedAgentId: string;
+    externalUserId: string;
+    channel: string;
+    sessionId?: string | null;
+    note?: string | null;
+  }) => Promise<Record<string, unknown> | null>;
+  getPlatformAnalytics: () => Promise<Record<string, unknown>>;
+  getWorkspaceRouting: () => Promise<Record<string, unknown>>;
+  updateWorkspaceRouting: (options: {
+    adminDefaults?: Record<string, unknown>;
+  }) => Promise<Record<string, unknown> | null>;
+  listWorkspaceMembers: () => Promise<Record<string, unknown>>;
+  inviteWorkspaceMember: (options: { email: string; role: string }) => Promise<Record<string, unknown> | null>;
+  revokeWorkspaceInvite: (options: { inviteId: string }) => Promise<Record<string, unknown> | null>;
+  updateWorkspaceMemberRole: (options: { userId: string; role: string }) => Promise<Record<string, unknown> | null>;
+  removeWorkspaceMember: (options: { userId: string }) => Promise<Record<string, unknown> | null>;
+  getWorkspacePolicies: () => Promise<Record<string, unknown>>;
+  updateWorkspacePolicies: (payload: Record<string, unknown>) => Promise<Record<string, unknown> | null>;
+  getBillingSummary: () => Promise<Record<string, unknown>>;
+  createBillingCheckoutSession: (options: {
+    planId: string;
+    successUrl?: string | null;
+    cancelUrl?: string | null;
+  }) => Promise<Record<string, unknown> | null>;
+  createBillingPortalSession: (options?: {
+    returnUrl?: string | null;
+  }) => Promise<Record<string, unknown> | null>;
   createSession: (options: {
     actor: WorkstationSessionActor;
     threadId: string;
@@ -114,6 +500,15 @@ export type WorkstationClient = {
     channel?: string;
     source?: string;
   }) => Promise<WorkstationTurnResponse>;
+  submitTurnStream: (options: {
+    actor: WorkstationSessionActor;
+    sessionId: string;
+    threadId: string;
+    message: string;
+    channel?: string;
+    source?: string;
+    onEvent?: (event: WorkstationTurnStreamEvent) => void;
+  }) => Promise<WorkstationTurnResponse>;
   submitTurnWithSessionRetry: (options: {
     actor: WorkstationSessionActor;
     threadId: string;
@@ -125,11 +520,24 @@ export type WorkstationClient = {
     session: WorkstationSessionRecord;
     renewed: boolean;
   }>;
+  submitTurnStreamWithSessionRetry: (options: {
+    actor: WorkstationSessionActor;
+    threadId: string;
+    message: string;
+    channel?: string;
+    source?: string;
+    onEvent?: (event: WorkstationTurnStreamEvent) => void;
+  }) => Promise<{
+    response: WorkstationTurnResponse;
+    session: WorkstationSessionRecord;
+    renewed: boolean;
+  }>;
   resolveApproval: (options: {
     approvalId: string;
     payload: Record<string, unknown>;
     runId?: string | null;
   }) => Promise<Record<string, unknown> | null>;
+  openTraceStream: (traceId: string) => EventSource;
   openNotificationsStream: (options?: WorkstationClientStreamOptions) => EventSource;
   openChannelEventsStream: (options?: WorkstationClientStreamOptions) => EventSource;
   snapshot: () => {
@@ -140,7 +548,10 @@ export type WorkstationClient = {
       runs: string;
       approvals: string;
       artifacts: string;
+      agentTraces: string;
       notifications: string;
+      activity: string;
+      agentTraceStream: string;
       notificationsStream: string;
       channelEventsStream: string;
     };
@@ -173,8 +584,12 @@ export function buildWorkstationApiPaths(workspaceId: string): WorkstationClient
       `/api/threads/${encodeURIComponent(threadId)}${buildQueryString({ workspace_id: workspaceId })}`,
     runs: (limit = 80) =>
       `/api/runs${buildQueryString({ workspace_id: workspaceId, limit })}`,
+    runDetail: (runId) =>
+      `/api/runs/${encodeURIComponent(runId)}`,
     approvals: (limit = 80) =>
       `/api/approvals${buildQueryString({ workspace_id: workspaceId, limit })}`,
+    approvalDetail: (approvalId) =>
+      `/api/approvals/${encodeURIComponent(approvalId)}`,
     approvalResolve: (approvalId, runId) => (
       runId
         ? `/api/runs/${encodeURIComponent(runId)}/approvals/${encodeURIComponent(approvalId)}/resolve${buildQueryString({ workspace_id: workspaceId })}`
@@ -182,8 +597,76 @@ export function buildWorkstationApiPaths(workspaceId: string): WorkstationClient
     ),
     artifacts: (limit = 80) =>
       `/api/artifacts${buildQueryString({ workspace_id: workspaceId, limit })}`,
+    artifactDetail: (artifactId) =>
+      `/api/artifacts/${encodeURIComponent(artifactId)}`,
+    artifactFile: (artifactId) =>
+      `/api/artifacts/${encodeURIComponent(artifactId)}/file`,
+    artifactContent: (artifactId) =>
+      `/api/artifacts/${encodeURIComponent(artifactId)}/content`,
     notifications: (limit = 80) =>
       `/api/notifications${buildQueryString({ workspace_id: workspaceId, limit })}`,
+    activity: (limit = 80) =>
+      `/api/activity/timeline${buildQueryString({ workspace_id: workspaceId, limit })}`,
+    appsInstalled: '/apps/installed',
+    appsStore: '/apps/store',
+    appsUpdates: '/apps/updates',
+    appsInstall: '/apps/install',
+    appsUninstall: '/apps/uninstall',
+    appsUpdate: '/apps/update',
+    agentDefinitions: `/agent-registry/definitions${buildQueryString({ workspace_id: workspaceId })}`,
+    agentInstalls: `/agent-registry/installs${buildQueryString({ workspace_id: workspaceId })}`,
+    runtimeTargets: `/agent-registry/runtime-targets${buildQueryString({ workspace_id: workspaceId })}`,
+    providersCatalog: `/providers/catalog${buildQueryString({ workspace_id: workspaceId })}`,
+    runInstalledAgent: (installId) => `/agents/${encodeURIComponent(installId)}/run`,
+    agentTraces: (filters = {}) =>
+      `/api/agent-traces${buildQueryString({
+        workspace_id: workspaceId,
+        thread_id: filters.threadId,
+        run_id: filters.runId,
+        surface: filters.surface,
+        outcome: filters.outcome,
+        root_agent_id: filters.rootAgentId,
+        limit: filters.limit,
+      })}`,
+    agentTraceDetail: (traceId) =>
+      `/api/agent-traces/${encodeURIComponent(traceId)}${buildQueryString({ workspace_id: workspaceId })}`,
+    agentTraceStream: (traceId) =>
+      `/api/agent-traces/${encodeURIComponent(traceId)}/stream${buildQueryString({ workspace_id: workspaceId })}`,
+    deployedAgents: (deploymentState) =>
+      `/api/deployed-agents${buildQueryString({ workspace_id: workspaceId, deployment_state: deploymentState })}`,
+    deployedAgentDetail: (deployedAgentId) =>
+      `/api/deployed-agents/${encodeURIComponent(deployedAgentId)}${buildQueryString({ workspace_id: workspaceId })}`,
+    deployedAgentDeploy: (deployedAgentId) =>
+      `/api/deployed-agents/${encodeURIComponent(deployedAgentId)}/deploy`,
+    deployedAgentPause: (deployedAgentId) =>
+      `/api/deployed-agents/${encodeURIComponent(deployedAgentId)}/pause`,
+    deployedAgentAnalyticsRoster:
+      `/api/deployed-agents/analytics${buildQueryString({ workspace_id: workspaceId })}`,
+    deployedAgentAnalyticsDetail: (deployedAgentId) =>
+      `/api/deployed-agents/${encodeURIComponent(deployedAgentId)}/analytics${buildQueryString({ workspace_id: workspaceId })}`,
+    deployedAgentConversations: (deployedAgentId, limit = 50, offset = 0) =>
+      `/api/deployed-agents/${encodeURIComponent(deployedAgentId)}/conversations${buildQueryString({
+        workspace_id: workspaceId,
+        limit,
+        offset,
+      })}`,
+    deployedAgentConversationDetail: (deployedAgentId, sessionId) =>
+      `/api/deployed-agents/${encodeURIComponent(deployedAgentId)}/conversations/${encodeURIComponent(sessionId)}${buildQueryString({
+        workspace_id: workspaceId,
+      })}`,
+    deployedAgentExternalUserDelete: (deployedAgentId, externalUserId) =>
+      `/api/deployed-agents/${encodeURIComponent(deployedAgentId)}/external-users/${encodeURIComponent(externalUserId)}/delete`,
+    platformAnalytics: `/api/platform-analytics${buildQueryString({ workspace_id: workspaceId })}`,
+    workspaceRouting: `/api/workspaces/${encodeURIComponent(workspaceId)}/routing`,
+    workspaceMembers: `/api/workspaces/${encodeURIComponent(workspaceId)}/members`,
+    workspaceMemberInvites: `/api/workspaces/${encodeURIComponent(workspaceId)}/members/invites`,
+    workspaceMemberInvite: (inviteId) =>
+      `/api/workspaces/${encodeURIComponent(workspaceId)}/members/invites/${encodeURIComponent(inviteId)}`,
+    workspaceMember: (userId) => `/api/workspaces/${encodeURIComponent(workspaceId)}/members/${encodeURIComponent(userId)}`,
+    workspacePolicies: `/api/workspaces/${encodeURIComponent(workspaceId)}/policies`,
+    billingSummary: `/api/billing/summary${buildQueryString({ workspace_id: workspaceId })}`,
+    billingCheckout: '/api/billing/checkout',
+    billingPortal: '/api/billing/portal',
     notificationsStream: (options = {}) =>
       `/api/notifications${buildQueryString({
         workspace_id: workspaceId,
@@ -222,6 +705,9 @@ function extractErrorCode(payload: unknown, detail: unknown): string | null {
 }
 
 function fallbackErrorMessage(status: number): string {
+  if (status === 0) {
+    return 'The workstation request did not complete successfully.';
+  }
   if (status === 401) {
     return 'Authentication is required for this workstation request.';
   }
@@ -240,6 +726,40 @@ function fallbackErrorMessage(status: number): string {
   return `Workstation request failed with status ${status}.`;
 }
 
+const READ_REQUEST_POLICY: WorkstationRequestPolicy = {
+  timeoutMs: 10_000,
+  retryCount: 1,
+  retryOnStatuses: [408, 425, 429, 500, 502, 503, 504],
+  refreshSessionOn401: true,
+};
+
+const WRITE_REQUEST_POLICY: WorkstationRequestPolicy = {
+  timeoutMs: 15_000,
+  retryCount: 0,
+  refreshSessionOn401: true,
+};
+
+function resolveRequestPolicy(
+  init: RequestInit | undefined,
+  policy: WorkstationRequestPolicy | undefined,
+): WorkstationRequestPolicy {
+  const method = String(init?.method ?? 'GET').trim().toUpperCase();
+  const base = ['GET', 'HEAD'].includes(method) ? READ_REQUEST_POLICY : WRITE_REQUEST_POLICY;
+  return {
+    ...base,
+    ...(policy ?? {}),
+  };
+}
+
+function normalizeTransportFailure(error: unknown): WorkstationClientError {
+  const message =
+    error instanceof Error && error.message.trim()
+      ? error.message
+      : 'The workstation request failed before the server responded.';
+  const code = /timed out/i.test(message) ? 'request_timeout' : 'transport_failure';
+  return new WorkstationClientError(message, 0, null, code);
+}
+
 function normalizeClientError(status: number, payload: unknown): WorkstationClientError {
   const detail = extractErrorDetail(payload);
   const code = extractErrorCode(payload, detail);
@@ -256,6 +776,23 @@ function mergeJsonHeaders(headers?: HeadersInit): Headers {
     merged.set('content-type', 'application/json');
   }
   return merged;
+}
+
+async function readResponsePayload(response: Response): Promise<unknown> {
+  const text = await response.text();
+  if (!text.trim()) {
+    return null;
+  }
+  try {
+    return JSON.parse(text);
+  } catch {
+    return text;
+  }
+}
+
+function appendWorkspaceScope(path: string, workspaceId: string): string {
+  const separator = path.includes('?') ? '&' : '?';
+  return `${path}${separator}workspace_id=${encodeURIComponent(workspaceId)}`;
 }
 
 function resolveAbsoluteUrl(baseUrl: string, path: string): string {
@@ -286,8 +823,14 @@ export function createWorkstationClient(
     path,
     init = {},
     allowStatuses = [],
+    policy,
   }: WorkstationClientRequestOptions): Promise<T | null> {
-    const response = await transport.request(path, init);
+    let response: Response;
+    try {
+      response = await transport.request(path, init, resolveRequestPolicy(init, policy));
+    } catch (error) {
+      throw normalizeTransportFailure(error);
+    }
     let payload: unknown = null;
     const text = await response.text();
 
@@ -394,6 +937,245 @@ export function createWorkstationClient(
     })) as WorkstationTurnResponse;
   }
 
+  function parseStreamPayload(data: string): Record<string, unknown> {
+    const text = String(data ?? '').trim();
+    if (!text) {
+      return {};
+    }
+    try {
+      const parsed = JSON.parse(text);
+      return parsed && typeof parsed === 'object'
+        ? parsed as Record<string, unknown>
+        : { value: parsed };
+    } catch {
+      return { value: text };
+    }
+  }
+
+  function parseSseBlock(block: string): WorkstationTurnStreamEvent | null {
+    const lines = block.split('\n');
+    let eventName = 'message';
+    let eventId: string | null = null;
+    const dataLines: string[] = [];
+
+    for (const rawLine of lines) {
+      const line = rawLine.trimEnd();
+      if (!line || line.startsWith(':')) {
+        continue;
+      }
+      if (line.startsWith('event:')) {
+        eventName = line.slice('event:'.length).trim() || 'message';
+        continue;
+      }
+      if (line.startsWith('id:')) {
+        eventId = line.slice('id:'.length).trim() || null;
+        continue;
+      }
+      if (line.startsWith('data:')) {
+        dataLines.push(line.slice('data:'.length).trimStart());
+      }
+    }
+
+    if (dataLines.length === 0) {
+      return null;
+    }
+
+    return {
+      id: eventId,
+      event: eventName,
+      payload: parseStreamPayload(dataLines.join('\n')),
+    };
+  }
+
+  function normalizeStreamTurnResponse(
+    payload: Record<string, unknown>,
+    options: {
+      threadId: string;
+      sessionId: string;
+      traceId: string | null;
+      fallbackReply: string;
+    },
+  ): WorkstationTurnResponse {
+    const {
+      threadId,
+      sessionId,
+      traceId,
+      fallbackReply,
+    } = options;
+    const metadata = payload.metadata && typeof payload.metadata === 'object'
+      ? { ...(payload.metadata as Record<string, unknown>) }
+      : {};
+    if (traceId) {
+      metadata.trace_id = traceId;
+    }
+    const reply = typeof payload.reply === 'string' && payload.reply.trim()
+      ? payload.reply
+      : fallbackReply;
+    return {
+      ...(payload as WorkstationTurnResponse),
+      reply,
+      status: typeof payload.status === 'string' && payload.status.trim()
+        ? payload.status
+        : 'completed',
+      thread_id: typeof payload.thread_id === 'string' && payload.thread_id.trim()
+        ? payload.thread_id
+        : threadId,
+      session_id: typeof payload.session_id === 'string' && payload.session_id.trim()
+        ? payload.session_id
+        : sessionId,
+      metadata,
+    };
+  }
+
+  async function submitTurnStream({
+    actor,
+    sessionId,
+    threadId,
+    message,
+    channel = 'web',
+    source = 'workstation_client',
+    onEvent,
+  }: {
+    actor: WorkstationSessionActor;
+    sessionId: string;
+    threadId: string;
+    message: string;
+    channel?: string;
+    source?: string;
+    onEvent?: (event: WorkstationTurnStreamEvent) => void;
+  }): Promise<WorkstationTurnResponse> {
+    let response: Response;
+    try {
+      response = await transport.request(
+        paths.turnSubmit,
+        {
+          method: 'POST',
+          headers: mergeJsonHeaders(),
+          body: JSON.stringify({
+            tenant_id: scope.tenantId,
+            workspace_id: scope.workspaceId,
+            thread_id: threadId,
+            session_id: sessionId,
+            channel,
+            actor,
+            message,
+            attachments: [],
+            context_hints: {
+              source,
+              thread_id: threadId,
+            },
+            execution_mode: 'sync',
+            response_mode: 'stream',
+            policy_context: {},
+          }),
+        },
+        resolveRequestPolicy({ method: 'POST' }, WRITE_REQUEST_POLICY),
+      );
+    } catch (error) {
+      throw normalizeTransportFailure(error);
+    }
+
+    if (!response.ok) {
+      const payload = await readResponsePayload(response);
+      throw normalizeClientError(response.status, payload);
+    }
+
+    const contentType = response.headers.get('content-type') ?? '';
+    if (!/text\/event-stream/i.test(contentType)) {
+      const payload = await readResponsePayload(response);
+      if (payload && typeof payload === 'object') {
+        return normalizeStreamTurnResponse(
+          payload as Record<string, unknown>,
+          {
+            threadId,
+            sessionId,
+            traceId: readString((payload as Record<string, unknown>).metadata && typeof (payload as Record<string, unknown>).metadata === 'object'
+              ? ((payload as Record<string, unknown>).metadata as Record<string, unknown>).trace_id
+              : null),
+            fallbackReply: '',
+          },
+        );
+      }
+      throw new WorkstationClientError(
+        'The workstation stream did not return an event stream.',
+        0,
+        payload,
+        'stream_protocol_error',
+      );
+    }
+
+    if (!response.body) {
+      throw new WorkstationClientError(
+        'The workstation stream did not include a readable body.',
+        0,
+        null,
+        'stream_protocol_error',
+      );
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let finalPayload: Record<string, unknown> | null = null;
+    let traceId: string | null = null;
+    let streamedReply = '';
+
+    while (true) {
+      const { done, value } = await reader.read();
+      buffer += decoder.decode(value ?? new Uint8Array(), { stream: !done }).replace(/\r/g, '');
+
+      while (true) {
+        const delimiterIndex = buffer.indexOf('\n\n');
+        if (delimiterIndex < 0) {
+          break;
+        }
+        const block = buffer.slice(0, delimiterIndex);
+        buffer = buffer.slice(delimiterIndex + 2);
+        const event = parseSseBlock(block);
+        if (!event) {
+          continue;
+        }
+        if (event.event === 'trace') {
+          const candidateTraceId = readString(event.payload.trace_id);
+          if (candidateTraceId) {
+            traceId = candidateTraceId;
+          }
+        }
+        if (event.event === 'chunk') {
+          streamedReply = `${streamedReply}${readString(event.payload.delta)}`;
+        }
+        if (event.event === 'final') {
+          finalPayload = event.payload;
+        }
+        try {
+          onEvent?.(event);
+        } catch {
+          // UI callbacks must not break stream consumption.
+        }
+      }
+
+      if (done) {
+        break;
+      }
+    }
+
+    if (!finalPayload) {
+      throw new WorkstationClientError(
+        'The workstation stream ended before the final response arrived.',
+        0,
+        null,
+        'stream_incomplete',
+      );
+    }
+
+    return normalizeStreamTurnResponse(finalPayload, {
+      threadId,
+      sessionId,
+      traceId,
+      fallbackReply: streamedReply,
+    });
+  }
+
   return {
     scope,
     paths,
@@ -402,19 +1184,437 @@ export function createWorkstationClient(
       requestJson<Record<string, unknown>>({
         path: paths.thread(threadId),
         allowStatuses: allowMissing ? [404] : [],
+        policy: READ_REQUEST_POLICY,
       }),
     listRuns: ({ limit = 80 } = {}) =>
       requestJson<Record<string, unknown>>({
         path: paths.runs(limit),
+        policy: READ_REQUEST_POLICY,
       }) as Promise<Record<string, unknown>>,
+    getRunDetail: ({ runId, allowMissing = false }) =>
+      requestJson<Record<string, unknown>>({
+        path: paths.runDetail(runId),
+        allowStatuses: allowMissing ? [404] : [],
+        policy: READ_REQUEST_POLICY,
+      }),
     listApprovals: ({ limit = 80 } = {}) =>
       requestJson<Record<string, unknown>>({
         path: paths.approvals(limit),
+        policy: READ_REQUEST_POLICY,
       }) as Promise<Record<string, unknown>>,
+    getApprovalDetail: ({ approvalId, allowMissing = false }) =>
+      requestJson<Record<string, unknown>>({
+        path: paths.approvalDetail(approvalId),
+        allowStatuses: allowMissing ? [404] : [],
+        policy: READ_REQUEST_POLICY,
+      }),
     listArtifacts: ({ limit = 80 } = {}) =>
       requestJson<Record<string, unknown>>({
         path: paths.artifacts(limit),
+        policy: READ_REQUEST_POLICY,
       }) as Promise<Record<string, unknown>>,
+    getArtifactDetail: ({ artifactId, allowMissing = false }) =>
+      requestJson<Record<string, unknown>>({
+        path: paths.artifactDetail(artifactId),
+        allowStatuses: allowMissing ? [404] : [],
+        policy: READ_REQUEST_POLICY,
+      }),
+    artifactFileUrl: (artifactId) => appendWorkspaceScope(paths.artifactFile(artifactId), scope.workspaceId),
+    artifactDownloadUrl: (artifactId) =>
+      appendWorkspaceScope(paths.artifactContent(artifactId), scope.workspaceId),
+    listNotifications: ({ limit = 80 } = {}) =>
+      requestJson<Record<string, unknown>>({
+        path: paths.notifications(limit),
+        policy: READ_REQUEST_POLICY,
+      }) as Promise<Record<string, unknown>>,
+    markNotificationsRead: ({ notificationIds, markAll = false } = {}) =>
+      requestJson<Record<string, unknown>>({
+        path: paths.notifications(),
+        init: {
+          method: 'POST',
+          headers: mergeJsonHeaders(),
+          body: JSON.stringify({
+            workspace_id: scope.workspaceId,
+            notification_ids: notificationIds ?? [],
+            mark_all: markAll,
+          }),
+        },
+        policy: WRITE_REQUEST_POLICY,
+      }),
+    listActivityTimeline: ({ limit = 80 } = {}) =>
+      requestJson<Record<string, unknown>>({
+        path: paths.activity(limit),
+        policy: READ_REQUEST_POLICY,
+      }) as Promise<Record<string, unknown>>,
+    listInstalledApps: () =>
+      requestJson<Record<string, unknown>>({
+        path: paths.appsInstalled,
+        policy: READ_REQUEST_POLICY,
+      }) as Promise<Record<string, unknown>>,
+    listStoreApps: () =>
+      requestJson<Record<string, unknown>>({
+        path: paths.appsStore,
+        policy: READ_REQUEST_POLICY,
+      }) as Promise<Record<string, unknown>>,
+    listAppUpdates: () =>
+      requestJson<Record<string, unknown>>({
+        path: paths.appsUpdates,
+        policy: READ_REQUEST_POLICY,
+      }) as Promise<Record<string, unknown>>,
+    installApp: ({ appId, packageId, releaseChannel, installSource }) =>
+      requestJson<Record<string, unknown>>({
+        path: paths.appsInstall,
+        init: {
+          method: 'POST',
+          headers: mergeJsonHeaders(),
+          body: JSON.stringify({
+            app_id: appId,
+            package_id: packageId ?? undefined,
+            release_channel: releaseChannel ?? undefined,
+            install_source: installSource ?? undefined,
+          }),
+        },
+        policy: WRITE_REQUEST_POLICY,
+      }),
+    uninstallApp: ({ appId }) =>
+      requestJson<Record<string, unknown>>({
+        path: paths.appsUninstall,
+        init: {
+          method: 'POST',
+          headers: mergeJsonHeaders(),
+          body: JSON.stringify({
+            app_id: appId,
+          }),
+        },
+        policy: WRITE_REQUEST_POLICY,
+      }),
+    updateApp: ({ appId, packageId, releaseChannel, installSource }) =>
+      requestJson<Record<string, unknown>>({
+        path: paths.appsUpdate,
+        init: {
+          method: 'POST',
+          headers: mergeJsonHeaders(),
+          body: JSON.stringify({
+            app_id: appId,
+            package_id: packageId ?? undefined,
+            release_channel: releaseChannel ?? undefined,
+            install_source: installSource ?? undefined,
+          }),
+        },
+        policy: WRITE_REQUEST_POLICY,
+      }),
+    listAgentDefinitions: () =>
+      requestJson<Record<string, unknown>>({
+        path: paths.agentDefinitions,
+        policy: READ_REQUEST_POLICY,
+      }) as Promise<Record<string, unknown>>,
+    listAgentInstalls: () =>
+      requestJson<Record<string, unknown>>({
+        path: paths.agentInstalls,
+        policy: READ_REQUEST_POLICY,
+      }) as Promise<Record<string, unknown>>,
+    listRuntimeTargets: () =>
+      requestJson<Record<string, unknown>>({
+        path: paths.runtimeTargets,
+        policy: READ_REQUEST_POLICY,
+      }) as Promise<Record<string, unknown>>,
+    listProviderCatalog: () =>
+      requestJson<Record<string, unknown>>({
+        path: paths.providersCatalog,
+        policy: READ_REQUEST_POLICY,
+      }) as Promise<Record<string, unknown>>,
+    runInstalledAgent: ({ installId, message, threadId, sessionId }) =>
+      requestJson<Record<string, unknown>>({
+        path: paths.runInstalledAgent(installId),
+        init: {
+          method: 'POST',
+          headers: mergeJsonHeaders(),
+          body: JSON.stringify({
+            message: message ?? undefined,
+            thread_id: threadId ?? undefined,
+            session_id: sessionId ?? undefined,
+            channel: 'web',
+            execution_mode: 'durable',
+            response_mode: 'artifact',
+          }),
+        },
+        policy: WRITE_REQUEST_POLICY,
+      }),
+    listTraces: (filters = {}) =>
+      requestJson<Record<string, unknown>>({
+        path: paths.agentTraces(filters),
+        policy: READ_REQUEST_POLICY,
+      }) as Promise<Record<string, unknown>>,
+    getTraceReplay: ({ traceId, allowMissing = false }) =>
+      requestJson<Record<string, unknown>>({
+        path: paths.agentTraceDetail(traceId),
+        allowStatuses: allowMissing ? [404] : [],
+        policy: READ_REQUEST_POLICY,
+      }),
+    listDeployedAgents: ({ deploymentState = null } = {}) =>
+      requestJson<Record<string, unknown>>({
+        path: paths.deployedAgents(deploymentState),
+        policy: READ_REQUEST_POLICY,
+      }) as Promise<Record<string, unknown>>,
+    createDeployedAgent: ({
+      name,
+      avatar,
+      persona,
+      systemPrompt,
+      channels,
+      knowledgeSources,
+      runtimeTarget,
+      billingPlan,
+      config,
+      metadata,
+      runtimeProfileId,
+      provider,
+      model,
+    }) =>
+      requestJson<Record<string, unknown>>({
+        path: paths.deployedAgents(),
+        init: {
+          method: 'POST',
+          headers: mergeJsonHeaders(),
+          body: JSON.stringify({
+            workspace_id: scope.workspaceId,
+            name,
+            avatar: avatar ?? null,
+            persona: persona ?? '',
+            system_prompt: systemPrompt ?? '',
+            channels: channels ?? {},
+            knowledge_sources: knowledgeSources ?? [],
+            runtime_target: runtimeTarget ?? 'cloud',
+            billing_plan: billingPlan ?? 'free',
+            config: config ?? undefined,
+            metadata: metadata ?? {},
+            runtime_profile_id: runtimeProfileId ?? null,
+            provider: provider ?? null,
+            model: model ?? null,
+          }),
+        },
+        policy: WRITE_REQUEST_POLICY,
+      }),
+    getDeployedAgent: ({ deployedAgentId, allowMissing = false }) =>
+      requestJson<Record<string, unknown>>({
+        path: paths.deployedAgentDetail(deployedAgentId),
+        allowStatuses: allowMissing ? [404] : [],
+        policy: READ_REQUEST_POLICY,
+      }),
+    updateDeployedAgent: ({
+      deployedAgentId,
+      name,
+      avatar,
+      persona,
+      systemPrompt,
+      deploymentState,
+      channels,
+      knowledgeSources,
+      runtimeTarget,
+      billingPlan,
+      config,
+      metadata,
+      provider,
+      model,
+    }) =>
+      requestJson<Record<string, unknown>>({
+        path: paths.deployedAgentDetail(deployedAgentId),
+        init: {
+          method: 'PATCH',
+          headers: mergeJsonHeaders(),
+          body: JSON.stringify({
+            workspace_id: scope.workspaceId,
+            name: name ?? undefined,
+            avatar: avatar ?? undefined,
+            persona: persona ?? undefined,
+            system_prompt: systemPrompt ?? undefined,
+            deployment_state: deploymentState ?? undefined,
+            channels: channels ?? undefined,
+            knowledge_sources: knowledgeSources ?? undefined,
+            runtime_target: runtimeTarget ?? undefined,
+            billing_plan: billingPlan ?? undefined,
+            config: config ?? undefined,
+            metadata: metadata ?? undefined,
+            provider: provider ?? undefined,
+            model: model ?? undefined,
+          }),
+        },
+        policy: WRITE_REQUEST_POLICY,
+      }),
+    deployDeployedAgent: ({ deployedAgentId }) =>
+      requestJson<Record<string, unknown>>({
+        path: paths.deployedAgentDeploy(deployedAgentId),
+        init: {
+          method: 'POST',
+          headers: mergeJsonHeaders(),
+          body: JSON.stringify({
+            workspace_id: scope.workspaceId,
+          }),
+        },
+        policy: WRITE_REQUEST_POLICY,
+      }),
+    pauseDeployedAgent: ({ deployedAgentId }) =>
+      requestJson<Record<string, unknown>>({
+        path: paths.deployedAgentPause(deployedAgentId),
+        init: {
+          method: 'POST',
+          headers: mergeJsonHeaders(),
+          body: JSON.stringify({
+            workspace_id: scope.workspaceId,
+          }),
+        },
+        policy: WRITE_REQUEST_POLICY,
+      }),
+    listDeployedAgentAnalytics: () =>
+      requestJson<Record<string, unknown>>({
+        path: paths.deployedAgentAnalyticsRoster,
+        policy: READ_REQUEST_POLICY,
+      }) as Promise<Record<string, unknown>>,
+    getDeployedAgentAnalytics: ({ deployedAgentId, allowMissing = false }) =>
+      requestJson<Record<string, unknown>>({
+        path: paths.deployedAgentAnalyticsDetail(deployedAgentId),
+        allowStatuses: allowMissing ? [404] : [],
+        policy: READ_REQUEST_POLICY,
+      }),
+    listDeployedAgentConversations: ({ deployedAgentId, limit = 50, offset = 0 }) =>
+      requestJson<Record<string, unknown>>({
+        path: paths.deployedAgentConversations(deployedAgentId, limit, offset),
+        policy: READ_REQUEST_POLICY,
+      }) as Promise<Record<string, unknown>>,
+    getDeployedAgentConversationDetail: ({ deployedAgentId, sessionId, allowMissing = false }) =>
+      requestJson<Record<string, unknown>>({
+        path: paths.deployedAgentConversationDetail(deployedAgentId, sessionId),
+        allowStatuses: allowMissing ? [404] : [],
+        policy: READ_REQUEST_POLICY,
+      }),
+    deleteDeployedAgentExternalUserData: ({ deployedAgentId, externalUserId, channel, sessionId, note }) =>
+      requestJson<Record<string, unknown>>({
+        path: paths.deployedAgentExternalUserDelete(deployedAgentId, externalUserId),
+        init: {
+          method: 'POST',
+          headers: mergeJsonHeaders(),
+          body: JSON.stringify({
+            workspace_id: scope.workspaceId,
+            channel,
+            session_id: sessionId ?? undefined,
+            note: note ?? undefined,
+          }),
+        },
+        policy: WRITE_REQUEST_POLICY,
+      }),
+    getPlatformAnalytics: () =>
+      requestJson<Record<string, unknown>>({
+        path: paths.platformAnalytics,
+        policy: READ_REQUEST_POLICY,
+      }) as Promise<Record<string, unknown>>,
+    getWorkspaceRouting: () =>
+      requestJson<Record<string, unknown>>({
+        path: paths.workspaceRouting,
+        policy: READ_REQUEST_POLICY,
+      }) as Promise<Record<string, unknown>>,
+    updateWorkspaceRouting: ({ adminDefaults }) =>
+      requestJson<Record<string, unknown>>({
+        path: paths.workspaceRouting,
+        init: {
+          method: 'PATCH',
+          headers: mergeJsonHeaders(),
+          body: JSON.stringify({
+            admin_defaults: adminDefaults ?? {},
+          }),
+        },
+        policy: WRITE_REQUEST_POLICY,
+      }),
+    listWorkspaceMembers: () =>
+      requestJson<Record<string, unknown>>({
+        path: paths.workspaceMembers,
+        policy: READ_REQUEST_POLICY,
+      }) as Promise<Record<string, unknown>>,
+    inviteWorkspaceMember: ({ email, role }) =>
+      requestJson<Record<string, unknown>>({
+        path: paths.workspaceMemberInvites,
+        init: {
+          method: 'POST',
+          headers: mergeJsonHeaders(),
+          body: JSON.stringify({ email, role }),
+        },
+        policy: WRITE_REQUEST_POLICY,
+      }),
+    revokeWorkspaceInvite: ({ inviteId }) =>
+      requestJson<Record<string, unknown>>({
+        path: paths.workspaceMemberInvite(inviteId),
+        init: {
+          method: 'DELETE',
+          headers: mergeJsonHeaders(),
+        },
+        policy: WRITE_REQUEST_POLICY,
+      }),
+    updateWorkspaceMemberRole: ({ userId, role }) =>
+      requestJson<Record<string, unknown>>({
+        path: paths.workspaceMember(userId),
+        init: {
+          method: 'PATCH',
+          headers: mergeJsonHeaders(),
+          body: JSON.stringify({ role }),
+        },
+        policy: WRITE_REQUEST_POLICY,
+      }),
+    removeWorkspaceMember: ({ userId }) =>
+      requestJson<Record<string, unknown>>({
+        path: paths.workspaceMember(userId),
+        init: {
+          method: 'DELETE',
+          headers: mergeJsonHeaders(),
+        },
+        policy: WRITE_REQUEST_POLICY,
+      }),
+    getWorkspacePolicies: () =>
+      requestJson<Record<string, unknown>>({
+        path: paths.workspacePolicies,
+        policy: READ_REQUEST_POLICY,
+      }) as Promise<Record<string, unknown>>,
+    updateWorkspacePolicies: (payload) =>
+      requestJson<Record<string, unknown>>({
+        path: paths.workspacePolicies,
+        init: {
+          method: 'PATCH',
+          headers: mergeJsonHeaders(),
+          body: JSON.stringify(payload),
+        },
+        policy: WRITE_REQUEST_POLICY,
+      }),
+    getBillingSummary: () =>
+      requestJson<Record<string, unknown>>({
+        path: paths.billingSummary,
+        policy: READ_REQUEST_POLICY,
+      }) as Promise<Record<string, unknown>>,
+    createBillingCheckoutSession: ({ planId, successUrl, cancelUrl }) =>
+      requestJson<Record<string, unknown>>({
+        path: paths.billingCheckout,
+        init: {
+          method: 'POST',
+          headers: mergeJsonHeaders(),
+          body: JSON.stringify({
+            workspace_id: scope.workspaceId,
+            plan_id: planId,
+            success_url: successUrl,
+            cancel_url: cancelUrl,
+          }),
+        },
+        policy: WRITE_REQUEST_POLICY,
+      }),
+    createBillingPortalSession: ({ returnUrl } = {}) =>
+      requestJson<Record<string, unknown>>({
+        path: paths.billingPortal,
+        init: {
+          method: 'POST',
+          headers: mergeJsonHeaders(),
+          body: JSON.stringify({
+            workspace_id: scope.workspaceId,
+            return_url: returnUrl,
+          }),
+        },
+        policy: WRITE_REQUEST_POLICY,
+      }),
     createSession,
     submitTurn,
     submitTurnWithSessionRetry: async ({
@@ -465,6 +1665,58 @@ export function createWorkstationClient(
         return { response, session, renewed: true };
       }
     },
+    submitTurnStream,
+    submitTurnStreamWithSessionRetry: async ({
+      actor,
+      threadId,
+      message,
+      channel = 'web',
+      source = 'workstation_client',
+      onEvent,
+    }) => {
+      let session = await createSession({
+        actor,
+        threadId,
+        channel,
+        source,
+        forceNew: false,
+      });
+
+      try {
+        const response = await submitTurnStream({
+          actor,
+          sessionId: String(session.session_id),
+          threadId,
+          message,
+          channel,
+          source,
+          onEvent,
+        });
+        return { response, session, renewed: false };
+      } catch (error) {
+        if (!(error instanceof WorkstationClientError) || error.status !== 409) {
+          throw error;
+        }
+
+        session = await createSession({
+          actor,
+          threadId,
+          channel,
+          source,
+          forceNew: true,
+        });
+        const response = await submitTurnStream({
+          actor,
+          sessionId: String(session.session_id),
+          threadId,
+          message,
+          channel,
+          source,
+          onEvent,
+        });
+        return { response, session, renewed: true };
+      }
+    },
     resolveApproval: ({ approvalId, payload, runId }) =>
       requestJson<Record<string, unknown>>({
         path: paths.approvalResolve(approvalId, runId),
@@ -473,7 +1725,15 @@ export function createWorkstationClient(
           headers: mergeJsonHeaders(),
           body: JSON.stringify(payload),
         },
+        policy: WRITE_REQUEST_POLICY,
       }),
+    openTraceStream: (traceId) =>
+      realtime.trackEventSource(
+        new EventSource(
+          resolveAbsoluteUrl(getApiBaseUrl(), paths.agentTraceStream(traceId)),
+          { withCredentials: true },
+        ),
+      ),
     openNotificationsStream: (options = {}) =>
       realtime.trackEventSource(
         new EventSource(
@@ -496,7 +1756,10 @@ export function createWorkstationClient(
         runs: paths.runs(),
         approvals: paths.approvals(),
         artifacts: paths.artifacts(),
+        agentTraces: paths.agentTraces(),
         notifications: paths.notifications(),
+        activity: paths.activity(),
+        agentTraceStream: paths.agentTraceStream(':traceId'),
         notificationsStream: paths.notificationsStream(),
         channelEventsStream: paths.channelEventsStream(),
       },

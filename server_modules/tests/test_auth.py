@@ -11,6 +11,7 @@ from fastapi import FastAPI
 from fastapi import HTTPException
 
 import server_modules.auth as auth_module
+import server_modules.channel_user_acquisition_service as channel_user_acquisition_service_module
 import server_modules.control_plane_repository as control_plane_repository_module
 import server_modules.db as db_module
 import server_modules.jwt_secret as jwt_secret_module
@@ -100,6 +101,66 @@ def test_register_and_login_emit_security_audit(monkeypatch: pytest.MonkeyPatch,
     assert created["user"]["email"] == "audit@example.com"
     assert logged_in["user"]["email"] == "audit@example.com"
     assert [item["action"] for item in emitted] == ["auth.register", "auth.login"]
+
+
+def test_register_user_binds_channel_attribution_token(monkeypatch: pytest.MonkeyPatch, tmp_path):
+    auth, _, _ = _reload_auth(monkeypatch, tmp_path)
+    acquisition_service = channel_user_acquisition_service_module.get_channel_user_acquisition_service()
+    response = acquisition_service.prepare_public_start_response(
+        profile={
+            "public_start": {
+                "enabled": True,
+                "tenant_id": "tenant-1",
+                "workspace_id": "ws-1",
+                "deployed_agent_id": "dagent-1",
+                "deployed_agent_name": "HealthGuide",
+            }
+        },
+        workspace_id="ws-1",
+        external_user_id="telegram-user-1",
+    )
+
+    created = auth.register_user(
+        "acquisition.register@example.com",
+        "password-123",
+        name="Acquisition Register",
+        acquisition_token=response["attribution_token"],
+    )
+    touch = acquisition_service.touch_from_attribution_token(response["attribution_token"])
+
+    assert created["channel_attribution"]["converted_user_id"] == created["user"]["id"]
+    assert touch["converted_user_id"] == created["user"]["id"]
+    assert touch["converted_auth_flow"] == "register"
+
+
+def test_login_user_binds_channel_attribution_token(monkeypatch: pytest.MonkeyPatch, tmp_path):
+    auth, _, _ = _reload_auth(monkeypatch, tmp_path)
+    acquisition_service = channel_user_acquisition_service_module.get_channel_user_acquisition_service()
+    auth.register_user("acquisition.login@example.com", "password-123", name="Acquisition Login")
+    response = acquisition_service.prepare_public_start_response(
+        profile={
+            "public_start": {
+                "enabled": True,
+                "tenant_id": "tenant-1",
+                "workspace_id": "ws-1",
+                "deployed_agent_id": "dagent-1",
+                "deployed_agent_name": "Returns Concierge",
+            }
+        },
+        workspace_id="ws-1",
+        external_user_id="telegram-user-2",
+    )
+
+    logged_in = auth.login_user(
+        "acquisition.login@example.com",
+        "password-123",
+        acquisition_token=response["attribution_token"],
+    )
+    touch = acquisition_service.touch_from_attribution_token(response["attribution_token"])
+
+    assert logged_in["channel_attribution"]["converted_user_id"] == logged_in["user"]["id"]
+    assert touch["converted_user_id"] == logged_in["user"]["id"]
+    assert touch["converted_auth_flow"] == "login"
 
 
 def test_session_persistence(monkeypatch: pytest.MonkeyPatch, tmp_path):

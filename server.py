@@ -1,3 +1,15 @@
+"""
+Composition root for the active runtime application.
+
+Prompt 01 freezes `server.py` as wiring only:
+- create the FastAPI app
+- register middleware and lifecycle hooks
+- mount routers and shared service configuration
+
+It must not become a product-policy owner for turn execution, connector behavior,
+memory, quota, or deployed-agent runtime logic.
+"""
+
 import argparse
 import os
 import logging
@@ -21,7 +33,10 @@ sentry_sdk.init(
 )
 
 from fastapi import FastAPI, Request
+from fastapi import HTTPException as FastAPIHTTPException
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from server_modules import runtime_config as runtime_config
 from server_modules import shared as shared
@@ -37,6 +52,7 @@ from server_modules import health_core as health_core
 from server_modules import health_diagnostics as health_diagnostics
 from server_modules import connectors_core as connectors_core
 from server_modules import connectors_actions as connectors_actions
+from server_modules import error_response_service as error_response_service
 from server_modules.direct_chat_tool_catalog_service import registered_direct_chat_tool_names_for_logging
 
 
@@ -117,10 +133,14 @@ configure_runtime_events(
 )
 
 from server_modules.routes_agents import router as agents_router
+from server_modules.routes_agent_traces import router as agent_traces_router
 from server_modules.routes_auth import router as auth_router
+from server_modules.routes_billing import router as billing_router
 from server_modules.routes_builder import router as builder_router
 from server_modules.routes_connectors import router as connectors_router
+from server_modules.routes_deployed_agents import router as deployed_agents_router
 from server_modules.routes_health import router as health_router
+from server_modules.routes_platform_analytics import router as platform_analytics_router
 from server_modules.routes_runs import router as runs_router
 from server_modules.routes_workspaces import router as workspaces_router
 from server_modules.routes_workflows import router as workflows_router
@@ -150,11 +170,32 @@ if existing_shared_app is not None and existing_shared_app is not app:
     raise RuntimeError("shared.app must reference the server-owned FastAPI app.")
 shared.app = app
 
+
+@app.exception_handler(FastAPIHTTPException)
+async def fastapi_http_exception_handler(request: Request, exc: FastAPIHTTPException):
+    return error_response_service.http_exception_response(request, exc)
+
+
+@app.exception_handler(StarletteHTTPException)
+async def starlette_http_exception_handler(request: Request, exc: StarletteHTTPException):
+    return error_response_service.http_exception_response(request, exc)
+
+
+@app.exception_handler(RequestValidationError)
+async def request_validation_exception_handler(request: Request, exc: RequestValidationError):
+    return error_response_service.request_validation_error_response(request, exc)
+
+
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception):
+    return error_response_service.unhandled_exception_response(request, exc)
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[origin.strip() for origin in FRONTEND_ORIGINS.split(",") if origin.strip()],
     allow_methods=["*"],
     allow_headers=["*"],
+    allow_credentials=True,
 )
 mount_empyralist_mcp(app)
 
@@ -174,6 +215,10 @@ app.include_router(builder_router)
 app.include_router(runs_router, prefix="/api")
 app.include_router(health_router, prefix="/api")
 app.include_router(workspaces_router, prefix="/api")
+app.include_router(billing_router, prefix="/api")
+app.include_router(deployed_agents_router, prefix="/api")
+app.include_router(agent_traces_router, prefix="/api")
+app.include_router(platform_analytics_router, prefix="/api")
 app.include_router(auth_router, prefix="/api/v1")
 
 

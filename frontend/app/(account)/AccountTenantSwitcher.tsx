@@ -1,12 +1,13 @@
 'use client';
 
 import Link from 'next/link';
-import { useEffect } from 'react';
+import { useEffect, useMemo } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
 
 import { useAccountShell } from '@/lib/shell/account-shell-context';
 import {
   resolvePrimaryWorkspaceId,
+  resolveRouteWorkspaceId,
   sanitizeWorkspaceRoute,
   type WorkspaceMembershipRecord,
 } from '@/lib/shell/workspace-membership-model';
@@ -30,10 +31,10 @@ function extractRouteWorkspaceId(pathname: string | null): string | null {
 
 function shellProfileLabel(profileId: string | null | undefined): string {
   if (profileId === 'document_workstation_shell') {
-    return 'Document Workstation';
+    return 'Document';
   }
   if (profileId === 'operations_admin_shell') {
-    return 'Operations Admin';
+    return 'Operations';
   }
   if (profileId === 'personal_shell') {
     return 'Personal';
@@ -51,12 +52,19 @@ function resolveSafeWorkspaceHref(
   );
 }
 
+function workspaceStatusLabel(membership: WorkspaceMembershipRecord): string {
+  return membership.requiresOnboarding ? 'Setup required' : 'Ready';
+}
+
 export function AccountTenantSwitcher() {
   const pathname = usePathname();
   const router = useRouter();
   const { state, actions } = useAccountShell();
   const suggestedWorkspaceId = resolvePrimaryWorkspaceId(state.workspaceMemberships);
-  const routeWorkspaceId = extractRouteWorkspaceId(pathname);
+  const routeWorkspaceId = resolveRouteWorkspaceId(
+    state.workspaceMemberships,
+    extractRouteWorkspaceId(pathname),
+  );
 
   useEffect(() => {
     const prefetchCandidates = state.workspaceMemberships
@@ -76,82 +84,173 @@ export function AccountTenantSwitcher() {
     }
   }, [actions, routeWorkspaceId, router, state.workspaceMemberships, suggestedWorkspaceId]);
 
+  const activeWorkspace = useMemo(
+    () => state.workspaceMemberships.find((membership) => membership.workspace.id === routeWorkspaceId) ?? null,
+    [routeWorkspaceId, state.workspaceMemberships],
+  );
+
   return (
     <aside
       data-workstation-switcher="rail"
       style={{
         height: '100%',
-        padding: '1.25rem 1rem',
         display: 'grid',
-        gridTemplateRows: 'auto auto minmax(0, 1fr)',
-        alignContent: 'start',
-        gap: '1rem',
-        background:
-          'linear-gradient(180deg, rgba(248,250,252,0.98) 0%, rgba(241,245,249,0.98) 100%)',
+        gridTemplateRows: 'auto auto auto minmax(0, 1fr)',
+        gap: '0.95rem',
+        padding: '1rem 0.9rem',
+        background: 'color-mix(in srgb, var(--app-bg-shell) 92%, var(--app-bg-overlay) 8%)',
       }}
     >
       <div
         style={{
           display: 'grid',
-          gap: '0.45rem',
+          gap: '0.35rem',
           padding: '0.95rem 1rem',
           borderRadius: '1rem',
-          border: '1px solid rgba(148, 163, 184, 0.35)',
-          background: 'rgba(255, 255, 255, 0.88)',
+          border: '1px solid var(--app-border-subtle)',
+          background: 'color-mix(in srgb, var(--app-bg-panel) 76%, var(--app-bg-overlay) 24%)',
         }}
       >
         <span
           style={{
-            width: 'fit-content',
-            padding: '0.22rem 0.55rem',
-            borderRadius: '999px',
-            background: '#dbeafe',
-            color: '#1d4ed8',
-            fontSize: '0.74rem',
-            fontWeight: 700,
+            color: 'var(--app-text-tertiary)',
+            fontSize: '0.72rem',
+            fontWeight: 650,
+            letterSpacing: '0.08em',
             textTransform: 'uppercase',
-            letterSpacing: '0.04em',
           }}
         >
-          Pane 1
+          Empyralis
         </span>
-        <div style={{ display: 'grid', gap: '0.2rem' }}>
-          <h1 style={{ margin: 0, fontSize: '1.05rem', color: '#0f172a' }}>Workspace Switcher</h1>
-          <p style={{ margin: 0, color: '#475569', lineHeight: 1.5, fontSize: '0.9rem' }}>
-            Route-only switching. The rail never mutates kernel state directly.
-          </p>
-        </div>
+        <h1
+          style={{
+            margin: 0,
+            color: 'var(--app-text-primary)',
+            fontSize: '1rem',
+            fontWeight: 680,
+            letterSpacing: '-0.015em',
+          }}
+        >
+          Workspaces
+        </h1>
+        <p
+          style={{
+            margin: 0,
+            color: 'var(--app-text-secondary)',
+            fontSize: '0.86rem',
+            lineHeight: 1.5,
+          }}
+        >
+          Switch operational context without leaving the workstation shell.
+        </p>
       </div>
 
-      <div
+      {activeWorkspace ? (
+        <div
+          style={{
+            display: 'grid',
+            gap: '0.55rem',
+            padding: '0.95rem 1rem',
+            borderRadius: '1rem',
+            border: '1px solid var(--app-border-subtle)',
+            background: 'color-mix(in srgb, var(--app-bg-panel-elevated) 80%, var(--app-bg-overlay) 20%)',
+          }}
+        >
+          <div style={{ display: 'grid', gap: '0.18rem' }}>
+            <span
+              style={{
+                color: 'var(--app-text-tertiary)',
+                fontSize: '0.72rem',
+                fontWeight: 650,
+                letterSpacing: '0.08em',
+                textTransform: 'uppercase',
+              }}
+            >
+              Current workspace
+            </span>
+            <strong style={{ color: 'var(--app-text-primary)', fontSize: '0.96rem' }}>
+              {activeWorkspace.workspace.label}
+            </strong>
+          </div>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.45rem' }}>
+            <span
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                minHeight: '1.8rem',
+                padding: '0.28rem 0.55rem',
+                borderRadius: '999px',
+                border: '1px solid var(--app-border-subtle)',
+                background: 'color-mix(in srgb, var(--app-bg-panel) 84%, var(--app-bg-overlay) 16%)',
+                color: 'var(--app-text-secondary)',
+                fontSize: '0.76rem',
+              }}
+            >
+              {shellProfileLabel(activeWorkspace.preferredShellProfileId)}
+            </span>
+            <span
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                minHeight: '1.8rem',
+                padding: '0.28rem 0.55rem',
+                borderRadius: '999px',
+                border: '1px solid var(--app-border-subtle)',
+                background: 'color-mix(in srgb, var(--app-bg-panel) 84%, var(--app-bg-overlay) 16%)',
+                color: 'var(--app-text-secondary)',
+                fontSize: '0.76rem',
+              }}
+            >
+              {activeWorkspace.role}
+            </span>
+            <span
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                minHeight: '1.8rem',
+                padding: '0.28rem 0.55rem',
+                borderRadius: '999px',
+                border: '1px solid var(--app-border-subtle)',
+                background: activeWorkspace.requiresOnboarding
+                  ? 'color-mix(in srgb, var(--app-warning-muted) 80%, var(--app-bg-panel) 20%)'
+                  : 'color-mix(in srgb, var(--app-success-muted) 80%, var(--app-bg-panel) 20%)',
+                color: activeWorkspace.requiresOnboarding ? 'var(--app-warning)' : 'var(--app-success)',
+                fontSize: '0.76rem',
+                fontWeight: 620,
+              }}
+            >
+              {workspaceStatusLabel(activeWorkspace)}
+            </span>
+          </div>
+        </div>
+      ) : null}
+
+      <Link
+        href="/workspaces/new"
+        prefetch
         style={{
-          display: 'grid',
-          gap: '0.55rem',
-          padding: '0.95rem 1rem',
-          borderRadius: '1rem',
-          border: '1px solid rgba(148, 163, 184, 0.35)',
-          background: 'rgba(255, 255, 255, 0.7)',
+          display: 'inline-flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          minHeight: '2.4rem',
+          padding: '0.55rem 0.95rem',
+          borderRadius: '999px',
+          border: '1px solid var(--app-border-accent)',
+          background: 'color-mix(in srgb, var(--app-accent) 18%, var(--app-bg-overlay) 82%)',
+          color: 'var(--app-accent-text)',
+          textDecoration: 'none',
+          fontSize: '0.84rem',
+          fontWeight: 640,
         }}
       >
-        <div style={{ display: 'grid', gap: '0.2rem' }}>
-          <span style={{ color: '#64748b', fontSize: '0.78rem', textTransform: 'uppercase' }}>
-            Active route workspace
-          </span>
-          <strong style={{ color: '#0f172a' }}>{routeWorkspaceId ?? 'none'}</strong>
-        </div>
-        <div style={{ display: 'grid', gap: '0.2rem' }}>
-          <span style={{ color: '#64748b', fontSize: '0.78rem', textTransform: 'uppercase' }}>
-            Current path
-          </span>
-          <span style={{ color: '#334155', fontSize: '0.86rem', wordBreak: 'break-word' }}>{pathname ?? '/'}</span>
-        </div>
-      </div>
+        Create workspace
+      </Link>
 
       <nav
         aria-label="Workspace switcher"
         style={{
           display: 'grid',
-          gap: '0.8rem',
+          gap: '0.7rem',
           alignContent: 'start',
           minHeight: 0,
           overflow: 'auto',
@@ -160,11 +259,10 @@ export function AccountTenantSwitcher() {
         {state.workspaceMemberships.map((membership) => {
           const workspaceId = membership.workspace.id;
           const isActive = routeWorkspaceId === workspaceId;
-          const entryHref = workspaceEntryHref(workspaceId);
           const rememberedRoute = actions.resolveWorkspaceHref(workspaceId);
           const targetHref = resolveSafeWorkspaceHref(membership, rememberedRoute);
           const shellProfile = shellProfileLabel(membership.preferredShellProfileId);
-          const isUsingFallback = rememberedRoute !== targetHref;
+          const isSuggested = suggestedWorkspaceId === workspaceId;
 
           return (
             <Link
@@ -181,30 +279,36 @@ export function AccountTenantSwitcher() {
               }}
               style={{
                 display: 'grid',
-                gap: '0.6rem',
+                gap: '0.7rem',
                 padding: '0.95rem 1rem',
                 borderRadius: '1rem',
-                border: isActive ? '1px solid #0f172a' : '1px solid rgba(148, 163, 184, 0.45)',
-                background: isActive ? '#e2e8f0' : 'rgba(255, 255, 255, 0.92)',
-                color: '#0f172a',
+                border: isActive ? '1px solid var(--app-border-accent)' : '1px solid var(--app-border-subtle)',
+                background: isActive
+                  ? 'color-mix(in srgb, var(--app-accent-muted) 74%, var(--app-bg-panel) 26%)'
+                  : 'color-mix(in srgb, var(--app-bg-panel) 86%, var(--app-bg-overlay) 14%)',
+                color: 'var(--app-text-primary)',
                 textDecoration: 'none',
-                boxShadow: isActive ? '0 16px 32px rgba(15, 23, 42, 0.12)' : '0 12px 24px rgba(15, 23, 42, 0.04)',
+                boxShadow: isActive ? 'var(--app-shadow-panel)' : 'none',
               }}
             >
               <div style={{ display: 'flex', justifyContent: 'space-between', gap: '0.75rem', alignItems: 'start' }}>
                 <div style={{ display: 'grid', gap: '0.18rem', minWidth: 0 }}>
-                  <span style={{ fontWeight: 700, fontSize: '0.96rem' }}>{membership.workspace.label}</span>
-                  <span style={{ fontSize: '0.82rem', color: '#475569', overflowWrap: 'anywhere' }}>
-                    tenant {membership.workspace.tenantId}
+                  <span style={{ fontWeight: 660, fontSize: '0.94rem', overflowWrap: 'anywhere' }}>
+                    {membership.workspace.label}
+                  </span>
+                  <span style={{ fontSize: '0.8rem', color: 'var(--app-text-secondary)' }}>
+                    {membership.workspace.kind}
                   </span>
                 </div>
                 <span
                   style={{
                     padding: '0.18rem 0.55rem',
                     borderRadius: '999px',
-                    background: isActive ? '#0f172a' : '#e2e8f0',
-                    color: isActive ? '#ffffff' : '#334155',
-                    fontSize: '0.75rem',
+                    background: isActive
+                      ? 'color-mix(in srgb, var(--app-accent) 24%, var(--app-bg-overlay) 76%)'
+                      : 'color-mix(in srgb, var(--app-bg-panel-elevated) 80%, var(--app-bg-overlay) 20%)',
+                    color: isActive ? 'var(--app-accent-text)' : 'var(--app-text-secondary)',
+                    fontSize: '0.74rem',
                     fontWeight: 700,
                     textTransform: 'uppercase',
                   }}
@@ -215,74 +319,31 @@ export function AccountTenantSwitcher() {
 
               <div
                 style={{
-                  display: 'grid',
-                  gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
-                  gap: '0.55rem',
-                }}
-              >
-                <div style={{ display: 'grid', gap: '0.15rem' }}>
-                  <span style={{ fontSize: '0.72rem', color: '#64748b', textTransform: 'uppercase' }}>
-                    Shell
-                  </span>
-                  <span style={{ fontSize: '0.84rem', color: '#0f172a' }}>{shellProfile}</span>
-                </div>
-                <div style={{ display: 'grid', gap: '0.15rem' }}>
-                  <span style={{ fontSize: '0.72rem', color: '#64748b', textTransform: 'uppercase' }}>
-                    Kind
-                  </span>
-                  <span style={{ fontSize: '0.84rem', color: '#0f172a' }}>{membership.workspace.kind}</span>
-                </div>
-              </div>
-
-              <div style={{ display: 'grid', gap: '0.3rem' }}>
-                <span style={{ fontSize: '0.72rem', color: '#64748b', textTransform: 'uppercase' }}>
-                  Route-safe entry
-                </span>
-                <span style={{ fontSize: '0.82rem', color: '#0f172a', overflowWrap: 'anywhere' }}>
-                  {targetHref}
-                </span>
-                <span style={{ fontSize: '0.78rem', color: '#64748b', overflowWrap: 'anywhere' }}>
-                  remembered: {rememberedRoute ?? 'none'}
-                </span>
-                <span style={{ fontSize: '0.78rem', color: '#64748b', overflowWrap: 'anywhere' }}>
-                  fallback: {entryHref !== membership.defaultRoute ? membership.defaultRoute : entryHref}
-                </span>
-                <span style={{ fontSize: '0.78rem', color: isUsingFallback ? '#b45309' : '#64748b' }}>
-                  {isUsingFallback ? 'invalid remembered route fell back safely' : 'remembered route is safe'}
-                </span>
-              </div>
-
-              <div
-                style={{
                   display: 'flex',
                   flexWrap: 'wrap',
                   gap: '0.45rem',
                 }}
               >
-                {[
-                  ['Runs', 'slot'],
-                  ['Approvals', 'slot'],
-                  ['Activity', 'slot'],
-                ].map(([label, value]) => (
-                  <span
-                    key={label}
-                    style={{
-                      display: 'inline-flex',
-                      alignItems: 'center',
-                      gap: '0.35rem',
-                      padding: '0.28rem 0.55rem',
-                      borderRadius: '999px',
-                      background: '#f8fafc',
-                      border: '1px solid #e2e8f0',
-                      color: '#475569',
-                      fontSize: '0.76rem',
-                      fontWeight: 600,
-                    }}
-                  >
-                    {label}
-                    <span style={{ color: '#94a3b8' }}>{value}</span>
-                  </span>
-                ))}
+                {[shellProfile, workspaceStatusLabel(membership), isSuggested ? 'Primary' : null]
+                  .filter(Boolean)
+                  .map((label) => (
+                    <span
+                      key={label}
+                      style={{
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        minHeight: '1.75rem',
+                        padding: '0.22rem 0.5rem',
+                        borderRadius: '999px',
+                        border: '1px solid var(--app-border-subtle)',
+                        background: 'color-mix(in srgb, var(--app-bg-panel-elevated) 82%, var(--app-bg-overlay) 18%)',
+                        color: 'var(--app-text-secondary)',
+                        fontSize: '0.74rem',
+                      }}
+                    >
+                      {label}
+                    </span>
+                  ))}
               </div>
             </Link>
           );

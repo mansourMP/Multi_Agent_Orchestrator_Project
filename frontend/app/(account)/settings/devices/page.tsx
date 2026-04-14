@@ -1,17 +1,26 @@
+import { FormGrid, FormReadout } from '@/lib/ui/form-controls';
+import { ListDetailPanel, ListDetailShell } from '@/lib/ui/list-detail';
+
 export default function DeviceSettingsPage() {
   return (
-    <main
-      style={{
-        minHeight: '100vh',
-        padding: '3rem',
-        display: 'grid',
-        gap: '0.75rem',
-      }}
+    <ListDetailShell
+      title="Device sessions"
+      subtitle="Operator machine and session inventory is account-global, but it should still read like part of the workstation product."
     >
-      <h1 style={{ margin: 0, fontSize: '1.5rem' }}>Device Sessions</h1>
-      <p style={{ margin: 0, maxWidth: '48rem', lineHeight: 1.6 }}>
-        This route remains account-global and will not mount workspace-scoped feature state.
-      </p>
-    </main>
+      <div data-device-settings-page="shell" style={{ display: 'grid', gap: '1rem' }}>
+        <ListDetailPanel
+          eyebrow="Devices"
+          title="Session scope"
+          subtitle="This route stays outside the workspace boundary because it governs account-level session trust."
+        >
+          <FormGrid columns="repeat(2, minmax(0, 1fr))">
+            <FormReadout label="Route scope" value="Account-global" />
+            <FormReadout label="Workspace coupling" value="None" />
+            <FormReadout label="Purpose" value="Device trust and active session review" />
+            <FormReadout label="Presentation" value="Shared product chrome" />
+          </FormGrid>
+        </ListDetailPanel>
+      </div>
+    </ListDetailShell>
   );
 }

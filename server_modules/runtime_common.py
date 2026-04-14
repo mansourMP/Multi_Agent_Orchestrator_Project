@@ -16,6 +16,8 @@ from fastapi.responses import JSONResponse
 
 from server_modules import runtime_config as config
 from server_modules import egress_policy
+from server_modules import error_response_service, quota_policy_service, quota_response_service
+from server_modules.error_contracts import AUTHORIZATION_ERROR, IDEMPOTENCY_CONFLICT
 from server_modules import secrets_broker
 from server_modules import shared as shared
 from server_modules.telemetry import record_control_plane_request
@@ -106,13 +108,19 @@ def _check_control_plane_origin(request: Request) -> Optional[JSONResponse]:
     if not origin:
         return None
     if origin not in CONTROL_PLANE_ORIGINS:
-        return JSONResponse(
-            status_code=403,
-            content={
-                "detail": "Origin is not allowed.",
-                "origin": origin,
-                "allowed_origins": CONTROL_PLANE_ORIGINS,
-            },
+        return error_response_service.json_response_from_platform_error(
+            error_response_service.platform_error(
+                code="origin_not_allowed",
+                message="Origin is not allowed.",
+                error_class=AUTHORIZATION_ERROR,
+                retryable=False,
+                status_code=403,
+                request_id=error_response_service.request_id_from_request(request),
+                details={
+                    "origin": origin,
+                    "allowed_origins": CONTROL_PLANE_ORIGINS,
+                },
+            )
         )
     return None
 
@@ -140,20 +148,23 @@ def _control_plane_rate_limit(request: Request) -> Optional[JSONResponse]:
     client_host = request.client.host if request.client else "unknown"
     api_key = _extract_request_api_key(request)
     identity = f"{client_host}:{api_key or 'anon'}"
-    with RATE_LIMIT_LOCK:
-        bucket = RATE_LIMIT_BUCKETS.get(identity, [])
-        cutoff = now - 60.0
-        bucket = [ts for ts in bucket if ts >= cutoff]
-        limit = max(1, CONTROL_PLANE_RATE_LIMIT_PER_MINUTE + CONTROL_PLANE_RATE_LIMIT_BURST)
-        if len(bucket) >= limit:
-            retry_after = max(1, int(round(bucket[0] + 60.0 - now)))
-            return JSONResponse(
-                status_code=429,
-                content={"detail": "Control plane rate limit exceeded.", "retry_after_seconds": retry_after},
-                headers={"Retry-After": str(retry_after)},
-            )
-        bucket.append(now)
-        RATE_LIMIT_BUCKETS[identity] = bucket
+    limit = max(1, CONTROL_PLANE_RATE_LIMIT_PER_MINUTE + CONTROL_PLANE_RATE_LIMIT_BURST)
+    decision = quota_policy_service.evaluate_request_window_quota(
+        profile_name=quota_policy_service.CONTROL_PLANE_MUTATION_PROFILE.name,
+        subject=quota_policy_service.QuotaSubject(
+            surface_kind=quota_policy_service.CONTROL_PLANE_MUTATION_PROFILE.surface_kind,
+            request_path=request_path,
+            client_ip=client_host,
+            actor_id=api_key or "anon",
+        ),
+        buckets=RATE_LIMIT_BUCKETS,
+        lock=RATE_LIMIT_LOCK,
+        key=identity,
+        limit=limit,
+        now=now,
+    )
+    if not decision.allowed:
+        return quota_response_service.json_response_from_quota_decision(decision)
     return None
 
 
@@ -190,7 +201,16 @@ async def control_plane_guard_middleware(request: Request, call_next):
         body_hash = hashlib.sha256(body).hexdigest()
         lookup = _idempotency_get(request.method, request.url.path, idempotency_key.strip(), body_hash)
         if lookup.get("hit") and lookup.get("conflict"):
-            response = JSONResponse(status_code=409, content={"detail": "Idempotency key reused with different payload."})
+            response = error_response_service.json_response_from_platform_error(
+                error_response_service.platform_error(
+                    code="idempotency_key_reused_with_different_payload",
+                    message="Idempotency key reused with different payload.",
+                    error_class=IDEMPOTENCY_CONFLICT,
+                    retryable=False,
+                    status_code=409,
+                    request_id=error_response_service.request_id_from_request(request),
+                )
+            )
             return response
         if lookup.get("hit") and isinstance(lookup.get("record"), dict):
             record = lookup["record"]

@@ -2,7 +2,10 @@ from __future__ import annotations
 
 from typing import Any, Callable, Dict, List, Optional
 
-from server_modules import memory_service
+from server_modules import conversation_memory_facade_service
+from server_modules import memory_summary_service
+from server_modules import workspace_context_memory_adapter
+from server_modules.conversation_memory_policy import DIRECT_CHAT_PROFILE
 
 
 def direct_chat_memory_context_message(
@@ -10,9 +13,16 @@ def direct_chat_memory_context_message(
     *,
     system_prefix: str,
 ) -> Optional[Dict[str, str]]:
-    return memory_service.direct_chat_memory_context_message(
-        workspace_id,
+    context = conversation_memory_facade_service.load_context(
+        conversation_memory_facade_service.ConversationMemorySubject(
+            workspace_id=workspace_id,
+            surface_kind=conversation_memory_facade_service.DIRECT_CHAT_SURFACE,
+        ),
+        DIRECT_CHAT_PROFILE,
+    )
+    return workspace_context_memory_adapter.build_workspace_memory_context_message(
         system_prefix=system_prefix,
+        contextual_blocks=context.contextual_blocks,
     )
 
 
@@ -21,9 +31,13 @@ def direct_chat_workspace_context_text(
     *,
     memory_query: str = "",
 ) -> str:
-    return memory_service.direct_chat_workspace_context_text(
-        workspace_id,
-        memory_query=memory_query,
+    return conversation_memory_facade_service.build_workspace_context_text(
+        conversation_memory_facade_service.ConversationMemorySubject(
+            workspace_id=workspace_id,
+            surface_kind=conversation_memory_facade_service.DIRECT_CHAT_SURFACE,
+        ),
+        DIRECT_CHAT_PROFILE,
+        query_text=memory_query,
     )
 
 
@@ -32,7 +46,7 @@ def build_direct_chat_daily_log_summary(
     user_message: str,
     assistant_reply: str,
 ) -> str:
-    return memory_service.build_direct_chat_daily_log_summary(
+    return memory_summary_service.build_direct_chat_daily_log_summary(
         user_message=user_message,
         assistant_reply=assistant_reply,
     )
@@ -52,18 +66,25 @@ def persist_direct_chat_memory_best_effort(
     extraction_prompt: str,
     extraction_system_prompt: str,
 ) -> None:
-    memory_service.persist_direct_chat_memory_best_effort(
-        workspace_id=workspace_id,
-        provider=provider,
-        model=model,
-        credentials=credentials,
-        reasoning_effort=reasoning_effort,
-        prior_messages=prior_messages,
+    conversation_memory_facade_service.persist_interaction(
+        conversation_memory_facade_service.ConversationMemorySubject(
+            workspace_id=workspace_id,
+            surface_kind=conversation_memory_facade_service.DIRECT_CHAT_SURFACE,
+        ),
+        DIRECT_CHAT_PROFILE,
         user_message=user_message,
         assistant_reply=assistant_reply,
-        generate_reply=generate_reply,
-        extraction_prompt=extraction_prompt,
-        extraction_system_prompt=extraction_system_prompt,
+        metadata={
+            "persist_memory": True,
+            "provider": provider,
+            "model": model,
+            "credentials": credentials,
+            "reasoning_effort": reasoning_effort,
+            "prior_messages": prior_messages,
+            "generate_reply": generate_reply,
+            "extraction_prompt": extraction_prompt,
+            "extraction_system_prompt": extraction_system_prompt,
+        },
     )
 
 
@@ -79,14 +100,22 @@ def persist_direct_chat_transcript_best_effort(
     save_session_transcript_fn: Callable[..., Any],
 ) -> None:
     try:
-        save_session_transcript_fn(
-            workspace_id=workspace_id,
-            thread_id=thread_id,
-            provider=provider,
-            model=model,
-            messages=messages,
+        conversation_memory_facade_service.persist_interaction(
+            conversation_memory_facade_service.ConversationMemorySubject(
+                workspace_id=workspace_id,
+                thread_id=thread_id,
+                surface_kind=conversation_memory_facade_service.DIRECT_CHAT_SURFACE,
+            ),
+            DIRECT_CHAT_PROFILE,
             user_message=user_message,
             assistant_reply=assistant_reply,
+            metadata={
+                "persist_transcript": True,
+                "provider": provider,
+                "model": model,
+                "messages": messages,
+                "save_session_transcript_fn": save_session_transcript_fn,
+            },
         )
     except Exception:
         return

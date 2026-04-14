@@ -3,6 +3,7 @@ from server_modules import shared as shared
 from server_modules.capability_registry import resolve_capability
 from server_modules import runtime_common as common
 from server_modules import run_state_repository
+from server_modules import usage_accounting_service
 from server_modules.run_execution_handle import durable_run_payload, restore_run_state, should_restore_execution_handle
 
 globals().update({key: value for key, value in vars(config).items() if not key.startswith("__")})
@@ -318,6 +319,21 @@ def _serialize_run_snapshot(run_id: str, run: Dict[str, Any]) -> Dict[str, Any]:
     context = run.get("context") if isinstance(run.get("context"), dict) else {}
     metadata = context.get("metadata") if isinstance(context.get("metadata"), dict) else {}
     usage_masked = run.get("usage_masked") if isinstance(run.get("usage_masked"), dict) else {}
+    usage_accounting = usage_accounting_service.accounting_record_from_snapshot(
+        {
+            "run_id": run_id,
+            "status": run.get("status"),
+            "created_at": run.get("created_at"),
+            "updated_at": run.get("updated_at"),
+            "completed_at": run.get("completed_at"),
+            "context": context,
+            "usage_accounting": run.get("usage_accounting") if isinstance(run.get("usage_accounting"), dict) else None,
+            "usage_masked": usage_masked,
+        }
+    )
+    usage_view = dict(usage_masked)
+    if isinstance(usage_accounting, dict):
+        usage_view.update(usage_accounting_service.usage_projection_from_record(usage_accounting))
     events = run.get("events") if isinstance(run.get("events"), list) else []
     trimmed_events = events[-min(len(events), ORION_MAX_EVENT_BUFFER):]
     tool_policy_audit = run.get("tool_policy_audit") if isinstance(run.get("tool_policy_audit"), list) else []
@@ -339,7 +355,7 @@ def _serialize_run_snapshot(run_id: str, run: Dict[str, Any]) -> Dict[str, Any]:
         context=context,
         metadata=metadata,
         active_profile=active_profile,
-        usage_masked=usage_masked,
+        usage_masked=usage_view,
         events=trimmed_events,
         result_data=result_data,
     )
@@ -386,6 +402,8 @@ def _serialize_run_snapshot(run_id: str, run: Dict[str, Any]) -> Dict[str, Any]:
         "model_overridden": provider_model_truth.get("model_overridden"),
         "fallback_used": provider_model_truth.get("fallback_used"),
         "pack_id": _pack_id_from_context(run),
+        "deployed_agent_id": metadata.get("deployed_agent_id"),
+        "deployment_state": metadata.get("deployment_state"),
         "agent_role": metadata.get("agent_role"),
         "agent_role_source": metadata.get("agent_role_source"),
         "parent_run_id": metadata.get("parent_run_id"),
@@ -427,16 +445,17 @@ def _serialize_run_snapshot(run_id: str, run: Dict[str, Any]) -> Dict[str, Any]:
         "approval_outcome": approval_outcome,
         "evidence_items": evidence_items,
         "run_detail_contract": run_detail_contract,
-        "usage_masked": usage_masked,
-        "usage_provider": usage_masked.get("provider"),
-        "usage_model": usage_masked.get("model"),
-        "usage_prompt_tokens": usage_masked.get("prompt_tokens", usage_masked.get("input_tokens_est")),
-        "usage_completion_tokens": usage_masked.get("completion_tokens", usage_masked.get("output_tokens_est")),
-        "usage_total_tokens": usage_masked.get("total_tokens", usage_masked.get("total_tokens_est")),
-        "usage_total_tokens_est": usage_masked.get("total_tokens_est"),
-        "usage_estimated_cost_usd": usage_masked.get("estimated_cost_usd", usage_masked.get("cost_est_usd")),
-        "usage_cost_band": usage_masked.get("cost_band"),
-        "usage_timestamp": usage_masked.get("timestamp"),
+        "usage_masked": usage_view,
+        "usage_accounting": usage_accounting if isinstance(usage_accounting, dict) else None,
+        "usage_provider": usage_view.get("provider"),
+        "usage_model": usage_view.get("model"),
+        "usage_prompt_tokens": usage_view.get("prompt_tokens", usage_view.get("input_tokens_est")),
+        "usage_completion_tokens": usage_view.get("completion_tokens", usage_view.get("output_tokens_est")),
+        "usage_total_tokens": usage_view.get("total_tokens", usage_view.get("total_tokens_est")),
+        "usage_total_tokens_est": usage_view.get("total_tokens_est"),
+        "usage_estimated_cost_usd": usage_view.get("estimated_cost_usd", usage_view.get("cost_est_usd")),
+        "usage_cost_band": usage_view.get("cost_band"),
+        "usage_timestamp": usage_view.get("timestamp"),
         "result_data": result_data,
         "node_states": node_states,
         "tool_policy_precheck": metadata.get("tool_policy_precheck"),
@@ -477,7 +496,16 @@ def _archive_run_if_terminal(run_id: str, run: Dict[str, Any]):
     with RUN_HISTORY_LOCK:
         RUN_HISTORY.insert(0, snapshot)
         del RUN_HISTORY[ORION_HISTORY_LIMIT:]
-    run["_archived"] = True
+    payload = getattr(getattr(run, "record", None), "payload", None)
+    if payload is None or not hasattr(payload, "_suspend_notifications"):
+        run["_archived"] = True
+        return
+    previous = bool(getattr(payload, "_suspend_notifications", False))
+    payload._suspend_notifications = True
+    try:
+        run["_archived"] = True
+    finally:
+        payload._suspend_notifications = previous
 
 
 def _refresh_archived_run_snapshot(run_id: str, run: Dict[str, Any]) -> None:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, Iterator, List, Optional, Sequence
 
@@ -7,10 +8,12 @@ from server_modules.agent_turn import (
     resolve_agent_turn_request_from_runtime_context,
     resolve_agent_turn_request_with_fallback,
 )
+from server_modules import agent_trace_service
 from server_modules import direct_chat_generation_service
 from server_modules import direct_chat_prompt_service
 from server_modules import direct_chat_response_service
 from server_modules import no_provider_service
+from server_modules.direct_tool_config_service import run_async_tool_call
 
 
 @dataclass(slots=True)
@@ -37,6 +40,48 @@ class DirectChatRuntimeServices:
     direct_chat_generation_services: direct_chat_generation_service.DirectChatGenerationServices
     no_provider_reasoning_required_response: Callable[[], Dict[str, Any]]
     capture_exception: Callable[[BaseException], None]
+
+
+def _resume_trace_context(
+    *,
+    session_ctx: Optional[Dict[str, Any]],
+    request_meta: Optional[Dict[str, Any]],
+    explicit_trace_context: Optional[Any],
+) -> Optional[Any]:
+    try:
+        if explicit_trace_context is not None:
+            if isinstance(session_ctx, dict):
+                session_ctx.setdefault("trace_context", explicit_trace_context)
+            return explicit_trace_context
+        if isinstance(session_ctx, dict) and session_ctx.get("trace_context") is not None:
+            return session_ctx.get("trace_context")
+        trace_payload = None
+        if isinstance(request_meta, dict) and isinstance(request_meta.get("trace"), dict):
+            trace_payload = dict(request_meta.get("trace") or {})
+        elif isinstance(session_ctx, dict) and isinstance(session_ctx.get("trace"), dict):
+            trace_payload = dict(session_ctx.get("trace") or {})
+        if not isinstance(trace_payload, dict):
+            return None
+        trace_id = str(trace_payload.get("trace_id") or "").strip()
+        tenant_id = str(trace_payload.get("tenant_id") or "").strip()
+        workspace_id = str(trace_payload.get("workspace_id") or "").strip()
+        if not trace_id or not tenant_id or not workspace_id:
+            return None
+        resumed = run_async_tool_call(
+            agent_trace_service.resume_trace(
+                trace_id=trace_id,
+                tenant_id=tenant_id,
+                workspace_id=workspace_id,
+                thread_id=str(trace_payload.get("thread_id") or "").strip() or None,
+                run_id=str(trace_payload.get("run_id") or "").strip() or None,
+                root_agent_id=str(trace_payload.get("root_agent_id") or "").strip() or None,
+            )
+        )
+        if resumed is not None and isinstance(session_ctx, dict):
+            session_ctx["trace_context"] = resumed
+        return resumed
+    except Exception:
+        return None
 
 
 def _finalize_direct_tool_payload(
@@ -116,6 +161,158 @@ def _fallback_tool_payload(
     )
 
 
+def _execute_approved_action_payload(
+    *,
+    approved_action_payload: Optional[Dict[str, str]],
+    workspace_id: str,
+    thread_id: str,
+    requested_provider: str,
+    requested_model: str,
+    reasoning_effort: Optional[str],
+    session_ctx: Optional[Dict[str, Any]],
+    proactive_suggestions: List[str],
+    connected_systems: List[str],
+    tool_capabilities: List[Dict[str, Any]],
+    services: DirectChatRuntimeServices,
+) -> Dict[str, Any]:
+    from server_modules import direct_tool_config_service, runs_execution
+
+    response_services = services.direct_chat_response_services
+    base_context = response_services.build_context_used(
+        workspace_id=workspace_id,
+        requested_provider=requested_provider,
+        effective_provider=None,
+        requested_model=requested_model,
+        effective_model=None,
+        reasoning_effort=reasoning_effort,
+        connected_systems=connected_systems,
+        tool_capabilities=tool_capabilities,
+        prior_messages_used=False,
+        history_mode="none",
+        run_created=False,
+        fallback_used=False,
+        fallback_reason=None,
+    )
+    if approved_action_payload is None:
+        return direct_chat_response_service.approval_confirmation_payload(
+            approved_action_payload=approved_action_payload,
+            workspace_id=workspace_id,
+            thread_id=thread_id,
+            requested_provider=requested_provider,
+            requested_model=requested_model,
+            reasoning_effort=reasoning_effort,
+            session_ctx=session_ctx,
+            proactive_suggestions=proactive_suggestions,
+            connected_systems=connected_systems,
+            tool_capabilities=tool_capabilities,
+            tool_write_action_available_fn=services.tool_write_action_available,
+            approved_action_to_tool_call_fn=services.approved_action_to_tool_call,
+            services=response_services,
+        )
+    if not services.tool_write_action_available(
+        approved_action_payload["connector"],
+        approved_action_payload["action"],
+        tool_capabilities,
+    ):
+        return direct_chat_response_service.approval_confirmation_payload(
+            approved_action_payload=approved_action_payload,
+            workspace_id=workspace_id,
+            thread_id=thread_id,
+            requested_provider=requested_provider,
+            requested_model=requested_model,
+            reasoning_effort=reasoning_effort,
+            session_ctx=session_ctx,
+            proactive_suggestions=proactive_suggestions,
+            connected_systems=connected_systems,
+            tool_capabilities=tool_capabilities,
+            tool_write_action_available_fn=services.tool_write_action_available,
+            approved_action_to_tool_call_fn=services.approved_action_to_tool_call,
+            services=response_services,
+        )
+    direct_chat_credentials = response_services.direct_chat_credentials(
+        workspace_id,
+        requested_provider,
+    )
+
+    def _parse_json_object_loose(value: Any) -> Any:
+        if isinstance(value, dict):
+            return dict(value)
+        raw = str(value or "").strip()
+        if not raw:
+            return {}
+        try:
+            parsed = json.loads(raw)
+        except Exception:
+            return {}
+        return parsed if isinstance(parsed, dict) else {}
+
+    connector_id = str(approved_action_payload.get("connector") or "").strip().lower()
+    action_id = str(approved_action_payload.get("action") or "").strip()
+    tool_input = str(approved_action_payload.get("input") or "").strip()
+    config = direct_tool_config_service.build_direct_tool_config(
+        connector_id,
+        action_id,
+        tool_input,
+        parse_json_object_loose=_parse_json_object_loose,
+    )
+    try:
+        result = runs_execution._workflow_execute_connector_action(
+            "direct-chat-approved-action",
+            "direct_chat_approved_action",
+            {
+                "workspace_id": workspace_id,
+                "tenant_id": str(
+                    (session_ctx or {}).get("tenant_id")
+                    or (
+                        (session_ctx or {}).get("agent_turn_request", {}).get("tenant_id")
+                        if isinstance((session_ctx or {}).get("agent_turn_request"), dict)
+                        else ""
+                    )
+                    or "default"
+                ).strip()
+                or "default",
+                "provider": requested_provider or None,
+                "model": requested_model or None,
+                "credentials": direct_chat_credentials if isinstance(direct_chat_credentials, dict) else None,
+                "metadata": {},
+            },
+            config,
+            current_text=str(config.get("text") or tool_input or "").strip(),
+        )
+        reply = direct_tool_config_service.format_direct_tool_result(result)
+    except Exception as exc:
+        response_services.capture_exception(exc)
+        return response_services.with_context_used(
+            {
+                "reply": "",
+                "actions": [],
+                "interventions": [
+                    direct_chat_response_service.build_intervention(
+                        "system_error",
+                        "Approved action failed",
+                        detail=str(exc).strip() or "The approved action could not be executed.",
+                        severity="error",
+                        status="failed",
+                        code="approved_action_failed",
+                    )
+                ],
+                "suggestions": proactive_suggestions,
+                "mode": "answer",
+                "error": "approved_action_failed",
+            },
+            base_context,
+        )
+    return response_services.with_context_used(
+        {
+            "reply": str(reply or "").strip(),
+            "actions": [],
+            "suggestions": proactive_suggestions,
+            "mode": "answer",
+        },
+        base_context,
+    )
+
+
 def build_direct_operator_reply(
     *,
     services: DirectChatRuntimeServices,
@@ -131,7 +328,13 @@ def build_direct_operator_reply(
     max_iterations: Optional[int] = None,
     session_ctx: Optional[Dict[str, Any]] = None,
     agent_turn_request: Optional[Any] = None,
+    trace_context: Optional[Any] = None,
 ) -> Iterator[Dict[str, Any]]:
+    resolved_trace_context = _resume_trace_context(
+        session_ctx=session_ctx,
+        request_meta=None,
+        explicit_trace_context=trace_context,
+    )
     resolved_turn_request = resolve_agent_turn_request_with_fallback(
         agent_turn_request,
         (session_ctx.get("agent_turn_request") if isinstance(session_ctx, dict) else None),
@@ -202,7 +405,7 @@ def build_direct_operator_reply(
     if normalized_message == "__approval_confirmed__":
         yield {
             "type": "final",
-            "payload": direct_chat_response_service.approval_confirmation_payload(
+            "payload": _execute_approved_action_payload(
                 approved_action_payload=approved_action_payload,
                 workspace_id=normalized_workspace_id,
                 thread_id=normalized_thread_id,
@@ -213,9 +416,7 @@ def build_direct_operator_reply(
                 proactive_suggestions=proactive_suggestions,
                 connected_systems=connected_systems,
                 tool_capabilities=tool_capabilities,
-                tool_write_action_available_fn=services.tool_write_action_available,
-                approved_action_to_tool_call_fn=services.approved_action_to_tool_call,
-                services=services.direct_chat_response_services,
+                services=services,
             ),
         }
         return
@@ -449,6 +650,7 @@ def build_direct_operator_reply(
         tool_loop_session_key=tool_loop_session_key,
         fallback_reason=fallback_reason,
         session_ctx=session_ctx,
+        trace_context=resolved_trace_context,
         resolved_chat_max_iterations=resolved_chat_max_iterations,
         direct_tool_result_summary_system_message="You have the results from the direct tool calls. Summarize them for the user or continue if another tool is required.",
     )
@@ -484,6 +686,11 @@ def build_chat_turn_event_stream(
 ) -> Iterator[Dict[str, Any]]:
     context = session_ctx if isinstance(session_ctx, dict) else {}
     meta = request_meta if isinstance(request_meta, dict) else {}
+    trace_context = _resume_trace_context(
+        session_ctx=context,
+        request_meta=meta,
+        explicit_trace_context=None,
+    )
     turn_request = resolve_agent_turn_request_from_runtime_context(
         request_meta=meta,
         session_ctx=context,
@@ -509,6 +716,7 @@ def build_chat_turn_event_stream(
         approved_action=meta.get("approved_action") if isinstance(meta.get("approved_action"), dict) else None,
         max_iterations=meta.get("max_iterations"),
         agent_turn_request=(meta.get("agent_turn_request") if turn_request is None else turn_request),
+        trace_context=trace_context,
     )
 
 

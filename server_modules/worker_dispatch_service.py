@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Mapping, Optional
 
 from fastapi import HTTPException
-from server_modules import machine_lease_service
+from server_modules import machine_lease_service, usage_accounting_service
 
 
 @dataclass(slots=True)
@@ -211,6 +211,19 @@ def complete_local_run(
     run["context"] = context
     if isinstance(usage_masked, dict):
         run["usage_masked"] = usage_masked
+        usage_accounting = usage_accounting_service.accounting_record_from_snapshot(
+            {
+                "run_id": run_id,
+                "status": "completed",
+                "created_at": run.get("created_at"),
+                "updated_at": run.get("updated_at"),
+                "completed_at": run.get("completed_at"),
+                "context": context,
+                "usage_masked": usage_masked,
+            }
+        )
+        if isinstance(usage_accounting, dict):
+            run["usage_accounting"] = usage_accounting
 
     resolved_text = str(result_text or "").strip()
     if not resolved_text and isinstance(result_data, dict):

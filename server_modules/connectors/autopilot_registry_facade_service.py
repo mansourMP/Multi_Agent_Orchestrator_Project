@@ -5,7 +5,7 @@ import time
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional
 
-from server_modules import entitlements_service, outbox_service
+from server_modules import activity_ledger_service, entitlements_service, outbox_service
 from server_modules.automation_intents import classify_automation_intent
 from server_modules.connectors.autopilot_approval_service import AutopilotApprovalService
 from server_modules.connectors.autopilot_channel_support_service import AutopilotChannelSupportService
@@ -26,6 +26,7 @@ from server_modules.connectors.telegram_autopilot_service_registry import Telegr
 from server_modules.connectors.telegram_terminal_service import TelegramTerminalService
 from server_modules.connectors.telegram_transport_service import TelegramTransportService
 from server_modules.connectors.whatsapp_autopilot_service_registry import WhatsAppAutopilotServiceRegistry
+from server_modules.direct_tool_config_service import run_async_tool_call
 
 
 class AutopilotRegistryFacadeService:
@@ -505,6 +506,9 @@ class AutopilotRegistryFacadeService:
                 can_auto_approve_wait=lambda run: runtime_registry.run_entry_service().can_auto_approve_wait(run),
                 pending_confirmation_payload=lambda run: runtime_registry.run_entry_service().pending_confirmation_payload(run),
                 emit_channel_run_delivery_event=outbox_service.emit_channel_run_delivery_event,
+                record_activity_event=lambda **kwargs: run_async_tool_call(
+                    activity_ledger_service.append_activity_event(**kwargs)
+                ),
                 sleep=time.sleep,
             )
         return self._telegram_service_registry

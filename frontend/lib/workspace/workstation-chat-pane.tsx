@@ -1,32 +1,35 @@
 'use client';
 
-import Link from 'next/link';
 import { useEffect, useMemo, useState } from 'react';
 
+import { AppButton, AppNotice } from '@/lib/ui/primitives';
+import { ScrollRegion } from '@/lib/ui/scroll-region';
+import { ChatComposer } from '@/lib/workspace/chat-composer';
+import { ChatInlineStateCard } from '@/lib/workspace/chat-inline-state-card';
+import {
+  ChatMessage,
+  type WorkstationChatArtifactReference,
+  type WorkstationChatMessageRecord,
+} from '@/lib/workspace/chat-message';
+import { SageTraceView } from '@/lib/workspace/sage-trace-view';
+import {
+  resolveWorkstationApproval,
+  subscribeWorkstationApprovalResolved,
+} from '@/lib/workspace/workstation-approval-events';
 import { useWorkspaceBoundary } from '@/lib/workspace/workspace-boundary';
 import { useWorkspaceServices, useWorkstationStreamState } from '@/lib/workspace/workspace-services';
 import {
   WorkstationClientError,
+  type WorkstationAgentTraceEvent,
+  type WorkstationAgentTraceRecord,
   type WorkstationSessionActor,
   type WorkstationTurnResponse,
 } from '@/lib/workspace/workstation-client';
 
-type CanonicalChatMessage = {
-  id: string;
-  role: string;
-  content: string;
-  status: string | null;
-  createdAt: string | null;
-  runId: string | null;
-  approvals: Record<string, unknown>[];
-  interventions: Record<string, unknown>[];
-  metadata: Record<string, unknown>;
-};
-
 type CanonicalChatThreadState = {
   threadId: string;
   title: string;
-  messages: CanonicalChatMessage[];
+  messages: WorkstationChatMessageRecord[];
 };
 
 type CanonicalRunSummary = Record<string, unknown> & {
@@ -42,6 +45,15 @@ type CanonicalApprovalSummary = Record<string, unknown> & {
   prompt?: string | null;
 };
 
+type LiveTraceTransport = 'external' | 'trace-stream';
+
+type LiveTraceState = {
+  traceId: string | null;
+  transport: LiveTraceTransport;
+  trace: WorkstationAgentTraceRecord | null;
+  events: WorkstationAgentTraceEvent[];
+};
+
 const PRIMARY_THREAD_ID = 'primary';
 const ACTIVE_THREAD_QUERY_KEY = 'chat:canonical:active-thread';
 const RUNS_QUERY_KEY = 'chat:canonical:runs';
@@ -51,18 +63,177 @@ function threadQueryKey(threadId: string): string {
   return `chat:canonical:thread:${threadId}`;
 }
 
+function normalizeArtifactReferences(metadata: Record<string, unknown>): WorkstationChatArtifactReference[] {
+  const candidates: WorkstationChatArtifactReference[] = [];
+  const pushArtifact = (value: unknown) => {
+    if (typeof value === 'string' && value.trim()) {
+      candidates.push({
+        id: value.trim(),
+        label: value.trim(),
+      });
+      return;
+    }
+
+    if (!value || typeof value !== 'object') {
+      return;
+    }
+
+    const record = value as Record<string, unknown>;
+    const id = String(record.artifact_id ?? record.id ?? '').trim();
+    if (!id) {
+      return;
+    }
+
+    candidates.push({
+      id,
+      label: String(record.label ?? record.file_name ?? id),
+      kind: typeof record.kind === 'string' ? record.kind : null,
+      mediaType: typeof record.media_type === 'string' ? record.media_type : null,
+    });
+  };
+
+  const maybeCollections = [
+    metadata.artifacts,
+    metadata.generated_artifacts,
+    metadata.outputs,
+    metadata.attachments,
+  ];
+
+  for (const collection of maybeCollections) {
+    if (Array.isArray(collection)) {
+      for (const item of collection) {
+        pushArtifact(item);
+      }
+    }
+  }
+
+  if (Array.isArray(metadata.artifact_ids)) {
+    for (const artifactId of metadata.artifact_ids) {
+      pushArtifact(artifactId);
+    }
+  }
+
+  const seen = new Set<string>();
+  return candidates.filter((artifact) => {
+    if (seen.has(artifact.id)) {
+      return false;
+    }
+    seen.add(artifact.id);
+    return true;
+  });
+}
+
+function readString(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+function readNumber(value: unknown, fallback = 0): number {
+  const parsed = typeof value === 'number' ? value : Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function readObject(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+}
+
+function traceEventKey(event: WorkstationAgentTraceEvent, index: number): string {
+  const explicit = readString(event.id);
+  if (explicit) {
+    return explicit;
+  }
+  const traceId = readString(event.trace_id) || 'trace';
+  const seq = readNumber(event.seq, index + 1);
+  const eventType = readString(event.event_type) || 'trace.event';
+  return `${traceId}:${seq}:${eventType}:${index}`;
+}
+
+function mergeTraceEvents(
+  current: WorkstationAgentTraceEvent[],
+  incoming: WorkstationAgentTraceEvent[],
+): WorkstationAgentTraceEvent[] {
+  const next = new Map<string, WorkstationAgentTraceEvent>();
+  current.forEach((event, index) => {
+    next.set(traceEventKey(event, index), event);
+  });
+  incoming.forEach((event, index) => {
+    next.set(traceEventKey(event, current.length + index), event);
+  });
+  return Array.from(next.values()).sort((left, right) => {
+    const leftSeq = readNumber(left.seq, 0);
+    const rightSeq = readNumber(right.seq, 0);
+    if (leftSeq !== rightSeq) {
+      return leftSeq - rightSeq;
+    }
+    return traceEventKey(left, 0).localeCompare(traceEventKey(right, 0));
+  });
+}
+
+function isTerminalTraceEvent(eventType: string): boolean {
+  return eventType === 'trace.completed' || eventType === 'trace.failed';
+}
+
+function normalizeTraceStreamEvent(payload: Record<string, unknown>): WorkstationAgentTraceEvent | null {
+  const eventType = readString(payload.event_type);
+  if (!eventType) {
+    return null;
+  }
+  return {
+    id: readString(payload.id) || null,
+    trace_id: readString(payload.trace_id) || null,
+    seq: readNumber(payload.seq, 0),
+    ts: readString(payload.ts) || null,
+    event_type: eventType,
+    persisted: Boolean(payload.persisted),
+    agent_id: readString(payload.agent_id) || null,
+    parent_id: readString(payload.parent_id) || null,
+    item_id: readString(payload.item_id) || null,
+    tool_call_id: readString(payload.tool_call_id) || null,
+    child_run_id: readString(payload.child_run_id) || null,
+    approval_id: readString(payload.approval_id) || null,
+    artifact_id: readString(payload.artifact_id) || null,
+    data: readObject(payload.data),
+  };
+}
+
+function buildLiveTraceRecord({
+  traceId,
+  workspaceId,
+  threadId,
+  rootAgentId,
+}: {
+  traceId: string | null;
+  workspaceId: string;
+  threadId: string;
+  rootAgentId?: string | null;
+}): WorkstationAgentTraceRecord {
+  return {
+    id: traceId,
+    workspace_id: workspaceId,
+    thread_id: threadId,
+    root_agent_id: readString(rootAgentId) || 'sage',
+    surface: 'web',
+  };
+}
+
 function normalizeCanonicalChatThread(
   payload: unknown,
   threadId: string,
 ): CanonicalChatThreadState {
   const record = payload && typeof payload === 'object' ? payload as Record<string, unknown> : {};
   const turns = Array.isArray(record.turns) ? record.turns : [];
-  const messages = turns.flatMap((turn, index): CanonicalChatMessage[] => {
+  const messages = turns.flatMap((turn, index): WorkstationChatMessageRecord[] => {
     if (!turn || typeof turn !== 'object') {
       return [];
     }
 
     const entry = turn as Record<string, unknown>;
+    const metadata =
+      entry.metadata && typeof entry.metadata === 'object'
+        ? entry.metadata as Record<string, unknown>
+        : {};
+
     return [{
       id: String(entry.id ?? `${threadId}:message:${index}`),
       role: String(entry.role ?? 'assistant'),
@@ -72,10 +243,8 @@ function normalizeCanonicalChatThread(
       runId: typeof entry.run_id === 'string' ? entry.run_id : null,
       approvals: Array.isArray(entry.approvals) ? entry.approvals as Record<string, unknown>[] : [],
       interventions: Array.isArray(entry.interventions) ? entry.interventions as Record<string, unknown>[] : [],
-      metadata:
-        entry.metadata && typeof entry.metadata === 'object'
-          ? entry.metadata as Record<string, unknown>
-          : {},
+      artifacts: normalizeArtifactReferences(metadata),
+      metadata,
     }];
   });
 
@@ -109,18 +278,22 @@ function normalizeCanonicalApprovalItems(payload: unknown): CanonicalApprovalSum
 function createCanonicalAssistantMessage(
   response: WorkstationTurnResponse,
   threadId: string,
-): CanonicalChatMessage | null {
+): WorkstationChatMessageRecord | null {
   const reply = String(response.reply ?? '').trim();
   const approvals = Array.isArray(response.approvals) ? response.approvals : [];
   const interventions = Array.isArray(response.interventions) ? response.interventions : [];
   const runId = typeof response.run_id === 'string' ? response.run_id : null;
+  const metadata =
+    response.metadata && typeof response.metadata === 'object'
+      ? response.metadata as Record<string, unknown>
+      : {};
   const synthesizedReply = reply
     || (approvals.length > 0
       ? 'Approval is required before this run can continue.'
       : interventions.length > 0
-        ? 'The run needs intervention before it can continue.'
+        ? 'Execution needs operator intervention before it can continue.'
         : runId
-          ? 'Run accepted. Open the runs surface for status updates.'
+          ? 'Run accepted. Execution has started.'
           : `Turn ${String(response.status ?? 'completed')}.`);
 
   if (!synthesizedReply.trim()) {
@@ -136,14 +309,12 @@ function createCanonicalAssistantMessage(
     runId,
     approvals,
     interventions,
-    metadata:
-      response.metadata && typeof response.metadata === 'object'
-        ? response.metadata as Record<string, unknown>
-        : {},
+    artifacts: normalizeArtifactReferences(metadata),
+    metadata,
   };
 }
 
-function createCanonicalUserMessage(text: string, threadId: string): CanonicalChatMessage {
+function createCanonicalUserMessage(text: string, threadId: string): WorkstationChatMessageRecord {
   return {
     id: `${threadId}:user:${Date.now()}`,
     role: 'user',
@@ -153,28 +324,51 @@ function createCanonicalUserMessage(text: string, threadId: string): CanonicalCh
     runId: null,
     approvals: [],
     interventions: [],
+    artifacts: [],
     metadata: {},
   };
 }
 
-function readApprovalLabel(item: Record<string, unknown>, fallback: string): string {
-  return String(item.prompt ?? item.title ?? item.id ?? item.approval_id ?? fallback);
+function createStreamingAssistantMessage(
+  text: string,
+  threadId: string,
+  traceId: string | null,
+): WorkstationChatMessageRecord | null {
+  if (!text) {
+    return null;
+  }
+
+  return {
+    id: `${threadId}:assistant:streaming`,
+    role: 'assistant',
+    content: text,
+    status: 'streaming',
+    createdAt: new Date().toISOString(),
+    runId: null,
+    approvals: [],
+    interventions: [],
+    artifacts: [],
+    metadata: traceId ? { trace_id: traceId } : {},
+  };
 }
 
-function readApprovalStatus(item: Record<string, unknown>): string {
-  return String(item.status ?? 'pending');
+function summarizeRuns(runs: CanonicalRunSummary[]): string {
+  if (runs.length === 0) {
+    return 'No active runs yet';
+  }
+  const latest = runs[0];
+  return `${runs.length} tracked · latest ${String(latest.status ?? 'unknown')}`;
 }
 
-function readInterventionLabel(item: Record<string, unknown>, fallback: string): string {
-  return String(item.title ?? item.kind ?? item.code ?? item.id ?? fallback);
-}
-
-function readInterventionMessage(item: Record<string, unknown>): string {
-  return String(item.message ?? item.detail ?? item.reason ?? 'Operator action is required.');
+function summarizeApprovals(approvals: CanonicalApprovalSummary[]): string {
+  if (approvals.length === 0) {
+    return 'No pending approvals';
+  }
+  return `${approvals.length} awaiting action`;
 }
 
 export function WorkstationChatPane() {
-  const { bootstrap, routeManifest } = useWorkspaceBoundary();
+  const { bootstrap } = useWorkspaceBoundary();
   const services = useWorkspaceServices();
   const streamState = useWorkstationStreamState();
   const actor = useMemo<WorkstationSessionActor>(() => ({
@@ -203,6 +397,12 @@ export function WorkstationChatPane() {
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isSending, setIsSending] = useState(false);
+  const [resolvingApprovalId, setResolvingApprovalId] = useState<string | null>(null);
+  const [pendingUserMessage, setPendingUserMessage] = useState<WorkstationChatMessageRecord | null>(null);
+  const [streamingAssistantText, setStreamingAssistantText] = useState('');
+  const [liveTrace, setLiveTrace] = useState<LiveTraceState | null>(null);
+  const [isMobileViewport, setIsMobileViewport] = useState(false);
+  const [isWideViewport, setIsWideViewport] = useState(false);
 
   const writeThreadState = (nextThread: CanonicalChatThreadState) => {
     services.queryClient.set(threadQueryKey(nextThread.threadId), nextThread);
@@ -238,14 +438,43 @@ export function WorkstationChatPane() {
     const runsRequest = services.client.listRuns({
       limit: 12,
     }).then(normalizeCanonicalRunItems);
-    const approvalsRequest = routeManifest.routeIndex.approvals
-      ? services.client.listApprovals({
-          limit: 80,
-        }).then(normalizeCanonicalApprovalItems)
-      : Promise.resolve([]);
+    const approvalsRequest = services.client.listApprovals({
+      limit: 24,
+    }).then(normalizeCanonicalApprovalItems);
 
     const [nextRuns, nextApprovals] = await Promise.all([runsRequest, approvalsRequest]);
     writeOverview({ nextRuns, nextApprovals });
+  };
+
+  const refreshCanonicalState = async (requestedThreadId = activeThreadId) => {
+    const [nextThread] = await Promise.all([
+      loadThread(requestedThreadId),
+      loadOverview(),
+    ]);
+    return nextThread;
+  };
+
+  const handleResolveApproval = async (approvalId: string, resolution: 'approved' | 'rejected') => {
+    if (!approvalId || resolvingApprovalId) {
+      return;
+    }
+    setResolvingApprovalId(approvalId);
+    setStatusMessage(null);
+    try {
+      await resolveWorkstationApproval(services.client, {
+        approvalId,
+        resolution,
+      });
+      services.streams.touchActivity();
+    } catch (error) {
+      setStatusMessage(
+        error instanceof WorkstationClientError || error instanceof Error
+          ? error.message
+          : 'Approval resolution failed.',
+      );
+    } finally {
+      setResolvingApprovalId(null);
+    }
   };
 
   useEffect(() => {
@@ -255,13 +484,32 @@ export function WorkstationChatPane() {
     }
   }, [activeThreadId, services]);
 
+  useEffect(() => subscribeWorkstationApprovalResolved((detail) => {
+    void refreshCanonicalState(activeThreadId)
+      .then(() => {
+        setStatusMessage(detail.message);
+      })
+      .catch((error) => {
+        setStatusMessage(error instanceof Error ? error.message : detail.message);
+      });
+  }), [activeThreadId]);
+
+  useEffect(() => {
+    if (streamState.activity.version === 0) {
+      return;
+    }
+    void refreshCanonicalState(activeThreadId).catch((error) => {
+      setStatusMessage(error instanceof Error ? error.message : 'Chat refresh failed.');
+    });
+  }, [activeThreadId, streamState.activity.version]);
+
   useEffect(() => {
     let cancelled = false;
 
     (async () => {
       try {
         setIsLoading(true);
-        await Promise.all([loadThread(activeThreadId), loadOverview()]);
+        await refreshCanonicalState(activeThreadId);
         if (!cancelled) {
           setStatusMessage(null);
         }
@@ -279,7 +527,52 @@ export function WorkstationChatPane() {
     return () => {
       cancelled = true;
     };
-  }, [activeThreadId, bootstrap.workspace.id, routeManifest.routeIndex.approvals, services]);
+  }, [activeThreadId, bootstrap.workspace.id]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') {
+      return undefined;
+    }
+
+    const mobileQuery = window.matchMedia('(max-width: 767px)');
+    const wideQuery = window.matchMedia('(min-width: 1200px)');
+
+    const updateViewport = () => {
+      setIsMobileViewport(mobileQuery.matches);
+      setIsWideViewport(wideQuery.matches);
+    };
+
+    updateViewport();
+
+    if (typeof mobileQuery.addEventListener === 'function') {
+      mobileQuery.addEventListener('change', updateViewport);
+      wideQuery.addEventListener('change', updateViewport);
+      return () => {
+        mobileQuery.removeEventListener('change', updateViewport);
+        wideQuery.removeEventListener('change', updateViewport);
+      };
+    }
+
+    mobileQuery.addListener(updateViewport);
+    wideQuery.addListener(updateViewport);
+    return () => {
+      mobileQuery.removeListener(updateViewport);
+      wideQuery.removeListener(updateViewport);
+    };
+  }, []);
+
+  const streamingAssistantMessage = useMemo(
+    () => createStreamingAssistantMessage(
+      streamingAssistantText,
+      liveTrace?.trace?.thread_id && readString(liveTrace.trace.thread_id)
+        ? String(liveTrace.trace.thread_id)
+        : activeThreadId,
+      liveTrace?.traceId ?? null,
+    ),
+    [activeThreadId, liveTrace?.trace?.thread_id, liveTrace?.traceId, streamingAssistantText],
+  );
+
+  const showTrace = Boolean(liveTrace) && !isMobileViewport && isWideViewport;
 
   const sendMessage = async () => {
     const message = draft.trim();
@@ -287,45 +580,153 @@ export function WorkstationChatPane() {
       return;
     }
 
+    const requestedThreadId = activeThreadId;
+    const pendingMessage = createCanonicalUserMessage(message, requestedThreadId);
     setIsSending(true);
     setStatusMessage(null);
+    setPendingUserMessage(pendingMessage);
+    setStreamingAssistantText('');
+    setLiveTrace(null);
 
     try {
-      const { renewed, response } = await services.client.submitTurnWithSessionRetry({
+      let observedTraceId: string | null = null;
+      let observedThreadId = requestedThreadId;
+      let terminalTraceSeen = false;
+      const onTraceEvent = (traceEvent: WorkstationAgentTraceEvent) => {
+        observedTraceId = readString(traceEvent.trace_id) || observedTraceId;
+        terminalTraceSeen = terminalTraceSeen || isTerminalTraceEvent(readString(traceEvent.event_type));
+        setLiveTrace((current) => {
+          const nextEvents = mergeTraceEvents(current?.events ?? [], [traceEvent]);
+          const traceId = readString(traceEvent.trace_id) || current?.traceId || observedTraceId;
+          const currentTrace = current?.trace ?? buildLiveTraceRecord({
+            traceId,
+            workspaceId: bootstrap.workspace.id,
+            threadId: observedThreadId,
+            rootAgentId: readString(traceEvent.agent_id) || 'sage',
+          });
+          return {
+            traceId,
+            transport: current?.transport ?? 'external',
+            trace: {
+              ...currentTrace,
+              id: traceId ?? currentTrace.id ?? null,
+              thread_id: readString(currentTrace.thread_id) || observedThreadId,
+              root_agent_id: readString(currentTrace.root_agent_id) || readString(traceEvent.agent_id) || 'sage',
+            },
+            events: nextEvents,
+          };
+        });
+      };
+
+      const { renewed, response } = await services.client.submitTurnStreamWithSessionRetry({
         actor,
-        threadId: activeThreadId,
+        threadId: requestedThreadId,
         message,
         channel: 'web',
         source: 'workstation_chat_pane',
+        onEvent: (event) => {
+          if (event.event === 'trace') {
+            const traceEvent = normalizeTraceStreamEvent(event.payload);
+            if (traceEvent) {
+              onTraceEvent(traceEvent);
+            }
+            return;
+          }
+
+          if (event.event === 'chunk') {
+            const delta = readString(event.payload.delta);
+            if (delta) {
+              setStreamingAssistantText((current) => `${current}${delta}`);
+            }
+            return;
+          }
+
+          if (event.event === 'final') {
+            const finalThreadId = readString(event.payload.thread_id);
+            if (finalThreadId) {
+              observedThreadId = finalThreadId;
+            }
+            const metadata = readObject(event.payload.metadata);
+            const finalTraceId = readString(metadata.trace_id);
+            if (finalTraceId) {
+              observedTraceId = finalTraceId;
+            }
+          }
+        },
       });
 
-      const nextThreadId = String(response.thread_id ?? activeThreadId);
-      const nextMessages = [
-        ...thread.messages,
-        createCanonicalUserMessage(message, nextThreadId),
-      ];
-      const assistantMessage = createCanonicalAssistantMessage(response, nextThreadId);
-      if (assistantMessage) {
-        nextMessages.push(assistantMessage);
+      const responseMetadata =
+        response.metadata && typeof response.metadata === 'object'
+          ? { ...(response.metadata as Record<string, unknown>) }
+          : {};
+      const traceId = readString(responseMetadata.trace_id) || observedTraceId;
+      if (traceId) {
+        responseMetadata.trace_id = traceId;
       }
+      const normalizedResponse: WorkstationTurnResponse = {
+        ...response,
+        thread_id: String(response.thread_id ?? observedThreadId ?? requestedThreadId),
+        metadata: responseMetadata,
+      };
+      const nextThreadId = String(normalizedResponse.thread_id ?? requestedThreadId);
+      const optimisticUserMessage = createCanonicalUserMessage(message, nextThreadId);
+      const nextMessages = [...thread.messages, optimisticUserMessage];
+      const assistantMessage = createCanonicalAssistantMessage(normalizedResponse, nextThreadId);
+
+      setLiveTrace((current) => {
+        if (!traceId && !current) {
+          return null;
+        }
+        const currentTrace = current?.trace ?? buildLiveTraceRecord({
+          traceId,
+          workspaceId: bootstrap.workspace.id,
+          threadId: nextThreadId,
+          rootAgentId: current?.trace?.root_agent_id ? String(current.trace.root_agent_id) : 'sage',
+        });
+        return {
+          traceId,
+          transport: normalizedResponse.run_id && traceId && !terminalTraceSeen ? 'trace-stream' : (current?.transport ?? 'external'),
+          trace: {
+            ...currentTrace,
+            id: traceId ?? currentTrace.id ?? null,
+            thread_id: nextThreadId,
+          },
+          events: current?.events ?? [],
+        };
+      });
 
       writeThreadState({
         ...thread,
         threadId: nextThreadId,
         messages: nextMessages,
       });
+      setPendingUserMessage(null);
+      setStreamingAssistantText('');
       setDraft('');
-      await loadOverview();
+      services.streams.touchActivity();
+      const canonicalThread = await refreshCanonicalState(nextThreadId)
+        .catch(() => null);
+      if (canonicalThread && canonicalThread.messages.length >= nextMessages.length) {
+        writeThreadState(canonicalThread);
+      } else if (assistantMessage) {
+        writeThreadState({
+          ...thread,
+          threadId: nextThreadId,
+          messages: [...nextMessages, assistantMessage],
+        });
+      }
       setStatusMessage(
-        Array.isArray(response.approvals) && response.approvals.length > 0
-          ? 'Turn submitted. Approval is now pending in the canonical approval queue.'
-          : Array.isArray(response.interventions) && response.interventions.length > 0
+        Array.isArray(normalizedResponse.approvals) && normalizedResponse.approvals.length > 0
+          ? 'Turn submitted. Approval is now pending.'
+          : Array.isArray(normalizedResponse.interventions) && normalizedResponse.interventions.length > 0
             ? 'Turn submitted. Intervention is required before execution can continue.'
             : renewed
               ? 'Turn submitted after renewing the scoped workstation session.'
               : null,
       );
     } catch (error) {
+      setPendingUserMessage(null);
+      setStreamingAssistantText('');
       setStatusMessage(
         error instanceof WorkstationClientError || error instanceof Error
           ? error.message
@@ -336,290 +737,123 @@ export function WorkstationChatPane() {
     }
   };
 
+  const liveTraceView = liveTrace ? (
+    <SageTraceView
+      traceId={liveTrace.traceId}
+      mode="live"
+      liveTransport={liveTrace.transport === 'trace-stream' ? 'trace-stream' : 'external'}
+      initialTrace={liveTrace.trace}
+      initialEvents={liveTrace.transport === 'trace-stream' ? liveTrace.events : null}
+      additiveEvents={liveTrace.transport === 'external' ? liveTrace.events : null}
+    />
+  ) : null;
+
   return (
-    <main
-      data-workstation-chat="pane"
-      style={{
-        minHeight: '100%',
-        padding: '2rem 2.4rem',
-        display: 'grid',
-        gap: '1.5rem',
-      }}
-    >
-      <header style={{ display: 'grid', gap: '0.5rem' }}>
-        <h1 style={{ margin: 0, fontSize: '1.6rem' }}>Chat</h1>
-        <p style={{ margin: 0, maxWidth: '58rem', lineHeight: 1.6 }}>
-          Pane 3 talks to the canonical runtime contract through the shared workstation client only.
-        </p>
-        <span style={{ color: '#475569', fontSize: '0.88rem' }}>
-          Live kernel state: {streamState.notifications.unreadCount} notifications, {streamState.activity.totalCount} activity events.
-        </span>
-      </header>
-
-      <section
-        style={{
-          display: 'grid',
-          gridTemplateColumns: 'minmax(0, 2fr) minmax(18rem, 1fr)',
-          gap: '1rem',
-          alignItems: 'start',
-        }}
-      >
-        <div
-          style={{
-            display: 'grid',
-            gap: '0.85rem',
-            padding: '1rem',
-            borderRadius: '1rem',
-            border: '1px solid #cbd5e1',
-            background: '#ffffff',
-          }}
-        >
-          <div style={{ display: 'flex', justifyContent: 'space-between', gap: '1rem', flexWrap: 'wrap' }}>
-            <div style={{ display: 'grid', gap: '0.25rem' }}>
-              <strong>{bootstrap.workspace.label}</strong>
-              <span style={{ color: '#475569' }}>
-                Thread <code>{thread.threadId}</code> scoped to <code>{services.scopeKey}</code>
-              </span>
-            </div>
-            <button
-              type="button"
-              onClick={() => {
-                void Promise.all([loadThread(activeThreadId), loadOverview()]).catch((error) => {
-                  setStatusMessage(error instanceof Error ? error.message : 'Refresh failed.');
-                });
-              }}
-              style={{
-                border: '1px solid #94a3b8',
-                borderRadius: '999px',
-                background: '#f8fafc',
-                padding: '0.45rem 0.8rem',
-                cursor: 'pointer',
-              }}
-            >
-              Refresh thread
-            </button>
-          </div>
-
-          <div
-            style={{
-              display: 'grid',
-              gap: '0.75rem',
-              padding: '0.75rem',
-              borderRadius: '0.85rem',
-              background: '#f8fafc',
-              minHeight: '22rem',
-            }}
-          >
-            {isLoading && thread.messages.length === 0 ? (
-              <p style={{ margin: 0, color: '#475569' }}>Loading canonical thread history…</p>
-            ) : null}
-            {thread.messages.length === 0 ? (
-              <p style={{ margin: 0, color: '#475569' }}>
-                No turns have been written yet. The first send will create the canonical thread history.
-              </p>
-            ) : (
-              thread.messages.map((message) => (
-                <article
-                  key={message.id}
-                  style={{
-                    justifySelf: message.role === 'user' ? 'end' : 'start',
-                    maxWidth: '88%',
-                    padding: '0.85rem 1rem',
-                    borderRadius: '1rem',
-                    background: message.role === 'user' ? '#dbeafe' : '#e2e8f0',
-                    display: 'grid',
-                    gap: '0.45rem',
-                  }}
-                >
-                  <div style={{ display: 'flex', justifyContent: 'space-between', gap: '0.75rem', flexWrap: 'wrap' }}>
-                    <strong style={{ textTransform: 'capitalize' }}>{message.role}</strong>
-                    <span style={{ fontSize: '0.8rem', color: '#475569' }}>
-                      {message.status ?? 'completed'}
-                    </span>
-                  </div>
-
-                  <span style={{ whiteSpace: 'pre-wrap', lineHeight: 1.5 }}>{message.content}</span>
-
-                  {message.runId ? (
-                    <div
-                      style={{
-                        display: 'inline-flex',
-                        width: 'fit-content',
-                        alignItems: 'center',
-                        gap: '0.35rem',
-                        padding: '0.28rem 0.6rem',
-                        borderRadius: '999px',
-                        background: '#dbeafe',
-                        color: '#1d4ed8',
-                        fontSize: '0.8rem',
-                        fontWeight: 700,
-                      }}
-                    >
-                      Run {message.runId}
-                    </div>
-                  ) : null}
-
-                  {message.approvals.length > 0 ? (
-                    <div style={{ display: 'grid', gap: '0.45rem' }}>
-                      <strong style={{ fontSize: '0.85rem', color: '#0f172a' }}>Approvals</strong>
-                      {message.approvals.map((item, index) => {
-                        const approval = item as Record<string, unknown>;
-                        return (
-                          <div
-                            key={String(approval.approval_id ?? approval.id ?? `${message.id}:approval:${index}`)}
-                            style={{
-                              display: 'grid',
-                              gap: '0.2rem',
-                              padding: '0.7rem 0.8rem',
-                              borderRadius: '0.85rem',
-                              background: '#fff7ed',
-                              border: '1px solid #fdba74',
-                            }}
-                          >
-                            <strong style={{ color: '#9a3412' }}>
-                              {readApprovalLabel(approval, `Approval ${index + 1}`)}
-                            </strong>
-                            <span style={{ color: '#9a3412', fontSize: '0.82rem' }}>
-                              {readApprovalStatus(approval)}
-                            </span>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  ) : null}
-
-                  {message.interventions.length > 0 ? (
-                    <div style={{ display: 'grid', gap: '0.45rem' }}>
-                      <strong style={{ fontSize: '0.85rem', color: '#0f172a' }}>Interventions</strong>
-                      {message.interventions.map((item, index) => {
-                        const intervention = item as Record<string, unknown>;
-                        return (
-                          <div
-                            key={String(intervention.id ?? intervention.code ?? `${message.id}:intervention:${index}`)}
-                            style={{
-                              display: 'grid',
-                              gap: '0.2rem',
-                              padding: '0.7rem 0.8rem',
-                              borderRadius: '0.85rem',
-                              background: '#ecfeff',
-                              border: '1px solid #67e8f9',
-                            }}
-                          >
-                            <strong style={{ color: '#155e75' }}>
-                              {readInterventionLabel(intervention, `Intervention ${index + 1}`)}
-                            </strong>
-                            <span style={{ color: '#155e75', fontSize: '0.82rem', lineHeight: 1.5 }}>
-                              {readInterventionMessage(intervention)}
-                            </span>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  ) : null}
-                </article>
-              ))
-            )}
-          </div>
-
-          <label style={{ display: 'grid', gap: '0.45rem' }}>
-            <span style={{ fontWeight: 600 }}>Message</span>
-            <textarea
-              value={draft}
-              onChange={(event) => setDraft(event.currentTarget.value)}
-              rows={5}
-              placeholder="Ask the canonical chat pane to do real work."
-              style={{
-                width: '100%',
-                resize: 'vertical',
-                borderRadius: '0.85rem',
-                border: '1px solid #cbd5e1',
-                padding: '0.8rem 0.9rem',
-                font: 'inherit',
-              }}
-            />
-          </label>
-
-          <div style={{ display: 'flex', justifyContent: 'space-between', gap: '1rem', flexWrap: 'wrap' }}>
-            <span style={{ color: statusMessage ? '#92400e' : '#475569' }}>
-              {statusMessage ?? 'Canonical chat is ready.'}
-            </span>
-            <button
-              type="button"
-              onClick={() => {
-                void sendMessage();
-              }}
-              disabled={isSending || !draft.trim()}
-              style={{
-                border: '1px solid #0f172a',
-                borderRadius: '999px',
-                background: isSending || !draft.trim() ? '#cbd5e1' : '#0f172a',
-                color: '#ffffff',
-                padding: '0.55rem 0.95rem',
-                cursor: isSending || !draft.trim() ? 'not-allowed' : 'pointer',
-              }}
-            >
-              {isSending ? 'Sending…' : 'Send canonical turn'}
-            </button>
-          </div>
+    <main data-workstation-surface="chat" data-workstation-chat="pane" className="app-chat-page">
+      <header className="app-chat-header">
+        <div className="app-chat-header__copy">
+          <span className="app-chat-header__kicker">Conversation</span>
+          <h1 className="app-chat-header__title">{thread.title || bootstrap.workspace.label}</h1>
+          <p className="app-chat-header__subtitle">
+            Canonical thread state, approvals, runs, and generated outputs stay attached to the same conversation.
+          </p>
         </div>
 
-        <aside
-          style={{
-            display: 'grid',
-            gap: '1rem',
+        <AppButton
+          type="button"
+          tone="secondary"
+          onClick={() => {
+            void refreshCanonicalState(activeThreadId).catch((error) => {
+              setStatusMessage(error instanceof Error ? error.message : 'Refresh failed.');
+            });
           }}
         >
-          <section
-            style={{
-              display: 'grid',
-              gap: '0.65rem',
-              padding: '1rem',
-              borderRadius: '1rem',
-              border: '1px solid #cbd5e1',
-              background: '#ffffff',
-            }}
-          >
-            <strong>Recent runs</strong>
-            <span style={{ color: '#475569', fontSize: '0.82rem' }}>
-              Notifications stream {streamState.notifications.connectionState}
-            </span>
-            {runs.length === 0 ? (
-              <span style={{ color: '#475569' }}>No live runs recorded for this workspace yet.</span>
-            ) : runs.slice(0, 5).map((item) => (
-              <div key={String(item.run_id ?? JSON.stringify(item))} style={{ display: 'grid', gap: '0.2rem' }}>
-                <span style={{ fontWeight: 600 }}>{String(item.run_id ?? 'run')}</span>
-                <span style={{ color: '#475569' }}>{String(item.status ?? 'unknown')}</span>
-              </div>
-            ))}
-            <Link href={routeManifest.routeIndex.runs?.href ?? routeManifest.defaultRoute}>Open runs</Link>
-          </section>
+          Refresh
+        </AppButton>
+      </header>
 
-          <section
-            style={{
-              display: 'grid',
-              gap: '0.65rem',
-              padding: '1rem',
-              borderRadius: '1rem',
-              border: '1px solid #cbd5e1',
-              background: '#ffffff',
-            }}
-          >
-            <strong>Pending approvals</strong>
-            <span style={{ color: '#475569', fontSize: '0.82rem' }}>
-              Activity stream {streamState.activity.connectionState}
-            </span>
-            {approvals.length === 0 ? (
-              <span style={{ color: '#475569' }}>No pending approvals for this workspace.</span>
-            ) : approvals.slice(0, 5).map((item) => (
-              <div key={String(item.approval_id ?? item.id ?? JSON.stringify(item))} style={{ display: 'grid', gap: '0.2rem' }}>
-                <span style={{ fontWeight: 600 }}>{String(item.prompt ?? item.id ?? 'approval')}</span>
-                <span style={{ color: '#475569' }}>{String(item.status ?? 'pending')}</span>
-              </div>
-            ))}
-            <Link href={routeManifest.routeIndex.approvals?.href ?? routeManifest.defaultRoute}>Open approvals</Link>
-          </section>
-        </aside>
+      <section className="app-chat-summary" aria-label="Conversation state">
+        <span className="app-chat-pill">{thread.messages.length} messages</span>
+        <span className="app-chat-pill">{summarizeRuns(runs)}</span>
+        <span className="app-chat-pill">{summarizeApprovals(approvals)}</span>
+        <span className="app-chat-pill">Activity {streamState.activity.connectionState}</span>
+        <span className="app-chat-pill">Notifications {streamState.notifications.connectionState}</span>
       </section>
+
+      {statusMessage ? (
+        <AppNotice tone={/failed|unavailable|error/i.test(statusMessage) ? 'danger' : 'neutral'}>
+          {statusMessage}
+        </AppNotice>
+      ) : null}
+
+      <section className="app-chat-thread">
+        <ScrollRegion className="app-chat-thread__scroll">
+          <div className="app-chat-thread__body">
+            {isLoading && thread.messages.length === 0 ? (
+              <AppNotice>Loading canonical conversation history.</AppNotice>
+            ) : null}
+
+            {!isLoading && thread.messages.length === 0 && !pendingUserMessage ? (
+              <section className="app-chat-empty">
+                <strong className="app-chat-empty__title">No conversation yet</strong>
+                <span className="app-chat-empty__body">
+                  The first turn will create the canonical thread history and begin populating runs, approvals, and outputs.
+                </span>
+              </section>
+            ) : null}
+
+            {thread.messages.map((message) => (
+              <ChatMessage
+                key={message.id}
+                message={message}
+                resolvingApprovalId={resolvingApprovalId}
+                onResolveApproval={(approvalId, resolution) => {
+                  void handleResolveApproval(approvalId, resolution);
+                }}
+              />
+            ))}
+
+            {pendingUserMessage ? (
+              <ChatMessage
+                key={pendingUserMessage.id}
+                message={pendingUserMessage}
+                resolvingApprovalId={resolvingApprovalId}
+                onResolveApproval={(approvalId, resolution) => {
+                  void handleResolveApproval(approvalId, resolution);
+                }}
+              />
+            ) : null}
+
+            {streamingAssistantMessage ? (
+              <ChatMessage
+                key={streamingAssistantMessage.id}
+                message={streamingAssistantMessage}
+                resolvingApprovalId={resolvingApprovalId}
+                onResolveApproval={(approvalId, resolution) => {
+                  void handleResolveApproval(approvalId, resolution);
+                }}
+              />
+            ) : null}
+
+            {showTrace && liveTraceView ? (
+              <div className="app-chat-trace">
+                {liveTraceView}
+              </div>
+            ) : null}
+          </div>
+        </ScrollRegion>
+      </section>
+
+      <ChatComposer
+        draft={draft}
+        onDraftChange={setDraft}
+        onSubmit={() => {
+          void sendMessage();
+        }}
+        busy={isSending}
+        disabled={isLoading}
+        statusMessage={statusMessage}
+      />
     </main>
   );
 }

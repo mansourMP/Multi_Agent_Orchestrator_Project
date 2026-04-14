@@ -56,6 +56,46 @@ class TelegramPollDispatchService:
         sender_id = str(sender.get("id") or "").strip()
         inbound_message_id = str(message.get("message_id") or "").strip()
         raw_message_text = str(message.get("text") or "")
+        sender_username = str(sender.get("username") or "").strip()
+        sender_display_name = (
+            str(sender.get("full_name") or "").strip()
+            or " ".join(
+                token
+                for token in (
+                    str(sender.get("first_name") or "").strip(),
+                    str(sender.get("last_name") or "").strip(),
+                )
+                if token
+            ).strip()
+        )
+        action_service = self.action_service()
+        public_action = action_service.public_action(profile, raw_message_text)
+        if isinstance(public_action, dict):
+            action_service.handle_non_run_action(
+                action=str(public_action.get("action") or "help"),
+                routed=public_action.get("routed") if isinstance(public_action.get("routed"), dict) else {},
+                profile=profile,
+                chat_profile=self.get_chat_profile(workspace_id, chat_id),
+                workspace_id=workspace_id,
+                connector_id=connector_id,
+                bot_token=bot_token,
+                chat_id=chat_id,
+                inbound_message_id=inbound_message_id or "",
+                trace_id=f"tgstart:{chat_id}:{update_id}",
+                source_event_id="",
+                sender_id=sender_id or chat_id,
+                sender_username=sender_username or None,
+                sender_display_name=sender_display_name or None,
+                message_text=raw_message_text,
+            )
+            return {
+                "handled": True,
+                "processed": True,
+                "chat_id": chat_id,
+                "action": str(public_action.get("action") or "help"),
+                "run_id": "",
+                "workspace_id": workspace_id,
+            }
         pair_resolution = self.channel_pairing_service().authorize_channel_message(
             provider="telegram",
             external_subject=sender_id,
@@ -162,7 +202,7 @@ class TelegramPollDispatchService:
         run_id = ""
         chat_profile = self.get_chat_profile(resolved_workspace_id, chat_id)
         if action != "run":
-            action_result = self.action_service().handle_non_run_action(
+            action_result = action_service.handle_non_run_action(
                 action=action,
                 routed=routed,
                 profile=profile,
@@ -174,6 +214,10 @@ class TelegramPollDispatchService:
                 inbound_message_id=inbound_message_id or "",
                 trace_id=trace_id,
                 source_event_id=source_event_id,
+                sender_id=sender_id or chat_id,
+                sender_username=sender_username or None,
+                sender_display_name=sender_display_name or None,
+                message_text=message_text,
             )
             if bool(action_result.get("handled")):
                 action = str(action_result.get("action") or action)

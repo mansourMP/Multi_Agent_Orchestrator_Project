@@ -34,6 +34,7 @@ export type WorkstationStreamState = {
     recent: WorkstationNotificationItem[];
     unreadCount: number;
     totalCount: number;
+    version: number;
     reconnectCount: number;
     lastHeartbeatAt: string | null;
     lastEventAt: string | null;
@@ -43,6 +44,7 @@ export type WorkstationStreamState = {
     cursor: WorkstationStreamCursor;
     recent: WorkstationChannelEventItem[];
     totalCount: number;
+    version: number;
     reconnectCount: number;
     lastHeartbeatAt: string | null;
     lastEventAt: string | null;
@@ -68,6 +70,7 @@ const DEFAULT_STATE: WorkstationStreamState = {
     recent: [],
     unreadCount: 0,
     totalCount: 0,
+    version: 0,
     reconnectCount: 0,
     lastHeartbeatAt: null,
     lastEventAt: null,
@@ -80,6 +83,7 @@ const DEFAULT_STATE: WorkstationStreamState = {
     },
     recent: [],
     totalCount: 0,
+    version: 0,
     reconnectCount: 0,
     lastHeartbeatAt: null,
     lastEventAt: null,
@@ -197,6 +201,60 @@ export class WorkstationStreamManager {
 
   snapshot() {
     return this.state;
+  }
+
+  markNotificationsRead(options: {
+    notificationIds?: string[];
+    markAll?: boolean;
+  } = {}): void {
+    const notificationIds = new Set(
+      (options.notificationIds ?? [])
+        .map((value) => String(value ?? '').trim())
+        .filter(Boolean),
+    );
+    if (!options.markAll && notificationIds.size === 0) {
+      return;
+    }
+    const now = this.nowIso();
+    this.patchState((current) => {
+      const recent = current.notifications.recent.map((item) => {
+        const itemId = String(item.id ?? '').trim();
+        if (!options.markAll && !notificationIds.has(itemId)) {
+          return item;
+        }
+        if (String(item.read_at ?? '').trim()) {
+          return item;
+        }
+        return {
+          ...item,
+          read_at: now,
+          updated_at: String(item.updated_at ?? now),
+        };
+      });
+      return {
+        ...current,
+        notifications: {
+          ...current.notifications,
+          recent,
+          unreadCount: recent.filter((entry) => !String(entry.read_at ?? '').trim()).length,
+          totalCount: Math.max(current.notifications.totalCount, recent.length),
+          version: current.notifications.version + 1,
+          lastEventAt: now,
+        },
+      };
+    });
+  }
+
+  touchActivity(): void {
+    const now = this.nowIso();
+    this.patchState((current) => ({
+      ...current,
+      activity: {
+        ...current.activity,
+        version: current.activity.version + 1,
+        lastEventAt: now,
+      },
+    }));
   }
 
   private emit(): void {
@@ -317,6 +375,7 @@ export class WorkstationStreamManager {
             },
             unreadCount: recent.filter((entry) => !String(entry.read_at ?? '').trim()).length,
             totalCount: recent.length,
+            version: current.notifications.version + 1,
             lastEventAt: this.nowIso(),
           },
         };
@@ -412,6 +471,7 @@ export class WorkstationStreamManager {
               ts: cursor.ts ?? current.activity.cursor.ts,
             },
             totalCount: recent.length,
+            version: current.activity.version + 1,
             lastEventAt: this.nowIso(),
           },
         };

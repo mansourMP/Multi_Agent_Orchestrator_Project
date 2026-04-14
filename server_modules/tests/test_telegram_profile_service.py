@@ -78,3 +78,15 @@ class TelegramProfileServiceTests(unittest.TestCase):
 
         self.assertIn("`/orion me`", profile_text)
         self.assertIn("/orion me set project", help_text)
+
+    def test_profile_text_and_help_include_privacy_commands_for_deployed_agent_profiles(self) -> None:
+        profile_text = self.service.profile_text(
+            {"prefix": "/orion", "require_prefix": True, "deployed_agent_id": "dagent-1"},
+            {"project": "Launch"},
+        )
+        help_text = self.service.profile_help_text(
+            {"prefix": "/orion", "require_prefix": True, "deployed_agent_id": "dagent-1"},
+        )
+
+        self.assertIn("`/orion privacy`", profile_text)
+        self.assertIn("/orion delete", help_text)

@@ -41,6 +41,8 @@ export type WorkspaceBootstrapRuntime = {
 export type WorkspaceBootstrapShellHints = {
   defaultRoute: string;
   preferredProfile: string;
+  setupCompleted: boolean;
+  requiresOnboarding: boolean;
 };
 
 export type WorkspaceBootstrapPayload = {
@@ -172,6 +174,8 @@ export function parseWorkspaceBootstrapPayload(payload: unknown): WorkspaceBoots
     shellHints: {
       defaultRoute: requireString(shellHints.defaultRoute, 'shellHints.defaultRoute'),
       preferredProfile: requireString(shellHints.preferredProfile, 'shellHints.preferredProfile'),
+      setupCompleted: Boolean(shellHints.setupCompleted),
+      requiresOnboarding: Boolean(shellHints.requiresOnboarding),
     },
   };
 }

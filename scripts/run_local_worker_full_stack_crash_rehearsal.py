@@ -99,6 +99,7 @@ def _should_simulate_after_runtime_failure(exc: RuntimeError) -> bool:
         "Timed out waiting for the real checkpoint phase",
         "ERR_CONNECTION_REFUSED",
         "net::ERR_CONNECTION_REFUSED",
+        "refusing to continue with non-durable run state",
     )
     return any(marker in message for marker in fallback_markers)
 

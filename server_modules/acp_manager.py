@@ -238,6 +238,8 @@ class _PersistentRunStore(dict):
         wrapped = self._wrap_run(run_id, value if isinstance(value, (dict, RunExecutionHandle)) else {})
         dict.__setitem__(self, run_id, wrapped)
         if not self._loading:
+            if wrapped.get("_durable_registered_at") and "_durable_version" in wrapped:
+                return
             self._manager.persist_live_run(run_id, wrapped)
 
     def clear(self) -> None:
@@ -400,12 +402,29 @@ class AcpSessionManager:
     def _serialize_live_run(self, run_id: str, run: MutableMapping[str, Any]) -> Dict[str, Any]:
         return durable_run_payload(run_id, dict(run), json_safe=_json_safe)
 
+    def _set_run_field_quietly(self, run: MutableMapping[str, Any], key: str, value: Any) -> None:
+        payload = getattr(getattr(run, "record", None), "payload", None)
+        if payload is None or not hasattr(payload, "_suspend_notifications"):
+            run[key] = value
+            return
+        previous = bool(getattr(payload, "_suspend_notifications", False))
+        payload._suspend_notifications = True
+        try:
+            run[key] = value
+        finally:
+            payload._suspend_notifications = previous
+
     def persist_live_run(self, run_id: str, run: MutableMapping[str, Any]) -> None:
         token = str(run_id or "").strip()
         if not token:
             return
         with self._lock_for(f"run:{token}"):
             payload = self._serialize_live_run(token, run)
+            expected_version_raw = payload.get("_durable_version") if isinstance(payload, dict) else None
+            try:
+                expected_version = int(expected_version_raw) if expected_version_raw is not None else None
+            except Exception:
+                expected_version = None
             run_state_repository.sync_upsert_live_run(
                 token,
                 str(payload.get("workspace_id") or payload.get("context", {}).get("workspace_id") or "default"),
@@ -414,6 +433,8 @@ class AcpSessionManager:
                 payload,
                 str(payload.get("trace_id") or payload.get("context", {}).get("trace_id") or ""),
             )
+            if expected_version is not None:
+                self._set_run_field_quietly(run, "_durable_version", expected_version + 1)
 
     def delete_live_run(self, run_id: str) -> None:
         token = str(run_id or "").strip()

@@ -1,0 +1,93 @@
+'use client';
+
+import {
+  type PropsWithChildren,
+  createContext,
+  useContext,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useState,
+} from 'react';
+
+import {
+  APP_DEFAULT_THEME,
+  APP_THEME_ATTRIBUTE,
+  type AppResolvedTheme,
+  type AppThemePreference,
+  resolveAppThemePreference,
+} from '@/lib/ui/tokens';
+
+type AppThemeContextValue = {
+  preference: AppThemePreference;
+  resolvedTheme: AppResolvedTheme;
+};
+
+const AppThemeContext = createContext<AppThemeContextValue>({
+  preference: 'system',
+  resolvedTheme: APP_DEFAULT_THEME,
+});
+
+function readSystemDarkPreference(): boolean {
+  if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') {
+    return true;
+  }
+  return window.matchMedia('(prefers-color-scheme: dark)').matches;
+}
+
+export function AppThemeProvider({
+  preference,
+  children,
+}: PropsWithChildren<{
+  preference: AppThemePreference;
+}>) {
+  const [prefersDark, setPrefersDark] = useState<boolean>(() => readSystemDarkPreference());
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') {
+      return undefined;
+    }
+    const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
+    const onChange = (event: MediaQueryListEvent) => {
+      setPrefersDark(event.matches);
+    };
+    setPrefersDark(mediaQuery.matches);
+    if (typeof mediaQuery.addEventListener === 'function') {
+      mediaQuery.addEventListener('change', onChange);
+      return () => mediaQuery.removeEventListener('change', onChange);
+    }
+    mediaQuery.addListener(onChange);
+    return () => mediaQuery.removeListener(onChange);
+  }, []);
+
+  const resolvedTheme = resolveAppThemePreference(preference, prefersDark);
+
+  useLayoutEffect(() => {
+    if (typeof document === 'undefined') {
+      return;
+    }
+    document.documentElement.setAttribute(APP_THEME_ATTRIBUTE, resolvedTheme);
+    document.documentElement.style.colorScheme = resolvedTheme;
+    document.body.setAttribute(APP_THEME_ATTRIBUTE, resolvedTheme);
+  }, [resolvedTheme]);
+
+  const value = useMemo<AppThemeContextValue>(
+    () => ({
+      preference,
+      resolvedTheme,
+    }),
+    [preference, resolvedTheme],
+  );
+
+  return (
+    <AppThemeContext.Provider value={value}>
+      <div className="app-root" data-emp-theme-root={resolvedTheme}>
+        {children}
+      </div>
+    </AppThemeContext.Provider>
+  );
+}
+
+export function useAppTheme(): AppThemeContextValue {
+  return useContext(AppThemeContext);
+}

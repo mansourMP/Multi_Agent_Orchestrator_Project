@@ -12,7 +12,7 @@ class WhatsAppWebhookBridgeService:
         webhook_auth_result: Callable[..., Dict[str, Any]],
         resolve_inbound_connector: Callable[[Dict[str, str]], Any],
         validate_signature: Callable[[str, Dict[str, str], str, str], bool],
-        handle_inbound: Callable[[Dict[str, str]], Any],
+        ingest_webhook: Callable[[Dict[str, str]], Any],
         twiml_response: Callable[[str], Any],
         error_response: Callable[[int, str], Any],
         enabled: bool,
@@ -23,7 +23,7 @@ class WhatsAppWebhookBridgeService:
         self.webhook_auth_result = webhook_auth_result
         self.resolve_inbound_connector = resolve_inbound_connector
         self.validate_signature = validate_signature
-        self.handle_inbound = handle_inbound
+        self.ingest_webhook = ingest_webhook
         self.twiml_response = twiml_response
         self.error_response = error_response
         self.enabled = bool(enabled)
@@ -62,4 +62,4 @@ class WhatsAppWebhookBridgeService:
             return self.error_response(401, "X-Twilio-Signature header is required.")
         if not self.validate_signature(str(request_url or "").strip(), form, provided_signature, auth_token):
             return self.error_response(403, "Twilio signature is invalid.")
-        return self.twiml_response(str(self.handle_inbound(form, matched=matched) or ""))
+        return self.twiml_response(str(self.ingest_webhook(form, matched=matched) or ""))

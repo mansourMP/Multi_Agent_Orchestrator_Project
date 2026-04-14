@@ -336,6 +336,13 @@ class TelegramProfileService:
                 f"Clear a field: `{cmd_prefix}me clear [project|exam|about|preferences]`",
             ]
         )
+        if bool(profile.get("deployed_agent_id")):
+            lines.extend(
+                [
+                    f"Privacy policy: `{cmd_prefix}privacy`",
+                    f"Request data deletion: `{cmd_prefix}delete`",
+                ]
+            )
         return "\n".join(lines).strip()
 
     def profile_help_text(self, profile: Dict[str, Any]) -> str:
@@ -350,6 +357,14 @@ class TelegramProfileService:
                 f"- {cmd_prefix}me set about <details>",
                 f"- {cmd_prefix}me set preferences <details>",
                 f"- {cmd_prefix}me clear [project|exam|about|preferences]",
+                *(
+                    [
+                        f"- {cmd_prefix}privacy",
+                        f"- {cmd_prefix}delete",
+                    ]
+                    if bool(profile.get("deployed_agent_id"))
+                    else []
+                ),
             ]
         )
 

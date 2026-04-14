@@ -23,6 +23,7 @@ export type AccountShellSnapshot = {
   accountId: string | null;
   selectedWorkspaceId: string | null;
   lastVisitedWorkspaceRouteById: Record<string, string>;
+  workspaceRouteStateById: Record<string, string>;
   globalTheme: GlobalTheme;
   globalChromePreferences: GlobalChromePreferences;
 };
@@ -68,6 +69,83 @@ export type AccountShellAction =
 export const DEFAULT_GLOBAL_CHROME_PREFERENCES: GlobalChromePreferences = {
   tenantSwitcherCollapsed: false,
 };
+
+function createWorkspaceRouteStateToken(
+  membership: WorkspaceMembershipRecord,
+): string {
+  const permissionsToken = [...membership.permissions]
+    .filter((permission) => typeof permission === 'string' && permission.length > 0)
+    .sort()
+    .join('|');
+  return [
+    membership.membershipVersion,
+    membership.defaultRoute,
+    permissionsToken,
+  ].join('::');
+}
+
+export function createWorkspaceRouteStateById(
+  memberships: WorkspaceMembershipRecord[],
+): Record<string, string> {
+  return memberships.reduce<Record<string, string>>((accumulator, membership) => {
+    accumulator[membership.workspace.id] = createWorkspaceRouteStateToken(membership);
+    return accumulator;
+  }, {});
+}
+
+export function reconcileAccountShellSnapshot(
+  persistedSnapshot: AccountShellSnapshot | null | undefined,
+  session: AccountShellBootstrap,
+): AccountShellSnapshot | null {
+  if (!persistedSnapshot) {
+    return null;
+  }
+
+  const workspaceMembershipIndex = indexWorkspaceMemberships(session.workspaceMemberships);
+  const workspaceRouteStateById = createWorkspaceRouteStateById(session.workspaceMemberships);
+
+  if (persistedSnapshot.accountId !== session.account.id) {
+    return {
+      accountId: session.account.id,
+      selectedWorkspaceId: null,
+      lastVisitedWorkspaceRouteById: {},
+      workspaceRouteStateById,
+      globalTheme: persistedSnapshot.globalTheme,
+      globalChromePreferences: persistedSnapshot.globalChromePreferences,
+    };
+  }
+
+  const lastVisitedWorkspaceRouteById = session.workspaceMemberships.reduce<Record<string, string>>(
+    (accumulator, membership) => {
+      const workspaceId = membership.workspace.id;
+      if (persistedSnapshot.workspaceRouteStateById[workspaceId] !== workspaceRouteStateById[workspaceId]) {
+        return accumulator;
+      }
+
+      const rememberedRoute = persistedSnapshot.lastVisitedWorkspaceRouteById[workspaceId];
+      if (typeof rememberedRoute !== 'string' || rememberedRoute.trim().length === 0) {
+        return accumulator;
+      }
+
+      accumulator[workspaceId] = sanitizeWorkspaceRoute(rememberedRoute, membership.defaultRoute);
+      return accumulator;
+    },
+    {},
+  );
+
+  return {
+    accountId: session.account.id,
+    selectedWorkspaceId:
+      persistedSnapshot.selectedWorkspaceId
+      && workspaceMembershipIndex[persistedSnapshot.selectedWorkspaceId]
+        ? persistedSnapshot.selectedWorkspaceId
+        : null,
+    lastVisitedWorkspaceRouteById,
+    workspaceRouteStateById,
+    globalTheme: persistedSnapshot.globalTheme,
+    globalChromePreferences: persistedSnapshot.globalChromePreferences,
+  };
+}
 
 export function createInitialAccountShellState(): AccountShellState {
   return {
@@ -179,6 +257,7 @@ export function createAccountShellSnapshot(state: AccountShellState): AccountShe
     accountId: state.account?.id ?? null,
     selectedWorkspaceId: state.selectedWorkspaceId,
     lastVisitedWorkspaceRouteById: state.lastVisitedWorkspaceRouteById,
+    workspaceRouteStateById: createWorkspaceRouteStateById(state.workspaceMemberships),
     globalTheme: state.globalTheme,
     globalChromePreferences: state.globalChromePreferences,
   };

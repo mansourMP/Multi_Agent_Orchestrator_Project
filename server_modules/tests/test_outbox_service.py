@@ -269,6 +269,35 @@ class OutboxServiceTests(unittest.TestCase):
         self.assertEqual(delivered, [])
         self.assertEqual(result["attempted"], 0)
 
+    def test_deliver_due_outbox_events_once_prefers_list_fallback_when_claim_fn_missing(self) -> None:
+        listed = []
+        delivered = []
+        marked = []
+
+        result = outbox_service.deliver_due_outbox_events_once(
+            list_undelivered_outbox_events_fn=lambda **kwargs: listed.append(dict(kwargs)) or [
+                {
+                    "event_id": "evt-1",
+                    "event_type": "approval_requested",
+                    "tenant_id": "tenant-1",
+                    "workspace_id": "ws-1",
+                    "run_id": "run-1",
+                    "trace_id": "trace-1",
+                    "idempotency_key": "approval_requested:approval-1",
+                    "payload": {"approval_id": "approval-1"},
+                }
+            ],
+            mark_outbox_event_delivered_fn=lambda event_id, **kwargs: marked.append((event_id, kwargs.get("claim_token"))) or True,
+            record_outbox_delivery_failure_fn=lambda event_id, **kwargs: True,
+            deliver_event_fn=lambda event: delivered.append(event.event_id) or True,
+            get_outbox_delivery_status_fn=lambda: {"undelivered_count": 0, "poisoned_count": 0, "claimed_count": 0},
+        )
+
+        self.assertEqual(len(listed), 1)
+        self.assertEqual(delivered, ["evt-1"])
+        self.assertEqual(marked, [("evt-1", "compat-claim:evt-1")])
+        self.assertEqual(result["attempted"], 1)
+
     def test_deliver_outbox_event_uses_stable_ids_for_duplicate_safety(self) -> None:
         channel_events = []
         try:

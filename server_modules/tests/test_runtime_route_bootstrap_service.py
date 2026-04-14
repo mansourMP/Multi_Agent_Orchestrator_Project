@@ -42,6 +42,11 @@ class RuntimeRouteBootstrapServiceTests(unittest.TestCase):
                     "execute_system_agent_turn": staticmethod(lambda **kwargs: {}),
                 },
             )(),
+            "server_modules.turn_ingress_service": type(
+                "TurnIngressModule",
+                (),
+                {"start_system_turn": staticmethod(lambda **kwargs: {})},
+            )(),
             "server_modules.workspace_context": type(
                 "WorkspaceContext",
                 (),

@@ -310,6 +310,8 @@ class GoldenPathSmokeTests(unittest.TestCase):
             trace_id: Optional[str] = None,
             status: Optional[str] = None,
             limit: int = 100,
+            since_created_at: Optional[str] = None,
+            since_id: Optional[str] = None,
         ) -> List[Dict[str, Any]]:
             normalized_event_classes = {str(item or "").strip().lower() for item in list(event_classes or []) if str(item or "").strip()}
             normalized_detail_levels = {str(item or "").strip().lower() for item in list(detail_levels or []) if str(item or "").strip()}
@@ -575,6 +577,24 @@ class GoldenPathSmokeTests(unittest.TestCase):
             stack.enter_context(
                 patch.object(runtime_runs_api.run_state_repository, "sync_list_live_runs", side_effect=lambda: list(live_runs.values()))
             )
+            stack.enter_context(
+                patch.object(
+                    runtime_runs_api.run_state_repository,
+                    "sync_list_live_runs_page",
+                    side_effect=lambda limit=100, offset=0, workspace_id=None, states=None: [
+                        snapshot
+                        for snapshot in list(live_runs.values())
+                        if (
+                            (not workspace_id or str(snapshot.get("workspace_id") or "default").strip() == str(workspace_id).strip())
+                            and (
+                                not states
+                                or str(snapshot.get("status") or "").strip().lower()
+                                in {str(item or "").strip().lower() for item in (states or []) if str(item or "").strip()}
+                            )
+                        )
+                    ][offset : offset + limit],
+                )
+            )
             stack.enter_context(patch.object(runtime_runs_api, "_current_user_is_privileged", side_effect=lambda current_user: False))
             stack.enter_context(
                 patch.object(
@@ -702,6 +722,12 @@ class GoldenPathSmokeTests(unittest.TestCase):
                     activity_ledger_service.control_plane_repository,
                     "list_activity_ledger_events",
                     side_effect=_list_activity_ledger_events,
+                )
+            )
+            stack.enter_context(
+                patch(
+                    "server_modules.runtime_runs_api.entitlements_service.workspace_entitlement_payload_for_workspace_id",
+                    return_value={"capabilities": {"approvals_enabled": True}},
                 )
             )
             stack.enter_context(

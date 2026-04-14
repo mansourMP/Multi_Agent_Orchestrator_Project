@@ -84,6 +84,7 @@ class ConnectorCreate(ConnectorUpsertRequest):
 class AuthLoginRequest(BaseModel):
     email: str
     password: str
+    acquisition_token: Optional[str] = None
     channel: Optional[str] = None
     device_id: Optional[str] = None
     device_name: Optional[str] = None

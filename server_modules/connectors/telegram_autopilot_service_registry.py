@@ -9,6 +9,7 @@ from server_modules.connectors.telegram_autopilot_runtime_service import Telegra
 from server_modules.connectors.telegram_autopilot_state_service import TelegramAutopilotStateService
 from server_modules.connectors.telegram_autopilot_supervisor_service import TelegramAutopilotSupervisorService
 from server_modules.connectors.telegram_connector_poll_service import TelegramConnectorPollService
+from server_modules.connectors.telegram_ingress_service import TelegramIngressService
 from server_modules.connectors.telegram_inbound_context_service import TelegramInboundContextService
 from server_modules.connectors.telegram_poll_cycle_service import TelegramPollCycleService
 from server_modules.connectors.telegram_poll_dispatch_service import TelegramPollDispatchService
@@ -123,6 +124,7 @@ class TelegramAutopilotServiceRegistry:
         can_auto_approve_wait: Callable[[Any], bool],
         pending_confirmation_payload: Callable[[Any], Dict[str, Any]],
         emit_channel_run_delivery_event: Callable[..., Any],
+        record_activity_event: Optional[Callable[..., Any]],
         sleep: Callable[[float], Any],
     ) -> None:
         self.project_root = Path(project_root)
@@ -223,6 +225,7 @@ class TelegramAutopilotServiceRegistry:
         self.can_auto_approve_wait = can_auto_approve_wait
         self.pending_confirmation_payload = pending_confirmation_payload
         self.emit_channel_run_delivery_event = emit_channel_run_delivery_event
+        self.record_activity_event = record_activity_event
         self.sleep = sleep
 
         self._run_dispatch_service: Optional[TelegramRunDispatchService] = None
@@ -237,6 +240,7 @@ class TelegramAutopilotServiceRegistry:
         self._poll_state_service: Optional[TelegramPollStateService] = None
         self._run_action_service: Optional[TelegramRunActionService] = None
         self._connector_poll_service: Optional[TelegramConnectorPollService] = None
+        self._ingress_service: Optional[TelegramIngressService] = None
         self._webhook_service: Optional[TelegramWebhookService] = None
         self._autopilot_supervisor_service: Optional[TelegramAutopilotSupervisorService] = None
 
@@ -259,6 +263,7 @@ class TelegramAutopilotServiceRegistry:
                 can_auto_approve_wait=self.can_auto_approve_wait,
                 pending_confirmation_payload=self.pending_confirmation_payload,
                 emit_channel_run_delivery_event=self.emit_channel_run_delivery_event,
+                record_activity_event=self.record_activity_event,
             )
         return self._run_dispatch_service
 
@@ -408,6 +413,45 @@ class TelegramAutopilotServiceRegistry:
             )
         return self._poll_state_service
 
+    def telegram_ingress_service(self) -> TelegramIngressService:
+        if self._ingress_service is None:
+            self._ingress_service = TelegramIngressService(
+                default_workspace_id=self.default_workspace_id,
+                resolve_workspace_scope=lambda entry, fallback_workspace_id, detail_prefix: resolve_connector_workspace_scope(
+                    entry,
+                    normalize_workspace_id=self.normalize_workspace_id,
+                    fallback_workspace_id=fallback_workspace_id,
+                    detail_prefix=detail_prefix,
+                ),
+                get_connector_entry=lambda connector_id: self.telegram_autopilot_state_service().get_connector_entry(
+                    connector_id
+                ),
+                resolve_profile=self.resolve_profile,
+                resolve_allow_from=self.resolve_allow_from,
+                connector_state=self.connector_state,
+                resolve_secret=self.resolve_secret,
+                poll_cycle_service=lambda: self.telegram_poll_cycle_service(),
+                poll_state_service=lambda: self.telegram_poll_state_service(),
+                extract_message=self.extract_message,
+                chat_matches=self.chat_matches,
+                store_attachments=self.store_attachments,
+                route_message=self.route_message,
+                session_key_builder=self.session_key_builder,
+                trace_id_builder=self.trace_id_builder,
+                record_channel_event=self.record_channel_event,
+                guided_setup_handler=self.guided_setup_handler,
+                send_message=self.send_message,
+                run_dispatch_service=lambda: self.telegram_run_dispatch_service(),
+                action_service=lambda: self.telegram_action_service(),
+                run_action_service=lambda: self.telegram_run_action_service(),
+                get_chat_profile=self.get_chat_profile,
+                explicit_run_command=self.explicit_run_command,
+                help_text=self.help_text,
+                channel_pairing_service=get_channel_pairing_service,
+                media_max_items=self.media_max_items,
+            )
+        return self._ingress_service
+
     def telegram_run_action_service(self) -> TelegramRunActionService:
         if self._run_action_service is None:
             self._run_action_service = TelegramRunActionService(
@@ -454,6 +498,7 @@ class TelegramAutopilotServiceRegistry:
                 connector_state=self.connector_state,
                 resolve_secret=self.resolve_secret,
                 poll_cycle_service=lambda: self.telegram_poll_cycle_service(),
+                ingress_service=lambda: self.telegram_ingress_service(),
                 inbound_context_service=lambda: self.telegram_inbound_context_service(),
                 poll_dispatch_service=lambda: self.telegram_poll_dispatch_service(),
                 poll_state_service=lambda: self.telegram_poll_state_service(),

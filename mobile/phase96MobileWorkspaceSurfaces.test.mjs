@@ -19,7 +19,7 @@ function createMembership({
   role = 'member',
   permissions = ['chat.read'],
   membershipVersion = 'v1',
-  defaultRoute = `/w/${workspaceId}/chat`,
+  defaultRoute = 'chat',
   preferredShellProfileId = null,
 }) {
   return {
@@ -45,7 +45,7 @@ function createBootstrap({
   role = 'member',
   permissions = ['chat.read'],
   capabilities = {},
-  defaultRoute = `/w/${workspaceId}/chat`,
+  defaultRoute = 'chat',
   preferredProfile = 'personal_shell',
 } = {}) {
   return {
@@ -130,14 +130,14 @@ function createAccountState() {
           label: 'Law Firm',
           kind: 'enterprise',
           role: 'viewer',
-          defaultRoute: '/w/ws_law/workstation',
+          defaultRoute: 'runs',
         }),
         createMembership({
           workspaceId: 'ws_ops',
           label: 'Side Business',
           kind: 'side_business',
           role: 'admin',
-          defaultRoute: '/w/ws_ops/admin',
+          defaultRoute: 'approvals',
         }),
       ],
     },
@@ -145,12 +145,12 @@ function createAccountState() {
   const rememberedLaw = reduceAccountShellState(hydrated, {
     type: 'remember_workspace_route',
     workspaceId: 'ws_law',
-    route: '/w/ws_law/workstation',
+    route: 'runs',
   });
   return reduceAccountShellState(rememberedLaw, {
     type: 'remember_workspace_route',
     workspaceId: 'ws_ops',
-    route: '/w/ws_ops/admin/billing',
+    route: 'approvals',
   });
 }
 
@@ -177,6 +177,13 @@ function createFetchRouter(routes) {
       status: payload.status ?? 200,
       async json() {
         return payload.json ?? payload;
+      },
+      async text() {
+        const body = payload.json ?? payload;
+        if (body === null || body === undefined) {
+          return '';
+        }
+        return typeof body === 'string' ? body : JSON.stringify(body);
       },
     };
   };
@@ -211,7 +218,7 @@ test('workspace switcher loads workspace foundation safely and restores only all
         capabilities: {
           document_workstation_enabled: true,
         },
-        defaultRoute: '/w/ws_law/workstation',
+        defaultRoute: 'runs',
         preferredProfile: 'document_workstation_shell',
       }),
     }),
@@ -224,7 +231,7 @@ test('workspace switcher loads workspace foundation safely and restores only all
         capabilities: {
           workspace_admin_enabled: false,
         },
-        defaultRoute: '/w/ws_ops/chat',
+        defaultRoute: 'chat',
         preferredProfile: 'personal_shell',
       }),
     }),
@@ -240,11 +247,12 @@ test('workspace switcher loads workspace foundation safely and restores only all
   const lawSwitch = await surfaces.workspaceSwitcher.switchWorkspace('ws_law');
   assert.equal(disposed, true);
   assert.equal(lawSwitch.workspaceId, 'ws_law');
-  assert.equal(lawSwitch.targetRoute, '/w/ws_law/workstation');
+  assert.equal(lawSwitch.targetRouteId, 'runs');
+  assert.equal(lawSwitch.targetScreen, '/(workspace)/runs');
   assert.equal(lawSwitch.shellProfileId, 'document_workstation_shell');
 
   const opsSwitch = await surfaces.workspaceSwitcher.switchWorkspace('ws_ops');
-  assert.equal(opsSwitch.targetRoute, '/w/ws_ops/chat');
+  assert.equal(opsSwitch.targetRouteId, 'chat');
 });
 
 test('chat surface stays workspace-scoped and preserves drafts honestly on cloud failure', async () => {
@@ -257,7 +265,7 @@ test('chat surface stays workspace-scoped and preserves drafts honestly on cloud
     capabilities: {
       document_workstation_enabled: true,
     },
-    defaultRoute: '/w/ws_law/workstation',
+    defaultRoute: 'chat',
     preferredProfile: 'document_workstation_shell',
   });
 
@@ -405,7 +413,7 @@ test('chat surface stays workspace-scoped and preserves drafts honestly on cloud
 
   const degradedThread = await degradedChat.loadThread({ threadId: 'primary', refresh: true });
   assert.equal(degradedThread.status, 'degraded');
-  assert.equal(degradedThread.data.messages.length, 2);
+  assert.equal(degradedThread.data.messages.length, 3);
 
   const failedSend = await degradedChat.sendMessage({
     threadId: 'primary',
@@ -431,7 +439,7 @@ test('runs and approvals surface uses capability gating and workspace-scoped per
         approvals_enabled: true,
         workspace_admin_enabled: true,
       },
-      defaultRoute: '/w/ws_ops/admin',
+      defaultRoute: 'approvals',
       preferredProfile: 'operations_admin_shell',
     }),
     storage,
@@ -441,6 +449,14 @@ test('runs and approvals surface uses capability gating and workspace-scoped per
         return {
           json: {
             runs: [{ id: 'run_1', status: 'running' }],
+          },
+        };
+      },
+      'GET /api/agent-traces?workspace_id=ws_ops': ({ headers }) => {
+        opsCalls.push(headers.get('x-empyralis-workspace-id'));
+        return {
+          json: {
+            items: [{ id: 'trace_ops_1', root_agent_id: 'sage', outcome: 'success' }],
           },
         };
       },
@@ -472,6 +488,7 @@ test('runs and approvals surface uses capability gating and workspace-scoped per
   const opsOverview = await opsSurface.loadOverview({ refresh: true });
   assert.equal(opsOverview.status, 'ready');
   assert.equal(opsOverview.runs.length, 1);
+  assert.equal(opsOverview.traces.length, 1);
   assert.equal(opsOverview.approvals.length, 1);
 
   const approvalResult = await opsSurface.respondToApproval({
@@ -479,12 +496,13 @@ test('runs and approvals surface uses capability gating and workspace-scoped per
     decision: 'approved',
   });
   assert.equal(approvalResult.status, 'ready');
-  assert.equal(approvalResult.approvals[0].status, 'approved');
+  assert.equal(approvalResult.resolvedApproval.status, 'approved');
+  assert.equal(approvalResult.approvals.length, 0);
   assert.equal(
     storage.getItem('empyralis.mobile.v2:acct_1:ws_ops:persist:approvals:list') !== null,
     true,
   );
-  assert.deepEqual(opsCalls, ['ws_ops', 'ws_ops', 'ws_ops']);
+  assert.deepEqual(opsCalls, ['ws_ops', 'ws_ops', 'ws_ops', 'ws_ops']);
 
   const personalFoundation = createMobileWorkspaceFoundation({
     session: accountState.session,
@@ -497,6 +515,11 @@ test('runs and approvals surface uses capability gating and workspace-scoped per
       'GET /api/runs?workspace_id=ws_personal': () => ({
         json: [{ id: 'run_personal', status: 'idle' }],
       }),
+      'GET /api/agent-traces?workspace_id=ws_personal': () => ({
+        json: {
+          items: [],
+        },
+      }),
     }),
   });
   const personalSurface = createMobileWorkspaceSurfaceSet({
@@ -507,6 +530,141 @@ test('runs and approvals surface uses capability gating and workspace-scoped per
   const personalOverview = await personalSurface.loadOverview({ refresh: true });
   assert.equal(personalSurface.approvalsAvailable, false);
   assert.equal(personalOverview.approvals.length, 0);
+});
+
+test('runs surface combines trace replay records with runs and loads trace replay detail', async () => {
+  const storage = createMemoryKeyValueStorage();
+  const accountState = createAccountState();
+  const opsCalls = [];
+  const traceReplayPayload = {
+    trace: {
+      id: 'trace_1',
+      workspace_id: 'ws_ops',
+      tenant_id: 'tenant-ws_ops',
+      root_agent_id: 'sage',
+      surface: 'mobile',
+      runtime_target: 'cloud',
+      provider: 'openai',
+      model: 'gpt-5.4',
+      started_at: '2026-04-13T09:10:00Z',
+      finished_at: '2026-04-13T09:10:05Z',
+      outcome: 'success',
+    },
+    events: [
+      {
+        id: 'evt_1',
+        seq: 1,
+        event_type: 'plan.started',
+        ts: '2026-04-13T09:10:00Z',
+        persisted: true,
+        data: {
+          title: 'Sage Plan',
+          summary: 'Review the request and produce a grounded answer.',
+        },
+      },
+      {
+        id: 'evt_2',
+        seq: 2,
+        event_type: 'tool.result',
+        ts: '2026-04-13T09:10:02Z',
+        persisted: true,
+        data: {
+          status: 'ok',
+          summary: 'Collected one reference.',
+        },
+      },
+      {
+        id: 'evt_3',
+        seq: 3,
+        event_type: 'artifact.created',
+        ts: '2026-04-13T09:10:04Z',
+        persisted: true,
+        data: {
+          kind: 'report',
+          title: 'Trace report',
+        },
+      },
+    ],
+  };
+
+  const foundation = createMobileWorkspaceFoundation({
+    session: accountState.session,
+    bootstrap: createBootstrap({
+      workspaceId: 'ws_ops',
+      label: 'Side Business',
+      kind: 'side_business',
+      role: 'admin',
+      capabilities: {
+        approvals_enabled: true,
+      },
+      defaultRoute: 'runs',
+      preferredProfile: 'operations_admin_shell',
+    }),
+    storage,
+    fetchImpl: createFetchRouter({
+      'GET /api/runs?workspace_id=ws_ops': ({ headers }) => {
+        opsCalls.push(headers.get('x-empyralis-workspace-id'));
+        return {
+          json: {
+            runs: [
+              {
+                id: 'run_1',
+                status: 'completed',
+                created_at: '2026-04-13T09:00:00Z',
+                summary: 'Background work complete.',
+              },
+            ],
+          },
+        };
+      },
+      'GET /api/agent-traces?workspace_id=ws_ops': ({ headers }) => {
+        opsCalls.push(headers.get('x-empyralis-workspace-id'));
+        return {
+          json: {
+            items: [
+              {
+                id: 'trace_1',
+                root_agent_id: 'sage',
+                runtime_target: 'cloud',
+                provider: 'openai',
+                model: 'gpt-5.4',
+                started_at: '2026-04-13T09:10:00Z',
+                outcome: 'success',
+              },
+            ],
+          },
+        };
+      },
+      'GET /api/agent-traces/trace_1?workspace_id=ws_ops': ({ headers }) => {
+        opsCalls.push(headers.get('x-empyralis-workspace-id'));
+        return {
+          json: traceReplayPayload,
+        };
+      },
+    }),
+  });
+
+  const surface = createMobileWorkspaceSurfaceSet({
+    accountState,
+    foundation,
+    storage,
+  }).runsApprovals;
+
+  const workItems = await surface.loadWorkItems({ refresh: true });
+  assert.equal(workItems.status, 'ready');
+  assert.equal(workItems.data.length, 2);
+  assert.equal(workItems.data[0].kind, 'trace');
+  assert.equal(workItems.data[0].id, 'trace_1');
+  assert.equal(workItems.data[1].kind, 'run');
+  assert.equal(workItems.data[1].id, 'run_1');
+
+  const replay = await surface.getTraceReplay({ traceId: 'trace_1' });
+  assert.equal(replay.trace.id, 'trace_1');
+  assert.deepEqual(
+    replay.events.map((event) => event.event_type),
+    ['plan.started', 'tool.result', 'artifact.created'],
+  );
+  assert.deepEqual(opsCalls, ['ws_ops', 'ws_ops', 'ws_ops']);
 });
 
 test('mobile shell model mounts workspace-backed tabs when a real foundation is present', () => {
@@ -524,7 +682,7 @@ test('mobile shell model mounts workspace-backed tabs when a real foundation is 
         artifacts_enabled: true,
         workspace_admin_enabled: true,
       },
-      defaultRoute: '/w/ws_ops/admin',
+      defaultRoute: 'approvals',
       preferredProfile: 'operations_admin_shell',
     }),
     storage,
@@ -538,7 +696,8 @@ test('mobile shell model mounts workspace-backed tabs when a real foundation is 
     fetchImpl: createFetchRouter({}),
   });
 
-  assert.equal(shell.defaultRoute, '/w/ws_ops/admin');
+  assert.equal(shell.defaultRouteId, 'approvals');
+  assert.equal(shell.defaultRoute, '/(workspace)/approvals');
   assert.equal(shell.shellProfileId, 'operations_admin_shell');
   assert.equal(shell.tabs.some((tab) => tab.id === 'chat' && tab.mounted), true);
   assert.equal(shell.tabs.some((tab) => tab.id === 'runs' && tab.mounted), true);
@@ -564,12 +723,12 @@ test('notifications and artifacts surfaces stay scoped and tear down cleanly', a
     }),
     storage,
     fetchImpl: createFetchRouter({
-      'GET /api/workspaces/ws_ops/notifications': () => ({
+      'GET /api/notifications?workspace_id=ws_ops': () => ({
         json: {
           notifications: [{ id: 'note_1', level: 'info' }],
         },
       }),
-      'GET /api/workspaces/ws_ops/artifacts': () => ({
+      'GET /api/artifacts?workspace_id=ws_ops': () => ({
         json: {
           artifacts: [{ id: 'artifact_1', label: 'Draft.pdf' }],
         },

@@ -216,9 +216,10 @@ class AutopilotBridgeFacadeService:
         if self._telegram_webhook_bridge_service is None:
             self._telegram_webhook_bridge_service = self.telegram_webhook_bridge_class(
                 init_runtime=self.init_runtime,
-                parse_update=lambda raw: self.telegram_service_registry().telegram_webhook_service().parse_update(raw),
+                parse_update=lambda raw: self.telegram_service_registry().telegram_ingress_service().parse_update(raw),
                 webhook_auth_result=lambda **kwargs: self.autopilot_endpoint_service().telegram_webhook_auth_result(**kwargs),
-                handle_inbound=lambda connector_id, update: self.telegram_service_registry().telegram_webhook_service().handle_webhook(
+                handle_inbound=lambda connector_id, update: self.telegram_service_registry().telegram_ingress_service().ingest_update(
+                    source="webhook",
                     connector_id=connector_id,
                     update=update,
                 ),
@@ -246,7 +247,7 @@ class AutopilotBridgeFacadeService:
                     signature=signature,
                     auth_token=auth_token,
                 ),
-                handle_inbound=lambda payload, matched=None: self.whatsapp_service_registry().whatsapp_webhook_service().handle_inbound(
+                ingest_webhook=lambda payload, matched=None: self.whatsapp_service_registry().whatsapp_ingress_service().ingest_webhook(
                     payload,
                     matched=matched,
                 ),

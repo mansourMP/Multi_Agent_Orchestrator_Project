@@ -1,0 +1,168 @@
+import asyncio
+import hashlib
+import hmac
+import json
+import os
+from pathlib import Path
+import tempfile
+import time
+import unittest
+from unittest.mock import AsyncMock, patch
+
+from server_modules import billing_service
+from server_modules import control_plane_repository
+
+
+class BillingWebhookTests(unittest.TestCase):
+    def _create_workspace(self, root: Path) -> str:
+        with patch.object(control_plane_repository, "LOCAL_IDENTITY_DB_FILE", root / "users.db"), patch.object(
+            control_plane_repository,
+            "ensure_control_plane_schema",
+            new=AsyncMock(return_value=None),
+        ):
+            bundle = asyncio.run(
+                control_plane_repository.create_local_password_account(
+                    user_id="user-webhook-1",
+                    email="owner@example.com",
+                    display_name="Owner Example",
+                    password_hash="hash",
+                )
+            )
+            memberships = list((bundle or {}).get("memberships") or [])
+            self.assertTrue(memberships)
+            return str(memberships[0].get("workspace_id") or "").strip()
+
+    def _sign(self, secret: str, payload: bytes) -> str:
+        timestamp = str(int(time.time()))
+        digest = hmac.new(
+            secret.encode("utf-8"),
+            f"{timestamp}.{payload.decode('utf-8')}".encode("utf-8"),
+            hashlib.sha256,
+        ).hexdigest()
+        return f"t={timestamp},v1={digest}"
+
+    def test_subscription_webhook_activates_paid_plan(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            workspace_id = self._create_workspace(root)
+            event = {
+                "type": "customer.subscription.updated",
+                "data": {
+                    "object": {
+                        "id": "sub_team_123",
+                        "customer": "cus_team_123",
+                        "status": "active",
+                        "currency": "usd",
+                        "current_period_start": 1710000000,
+                        "current_period_end": 1712592000,
+                        "cancel_at_period_end": False,
+                        "items": {
+                            "data": [
+                                {
+                                    "price": {
+                                        "id": "price_team_123",
+                                        "product": "prod_team_123",
+                                        "currency": "usd",
+                                        "recurring": {"interval": "month"},
+                                    }
+                                }
+                            ]
+                        },
+                        "metadata": {
+                            "workspace_id": workspace_id,
+                            "plan_id": "team",
+                        },
+                    }
+                },
+            }
+            payload = json.dumps(event).encode("utf-8")
+            secret = "whsec_test_123"
+            with patch.dict(
+                os.environ,
+                {
+                    "EMPYRALIS_STRIPE_WEBHOOK_SECRET": secret,
+                    "EMPYRALIS_STRIPE_PRICE_IDS": '{"team":"price_team_123"}',
+                },
+                clear=False,
+            ), patch.object(
+                control_plane_repository,
+                "LOCAL_IDENTITY_DB_FILE",
+                root / "users.db",
+            ), patch.object(
+                control_plane_repository,
+                "ensure_control_plane_schema",
+                new=AsyncMock(return_value=None),
+            ):
+                result = billing_service.handle_stripe_webhook(payload, self._sign(secret, payload))
+                summary = billing_service.workspace_billing_summary_for_workspace_id(workspace_id)
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(summary["subscription"]["plan_id"], "team")
+        self.assertEqual(summary["subscription"]["effective_plan_id"], "team")
+        self.assertEqual(summary["subscription"]["status"], "active")
+
+    def test_cancellation_webhook_downgrades_workspace_back_to_free(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            workspace_id = self._create_workspace(root)
+            activate_event = {
+                "type": "customer.subscription.updated",
+                "data": {
+                    "object": {
+                        "id": "sub_team_123",
+                        "customer": "cus_team_123",
+                        "status": "active",
+                        "currency": "usd",
+                        "current_period_start": 1710000000,
+                        "current_period_end": 1712592000,
+                        "cancel_at_period_end": False,
+                        "items": {"data": [{"price": {"id": "price_team_123", "product": "prod_team_123", "currency": "usd", "recurring": {"interval": "month"}}}]},
+                        "metadata": {"workspace_id": workspace_id, "plan_id": "team"},
+                    }
+                },
+            }
+            cancel_event = {
+                "type": "customer.subscription.deleted",
+                "data": {
+                    "object": {
+                        "id": "sub_team_123",
+                        "customer": "cus_team_123",
+                        "status": "canceled",
+                        "currency": "usd",
+                        "cancel_at_period_end": False,
+                        "canceled_at": 1712000000,
+                        "items": {"data": [{"price": {"id": "price_team_123", "product": "prod_team_123", "currency": "usd", "recurring": {"interval": "month"}}}]},
+                        "metadata": {"workspace_id": workspace_id, "plan_id": "team"},
+                    }
+                },
+            }
+            secret = "whsec_test_123"
+            with patch.dict(
+                os.environ,
+                {
+                    "EMPYRALIS_STRIPE_WEBHOOK_SECRET": secret,
+                    "EMPYRALIS_STRIPE_PRICE_IDS": '{"team":"price_team_123"}',
+                },
+                clear=False,
+            ), patch.object(
+                control_plane_repository,
+                "LOCAL_IDENTITY_DB_FILE",
+                root / "users.db",
+            ), patch.object(
+                control_plane_repository,
+                "ensure_control_plane_schema",
+                new=AsyncMock(return_value=None),
+            ):
+                activate_payload = json.dumps(activate_event).encode("utf-8")
+                cancel_payload = json.dumps(cancel_event).encode("utf-8")
+                billing_service.handle_stripe_webhook(activate_payload, self._sign(secret, activate_payload))
+                billing_service.handle_stripe_webhook(cancel_payload, self._sign(secret, cancel_payload))
+                summary = billing_service.workspace_billing_summary_for_workspace_id(workspace_id)
+
+        self.assertEqual(summary["subscription"]["plan_id"], "team")
+        self.assertEqual(summary["subscription"]["status"], "canceled")
+        self.assertEqual(summary["subscription"]["effective_plan_id"], "free")
+
+
+if __name__ == "__main__":
+    unittest.main()

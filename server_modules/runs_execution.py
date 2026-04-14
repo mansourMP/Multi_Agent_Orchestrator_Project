@@ -43,6 +43,7 @@ from server_modules.connectors.github_connector import (
     list_pull_requests as github_list_pull_requests,
     list_repos as github_list_repos,
 )
+from server_modules import usage_accounting_service
 from server_modules.connectors.dropbox_connector import (
     delete as dropbox_delete,
     download_file as dropbox_download_file,
@@ -5188,6 +5189,20 @@ def run_orion_mission(run_id: str):
             run["result"] = result["result_text"]
             run["result_data"] = result.get("result_data")
             run["usage_masked"] = result["usage_masked"]
+            usage_accounting = usage_accounting_service.accounting_record_from_snapshot(
+                {
+                    "run_id": run_id,
+                    "status": "completed",
+                    "created_at": run.get("created_at"),
+                    "updated_at": run.get("updated_at"),
+                    "completed_at": run.get("completed_at"),
+                    "context": context,
+                    "usage_accounting": result.get("usage_accounting") if isinstance(result.get("usage_accounting"), dict) else None,
+                    "usage_masked": result.get("usage_masked") if isinstance(result.get("usage_masked"), dict) else None,
+                }
+            )
+            if isinstance(usage_accounting, dict):
+                run["usage_accounting"] = usage_accounting
             run["active_profile_id"] = result.get("active_profile_id")
             run["active_provider"] = result.get("active_provider")
             run["active_model"] = result.get("active_model")

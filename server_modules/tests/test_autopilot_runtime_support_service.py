@@ -69,6 +69,24 @@ class AutopilotRuntimeSupportServiceTests(unittest.TestCase):
         self.assertIn("offline", service.humanize_telegram_run_summary("Local companion is offline right now."))
         self.assertIn("Please retry", service.humanize_telegram_run_summary("missing required scope: api.responses.write"))
 
+    def test_summarize_run_terminal_result_applies_health_safety_overlay(self) -> None:
+        service = self._make_service(truncate_one_line=lambda text, limit: str(text or "")[:limit])
+        run = {
+            "result": "Blackbox durable reply: I have chest pain and trouble breathing",
+            "context": {
+                "user_goal": "I have chest pain and trouble breathing",
+                "metadata": {
+                    "health_safety_enabled": True,
+                    "health_safety_assistant_name": "HealthGuide",
+                },
+            },
+        }
+
+        summary = service.summarize_run_terminal_result(run, 400)
+
+        self.assertIn("urgent medical attention", summary.lower())
+        self.assertNotIn("Blackbox durable reply:", summary)
+
 
 if __name__ == "__main__":
     unittest.main()

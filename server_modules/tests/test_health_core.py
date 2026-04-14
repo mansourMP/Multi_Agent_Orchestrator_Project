@@ -223,6 +223,8 @@ class HealthCoreRuntimeTests(unittest.TestCase):
         self.assertEqual(payload["provider_profile_health"]["providers_by_id"]["openai-codex"]["state"], "active")
         self.assertEqual(payload["process_runtime"]["pid"], 123)
         self.assertEqual(payload["database_runtime"]["sqlite_status"], "active")
+        self.assertEqual(payload["healthguide_safety_policy"]["policy_version"], 1)
+        self.assertGreaterEqual(payload["healthguide_safety_policy"]["red_flag_rule_count"], 1)
 
     def test_health_exposes_scale_safety_baseline_with_provider_backpressure_and_queueing(self) -> None:
         rate_limited_profile = {

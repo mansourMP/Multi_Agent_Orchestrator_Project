@@ -1,72 +1,52 @@
 'use client';
 
-import Link from 'next/link';
+import { useEffect } from 'react';
+import { useRouter } from 'next/navigation';
 
 import { useAccountShell } from '@/lib/shell/account-shell-context';
-import { resolvePrimaryWorkspaceId } from '@/lib/shell/workspace-membership-model';
-
-function workspaceEntryHref(workspaceId: string): string {
-  return `/w/${encodeURIComponent(workspaceId)}`;
-}
+import {
+  getWorkspaceMembership,
+  resolvePrimaryWorkspaceId,
+} from '@/lib/shell/workspace-membership-model';
 
 export function AccountHomeClient() {
+  const router = useRouter();
   const { state, actions } = useAccountShell();
-  const suggestedWorkspaceId = resolvePrimaryWorkspaceId(state.workspaceMemberships);
-  const suggestedHref = suggestedWorkspaceId ? workspaceEntryHref(suggestedWorkspaceId) : null;
-  const suggestedRememberedRoute = suggestedWorkspaceId
-    ? actions.resolveWorkspaceHref(suggestedWorkspaceId)
-    : null;
+  const selectedWorkspaceId = state.selectedWorkspaceId ?? resolvePrimaryWorkspaceId(state.workspaceMemberships);
+  const selectedMembership = getWorkspaceMembership(
+    state.workspaceMembershipIndex,
+    selectedWorkspaceId,
+  );
+  const suggestedHref = selectedMembership
+    ? selectedMembership.requiresOnboarding
+      ? `/onboarding?workspaceId=${encodeURIComponent(selectedMembership.workspace.id)}`
+      : actions.resolveWorkspaceHref(selectedMembership.workspace.id)
+          ?? `/w/${encodeURIComponent(selectedMembership.workspace.id)}`
+    : '/onboarding';
+
+  useEffect(() => {
+    if (state.status !== 'authenticated') {
+      return;
+    }
+    router.replace(suggestedHref);
+  }, [router, state.status, suggestedHref]);
 
   return (
     <main
       style={{
         minHeight: '100vh',
-        padding: '3rem',
+        padding: '2.5rem',
         display: 'grid',
-        gap: '1rem',
+        placeItems: 'center',
       }}
     >
-      <div style={{ display: 'grid', gap: '0.5rem' }}>
-        <h1 style={{ margin: 0, fontSize: '1.5rem' }}>Empyralis Account Shell</h1>
-        <p style={{ margin: 0, maxWidth: '48rem', lineHeight: 1.6 }}>
-          Workspace routes now live under <code>/w/[workspaceId]/*</code>. This root page is account-global
-          only and does not mount any workspace feature surface.
+      <div style={{ display: 'grid', gap: '0.5rem', textAlign: 'center', maxWidth: '32rem' }}>
+        <h1 style={{ margin: 0, fontSize: '1.35rem' }}>Redirecting to your workspace</h1>
+        <p style={{ margin: 0, color: '#475569', lineHeight: 1.6 }}>
+          Account home resolves to onboarding when the selected workspace still requires setup.
+          Otherwise it uses the current account-shell workspace route state.
         </p>
       </div>
-      <pre
-        style={{
-          margin: 0,
-          padding: '1rem',
-          borderRadius: '0.75rem',
-          background: '#111827',
-          color: '#e5e7eb',
-          overflow: 'auto',
-        }}
-      >
-        {JSON.stringify(
-          {
-            accountStatus: state.status,
-            routeWorkspaceId: state.selectedWorkspaceId,
-            suggestedWorkspaceId,
-            memberships: state.workspaceMemberships.map((membership) => ({
-              workspaceId: membership.workspace.id,
-              role: membership.role,
-              entryHref: workspaceEntryHref(membership.workspace.id),
-              rememberedRoute: actions.resolveWorkspaceHref(membership.workspace.id),
-              defaultRoute: membership.defaultRoute,
-            })),
-            suggestedWorkspaceEntryHref: suggestedHref,
-            suggestedWorkspaceRememberedRoute: suggestedRememberedRoute,
-          },
-          null,
-          2,
-        )}
-      </pre>
-      {suggestedHref ? (
-        <Link href={suggestedHref} style={{ color: '#1d4ed8', fontWeight: 600 }}>
-          Open primary workspace entry route
-        </Link>
-      ) : null}
     </main>
   );
 }

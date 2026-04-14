@@ -1,15 +1,74 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import logging
 from typing import Any, Callable
+import uuid
 
 from fastapi import HTTPException
+from server_modules import agent_trace_service
+from server_modules.direct_tool_config_service import run_async_tool_call
+
+
+LOGGER = logging.getLogger(__name__)
 
 
 def _parent_run_context(parent_snapshot: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
     parent_context = parent_snapshot.get("context") if isinstance(parent_snapshot.get("context"), dict) else {}
     parent_metadata = parent_context.get("metadata") if isinstance(parent_context.get("metadata"), dict) else {}
     return parent_context, parent_metadata
+
+
+def _resume_parent_trace_context(parent_snapshot: dict[str, Any]) -> Any:
+    parent_context, parent_metadata = _parent_run_context(parent_snapshot)
+    trace_id = (
+        str(parent_snapshot.get("trace_id") or "").strip()
+        or str(parent_context.get("trace_id") or "").strip()
+        or str(parent_metadata.get("trace_id") or "").strip()
+        or str(parent_metadata.get("request_trace_id") or "").strip()
+    )
+    if not trace_id:
+        return None
+    try:
+        return run_async_tool_call(
+            agent_trace_service.resume_trace(
+                trace_id=trace_id,
+                tenant_id=str(
+                    parent_snapshot.get("tenant_id")
+                    or parent_context.get("tenant_id")
+                    or parent_metadata.get("tenant_id")
+                    or "default"
+                ).strip()
+                or "default",
+                workspace_id=str(
+                    parent_snapshot.get("workspace_id")
+                    or parent_context.get("workspace_id")
+                    or parent_metadata.get("workspace_id")
+                    or "default"
+                ).strip()
+                or "default",
+                thread_id=str(
+                    parent_snapshot.get("thread_id")
+                    or parent_context.get("thread_id")
+                    or parent_metadata.get("thread_id")
+                    or parent_metadata.get("session_id")
+                    or ""
+                ).strip()
+                or None,
+                run_id=str(parent_snapshot.get("run_id") or "").strip() or None,
+            )
+        )
+    except Exception as exc:
+        LOGGER.warning("Failed to resume delegation trace context: %s", exc)
+        return None
+
+
+def _emit_trace(awaitable: Any, *, operation: str) -> Any:
+    try:
+        return run_async_tool_call(awaitable)
+    except Exception as exc:
+        LOGGER.warning("Failed to emit delegation trace during %s: %s", operation, exc)
+        return None
 
 
 def _orchestrator_parent(
@@ -168,6 +227,7 @@ def delegate_run_children(
     )
     note = str(body.note or "").strip() or None
     created = []
+    trace_context = _resume_parent_trace_context(parent_snapshot)
     delegation_root_run_id = _delegation_root_run_id(
         parent_run_id,
         parent_snapshot=parent_snapshot,
@@ -175,6 +235,7 @@ def delegate_run_children(
         normalize_run_id_token=normalize_run_id_token,
     )
     for child in body.children:
+        item_id = str(uuid.uuid4())
         target_role = normalize_agent_role(child.agent_role)
         if not target_role or target_role == "orchestrator":
             raise HTTPException(status_code=400, detail="Delegated child runs must target a specialist agent role.")
@@ -190,6 +251,29 @@ def delegate_run_children(
             stamp_request_owner_fn=stamp_request_owner_fn,
             services=run_execution_services(),
         )
+        child_run_id = str((result or {}).get("run_id") or "").strip()
+        if trace_context is not None and child_run_id:
+            _emit_trace(
+                agent_trace_service.emit_delegation_started(
+                    trace_context,
+                    item_id,
+                    child_run_id,
+                    target_role,
+                    target_role,
+                    str(child.user_goal or "").strip() or None,
+                ),
+                operation=f"delegation.started:{parent_run_id}:{child_run_id}",
+            )
+            _emit_trace(
+                agent_trace_service.emit_delegation_finished(
+                    trace_context,
+                    item_id,
+                    child_run_id,
+                    "ok",
+                    f"Delegated child run {child_run_id} created.",
+                ),
+                operation=f"delegation.finished:{parent_run_id}:{child_run_id}",
+            )
         created.append(
             {
                 **result,
@@ -243,19 +327,93 @@ def auto_delegate_run_children(
         emit_auto_delegation_routing_log(parent_run_id, plan, strategy=routing_source, reason=routing_reason)
     note = str(request_payload.note or "").strip() or "Auto-planned by orchestrator rules."
     created = []
+    trace_context = _resume_parent_trace_context(parent_snapshot)
+    plan_id = str(uuid.uuid4())
+    if trace_context is not None:
+        _emit_trace(
+            agent_trace_service.emit_plan_started(
+                trace_context,
+                plan_id,
+                "Delegation Plan",
+                note,
+            ),
+            operation=f"plan.started:{parent_run_id}",
+        )
     delegation_root_run_id = _delegation_root_run_id(
         parent_run_id,
         parent_snapshot=parent_snapshot,
         parent_metadata=parent_metadata,
         normalize_run_id_token=normalize_run_id_token,
     )
-    for child in plan:
+    for index, child in enumerate(plan, start=1):
+        item_id = str(uuid.uuid4())
+        target_role = str(child.get("agent_role") or "").strip()
+        if trace_context is not None:
+            _emit_trace(
+                agent_trace_service.emit_plan_item(
+                    trace_context,
+                    plan_id,
+                    item_id,
+                    index,
+                    f"Delegate to {target_role or 'specialist'}",
+                    "delegate",
+                    target_role or "specialist",
+                    [],
+                    str(child.get("user_goal") or "").strip() or None,
+                ),
+                operation=f"plan.item.created:{parent_run_id}:{index}",
+            )
         delegated_req = build_delegated_run_request(parent_snapshot, child, note=note)
-        result = execute_system_run_start_request_via_turn_runtime(
-            delegated_req,
-            stamp_request_owner_fn=stamp_request_owner_fn,
-            services=run_execution_services(),
-        )
+        try:
+            result = execute_system_run_start_request_via_turn_runtime(
+                delegated_req,
+                stamp_request_owner_fn=stamp_request_owner_fn,
+                services=run_execution_services(),
+            )
+        except Exception as exc:
+            if trace_context is not None:
+                _emit_trace(
+                    agent_trace_service.emit_plan_item_updated(
+                        trace_context,
+                        item_id,
+                        "failed",
+                        str(exc)[:280],
+                    ),
+                    operation=f"plan.item.updated:{parent_run_id}:{item_id}:failed",
+                )
+            raise
+        child_run_id = str((result or {}).get("run_id") or "").strip()
+        if trace_context is not None and child_run_id:
+            _emit_trace(
+                agent_trace_service.emit_delegation_started(
+                    trace_context,
+                    item_id,
+                    child_run_id,
+                    target_role or "specialist",
+                    target_role or "specialist",
+                    str(child.get("user_goal") or "").strip() or None,
+                ),
+                operation=f"delegation.started:{parent_run_id}:{child_run_id}",
+            )
+            _emit_trace(
+                agent_trace_service.emit_delegation_finished(
+                    trace_context,
+                    item_id,
+                    child_run_id,
+                    "ok",
+                    f"Delegated child run {child_run_id} created.",
+                ),
+                operation=f"delegation.finished:{parent_run_id}:{child_run_id}",
+            )
+            _emit_trace(
+                agent_trace_service.emit_plan_item_updated(
+                    trace_context,
+                    item_id,
+                    "done",
+                    f"Started child run {child_run_id}.",
+                ),
+                operation=f"plan.item.updated:{parent_run_id}:{item_id}:done",
+            )
         created.append(
             {
                 **result,
@@ -339,7 +497,9 @@ def retry_failed_delegation_runs(
         raise HTTPException(status_code=400, detail="No retryable failed child runs were found for this orchestrator run.")
     note = str(request_payload.note or "").strip() or "Retry requested from orchestration summary."
     created = []
+    trace_context = _resume_parent_trace_context(parent_snapshot)
     for child in failed_effective_children:
+        item_id = str(uuid.uuid4())
         child_payload = build_retry_child_payload(parent_snapshot, child, note=note)
         delegated_req = build_delegated_run_request(parent_snapshot, child_payload, note=note)
         result = execute_system_run_start_request_via_turn_runtime(
@@ -347,6 +507,30 @@ def retry_failed_delegation_runs(
             stamp_request_owner_fn=stamp_request_owner_fn,
             services=run_execution_services(),
         )
+        child_run_id = str((result or {}).get("run_id") or "").strip()
+        target_role = str(child_payload.get("agent_role") or "").strip() or "specialist"
+        if trace_context is not None and child_run_id:
+            _emit_trace(
+                agent_trace_service.emit_delegation_started(
+                    trace_context,
+                    item_id,
+                    child_run_id,
+                    target_role,
+                    target_role,
+                    str(child_payload.get("user_goal") or "").strip() or None,
+                ),
+                operation=f"delegation.started:{parent_run_id}:{child_run_id}:retry",
+            )
+            _emit_trace(
+                agent_trace_service.emit_delegation_finished(
+                    trace_context,
+                    item_id,
+                    child_run_id,
+                    "ok",
+                    f"Retry child run {child_run_id} created.",
+                ),
+                operation=f"delegation.finished:{parent_run_id}:{child_run_id}:retry",
+            )
         created.append(
             {
                 **result,

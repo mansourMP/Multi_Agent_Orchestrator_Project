@@ -697,6 +697,22 @@ def load_artifact_metadata(
     return None
 
 
+def load_artifact_metadata_by_id(
+    artifact_id: str,
+    *,
+    agent_install_id: str | None = None,
+    include_shared: bool = True,
+) -> Optional[Dict[str, Any]]:
+    token = str(artifact_id or "").strip()
+    if not token:
+        return None
+    return load_artifact_metadata(
+        token,
+        agent_install_id=agent_install_id,
+        include_shared=include_shared,
+    )
+
+
 def resolve_artifact_content_path(
     reference: str,
     *,
@@ -733,6 +749,47 @@ def resolve_artifact_content_path(
     except Exception:
         return None
     return candidate if candidate.exists() and candidate.is_file() else None
+
+
+def resolve_artifact_content_path_by_id(
+    artifact_id: str,
+    *,
+    agent_install_id: str | None = None,
+    include_shared: bool = True,
+) -> Optional[Path]:
+    token = str(artifact_id or "").strip()
+    if not token:
+        return None
+    return resolve_artifact_content_path(
+        token,
+        agent_install_id=agent_install_id,
+        include_shared=include_shared,
+    )
+
+
+def artifact_download_filename(payload: Mapping[str, Any], fallback: str = "artifact.bin") -> str:
+    if not isinstance(payload, Mapping):
+        return _safe_filename(fallback)
+    candidate = (
+        str(payload.get("file_name") or "").strip()
+        or str(payload.get("label") or "").strip()
+        or str(payload.get("artifact_id") or "").strip()
+        or fallback
+    )
+    return _safe_filename(candidate or fallback)
+
+
+def artifact_content_type(payload: Mapping[str, Any], fallback_name: str = "artifact.bin") -> str:
+    if not isinstance(payload, Mapping):
+        return _guess_content_type(fallback_name)
+    explicit = (
+        str(payload.get("content_type") or "").strip()
+        or str(payload.get("mime_type") or "").strip()
+    )
+    return _guess_content_type(
+        artifact_download_filename(payload, fallback_name),
+        explicit=explicit or None,
+    )
 
 
 def _iter_artifact_record_payloads() -> List[Dict[str, Any]]:

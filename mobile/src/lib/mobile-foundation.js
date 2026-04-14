@@ -7,6 +7,24 @@ import {
 import { buildRouteManifest, deriveShellProfile } from './workspace/workspace-shell.js';
 import { createWorkspaceServiceBundle } from './workspace/workspace-services.js';
 
+function resolveBootstrapSession(session) {
+  if (!session || typeof session !== 'object') {
+    throw new Error('Mobile platform session must be an object.');
+  }
+
+  const apiBaseUrl = typeof session.apiBaseUrl === 'string'
+    ? session.apiBaseUrl
+    : session.platformBaseUrl;
+  if (typeof apiBaseUrl !== 'string' || !apiBaseUrl.trim()) {
+    throw new Error('Mobile platform session requires a public apiBaseUrl.');
+  }
+
+  return {
+    apiBaseUrl: apiBaseUrl.replace(/\/+$/, ''),
+    accessToken: typeof session.accessToken === 'string' ? session.accessToken : null,
+  };
+}
+
 export function createMobileWorkspaceFoundation({
   session,
   bootstrap,
@@ -14,8 +32,10 @@ export function createMobileWorkspaceFoundation({
   storage,
   fetchImpl,
 }) {
-  const normalizedSession = normalizePlatformSession(session);
   const parsedBootstrap = parseWorkspaceBootstrapPayload(bootstrap);
+  const normalizedSession = normalizePlatformSession(session, {
+    fallbackAccountId: parsedBootstrap.account.id,
+  });
   const effectiveWorkspaceId = workspaceId ?? parsedBootstrap.workspace.id;
 
   if (effectiveWorkspaceId !== parsedBootstrap.workspace.id) {
@@ -61,16 +81,16 @@ export async function loadMobileWorkspaceFoundation({
   storage,
   fetchImpl,
 }) {
-  const normalizedSession = normalizePlatformSession(session);
+  const bootstrapSession = resolveBootstrapSession(session);
   const bootstrap = await fetchWorkspaceBootstrap({
-    apiBaseUrl: normalizedSession.apiBaseUrl,
+    apiBaseUrl: bootstrapSession.apiBaseUrl,
     workspaceId,
-    accessToken: normalizedSession.accessToken,
+    accessToken: bootstrapSession.accessToken,
     fetchImpl,
   });
 
   return createMobileWorkspaceFoundation({
-    session: normalizedSession,
+    session,
     bootstrap,
     workspaceId,
     storage,

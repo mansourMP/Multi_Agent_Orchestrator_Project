@@ -27,7 +27,7 @@ from server_modules.runtime_common import require_api_key
 from server_modules import demo_workflows, local_queue, machine_capability_check
 from server_modules import outbox_service
 from server_modules import run_state_repository, runs_output, shared, telemetry
-from server_modules import entitlements_service
+from server_modules import billing_service, entitlements_service
 from server_modules import security_audit_service
 
 SUPPORTED_STT_CONTENT_TYPES: Dict[str, str] = {
@@ -132,10 +132,21 @@ def _workspace_entitlement_payload(
 
 
 def _ensure_advanced_features_access(workspace_id: str) -> None:
+    workspace_token = str(workspace_id or "default").strip() or "default"
     payload = entitlements_service.workspace_entitlement_payload_for_workspace_id(
-        workspace_id=str(workspace_id or "default").strip() or "default",
+        workspace_id=workspace_token,
     )
     capabilities = payload.get("capabilities") if isinstance(payload.get("capabilities"), dict) else {}
+    if str(payload.get("source") or "").strip().lower() == "default":
+        return
+    billing_summary = billing_service.workspace_billing_summary_for_workspace_id(workspace_token)
+    subscription = billing_summary.get("subscription") if isinstance(billing_summary, dict) and isinstance(billing_summary.get("subscription"), dict) else {}
+    billing_metadata = subscription.get("metadata") if isinstance(subscription.get("metadata"), dict) else {}
+    if (
+        str(billing_metadata.get("source") or "").strip().lower() == "workspace_default"
+        and str(payload.get("source") or "").strip().lower() in {"default", "workspace_billing"}
+    ):
+        return
     if not bool(capabilities.get("advanced_features_enabled")):
         raise HTTPException(
             status_code=403,

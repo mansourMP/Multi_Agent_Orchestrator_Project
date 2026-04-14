@@ -274,9 +274,11 @@ from server_modules.memory_service import (
     _memory_prompt_context_block,
     _memory_search_scoped,
     _normalize_memory_bucket,
-    _persist_run_memory,
     _trim_memory_trace,
-    _hydrate_run_memory_context,
+)
+from server_modules.conversation_memory_facade_service import (
+    persist_run_memory as _persist_run_memory,
+    hydrate_run_memory_context as _hydrate_run_memory_context,
 )
 from server_modules.runtime_events import (
     configure_runtime_events,
@@ -384,6 +386,14 @@ async def app_lifespan(_: FastAPI):
 
 # --- CONFIG ---
 FRONTEND_ORIGINS = config_str("FRONTEND_ORIGINS", "http://127.0.0.1:3000,http://localhost:3000")
+EMPYRALIS_BILLING_PROVIDER = config_str("EMPYRALIS_BILLING_PROVIDER", "stripe")
+EMPYRALIS_STRIPE_SECRET_KEY = config_str("EMPYRALIS_STRIPE_SECRET_KEY", config_str("STRIPE_SECRET_KEY", ""))
+EMPYRALIS_STRIPE_WEBHOOK_SECRET = config_str("EMPYRALIS_STRIPE_WEBHOOK_SECRET", "")
+EMPYRALIS_STRIPE_PRICE_IDS = config_str("EMPYRALIS_STRIPE_PRICE_IDS", "")
+EMPYRALIS_BILLING_FRONTEND_ORIGIN = config_str("EMPYRALIS_BILLING_FRONTEND_ORIGIN", "")
+EMPYRALIS_BILLING_SUCCESS_URL = config_str("EMPYRALIS_BILLING_SUCCESS_URL", "")
+EMPYRALIS_BILLING_CANCEL_URL = config_str("EMPYRALIS_BILLING_CANCEL_URL", "")
+EMPYRALIS_BILLING_PORTAL_RETURN_URL = config_str("EMPYRALIS_BILLING_PORTAL_RETURN_URL", "")
 ORION_API_KEY = config_value("ORION_API_KEY")
 _ORION_AUTH_REQUIRED_RAW = config_value("ORION_AUTH_REQUIRED")
 ORION_DEV_INSECURE_NO_AUTH = config_bool("ORION_DEV_INSECURE_NO_AUTH", False)

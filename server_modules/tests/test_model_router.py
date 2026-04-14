@@ -11,6 +11,17 @@ class ModelRouterTests(unittest.TestCase):
         self.assertEqual(model_router.resolve_model("gpt-4o-mini"), "gpt-4o-mini")
         self.assertEqual(model_router.resolve_model("vertex-gemini-pro"), "vertex_ai/gemini-1.5-pro")
         self.assertEqual(model_router.resolve_model("gemini-1.5-pro", provider="vertex"), "vertex_ai/gemini-1.5-pro")
+        self.assertEqual(model_router.resolve_model("deepseek-chat", provider="deepseek"), "deepseek-chat")
+        self.assertEqual(model_router.resolve_model("qwen-plus", provider="qwen"), "qwen-plus")
+        self.assertEqual(model_router.resolve_model("mistral-large-latest", provider="mistral"), "mistral-large-latest")
+        self.assertEqual(model_router.resolve_model("llama3.2", provider="ollama"), "llama3.2")
+
+    def test_infer_provider_supports_openai_compatible_and_local_catalogs(self):
+        self.assertEqual(model_router.infer_provider("deepseek-chat"), "deepseek")
+        self.assertEqual(model_router.infer_provider("deepseek-reasoner"), "deepseek")
+        self.assertEqual(model_router.infer_provider("qwen-plus"), "qwen")
+        self.assertEqual(model_router.infer_provider("mistral-large-latest"), "mistral")
+        self.assertEqual(model_router.infer_provider("llama3.2"), "ollama")
 
     def test_normalize_messages_filters_invalid_shapes(self):
         messages = model_router.normalize_messages(

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from typing import Any, Dict, Optional
 
@@ -650,6 +651,50 @@ def build_direct_chat_tool_runtime_bindings(
         reasoning_effort="",
         session_ctx=None,
     ):
+        callbacks = direct_tool_execution_callbacks()
+        connector_id, action_id = callbacks.parse_tool_name(str(tool_call.get("name") or ""))
+        if connector_id not in {"", "http", "llm", "file", "shell", "screenshot", "computer", "memory", "web", "browser", "image"}:
+            from server_modules import runs_execution
+
+            argument_payload = callbacks.tool_arguments_payload(tool_call.get("arguments"))
+            if isinstance(argument_payload, dict):
+                tool_input = str(argument_payload.get("input") or "").strip()
+                if not tool_input:
+                    try:
+                        tool_input = json.dumps(argument_payload, ensure_ascii=False)
+                    except Exception:
+                        tool_input = str(argument_payload)
+            else:
+                tool_input = str(argument_payload or "").strip()
+            config = callbacks.build_direct_tool_config(
+                connector_id,
+                action_id,
+                tool_input,
+            )
+            result = runs_execution._workflow_execute_connector_action(
+                "direct-chat-tool-call",
+                "direct_chat_tool_call",
+                {
+                    "workspace_id": workspace_id,
+                    "tenant_id": str(
+                        (session_ctx or {}).get("tenant_id")
+                        or (
+                            (session_ctx or {}).get("agent_turn_request", {}).get("tenant_id")
+                            if isinstance((session_ctx or {}).get("agent_turn_request"), dict)
+                            else ""
+                        )
+                        or "default"
+                    ).strip()
+                    or "default",
+                    "provider": provider,
+                    "model": model,
+                    "credentials": credentials if isinstance(credentials, dict) else None,
+                    "metadata": {},
+                },
+                config,
+                current_text=str(config.get("text") or tool_input or "").strip(),
+            )
+            return callbacks.format_direct_tool_result(result)
         return skills_service.execute_single_direct_tool_call(
             tool_call=tool_call,
             workspace_id=workspace_id,
@@ -660,7 +705,7 @@ def build_direct_chat_tool_runtime_bindings(
             credentials=credentials,
             reasoning_effort=reasoning_effort,
             session_ctx=session_ctx,
-            callbacks=direct_tool_execution_callbacks(),
+            callbacks=callbacks,
         )
 
     def execute_direct_tool_calls(
@@ -1995,6 +2040,7 @@ def build_direct_chat_entrypoint_bindings(
         max_iterations=None,
         session_ctx=None,
         agent_turn_request=None,
+        trace_context=None,
     ):
         return direct_chat_runtime_entry_facade_service.build_direct_operator_reply(
             services=direct_chat_runtime_services_fn(),
@@ -2010,6 +2056,7 @@ def build_direct_chat_entrypoint_bindings(
             max_iterations=max_iterations,
             session_ctx=session_ctx,
             agent_turn_request=agent_turn_request,
+            trace_context=trace_context,
         )
 
     def collect_direct_operator_reply(**kwargs):

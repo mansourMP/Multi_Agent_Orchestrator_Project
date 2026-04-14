@@ -59,6 +59,7 @@ from server_modules.memory_service import (
     search_memory_notebook,
 )
 from server_modules.agent_turn import resolve_agent_turn_request
+from server_modules.conversation_memory_policy import DIRECT_CHAT_PROFILE, get_memory_policy_profile
 from server_modules.conversation_compaction import compact_conversation_history
 from server_modules.llm_task import llm_task
 from server_modules.session_transcript_store import save_session_transcript
@@ -269,7 +270,7 @@ MAX_CONTEXT_TOOL_CAPABILITIES = 6
 MAX_CONTEXT_TOOL_ACTIONS = 6
 DIRECT_CHAT_RUN_HANDOFF_LIVE_WINDOW_SECONDS = 12.0
 DIRECT_CHAT_RUN_HANDOFF_POLL_SECONDS = 0.25
-DIRECT_CHAT_COMPACTION_TOKEN_LIMIT = 8000
+DIRECT_CHAT_COMPACTION_TOKEN_LIMIT = get_memory_policy_profile(DIRECT_CHAT_PROFILE).max_prompt_tokens
 DIRECT_CHAT_LOOP_REPEAT_LIMIT = 3
 _DIRECT_CHAT_MEMORY_SYSTEM_PREFIX = (
     "Persistent workspace memory. Use this only as background context when it is relevant, "

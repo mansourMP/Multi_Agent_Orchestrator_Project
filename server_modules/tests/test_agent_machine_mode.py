@@ -362,7 +362,7 @@ class AgentMachineModeTests(unittest.TestCase):
                 autopilot_connectors._init()
                 with patch("server_modules.connectors.autopilot_runtime_exports.decide_execution_target", return_value={"selected": "cloud"}, create=True):
                     with patch("server_modules.connectors.autopilot_runtime_exports.apply_execution_route_metadata", side_effect=lambda metadata, route: metadata, create=True):
-                        with patch("server_modules.connectors.autopilot_runtime_exports.execute_system_run_start_request_via_turn_runtime", side_effect=_fake_execute_system_run_start_request, create=True):
+                        with patch("server_modules.turn_ingress_service.start_system_run_start", side_effect=_fake_execute_system_run_start_request):
                             with patch("server_modules.connectors.autopilot_runtime_exports._stamp_request_owner", side_effect=lambda req, current_user: req, create=True):
                                 with patch("server_modules.connectors.autopilot_runtime_exports._run_execution_services", side_effect=lambda: object(), create=True):
                                     autopilot_connectors._autopilot_run_entry_service().create_telegram_run(
@@ -392,7 +392,7 @@ class AgentMachineModeTests(unittest.TestCase):
                 autopilot_connectors._init()
                 with patch("server_modules.connectors.autopilot_runtime_exports.decide_execution_target", return_value={"selected": "cloud"}, create=True):
                     with patch("server_modules.connectors.autopilot_runtime_exports.apply_execution_route_metadata", side_effect=lambda metadata, route: metadata, create=True):
-                        with patch("server_modules.connectors.autopilot_runtime_exports.execute_system_run_start_request_via_turn_runtime", side_effect=_fake_execute_system_run_start_request, create=True):
+                        with patch("server_modules.turn_ingress_service.start_system_run_start", side_effect=_fake_execute_system_run_start_request):
                             with patch("server_modules.connectors.autopilot_runtime_exports._stamp_request_owner", side_effect=lambda req, current_user: req, create=True):
                                 with patch("server_modules.connectors.autopilot_runtime_exports._run_execution_services", side_effect=lambda: object(), create=True):
                                     autopilot_connectors._autopilot_run_entry_service().create_whatsapp_run(
@@ -409,7 +409,7 @@ class AgentMachineModeTests(unittest.TestCase):
 
         self.assertEqual(captured["request"].metadata["owner_user_id"], "user-123")
 
-    def test_discord_inbound_run_inherits_machine_owner(self):
+    def test_discord_inbound_requires_canonical_callbacks(self):
         parsed = discord_connector.parse_inbound_event(
             {
                 "t": "MESSAGE_CREATE",
@@ -423,24 +423,15 @@ class AgentMachineModeTests(unittest.TestCase):
                 },
             }
         )
-        created: list[dict[str, object]] = []
-
-        def _fake_create_run(*, context):
-            created.append(context)
-            return "run-discord-1"
-
         with patch.object(runtime_config, "AGENT_MACHINE_MODE", "agent"):
             with patch.object(runtime_config, "AGENT_MACHINE_OWNER", "user-123"):
-                result = discord_connector.dispatch_inbound_event(
-                    parsed,
-                    connector_entry={"id": "cred-discord", "workspace_id": "default", "metadata": {}},
-                    credentials={"bot_token": "discord-token", "channel_id": "123", "guild_id": "456"},
-                    append_event_fn=None,
-                    create_run_fn=_fake_create_run,
-                )
-
-        self.assertTrue(result["triggered"])
-        self.assertEqual(created[0]["metadata"]["owner_user_id"], "user-123")
+                with self.assertRaises(RuntimeError):
+                    discord_connector.dispatch_inbound_event(
+                        parsed,
+                        connector_entry={"id": "cred-discord", "workspace_id": "default", "metadata": {}},
+                        credentials={"bot_token": "discord-token", "channel_id": "123", "guild_id": "456"},
+                        append_event_fn=None,
+                    )
 
     def test_discord_inbound_canonical_run_start_inherits_machine_owner(self):
         parsed = discord_connector.parse_inbound_event(

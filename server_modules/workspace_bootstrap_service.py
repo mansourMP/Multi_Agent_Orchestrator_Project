@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import json
+from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from fastapi import HTTPException
@@ -29,6 +30,15 @@ def _coerce_bool(value: Any, default: bool = False) -> bool:
         if token in {"0", "false", "no", "off"}:
             return False
     return bool(default)
+
+
+def _version_component(value: Any) -> int:
+    if isinstance(value, datetime):
+        return int(value.timestamp())
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return 0
 
 
 def _entitlement_flags(entitlements: Dict[str, Any]) -> Dict[str, bool]:
@@ -81,11 +91,9 @@ def _cache_store(cache: Dict[str, Dict[str, Any]], key: str, payload: Dict[str, 
 
 def _workspace_record_version(workspace: Optional[Dict[str, Any]]) -> str:
     record = _coerce_dict(workspace)
-    updated_at = str(record.get("updated_at") or "").strip()
-    if updated_at:
-        return updated_at
     return _stable_json(
         {
+            "updated_at": record.get("updated_at"),
             "workspace_id": str(record.get("workspace_id") or "").strip(),
             "tenant_id": str(record.get("tenant_id") or "").strip(),
             "name": str(record.get("name") or "").strip(),
@@ -131,16 +139,21 @@ def _build_workspace_bootstrap_payload(
         role=role,
         capabilities=capability_flags,
     )
-    preferred_profile = _preferred_shell_profile(role=role, traits=workspace_traits)
-    default_route = _default_route(workspace_id=resolved_workspace_id, traits=workspace_traits)
+    shell_hints = _shell_hints(
+        workspace_id=resolved_workspace_id,
+        role=role,
+        workspace=workspace_record,
+        traits=workspace_traits,
+    )
     identity_versions = _coerce_dict((current_user or {}).get("identity_versions"))
     membership_version = (
-        f"{int(identity_versions.get('membership_version') or 1)}"
-        f":{int((membership_row or {}).get('updated_at') or 0)}"
+        f"{_version_component(identity_versions.get('membership_version') or 1)}"
+        f":{_version_component((membership_row or {}).get('updated_at'))}"
     )
     capabilities = {
         **capability_flags,
         "workspace_admin_enabled": role in {"owner", "admin"},
+        "platform_admin_enabled": bool((current_user or {}).get("auth_admin") or (current_user or {}).get("is_admin")),
         "billing_read_enabled": role in {"owner", "admin"},
         "billing_write_enabled": role in {"owner", "admin"},
         "routing_read_enabled": role in {"owner", "admin"},
@@ -180,6 +193,11 @@ def _build_workspace_bootstrap_payload(
             "flags": _entitlement_flags(entitlement_state.entitlements),
             "limits": _entitlement_limits(entitlement_state.entitlements),
         },
+        "billing": {
+            "currentPlan": entitlement_state.plan_id,
+            "planLabel": entitlement_state.plan_label,
+            "source": entitlement_state.source,
+        },
         "workspaceTraits": workspace_traits,
         "runtime": {
             "deploymentMode": _normalized_deployment_mode(runtime_targets.get("deployment_mode")),
@@ -196,8 +214,10 @@ def _build_workspace_bootstrap_payload(
             ],
         },
         "shellHints": {
-            "defaultRoute": default_route,
-            "preferredProfile": preferred_profile,
+            "defaultRoute": shell_hints["defaultRoute"],
+            "preferredProfile": shell_hints["preferredProfile"],
+            "setupCompleted": shell_hints["setupCompleted"],
+            "requiresOnboarding": shell_hints["requiresOnboarding"],
         },
     }
 
@@ -247,7 +267,7 @@ def _workspace_traits(
         or (
             "workstation"
             if operating_mode == "document_workstation"
-            else "dashboard"
+            else "admin"
             if operating_mode == "operations"
             else "chat"
         )
@@ -273,11 +293,68 @@ def _preferred_shell_profile(*, role: str, traits: Dict[str, Any]) -> str:
 
 def _default_route(*, workspace_id: str, traits: Dict[str, Any]) -> str:
     default_surface = str(traits.get("defaultSurface") or "chat").strip().lower()
-    if default_surface == "dashboard":
-        return f"/w/{workspace_id}/dashboard"
+    if default_surface in {"dashboard", "admin"}:
+        return f"/w/{workspace_id}/admin"
     if default_surface == "workstation":
         return f"/w/{workspace_id}/workstation"
     return f"/w/{workspace_id}/chat"
+
+
+def _extract_workspace_id_from_route(route: Any) -> str:
+    token = str(route or "").strip()
+    if not token.startswith("/w/"):
+        return ""
+    suffix = token[3:]
+    return suffix.split("/", 1)[0].strip()
+
+
+def _normalize_shell_default_route(workspace_id: str, route: Any) -> str:
+    token = str(route or "").strip()
+    if not token or not token.startswith("/") or token.startswith("//"):
+        return ""
+    route_workspace_id = _extract_workspace_id_from_route(token)
+    if token.startswith("/w/") and not route_workspace_id:
+        return ""
+    if route_workspace_id and route_workspace_id != str(workspace_id or "").strip():
+        return ""
+    normalized = token if route_workspace_id else f"/w/{workspace_id}{token}"
+    if normalized == f"/w/{workspace_id}/dashboard":
+        return f"/w/{workspace_id}/admin"
+    if normalized.endswith("/dashboard") and _extract_workspace_id_from_route(normalized) == str(workspace_id or "").strip():
+        return normalized[:-10] + "/admin"
+    return normalized
+
+
+def _shell_hints(
+    *,
+    workspace_id: str,
+    role: str,
+    workspace: Optional[Dict[str, Any]],
+    traits: Dict[str, Any],
+) -> Dict[str, Any]:
+    metadata = _coerce_dict(_coerce_dict(workspace).get("metadata"))
+    shell_meta = _coerce_dict(metadata.get("shell"))
+    preferred_profile = (
+        str(shell_meta.get("preferredProfile") or "").strip()
+        or _preferred_shell_profile(role=role, traits=traits)
+    )
+    default_route = (
+        _normalize_shell_default_route(workspace_id, shell_meta.get("defaultRoute"))
+        or _default_route(workspace_id=workspace_id, traits=traits)
+    )
+    explicit_preferred_profile = str(shell_meta.get("preferredProfile") or "").strip()
+    workspace_name = str(_coerce_dict(workspace).get("name") or "").strip()
+    setup_completed = (
+        _coerce_bool(shell_meta.get("setupCompleted"), default=False)
+        and bool(workspace_name)
+        and bool(explicit_preferred_profile)
+    )
+    return {
+        "defaultRoute": default_route,
+        "preferredProfile": preferred_profile,
+        "setupCompleted": bool(setup_completed),
+        "requiresOnboarding": not bool(setup_completed),
+    }
 
 
 def _membership_permissions(*, role: str, capabilities: Dict[str, Any], traits: Dict[str, Any]) -> List[str]:
@@ -394,8 +471,8 @@ async def build_workspace_bootstrap(
     )
     identity_versions = _coerce_dict((current_user or {}).get("identity_versions"))
     membership_version = (
-        f"{int(identity_versions.get('membership_version') or 1)}"
-        f":{int((membership_row or {}).get('updated_at') or 0)}"
+        f"{_version_component(identity_versions.get('membership_version') or 1)}"
+        f":{_version_component((membership_row or {}).get('updated_at'))}"
     )
     cache_key = _stable_json(
         {

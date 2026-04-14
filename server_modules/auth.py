@@ -15,9 +15,10 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 from urllib.parse import urlparse
 
-from fastapi import Header, HTTPException, Request
+from fastapi import Header, HTTPException, Request, Response
 from server_modules import control_plane_repository
 from server_modules import entitlements_service
+from server_modules import quota_policy_service, quota_response_service
 from server_modules import security_audit_service
 from server_modules.direct_tool_config_service import run_async_tool_call
 from server_modules.jwt_secret import resolve_jwt_secret
@@ -44,6 +45,12 @@ AUTH_SESSION_CHANNELS = {"web", "desktop", "mobile", "local_runtime_companion"}
 AUTH_SESSION_STATUSES = {"active", "revoked", "expired"}
 DEVICE_LINK_STATUSES = {"active", "pending", "unlinked", "revoked"}
 DEVICE_TRUST_STATES = {"unbound", "pending", "verified", "limited", "revoked"}
+AUTH_ACCESS_COOKIE_NAME = str(os.getenv("EMPYRALIS_AUTH_ACCESS_COOKIE", "empyralis_access_token")).strip() or "empyralis_access_token"
+AUTH_REFRESH_COOKIE_NAME = str(os.getenv("EMPYRALIS_AUTH_REFRESH_COOKIE", "empyralis_refresh_token")).strip() or "empyralis_refresh_token"
+AUTH_CSRF_COOKIE_NAME = str(os.getenv("EMPYRALIS_AUTH_CSRF_COOKIE", "empyralis_csrf_token")).strip() or "empyralis_csrf_token"
+AUTH_CSRF_HEADER_NAME = "x-csrf-token"
+AUTH_COOKIE_PATH = "/"
+BROWSER_AUTH_SESSION_CHANNELS = {"web", "desktop"}
 
 
 def _control_plane_call(coro: Any) -> Any:
@@ -58,6 +65,124 @@ def public_registration_enabled() -> bool:
     if raw is None:
         return bool(ORION_PUBLIC_REGISTRATION_ENABLED)
     return str(raw).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def browser_auth_session_channel(channel: Any) -> bool:
+    return _normalize_auth_session_channel(channel, default="web") in BROWSER_AUTH_SESSION_CHANNELS
+
+
+def _request_scheme(request: Request) -> str:
+    forwarded_proto = str(request.headers.get("x-forwarded-proto") or "").strip().lower()
+    if forwarded_proto:
+        return forwarded_proto.split(",", 1)[0].strip() or "http"
+    try:
+        return str(request.url.scheme or "").strip().lower() or "http"
+    except Exception:
+        return "http"
+
+
+def _cookie_secure(request: Request) -> bool:
+    return _request_scheme(request) == "https"
+
+
+def _cookie_domain() -> Optional[str]:
+    raw_domain = str(os.getenv("EMPYRALIS_AUTH_COOKIE_DOMAIN") or "").strip()
+    return raw_domain or None
+
+
+def issue_csrf_token() -> str:
+    return secrets.token_urlsafe(32)
+
+
+def auth_cookie_access_token(request: Request) -> Optional[str]:
+    token = str(request.cookies.get(AUTH_ACCESS_COOKIE_NAME) or "").strip()
+    return token or None
+
+
+def auth_cookie_refresh_token(request: Request) -> Optional[str]:
+    token = str(request.cookies.get(AUTH_REFRESH_COOKIE_NAME) or "").strip()
+    return token or None
+
+
+def set_auth_cookies(
+    response: Response,
+    payload: dict[str, Any],
+    *,
+    request: Request,
+    channel: Any = "web",
+) -> None:
+    if not browser_auth_session_channel(channel):
+        return
+    access_token = str(payload.get("token") or "").strip()
+    if not access_token:
+        return
+    token_payload = _decode_token_payload(access_token)
+    now_ts = int(time.time())
+    access_max_age = max(int(token_payload.get("exp") or now_ts) - now_ts, 60)
+
+    refresh_payload = payload.get("session_recovery") if isinstance(payload.get("session_recovery"), dict) else {}
+    refresh_token = str(refresh_payload.get("refresh_token") or "").strip()
+    refresh_max_age = max(int(refresh_payload.get("refresh_expires_at") or now_ts) - now_ts, 60) if refresh_token else None
+    csrf_token = issue_csrf_token()
+    secure = _cookie_secure(request)
+    domain = _cookie_domain()
+
+    response.set_cookie(
+        key=AUTH_ACCESS_COOKIE_NAME,
+        value=access_token,
+        max_age=access_max_age,
+        httponly=True,
+        secure=secure,
+        samesite="lax",
+        path=AUTH_COOKIE_PATH,
+        domain=domain,
+    )
+    if refresh_token and refresh_max_age is not None:
+        response.set_cookie(
+            key=AUTH_REFRESH_COOKIE_NAME,
+            value=refresh_token,
+            max_age=refresh_max_age,
+            httponly=True,
+            secure=secure,
+            samesite="lax",
+            path=AUTH_COOKIE_PATH,
+            domain=domain,
+        )
+    response.set_cookie(
+        key=AUTH_CSRF_COOKIE_NAME,
+        value=csrf_token,
+        max_age=refresh_max_age or access_max_age,
+        httponly=False,
+        secure=secure,
+        samesite="lax",
+        path=AUTH_COOKIE_PATH,
+        domain=domain,
+    )
+
+
+def clear_auth_cookies(response: Response, *, request: Request) -> None:
+    secure = _cookie_secure(request)
+    domain = _cookie_domain()
+    for cookie_name in (AUTH_ACCESS_COOKIE_NAME, AUTH_REFRESH_COOKIE_NAME, AUTH_CSRF_COOKIE_NAME):
+        response.delete_cookie(
+            key=cookie_name,
+            path=AUTH_COOKIE_PATH,
+            domain=domain,
+            secure=secure,
+            samesite="lax",
+        )
+
+
+def validate_csrf(request: Request) -> bool:
+    if request.method.upper() in {"GET", "HEAD", "OPTIONS"}:
+        return True
+    if not (auth_cookie_access_token(request) or auth_cookie_refresh_token(request)):
+        return True
+    csrf_cookie = str(request.cookies.get(AUTH_CSRF_COOKIE_NAME) or "").strip()
+    csrf_header = str(request.headers.get(AUTH_CSRF_HEADER_NAME) or "").strip()
+    if not csrf_cookie or not csrf_header or not secrets.compare_digest(csrf_cookie, csrf_header):
+        raise HTTPException(status_code=403, detail="CSRF validation failed.")
+    return True
 
 
 def auth_provider_options() -> dict[str, dict[str, bool]]:
@@ -299,7 +424,9 @@ def _issue_authenticated_user_payload(
     token_payload = _decode_token_payload(token)
     auth_session = get_auth_session(str(token_payload.get("sid") or "").strip())
     session_recovery = None
-    if normalized_channel == "mobile" and auth_session:
+    if auth_session and (
+        normalized_channel == "mobile" or browser_auth_session_channel(normalized_channel)
+    ):
         session_recovery = issue_auth_session_refresh_token(
             str(auth_session.get("session_id") or "").strip(),
             user_id=user_id,
@@ -519,8 +646,6 @@ def _normalize_workspace_trusted_machine_claim_map(value: Any) -> dict[str, list
 def current_user_role(current_user: Optional[Dict[str, Any]], *, default: str = "member") -> str:
     if not isinstance(current_user, dict):
         return normalize_rbac_role(default)
-    if bool(current_user.get("is_admin")):
-        return "owner"
     auth_type = str(current_user.get("auth_type") or "").strip().lower()
     if auth_type == "api_key":
         return "owner"
@@ -529,6 +654,33 @@ def current_user_role(current_user: Optional[Dict[str, Any]], *, default: str = 
 
 def current_user_is_owner(current_user: Optional[Dict[str, Any]]) -> bool:
     return current_user_role(current_user, default="viewer") == "owner"
+
+
+def _has_auth_admin_identity(user_id: Optional[str], email: Optional[str]) -> bool:
+    clean_user_id = str(user_id or "").strip()
+    clean_email = str(email or "").strip().lower()
+    return (
+        bool(clean_user_id and clean_user_id in ORION_ADMIN_USER_IDS)
+        or bool(clean_email and clean_email in ORION_ADMIN_EMAILS)
+    )
+
+
+def current_user_has_auth_admin_access(current_user: Optional[Dict[str, Any]]) -> bool:
+    if not isinstance(current_user, dict):
+        return False
+    auth_type = str(current_user.get("auth_type") or "").strip().lower()
+    if auth_type == "api_key":
+        return True
+    if auth_type == "local_dev":
+        return current_user_role(current_user, default="viewer") == "owner"
+    if auth_type == "bearer":
+        if bool(current_user.get("auth_admin")):
+            return True
+        return _has_auth_admin_identity(
+            str(current_user.get("user_id") or "").strip() or None,
+            str(current_user.get("email") or "").strip().lower() or None,
+        )
+    return False
 
 
 def enforce_minimum_role(current_user: Optional[Dict[str, Any]], minimum_role: str) -> Dict[str, Any]:
@@ -543,17 +695,13 @@ def enforce_minimum_role(current_user: Optional[Dict[str, Any]], minimum_role: s
         )
     enriched = dict(current_user)
     enriched["role"] = actual_role
-    enriched["is_admin"] = actual_role == "owner"
+    enriched["is_admin"] = bool(current_user.get("is_admin"))
+    enriched["auth_admin"] = bool(current_user.get("auth_admin"))
     return enriched
 
 
 def _resolved_bearer_role(user_id: str, email: Optional[str], claimed_role: Any) -> str:
-    role = normalize_rbac_role(claimed_role, default="member")
-    if user_id and user_id in ORION_ADMIN_USER_IDS:
-        return "owner"
-    if email and email in ORION_ADMIN_EMAILS:
-        return "owner"
-    return role
+    return normalize_rbac_role(claimed_role, default="member")
 
 
 def _orion_api_key() -> str:
@@ -819,6 +967,32 @@ def _connect_auth_db() -> sqlite3.Connection:
         )
         """
     )
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS channel_user_acquisition_touches (
+            id TEXT PRIMARY KEY,
+            tenant_id TEXT NOT NULL,
+            workspace_id TEXT NOT NULL,
+            deployed_agent_id TEXT NOT NULL,
+            channel_key TEXT NOT NULL,
+            endpoint_key TEXT NOT NULL DEFAULT '',
+            external_user_id TEXT NOT NULL,
+            source TEXT NOT NULL DEFAULT '',
+            campaign_token TEXT NOT NULL DEFAULT '',
+            start_count INTEGER NOT NULL DEFAULT 1,
+            metadata_json TEXT NOT NULL DEFAULT '{}',
+            converted_user_id TEXT,
+            converted_email TEXT,
+            converted_auth_flow TEXT,
+            converted_at INTEGER,
+            first_started_at INTEGER NOT NULL,
+            last_started_at INTEGER NOT NULL,
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL,
+            UNIQUE(tenant_id, workspace_id, deployed_agent_id, channel_key, external_user_id)
+        )
+        """
+    )
     existing_columns = {
         str(row[1]).strip().lower()
         for row in connection.execute("PRAGMA table_info(users)").fetchall()
@@ -911,6 +1085,12 @@ def _connect_auth_db() -> sqlite3.Connection:
     )
     connection.execute(
         "CREATE INDEX IF NOT EXISTS idx_auth_refresh_tokens_user ON auth_session_refresh_tokens(user_id, expires_at DESC)"
+    )
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS idx_channel_user_acquisition_touches_deployment ON channel_user_acquisition_touches(tenant_id, workspace_id, deployed_agent_id, last_started_at DESC)"
+    )
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS idx_channel_user_acquisition_touches_conversion ON channel_user_acquisition_touches(tenant_id, workspace_id, converted_user_id, converted_at DESC)"
     )
     connection.commit()
     return connection
@@ -1897,6 +2077,43 @@ def remove_workspace_membership(user_id: str, workspace_id: str) -> dict[str, An
             reason=f"Workspace membership for '{clean_workspace_id}' was removed.",
         )
     return {"user_id": clean_user_id, "workspace_id": clean_workspace_id, "removed": removed}
+
+
+def accept_workspace_invites_for_user(user_id: str, email: str) -> list[dict[str, Any]]:
+    clean_user_id = str(user_id or "").strip()
+    email_token = str(email or "").strip().lower()
+    if not clean_user_id or not email_token:
+        return []
+    invites = _control_plane_call(
+        control_plane_repository.list_pending_workspace_invites_for_email(email_token)
+    )
+    if not isinstance(invites, list):
+        return []
+    accepted: list[dict[str, Any]] = []
+    for invite in invites:
+        if not isinstance(invite, dict):
+            continue
+        workspace_id = _normalize_workspace_token(invite.get("workspace_id"), default="")
+        if not workspace_id:
+            continue
+        role = normalize_rbac_role(invite.get("role"), default="member")
+        upsert_workspace_membership(clean_user_id, workspace_id, role)
+        invite_id = str(invite.get("id") or "").strip()
+        if invite_id:
+            _control_plane_call(
+                control_plane_repository.accept_workspace_invite(
+                    invite_id=invite_id,
+                    accepted_by_user_id=clean_user_id,
+                )
+            )
+        accepted.append(
+            {
+                "invite_id": invite_id or None,
+                "workspace_id": workspace_id,
+                "role": role,
+            }
+        )
+    return accepted
 
 
 def _write_workspace_policy(
@@ -3377,6 +3594,7 @@ def _build_local_dev_user() -> Dict[str, Any]:
         "tenant_access": tenant_access_map({"workspace_access": workspace_access}),
         "role": role,
         "is_admin": role == "owner",
+        "auth_admin": role == "owner",
         "local_dev": True,
     }
 
@@ -3415,16 +3633,18 @@ def _find_user_by_id(user_id: str) -> Optional[Dict[str, Any]]:
 
 
 def _public_user_payload(user: Dict[str, Any], *, role: Optional[str] = None) -> Dict[str, Any]:
+    user_id = str(user.get("id") or "").strip()
+    email = str(user.get("email") or "").strip().lower()
     payload = {
-        "id": str(user.get("id") or "").strip(),
-        "email": str(user.get("email") or "").strip().lower(),
+        "id": user_id,
+        "email": email,
         "name": str(user.get("name") or "").strip() or None,
         "avatar_url": str(user.get("avatar_url") or "").strip() or None,
     }
     if role is not None:
         normalized_role = normalize_rbac_role(role)
         payload["role"] = normalized_role
-        payload["is_admin"] = normalized_role == "owner"
+        payload["is_admin"] = _has_auth_admin_identity(user_id or None, email or None)
     return payload
 
 
@@ -3965,21 +4185,31 @@ def enforce_workspace_access(
     return token
 
 
-def _enforce_window_limit(*, buckets: Dict[str, list[float]], lock: threading.Lock, key: str, limit: int) -> None:
-    now = time.time()
-    with lock:
-        bucket = buckets.get(key, [])
-        cutoff = now - 60.0
-        bucket = [item for item in bucket if item >= cutoff]
-        if len(bucket) >= limit:
-            retry_after = max(1, int(round(bucket[0] + 60.0 - now)))
-            raise HTTPException(
-                status_code=429,
-                detail="Rate limit exceeded.",
-                headers={"Retry-After": str(retry_after)},
-            )
-        bucket.append(now)
-        buckets[key] = bucket
+def _enforce_window_limit(
+    *,
+    request: Request,
+    buckets: Dict[str, list[float]],
+    lock: threading.Lock,
+    key: str,
+    limit: int,
+    profile_name: str,
+    actor_id: Optional[str] = None,
+) -> None:
+    decision = quota_policy_service.evaluate_request_window_quota(
+        profile_name=profile_name,
+        subject=quota_policy_service.QuotaSubject(
+            surface_kind=quota_policy_service.get_quota_policy_profile(profile_name).surface_kind,
+            request_path=_request_path(request),
+            client_ip=_client_ip(request),
+            actor_id=str(actor_id or "").strip() or None,
+        ),
+        buckets=buckets,
+        lock=lock,
+        key=key,
+        limit=limit,
+    )
+    if not decision.allowed:
+        raise quota_response_service.http_exception_from_quota_decision(decision)
 
 
 def _client_ip(request: Request) -> str:
@@ -3991,21 +4221,42 @@ def _client_ip(request: Request) -> str:
     return "unknown"
 
 
+def _request_path(request: Request) -> str:
+    try:
+        path = str(request.url.path or "").strip()
+        if path:
+            return path
+    except Exception:
+        pass
+    try:
+        scope = getattr(request, "scope", None) or {}
+        path = str(scope.get("path") or "").strip()
+        if path:
+            return path
+    except Exception:
+        pass
+    return "/"
+
+
 def limit_login_requests(request: Request) -> None:
     _enforce_window_limit(
+        request=request,
         buckets=LOGIN_RATE_LIMIT_BUCKETS,
         lock=LOGIN_RATE_LIMIT_LOCK,
         key=_client_ip(request),
         limit=5,
+        profile_name=quota_policy_service.AUTH_LOGIN_PROFILE.name,
     )
 
 
 def limit_public_requests(request: Request) -> None:
     _enforce_window_limit(
+        request=request,
         buckets=USER_RATE_LIMIT_BUCKETS,
         lock=USER_RATE_LIMIT_LOCK,
         key=f"public:{_client_ip(request)}",
         limit=60,
+        profile_name=quota_policy_service.AUTH_PUBLIC_REGISTRATION_PROFILE.name,
     )
 
 
@@ -4014,6 +4265,7 @@ def register_user(
     password: str,
     *,
     name: Optional[str] = None,
+    acquisition_token: Optional[str] = None,
     channel: Any = "web",
     device_id: Optional[str] = None,
     device_name: Optional[str] = None,
@@ -4101,15 +4353,33 @@ def register_user(
     user = _find_user_by_id(user_id)
     if user is None:
         raise HTTPException(status_code=500, detail="Registered user was not persisted.")
+    accept_workspace_invites_for_user(
+        user_id,
+        str(user.get("email") or "").strip().lower() or email_token,
+    )
+    membership_rows = _list_workspace_memberships(user_id)
+    workspace_ids = [
+        _normalize_workspace_token(item.get("workspace_id"))
+        for item in membership_rows
+        if isinstance(item, dict) and str(item.get("workspace_id") or "").strip()
+    ]
+    workspace_roles = {
+        _normalize_workspace_token(item.get("workspace_id")): normalize_rbac_role(item.get("role"), default="owner")
+        for item in membership_rows
+        if isinstance(item, dict) and str(item.get("workspace_id") or "").strip()
+    }
     workspace_access = _effective_workspace_access(
         user_id=user_id,
         email=str(user.get("email") or "").strip().lower() or email_token,
         role="owner",
         auth_type="bearer",
-        is_admin=False,
+        is_admin=_has_auth_admin_identity(
+            user_id,
+            str(user.get("email") or "").strip().lower() or email_token,
+        ),
         workspace_ids=workspace_ids,
     )
-    return _issue_authenticated_user_payload(
+    payload = _issue_authenticated_user_payload(
         user,
         role="owner",
         workspace_access=workspace_access,
@@ -4121,12 +4391,26 @@ def register_user(
         auth_flow="register",
         session_ttl_seconds=session_ttl_seconds,
     )
+    if str(acquisition_token or "").strip():
+        try:
+            from server_modules import channel_user_acquisition_service
+
+            payload["channel_attribution"] = channel_user_acquisition_service.get_channel_user_acquisition_service().bind_attribution_token_to_user(
+                attribution_token=str(acquisition_token or "").strip(),
+                user_id=str(user.get("id") or "").strip() or user_id,
+                email=str(user.get("email") or "").strip().lower() or email_token,
+                auth_flow="register",
+            )
+        except Exception:
+            pass
+    return payload
 
 
 def login_user(
     email: str,
     password: str,
     *,
+    acquisition_token: Optional[str] = None,
     channel: Any = "web",
     device_id: Optional[str] = None,
     device_name: Optional[str] = None,
@@ -4152,6 +4436,10 @@ def login_user(
     user_id = str(user.get("id") or "").strip()
     if not user_id:
         raise HTTPException(status_code=401, detail="Invalid user record.")
+    accept_workspace_invites_for_user(
+        user_id,
+        str(user.get("email") or "").strip().lower(),
+    )
     membership_rows = _list_workspace_memberships(user_id)
     workspace_ids = [
         _normalize_workspace_token(item.get("workspace_id"))
@@ -4170,10 +4458,13 @@ def login_user(
         email=str(user.get("email") or "").strip().lower() or None,
         role=effective_role,
         auth_type="bearer",
-        is_admin=effective_role == "owner",
+        is_admin=_has_auth_admin_identity(
+            user_id,
+            str(user.get("email") or "").strip().lower() or None,
+        ),
         workspace_ids=workspace_ids,
     )
-    return _issue_authenticated_user_payload(
+    payload = _issue_authenticated_user_payload(
         user,
         role=effective_role,
         workspace_access=workspace_access,
@@ -4186,6 +4477,19 @@ def login_user(
         session_ttl_seconds=session_ttl_seconds,
         enterprise_security=load_user_enterprise_security(user_id),
     )
+    if str(acquisition_token or "").strip():
+        try:
+            from server_modules import channel_user_acquisition_service
+
+            payload["channel_attribution"] = channel_user_acquisition_service.get_channel_user_acquisition_service().bind_attribution_token_to_user(
+                attribution_token=str(acquisition_token or "").strip(),
+                user_id=user_id,
+                email=str(user.get("email") or "").strip().lower() or None,
+                auth_flow="login",
+            )
+        except Exception:
+            pass
+    return payload
 
 
 def refresh_authenticated_session(
@@ -4261,7 +4565,10 @@ def refresh_authenticated_session(
         email=str(user.get("email") or "").strip().lower() or None,
         role=effective_role,
         auth_type="bearer",
-        is_admin=effective_role == "owner",
+        is_admin=_has_auth_admin_identity(
+            user_id,
+            str(user.get("email") or "").strip().lower() or None,
+        ),
         workspace_ids=[
             _normalize_workspace_token(item.get("workspace_id"))
             for item in membership_rows
@@ -4366,6 +4673,22 @@ def revoke_authenticated_user_device(current_user: Optional[Dict[str, Any]], dev
     }
 
 
+def logout_authenticated_session(current_user: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    user_id = _current_bearer_user_id(current_user)
+    session_id = str(
+        ((current_user or {}).get("auth_session") or {}).get("session_id")
+        or (current_user or {}).get("session_id")
+        or ""
+    ).strip()
+    revoked_session = revoke_auth_session(session_id, reason="User logged out.") if session_id else {}
+    return {
+        "ok": True,
+        "user_id": user_id,
+        "session_id": session_id or None,
+        "revoked": bool(revoked_session),
+    }
+
+
 def _current_bearer_user_id(current_user: Optional[Dict[str, Any]]) -> str:
     if not isinstance(current_user, dict):
         raise HTTPException(status_code=401, detail="Authentication required.")
@@ -4377,10 +4700,27 @@ def _current_bearer_user_id(current_user: Optional[Dict[str, Any]]) -> str:
     return user_id
 
 
-def get_authenticated_user_profile(current_user: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+def get_authenticated_user_record(current_user: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     user = _find_user_by_id(_current_bearer_user_id(current_user))
     if user is None:
         raise HTTPException(status_code=404, detail="User not found.")
+    return user
+
+
+def list_authenticated_workspace_memberships(current_user: Optional[Dict[str, Any]]) -> list[dict[str, Any]]:
+    user_id = _current_bearer_user_id(current_user)
+    return _list_workspace_memberships(user_id)
+
+
+def get_authenticated_identity_versions(current_user: Optional[Dict[str, Any]]) -> dict[str, Any]:
+    if isinstance(current_user, dict) and isinstance(current_user.get("identity_versions"), dict):
+        return dict(current_user.get("identity_versions") or {})
+    user_id = _current_bearer_user_id(current_user)
+    return load_user_identity_versions(user_id)
+
+
+def get_authenticated_user_profile(current_user: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    user = get_authenticated_user_record(current_user)
     role = current_user_role(current_user)
     resolved_workspace_access = workspace_access_map(current_user)
     workspace_identity = _workspace_identity_projection(
@@ -4403,7 +4743,7 @@ def get_authenticated_user_profile(current_user: Optional[Dict[str, Any]]) -> Di
         enterprise_security=enterprise_status_for_user(current_user),
         auth_session=auth_session,
         device_link=dict(current_user.get("device_link") or {}) or None,
-        identity_versions=dict(current_user.get("identity_versions") or {}) or None,
+        identity_versions=get_authenticated_identity_versions(current_user) or None,
         session_recovery=session_recovery,
     )
 
@@ -4440,27 +4780,37 @@ def get_current_user(
             raise HTTPException(status_code=503, detail="Auth cannot be disabled in production.")
         user = _build_local_dev_user()
         _enforce_window_limit(
+            request=request,
             buckets=USER_RATE_LIMIT_BUCKETS,
             lock=USER_RATE_LIMIT_LOCK,
             key=f"user:{str(user.get('user_id') or 'local-dev').strip() or 'local-dev'}",
             limit=60,
+            profile_name=quota_policy_service.AUTHENTICATED_API_PROFILE.name,
+            actor_id=str(user.get("user_id") or "").strip() or None,
         )
         return user
 
     auth_header = str(authorization or "").strip()
+    bearer_token = ""
     if auth_header.lower().startswith("bearer "):
-        payload = _decode_token_payload(auth_header[7:].strip())
+        bearer_token = auth_header[7:].strip()
+    else:
+        bearer_token = str(auth_cookie_access_token(request) or "").strip()
+
+    if bearer_token:
+        payload = _decode_token_payload(bearer_token)
         context = _validated_bearer_context(payload, touch_session=True)
         user_id = str(context.get("user_id") or "").strip()
         email = str(context.get("email") or "").strip().lower() or None
         workspace_ids = list(context.get("workspace_ids") or [])
         role = _resolved_bearer_role(user_id, email, payload.get("role"))
+        auth_admin = _has_auth_admin_identity(user_id, email)
         workspace_access = _effective_workspace_access(
             user_id=user_id,
             email=email,
             role=role,
             auth_type="bearer",
-            is_admin=role == "owner",
+            is_admin=auth_admin,
             workspace_ids=workspace_ids,
             workspace_roles_claim=payload.get("workspace_roles"),
             workspace_capabilities_claim=payload.get("workspace_capabilities"),
@@ -4468,10 +4818,13 @@ def get_current_user(
             workspace_trusted_machines_claim=payload.get("workspace_trusted_machines"),
         )
         _enforce_window_limit(
+            request=request,
             buckets=USER_RATE_LIMIT_BUCKETS,
             lock=USER_RATE_LIMIT_LOCK,
             key=f"user:{user_id}",
             limit=60,
+            profile_name=quota_policy_service.AUTHENTICATED_API_PROFILE.name,
+            actor_id=user_id,
         )
         return {
             "user_id": user_id,
@@ -4487,7 +4840,8 @@ def get_current_user(
             "workspace_access": workspace_access,
             "tenant_access": tenant_access_map({"workspace_access": workspace_access}),
             "role": role,
-            "is_admin": role == "owner",
+            "is_admin": auth_admin,
+            "auth_admin": auth_admin,
             "identity_versions": context.get("identity_versions") or {},
             "auth_session": context.get("auth_session"),
             "device_link": context.get("device_link"),
@@ -4502,12 +4856,22 @@ def get_current_user(
     if expected_api_key and provided_api_key and secrets.compare_digest(provided_api_key, expected_api_key):
         if ORION_SERVICE_RATE_LIMIT_PER_MINUTE > 0:
             _enforce_window_limit(
+                request=request,
                 buckets=USER_RATE_LIMIT_BUCKETS,
                 lock=USER_RATE_LIMIT_LOCK,
                 key="user:service",
                 limit=ORION_SERVICE_RATE_LIMIT_PER_MINUTE,
+                profile_name=quota_policy_service.SERVICE_API_PROFILE.name,
+                actor_id="service",
             )
-        return {"user_id": "service", "auth_type": "api_key", "email": None, "role": "owner", "is_admin": True}
+        return {
+            "user_id": "service",
+            "auth_type": "api_key",
+            "email": None,
+            "role": "owner",
+            "is_admin": True,
+            "auth_admin": True,
+        }
 
     raise HTTPException(status_code=401, detail="Authentication required.")
 
@@ -4528,9 +4892,14 @@ def require_admin_access(
         authorization=authorization,
         x_api_key=x_api_key,
     )
-    user = enforce_minimum_role(user, "owner")
-    user["is_admin"] = True
-    return user
+    if not current_user_has_auth_admin_access(user):
+        raise HTTPException(status_code=403, detail="Admin role required.")
+    enriched = dict(user)
+    enriched["is_admin"] = True
+    enriched["auth_admin"] = True
+    enriched.setdefault("role", "owner")
+    enriched.setdefault("tenant_role", enriched.get("role") or "owner")
+    return enriched
 
 
 def require_member_access(

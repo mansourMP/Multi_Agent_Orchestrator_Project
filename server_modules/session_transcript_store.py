@@ -1,16 +1,20 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from server_modules.memory_service import save_daily_log
+from server_modules import failure_policy_service, memory_summary_service
+from server_modules.error_contracts import STORAGE_READ_FAILURE, STORAGE_WRITE_FAILURE, SEVERITY_WARNING
 
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 _TRANSCRIPTS_ROOT = _REPO_ROOT / ".orion-stack" / "transcripts"
+logger = logging.getLogger(__name__)
 
 
 def _normalize_workspace_token(workspace_id: str) -> str:
@@ -49,29 +53,24 @@ def build_transcript_summary(
     user_message: str,
     assistant_reply: str,
 ) -> str:
-    notable_user_points: List[str] = []
-    for item in messages:
-        if not isinstance(item, dict):
-            continue
-        if str(item.get("role") or "").strip().lower() != "user":
-            continue
-        content = _compact_line(item.get("content"), limit=220)
-        if content:
-            notable_user_points.append(content)
-        if len(notable_user_points) >= 2:
-            break
-    primary_user_line = _compact_line(user_message, limit=280)
-    if not primary_user_line and notable_user_points:
-        primary_user_line = notable_user_points[0]
-    assistant_line = _compact_line(assistant_reply, limit=420)
-    lines = ["Transcript summary:"]
-    if primary_user_line:
-        lines.append(f"- Latest user request: {primary_user_line}")
-    if notable_user_points:
-        lines.append(f"- Earlier context: {' | '.join(notable_user_points[:2])}")
-    if assistant_line:
-        lines.append(f"- Outcome: {assistant_line}")
-    return "\n".join(lines).strip()
+    return memory_summary_service.build_transcript_summary(
+        messages=messages,
+        user_message=user_message,
+        assistant_reply=assistant_reply,
+    )
+
+
+def build_deployed_agent_memory_summary(
+    *,
+    messages: List[Dict[str, Any]],
+    prior_summary: Optional[str] = None,
+    max_chars: int = 2200,
+) -> str:
+    return memory_summary_service.build_deployed_agent_memory_summary(
+        messages=messages,
+        prior_summary=prior_summary,
+        max_chars=max_chars,
+    )
 
 
 def _latest_message_by_role(messages: List[Dict[str, Any]], role: str) -> str:
@@ -100,14 +99,46 @@ def list_session_transcript_summaries(
     for transcript_path in transcript_files:
         try:
             lines = transcript_path.read_text(encoding="utf-8").splitlines()
-        except Exception:
+        except Exception as exc:
+            failure_policy_service.log_degraded_operation(
+                logger=logger,
+                code="transcript_read_failed",
+                message="Failed to read transcript file.",
+                error_class=STORAGE_READ_FAILURE,
+                degraded_component="session_transcript_store",
+                severity=SEVERITY_WARNING,
+                retryable=False,
+                status_code=500,
+                metadata={
+                    "workspace_id": workspace_id,
+                    "agent_install_id": agent_install_id,
+                    "path": str(transcript_path),
+                },
+                exc=exc,
+            )
             continue
         for raw_line in reversed(lines):
             if len(out) >= safe_limit:
                 return out
             try:
                 payload = json.loads(raw_line)
-            except Exception:
+            except Exception as exc:
+                failure_policy_service.log_degraded_operation(
+                    logger=logger,
+                    code="transcript_parse_failed",
+                    message="Failed to parse transcript record.",
+                    error_class=STORAGE_READ_FAILURE,
+                    degraded_component="session_transcript_store",
+                    severity=SEVERITY_WARNING,
+                    retryable=False,
+                    status_code=500,
+                    metadata={
+                        "workspace_id": workspace_id,
+                        "agent_install_id": agent_install_id,
+                        "path": str(transcript_path),
+                    },
+                    exc=exc,
+                )
                 continue
             messages = [dict(item) for item in list(payload.get("messages") or []) if isinstance(item, dict)]
             summary = build_transcript_summary(
@@ -160,12 +191,32 @@ def save_session_transcript(
         user_message=user_message,
         assistant_reply=assistant_reply,
     )
+    degraded_operations: List[Dict[str, Any]] = []
     if summary:
         try:
             save_daily_log(workspace_id, summary, agent_install_id=agent_install_id)
-        except Exception:
-            pass
+        except Exception as exc:
+            degraded_operations.append(
+                failure_policy_service.log_degraded_operation(
+                    logger=logger,
+                    code="daily_log_persist_failed",
+                    message="Failed to persist transcript-derived daily log summary.",
+                    error_class=STORAGE_WRITE_FAILURE,
+                    degraded_component="session_transcript_daily_log",
+                    severity=SEVERITY_WARNING,
+                    retryable=False,
+                    status_code=500,
+                    metadata={
+                        "workspace_id": workspace_id,
+                        "agent_install_id": agent_install_id,
+                        "thread_id": thread_id,
+                        "path": str(transcript_path),
+                    },
+                    exc=exc,
+                )
+            )
     return {
         "path": str(transcript_path),
         "summary": summary,
+        "degraded_operations": degraded_operations,
     }

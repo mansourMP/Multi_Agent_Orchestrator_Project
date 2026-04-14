@@ -1,14 +1,17 @@
 from __future__ import annotations
 
 import math
-import re
 from typing import Any, Dict, List
 
+from server_modules.conversation_memory_policy import DIRECT_CHAT_PROFILE, get_memory_policy_profile
+from server_modules.memory_summary_service import summarize_messages as summarize_messages_with_policy
 
-DEFAULT_MAX_TOKENS = 8000
-DEFAULT_PRESERVE_LAST_MESSAGES = 10
+
+_DIRECT_CHAT_POLICY = get_memory_policy_profile(DIRECT_CHAT_PROFILE)
+DEFAULT_MAX_TOKENS = _DIRECT_CHAT_POLICY.max_prompt_tokens
+DEFAULT_PRESERVE_LAST_MESSAGES = _DIRECT_CHAT_POLICY.preserve_last_messages
 SUMMARY_MESSAGE_ROLE = "assistant"
-SUMMARY_MAX_CHARS = 2200
+SUMMARY_MAX_CHARS = _DIRECT_CHAT_POLICY.max_summary_chars
 SUMMARY_LINE_MAX_CHARS = 240
 
 
@@ -30,25 +33,11 @@ def estimate_conversation_tokens(messages: List[Dict[str, Any]]) -> int:
 
 
 def summarize_messages(messages: List[Dict[str, Any]], *, max_chars: int = SUMMARY_MAX_CHARS) -> str:
-    if not isinstance(messages, list) or not messages:
-        return ""
-    lines: List[str] = []
-    for item in messages:
-        if not isinstance(item, dict):
-            continue
-        role = str(item.get("role") or "message").strip().lower()
-        content = re.sub(r"\s+", " ", str(item.get("content") or "").strip())
-        if not content:
-            continue
-        label = "User" if role == "user" else "Assistant" if role == "assistant" else role.title() or "Message"
-        snippet = content[:SUMMARY_LINE_MAX_CHARS].rstrip()
-        lines.append(f"- {label}: {snippet}")
-        if len("\n".join(lines)) >= max_chars:
-            break
-    if not lines:
-        return ""
-    summary = "Earlier conversation summary:\n" + "\n".join(lines)
-    return summary[:max_chars].rstrip()
+    return summarize_messages_with_policy(
+        messages,
+        max_chars=max_chars,
+        policy_profile=DIRECT_CHAT_PROFILE,
+    )
 
 
 def compact_conversation_history(

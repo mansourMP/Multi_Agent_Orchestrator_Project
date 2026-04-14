@@ -1,10 +1,12 @@
+import asyncio
 import queue
 import unittest
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 from fastapi import HTTPException
 
+from server_modules.agent_trace_service import TraceContext
 from server_modules import runtime_run_approval_service
 
 
@@ -119,6 +121,56 @@ class RuntimeRunApprovalServiceTests(unittest.TestCase):
         self.assertEqual(scheduled, ["run-1"])
         self.assertEqual(pending_updates[0]["status"], "decision_submitted")
         self.assertEqual(pending_updates[-1]["status"], "resolved")
+
+    def test_resolve_run_approval_emits_trace_resolution_event(self):
+        run = {
+            "run_id": "run-1",
+            "status": "waiting_for_input",
+            "logs": object(),
+            "input_queue": queue.Queue(),
+            "context": {"workspace_id": "ws-1", "tenant_id": "tenant-1", "metadata": {"trace_id": "trace-1"}},
+        }
+        trace_context = TraceContext(
+            trace_id="trace-1",
+            workspace_id="ws-1",
+            tenant_id="tenant-1",
+            thread_id="thread-1",
+            run_id="run-1",
+            root_agent_id="sage",
+        )
+
+        with patch("server_modules.runtime_run_approval_service.run_async_tool_call", side_effect=lambda coro: asyncio.run(coro)), patch(
+            "server_modules.runtime_run_approval_service.agent_trace_service.resume_trace",
+            new=AsyncMock(return_value=trace_context),
+        ), patch(
+            "server_modules.runtime_run_approval_service.agent_trace_service.emit_approval_resolved",
+            new=AsyncMock(return_value="evt-approval-resolved"),
+        ) as emit_resolved_mock:
+            payload = runtime_run_approval_service.resolve_run_approval(
+                "run-1",
+                "approval-1",
+                run=run,
+                payload=_Payload("approve", "ok"),
+                current_user={"user_id": "user-1"},
+                serialize_run_snapshot=lambda run_id, run: {"run_id": run_id},
+                enforce_run_owner_access=lambda current_user, snapshot: None,
+                get_pending_confirmation=lambda run: {"approval_id": "approval-1", "correlation_id": "corr-1"},
+                set_pending_confirmation=lambda run, pending: None,
+                clear_pending_confirmation=lambda run: None,
+                parse_utc_ts=lambda value: None,
+                utc_now=lambda: None,
+                utc_now_iso=lambda: "2026-04-05T00:00:00Z",
+                approval_correlation_id=lambda approval_id, run_id=None: "corr-1",
+                append_approval_audit=lambda **kwargs: None,
+                resolve_local_execution_start_approval=lambda *args, **kwargs: {},
+                resolve_local_worker_recovery_approval=lambda *args, **kwargs: {},
+                run_thread_is_alive=lambda run: False,
+                emit_log=lambda *args, **kwargs: None,
+                schedule_restored_run_resume=lambda run_id, run: True,
+            )
+
+        self.assertEqual(payload["decision_kind"], "approved")
+        emit_resolved_mock.assert_awaited_once()
 
     def test_resolve_run_approval_uses_local_worker_recovery_resolver_for_degraded_resume(self):
         calls = []

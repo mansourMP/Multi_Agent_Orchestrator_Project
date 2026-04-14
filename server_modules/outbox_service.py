@@ -586,6 +586,14 @@ def deliver_due_outbox_events_once(
     claimed_by: Optional[str] = None,
     claim_ttl_seconds: int = 30,
 ) -> Dict[str, Any]:
+    if claim_due_outbox_events_fn is None and callable(list_undelivered_outbox_events_fn):
+        claim_due_outbox_events_fn = lambda **kwargs: _compat_claim_items(  # noqa: E731
+            list_undelivered_outbox_events_fn(
+                older_than_seconds=kwargs.get("older_than_seconds", 0),
+                limit=kwargs.get("limit", 200),
+            ),
+            claimed_by=str(kwargs.get("claimed_by") or claimed_by or _default_outbox_claimed_by()),
+        )
     if (
         claim_due_outbox_events_fn is None
         or mark_outbox_event_delivered_fn is None
@@ -631,17 +639,6 @@ def deliver_due_outbox_events_once(
     if deliver_event_fn is None:
         deliver_event_fn = deliver_outbox_event
     claimed_by_token = str(claimed_by or "").strip() or _default_outbox_claimed_by()
-    if not callable(claim_due_outbox_events_fn):
-        if callable(list_undelivered_outbox_events_fn):
-            claim_due_outbox_events_fn = lambda **kwargs: _compat_claim_items(  # noqa: E731
-                list_undelivered_outbox_events_fn(
-                    older_than_seconds=kwargs.get("older_than_seconds", 0),
-                    limit=kwargs.get("limit", 200),
-                ),
-                claimed_by=str(kwargs.get("claimed_by") or claimed_by_token),
-            )
-        else:
-            claim_due_outbox_events_fn = None
     if not callable(claim_due_outbox_events_fn):
         return {
             "attempted": 0,

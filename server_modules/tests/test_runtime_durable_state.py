@@ -126,7 +126,7 @@ class RuntimeDurableStateTests(unittest.TestCase):
         self.assertEqual(len(live_runs), 1)
         self.assertEqual(live_runs[0]["run_id"], run_id)
         self.assertEqual(live_runs[0]["status"], "queued_local")
-        self.assertEqual(live_runs[0]["_durable_version"], 1)
+        self.assertEqual(live_runs[0]["_durable_version"], 2)
 
         local_state = load_local_runtime_state(self.db_path)
         self.assertEqual(local_state["pending_run_ids"], [run_id])
@@ -245,7 +245,7 @@ class RuntimeDurableStateTests(unittest.TestCase):
         )
 
         self.assertEqual(self.live_run_store[run_id]["status"], "queued_local")
-        self.assertEqual(self.live_run_store[run_id]["_durable_version"], 1)
+        self.assertEqual(self.live_run_store[run_id]["_durable_version"], 2)
 
     def test_post_insert_activation_failure_leaves_durable_row_registered(self):
         with self.assertRaises(RuntimeError):
@@ -557,6 +557,50 @@ class RuntimeDurableStateTests(unittest.TestCase):
         self.assertEqual(snapshot["browser_checkpoint"]["next_action_index"], 2)
         self.assertEqual(len(snapshot["browser_introspection"]["tabs"]), 2)
         self.assertEqual(snapshot["browser_introspection"]["console_entries"][0]["message"], "warn")
+
+    def test_serialize_run_snapshot_projects_usage_accounting_without_legacy_usage_masked(self):
+        run = {
+            "status": "completed",
+            "created_at": "2026-04-13T00:00:00Z",
+            "updated_at": "2026-04-13T00:01:00Z",
+            "completed_at": "2026-04-13T00:01:00Z",
+            "context": {
+                "tenant_id": "tenant-1",
+                "workspace_id": "ws-1",
+                "metadata": {"deployed_agent_id": "dagent-1"},
+            },
+            "usage_accounting": {
+                "usage_record_id": "uacct_run-serialize-usage",
+                "run_id": "run-serialize-usage",
+                "tenant_id": "tenant-1",
+                "workspace_id": "ws-1",
+                "deployed_agent_id": "dagent-1",
+                "source_surface": "deployed_agent_channel",
+                "requested_provider": "openai",
+                "effective_provider": "openai",
+                "requested_model": "gpt-4.1",
+                "effective_model": "gpt-4.1",
+                "input_tokens": 120,
+                "output_tokens": 30,
+                "total_tokens": 150,
+                "estimated_cost_usd": 0.00048,
+                "pricing_known": True,
+                "pricing_registry_version": "2026-04-13",
+                "pricing_source": "https://platform.openai.com/pricing",
+                "estimation_mode": "provider_reported",
+                "completed_at": "2026-04-13T00:01:00Z",
+                "metadata": {},
+            },
+            "events": [],
+            "tool_policy_audit": [],
+        }
+
+        snapshot = runs_output._serialize_run_snapshot("run-serialize-usage", run)
+
+        self.assertEqual(snapshot["usage_provider"], "openai")
+        self.assertEqual(snapshot["usage_model"], "gpt-4.1")
+        self.assertEqual(snapshot["usage_accounting"]["usage_record_id"], "uacct_run-serialize-usage")
+        self.assertEqual(snapshot["usage_masked"]["usage_accounting"]["usage_record_id"], "uacct_run-serialize-usage")
 
     @patch("server_modules.runtime_runs_api._late_server_export")
     def test_schedule_restored_run_resume_requeues_local_checkpoint_run(self, late_export_mock):

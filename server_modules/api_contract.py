@@ -398,36 +398,51 @@ def normalize_agent_turn_result(
     *,
     turn_request: AgentTurnRequest,
 ) -> ApiAgentTurnResponse:
+    result_metadata = dict(result.get("metadata") or {})
+    nested = result.get("result") if isinstance(result.get("result"), dict) else {}
+    nested_metadata = dict(nested.get("metadata") or {})
+    trace_id = (
+        str(result_metadata.get("trace_id") or "").strip()
+        or str(nested_metadata.get("trace_id") or "").strip()
+        or str(result.get("trace_id") or "").strip()
+        or None
+    )
     kind = str(result.get("kind") or "").strip()
     if kind == "durable_run":
         durable = result.get("result") if isinstance(result.get("result"), dict) else {}
+        metadata = {
+            "kind": "durable_run",
+            "engine": durable.get("engine"),
+            "route": durable.get("route"),
+            "doctor_preflight": durable.get("doctor_preflight"),
+            "created_run": durable.get("created_run"),
+            "turn_request": serialize_agent_turn_request(turn_request),
+        }
+        if trace_id:
+            metadata["trace_id"] = trace_id
         return ApiAgentTurnResponse(
             status=str(durable.get("status") or "accepted"),
             run_id=str(durable.get("run_id") or "").strip() or None,
             thread_id=turn_request.thread_id,
             session_id=turn_request.session_id,
-            metadata={
-                "kind": "durable_run",
-                "engine": durable.get("engine"),
-                "route": durable.get("route"),
-                "doctor_preflight": durable.get("doctor_preflight"),
-                "created_run": durable.get("created_run"),
-                "turn_request": serialize_agent_turn_request(turn_request),
-            },
+            metadata=metadata,
         )
     if kind == "direct_chat_stream":
+        metadata = {
+            "kind": "direct_chat_stream",
+            "workspace_id": result.get("workspace_id"),
+            "session_key": result.get("session_key"),
+            "thread_id": result.get("thread_id"),
+            "client_request_id": result.get("client_request_id"),
+            "turn_request": serialize_agent_turn_request(turn_request),
+        }
+        if trace_id:
+            metadata["trace_id"] = trace_id
         return ApiAgentTurnResponse(
             status="stream_ready",
             thread_id=str(result.get("thread_id") or turn_request.thread_id or turn_request.session_id or "").strip() or None,
             session_id=str(result.get("session_id") or turn_request.session_id or "").strip() or None,
-            metadata={
-                "kind": "direct_chat_stream",
-                "workspace_id": result.get("workspace_id"),
-                "session_key": result.get("session_key"),
-                "thread_id": result.get("thread_id"),
-                "client_request_id": result.get("client_request_id"),
-                "turn_request": serialize_agent_turn_request(turn_request),
-            },
+            metadata=metadata,
         )
     normalized = AgentTurnResponse(
         status=str(result.get("status") or "ok"),
@@ -438,7 +453,10 @@ def normalize_agent_turn_result(
         artifacts=list(result.get("artifacts") or []),
         approvals=list(result.get("approvals") or []),
         interventions=list(result.get("interventions") or []),
-        metadata=dict(result.get("metadata") or {}),
+        metadata={
+            **result_metadata,
+            **({"trace_id": trace_id} if trace_id else {}),
+        },
     )
     return ApiAgentTurnResponse(**model_to_dict(normalized))
 

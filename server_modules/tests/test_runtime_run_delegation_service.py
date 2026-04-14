@@ -1,8 +1,11 @@
+import asyncio
 import unittest
 from datetime import datetime, timezone
+from unittest.mock import AsyncMock, patch
 
 from fastapi import HTTPException
 
+from server_modules.agent_trace_service import TraceContext
 from server_modules import runtime_run_delegation_service
 
 
@@ -126,6 +129,75 @@ class RuntimeRunDelegationServiceTests(unittest.TestCase):
         self.assertEqual(payload["items"][0]["auto_delegation_rule"], "logs")
         self.assertEqual(created_requests[0]["note"], "Auto-planned by orchestrator rules.")
         self.assertEqual(routing_logs, [("parent-1", "keyword", "contains log triage", 1)])
+
+    def test_auto_delegate_run_children_emits_trace_plan_and_delegation_events(self):
+        trace_context = TraceContext(
+            trace_id="trace-1",
+            workspace_id="default",
+            tenant_id="default",
+            thread_id="thread-1",
+            run_id="parent-1",
+            root_agent_id="sage",
+        )
+        parent_snapshot = {
+            "run_id": "parent-1",
+            "agent_role": "orchestrator",
+            "delegation_root_run_id": None,
+            "context": {"workspace_id": "default", "tenant_id": "default", "metadata": {"agent_role": "orchestrator", "trace_id": "trace-1"}},
+        }
+
+        with patch("server_modules.runtime_run_delegation_service.run_async_tool_call", side_effect=lambda coro: asyncio.run(coro)), patch(
+            "server_modules.runtime_run_delegation_service.agent_trace_service.resume_trace",
+            new=AsyncMock(return_value=trace_context),
+        ), patch(
+            "server_modules.runtime_run_delegation_service.agent_trace_service.emit_plan_started",
+            new=AsyncMock(return_value="evt-plan-start"),
+        ) as plan_started_mock, patch(
+            "server_modules.runtime_run_delegation_service.agent_trace_service.emit_plan_item",
+            new=AsyncMock(return_value="evt-plan-item"),
+        ) as plan_item_mock, patch(
+            "server_modules.runtime_run_delegation_service.agent_trace_service.emit_plan_item_updated",
+            new=AsyncMock(return_value="evt-plan-update"),
+        ) as plan_item_updated_mock, patch(
+            "server_modules.runtime_run_delegation_service.agent_trace_service.emit_delegation_started",
+            new=AsyncMock(return_value="evt-delegation-start"),
+        ) as delegation_started_mock, patch(
+            "server_modules.runtime_run_delegation_service.agent_trace_service.emit_delegation_finished",
+            new=AsyncMock(return_value="evt-delegation-finish"),
+        ) as delegation_finished_mock:
+            payload = runtime_run_delegation_service.auto_delegate_run_children(
+                "parent-1",
+                request_payload=_AutoDelegationPayload(note=""),
+                current_user={"user_id": "user-1"},
+                lookup_run_snapshot=lambda run_id: parent_snapshot,
+                enforce_run_owner_access=lambda current_user, snapshot: None,
+                normalize_agent_role=lambda role: str(role or "").strip().lower(),
+                build_auto_delegation_plan=lambda snapshot, max_children=3: [
+                    {
+                        "agent_role": "researcher",
+                        "user_goal": "Inspect logs",
+                        "metadata": {
+                            "auto_delegation_rule": "logs",
+                            "auto_delegation_source": "keyword",
+                            "auto_delegation_reason": "contains log triage",
+                        },
+                    }
+                ],
+                emit_auto_delegation_routing_log=None,
+                build_delegated_run_request=lambda snapshot, child, note=None: {"child": child, "note": note},
+                execute_system_run_start_request_via_turn_runtime=lambda delegated_req, **kwargs: {"run_id": "child-1"},
+                stamp_request_owner_fn=lambda payload: payload,
+                run_execution_services=lambda: object(),
+                normalize_run_id_token=lambda value: str(value or "").strip() or None,
+                refresh_parent_delegation_state=lambda run_id: None,
+            )
+
+        self.assertEqual(payload["count"], 1)
+        plan_started_mock.assert_awaited_once()
+        plan_item_mock.assert_awaited_once()
+        plan_item_updated_mock.assert_awaited_once()
+        delegation_started_mock.assert_awaited_once()
+        delegation_finished_mock.assert_awaited_once()
 
     def test_retry_failed_delegation_runs_retries_latest_failed_child_per_lineage(self):
         child_runs = [

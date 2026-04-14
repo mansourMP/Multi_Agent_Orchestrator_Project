@@ -4,6 +4,7 @@ import time
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional
 
+from server_modules import healthguide_safety_service
 from scripts.platform_execution import stack_start_command_hint
 
 
@@ -27,6 +28,7 @@ class TelegramRunDispatchService:
         can_auto_approve_wait: Callable[[Dict[str, Any]], bool],
         pending_confirmation_payload: Callable[[Dict[str, Any]], Dict[str, Any]],
         emit_channel_run_delivery_event: Callable[..., Any],
+        record_activity_event: Optional[Callable[..., Any]] = None,
         time_now: Callable[[], float] = time.time,
         sleep: Callable[[float], None] = time.sleep,
     ) -> None:
@@ -46,6 +48,7 @@ class TelegramRunDispatchService:
         self.can_auto_approve_wait = can_auto_approve_wait
         self.pending_confirmation_payload = pending_confirmation_payload
         self.emit_channel_run_delivery_event = emit_channel_run_delivery_event
+        self.record_activity_event = record_activity_event
         self.time_now = time_now
         self.sleep = sleep
 
@@ -206,11 +209,18 @@ class TelegramRunDispatchService:
         connector_id: str,
         chat_id: str,
         run_id: str,
+        session_key: Optional[str] = None,
         pending_message_id: str,
         inbound_message_id: Optional[str],
         action: str,
         trace_id: str,
         source_event_id: str,
+        tenant_id: Optional[str] = None,
+        thread_id: Optional[str] = None,
+        owner_install_id: Optional[str] = None,
+        owner_label: Optional[str] = None,
+        owner_type: Optional[str] = None,
+        deployed_agent_id: Optional[str] = None,
     ) -> None:
         provider_idempotency_key = self.delivery_idempotency_key(
             connector_id=connector_id,
@@ -228,10 +238,17 @@ class TelegramRunDispatchService:
             idempotency_key=f"channel_run_delivery:telegram:{connector_id}:{run_id}",
             payload={
                 "chat_id": str(chat_id or "").strip(),
+                "session_key": str(session_key or "").strip() or None,
                 "pending_message_id": str(pending_message_id or "").strip() or None,
                 "parent_message_id": str(inbound_message_id or "").strip() or None,
                 "action": str(action or "run").strip().lower() or "run",
                 "source_event_id": str(source_event_id or "").strip() or None,
+                "tenant_id": str(tenant_id or "").strip() or None,
+                "thread_id": str(thread_id or "").strip() or None,
+                "owner_install_id": str(owner_install_id or "").strip() or None,
+                "owner_label": str(owner_label or "").strip() or None,
+                "owner_type": str(owner_type or "").strip().lower() or None,
+                "deployed_agent_id": str(deployed_agent_id or "").strip() or None,
                 "delivery": {
                     "provider": "telegram",
                     "transport": (
@@ -242,6 +259,83 @@ class TelegramRunDispatchService:
                     "status": "pending",
                     "provider_idempotency_key": provider_idempotency_key,
                 },
+            },
+        )
+
+    def _record_health_safety_escalation(
+        self,
+        *,
+        run_id: str,
+        workspace_id: str,
+        tenant_id: Optional[str],
+        session_key: str,
+        thread_id: Optional[str],
+        owner_install_id: Optional[str],
+        owner_label: Optional[str],
+        owner_type: Optional[str],
+        deployed_agent_id: Optional[str],
+        trace_id: Optional[str],
+        source_event_id: Optional[str],
+        provider_idempotency_key: str,
+        delivery_transport: str,
+        outbound_message_id: Optional[str],
+        delivered_reply: str,
+    ) -> None:
+        if not callable(self.record_activity_event):
+            return
+        resolved_tenant_id = str(tenant_id or "").strip()
+        resolved_install_id = str(owner_install_id or "").strip()
+        resolved_session_key = str(session_key or "").strip()
+        resolved_thread_id = str(thread_id or "").strip()
+        if not (resolved_tenant_id and resolved_install_id and resolved_session_key and resolved_thread_id):
+            return
+        run = self.runs_get(run_id)
+        if not isinstance(run, dict):
+            return
+        context = run.get("context") if isinstance(run.get("context"), dict) else {}
+        metadata = context.get("metadata") if isinstance(context.get("metadata"), dict) else {}
+        safety_context = healthguide_safety_service.resolve_health_safety_context(metadata=metadata)
+        if not safety_context.get("enabled"):
+            return
+        safety_result = healthguide_safety_service.apply_health_safety_to_reply(
+            reply=delivered_reply,
+            user_message=context.get("user_goal") or "",
+            assistant_name=str(safety_context.get("assistant_name") or "").strip() or None,
+            response_payload=run.get("result_data") if isinstance(run.get("result_data"), dict) else None,
+        )
+        if not bool(safety_result.get("red_flag_triggered")):
+            return
+        actor_type = "sage" if str(owner_type or "").strip().lower() == "master" else "specialist"
+        responder_label = str(owner_label or "").strip() or "Assistant"
+        self.record_activity_event(
+            tenant_id=resolved_tenant_id,
+            workspace_id=workspace_id,
+            actor_type=actor_type,
+            actor_id=resolved_install_id,
+            install_id=resolved_install_id,
+            run_id=run_id,
+            thread_id=resolved_thread_id,
+            session_key=resolved_session_key,
+            channel="telegram",
+            direction="outbound",
+            event_class="blocked_action",
+            detail_level="timeline_detail",
+            action="escalated",
+            trace_id=str(trace_id or "").strip() or None,
+            title=f"{responder_label} escalated an urgent health concern",
+            summary="Urgent symptom guidance was sent instead of a normal answer.",
+            status="escalated",
+            payload={
+                "escalated": True,
+                "resolution": "escalated",
+                "health_safety": safety_result,
+                "delivery_transport": delivery_transport,
+                "outbound_message_id": str(outbound_message_id or "").strip() or None,
+            },
+            metadata={
+                "source_event_id": str(source_event_id or "").strip() or None,
+                "provider_idempotency_key": provider_idempotency_key,
+                "deployed_agent_id": str(deployed_agent_id or "").strip() or None,
             },
         )
 
@@ -267,6 +361,12 @@ class TelegramRunDispatchService:
         edit_message: Callable[..., bool],
         set_connector_state: Optional[Callable[[str, Dict[str, Any]], Any]] = None,
         provider_idempotency_key: Optional[str] = None,
+        tenant_id: Optional[str] = None,
+        thread_id: Optional[str] = None,
+        owner_install_id: Optional[str] = None,
+        owner_label: Optional[str] = None,
+        owner_type: Optional[str] = None,
+        deployed_agent_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         resolved_status = str(status or "").strip().lower() or "completed"
         compact_summary = self.truncate_one_line(
@@ -355,6 +455,23 @@ class TelegramRunDispatchService:
                     "last_delivery_transport": delivery_transport,
                 },
             )
+        self._record_health_safety_escalation(
+            run_id=run_id,
+            workspace_id=workspace_id,
+            tenant_id=tenant_id,
+            session_key=session_key,
+            thread_id=thread_id,
+            owner_install_id=owner_install_id,
+            owner_label=owner_label,
+            owner_type=owner_type,
+            deployed_agent_id=deployed_agent_id,
+            trace_id=trace_id,
+            source_event_id=source_event_id,
+            provider_idempotency_key=resolved_delivery_id,
+            delivery_transport=delivery_transport,
+            outbound_message_id=outbound_message_id,
+            delivered_reply=compact_summary,
+        )
         delivery = {
             "provider": "telegram",
             "transport": delivery_transport,
@@ -444,6 +561,7 @@ class TelegramRunDispatchService:
                 connector_id=connector_id,
                 chat_id=chat_id,
                 run_id=run_id,
+                session_key=session_key,
                 pending_message_id=pending_message_id,
                 inbound_message_id=inbound_message_id or None,
                 action=action,

@@ -8,10 +8,18 @@ from starlette.requests import Request
 from server_modules import runtime_common
 
 
-def _request(path: str, *, method: str = "POST", api_key: str = "test-key") -> Request:
+def _request(
+    path: str,
+    *,
+    method: str = "POST",
+    api_key: str = "test-key",
+    extra_headers: dict[str, str] | None = None,
+) -> Request:
     headers = [(b"host", b"127.0.0.1:8001")]
     if api_key:
         headers.append((b"x-api-key", api_key.encode("utf-8")))
+    for key, value in dict(extra_headers or {}).items():
+        headers.append((key.lower().encode("utf-8"), str(value).encode("utf-8")))
     scope = {
         "type": "http",
         "http_version": "1.1",
@@ -69,6 +77,26 @@ class RuntimeCommonRateLimitTests(unittest.TestCase):
         self.assertIsNone(first)
         self.assertIsNotNone(second)
         self.assertEqual(second.status_code, 429)
+        self.assertEqual(second.body.decode("utf-8").count("\"detail\""), 1)
+        self.assertIn("\"error\"", second.body.decode("utf-8"))
+
+    def test_control_plane_origin_denial_uses_structured_error_envelope(self) -> None:
+        with patch.object(runtime_common, "CONTROL_PLANE_ORIGINS", ["https://allowed.example"]):
+            response = runtime_common._check_control_plane_origin(
+                _request(
+                    "/api/workspaces",
+                    extra_headers={"origin": "https://blocked.example", "x-request-id": "req-1"},
+                )
+            )
+
+        self.assertIsNotNone(response)
+        assert response is not None
+        self.assertEqual(response.status_code, 403)
+        payload = response.body.decode("utf-8")
+        self.assertIn("\"detail\":\"Origin is not allowed.\"", payload)
+        self.assertIn("\"code\":\"origin_not_allowed\"", payload)
+        self.assertIn("\"class\":\"authorization_error\"", payload)
+        self.assertIn("\"request_id\":\"req-1\"", payload)
 
     def test_fetch_workflow_snapshot_uses_control_plane_service(self) -> None:
         with patch(

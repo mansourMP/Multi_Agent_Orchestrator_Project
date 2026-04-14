@@ -34,12 +34,12 @@ class _FakeRegistryDeps:
     def telegram_autopilot_supervisor_service(self):
         return {"supervisor": True}
 
-    def whatsapp_webhook_service(self):
-        class _Webhook:
-            def handle_inbound(self, payload, *, matched=None):
+    def whatsapp_ingress_service(self):
+        class _Ingress:
+            def ingest_webhook(self, payload, *, matched=None):
                 return {"payload": payload, "matched": matched}
 
-        return _Webhook()
+        return _Ingress()
 
     def telegram_webhook_service(self):
         class _Webhook:

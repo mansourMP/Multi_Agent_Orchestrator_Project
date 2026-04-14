@@ -9,6 +9,7 @@ import {
   useSyncExternalStore,
 } from 'react';
 
+import { buildCookieAuthHeaders } from '@/lib/auth/csrf';
 import type { WorkspaceBootstrapPayload } from '@/lib/workspace/workspace-bootstrap';
 import {
   createWorkstationClient,
@@ -36,6 +37,14 @@ export function resolveWorkspaceApiBaseUrl(
   env: Partial<Record<'NEXT_PUBLIC_ORION_API_URL' | 'NEXT_PUBLIC_API_URL', string | undefined>> = process.env,
   windowOrigin?: string,
 ): string {
+  if (windowOrigin && windowOrigin.trim()) {
+    return windowOrigin.replace(/\/+$/, '');
+  }
+
+  if (typeof window !== 'undefined') {
+    return window.location.origin.replace(/\/+$/, '');
+  }
+
   const envBase =
     env.NEXT_PUBLIC_ORION_API_URL
     ?? env.NEXT_PUBLIC_API_URL
@@ -43,14 +52,6 @@ export function resolveWorkspaceApiBaseUrl(
 
   if (envBase.trim()) {
     return envBase.replace(/\/+$/, '');
-  }
-
-  if (windowOrigin && windowOrigin.trim()) {
-    return windowOrigin.replace(/\/+$/, '');
-  }
-
-  if (typeof window !== 'undefined') {
-    return window.location.origin.replace(/\/+$/, '');
   }
 
   return '';
@@ -382,29 +383,145 @@ class WorkspacePersistenceNamespace {
 class WorkspaceTransportAdapter {
   private readonly inFlightControllers = new Map<string, AbortController>();
 
+  private static readonly RETRYABLE_STATUSES = new Set([408, 425, 429, 500, 502, 503, 504]);
+
   constructor(
     private readonly apiBaseUrl: string,
     private readonly workspaceId: string,
     private readonly disposableRegistry: WorkspaceDisposableRegistry,
   ) {}
 
-  async request(path: string, init: RequestInit = {}): Promise<Response> {
+  private resolveTimeout(method: string, requestedTimeoutMs?: number): number {
+    const fallback = ['GET', 'HEAD'].includes(method) ? 10_000 : 15_000;
+    const timeoutMs = requestedTimeoutMs ?? fallback;
+    return Math.max(1_000, Math.min(timeoutMs, 60_000));
+  }
+
+  private resolveRetryCount(method: string, requestedRetryCount?: number): number {
+    if (typeof requestedRetryCount === 'number') {
+      return Math.max(0, Math.min(requestedRetryCount, 3));
+    }
+    return ['GET', 'HEAD'].includes(method) ? 1 : 0;
+  }
+
+  private async delay(ms: number): Promise<void> {
+    await new Promise<void>((resolve) => {
+      this.disposableRegistry.trackTimeout(window.setTimeout(resolve, ms));
+    });
+  }
+
+  private async refreshBrowserSession(): Promise<boolean> {
+    try {
+      const response = await fetch(`${this.apiBaseUrl}/api/auth/refresh`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: buildCookieAuthHeaders('POST', {
+          accept: 'application/json',
+          'content-type': 'application/json',
+        }),
+        body: JSON.stringify({ channel: 'web' }),
+      });
+      return response.ok;
+    } catch {
+      return false;
+    }
+  }
+
+  private async performRequest(
+    url: string,
+    init: RequestInit,
+    timeoutMs: number,
+  ): Promise<Response> {
     const controller = this.disposableRegistry.trackAbortController(new AbortController());
     const requestId = `${Date.now()}:${Math.random().toString(16).slice(2)}`;
     this.inFlightControllers.set(requestId, controller);
-
-    const url = /^https?:\/\//.test(path) ? path : `${this.apiBaseUrl}${path.startsWith('/') ? path : `/${path}`}`;
-    const headers = new Headers(init.headers ?? {});
+    const headers = buildCookieAuthHeaders(init.method ?? 'GET', init.headers ?? {});
     headers.set('x-empyralis-workspace-id', this.workspaceId);
+    let timeoutTriggered = false;
+    const timeoutHandle = this.disposableRegistry.trackTimeout(window.setTimeout(() => {
+      timeoutTriggered = true;
+      controller.abort();
+    }, timeoutMs));
+
+    const upstreamAbort = init.signal;
+    const abortFromUpstream = () => {
+      controller.abort();
+    };
+    if (upstreamAbort) {
+      if (upstreamAbort.aborted) {
+        controller.abort();
+      } else {
+        upstreamAbort.addEventListener('abort', abortFromUpstream, { once: true });
+      }
+    }
 
     try {
       return await fetch(url, {
         ...init,
         headers,
-        signal: init.signal ?? controller.signal,
+        credentials: 'include',
+        signal: controller.signal,
       });
+    } catch (error) {
+      if (timeoutTriggered) {
+        throw new Error(`Workstation request timed out after ${timeoutMs}ms.`);
+      }
+      throw error;
     } finally {
+      window.clearTimeout(timeoutHandle);
+      if (upstreamAbort) {
+        upstreamAbort.removeEventListener('abort', abortFromUpstream);
+      }
       this.inFlightControllers.delete(requestId);
+    }
+  }
+
+  async request(
+    path: string,
+    init: RequestInit = {},
+    policy: {
+      timeoutMs?: number;
+      retryCount?: number;
+      retryOnStatuses?: number[];
+      refreshSessionOn401?: boolean;
+    } = {},
+  ): Promise<Response> {
+    const method = String(init.method ?? 'GET').trim().toUpperCase();
+    const url = /^https?:\/\//.test(path) ? path : `${this.apiBaseUrl}${path.startsWith('/') ? path : `/${path}`}`;
+    const timeoutMs = this.resolveTimeout(method, policy.timeoutMs);
+    const retryCount = this.resolveRetryCount(method, policy.retryCount);
+    const retryOnStatuses = new Set(policy.retryOnStatuses ?? Array.from(WorkspaceTransportAdapter.RETRYABLE_STATUSES));
+    const refreshSessionOn401 = policy.refreshSessionOn401 ?? true;
+    let refreshed = false;
+    let attempt = 0;
+
+    while (true) {
+      try {
+        const response = await this.performRequest(url, init, timeoutMs);
+        if (response.status === 401 && refreshSessionOn401 && !refreshed) {
+          refreshed = await this.refreshBrowserSession();
+          if (refreshed) {
+            continue;
+          }
+        }
+
+        if (attempt < retryCount && retryOnStatuses.has(response.status)) {
+          attempt += 1;
+          await this.delay(250 * attempt);
+          continue;
+        }
+
+        return response;
+      } catch (error) {
+        if (init.signal?.aborted) {
+          throw error;
+        }
+        if (attempt >= retryCount) {
+          throw error;
+        }
+        attempt += 1;
+        await this.delay(250 * attempt);
+      }
     }
   }
 

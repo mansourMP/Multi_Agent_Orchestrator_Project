@@ -4,6 +4,7 @@ from typing import Any, Callable, Dict, List, Optional
 
 from server_modules.channel_pairing_service import get_channel_pairing_service
 from server_modules.connectors.channel_workspace_scope_service import resolve_connector_workspace_scope
+from server_modules.connectors.whatsapp_ingress_service import WhatsAppIngressService
 from server_modules.connectors.whatsapp_autopilot_state_service import WhatsAppAutopilotStateService
 from server_modules.connectors.whatsapp_run_dispatch_service import WhatsAppRunDispatchService
 from server_modules.connectors.whatsapp_transport_service import WhatsAppTransportService
@@ -103,6 +104,7 @@ class WhatsAppAutopilotServiceRegistry:
         self._transport_service: Optional[WhatsAppTransportService] = None
         self._state_service: Optional[WhatsAppAutopilotStateService] = None
         self._run_dispatch_service: Optional[WhatsAppRunDispatchService] = None
+        self._ingress_service: Optional[WhatsAppIngressService] = None
         self._webhook_service: Optional[WhatsAppWebhookService] = None
 
     def whatsapp_transport_service(self) -> WhatsAppTransportService:
@@ -168,9 +170,9 @@ class WhatsAppAutopilotServiceRegistry:
             )
         return self._run_dispatch_service
 
-    def whatsapp_webhook_service(self) -> WhatsAppWebhookService:
-        if self._webhook_service is None:
-            self._webhook_service = WhatsAppWebhookService(
+    def whatsapp_ingress_service(self) -> WhatsAppIngressService:
+        if self._ingress_service is None:
+            self._ingress_service = WhatsAppIngressService(
                 normalize_number=self.whatsapp_transport_service().normalize_number,
                 session_key_builder=self.session_key_builder,
                 safe_path_token=self.safe_path_token,
@@ -209,5 +211,12 @@ class WhatsAppAutopilotServiceRegistry:
                 redact_event_text=self.redact_event_text,
                 retention_days=self.retention_days,
                 channel_pairing_service=get_channel_pairing_service,
+            )
+        return self._ingress_service
+
+    def whatsapp_webhook_service(self) -> WhatsAppWebhookService:
+        if self._webhook_service is None:
+            self._webhook_service = WhatsAppWebhookService(
+                ingress_service=self.whatsapp_ingress_service,
             )
         return self._webhook_service

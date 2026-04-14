@@ -62,27 +62,36 @@ export function buildMobileWorkspaceShellModel({
   });
 
   const tabs = [
-    {
-      id: 'account',
-      label: 'Account',
-      route: '/account',
-      mounted: Boolean(surfaces.account),
-    },
     ...((foundation?.routeManifest?.navGroups ?? []).flatMap((group) =>
       group.routes.map((route) => ({
         id: route.id,
         label: route.label,
-        route: route.href,
+        screen: route.screen,
         groupId: group.id,
         mounted: Boolean(resolveMountedSurface(route.id, surfaces)),
       })),
     )),
+    {
+      id: 'account',
+      label: 'Account',
+      screen: '/(workspace)/account',
+      groupId: 'secondary',
+      mounted: Boolean(surfaces.account),
+    },
+    {
+      id: 'switcher',
+      label: 'Workspaces',
+      screen: '/(workspace)/switcher',
+      groupId: 'secondary',
+      mounted: Boolean(surfaces.workspaceSwitcher),
+    },
   ];
 
   return {
     surfaces,
     tabs,
     activeWorkspaceId: accountState?.activeWorkspaceId ?? null,
+    defaultRouteId: foundation?.routeManifest?.defaultRouteId ?? null,
     defaultRoute: foundation?.routeManifest?.defaultRoute ?? null,
     shellProfileId: foundation?.shellProfile?.id ?? null,
   };

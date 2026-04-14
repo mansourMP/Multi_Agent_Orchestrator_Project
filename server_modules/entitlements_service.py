@@ -4,12 +4,13 @@ from dataclasses import asdict, dataclass
 import time
 from typing import Any, Callable, Dict, Optional
 
+from server_modules import billing_service
 from server_modules import control_plane_repository
 from server_modules import run_state_repository
 from server_modules.direct_tool_config_service import run_async_tool_call
 
 
-DEFAULT_PLAN_ID = "personal"
+DEFAULT_PLAN_ID = "free"
 PLAN_ALIASES = {
     "starter": "free",
     "free_personal": "personal",
@@ -272,9 +273,42 @@ def resolve_workspace_entitlement_state(
 ) -> WorkspaceEntitlementState:
     workspace_meta = _workspace_entitlement_metadata(workspace)
     install_meta = _install_entitlement_metadata(install)
+    workspace_id = str(_coerce_dict(workspace).get("workspace_id") or "").strip()
+    billing_summary = (
+        billing_service.workspace_billing_summary_for_workspace_id(workspace_id, workspace=_coerce_dict(workspace))
+        if workspace_id
+        else None
+    )
+    billing_plan_id = None
+    billing_source = None
+    billing_metadata: Dict[str, Any] = {}
+    if isinstance(billing_summary, dict):
+        subscription = _coerce_dict(billing_summary.get("subscription"))
+        billing_plan_id = str(
+            subscription.get("effective_plan_id")
+            or subscription.get("plan_id")
+            or ""
+        ).strip()
+        billing_source = "workspace_billing"
+        billing_metadata = _coerce_dict(subscription.get("metadata"))
+    workspace_plan_id = (
+        install_meta.get("plan")
+        or install_meta.get("plan_id")
+        or workspace_meta.get("plan")
+        or workspace_meta.get("plan_id")
+        or install_meta.get("plan_tier")
+        or workspace_meta.get("plan_tier")
+    )
+    if (
+        billing_plan_id == DEFAULT_PLAN_ID
+        and str(billing_metadata.get("source") or "").strip().lower() == "workspace_default"
+        and str(workspace_plan_id or "").strip()
+    ):
+        billing_plan_id = None
     raw_plan = (
         install_meta.get("plan")
         or install_meta.get("plan_id")
+        or billing_plan_id
         or workspace_meta.get("plan")
         or workspace_meta.get("plan_id")
         or install_meta.get("plan_tier")
@@ -287,6 +321,8 @@ def resolve_workspace_entitlement_state(
     source = "workspace_metadata"
     if install_meta.get("plan") or install_meta.get("plan_id") or install_meta.get("plan_tier"):
         source = "install_metadata"
+    elif billing_plan_id:
+        source = str(billing_source or "workspace_billing")
     elif not raw_plan:
         source = "default"
     return WorkspaceEntitlementState(

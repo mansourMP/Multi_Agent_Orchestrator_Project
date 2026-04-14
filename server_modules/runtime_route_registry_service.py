@@ -500,6 +500,10 @@ def register_runtime_run_routes(
         matched_run = run_state_repository.sync_find_live_run_by_approval_id(approval_id)
         if isinstance(matched_run, dict):
             _ensure_workspace_approvals_access(_run_workspace_id_for_approval(matched_run, matched_run))
+        else:
+            approval_record = run_state_repository.sync_get_approval_record(approval_id)
+            if isinstance(approval_record, dict):
+                _ensure_workspace_approvals_access(str(approval_record.get("workspace_id") or "default"))
 
         return runtime_run_approval_service.resolve_standalone_approval(
             approval_id,

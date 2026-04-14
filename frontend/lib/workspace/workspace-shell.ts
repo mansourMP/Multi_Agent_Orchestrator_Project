@@ -14,10 +14,12 @@ export type WorkspaceRouteId =
   | 'notifications'
   | 'applications'
   | 'agents'
+  | 'deployed-agents'
   | 'activity'
   | 'integrations'
   | 'settings'
   | 'admin'
+  | 'admin/platform'
   | 'admin/billing'
   | 'admin/routing'
   | 'admin/members'
@@ -78,9 +80,24 @@ const SHELL_PROFILE_DEFINITIONS: Record<WorkspaceShellProfileId, WorkspaceShellP
     id: 'operations_admin_shell',
     label: 'Operations Admin Shell',
     description: 'Admin-first operations shell for billing, routing, and governance.',
-    homeRouteId: 'admin',
+    homeRouteId: 'admin/routing',
   },
 };
+
+const HIDDEN_NAV_ROUTE_IDS = new Set<WorkspaceRouteId>([
+  'applications',
+  'agents',
+  'deployed-agents',
+  'activity',
+  'integrations',
+  'admin',
+  'admin/platform',
+  'admin/billing',
+]);
+
+export function isWorkspaceRouteHiddenFromNavigation(routeId: WorkspaceRouteId): boolean {
+  return HIDDEN_NAV_ROUTE_IDS.has(routeId);
+}
 
 const ROUTE_DEFINITIONS: RouteDefinition[] = [
   {
@@ -136,6 +153,12 @@ const ROUTE_DEFINITIONS: RouteDefinition[] = [
     href: (workspaceId) => `/w/${workspaceId}/agents`,
   },
   {
+    id: 'deployed-agents',
+    label: 'Deployed Agents',
+    groupId: 'workspace',
+    href: (workspaceId) => `/w/${workspaceId}/deployed-agents`,
+  },
+  {
     id: 'activity',
     label: 'Activity',
     groupId: 'workspace',
@@ -159,7 +182,13 @@ const ROUTE_DEFINITIONS: RouteDefinition[] = [
     groupId: 'operations',
     href: (workspaceId) => `/w/${workspaceId}/admin`,
     requiredCapabilities: ['workspace_admin_enabled'],
-    profileIds: ['operations_admin_shell'],
+  },
+  {
+    id: 'admin/platform',
+    label: 'Platform',
+    groupId: 'operations',
+    href: (workspaceId) => `/w/${workspaceId}/admin/platform`,
+    requiredCapabilities: ['platform_admin_enabled'],
   },
   {
     id: 'admin/billing',
@@ -167,7 +196,6 @@ const ROUTE_DEFINITIONS: RouteDefinition[] = [
     groupId: 'operations',
     href: (workspaceId) => `/w/${workspaceId}/admin/billing`,
     requiredCapabilities: ['billing_read_enabled'],
-    profileIds: ['operations_admin_shell'],
   },
   {
     id: 'admin/routing',
@@ -175,7 +203,6 @@ const ROUTE_DEFINITIONS: RouteDefinition[] = [
     groupId: 'operations',
     href: (workspaceId) => `/w/${workspaceId}/admin/routing`,
     requiredCapabilities: ['routing_read_enabled'],
-    profileIds: ['operations_admin_shell'],
   },
   {
     id: 'admin/members',
@@ -183,7 +210,6 @@ const ROUTE_DEFINITIONS: RouteDefinition[] = [
     groupId: 'operations',
     href: (workspaceId) => `/w/${workspaceId}/admin/members`,
     requiredCapabilities: ['workspace_admin_enabled'],
-    profileIds: ['operations_admin_shell'],
   },
   {
     id: 'admin/policies',
@@ -191,7 +217,6 @@ const ROUTE_DEFINITIONS: RouteDefinition[] = [
     groupId: 'operations',
     href: (workspaceId) => `/w/${workspaceId}/admin/policies`,
     requiredCapabilities: ['workspace_admin_enabled'],
-    profileIds: ['operations_admin_shell'],
   },
 ];
 
@@ -293,6 +318,9 @@ export function buildRouteManifest(
 ): WorkspaceRouteManifest {
   const workspaceId = bootstrap.workspace.id;
   const allowedRoutes = ROUTE_DEFINITIONS.flatMap((definition) => {
+    if (isWorkspaceRouteHiddenFromNavigation(definition.id)) {
+      return [];
+    }
     if (!routeMatchesProfile(definition, shellProfile.id)) {
       return [];
     }

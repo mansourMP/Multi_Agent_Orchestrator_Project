@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, patch
 
 from fastapi import HTTPException
 
+from server_modules.agent_trace_service import TraceContext
 from server_modules.agent_turn import build_agent_turn_request, build_run_start_turn_request
 from server_modules import runtime_attachment_service
 from server_modules.run_service import (
@@ -226,6 +227,59 @@ class RunServiceTests(unittest.TestCase):
         self.assertEqual(audits[0]["stage"], "requested")
         self.assertEqual(audits[1]["stage"], "waiting")
         self.assertEqual(outbox_events[0]["approval_id"], payload["approval_id"])
+
+    def test_begin_run_pending_confirmation_emits_trace_approval_requested(self):
+        log_queue = queue.Queue()
+        run = {
+            "run_id": "run-approval-trace",
+            "logs": log_queue,
+            "context": {
+                "workspace_id": "workspace-1",
+                "tenant_id": "tenant-1",
+                "metadata": {"trace_id": "trace-1", "approval_ttl_seconds": 15},
+            },
+        }
+        trace_context = TraceContext(
+            trace_id="trace-1",
+            workspace_id="workspace-1",
+            tenant_id="tenant-1",
+            thread_id="thread-1",
+            run_id="run-approval-trace",
+            root_agent_id="sage",
+        )
+
+        with (
+            patch("server_modules.run_service.outbox_service.emit_approval_requested_event"),
+            patch(
+                "server_modules.run_service.run_state_repository.sync_create_or_update_approval_request",
+                return_value={"version": 0},
+            ),
+            patch("server_modules.run_service.run_async_tool_call", side_effect=lambda coro: asyncio.run(coro)),
+            patch("server_modules.run_service.agent_trace_service.resume_trace", new=AsyncMock(return_value=trace_context)),
+            patch(
+                "server_modules.run_service.agent_trace_service.emit_approval_requested",
+                new=AsyncMock(return_value="evt-approval"),
+            ) as emit_approval_mock,
+        ):
+            payload = begin_run_pending_confirmation(
+                "run-approval-trace",
+                "Confirm send",
+                runs_by_id={"run-approval-trace": run},
+                default_approval_ttl_seconds=600,
+                approval_correlation_id_fn=lambda approval_id, run_id=None: f"corr:{run_id}:{approval_id}",
+                append_approval_audit_fn=lambda **kwargs: None,
+                json_safe_fn=lambda value: value,
+                emit_log_fn=lambda *args, **kwargs: None,
+                set_run_status_fn=lambda run_id, status: None,
+                utc_now_fn=lambda: datetime(2026, 4, 6, 0, 0, 0, tzinfo=timezone.utc),
+                utc_now_iso_fn=lambda: "2026-04-06T00:00:00Z",
+                source="local_execution_start",
+                metadata={"approval_node_key": "approval-step", "target": "local_companion"},
+                emit_pause_required=False,
+            )
+
+        self.assertTrue(payload["approval_id"])
+        emit_approval_mock.assert_awaited_once()
 
     def test_begin_run_pending_approval_delegates_to_confirmation_entrypoint(self):
         calls = []
@@ -578,11 +632,221 @@ class RunServiceTests(unittest.TestCase):
         self.assertEqual(synced, [True])
         self.assertNotIn(id(run["logs"]), queue_index)
         self.assertIn(("runs_completed", 1), metrics_inc)
-        self.assertIn("upsert_live_run:run-1:completed", repo_dispatches)
+        self.assertIn("update_live_run_if_version_matches:run-1:completed:0", repo_dispatches)
         self.assertIn("record_transition:run-1:completed", repo_dispatches)
         self.assertIn("archive_run:run-1:completed", repo_dispatches)
         self.assertEqual(transition_outbox[0]["to_state"], "completed")
         self.assertEqual(artifact_outbox, [])
+
+    def test_transition_live_run_status_emits_trace_completion_and_artifacts(self):
+        run = {
+            "run_id": "run-1",
+            "status": "running",
+            "_started_mono": 5.0,
+            "logs": queue.Queue(),
+            "context": {"workspace_id": "workspace-1", "tenant_id": "tenant-1", "metadata": {"trace_id": "trace-1"}},
+            "result_data": {
+                "outputs": {
+                    "artifacts": [
+                        {"id": "artifact-1", "kind": "report", "title": "Run report", "mime_type": "text/markdown"}
+                    ]
+                }
+            },
+        }
+        trace_context = TraceContext(
+            trace_id="trace-1",
+            workspace_id="workspace-1",
+            tenant_id="tenant-1",
+            thread_id="thread-1",
+            run_id="run-1",
+            root_agent_id="sage",
+        )
+
+        with patch("server_modules.run_service.run_state_repository.dispatch_repository_call", side_effect=lambda awaitable, operation: asyncio.run(awaitable)), \
+             patch("server_modules.run_service.outbox_service.emit_run_transition_event"), \
+             patch("server_modules.run_service.outbox_service.emit_artifact_created_event"), \
+             patch("server_modules.run_service.run_async_tool_call", side_effect=lambda coro: asyncio.run(coro)), \
+             patch("server_modules.run_service.agent_trace_service.resume_trace", new=AsyncMock(return_value=trace_context)), \
+             patch("server_modules.run_service.agent_trace_service.emit_artifact_created", new=AsyncMock(return_value="evt-artifact")) as emit_artifact_mock, \
+             patch("server_modules.run_service.agent_trace_service.emit_trace_completed", new=AsyncMock(return_value="evt-complete")) as emit_complete_mock, \
+             patch("server_modules.run_service.agent_trace_service.finish_trace", new=AsyncMock(return_value={"id": "trace-1"})) as finish_mock:
+            transition_live_run_status(
+                "run-1",
+                "completed",
+                run=run,
+                now_mono=7.5,
+                now_iso="2026-04-06T00:00:00Z",
+                terminal_statuses={"completed", "failed", "timeout"},
+                local_queue_lock=__import__("threading").Lock(),
+                local_pending_run_ids=[],
+                local_claimed_runs={},
+                archive_run_if_terminal_fn=lambda run_id, payload: None,
+                remove_live_run_state_fn=lambda run_id: None,
+                sync_local_runtime_state_snapshot_fn=lambda: None,
+                persist_live_run_state_fn=lambda run_id, payload: None,
+                run_queue_index={},
+                metrics_add_fn=lambda key, value: None,
+                metrics_inc_fn=lambda key, value=1: None,
+            )
+
+        emit_artifact_mock.assert_awaited_once()
+        emit_complete_mock.assert_awaited_once()
+        finish_mock.assert_awaited_once()
+
+    def test_transition_live_run_status_emits_trace_failed_for_failed_run(self):
+        run = {
+            "run_id": "run-1",
+            "status": "running",
+            "_started_mono": 5.0,
+            "logs": queue.Queue(),
+            "result": "Tool execution failed.",
+            "context": {"workspace_id": "workspace-1", "tenant_id": "tenant-1", "metadata": {"trace_id": "trace-1"}},
+        }
+        trace_context = TraceContext(
+            trace_id="trace-1",
+            workspace_id="workspace-1",
+            tenant_id="tenant-1",
+            thread_id="thread-1",
+            run_id="run-1",
+            root_agent_id="sage",
+        )
+
+        with patch("server_modules.run_service.run_state_repository.dispatch_repository_call", side_effect=lambda awaitable, operation: asyncio.run(awaitable)), \
+             patch("server_modules.run_service.outbox_service.emit_run_transition_event"), \
+             patch("server_modules.run_service.outbox_service.emit_artifact_created_event"), \
+             patch("server_modules.run_service.run_async_tool_call", side_effect=lambda coro: asyncio.run(coro)), \
+             patch("server_modules.run_service.agent_trace_service.resume_trace", new=AsyncMock(return_value=trace_context)), \
+             patch("server_modules.run_service.agent_trace_service.emit_trace_failed", new=AsyncMock(return_value="evt-failed")) as emit_failed_mock, \
+             patch("server_modules.run_service.agent_trace_service.finish_trace", new=AsyncMock(return_value={"id": "trace-1"})) as finish_mock:
+            transition_live_run_status(
+                "run-1",
+                "failed",
+                run=run,
+                now_mono=7.5,
+                now_iso="2026-04-06T00:00:00Z",
+                terminal_statuses={"completed", "failed", "timeout"},
+                local_queue_lock=__import__("threading").Lock(),
+                local_pending_run_ids=[],
+                local_claimed_runs={},
+                archive_run_if_terminal_fn=lambda run_id, payload: None,
+                remove_live_run_state_fn=lambda run_id: None,
+                sync_local_runtime_state_snapshot_fn=lambda: None,
+                persist_live_run_state_fn=lambda run_id, payload: None,
+                run_queue_index={},
+                metrics_add_fn=lambda key, value: None,
+                metrics_inc_fn=lambda key, value=1: None,
+            )
+
+        emit_failed_mock.assert_awaited_once()
+        finish_mock.assert_awaited_once()
+
+    def test_transition_live_run_status_settles_deployed_agent_cost_cap(self):
+        run = {
+            "run_id": "run-1",
+            "status": "running",
+            "_started_mono": 5.0,
+            "logs": queue.Queue(),
+            "usage_masked": {
+                "provider": "openai",
+                "model": "gpt-4.1",
+                "prompt_tokens": 1000,
+                "completion_tokens": 1000,
+                "estimated_cost_usd": 1.25,
+            },
+            "context": {
+                "workspace_id": "workspace-1",
+                "tenant_id": "tenant-1",
+                "metadata": {
+                    "deployed_agent_id": "dagent_1",
+                },
+            },
+        }
+
+        with (
+            patch("server_modules.run_service.run_state_repository.dispatch_repository_call", side_effect=lambda awaitable, operation: asyncio.run(awaitable)),
+            patch("server_modules.run_service.outbox_service.emit_run_transition_event"),
+            patch("server_modules.run_service.outbox_service.emit_artifact_created_event"),
+            patch("server_modules.run_service.run_async_tool_call", side_effect=lambda coro: asyncio.run(coro)),
+            patch(
+                "server_modules.run_service.deployed_agent_cost_cap_service.settle_deployed_agent_monthly_cost_cap",
+                new=AsyncMock(return_value={"applied": True}),
+            ) as settle_mock,
+        ):
+            transition_live_run_status(
+                "run-1",
+                "completed",
+                run=run,
+                now_mono=7.5,
+                now_iso="2026-04-06T00:00:00Z",
+                terminal_statuses={"completed", "failed", "timeout"},
+                local_queue_lock=__import__("threading").Lock(),
+                local_pending_run_ids=[],
+                local_claimed_runs={},
+                archive_run_if_terminal_fn=lambda run_id, payload: None,
+                remove_live_run_state_fn=lambda run_id: None,
+                sync_local_runtime_state_snapshot_fn=lambda: None,
+                persist_live_run_state_fn=lambda run_id, payload: None,
+                run_queue_index={},
+                metrics_add_fn=lambda key, value: None,
+                metrics_inc_fn=lambda key, value=1: None,
+            )
+
+        settle_mock.assert_awaited_once()
+        self.assertEqual(settle_mock.await_args.kwargs["run_id"], "run-1")
+        self.assertEqual(settle_mock.await_args.kwargs["status"], "completed")
+
+    def test_transition_live_run_status_continues_when_cost_cap_settlement_fails(self):
+        run = {
+            "run_id": "run-1",
+            "status": "running",
+            "_started_mono": 5.0,
+            "logs": queue.Queue(),
+            "usage_masked": {
+                "provider": "openai",
+                "model": "gpt-4.1",
+                "prompt_tokens": 1000,
+                "completion_tokens": 1000,
+                "estimated_cost_usd": 1.25,
+            },
+            "context": {
+                "workspace_id": "workspace-1",
+                "tenant_id": "tenant-1",
+                "metadata": {
+                    "deployed_agent_id": "dagent_1",
+                },
+            },
+        }
+
+        with (
+            patch("server_modules.run_service.run_state_repository.dispatch_repository_call", side_effect=lambda awaitable, operation: asyncio.run(awaitable)),
+            patch("server_modules.run_service.outbox_service.emit_run_transition_event"),
+            patch("server_modules.run_service.outbox_service.emit_artifact_created_event"),
+            patch("server_modules.run_service.run_async_tool_call", side_effect=lambda coro: asyncio.run(coro)),
+            patch(
+                "server_modules.run_service.deployed_agent_cost_cap_service.settle_deployed_agent_monthly_cost_cap",
+                new=AsyncMock(side_effect=RuntimeError("cap settlement failed")),
+            ),
+        ):
+            transition_live_run_status(
+                "run-1",
+                "completed",
+                run=run,
+                now_mono=7.5,
+                now_iso="2026-04-06T00:00:00Z",
+                terminal_statuses={"completed", "failed", "timeout"},
+                local_queue_lock=__import__("threading").Lock(),
+                local_pending_run_ids=[],
+                local_claimed_runs={},
+                archive_run_if_terminal_fn=lambda run_id, payload: None,
+                remove_live_run_state_fn=lambda run_id: None,
+                sync_local_runtime_state_snapshot_fn=lambda: None,
+                persist_live_run_state_fn=lambda run_id, payload: None,
+                run_queue_index={},
+                metrics_add_fn=lambda key, value: None,
+                metrics_inc_fn=lambda key, value=1: None,
+            )
+
+        self.assertEqual(run["status"], "completed")
 
     def test_transition_live_run_status_publishes_safe_summary_bridge_for_local_completion(self):
         run = {
@@ -1814,6 +2078,8 @@ class RunServiceTests(unittest.TestCase):
             utc_now_iso_fn=lambda: "2026-04-06T00:00:01Z",
             inject_runtime_skill_defaults_fn=lambda context: context.setdefault("metadata", {}).update({"skill_defaults": True}),
             compute_tool_policy_precheck_fn=lambda context: {"blocked_count": 0},
+            create_live_run_initial_fn=lambda *args, **kwargs: {"version": 0, "registered_at": "2026-04-06T00:00:00Z"},
+            record_run_transition_fn=lambda *args, **kwargs: None,
             uuid4_fn=lambda: "run-live-1",
             utcnow_fn=lambda: datetime(2026, 4, 6, 0, 0, 0),
             monotonic_fn=lambda: 123.0,
@@ -1849,6 +2115,8 @@ class RunServiceTests(unittest.TestCase):
             provider_profiles={},
             memory_enabled=False,
             utc_now_iso_fn=lambda: "2026-04-06T00:00:01Z",
+            create_live_run_initial_fn=lambda *args, **kwargs: {"version": 0, "registered_at": "2026-04-06T00:00:00Z"},
+            record_run_transition_fn=lambda *args, **kwargs: None,
             uuid4_fn=lambda: "run-live-metric",
             utcnow_fn=lambda: datetime(2026, 4, 6, 0, 0, 0),
             monotonic_fn=lambda: next(monotonic_values),
@@ -1879,6 +2147,8 @@ class RunServiceTests(unittest.TestCase):
             provider_profiles={},
             memory_enabled=False,
             utc_now_iso_fn=lambda: "2026-04-06T00:00:01Z",
+            create_live_run_initial_fn=lambda *args, **kwargs: {"version": 0, "registered_at": "2026-04-06T00:00:00Z"},
+            record_run_transition_fn=lambda *args, **kwargs: None,
             uuid4_fn=lambda: "run-live-local",
             utcnow_fn=lambda: datetime(2026, 4, 6, 0, 0, 0),
             monotonic_fn=lambda: 123.0,
@@ -2193,6 +2463,66 @@ class RunServiceTests(unittest.TestCase):
         self.assertEqual(execution["kind"], "durable_run")
         self.assertEqual(execution["result"]["run_id"], "run-1")
         self.assertFalse(execution["result"]["doctor_preflight"]["blocking"])
+
+    def test_execute_durable_turn_request_creates_trace_when_missing(self):
+        run_request = RunStartRequest(
+            engine="orion",
+            workspace_id="default",
+            user_goal="Summarize inbox state",
+            provider="openai",
+            model="gpt-test",
+            metadata={"owner_user_id": "user-1"},
+        )
+        turn_request = build_run_start_turn_request(run_request)
+        captured = {}
+        services = RunExecutionServices(
+            stamp_request_owner=lambda req, current_user: req,
+            prepare_run_start_request=lambda req: {"metadata": dict(req.metadata or {})},
+            create_run_from_request=lambda req: (
+                captured.update({"metadata": dict(req.metadata or {})}) or {"run_id": "run-1", "status": "starting"}
+            ),
+        )
+        trace_context = TraceContext(
+            trace_id="trace-durable-1",
+            workspace_id="default",
+            tenant_id="default",
+            thread_id="thread-1",
+            run_id=None,
+            root_agent_id="sage",
+        )
+
+        with patch("server_modules.run_service.decide_execution_target", return_value={"selected": "cloud"}), patch(
+            "server_modules.run_service.apply_execution_route_metadata",
+            side_effect=lambda metadata, route: {**metadata, "execution_target_selected": route["selected"]},
+        ), patch(
+            "server_modules.run_service.build_doctor_run_gate_live",
+            new=AsyncMock(return_value={"blocking": False, "title": "ok"}),
+        ), patch(
+            "server_modules.run_service.agent_trace_service.start_trace",
+            new=AsyncMock(return_value=trace_context),
+        ) as start_trace_mock, patch(
+            "server_modules.run_service.agent_trace_service.emit_trace_started",
+            new=AsyncMock(return_value="evt-start"),
+        ) as emit_started_mock, patch(
+            "server_modules.run_service.agent_trace_service.emit_trace_routed",
+            new=AsyncMock(return_value="evt-routed"),
+        ) as emit_routed_mock:
+            execution = asyncio.run(
+                execute_durable_turn_request(
+                    turn_request=turn_request,
+                    current_user={"user_id": "user-1"},
+                    services=services,
+                    base_request=run_request,
+                    trace_context=None,
+                )
+            )
+
+        self.assertEqual(execution["result"]["run_id"], "run-1")
+        self.assertEqual(captured["metadata"]["trace_id"], "trace-durable-1")
+        self.assertEqual(captured["metadata"]["request_trace_id"], "trace-durable-1")
+        start_trace_mock.assert_awaited_once()
+        emit_started_mock.assert_awaited_once()
+        emit_routed_mock.assert_awaited_once()
 
     def test_execute_durable_turn_request_allows_unbound_local_companion_runs(self):
         run_request = RunStartRequest(

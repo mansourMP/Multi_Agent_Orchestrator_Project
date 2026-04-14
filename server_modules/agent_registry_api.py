@@ -8,10 +8,10 @@ from pydantic import BaseModel, Field
 from server_modules import agent_registry_repository
 from server_modules import agent_specialist_repository
 from server_modules.auth import enforce_workspace_access, workspace_tenant_id
-from server_modules.agent_turn import AgentTurnRequest, TurnActor, agent_turn as execute_canonical_agent_turn
 from server_modules.api_contract import ApiAgentTurnResponse, normalize_agent_turn_result
 from server_modules.run_service import build_server_run_execution_services
 from server_modules import runtime_run_access_service
+from server_modules import turn_ingress_service
 from server_modules import template_compiler_service
 from server_modules import thread_service
 from server_modules.agent_manifest import AgentManifest, AgentManifestBible, AgentManifestIdentity, AgentManifestSkillBinding
@@ -28,6 +28,9 @@ from server_modules import runtime_attachment_service
 from server_modules import activity_ledger_service
 from server_modules import specialist_service
 from server_modules import shared_operational_board_service
+
+# Transitional compatibility shim for older tests and callers.
+execute_canonical_agent_turn = turn_ingress_service.start_turn
 
 
 def _late_server_export(name: str):
@@ -323,11 +326,11 @@ def _run_execution_services():
     )
 
 
-def _current_actor(current_user: Any) -> TurnActor:
+def _current_actor_payload(current_user: Any) -> Dict[str, str]:
     user_id = str((current_user or {}).get("user_id") or "").strip()
     email = str((current_user or {}).get("email") or "").strip()
     actor_id = user_id or email or "web-user"
-    return TurnActor(type="user", id=actor_id, display_name=email or actor_id)
+    return {"type": "user", "id": actor_id, "display_name": email or actor_id}
 
 
 def _raise_specialist_write_error(error: Exception) -> None:
@@ -545,7 +548,7 @@ async def execute_install_agent_turn(
     if not workflow_id or not workflow_version_id:
         raise HTTPException(status_code=409, detail="Installed agent is missing a compiled workflow artifact.")
 
-    actor = _current_actor(current_user)
+    actor = _current_actor_payload(current_user)
     runtime_scope = execution_sandbox_service.runtime_scope(
         runtime_mode=_normalized_runtime_mode(install),
         runtime_profile=runtime_profile,
@@ -621,16 +624,16 @@ async def execute_install_agent_turn(
         raise HTTPException(status_code=409, detail="This specialist requires a desktop companion runtime profile.")
     if runtime_mode == "privileged_device" and not bool(normalized_policy_context.get("privileged_runtime_approved")):
         raise HTTPException(status_code=409, detail="Privileged device execution requires explicit owner approval.")
-    turn_request = AgentTurnRequest(
-        tenant_id=str(install.get("tenant_id") or "").strip(),
-        workspace_id=workspace_id,
-        thread_id=thread_binding["thread_id"],
-        session_id=thread_binding["session_id"],
-        channel=str(channel or "web").strip() or "web",
-        actor=actor,
-        message=resolved_message,
-        attachments=[],
-        context_hints={
+    turn_payload = {
+        "tenant_id": str(install.get("tenant_id") or "").strip(),
+        "workspace_id": workspace_id,
+        "thread_id": thread_binding["thread_id"],
+        "session_id": thread_binding["session_id"],
+        "channel": str(channel or "web").strip() or "web",
+        "actor": actor,
+        "message": resolved_message,
+        "attachments": [],
+        "context_hints": {
             "engine": "orion",
             "workflow_id": workflow_id,
             "workflow_version_id": workflow_version_id,
@@ -651,17 +654,17 @@ async def execute_install_agent_turn(
                 },
             },
         },
-        execution_mode=execution_mode,
-        response_mode=response_mode,
-        machine_target=resolved_machine_target,
-        policy_context=normalized_policy_context,
-    )
-    result = await execute_canonical_agent_turn(
-        turn_request=turn_request,
+        "execution_mode": execution_mode,
+        "response_mode": response_mode,
+        "machine_target": resolved_machine_target,
+        "policy_context": normalized_policy_context,
+    }
+    ingress = await turn_ingress_service.start_turn(
+        payload=turn_payload,
         current_user=current_user,
         run_execution_services=_run_execution_services(),
     )
-    return normalize_agent_turn_result(result, turn_request=turn_request)
+    return normalize_agent_turn_result(ingress.result, turn_request=ingress.turn_request)
 
 
 def _inventory_preview_manifest(*, agent_label: str, hard_context: str, operational_policy: str) -> AgentManifest:

@@ -1,6 +1,8 @@
 import unittest
+from unittest.mock import patch
 
 from server_modules.agent_turn import build_direct_chat_turn_request, serialize_agent_turn_request
+from server_modules.agent_trace_service import TraceContext
 from server_modules.direct_chat_service import (
     DirectChatExecutionServices,
     direct_chat_request_signature,
@@ -87,6 +89,37 @@ class DirectChatServiceTests(unittest.TestCase):
         self.assertEqual(call["request_meta"]["agent_turn_request"]["message"], "hello")
         self.assertEqual(manager.eviction_calls, 1)
 
+    def test_build_direct_chat_event_producer_logs_cleanup_degradation(self):
+        manager = _DummyManager()
+
+        def _broken_cleanup(**kwargs):
+            raise RuntimeError("cleanup failed")
+
+        manager.evict_idle_handles = _broken_cleanup
+        services = DirectChatExecutionServices(
+            chat_stream_key=lambda current_user, body: ("user-1:thread-1:req-1", "thread-1", "req-1"),
+            session_manager_enabled=lambda: True,
+            session_manager_factory=lambda: manager,
+            build_direct_operator_reply=lambda **kwargs: {"reply": "direct"},
+            build_chat_turn_event_stream=lambda **kwargs: iter(()),
+        )
+
+        with patch("server_modules.direct_chat_service.failure_policy_service.log_degraded_operation") as degrade_mock:
+            producer = build_direct_chat_event_producer(
+                current_user={"user_id": "user-1", "email": "user@example.com"},
+                body={"thread_id": "thread-1", "provider": "openai", "model": "gpt-test"},
+                message="hello",
+                workspace_id="default",
+                session_key="user-1:thread-1:req-1",
+                thread_id="thread-1",
+                client_request_id="req-1",
+                services=services,
+            )
+            list(producer)
+
+        degrade_mock.assert_called_once()
+        self.assertEqual(degrade_mock.call_args.kwargs["code"], "direct_chat_session_cleanup_failed")
+
     def test_build_direct_chat_event_producer_passes_bound_session_context_without_session_manager(self):
         captured = {}
 
@@ -139,6 +172,37 @@ class DirectChatServiceTests(unittest.TestCase):
         self.assertEqual(request_meta["agent_turn_request"]["workspace_id"], "default")
         self.assertEqual(request_meta["agent_turn_request"]["session_id"], "thread-1")
         self.assertEqual(request_meta["agent_turn_request"]["message"], "hello")
+
+    def test_build_direct_chat_request_meta_includes_serializable_trace_reference(self):
+        turn_request = build_direct_chat_turn_request(
+            current_user={"user_id": "user-1"},
+            body={"thread_id": "thread-1"},
+            workspace_id="default",
+            thread_id="thread-1",
+            client_request_id="req-1",
+            message="hello",
+        )
+        trace_context = TraceContext(
+            trace_id="trace-1",
+            workspace_id="default",
+            tenant_id="tenant-1",
+            thread_id="thread-1",
+            run_id=None,
+            root_agent_id="sage",
+        )
+
+        request_meta = build_direct_chat_request_meta(
+            body={"thread_id": "thread-1"},
+            workspace_id="default",
+            thread_id="thread-1",
+            client_request_id="req-1",
+            agent_turn_request=serialize_agent_turn_request(turn_request),
+            trace_context=trace_context,
+        )
+
+        self.assertEqual(request_meta["trace"]["trace_id"], "trace-1")
+        self.assertEqual(request_meta["trace"]["tenant_id"], "tenant-1")
+        self.assertEqual(request_meta["trace"]["root_agent_id"], "sage")
 
     def test_execute_direct_chat_turn_request_returns_stream_plan(self):
         turn_request = build_direct_chat_turn_request(

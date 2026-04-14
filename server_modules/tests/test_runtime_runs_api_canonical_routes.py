@@ -3,6 +3,7 @@ import threading
 import types
 import unittest
 from fastapi import HTTPException
+from unittest.mock import patch
 
 from server_modules import runtime_runs_api
 from server_modules.api_contract import ApiAgentTurnRequest
@@ -98,7 +99,7 @@ class RuntimeRunsApiCanonicalRouteTests(unittest.TestCase):
         sys.modules["server"] = fake_server
         original_register = runtime_runs_api.runtime_route_registration_service.register_runtime_run_routes_from_api
         original_refresh = runtime_runs_api._refresh_server_exports
-        original_turn = runtime_runs_api.execute_canonical_agent_turn
+        original_turn = runtime_runs_api.turn_ingress_service.start_turn
         original_run_services = runtime_runs_api._run_execution_services
         original_direct_chat_services = runtime_runs_api._direct_chat_execution_services
         original_stream_response = runtime_runs_api.build_agent_turn_stream_response
@@ -114,7 +115,7 @@ class RuntimeRunsApiCanonicalRouteTests(unittest.TestCase):
         try:
             runtime_runs_api.runtime_route_registration_service.register_runtime_run_routes_from_api = lambda *args, **kwargs: None
             runtime_runs_api._refresh_server_exports = lambda: fake_server
-            runtime_runs_api.execute_canonical_agent_turn = self._fake_agent_turn
+            runtime_runs_api.turn_ingress_service.start_turn = self._fake_start_turn
             runtime_runs_api._run_execution_services = lambda: "run-services"
             runtime_runs_api._direct_chat_execution_services = lambda: "chat-services"
             runtime_runs_api.build_agent_turn_stream_response = self._fake_stream_response
@@ -240,6 +241,7 @@ class RuntimeRunsApiCanonicalRouteTests(unittest.TestCase):
             self.assertEqual(turn_payload.status, "accepted")
             self.assertEqual(turn_payload.run_id, "run-from-typed-turn")
             self.assertEqual(turn_payload.metadata["kind"], "durable_run")
+            self.assertEqual(turn_payload.metadata["trace_id"], "trace-durable-1")
 
             stream_payload = self._run_async(
                 app.routes[("POST", "/turn")](
@@ -330,6 +332,7 @@ class RuntimeRunsApiCanonicalRouteTests(unittest.TestCase):
             self.assertEqual(promoted_run_payload.status, "accepted")
             self.assertEqual(promoted_run_payload.run_id, "run-from-typed-turn")
             self.assertEqual(promoted_run_payload.metadata["kind"], "durable_run")
+            self.assertEqual(promoted_run_payload.metadata["trace_id"], "trace-durable-1")
             self.assertEqual(
                 promoted_run_payload.metadata["turn_request"]["context_hints"]["metadata"]["primary_engine_reason"],
                 "task_markers",
@@ -357,7 +360,11 @@ class RuntimeRunsApiCanonicalRouteTests(unittest.TestCase):
             self.assertEqual(legacy_run_payload.status, "accepted")
             self.assertEqual(legacy_run_payload.run_id, "run-from-legacy-start")
 
-            runs_payload = self._run_async(app.routes[("GET", "/runs")](current_user=self._current_user()))
+            with patch(
+                "server_modules.runtime_runs_api.entitlements_service.workspace_entitlement_payload_for_workspace_id",
+                return_value={"capabilities": {"history_window_days": 365}},
+            ):
+                runs_payload = self._run_async(app.routes[("GET", "/runs")](current_user=self._current_user()))
             self.assertEqual(runs_payload["count"], 4)
             self.assertEqual(runs_payload["items"][0]["source"], "live")
             self.assertEqual(runs_payload["items"][1]["source"], "live")
@@ -370,57 +377,60 @@ class RuntimeRunsApiCanonicalRouteTests(unittest.TestCase):
                 runtime_runs_api.session_service.create_session = self._fake_create_session
                 runtime_runs_api.session_service.get_session = self._fake_get_session
                 runtime_runs_api.session_service.terminate_session = self._fake_terminate_session
+                with patch(
+                    "server_modules.runtime_runs_api.entitlements_service.workspace_entitlement_payload_for_workspace_id",
+                    return_value={"capabilities": {"history_window_days": 365}},
+                ):
+                    session_payload = self._run_async(
+                        app.routes[("POST", "/sessions")](
+                            runtime_runs_api.ApiSessionRequest(
+                                workspace_id="default",
+                                tenant_id="default",
+                                channel="web",
+                                actor={"type": "user", "id": "user-1"},
+                                metadata={"source": "test"},
+                            ),
+                            current_user=self._current_user(),
+                        )
+                    )
+                    self.assertEqual(session_payload.session_id, "session-created")
 
-                session_payload = self._run_async(
-                    app.routes[("POST", "/sessions")](
-                        runtime_runs_api.ApiSessionRequest(
+                    fetched_session = self._run_async(
+                        app.routes[("GET", "/sessions/{session_id}")](
+                            "session-created",
+                            current_user=self._current_user(),
+                        )
+                    )
+                    self.assertEqual(fetched_session.session_id, "session-created")
+
+                    deleted_session = self._run_async(
+                        app.routes[("DELETE", "/sessions/{session_id}")](
+                            "session-created",
+                            current_user=self._current_user(),
+                        )
+                    )
+                    self.assertTrue(deleted_session["ok"])
+
+                    thread_list = self._run_async(
+                        app.routes[("GET", "/threads")](
                             workspace_id="default",
-                            tenant_id="default",
-                            channel="web",
-                            actor={"type": "user", "id": "user-1"},
-                            metadata={"source": "test"},
-                        ),
-                        current_user=self._current_user(),
+                            include_turns=True,
+                            limit=25,
+                            current_user=self._current_user(),
+                        )
                     )
-                )
-                self.assertEqual(session_payload.session_id, "session-created")
+                    self.assertEqual(thread_list["count"], 1)
+                    self.assertEqual(thread_list["items"][0]["id"], "thread-1")
+                    self.assertEqual(thread_list["items"][0]["turns"][0]["role"], "user")
 
-                fetched_session = self._run_async(
-                    app.routes[("GET", "/sessions/{session_id}")](
-                        "session-created",
-                        current_user=self._current_user(),
+                    thread_detail = self._run_async(
+                        app.routes[("GET", "/threads/{thread_id}")](
+                            "thread-1",
+                            current_user=self._current_user(),
+                        )
                     )
-                )
-                self.assertEqual(fetched_session.session_id, "session-created")
-
-                deleted_session = self._run_async(
-                    app.routes[("DELETE", "/sessions/{session_id}")](
-                        "session-created",
-                        current_user=self._current_user(),
-                    )
-                )
-                self.assertTrue(deleted_session["ok"])
-
-                thread_list = self._run_async(
-                    app.routes[("GET", "/threads")](
-                        workspace_id="default",
-                        include_turns=True,
-                        limit=25,
-                        current_user=self._current_user(),
-                    )
-                )
-                self.assertEqual(thread_list["count"], 1)
-                self.assertEqual(thread_list["items"][0]["id"], "thread-1")
-                self.assertEqual(thread_list["items"][0]["turns"][0]["role"], "user")
-
-                thread_detail = self._run_async(
-                    app.routes[("GET", "/threads/{thread_id}")](
-                        "thread-1",
-                        current_user=self._current_user(),
-                    )
-                )
-                self.assertEqual(thread_detail["id"], "thread-1")
-                self.assertEqual(thread_detail["turns"][1]["role"], "assistant")
+                    self.assertEqual(thread_detail["id"], "thread-1")
+                    self.assertEqual(thread_detail["turns"][1]["role"], "assistant")
             finally:
                 runtime_runs_api.session_service.create_session = original_create_session
                 runtime_runs_api.session_service.get_session = original_get_session
@@ -428,7 +438,7 @@ class RuntimeRunsApiCanonicalRouteTests(unittest.TestCase):
         finally:
             runtime_runs_api.runtime_route_registration_service.register_runtime_run_routes_from_api = original_register
             runtime_runs_api._refresh_server_exports = original_refresh
-            runtime_runs_api.execute_canonical_agent_turn = original_turn
+            runtime_runs_api.turn_ingress_service.start_turn = original_turn
             runtime_runs_api._run_execution_services = original_run_services
             runtime_runs_api._direct_chat_execution_services = original_direct_chat_services
             runtime_runs_api.build_agent_turn_stream_response = original_stream_response
@@ -522,12 +532,16 @@ class RuntimeRunsApiCanonicalRouteTests(unittest.TestCase):
             app = _FakeApp()
             runtime_runs_api.register_run_routes(app)
 
-            payload = self._run_async(
-                app.routes[("GET", "/approvals")](
-                    workspace_id="default",
-                    current_user=self._current_user(),
+            with patch(
+                "server_modules.runtime_runs_api.entitlements_service.workspace_entitlement_payload_for_workspace_id",
+                return_value={"capabilities": {"approvals_enabled": True}},
+            ):
+                payload = self._run_async(
+                    app.routes[("GET", "/approvals")](
+                        workspace_id="default",
+                        current_user=self._current_user(),
+                    )
                 )
-            )
         finally:
             runtime_runs_api.runtime_route_registration_service.register_runtime_run_routes_from_api = original_register
             runtime_runs_api._refresh_server_exports = original_refresh
@@ -813,6 +827,7 @@ class RuntimeRunsApiCanonicalRouteTests(unittest.TestCase):
         if kwargs.get("run_request") is not None:
             return {
                 "kind": "durable_run",
+                "metadata": {"trace_id": "trace-durable-legacy"},
                 "result": {
                     "status": "accepted",
                     "run_id": "run-from-legacy-start",
@@ -826,6 +841,7 @@ class RuntimeRunsApiCanonicalRouteTests(unittest.TestCase):
         if getattr(turn_request, "execution_mode", None) == "durable":
             return {
                 "kind": "durable_run",
+                "metadata": {"trace_id": "trace-durable-1"},
                 "result": {
                     "status": "accepted",
                     "run_id": "run-from-typed-turn",
@@ -842,7 +858,120 @@ class RuntimeRunsApiCanonicalRouteTests(unittest.TestCase):
             "session_key": "session-1",
             "thread_id": "thread-1",
             "client_request_id": "req-1",
-        }
+            "metadata": {"trace_id": "trace-stream-1"},
+            }
+
+    async def _fake_start_turn(self, **kwargs):
+        payload = kwargs.get("payload")
+        compatibility_payload = kwargs.get("compatibility_payload")
+        turn_request = kwargs.get("turn_request")
+        chat_body = kwargs.get("chat_body")
+        run_request = kwargs.get("run_request")
+        legacy_resolution = None
+
+        if turn_request is None:
+            detection_payload = compatibility_payload if isinstance(compatibility_payload, dict) else payload
+            if runtime_runs_api.turn_ingress_service.looks_like_legacy_direct_chat_body(detection_payload or {}):
+                legacy_resolution = runtime_runs_api.resolve_direct_chat_turn_request(
+                    current_user=kwargs.get("current_user"),
+                    body=payload,
+                    request_signature_fn=kwargs.get("request_signature_fn"),
+                )
+                turn_request = legacy_resolution.turn_request
+                chat_body = dict(payload or {})
+            elif runtime_runs_api.turn_ingress_service.looks_like_legacy_run_start_body(detection_payload or {}):
+                from server_modules.runtime_models import RunStartRequest
+
+                request = RunStartRequest(**dict(payload or {}))
+                resolution = runtime_runs_api.resolve_run_start_turn_request(
+                    current_user=kwargs.get("current_user"),
+                    body=request,
+                    stamp_request_owner_fn=kwargs.get("stamp_request_owner_fn"),
+                )
+                turn_request = resolution.turn_request
+                run_request = resolution.request
+            else:
+                turn_request = runtime_runs_api.request_body_to_turn_request(payload)
+
+        if (
+            callable(kwargs.get("stream_response_builder"))
+            and str(turn_request.execution_mode or "").strip().lower() == "sync"
+            and str(turn_request.response_mode or "").strip().lower() == "stream"
+        ):
+            result = await kwargs["stream_response_builder"](
+                current_user=kwargs.get("current_user"),
+                turn_request=turn_request,
+                last_event_id=kwargs.get("stream_last_event_id"),
+                services=kwargs.get("stream_response_services"),
+                chat_body=chat_body,
+                fallback_workspace_id=legacy_resolution.workspace_id if legacy_resolution else None,
+                fallback_thread_id=legacy_resolution.thread_id if legacy_resolution else None,
+                fallback_client_request_id=legacy_resolution.client_request_id if legacy_resolution else None,
+            )
+            if kwargs.get("return_result_only"):
+                return result
+            return runtime_runs_api.turn_ingress_service.TurnIngressResult(
+                turn_request=turn_request,
+                result=result,
+                chat_body=chat_body,
+                run_request=run_request,
+                legacy_direct_resolution=legacy_resolution,
+            )
+
+        result = await self._fake_agent_turn(
+            turn_request=turn_request,
+            run_request=run_request,
+            chat_body=chat_body,
+        )
+        if kwargs.get("return_result_only"):
+            return result
+        return runtime_runs_api.turn_ingress_service.TurnIngressResult(
+            turn_request=turn_request,
+            result=result,
+            chat_body=chat_body,
+            run_request=run_request,
+            legacy_direct_resolution=legacy_resolution,
+        )
+
+    def test_normalize_agent_turn_result_preserves_trace_id_for_direct_and_durable_results(self):
+        turn_request = runtime_runs_api.request_body_to_turn_request(
+            ApiAgentTurnRequest(
+                tenant_id="default",
+                workspace_id="default",
+                session_id="thread-1",
+                channel="web",
+                actor={"type": "user", "id": "user-1"},
+                message="hello",
+                execution_mode="sync",
+                response_mode="stream",
+            )
+        )
+
+        durable = runtime_runs_api.normalize_agent_turn_result(
+            {
+                "kind": "durable_run",
+                "metadata": {"trace_id": "trace-durable-2"},
+                "result": {
+                    "status": "accepted",
+                    "run_id": "run-1",
+                },
+            },
+            turn_request=turn_request,
+        )
+        direct = runtime_runs_api.normalize_agent_turn_result(
+            {
+                "kind": "direct_chat_stream",
+                "workspace_id": "default",
+                "session_key": "session-1",
+                "thread_id": "thread-1",
+                "client_request_id": "req-1",
+                "metadata": {"trace_id": "trace-stream-2"},
+            },
+            turn_request=turn_request,
+        )
+
+        self.assertEqual(durable.metadata["trace_id"], "trace-durable-2")
+        self.assertEqual(direct.metadata["trace_id"], "trace-stream-2")
 
     async def _fake_stream_response(self, **kwargs):
         return {

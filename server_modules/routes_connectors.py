@@ -3,6 +3,7 @@ from typing import Dict, Optional
 from fastapi import APIRouter, Depends, HTTPException, Request
 
 from server_modules.auth import enforce_workspace_access
+from server_modules import provider_catalog_service
 from server_modules.runtime_common import require_admin_api_key, require_api_key
 from server_modules.runtime_models import (
     ConnectorPatchRequest,
@@ -83,6 +84,19 @@ async def providers_catalog(
         capability_id="connectors.manage",
     )
     return await core.list_providers(workspace_id=workspace_id)
+
+
+async def providers_model_catalog(
+    request: Request,
+    current_user=Depends(require_api_key),
+):
+    workspace_id = enforce_workspace_access(
+        current_user,
+        request.query_params.get("workspace_id"),
+        minimum_role="owner",
+        capability_id="connectors.manage",
+    )
+    return await provider_catalog_service.list_workspace_provider_catalog(workspace_id=workspace_id)
 
 
 async def providers_health_check(
@@ -404,6 +418,7 @@ router.add_api_route("/tools/contracts", core.get_tool_contracts, methods=['GET'
 router.add_api_route("/tools/contracts/{tool_id}", update_tool_contract, methods=['PUT'], dependencies=admin_deps)
 router.add_api_route("/tools/policy/evaluate", core.evaluate_tools_policy, methods=['POST'], dependencies=[Depends(require_api_key)])
 router.add_api_route("/providers", providers_catalog, methods=['GET'])
+router.add_api_route("/providers/catalog", providers_model_catalog, methods=['GET'])
 router.add_api_route("/providers/anthropic/local-cli/status", core.get_anthropic_local_cli_status, methods=['GET'], dependencies=admin_deps)
 router.add_api_route("/providers/anthropic/local-cli/login", core.start_anthropic_local_cli_login, methods=['POST'], dependencies=admin_deps)
 router.add_api_route("/providers/gemini/local-cli/status", core.get_gemini_local_cli_status, methods=['GET'], dependencies=admin_deps)

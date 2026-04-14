@@ -30,6 +30,10 @@ class TelegramRoutingServiceTests(unittest.TestCase):
         self.assertEqual(routed["action"], "profile_set")
         self.assertEqual(routed["field"], "exam")
 
+        start_routed = self.service.route_message("/start youtube-health", self.profile)
+        self.assertEqual(start_routed["action"], "onboard_start")
+        self.assertEqual(start_routed["payload"], "youtube-health")
+
         skill_routed = self.service.route_message("skill crm", self.profile)
         self.assertEqual(skill_routed["action"], "run")
         self.assertEqual(skill_routed["goal"], "Apply skill crm")

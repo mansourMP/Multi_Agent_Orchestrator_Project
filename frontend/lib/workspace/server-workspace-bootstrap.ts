@@ -2,34 +2,47 @@ import 'server-only';
 
 import { headers } from 'next/headers';
 
-import { controlPlaneBaseUrl } from '@/lib/server/control-plane-base-url';
 import {
   type WorkspaceBootstrapPayload,
   parseWorkspaceBootstrapPayload,
 } from '@/lib/workspace/workspace-bootstrap';
 
+export class WorkspaceBootstrapError extends Error {
+  status: number;
+  workspaceId: string;
+
+  constructor(workspaceId: string, status: number, message?: string) {
+    super(
+      message ?? `Workspace bootstrap request failed for ${workspaceId} with status ${status}.`,
+    );
+    this.name = 'WorkspaceBootstrapError';
+    this.status = status;
+    this.workspaceId = workspaceId;
+  }
+}
+
 export async function loadWorkspaceBootstrap(workspaceId: string): Promise<WorkspaceBootstrapPayload> {
   const requestHeaders = await headers();
-  const cookieHeader = requestHeaders.get('cookie');
-  const authorizationHeader = requestHeaders.get('authorization');
-  const forwardedHost = requestHeaders.get('host');
-  const forwardedProto = requestHeaders.get('x-forwarded-proto');
-  const url = `${controlPlaneBaseUrl()}/api/workspaces/${encodeURIComponent(workspaceId)}/bootstrap`;
+  const host = requestHeaders.get('x-forwarded-host') ?? requestHeaders.get('host');
+  const proto = requestHeaders.get('x-forwarded-proto') ?? 'http';
+  if (!host) {
+    throw new WorkspaceBootstrapError(workspaceId, 500, 'Cannot resolve request host for workspace bootstrap.');
+  }
+  const origin = `${proto.split(',')[0].trim() || 'http'}://${host.split(',')[0].trim()}`;
+  const url = `${origin}/api/workspaces/${encodeURIComponent(workspaceId)}/bootstrap`;
 
   const response = await fetch(url, {
     method: 'GET',
-    next: { revalidate: 30 },
+    cache: 'no-store',
     headers: {
       accept: 'application/json',
-      ...(cookieHeader ? { cookie: cookieHeader } : {}),
-      ...(authorizationHeader ? { authorization: authorizationHeader } : {}),
-      ...(forwardedHost ? { 'x-forwarded-host': forwardedHost } : {}),
-      ...(forwardedProto ? { 'x-forwarded-proto': forwardedProto } : {}),
+      ...(requestHeaders.get('cookie') ? { cookie: requestHeaders.get('cookie') as string } : {}),
+      ...(requestHeaders.get('authorization') ? { authorization: requestHeaders.get('authorization') as string } : {}),
     },
   });
 
   if (!response.ok) {
-    throw new Error(`Workspace bootstrap request failed for ${workspaceId} with status ${response.status}.`);
+    throw new WorkspaceBootstrapError(workspaceId, response.status);
   }
 
   const payload = await response.json();

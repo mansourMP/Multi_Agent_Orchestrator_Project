@@ -1,7 +1,12 @@
 import type { ReactNode } from 'react';
+import { notFound, redirect } from 'next/navigation';
 
 import { AccountTenantSwitcher } from '@/app/(account)/AccountTenantSwitcher';
-import { loadWorkspaceBootstrap } from '@/lib/workspace/server-workspace-bootstrap';
+import {
+  WorkspaceBootstrapError,
+  loadWorkspaceBootstrap,
+} from '@/lib/workspace/server-workspace-bootstrap';
+import { DesktopStartupScreen } from '@/lib/workspace/desktop-startup-screen';
 import { WorkspaceBoundary } from '@/lib/workspace/workspace-boundary';
 import { WorkstationKernelShell } from '@/lib/workspace/workstation-kernel-shell';
 import { WorkstationShellFrame } from '@/lib/workspace/workstation-shell-frame';
@@ -14,18 +19,41 @@ export default async function WorkspaceRouteLayout({
   params: Promise<{ workspaceId: string }>;
 }) {
   const { workspaceId } = await params;
-  const bootstrap = await loadWorkspaceBootstrap(workspaceId);
+  let bootstrap;
+  try {
+    bootstrap = await loadWorkspaceBootstrap(workspaceId);
+  } catch (error) {
+    if (error instanceof WorkspaceBootstrapError) {
+      if (error.status === 401) {
+        redirect('/login');
+      }
+      if (error.status === 403) {
+        redirect('/');
+      }
+      if (error.status === 404) {
+        notFound();
+      }
+    }
+    throw error;
+  }
+
+  if (bootstrap.shellHints.requiresOnboarding) {
+    redirect(`/onboarding?workspaceId=${encodeURIComponent(bootstrap.workspace.id)}`);
+  }
 
   return (
-    <WorkstationShellFrame
-      switcherPane={<AccountTenantSwitcher />}
-      kernelPane={(
-        <WorkspaceBoundary workspaceId={workspaceId} bootstrap={bootstrap}>
-          <WorkstationKernelShell>
-            {children}
-          </WorkstationKernelShell>
-        </WorkspaceBoundary>
-      )}
-    />
+    <>
+      <DesktopStartupScreen workspaceLabel={bootstrap.workspace.label} />
+      <WorkstationShellFrame
+        switcherPane={<AccountTenantSwitcher />}
+        kernelPane={(
+          <WorkspaceBoundary workspaceId={workspaceId} bootstrap={bootstrap}>
+            <WorkstationKernelShell>
+              {children}
+            </WorkstationKernelShell>
+          </WorkspaceBoundary>
+        )}
+      />
+    </>
   );
 }

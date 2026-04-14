@@ -8,6 +8,7 @@ from fastapi import HTTPException
 
 from server_modules import agent_registry_api
 from server_modules.agent_manifest import AgentManifest
+from server_modules.api_contract import request_body_to_turn_request
 
 
 class _FakeApp:
@@ -408,12 +409,20 @@ class AgentRegistryApiRouteTests(unittest.TestCase):
                         }
                     ),
                 ),
-                patch("server_modules.agent_registry_api.execute_canonical_agent_turn", new=AsyncMock(return_value={
-                    "status": "accepted",
-                    "reply": "",
-                    "run_id": "run-1",
-                    "metadata": {"created_run": {"run_id": "run-1", "status": "queued"}},
-                })) as turn_mock,
+                patch(
+                    "server_modules.agent_registry_api.turn_ingress_service.start_turn",
+                    new=AsyncMock(
+                        side_effect=lambda **kwargs: agent_registry_api.turn_ingress_service.TurnIngressResult(
+                            turn_request=request_body_to_turn_request(kwargs["payload"]),
+                            result={
+                                "status": "accepted",
+                                "reply": "",
+                                "run_id": "run-1",
+                                "metadata": {"created_run": {"run_id": "run-1", "status": "queued"}},
+                            },
+                        )
+                    ),
+                ) as turn_mock,
             ):
                 result = asyncio.run(
                     route(
@@ -424,14 +433,14 @@ class AgentRegistryApiRouteTests(unittest.TestCase):
                 )
 
             self.assertEqual(result.status, "accepted")
-            turn_request = turn_mock.await_args.kwargs["turn_request"]
-            self.assertEqual(turn_request.context_hints["workflow_id"], "wf-compiled")
-            self.assertEqual(turn_request.context_hints["workflow_version_id"], "wfver-compiled")
-            self.assertEqual(turn_request.machine_target, "machine-1")
-            metadata = turn_request.context_hints["metadata"]
+            turn_payload = turn_mock.await_args.kwargs["payload"]
+            self.assertEqual(turn_payload["context_hints"]["workflow_id"], "wf-compiled")
+            self.assertEqual(turn_payload["context_hints"]["workflow_version_id"], "wfver-compiled")
+            self.assertEqual(turn_payload["machine_target"], "machine-1")
+            metadata = turn_payload["context_hints"]["metadata"]
             self.assertEqual(metadata["runtime_profile_id"], "profile-1")
             self.assertEqual(metadata["workflow_definition"]["version"], "empyralist.workflow.v2")
-            self.assertEqual(turn_request.thread_id, "thread-1")
+            self.assertEqual(turn_payload["thread_id"], "thread-1")
         finally:
             if previous_server is None:
                 sys.modules.pop("server", None)
@@ -1692,7 +1701,7 @@ class AgentRegistryApiRouteTests(unittest.TestCase):
                 patch("server_modules.agent_registry_api.template_compiler_service.ensure_install_compiled_artifact", new=AsyncMock(return_value=compiled)),
                 patch("server_modules.agent_registry_api.enforce_workspace_access", return_value="workspace-1"),
                 patch("server_modules.agent_registry_api._run_execution_services", return_value={"run": "services"}),
-                patch("server_modules.agent_registry_api.execute_canonical_agent_turn", new=AsyncMock()),
+                patch("server_modules.agent_registry_api.turn_ingress_service.start_turn", new=AsyncMock()),
                 patch(
                     "server_modules.agent_registry_api.runtime_attachment_service.resolve_install_runtime_plan",
                     new=AsyncMock(
@@ -1794,12 +1803,20 @@ class AgentRegistryApiRouteTests(unittest.TestCase):
                         }
                     ),
                 ),
-                patch("server_modules.agent_registry_api.execute_canonical_agent_turn", new=AsyncMock(return_value={
-                    "status": "accepted",
-                    "reply": "",
-                    "run_id": "run-1",
-                    "metadata": {"created_run": {"run_id": "run-1", "status": "queued"}},
-                })) as turn_mock,
+                patch(
+                    "server_modules.agent_registry_api.turn_ingress_service.start_turn",
+                    new=AsyncMock(
+                        side_effect=lambda **kwargs: agent_registry_api.turn_ingress_service.TurnIngressResult(
+                            turn_request=request_body_to_turn_request(kwargs["payload"]),
+                            result={
+                                "status": "accepted",
+                                "reply": "",
+                                "run_id": "run-1",
+                                "metadata": {"created_run": {"run_id": "run-1", "status": "queued"}},
+                            },
+                        )
+                    ),
+                ) as turn_mock,
             ):
                 result = asyncio.run(
                     route(
@@ -1810,9 +1827,9 @@ class AgentRegistryApiRouteTests(unittest.TestCase):
                 )
 
             self.assertEqual(result.status, "accepted")
-            turn_request = turn_mock.await_args.kwargs["turn_request"]
-            self.assertIsNone(turn_request.machine_target)
-            metadata = turn_request.context_hints["metadata"]
+            turn_payload = turn_mock.await_args.kwargs["payload"]
+            self.assertIsNone(turn_payload["machine_target"])
+            metadata = turn_payload["context_hints"]["metadata"]
             self.assertIsNone(metadata["root_folder_uri"])
             self.assertEqual(metadata["folder_grants"], [])
             self.assertEqual(metadata["file_mount_grants"], [])
@@ -1887,12 +1904,20 @@ class AgentRegistryApiRouteTests(unittest.TestCase):
                         }
                     ),
                 ),
-                patch("server_modules.agent_registry_api.execute_canonical_agent_turn", new=AsyncMock(return_value={
-                    "status": "accepted",
-                    "reply": "",
-                    "run_id": "run-1",
-                    "metadata": {"created_run": {"run_id": "run-1", "status": "queued"}},
-                })) as turn_mock,
+                patch(
+                    "server_modules.agent_registry_api.turn_ingress_service.start_turn",
+                    new=AsyncMock(
+                        side_effect=lambda **kwargs: agent_registry_api.turn_ingress_service.TurnIngressResult(
+                            turn_request=request_body_to_turn_request(kwargs["payload"]),
+                            result={
+                                "status": "accepted",
+                                "reply": "",
+                                "run_id": "run-1",
+                                "metadata": {"created_run": {"run_id": "run-1", "status": "queued"}},
+                            },
+                        )
+                    ),
+                ) as turn_mock,
             ):
                 result = asyncio.run(
                     route(
@@ -1903,9 +1928,9 @@ class AgentRegistryApiRouteTests(unittest.TestCase):
                 )
 
             self.assertEqual(result.status, "accepted")
-            turn_request = turn_mock.await_args.kwargs["turn_request"]
-            self.assertEqual(turn_request.machine_target, "machine-local")
-            metadata = turn_request.context_hints["metadata"]
+            turn_payload = turn_mock.await_args.kwargs["payload"]
+            self.assertEqual(turn_payload["machine_target"], "machine-local")
+            metadata = turn_payload["context_hints"]["metadata"]
             self.assertEqual(metadata["runtime_attachment_kind"], "local_companion")
             self.assertEqual(metadata["workspace_runtime_deployment_mode"], "hybrid")
         finally:

@@ -69,7 +69,7 @@ class AutopilotBridgeRegistryService:
         webhook_auth_result: Callable[..., Dict[str, Any]],
         resolve_inbound_connector: Callable[[Dict[str, str]], Any],
         validate_webhook_signature: Callable[[str, Dict[str, str], str, str], bool],
-        handle_inbound: Callable[[Dict[str, str], Optional[Dict[str, Any]]], Any],
+        ingest_webhook: Callable[[Dict[str, str], Optional[Dict[str, Any]]], Any],
         twiml_response: Callable[[str], Any],
         error_response: Callable[[int, str], Any],
         telegram_webhook_enabled: bool,
@@ -138,7 +138,7 @@ class AutopilotBridgeRegistryService:
         self.webhook_auth_result = webhook_auth_result
         self.resolve_inbound_connector = resolve_inbound_connector
         self.validate_webhook_signature = validate_webhook_signature
-        self.handle_inbound = handle_inbound
+        self.ingest_webhook = ingest_webhook
         self.twiml_response = twiml_response
         self.error_response = error_response
         self.telegram_webhook_enabled = bool(telegram_webhook_enabled)
@@ -263,7 +263,7 @@ class AutopilotBridgeRegistryService:
                 webhook_auth_result=self.webhook_auth_result,
                 resolve_inbound_connector=self.resolve_inbound_connector,
                 validate_signature=self.validate_webhook_signature,
-                handle_inbound=self.handle_inbound,
+                ingest_webhook=self.ingest_webhook,
                 twiml_response=self.twiml_response,
                 error_response=self.error_response,
                 enabled=self.webhook_enabled,

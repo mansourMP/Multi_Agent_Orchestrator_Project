@@ -25,6 +25,19 @@ function resolveApiBaseUrl(apiBaseUrl) {
   return apiBaseUrl.replace(/\/+$/, '');
 }
 
+function resolveStorage(storage) {
+  if (
+    storage
+    && typeof storage.getItem === 'function'
+    && typeof storage.setItem === 'function'
+    && typeof storage.removeItem === 'function'
+  ) {
+    return storage;
+  }
+
+  return createMemoryKeyValueStorage();
+}
+
 export class WorkspaceDisposableRegistry {
   constructor() {
     this.disposers = new Set();
@@ -402,9 +415,10 @@ export function createWorkspaceServiceBundle({
     throw new Error('Workspace service bundle requires workspaceId.');
   }
 
+  const resolvedStorage = resolveStorage(storage);
   const prefix = `empyralis.mobile.v2:${accountId}:${workspaceId}`;
   const disposableRegistry = new WorkspaceDisposableRegistry();
-  const persistence = new WorkspacePersistenceNamespace(prefix, storage);
+  const persistence = new WorkspacePersistenceNamespace(prefix, resolvedStorage);
   const transport = new WorkspaceTransportAdapter({
     apiBaseUrl,
     workspaceId,
@@ -422,6 +436,7 @@ export function createWorkspaceServiceBundle({
     transport,
     realtime,
     persistence,
+    storage: resolvedStorage,
     disposableRegistry,
     storeFactory,
     snapshot() {
@@ -431,6 +446,7 @@ export function createWorkspaceServiceBundle({
         transport: transport.snapshot(),
         realtime: realtime.snapshot(),
         persistence: persistence.snapshot(),
+        storage: resolvedStorage.snapshot?.() ?? null,
         disposableRegistry: disposableRegistry.snapshot(),
       };
     },

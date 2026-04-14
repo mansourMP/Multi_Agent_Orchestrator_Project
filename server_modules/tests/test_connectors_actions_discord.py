@@ -173,7 +173,7 @@ class DiscordWebhookCanonicalizationTests(unittest.IsolatedAsyncioTestCase):
         kwargs = captured["kwargs"]
         self.assertTrue(callable(kwargs["run_start_request_class"]))
         self.assertTrue(callable(kwargs["start_run_request"]))
-        self.assertTrue(callable(kwargs["create_run_fn"]))
+        self.assertNotIn("create_run_fn", kwargs)
         run_request = kwargs["run_start_request_class"](engine="orion", workspace_id="default", user_goal="hello")
         self.assertEqual(run_request.workspace_id, "default")
         self.assertEqual(run_request.user_goal, "hello")

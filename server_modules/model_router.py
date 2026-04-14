@@ -57,6 +57,14 @@ def infer_provider(model_name: Optional[str], provider: Optional[str] = None, pr
         return "gemini"
     if raw.startswith("vertex_ai/") or raw.startswith("vertex"):
         return "vertex"
+    if raw.startswith("qwen/") or raw.startswith("qwen"):
+        return "qwen"
+    if raw.startswith("deepseek/") or raw.startswith("deepseek"):
+        return "deepseek"
+    if raw.startswith("mistral/") or raw.startswith("mistral"):
+        return "mistral"
+    if raw.startswith("ollama/") or raw.startswith("llama") or raw.startswith("gemma") or raw.startswith("phi3"):
+        return "ollama"
     return "openai"
 
 

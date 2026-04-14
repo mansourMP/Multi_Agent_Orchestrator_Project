@@ -28,7 +28,7 @@ class AutopilotRunEntryService:
         route_transport_channel_message: Optional[Callable[..., Dict[str, Any]]] = None,
         run_start_request_class: Optional[Callable[..., Any]] = None,
         start_run_request: Optional[Callable[[Any], Dict[str, Any]]] = None,
-        create_run: Callable[..., str],
+        create_run: Optional[Callable[..., str]] = None,
         record_channel_event: Callable[..., Any],
         telegram_session_key: Callable[[str], str],
         whatsapp_session_key: Callable[[str, str], str],
@@ -176,6 +176,14 @@ class AutopilotRunEntryService:
         owner_type: str,
     ) -> Optional[Dict[str, Any]]:
         if not callable(self.route_transport_channel_message):
+            return None
+        from server_modules import runtime_config
+
+        if (
+            str(getattr(runtime_config, "AGENT_MACHINE_MODE", "personal") or "").strip().lower() == "agent"
+            and callable(self.start_run_request)
+            and callable(self.run_start_request_class)
+        ):
             return None
         result = self.route_transport_channel_message(
             tenant_id=tenant_id,
@@ -334,6 +342,16 @@ class AutopilotRunEntryService:
         metadata["trust_mode"] = self.normalize_trust_mode(trust_mode_value)
         metadata["execution_target"] = self.normalize_execution_target(execution_target_value)
         connector_metadata = self._connector_metadata(connector_entry)
+        for field_name in (
+            "tenant_id",
+            "active_agent_install_id",
+            "workspace_agent_install_id",
+            "master_agent_install_id",
+            "runtime_profile_id",
+        ):
+            token = str(connector_metadata.get(field_name) or "").strip()
+            if token and not str(metadata.get(field_name) or "").strip():
+                metadata[field_name] = token
         tenant_id = str(metadata.get("tenant_id") or connector_metadata.get("tenant_id") or "default").strip() or "default"
         endpoint_key = self._channel_endpoint_key(
             channel_key="telegram",
@@ -464,6 +482,16 @@ class AutopilotRunEntryService:
         metadata["trust_mode"] = self.normalize_trust_mode(trust_mode_value)
         metadata["execution_target"] = self.normalize_execution_target(execution_target_value)
         connector_metadata = self._connector_metadata(connector_entry)
+        for field_name in (
+            "tenant_id",
+            "active_agent_install_id",
+            "workspace_agent_install_id",
+            "master_agent_install_id",
+            "runtime_profile_id",
+        ):
+            token = str(connector_metadata.get(field_name) or "").strip()
+            if token and not str(metadata.get(field_name) or "").strip():
+                metadata[field_name] = token
         tenant_id = str(metadata.get("tenant_id") or connector_metadata.get("tenant_id") or "default").strip() or "default"
         endpoint_key = self._channel_endpoint_key(
             channel_key="whatsapp",
@@ -592,20 +620,7 @@ class AutopilotRunEntryService:
             if result is not None:
                 return {"result": result}
 
-        route = self._apply_route_metadata(metadata)
-        bound_metadata = bind_agent_turn_metadata(metadata, turn_request, source="runs/start")
-        run_id = self.create_run(
-            engine=engine,
-            context={
-                "workflow_id": None,
-                "workspace_id": workspace_id,
-                "user_goal": str(turn_request.message or goal).strip(),
-                "business_plan": None,
-                "provider": None,
-                "model": None,
-                "credential_id": None,
-                "agents": [],
-                "metadata": bound_metadata,
-            },
+        raise RuntimeError(
+            "Autopilot run entry requires canonical ingress callbacks. "
+            "Configure route_transport_channel_message, execute_agent_turn_request, or start_run_request."
         )
-        return {"run_id": run_id, "route": route}

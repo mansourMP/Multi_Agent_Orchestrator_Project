@@ -1,16 +1,20 @@
 from __future__ import annotations
 
+import logging
 import queue
 import threading
 from types import SimpleNamespace
 from typing import Any, Callable, Optional
 
 from fastapi import HTTPException
+from server_modules import agent_trace_service
+from server_modules.direct_tool_config_service import run_async_tool_call
 from server_modules import run_state_repository
 
 
 _APPROVAL_RESOLUTION_GUARD_LOCK = threading.Lock()
 _APPROVAL_RESOLUTION_GUARDS: dict[str, threading.Lock] = {}
+LOGGER = logging.getLogger(__name__)
 _RESOLVED_APPROVAL_STATUSES = {
     "resolved",
     "approved",
@@ -20,6 +24,62 @@ _RESOLVED_APPROVAL_STATUSES = {
     "canceled",
     "dismissed",
 }
+
+
+def _resume_run_trace_context(run: dict[str, Any]) -> Any:
+    if not isinstance(run, dict):
+        return None
+    context = run.get("context") if isinstance(run.get("context"), dict) else {}
+    metadata = context.get("metadata") if isinstance(context.get("metadata"), dict) else {}
+    trace_id = (
+        str(run.get("trace_id") or "").strip()
+        or str(run.get("last_trace_id") or "").strip()
+        or str(context.get("trace_id") or "").strip()
+        or str(metadata.get("trace_id") or "").strip()
+        or str(metadata.get("request_trace_id") or "").strip()
+    )
+    if not trace_id:
+        return None
+    try:
+        return run_async_tool_call(
+            agent_trace_service.resume_trace(
+                trace_id=trace_id,
+                tenant_id=str(
+                    run.get("tenant_id")
+                    or context.get("tenant_id")
+                    or metadata.get("tenant_id")
+                    or "default"
+                ).strip()
+                or "default",
+                workspace_id=str(
+                    run.get("workspace_id")
+                    or context.get("workspace_id")
+                    or metadata.get("workspace_id")
+                    or "default"
+                ).strip()
+                or "default",
+                thread_id=str(
+                    run.get("thread_id")
+                    or context.get("thread_id")
+                    or metadata.get("thread_id")
+                    or metadata.get("session_id")
+                    or ""
+                ).strip()
+                or None,
+                run_id=str(run.get("run_id") or "").strip() or None,
+            )
+        )
+    except Exception as exc:
+        LOGGER.warning("Failed to resume approval trace context: %s", exc)
+        return None
+
+
+def _emit_trace(awaitable: Any, *, operation: str) -> Any:
+    try:
+        return run_async_tool_call(awaitable)
+    except Exception as exc:
+        LOGGER.warning("Failed to emit approval trace during %s: %s", operation, exc)
+        return None
 
 
 def _approval_resolution_guard(approval_id: str) -> threading.Lock:
@@ -171,15 +231,19 @@ def _approval_request_payload_from_run(run_id: str, run: dict[str, Any], pending
 def _ensure_durable_approval_request(run_id: str, snapshot_run: dict[str, Any], pending: dict[str, Any]) -> dict[str, Any]:
     approval_id = str(pending.get("approval_id") or "").strip()
     correlation_id = str(pending.get("correlation_id") or approval_id).strip() or approval_id
-    return run_state_repository.sync_create_or_update_approval_request(
-        run_id,
-        approval_id,
-        _approval_request_payload_from_run(run_id, snapshot_run, pending),
-        "system",
-        correlation_id,
-        metadata=pending.get("metadata") if isinstance(pending.get("metadata"), dict) else None,
-        expires_at=str(pending.get("expires_at") or "").strip() or None,
-    )
+    fallback = _approval_request_payload_from_run(run_id, snapshot_run, pending)
+    try:
+        return run_state_repository.sync_create_or_update_approval_request(
+            run_id,
+            approval_id,
+            fallback,
+            "system",
+            correlation_id,
+            metadata=pending.get("metadata") if isinstance(pending.get("metadata"), dict) else None,
+            expires_at=str(pending.get("expires_at") or "").strip() or None,
+        )
+    except run_state_repository.RunStatePersistenceError:
+        return fallback
 
 
 def list_pending_approvals_payload(
@@ -192,7 +256,8 @@ def list_pending_approvals_payload(
     workspace_entitlement_payload_fn: Callable[[dict[str, dict[str, Any]], str], dict[str, Any]] | None = None,
     current_user_is_privileged_fn: Callable[[Any], bool] | None = None,
     extract_run_owner_user_id_fn: Callable[[dict[str, Any]], str] | None = None,
-    list_pending_approvals_fn: Callable[[int], list[dict[str, Any]]] = run_state_repository.sync_list_pending_approvals,
+    list_pending_approvals_fn: Callable[[int], list[dict[str, Any]]] | None = None,
+    list_live_runs_fn: Callable[[], list[dict[str, Any]]] | None = None,
 ) -> dict[str, Any]:
     safe_limit = max(1, min(int(limit), 300))
     requested_workspace_id = (
@@ -210,18 +275,91 @@ def list_pending_approvals_payload(
         )
         if not bool(requested_capabilities.get("approvals_enabled")):
             raise HTTPException(status_code=403, detail="Approvals are not included in this workspace plan.")
+    if list_pending_approvals_fn is None:
+        list_pending_approvals_fn = run_state_repository.sync_list_pending_approvals
+    if list_live_runs_fn is None:
+        list_live_runs_fn = run_state_repository.sync_list_live_runs
+
+    def _approval_status_pending(value: Any) -> bool:
+        token = str(value or "").strip().lower()
+        if not token:
+            return True
+        return token not in {"resolved", "approved", "rejected", "expired", "cancelled", "canceled", "completed"}
+
+    def _build_live_run_approval(run: dict[str, Any]) -> dict[str, Any] | None:
+        if not isinstance(run, dict):
+            return None
+        pending = run.get("pending_approval")
+        if not isinstance(pending, dict):
+            pending = run.get("pending_confirmation")
+        if not isinstance(pending, dict):
+            return None
+        approval_id = str(pending.get("approval_id") or "").strip()
+        run_id = str(run.get("run_id") or "").strip()
+        if not approval_id or not run_id:
+            return None
+        context = run.get("context") if isinstance(run.get("context"), dict) else {}
+        metadata = context.get("metadata") if isinstance(context.get("metadata"), dict) else {}
+        owner_user_id = str(
+            pending.get("owner_user_id")
+            or metadata.get("owner_user_id")
+            or (extract_run_owner_user_id_fn(run) if callable(extract_run_owner_user_id_fn) else "")
+            or ""
+        ).strip() or None
+        owner_email = str(
+            pending.get("owner_email")
+            or metadata.get("owner_email")
+            or ""
+        ).strip().lower() or None
+        status = str(
+            pending.get("status")
+            or run.get("pending_approval_status")
+            or "requested"
+        ).strip().lower() or "requested"
+        return {
+            "approval_id": approval_id,
+            "run_id": run_id,
+            "workspace_id": str(
+                run.get("workspace_id")
+                or context.get("workspace_id")
+                or metadata.get("workspace_id")
+                or "default"
+            ).strip() or "default",
+            "owner_user_id": owner_user_id,
+            "owner_email": owner_email,
+            "status": status,
+            "prompt": str(pending.get("prompt") or pending.get("summary") or "Approval required.").strip() or "Approval required.",
+            "requested_at": pending.get("requested_at") or run.get("updated_at") or run.get("created_at"),
+            "expires_at": pending.get("expires_at"),
+            "correlation_id": pending.get("correlation_id"),
+            "scope": str(pending.get("scope") or "once").strip().lower() or "once",
+            "reusable": bool(pending.get("reusable")),
+            "consequence": str(pending.get("consequence") or "").strip() or None,
+            "actions": list(pending.get("actions") or []),
+            "target": pending.get("target"),
+            "labels": list(pending.get("labels") or pending.get("approval_labels") or []),
+            "capabilities": list(pending.get("capabilities") or pending.get("approval_capabilities") or []),
+            "agent_role": str(pending.get("agent_role") or "").strip() or None,
+            "metadata": pending.get("metadata") if isinstance(pending.get("metadata"), dict) else {},
+            "email_preview": pending.get("email_preview") if isinstance(pending.get("email_preview"), dict) else None,
+        }
+
     include_all = bool(callable(current_user_is_privileged_fn) and current_user_is_privileged_fn(current_user))
     request_user_id = str((current_user or {}).get("user_id") or "").strip()
     if current_user is not None and not include_all and not request_user_id:
         raise HTTPException(status_code=401, detail="Authenticated user id is required.")
 
     items: list[dict[str, Any]] = []
+    seen_approval_ids: set[str] = set()
+
     for approval in list_pending_approvals_fn(safe_limit):
         if not isinstance(approval, dict):
             continue
         approval_id = str(approval.get("approval_id") or "").strip()
         run_id = str(approval.get("run_id") or "").strip()
         if not approval_id or not run_id:
+            continue
+        if not _approval_status_pending(approval.get("status")):
             continue
         approval_workspace_id = str(approval.get("workspace_id") or "default").strip() or "default"
         if requested_workspace_id and approval_workspace_id != requested_workspace_id:
@@ -284,6 +422,74 @@ def list_pending_approvals_payload(
                 "email_preview": email_preview,
             }
         )
+        seen_approval_ids.add(approval_id)
+
+    for run in list_live_runs_fn() if callable(list_live_runs_fn) else []:
+        approval = _build_live_run_approval(run)
+        if not isinstance(approval, dict):
+            continue
+        approval_id = str(approval.get("approval_id") or "").strip()
+        run_id = str(approval.get("run_id") or "").strip()
+        if not approval_id or not run_id or approval_id in seen_approval_ids:
+            continue
+        if not _approval_status_pending(approval.get("status")):
+            continue
+        approval_workspace_id = str(approval.get("workspace_id") or "default").strip() or "default"
+        if requested_workspace_id and approval_workspace_id != requested_workspace_id:
+            continue
+        if allowed_workspace_ids is not None and approval_workspace_id not in allowed_workspace_ids:
+            continue
+        if callable(workspace_entitlement_payload_fn):
+            run_entitlements = workspace_entitlement_payload_fn(entitlement_cache, approval_workspace_id)
+            run_capabilities = (
+                run_entitlements.get("capabilities")
+                if isinstance(run_entitlements.get("capabilities"), dict)
+                else {}
+            )
+            if not bool(run_capabilities.get("approvals_enabled")):
+                continue
+        owner_user_id = str(approval.get("owner_user_id") or "").strip() or None
+        if current_user is not None and not include_all and owner_user_id != request_user_id:
+            continue
+        metadata = approval.get("metadata") if isinstance(approval.get("metadata"), dict) else {}
+        email_preview = approval.get("email_preview") if isinstance(approval.get("email_preview"), dict) else None
+        prompt = str(approval.get("prompt") or "Approval required.").strip()
+        items.append(
+            {
+                "approval_id": approval_id,
+                "run_id": run_id,
+                "workspace_id": approval_workspace_id,
+                "owner_user_id": owner_user_id,
+                "owner_email": str(approval.get("owner_email") or "").strip().lower() or None,
+                "status": str(approval.get("status") or "requested").strip().lower() or "requested",
+                "action": (
+                    str(approval.get("action") or "").strip()
+                    or str(metadata.get("kind") or "").strip()
+                    or str(approval.get("agent_role") or "").strip()
+                    or "Approval"
+                ),
+                "summary": prompt,
+                "prompt": prompt,
+                "requested_at": approval.get("requested_at"),
+                "expires_at": approval.get("expires_at"),
+                "correlation_id": approval.get("correlation_id"),
+                "scope": str(approval.get("scope") or "once").strip().lower() or "once",
+                "reusable": bool(approval.get("reusable")),
+                "consequence": (
+                    str(approval.get("consequence") or metadata.get("consequence") or "").strip()
+                    or "This confirmation applies only to this pending step in this run. Later runs or later confirmation points will ask again."
+                ),
+                "actions": [str(item or "").strip() for item in (approval.get("actions") or []) if str(item or "").strip()],
+                "target": str(approval.get("target") or "").strip() or None,
+                "labels": [str(item or "").strip() for item in (approval.get("labels") or []) if str(item or "").strip()],
+                "capabilities": [str(item or "").strip() for item in (approval.get("capabilities") or []) if str(item or "").strip()],
+                "agent_role": str(approval.get("agent_role") or "").strip() or None,
+                "metadata": metadata,
+                "email_preview": email_preview,
+            }
+        )
+        seen_approval_ids.add(approval_id)
+
     items.sort(key=lambda item: str(item.get("requested_at") or ""), reverse=True)
     limited_items = items[:safe_limit]
     return {
@@ -291,6 +497,108 @@ def list_pending_approvals_payload(
         "pending": limited_items,
         "count": len(limited_items),
     }
+
+
+def _approval_owned_by_current_user(
+    approval_record: dict[str, Any],
+    current_user: Any,
+    *,
+    current_user_is_privileged_fn: Callable[[Any], bool] | None = None,
+) -> bool:
+    if callable(current_user_is_privileged_fn) and current_user_is_privileged_fn(current_user):
+        return True
+    if not isinstance(current_user, dict):
+        return False
+    request_user_id = str(current_user.get("user_id") or "").strip()
+    request_email = str(current_user.get("email") or "").strip().lower()
+    owner_user_id = str(approval_record.get("owner_user_id") or "").strip()
+    owner_email = str(approval_record.get("owner_email") or "").strip().lower()
+    if request_user_id and owner_user_id and request_user_id == owner_user_id:
+        return True
+    if request_email and owner_email and request_email == owner_email:
+        return True
+    return False
+
+
+def _run_summary_for_approval_detail(run_snapshot_record: Any) -> dict[str, Any] | None:
+    if not isinstance(run_snapshot_record, dict):
+        return None
+    payload = run_snapshot_record.get("payload") if isinstance(run_snapshot_record.get("payload"), dict) else None
+    if not isinstance(payload, dict):
+        return None
+    source = str(run_snapshot_record.get("source") or "").strip().lower()
+    context = payload.get("context") if isinstance(payload.get("context"), dict) else {}
+    metadata = context.get("metadata") if isinstance(context.get("metadata"), dict) else {}
+    status = str(payload.get("status") or payload.get("state") or "unknown").strip().lower() or "unknown"
+    return {
+        "run_id": str(payload.get("run_id") or "").strip() or None,
+        "status": status,
+        "source": source or "missing",
+        "archived": source == "archive",
+        "active": status not in {"completed", "failed", "stopped", "rejected", "aborted", "cancelled", "canceled"},
+        "workspace_id": str(
+            payload.get("workspace_id")
+            or context.get("workspace_id")
+            or metadata.get("workspace_id")
+            or "default"
+        ).strip() or "default",
+        "tenant_id": str(
+            payload.get("tenant_id")
+            or context.get("tenant_id")
+            or metadata.get("tenant_id")
+            or "default"
+        ).strip() or "default",
+    }
+
+
+def build_approval_detail_response(
+    approval_id: str,
+    *,
+    current_user: Any,
+    enforce_workspace_access_fn: Callable[[Any, Any], str] | None = None,
+    workspace_entitlement_payload_fn: Callable[[dict[str, dict[str, Any]], str], dict[str, Any]] | None = None,
+    current_user_is_privileged_fn: Callable[[Any], bool] | None = None,
+    find_run_snapshot_for_approval_fn: Callable[[str], dict[str, Any] | None] | None = None,
+    enforce_run_owner_access_fn: Callable[[Any, Any], None] | None = None,
+) -> dict[str, Any]:
+    approval_token = str(approval_id or "").strip()
+    if not approval_token:
+        raise HTTPException(status_code=400, detail="approval_id is required.")
+
+    if find_run_snapshot_for_approval_fn is None:
+        find_run_snapshot_for_approval_fn = run_state_repository.sync_find_run_snapshot_for_approval_id
+
+    approval_record = run_state_repository.sync_get_approval_record(approval_token)
+    if not isinstance(approval_record, dict):
+        raise HTTPException(status_code=404, detail="approval_id not found")
+
+    workspace_id = str(approval_record.get("workspace_id") or "default").strip() or "default"
+    if callable(enforce_workspace_access_fn):
+        workspace_id = enforce_workspace_access_fn(current_user, workspace_id, minimum_role="viewer")
+    entitlement_cache: dict[str, dict[str, Any]] = {}
+    if callable(workspace_entitlement_payload_fn):
+        entitlement_payload = workspace_entitlement_payload_fn(entitlement_cache, workspace_id)
+        capabilities = entitlement_payload.get("capabilities") if isinstance(entitlement_payload.get("capabilities"), dict) else {}
+        if not bool(capabilities.get("approvals_enabled")):
+            raise HTTPException(status_code=403, detail="Approvals are not included in this workspace plan.")
+
+    run_snapshot_record = find_run_snapshot_for_approval_fn(approval_token)
+    run_summary = _run_summary_for_approval_detail(run_snapshot_record)
+    run_snapshot_source = str(run_snapshot_record.get("source") or "").strip().lower() if isinstance(run_snapshot_record, dict) else ""
+    run_payload = run_snapshot_record.get("payload") if isinstance(run_snapshot_record, dict) and isinstance(run_snapshot_record.get("payload"), dict) else None
+    if run_snapshot_source in {"live", "archive"} and isinstance(run_payload, dict) and callable(enforce_run_owner_access_fn):
+        enforce_run_owner_access_fn(current_user, run_payload)
+    elif not _approval_owned_by_current_user(
+        approval_record,
+        current_user,
+        current_user_is_privileged_fn=current_user_is_privileged_fn,
+    ):
+        raise HTTPException(status_code=403, detail="Approval is owned by another user.")
+
+    response = dict(approval_record)
+    response["workspace_id"] = workspace_id
+    response["run"] = run_summary
+    return response
 
 
 def build_default_resolve_run_approval_callbacks(
@@ -669,21 +977,42 @@ def resolve_run_approval(
         )
         raise HTTPException(status_code=409, detail="Confirmation request has already expired.")
     _ensure_durable_approval_request(run_id, snapshot_run, pending)
-    resolved = run_state_repository.sync_resolve_approval_if_pending(
-        run_id,
-        approval_id,
-        resolution_token,
-        str((current_user or {}).get("user_id") or "user").strip() or "user",
-        correlation_id,
-        note=str(payload.note or ""),
-        decision_payload={
-            "decision": decision_text,
-            "resolution": resolution_token,
-            "source": "runs_approval_api",
-        },
-    )
+    try:
+        resolved = run_state_repository.sync_resolve_approval_if_pending(
+            run_id,
+            approval_id,
+            resolution_token,
+            str((current_user or {}).get("user_id") or "user").strip() or "user",
+            correlation_id,
+            note=str(payload.note or ""),
+            decision_payload={
+                "decision": decision_text,
+                "resolution": resolution_token,
+                "source": "runs_approval_api",
+            },
+        )
+    except run_state_repository.RunStatePersistenceError:
+        resolved = {
+            "approval_id": approval_id,
+            "run_id": run_id,
+            "status": resolution_token,
+            "resolved_by": str((current_user or {}).get("user_id") or "user").strip() or "user",
+            "correlation_id": correlation_id,
+        }
     if not isinstance(resolved, dict):
         raise HTTPException(status_code=409, detail="Confirmation has already been processed for this run.")
+    trace_context = _resume_run_trace_context(snapshot_run)
+    if trace_context is not None:
+        _emit_trace(
+            agent_trace_service.emit_approval_resolved(
+                trace_context,
+                approval_id,
+                resolution_token,
+                str((current_user or {}).get("user_id") or "user").strip() or "user",
+                str(payload.note or ""),
+            ),
+            operation=f"approval.resolved:{run_id}:{approval_id}",
+        )
     if bool(metadata.get("local_execution_waiting_confirmation")) or bool(metadata.get("local_execution_waiting_approval")):
         if not isinstance(run, dict):
             raise HTTPException(status_code=409, detail="Run is not active in this process.")
@@ -830,9 +1159,18 @@ def resolve_standalone_approval(
 
     with _approval_resolution_guard(approval_token):
         approval_record = run_state_repository.sync_get_approval_record(approval_token)
-        matched_run = None
+        run_snapshot_record = run_state_repository.sync_find_run_snapshot_for_approval_id(approval_token)
+        matched_run = (
+            run_snapshot_record.get("payload")
+            if isinstance(run_snapshot_record, dict)
+            and str(run_snapshot_record.get("source") or "").strip().lower() == "live"
+            and isinstance(run_snapshot_record.get("payload"), dict)
+            else None
+        )
         matched_run_id = str((approval_record or {}).get("run_id") or "").strip() if isinstance(approval_record, dict) else ""
-        if matched_run_id:
+        if not matched_run_id and isinstance(matched_run, dict):
+            matched_run_id = str(matched_run.get("run_id") or "").strip()
+        if matched_run_id and not isinstance(matched_run, dict):
             matched_run = run_state_repository.sync_get_live_run(matched_run_id)
             if not isinstance(matched_run, dict):
                 matched_run = {"run_id": matched_run_id}

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+import logging
 from typing import Any, Callable, Optional
 
 from server_modules.agent_turn import (
@@ -12,7 +13,11 @@ from server_modules.agent_turn import (
     ensure_direct_chat_turn_request,
 )
 from server_modules.api_contract import build_turn_chat_body
-from server_modules import direct_chat_transport_service
+from server_modules import direct_chat_transport_service, failure_policy_service
+from server_modules.error_contracts import OBSERVABILITY_FAILURE, SEVERITY_WARNING
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(slots=True)
@@ -82,6 +87,7 @@ def build_direct_chat_request_meta(
     thread_id: str,
     client_request_id: str,
     agent_turn_request: Optional[Any] = None,
+    trace_context: Optional[Any] = None,
 ) -> dict[str, Any]:
     request_meta = {
         "request_id": client_request_id,
@@ -102,6 +108,17 @@ def build_direct_chat_request_meta(
             "thread_id": thread_id,
         },
     }
+    if trace_context is not None:
+        trace_id = str(getattr(trace_context, "trace_id", "") or "").strip()
+        if trace_id:
+            request_meta["trace"] = {
+                "trace_id": trace_id,
+                "workspace_id": str(getattr(trace_context, "workspace_id", "") or workspace_id or "").strip() or workspace_id,
+                "tenant_id": str(getattr(trace_context, "tenant_id", "") or "").strip(),
+                "thread_id": str(getattr(trace_context, "thread_id", "") or thread_id or "").strip() or thread_id,
+                "run_id": str(getattr(trace_context, "run_id", "") or "").strip() or None,
+                "root_agent_id": str(getattr(trace_context, "root_agent_id", "") or "").strip(),
+            }
     return bind_agent_turn_request_meta(request_meta, agent_turn_request)
 
 
@@ -116,6 +133,7 @@ def build_direct_chat_event_producer(
     client_request_id: str,
     services: DirectChatExecutionServices,
     agent_turn_request: Optional[AgentTurnRequest] = None,
+    trace_context: Optional[Any] = None,
 ):
     turn_request = ensure_direct_chat_turn_request(
         current_user=current_user,
@@ -147,6 +165,21 @@ def build_direct_chat_event_producer(
         session_id=normalized_thread_id,
         user_id=user_id,
     )
+    trace_id = str(getattr(trace_context, "trace_id", "") or "").strip()
+    if trace_context is not None and isinstance(direct_session_ctx, dict):
+        direct_session_ctx["trace_context"] = trace_context
+        if trace_id:
+            direct_session_ctx["trace_id"] = trace_id
+            direct_session_ctx["trace"] = {
+                "trace_id": trace_id,
+                "workspace_id": str(getattr(trace_context, "workspace_id", "") or normalized_workspace_id or "").strip()
+                or normalized_workspace_id,
+                "tenant_id": str(getattr(trace_context, "tenant_id", "") or "").strip(),
+                "thread_id": str(getattr(trace_context, "thread_id", "") or normalized_thread_id or "").strip()
+                or normalized_thread_id,
+                "run_id": str(getattr(trace_context, "run_id", "") or "").strip() or None,
+                "root_agent_id": str(getattr(trace_context, "root_agent_id", "") or "").strip(),
+            }
 
     if not services.session_manager_enabled():
         return services.build_direct_operator_reply(
@@ -161,19 +194,38 @@ def build_direct_chat_event_producer(
             max_iterations=body.get("max_iterations"),
             session_ctx=direct_session_ctx,
             agent_turn_request=turn_request,
+            trace_context=trace_context,
         )
 
     manager = services.session_manager_factory()
     try:
         manager.evict_idle_handles()
-    except Exception:
-        pass
+    except Exception as exc:
+        failure_policy_service.log_degraded_operation(
+            logger=logger,
+            code="direct_chat_session_cleanup_failed",
+            message="Failed to evict idle direct-chat session handles.",
+            error_class=OBSERVABILITY_FAILURE,
+            degraded_component="direct_chat_session_manager_cleanup",
+            severity=SEVERITY_WARNING,
+            retryable=False,
+            status_code=500,
+            request_id=client_request_id,
+            trace_id=trace_id or None,
+            metadata={
+                "workspace_id": normalized_workspace_id,
+                "thread_id": normalized_thread_id,
+                "session_key": actor_key,
+            },
+            exc=exc,
+        )
     request_meta = build_direct_chat_request_meta(
         body=body,
         workspace_id=normalized_workspace_id,
         thread_id=normalized_thread_id,
         client_request_id=client_request_id,
         agent_turn_request=turn_request,
+        trace_context=trace_context,
     )
     return manager.iter_turn_events(
         session_id=actor_key,
@@ -192,6 +244,7 @@ async def execute_direct_chat_turn_request(
     current_user: Any,
     services: DirectChatExecutionServices,
     chat_body: Optional[dict[str, Any]] = None,
+    trace_context: Optional[Any] = None,
 ) -> dict[str, Any]:
     body = build_turn_chat_body(turn_request)
     if isinstance(chat_body, dict):
@@ -218,6 +271,7 @@ async def execute_direct_chat_turn_request(
             client_request_id=client_request_id,
             services=services,
             agent_turn_request=turn_request,
+            trace_context=trace_context,
         )
 
     return {

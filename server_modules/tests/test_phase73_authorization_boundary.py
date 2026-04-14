@@ -66,7 +66,13 @@ class Phase73AuthorizationBoundaryTests(unittest.TestCase):
                 {"approval_id": "approval-2", "run_id": "run-2", "workspace_id": "ws-2"},
             ]
         try:
-            with patch.object(runs_history, "_owned_run_ids_for_user", return_value={"run-1", "run-2"}):
+            with (
+                patch.object(runs_history, "_owned_run_ids_for_user", return_value={"run-1", "run-2"}),
+                patch(
+                    "server_modules.runs_history.entitlements_service.workspace_entitlement_payload_for_workspace_id",
+                    return_value={"capabilities": {"approvals_enabled": True}},
+                ),
+            ):
                 payload = self._run_async(
                     runs_history.get_approval_audit(
                         workspace_id="default",

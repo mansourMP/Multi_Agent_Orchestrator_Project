@@ -26,7 +26,6 @@ except Exception:  # pragma: no cover
 
 DiscordHttpRequest = Callable[..., Dict[str, Any]]
 DiscordAppendEvent = Callable[..., Dict[str, Any]]
-DiscordCreateRun = Callable[..., str]
 DiscordRunStartRequestFactory = Callable[..., Any]
 DiscordStartRunRequest = Callable[[Any], Dict[str, Any]]
 
@@ -804,7 +803,6 @@ def dispatch_inbound_event(
     credentials: Dict[str, Any],
     append_event_fn: Optional[DiscordAppendEvent] = None,
     execute_agent_turn_request: Optional[Callable[..., Dict[str, Any]]] = None,
-    create_run_fn: Optional[DiscordCreateRun] = None,
     run_start_request_class: Optional[DiscordRunStartRequestFactory] = None,
     start_run_request: Optional[DiscordStartRunRequest] = None,
     resolve_workspace_scope_fn: Optional[Callable[[Dict[str, Any]], str]] = None,
@@ -916,19 +914,10 @@ def dispatch_inbound_event(
             run_id = str(created or "").strip()
 
     if not run_id:
-        run_creator = create_run_fn
-        if not callable(run_creator):
-            from server_modules.runs_engine import ENGINE_REGISTRY
-            from server_modules.runs_execution import create_run as _create_run
-
-            engine = "orion" if "orion" in ENGINE_REGISTRY else next(iter(ENGINE_REGISTRY.keys()), "orion")
-
-            def _default_create_run(*, context: Dict[str, Any]) -> str:
-                return _create_run(engine=engine, context=context)
-
-            run_creator = _default_create_run
-
-        run_id = str(run_creator(context=context) or "").strip()
+        raise RuntimeError(
+            "Discord inbound dispatch requires canonical ingress callbacks. "
+            "Configure execute_agent_turn_request or start_run_request."
+        )
 
     if callable(append_event_fn) and run_id:
         append_event_fn(

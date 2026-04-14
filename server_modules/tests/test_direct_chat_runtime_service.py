@@ -2,6 +2,7 @@ import unittest
 from types import SimpleNamespace
 from unittest import mock
 
+from server_modules import agent_trace_service
 from server_modules import direct_chat_generation_service
 from server_modules import direct_chat_response_service
 from server_modules import direct_chat_runtime_service
@@ -253,6 +254,52 @@ class DirectChatRuntimeServiceTests(unittest.TestCase):
         self.assertEqual(captured["workspace_id"], "meta-workspace")
         self.assertEqual(captured["thread_id"], "meta-thread")
         self.assertEqual(captured["agent_turn_request"].workspace_id, "meta-workspace")
+
+    def test_build_chat_turn_event_stream_resumes_trace_context_from_request_meta(self) -> None:
+        captured: dict[str, object] = {}
+        services = self._runtime_services(SimpleNamespace())
+        trace_context = agent_trace_service.TraceContext(
+            trace_id="trace-1",
+            workspace_id="meta-workspace",
+            tenant_id="tenant-1",
+            thread_id="meta-thread",
+            run_id=None,
+            root_agent_id="sage",
+        )
+
+        def _build_direct_operator_reply(**kwargs):
+            captured.update(kwargs)
+            return iter(())
+
+        with mock.patch.object(
+            direct_chat_runtime_service,
+            "build_direct_operator_reply",
+            side_effect=_build_direct_operator_reply,
+        ), mock.patch.object(
+            direct_chat_runtime_service,
+            "run_async_tool_call",
+            side_effect=lambda awaitable: (awaitable.close(), trace_context)[1],
+        ):
+            list(
+                direct_chat_runtime_service.build_chat_turn_event_stream(
+                    services=services,
+                    session_ctx={"workspace_id": "meta-workspace", "thread_id": "meta-thread"},
+                    message="fallback",
+                    request_meta={
+                        "workspace_id": "meta-workspace",
+                        "thread_id": "meta-thread",
+                        "trace": {
+                            "trace_id": "trace-1",
+                            "workspace_id": "meta-workspace",
+                            "tenant_id": "tenant-1",
+                            "thread_id": "meta-thread",
+                            "root_agent_id": "sage",
+                        },
+                    },
+                )
+            )
+
+        self.assertIs(captured["trace_context"], trace_context)
 
 
 if __name__ == "__main__":

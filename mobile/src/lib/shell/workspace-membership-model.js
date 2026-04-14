@@ -1,3 +1,5 @@
+import { resolveRouteIdFromTarget } from '../workspace/workspace-shell.js';
+
 export function indexWorkspaceMemberships(memberships) {
   return memberships.reduce((accumulator, membership) => {
     accumulator[membership.workspace.id] = membership;
@@ -23,23 +25,12 @@ export function resolveRouteWorkspaceId(memberships, routeWorkspaceId) {
     return routeWorkspaceId;
   }
 
-  return routeWorkspaceId;
+  return null;
 }
 
-export function sanitizeWorkspaceRoute(route, fallbackRoute) {
-  if (!route || typeof route !== 'string') {
-    return fallbackRoute;
-  }
-
-  if (!route.startsWith('/')) {
-    return fallbackRoute;
-  }
-
-  if (route.startsWith('//')) {
-    return fallbackRoute;
-  }
-
-  return route;
+export function sanitizeWorkspaceRoute(route, fallbackRoute, workspaceId = null) {
+  const fallbackRouteId = resolveRouteIdFromTarget(workspaceId, fallbackRoute) ?? 'chat';
+  return resolveRouteIdFromTarget(workspaceId, route) ?? fallbackRouteId;
 }
 
 export function getWorkspaceMembership(memberships, workspaceId) {

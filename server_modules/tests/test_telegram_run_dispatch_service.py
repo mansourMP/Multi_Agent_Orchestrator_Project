@@ -38,6 +38,7 @@ class TelegramRunDispatchServiceTests(unittest.TestCase):
             can_auto_approve_wait=lambda run: bool(run.get("can_auto_approve")),
             pending_confirmation_payload=lambda run: dict(run.get("pending_confirmation") or {}),
             emit_channel_run_delivery_event=overrides.pop("emit_channel_run_delivery_event", lambda **kwargs: None),
+            record_activity_event=overrides.pop("record_activity_event", lambda **kwargs: None),
             time_now=lambda: time_values.pop(0) if time_values else 999.0,
             sleep=lambda seconds: None,
         )
@@ -155,6 +156,58 @@ class TelegramRunDispatchServiceTests(unittest.TestCase):
             connector_states[0][1]["last_delivery_idempotency_key"],
             "telegram:conn-1:chat-1:run-1:edit:pending-1",
         )
+
+    def test_deliver_final_response_records_health_safety_escalation_activity(self) -> None:
+        activity_events = []
+        service = self._make_service(
+            runs={
+                "run-1": {
+                    "context": {
+                        "user_goal": "I have chest pain and trouble breathing",
+                        "metadata": {
+                            "health_safety_enabled": True,
+                            "health_safety_assistant_name": "HealthGuide",
+                        },
+                    },
+                    "result_data": {"answer": "Seek emergency care now."},
+                }
+            },
+            record_activity_event=lambda **kwargs: activity_events.append(kwargs),
+        )
+
+        service.deliver_final_response(
+            bot_token="bot",
+            chat_id="chat-1",
+            workspace_id="ws-1",
+            connector_id="conn-1",
+            session_key="telegram:conn-1:chat-1",
+            profile={"id": "profile-1"},
+            run_id="run-1",
+            pending_message_id="pending-1",
+            inbound_message_id="msg-1",
+            action="run",
+            trace_id="trace-1",
+            source_event_id="evt-1",
+            status="completed",
+            summary="Please seek urgent medical attention immediately.",
+            record_channel_event=lambda **kwargs: None,
+            send_message=lambda *args, **kwargs: "msg-2",
+            edit_message=lambda *args, **kwargs: True,
+            set_connector_state=lambda connector_id, payload: None,
+            provider_idempotency_key="telegram:conn-1:chat-1:run-1:edit:pending-1",
+            tenant_id="tenant-1",
+            thread_id="thread-1",
+            owner_install_id="ainstall-1",
+            owner_label="HealthGuide",
+            owner_type="specialist",
+            deployed_agent_id="dagent-1",
+        )
+
+        self.assertEqual(len(activity_events), 1)
+        self.assertEqual(activity_events[0]["action"], "escalated")
+        self.assertEqual(activity_events[0]["install_id"], "ainstall-1")
+        self.assertEqual(activity_events[0]["run_id"], "run-1")
+        self.assertEqual(activity_events[0]["session_key"], "telegram:conn-1:chat-1")
 
 
 if __name__ == "__main__":

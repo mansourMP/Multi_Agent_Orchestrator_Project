@@ -1,10 +1,19 @@
+"""
+Execution switchboard for canonical turns.
+
+Prompt 01 freezes this module as the bridge that decides whether a canonical
+`AgentTurnRequest` resolves through direct-chat execution or durable execution.
+It is not an alternate engine and should not absorb route, connector, memory,
+quota, or channel policy behavior.
+"""
+
 from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
 from typing import Any, Dict, Optional
 
-from server_modules.agent_turn import AgentTurnRequest, resolve_run_start_turn_request
+from server_modules.agent_turn import AgentTurnRequest
 from server_modules.direct_chat_service import DirectChatExecutionServices, execute_direct_chat_turn_request
 from server_modules import run_service as run_service
 from server_modules.run_service import RunExecutionServices, execute_durable_turn_request
@@ -34,6 +43,7 @@ async def execute_agent_turn_request(
     services: TurnExecutionServices,
     chat_body: Optional[dict[str, Any]] = None,
     run_request: Optional[Any] = None,
+    trace_context: Optional[Any] = None,
 ) -> dict[str, Any]:
     # Internal delegate. Not an alternate turn engine. Called only from agent_turn().
     durable_execution = await run_service.execute_durable_agent_turn_dispatch(
@@ -41,6 +51,7 @@ async def execute_agent_turn_request(
         current_user=current_user,
         services=services.run_execution,
         base_request=run_request,
+        trace_context=trace_context,
         execute_durable_turn_request_fn=execute_durable_turn_request,
     )
     if durable_execution is not None:
@@ -52,6 +63,7 @@ async def execute_agent_turn_request(
         current_user=current_user,
         services=services.direct_chat,
         chat_body=body,
+        trace_context=trace_context,
     )
 
 
@@ -62,13 +74,13 @@ async def execute_run_start_request_via_turn_runtime(
     stamp_request_owner_fn: Any,
     services: RunExecutionServices,
 ) -> Dict[str, Any]:
-    return await run_service.execute_run_start_request_via_turn_runtime(
+    from server_modules import turn_ingress_service
+
+    return await turn_ingress_service.start_run_start(
         request,
         current_user=current_user,
         stamp_request_owner_fn=stamp_request_owner_fn,
         services=services,
-        resolve_run_start_turn_request_fn=resolve_run_start_turn_request,
-        execute_durable_turn_request_fn=execute_durable_turn_request,
     )
 
 
@@ -79,12 +91,13 @@ def execute_system_run_start_request_via_turn_runtime(
     services: RunExecutionServices,
     current_user: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
-    return run_service.execute_system_run_start_request_via_turn_runtime(
+    from server_modules import turn_ingress_service
+
+    return turn_ingress_service.start_system_run_start(
         request,
         stamp_request_owner_fn=stamp_request_owner_fn,
         services=services,
         current_user=current_user,
-        execute_run_start_request_via_turn_runtime_fn=execute_run_start_request_via_turn_runtime,
     )
 
 

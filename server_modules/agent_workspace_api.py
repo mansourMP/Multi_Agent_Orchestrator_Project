@@ -7,7 +7,10 @@ import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
-from urllib.parse import urlencode
+from urllib.parse import quote, urlencode
+
+from fastapi import Depends, HTTPException, Request
+from fastapi.responses import FileResponse
 
 from scripts.platform_execution import current_platform_context, supported_device_actions
 from server_modules.api_contract import ApiArtifactListResponse, ApiArtifactPreviewResponse
@@ -96,6 +99,130 @@ def _ensure_artifacts_access_for_workspace(workspace_id: str) -> None:
     capabilities = payload.get("capabilities") if isinstance(payload.get("capabilities"), dict) else {}
     if not bool(capabilities.get("artifacts_enabled")):
         raise HTTPException(status_code=403, detail="Artifacts are not included in this workspace plan.")
+
+
+def _active_workspace_scope_from_request(request: Optional[Request]) -> Optional[str]:
+    if request is None:
+        return None
+    header_value = str(request.headers.get("x-empyralis-workspace-id") or "").strip()
+    if header_value:
+        return header_value
+    query_params = getattr(request, "query_params", None)
+    if query_params is None:
+        return None
+    for key in ("workspace_id", "workspaceId"):
+        value = str(query_params.get(key) or "").strip()
+        if value:
+            return value
+    return None
+
+
+def _enforce_active_workspace_scope(
+    request: Optional[Request],
+    artifact_workspace_id: str,
+) -> None:
+    requested_workspace_id = _active_workspace_scope_from_request(request)
+    if requested_workspace_id and requested_workspace_id != str(artifact_workspace_id or "").strip():
+        raise HTTPException(status_code=403, detail="Artifact is outside the active workspace scope.")
+
+
+def _artifact_content_disposition(filename: str, *, disposition: str = "attachment") -> str:
+    safe_filename = str(filename or "artifact.bin").replace('"', "").strip() or "artifact.bin"
+    ascii_filename = safe_filename.encode("ascii", "ignore").decode("ascii").strip() or "artifact.bin"
+    if ascii_filename == safe_filename:
+        return f'{disposition}; filename="{ascii_filename}"'
+    return f"{disposition}; filename*=UTF-8''{quote(safe_filename)}"
+
+
+def _load_workspace_artifact_record(
+    artifact_id: str,
+    *,
+    current_user: Any,
+    request: Optional[Request] = None,
+) -> tuple[dict[str, Any], Path, str, str]:
+    payload = artifact_service.load_artifact_metadata_by_id(artifact_id)
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=404, detail="Artifact not found.")
+
+    workspace_id = str(payload.get("workspace_id") or "default").strip() or "default"
+    tenant_id = str(payload.get("tenant_id") or "").strip() or None
+    _ensure_artifacts_access_for_workspace(workspace_id)
+    enforce_workspace_access(
+        current_user,
+        workspace_id,
+        tenant_id=tenant_id,
+        minimum_role="viewer",
+    )
+    _enforce_active_workspace_scope(request, workspace_id)
+
+    target = artifact_service.resolve_artifact_content_path_by_id(artifact_id)
+    if target is None:
+        raise HTTPException(status_code=404, detail="Artifact content is unavailable for this canonical artifact.")
+
+    file_name = artifact_service.artifact_download_filename(payload, target.name)
+    media_type = artifact_service.artifact_content_type(payload, target.name)
+    return payload, target, media_type, file_name
+
+
+def _artifact_detail_payload_for_id(
+    artifact_id: str,
+    *,
+    current_user: Any,
+    request: Optional[Request] = None,
+) -> dict[str, Any]:
+    payload, target, media_type, file_name = _load_workspace_artifact_record(
+        artifact_id,
+        current_user=current_user,
+        request=request,
+    )
+    preview_kind = _workspace_artifact_preview_kind(target, media_type)
+    text_preview = _read_workspace_text_preview(target) if preview_kind == "text" else None
+    return {
+        "ok": True,
+        "artifact_id": str(payload.get("artifact_id") or artifact_id).strip() or artifact_id,
+        "workspace_id": str(payload.get("workspace_id") or "default").strip() or "default",
+        "tenant_id": str(payload.get("tenant_id") or "").strip() or None,
+        "run_id": str(payload.get("run_id") or "").strip() or None,
+        "uri": str(payload.get("uri") or "").strip() or None,
+        "kind": str(payload.get("kind") or "artifact").strip() or "artifact",
+        "label": str(payload.get("label") or file_name).strip() or file_name,
+        "file_name": file_name,
+        "media_type": media_type,
+        "preview_kind": preview_kind,
+        "byte_size": int(payload.get("byte_size") or target.stat().st_size),
+        "created_at": str(payload.get("created_at") or "").strip() or None,
+        "machine_id": str(payload.get("machine_id") or "").strip() or None,
+        "step_id": str(payload.get("step_id") or "").strip() or None,
+        "step_index": payload.get("step_index"),
+        "step_number": payload.get("step_number"),
+        "text_preview": text_preview,
+        "retention": dict(payload.get("retention") or {}),
+        "metadata": dict(payload.get("metadata") or {}),
+    }
+
+
+def _artifact_file_response_for_id(
+    artifact_id: str,
+    *,
+    current_user: Any,
+    request: Optional[Request] = None,
+    disposition: str = "attachment",
+):
+    _, target, media_type, file_name = _load_workspace_artifact_record(
+        artifact_id,
+        current_user=current_user,
+        request=request,
+    )
+    return FileResponse(
+        path=str(target),
+        media_type=media_type,
+        headers={
+            "Content-Disposition": _artifact_content_disposition(
+                file_name,
+                disposition=disposition,
+            ),
+        },
+    )
 
 
 execute_system_run_start_request_via_turn_runtime = build_execute_unowned_system_run_start_request_via_turn_runtime()
@@ -1999,6 +2126,44 @@ def register_agent_workspace_routes(app) -> None:
         current_user=Depends(require_api_key),
     ):
         return await _artifact_file_response(path, current_user=current_user)
+
+    @app.get("/artifacts/{artifact_id}", dependencies=[Depends(require_api_key)])
+    async def get_artifact_detail(
+        artifact_id: str,
+        request: Request,
+        current_user=Depends(require_api_key),
+    ):
+        return _artifact_detail_payload_for_id(
+            artifact_id,
+            current_user=current_user,
+            request=request,
+        )
+
+    @app.get("/artifacts/{artifact_id}/file", dependencies=[Depends(require_api_key)])
+    async def get_artifact_file_by_id(
+        artifact_id: str,
+        request: Request,
+        current_user=Depends(require_api_key),
+    ):
+        return _artifact_file_response_for_id(
+            artifact_id,
+            current_user=current_user,
+            request=request,
+            disposition="inline",
+        )
+
+    @app.get("/artifacts/{artifact_id}/content", dependencies=[Depends(require_api_key)])
+    async def get_artifact_content_by_id(
+        artifact_id: str,
+        request: Request,
+        current_user=Depends(require_api_key),
+    ):
+        return _artifact_file_response_for_id(
+            artifact_id,
+            current_user=current_user,
+            request=request,
+            disposition="attachment",
+        )
 
     @app.get("/agents/workspace/file-diff", dependencies=[Depends(require_admin_api_key)])
     async def get_agent_workspace_file_diff(

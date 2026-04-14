@@ -2,82 +2,71 @@
 
 import { useCallback } from 'react';
 
+import { AppButton } from '@/lib/ui/primitives';
 import { useWorkstationDesktopBridge } from '@/lib/workspace/workstation-desktop-bridge';
 
 export function WorkstationDesktopStatus() {
   const desktop = useWorkstationDesktopBridge();
 
-  const handleOpenCurrentSurface = useCallback(() => {
-    if (typeof window === 'undefined') {
-      return;
-    }
-    void desktop.openExternal(window.location.href);
-  }, [desktop]);
-
   const handleOpenPermissions = useCallback(() => {
     void desktop.openPermissionSettings('accessibility');
   }, [desktop]);
 
+  if (!desktop.available) {
+    return null;
+  }
+
+  const localCompanionLabel = desktop.localCompanion.present
+    ? `${desktop.localCompanion.label ?? 'Local companion'} ${desktop.localCompanion.online ? 'ready' : 'needs attention'}`
+    : 'No local companion attached to this workstation';
+
   return (
     <section
-      data-workstation-desktop-bridge={desktop.available ? 'desktop' : 'browser'}
+      data-workstation-desktop-bridge="native"
       style={{
         display: 'flex',
         justifyContent: 'space-between',
         alignItems: 'center',
-        gap: '1rem',
+        gap: '0.8rem',
         flexWrap: 'wrap',
-        padding: '0.9rem 1rem',
+        padding: '0.68rem 0.9rem',
         borderRadius: '1rem',
-        border: '1px solid rgba(148, 163, 184, 0.35)',
-        background: 'rgba(255, 255, 255, 0.88)',
-        boxShadow: '0 12px 30px rgba(15, 23, 42, 0.06)',
+        border: '1px solid var(--app-border-subtle)',
+        background: 'color-mix(in srgb, var(--app-bg-panel) 86%, var(--app-bg-overlay) 14%)',
       }}
     >
-      <div style={{ display: 'grid', gap: '0.2rem' }}>
-        <strong style={{ color: '#0f172a' }}>
-          {desktop.available ? `Desktop bridge active${desktop.platform ? ` · ${desktop.platform}` : ''}` : 'Browser mode'}
-        </strong>
-        <span style={{ color: '#475569', fontSize: '0.88rem', lineHeight: 1.5 }}>
-          {desktop.localCompanion.present
-            ? `${desktop.localCompanion.label ?? 'Local companion'} is ${desktop.localCompanion.online ? 'online' : 'offline'}${desktop.localCompanion.preferred ? ' and preferred' : ''}.`
-            : 'No local companion runtime target is attached to this workspace.'}
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.55rem', alignItems: 'center' }}>
+        <span
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            minHeight: '1.75rem',
+            padding: '0.26rem 0.56rem',
+            borderRadius: '999px',
+            border: '1px solid var(--app-border-subtle)',
+            background: 'color-mix(in srgb, var(--app-bg-panel-elevated) 82%, var(--app-bg-overlay) 18%)',
+            color: 'var(--app-text-secondary)',
+            fontSize: '0.78rem',
+            fontWeight: 620,
+          }}
+        >
+          Native shell{desktop.platform ? ` · ${desktop.platform}` : ''}
+        </span>
+        <span
+          style={{
+            color: desktop.localCompanion.online ? 'var(--app-success)' : 'var(--app-text-secondary)',
+            fontSize: '0.82rem',
+          }}
+        >
+          {localCompanionLabel}
         </span>
       </div>
 
-      <div style={{ display: 'flex', gap: '0.6rem', flexWrap: 'wrap' }}>
-        <button
-          type="button"
-          onClick={handleOpenCurrentSurface}
-          style={{
-            border: '1px solid #0f172a',
-            borderRadius: '999px',
-            background: '#0f172a',
-            color: '#ffffff',
-            padding: '0.45rem 0.85rem',
-            cursor: 'pointer',
-          }}
-        >
-          Open current surface externally
-        </button>
-
-        {desktop.available && desktop.localCompanion.present && !desktop.localCompanion.online ? (
-          <button
-            type="button"
-            onClick={handleOpenPermissions}
-            style={{
-              border: '1px solid #cbd5e1',
-              borderRadius: '999px',
-              background: '#ffffff',
-              color: '#334155',
-              padding: '0.45rem 0.85rem',
-              cursor: 'pointer',
-            }}
-          >
-            Open local permissions
-          </button>
-        ) : null}
-      </div>
+      {desktop.localCompanion.present && !desktop.localCompanion.online ? (
+        <AppButton type="button" tone="secondary" onClick={handleOpenPermissions}>
+          Review companion permissions
+        </AppButton>
+      ) : null}
     </section>
   );
 }

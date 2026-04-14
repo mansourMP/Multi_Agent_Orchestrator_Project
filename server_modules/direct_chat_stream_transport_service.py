@@ -5,7 +5,9 @@ import threading
 import time
 from typing import Any, Callable, Optional
 
+from server_modules import error_response_service
 from server_modules.direct_chat_intervention_service import build_intervention
+from server_modules.error_contracts import INTERNAL_ERROR
 
 
 def chat_stream_payload(raw_event: dict[str, Any]) -> tuple[Optional[str], Optional[dict[str, Any]]]:
@@ -15,17 +17,47 @@ def chat_stream_payload(raw_event: dict[str, Any]) -> tuple[Optional[str], Optio
     if event_name == "final":
         payload = raw_event.get("payload") if isinstance(raw_event.get("payload"), dict) else {}
         return "final", payload
+    if event_name == "trace":
+        payload = raw_event.get("payload") if isinstance(raw_event.get("payload"), dict) else {}
+        return "trace", payload
     payload = {key: value for key, value in raw_event.items() if key != "type"}
     return event_name, payload
 
 
-def chat_stream_error_payload(message: str) -> dict[str, Any]:
-    detail = str(message or "").strip() or "unknown_error"
+def chat_stream_error_payload(
+    message: str,
+    *,
+    request_id: Optional[str] = None,
+    trace_id: Optional[str] = None,
+    code: str = "direct_chat_terminal_failure",
+) -> dict[str, Any]:
+    detail = str(message or "").strip() or "Direct chat failed."
+    error = error_response_service.platform_error(
+        code=str(code or "").strip() or "direct_chat_terminal_failure",
+        message=detail,
+        error_class=INTERNAL_ERROR,
+        retryable=True,
+        status_code=500,
+        request_id=str(request_id or "").strip() or None,
+        trace_id=str(trace_id or "").strip() or None,
+    )
+    terminal_error = error_response_service.serialize_stream_error_envelope(
+        error_response_service.build_stream_error_envelope(
+            error=error,
+            request_id=request_id,
+            trace_id=trace_id,
+        )
+    )
     return {
+        "kind": "terminal_error",
         "reply": "",
         "actions": [],
         "mode": "answer",
-        "error": detail,
+        "error": terminal_error["error"]["code"],
+        "message": terminal_error["error"]["message"],
+        "terminal_error": terminal_error,
+        "trace_id": terminal_error["trace_id"],
+        "request_id": terminal_error["request_id"],
         "interventions": [
             build_intervention(
                 "system_error",
@@ -33,7 +65,7 @@ def chat_stream_error_payload(message: str) -> dict[str, Any]:
                 detail=detail,
                 severity="error",
                 status="failed",
-                code=detail,
+                code=terminal_error["error"]["code"],
             )
         ],
     }
@@ -45,10 +77,19 @@ def extract_direct_chat_error_response(raw_event: Any) -> Optional[dict[str, str
     if str(raw_event.get("type") or "").strip().lower() != "final":
         return None
     payload = raw_event.get("payload") if isinstance(raw_event.get("payload"), dict) else {}
-    error_code = str(payload.get("error") or "").strip()
+    terminal_error = payload.get("terminal_error") if isinstance(payload.get("terminal_error"), dict) else {}
+    error_code = (
+        str((terminal_error.get("error") or {}).get("code") or "").strip()
+        if isinstance(terminal_error.get("error"), dict)
+        else str(payload.get("error") or "").strip()
+    )
     if error_code != "no_provider":
         return None
-    message = str(payload.get("message") or "").strip() or "No AI provider configured"
+    message = (
+        str((terminal_error.get("error") or {}).get("message") or "").strip()
+        if isinstance(terminal_error.get("error"), dict)
+        else str(payload.get("message") or "").strip()
+    ) or "No AI provider configured"
     return {
         "error": "no_provider",
         "message": message,
@@ -94,7 +135,15 @@ def start_chat_stream_producer(
         except Exception as exc:
             capture_exception(exc)
             if not final_emitted:
-                append_event(session, "final", chat_stream_error_payload(str(exc)))
+                append_event(
+                    session,
+                    "final",
+                    chat_stream_error_payload(
+                        str(exc),
+                        request_id=str(session.get("request_id") or "").strip() or None,
+                        trace_id=str((session.get("metadata") or {}).get("trace_id") or "").strip() or None,
+                    ),
+                )
         finally:
             complete_session(session)
 

@@ -2,11 +2,16 @@
 
 import { usePathname, useSearchParams } from 'next/navigation';
 
+import { AppButton } from '@/lib/ui/primitives';
 import { useWorkspaceBoundary } from '@/lib/workspace/workspace-boundary';
 import { useWorkstationDesktopBridge } from '@/lib/workspace/workstation-desktop-bridge';
 import { useWorkstationKernel, useWorkstationStreamState } from '@/lib/workspace/workspace-services';
 
-export function WorkstationDiagnostics() {
+export function WorkstationDiagnostics({
+  onClose,
+}: {
+  onClose?: () => void;
+}) {
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const { kernelKey, routeManifest, shellProfile, workspaceId } = useWorkspaceBoundary();
@@ -15,33 +20,50 @@ export function WorkstationDiagnostics() {
   const desktop = useWorkstationDesktopBridge();
 
   return (
-    <details
+    <section
       data-workstation-diagnostics="surface"
       style={{
+        display: 'grid',
+        gap: '0.8rem',
+        padding: '0.95rem 1rem 1rem',
         borderRadius: '1rem',
-        border: '1px solid rgba(148, 163, 184, 0.35)',
-        background: 'rgba(255, 255, 255, 0.78)',
-        boxShadow: '0 12px 30px rgba(15, 23, 42, 0.05)',
+        border: '1px solid var(--app-border-subtle)',
+        background: 'color-mix(in srgb, var(--app-bg-panel) 88%, var(--app-bg-overlay) 12%)',
       }}
     >
-      <summary
+      <div
         style={{
-          cursor: 'pointer',
-          padding: '0.9rem 1rem',
-          color: '#0f172a',
-          fontWeight: 700,
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          gap: '0.75rem',
+          flexWrap: 'wrap',
         }}
       >
-        Workstation diagnostics
-      </summary>
+        <div style={{ display: 'grid', gap: '0.18rem' }}>
+          <strong style={{ color: 'var(--app-text-primary)' }}>Diagnostics</strong>
+          <span style={{ color: 'var(--app-text-secondary)', fontSize: '0.82rem' }}>
+            Internal shell and stream state for debugging only.
+          </span>
+        </div>
+        {onClose ? (
+          <AppButton type="button" tone="ghost" onClick={onClose}>
+            Hide diagnostics
+          </AppButton>
+        ) : null}
+      </div>
+
       <pre
         style={{
           margin: 0,
-          padding: '0 1rem 1rem',
+          padding: '0.95rem',
           overflow: 'auto',
-          color: '#334155',
+          borderRadius: '0.95rem',
+          border: '1px solid var(--app-border-subtle)',
+          background: 'color-mix(in srgb, var(--app-bg-canvas) 88%, var(--app-bg-overlay) 12%)',
+          color: 'var(--app-text-secondary)',
           fontSize: '0.78rem',
-          lineHeight: 1.45,
+          lineHeight: 1.5,
         }}
       >
         {JSON.stringify(
@@ -64,6 +86,6 @@ export function WorkstationDiagnostics() {
           2,
         )}
       </pre>
-    </details>
+    </section>
   );
 }

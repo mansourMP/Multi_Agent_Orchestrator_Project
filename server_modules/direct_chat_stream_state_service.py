@@ -4,7 +4,9 @@ import threading
 import time
 from typing import Any, Callable, Optional
 
+from server_modules import error_response_service
 from server_modules.direct_chat_intervention_service import build_intervention
+from server_modules.error_contracts import INTERNAL_ERROR
 
 
 def ensure_single_worker_runtime(*, configured_worker_count: int) -> None:
@@ -110,11 +112,26 @@ def persist_chat_stream_session_state(
 
 def chat_stream_interrupted_final_payload(partial_text: str, error_text: str) -> dict[str, Any]:
     detail = str(error_text or "").strip() or "Chat stream was interrupted while the runtime was unavailable."
+    error = error_response_service.platform_error(
+        code="chat_stream_interrupted",
+        message=detail,
+        error_class=INTERNAL_ERROR,
+        retryable=True,
+        status_code=503,
+    )
+    terminal_error = error_response_service.serialize_stream_error_envelope(
+        error_response_service.build_stream_error_envelope(error=error)
+    )
     return {
+        "kind": "terminal_error",
         "reply": "",
         "actions": [],
         "mode": "answer",
-        "error": detail,
+        "error": terminal_error["error"]["code"],
+        "message": terminal_error["error"]["message"],
+        "terminal_error": terminal_error,
+        "trace_id": terminal_error["trace_id"],
+        "request_id": terminal_error["request_id"],
         "interventions": [
             build_intervention(
                 "system_error",
@@ -343,9 +360,17 @@ def append_chat_stream_event(
         if event_name == "final":
             session["final_payload"] = dict(payload)
             session["completed"] = True
-            if str(payload.get("error") or "").strip():
+            terminal_error = payload.get("terminal_error") if isinstance(payload.get("terminal_error"), dict) else {}
+            terminal_error_body = terminal_error.get("error") if isinstance(terminal_error.get("error"), dict) else {}
+            error_code = str(terminal_error_body.get("code") or payload.get("error") or "").strip()
+            error_message = (
+                str(terminal_error_body.get("message") or "").strip()
+                or str(payload.get("message") or "").strip()
+                or error_code
+            )
+            if error_code or error_message:
                 session["status"] = "error"
-                session["error_text"] = str(payload.get("error") or "").strip()
+                session["error_text"] = error_message
             else:
                 session["status"] = "completed"
                 if not str(session.get("partial_text") or "").strip():

@@ -80,7 +80,7 @@ class AutopilotBridgeRegistryServiceTests(unittest.TestCase):
             webhook_auth_result=lambda **kwargs: {"status_code": 200, "kwargs": kwargs},
             resolve_inbound_connector=lambda payload: {"connector_id": "conn-1"},
             validate_webhook_signature=lambda request_url, form, signature, auth_token: True,
-            handle_inbound=lambda payload, matched=None: {"payload": payload, "matched": matched},
+            ingest_webhook=lambda payload, matched=None: {"payload": payload, "matched": matched},
             twiml_response=lambda text: {"twiml": text},
             error_response=lambda status_code, content: {"status_code": status_code, "content": content},
             telegram_webhook_enabled=True,

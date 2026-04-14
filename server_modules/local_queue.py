@@ -83,6 +83,10 @@ def _init():
     _server = _s
 
 
+def _monotonic() -> float:
+    return time.monotonic()
+
+
 # ---------------------------------------------------------------------------
 # Pydantic Models
 # ---------------------------------------------------------------------------
@@ -516,7 +520,7 @@ def iter_runtime_control_stream(
     if not runtime_token:
         return
     last_sequence = max(0, int(since_sequence or 0))
-    start = time.monotonic()
+    start = _monotonic()
     last_heartbeat = start
     while True:
         pending = _list_runtime_control_events(runtime_token, since_sequence=last_sequence) if include_backlog or last_sequence else _list_runtime_control_events(runtime_token, since_sequence=last_sequence)
@@ -527,7 +531,7 @@ def iter_runtime_control_stream(
                 "id": str(event_record.get("sequence") or ""),
                 "data": dict(event_record),
             }
-        now = time.monotonic()
+        now = _monotonic()
         if (now - start) >= max(1.0, float(timeout_seconds or 30.0)):
             break
         if (now - last_heartbeat) >= max(1.0, float(heartbeat_seconds or 5.0)):
@@ -1590,11 +1594,33 @@ def _is_worker_online(record: Dict[str, Any], now: Optional[datetime] = None) ->
 def _cleanup_stale_local_claims() -> List[str]:
     _init()
     global _LOCAL_CLAIM_CLEANUP_NEXT_AT_MONOTONIC
-    now_monotonic = time.monotonic()
+    now_monotonic = _monotonic()
     with _LOCAL_CLAIM_CLEANUP_LOCK:
         if now_monotonic < _LOCAL_CLAIM_CLEANUP_NEXT_AT_MONOTONIC:
             return []
         _LOCAL_CLAIM_CLEANUP_NEXT_AT_MONOTONIC = now_monotonic + LOCAL_QUEUE_STALE_CLAIM_CLEANUP_INTERVAL_SECONDS
+
+    for item in run_state_repository.sync_list_expired_local_claims() or []:
+        if not isinstance(item, dict):
+            continue
+        run_id = str(item.get("run_id") or "").strip()
+        if not run_id:
+            continue
+        lease_id = str(item.get("lease_id") or "").strip() or None
+        released = run_state_repository.sync_release_claim(
+            run_id,
+            lease_id=lease_id,
+        )
+        if not released:
+            continue
+        with _server.LOCAL_QUEUE_LOCK:
+            claim = _server.LOCAL_CLAIMED_RUNS.get(run_id)
+            if (
+                isinstance(claim, dict)
+                and str(claim.get("lease_id") or "").strip()
+                and str(claim.get("lease_id") or "").strip() == str(lease_id or "").strip()
+            ):
+                _server.LOCAL_CLAIMED_RUNS.pop(run_id, None)
 
     def _schedule_restored_run_resume(run_id: str, run: Dict[str, Any]) -> bool:
         try:
@@ -2791,7 +2817,7 @@ def handle_cleanup_local_run_queue(
                     run["local_worker_id"] = None
                     run["local_claimed_at"] = None
                     run["local_last_heartbeat_at"] = None
-                    run["_finished_mono"] = run.get("_finished_mono") or time.monotonic()
+                    run["_finished_mono"] = run.get("_finished_mono") or _monotonic()
                     _server.LOCAL_PENDING_RUN_IDS[:] = [item_id for item_id in _server.LOCAL_PENDING_RUN_IDS if item_id != run_id]
                     cleaned_payloads.append(
                         {
@@ -3326,7 +3352,7 @@ def handle_delete_local_runtime(machine_id: str, *, reason: Optional[str] = None
     runtime_id = str(machine_id or "").strip()
     if not runtime_id:
         raise HTTPException(status_code=400, detail="machine_id is required.")
-    started_mono = time.monotonic()
+    started_mono = _monotonic()
 
     with _server.LOCAL_QUEUE_LOCK:
         record = _server.LOCAL_WORKER_REGISTRY.get(runtime_id) if isinstance(_server.LOCAL_WORKER_REGISTRY.get(runtime_id), dict) else None
@@ -3890,7 +3916,7 @@ def handle_get_local_run_control_state(
         observed_at = _server._utc_now_iso() if callable(getattr(_server, "_utc_now_iso", None)) else None
         observe_machine_revocation_propagated(
             machine_id,
-            observed_monotonic=time.monotonic(),
+            observed_monotonic=_monotonic(),
             observed_at=observed_at,
         )
     return {

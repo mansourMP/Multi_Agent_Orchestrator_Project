@@ -4,6 +4,7 @@ export type WorkstationStageRouteSource = 'route' | 'roster';
 
 export type WorkstationStageRouteKind =
   | 'run'
+  | 'trace'
   | 'approval'
   | 'artifact'
   | 'agent'
@@ -12,6 +13,7 @@ export type WorkstationStageRouteKind =
 
 export type WorkstationStageViewKind =
   | 'run_detail'
+  | 'trace_detail'
   | 'approval_detail'
   | 'artifact_document'
   | 'agent_detail'
@@ -40,6 +42,7 @@ function normalizeStageSource(value: string | null | undefined): WorkstationStag
 function normalizeStageKind(value: string | null | undefined): WorkstationStageRouteKind | null {
   if (
     value === 'run'
+    || value === 'trace'
     || value === 'approval'
     || value === 'artifact'
     || value === 'agent'
@@ -99,6 +102,9 @@ export function mapStageRouteKindToViewKind(
 ): WorkstationStageViewKind {
   if (kind === 'run') {
     return 'run_detail';
+  }
+  if (kind === 'trace') {
+    return 'trace_detail';
   }
   if (kind === 'approval') {
     return 'approval_detail';

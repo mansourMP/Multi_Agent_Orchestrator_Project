@@ -70,6 +70,12 @@ struct OverlayActionEvent {
     phase: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "snake_case")]
+struct DesktopWindowState {
+    maximized: bool,
+}
+
 #[tauri::command]
 fn open_external(target: String) -> Result<bool, String> {
     let normalized = target.trim();
@@ -109,6 +115,80 @@ fn open_external(target: String) -> Result<bool, String> {
         return Err(format!("External URL handler exited with status {status}."));
     }
 
+    Ok(true)
+}
+
+#[tauri::command]
+fn desktop_window_ready(app: tauri::AppHandle) -> Result<bool, String> {
+    let window = app
+        .get_webview_window(WINDOW_LABEL)
+        .ok_or_else(|| "Desktop window is unavailable.".to_string())?;
+    window
+        .set_title(WINDOW_TITLE)
+        .map_err(|error| format!("Failed to set desktop window title: {error}"))?;
+    window
+        .show()
+        .map_err(|error| format!("Failed to show desktop window: {error}"))?;
+    let _ = window.unminimize();
+    let _ = window.set_focus();
+    Ok(true)
+}
+
+#[tauri::command]
+fn desktop_window_state(app: tauri::AppHandle) -> Result<DesktopWindowState, String> {
+    let window = app
+        .get_webview_window(WINDOW_LABEL)
+        .ok_or_else(|| "Desktop window is unavailable.".to_string())?;
+    let maximized = window
+        .is_maximized()
+        .map_err(|error| format!("Failed to inspect desktop window state: {error}"))?;
+    Ok(DesktopWindowState { maximized })
+}
+
+#[tauri::command]
+fn desktop_window_minimize(app: tauri::AppHandle) -> Result<bool, String> {
+    let window = app
+        .get_webview_window(WINDOW_LABEL)
+        .ok_or_else(|| "Desktop window is unavailable.".to_string())?;
+    window
+        .minimize()
+        .map_err(|error| format!("Failed to minimize desktop window: {error}"))?;
+    Ok(true)
+}
+
+#[tauri::command]
+fn desktop_window_toggle_maximize(app: tauri::AppHandle) -> Result<DesktopWindowState, String> {
+    let window = app
+        .get_webview_window(WINDOW_LABEL)
+        .ok_or_else(|| "Desktop window is unavailable.".to_string())?;
+    window
+        .toggle_maximize()
+        .map_err(|error| format!("Failed to toggle desktop window maximize: {error}"))?;
+    let maximized = window
+        .is_maximized()
+        .map_err(|error| format!("Failed to inspect desktop window maximize state: {error}"))?;
+    Ok(DesktopWindowState { maximized })
+}
+
+#[tauri::command]
+fn desktop_window_close(app: tauri::AppHandle) -> Result<bool, String> {
+    let window = app
+        .get_webview_window(WINDOW_LABEL)
+        .ok_or_else(|| "Desktop window is unavailable.".to_string())?;
+    window
+        .close()
+        .map_err(|error| format!("Failed to close desktop window: {error}"))?;
+    Ok(true)
+}
+
+#[tauri::command]
+fn desktop_window_start_drag(app: tauri::AppHandle) -> Result<bool, String> {
+    let window = app
+        .get_webview_window(WINDOW_LABEL)
+        .ok_or_else(|| "Desktop window is unavailable.".to_string())?;
+    window
+        .start_dragging()
+        .map_err(|error| format!("Failed to start desktop window drag: {error}"))?;
     Ok(true)
 }
 
@@ -1411,6 +1491,42 @@ fn desktop_bridge_script() -> String {
       }}
       return false;
     }},
+    markShellReady: async () => {{
+      if (window.__TAURI_INTERNALS__ && typeof window.__TAURI_INTERNALS__.invoke === "function") {{
+        return await window.__TAURI_INTERNALS__.invoke("desktop_window_ready");
+      }}
+      return false;
+    }},
+    getWindowState: async () => {{
+      if (window.__TAURI_INTERNALS__ && typeof window.__TAURI_INTERNALS__.invoke === "function") {{
+        return await window.__TAURI_INTERNALS__.invoke("desktop_window_state");
+      }}
+      return {{ maximized: false }};
+    }},
+    minimizeWindow: async () => {{
+      if (window.__TAURI_INTERNALS__ && typeof window.__TAURI_INTERNALS__.invoke === "function") {{
+        return await window.__TAURI_INTERNALS__.invoke("desktop_window_minimize");
+      }}
+      return false;
+    }},
+    toggleMaximizeWindow: async () => {{
+      if (window.__TAURI_INTERNALS__ && typeof window.__TAURI_INTERNALS__.invoke === "function") {{
+        return await window.__TAURI_INTERNALS__.invoke("desktop_window_toggle_maximize");
+      }}
+      return {{ maximized: false }};
+    }},
+    closeWindow: async () => {{
+      if (window.__TAURI_INTERNALS__ && typeof window.__TAURI_INTERNALS__.invoke === "function") {{
+        return await window.__TAURI_INTERNALS__.invoke("desktop_window_close");
+      }}
+      return false;
+    }},
+    startWindowDrag: async () => {{
+      if (window.__TAURI_INTERNALS__ && typeof window.__TAURI_INTERNALS__.invoke === "function") {{
+        return await window.__TAURI_INTERNALS__.invoke("desktop_window_start_drag");
+      }}
+      return false;
+    }},
     openPermissionSettings: async (permission) => {{
       if (window.__TAURI_INTERNALS__ && typeof window.__TAURI_INTERNALS__.invoke === "function") {{
         return await window.__TAURI_INTERNALS__.invoke("open_permission_settings", {{ permission }});
@@ -1450,9 +1566,6 @@ fn ensure_main_window<R: Runtime, M: Manager<R>>(app: &M) -> Result<(), String> 
             .map_err(|error| format!("Failed to refresh desktop bridge on existing main window: {error}"))?;
         let _ = window.set_title(WINDOW_TITLE);
         let _ = window.set_size(Size::Logical(LogicalSize::new(WINDOW_WIDTH, WINDOW_HEIGHT)));
-        let _ = window.unminimize();
-        let _ = window.show();
-        let _ = window.set_focus();
         let _ = mark_window_non_restorable(&window);
         return Ok(());
     }
@@ -1465,22 +1578,15 @@ fn ensure_main_window<R: Runtime, M: Manager<R>>(app: &M) -> Result<(), String> 
         .initialization_script(&desktop_bridge_script())
         .title(WINDOW_TITLE)
         .inner_size(WINDOW_WIDTH, WINDOW_HEIGHT)
-        .visible(true)
+        .visible(false)
+        .decorations(false)
         .focused(true);
-
-    #[cfg(target_os = "macos")]
-    {
-        window_builder = window_builder.title_bar_style(tauri::TitleBarStyle::Overlay);
-    }
 
     let window = window_builder
         .build()
         .map_err(|error| format!("Failed to build main window: {error}"))?;
 
     let _ = mark_window_non_restorable(&window);
-    let _ = window.unminimize();
-    let _ = window.show();
-    let _ = window.set_focus();
 
     Ok(())
 }
@@ -1959,6 +2065,12 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .invoke_handler(tauri::generate_handler![
             open_external,
+            desktop_window_ready,
+            desktop_window_state,
+            desktop_window_minimize,
+            desktop_window_toggle_maximize,
+            desktop_window_close,
+            desktop_window_start_drag,
             open_permission_settings,
             openai_codex_oauth_login,
             bootstrap_machine_enrollment

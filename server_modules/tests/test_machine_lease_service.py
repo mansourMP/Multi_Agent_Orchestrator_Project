@@ -301,7 +301,16 @@ class MachineLeaseServiceTests(unittest.TestCase):
                 "context": {"workspace_id": "ws-2", "metadata": {"active_agent_install_id": "install-b"}},
             },
         }
-        worker_registry = {"worker-1": {"runtime_id": "worker-1", "machine_id": "machine-1", "capabilities": []}}
+        worker_registry = {
+            "worker-1": {
+                "runtime_id": "worker-1",
+                "machine_id": "machine-1",
+                "tenant_id": "default",
+                "workspace_id": "ws-1",
+                "machine_enrollment_scope": "tenant",
+                "capabilities": [],
+            }
+        }
 
         with patch(
             "server_modules.machine_lease_service.run_state_repository.dispatch_repository_call",

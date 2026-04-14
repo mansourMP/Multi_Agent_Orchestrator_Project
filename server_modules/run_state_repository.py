@@ -1930,6 +1930,35 @@ async def get_approval_record(approval_id: str) -> Optional[Dict[str, Any]]:
     return _approval_record_from_row(row)
 
 
+async def find_run_snapshot_for_approval_id(approval_id: str) -> Optional[Dict[str, Any]]:
+    approval_record = await get_approval_record(approval_id)
+    if not isinstance(approval_record, dict):
+        return None
+    run_id = str(approval_record.get("run_id") or "").strip()
+    if not run_id:
+        return None
+    live_run = await get_live_run(run_id)
+    if isinstance(live_run, dict):
+        return {
+            "source": "live",
+            "payload": live_run,
+        }
+    archived_run = await get_archived_run(run_id)
+    if isinstance(archived_run, dict):
+        return {
+            "source": "archive",
+            "payload": archived_run,
+        }
+    return {
+        "source": "missing",
+        "payload": {
+            "run_id": run_id,
+            "workspace_id": approval_record.get("workspace_id"),
+            "tenant_id": approval_record.get("tenant_id"),
+        },
+    }
+
+
 async def resolve_approval_if_pending(
     run_id: str,
     approval_id: str,
@@ -2370,7 +2399,7 @@ async def claim_due_outbox_events(
                 ),
                 claimed_by = $3,
                 claimed_at = NOW(),
-                claim_expires_at = NOW() + ($4::text || ' seconds')::interval
+                claim_expires_at = NOW() + ($4 * INTERVAL '1 second')
             FROM due
             WHERE outbox.event_id = due.event_id
             RETURNING
@@ -2480,7 +2509,7 @@ async def record_outbox_delivery_failure(
     pool = await _require_pool(operation="record_outbox_delivery_failure")
     try:
         await _ensure_runtime_outbox_table(pool)
-        row = await pool.fetchrow(
+        status = await pool.execute(
             """
             UPDATE runtime_outbox
             SET retry_count = COALESCE(retry_count, 0) + CASE WHEN $5::boolean THEN 1 ELSE 0 END,
@@ -2509,9 +2538,17 @@ async def record_outbox_delivery_failure(
             bool(increment_retry),
             claim,
         )
+        row = await pool.fetchrow(
+            """
+            SELECT event_id
+            FROM runtime_outbox
+            WHERE event_id = $1
+            """,
+            token,
+        )
     except Exception as exc:
         raise RunStatePersistenceError(f"Postgres record_outbox_delivery_failure failed for {token}: {exc}") from exc
-    return row is not None
+    return row is not None or str(status or "").strip().upper().endswith("1")
 
 
 async def list_poisoned_outbox_events(
@@ -2904,6 +2941,14 @@ def sync_get_approval_record(approval_id: str) -> Optional[Dict[str, Any]]:
     return _run_sync(
         lambda: get_approval_record(approval_id),
         operation="sync_get_approval_record",
+        fallback=None,
+    )
+
+
+def sync_find_run_snapshot_for_approval_id(approval_id: str) -> Optional[Dict[str, Any]]:
+    return _run_sync(
+        lambda: find_run_snapshot_for_approval_id(approval_id),
+        operation="sync_find_run_snapshot_for_approval_id",
         fallback=None,
     )
 

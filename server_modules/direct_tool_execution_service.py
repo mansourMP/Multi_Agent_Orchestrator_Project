@@ -166,6 +166,120 @@ def resolve_chat_local_path(raw_path: str) -> Path:
     return candidate
 
 
+def _compact_trace_text(value: Any, limit: int = 240) -> str:
+    text = " ".join(str(value or "").split()).strip()
+    if not text:
+        return ""
+    if len(text) <= limit:
+        return text
+    return f"{text[: max(0, limit - 1)].rstrip()}…"
+
+
+def _infer_trace_capability_id(connector_id: str, action_id: str) -> Optional[str]:
+    normalized_connector = str(connector_id or "").strip().lower()
+    normalized_action = str(action_id or "").strip().lower()
+    if not normalized_connector:
+        return None
+    if normalized_connector == "web" and normalized_action == "search":
+        return "web_search"
+    if normalized_connector == "shell" and normalized_action == "exec":
+        return "shell.execute"
+    if normalized_connector == "screenshot" and normalized_action == "capture":
+        return "screenshot.capture"
+    if normalized_connector == "computer" and normalized_action:
+        return f"computer_control.{normalized_action}"
+    if normalized_action:
+        return f"{normalized_connector}.{normalized_action}"
+    return normalized_connector
+
+
+def _parse_web_search_results(result_text: str) -> List[Dict[str, str]]:
+    results: List[Dict[str, str]] = []
+    for block in re.split(r"\n\s*\n", str(result_text or "").strip()):
+        lines = [line.strip() for line in block.splitlines() if str(line or "").strip()]
+        if not lines:
+            continue
+        title = re.sub(r"^\d+\.\s*", "", lines[0]).strip()
+        url = ""
+        snippet_parts: List[str] = []
+        for line in lines[1:]:
+            lower = line.lower()
+            if lower.startswith("url:"):
+                url = line.split(":", 1)[1].strip()
+                continue
+            if lower.startswith("snippet:"):
+                snippet_parts.append(line.split(":", 1)[1].strip())
+                continue
+            snippet_parts.append(line)
+        if title or url or snippet_parts:
+            results.append(
+                {
+                    "title": title or url or "Result",
+                    "url": url,
+                    "snippet": " ".join(part for part in snippet_parts if part).strip(),
+                }
+            )
+    return results[:5]
+
+
+def build_direct_tool_trace_metadata(
+    connector_id: str,
+    action_id: str,
+    arguments: Optional[Dict[str, Any]],
+    *,
+    result_text: str = "",
+) -> Dict[str, Any]:
+    payload = arguments if isinstance(arguments, dict) else {}
+    normalized_connector = str(connector_id or "").strip().lower()
+    normalized_action = str(action_id or "").strip().lower()
+    search_query = ""
+    search_results: List[Dict[str, str]] = []
+    browser_action: Optional[Dict[str, Any]] = None
+    browser_screenshot: Optional[Dict[str, Any]] = None
+
+    if normalized_connector == "web" and normalized_action == "search":
+        search_query = str(payload.get("query") or payload.get("input") or "").strip()
+        search_results = _parse_web_search_results(result_text)
+
+    if normalized_connector == "browser":
+        target_summary = (
+            str(payload.get("selector") or "").strip()
+            or str(payload.get("url") or "").strip()
+            or str(payload.get("value") or "").strip()
+            or str(payload.get("text") or "").strip()
+            or str(payload.get("output_path") or "").strip()
+            or str(payload.get("save_path") or "").strip()
+            or str(payload.get("url_pattern") or "").strip()
+            or str(payload.get("tab_id") or "").strip()
+        )
+        browser_action = {
+            "action": normalized_action,
+            "target_summary": _compact_trace_text(target_summary or normalized_action.replace("_", " ")),
+            "url": str(payload.get("url") or "").strip() or extract_first_url(result_text) or None,
+        }
+        if normalized_action == "screenshot":
+            artifact_ref = (
+                str(payload.get("output_path") or "").strip()
+                or str(payload.get("save_path") or "").strip()
+                or extract_first_path_reference(result_text)
+            )
+            browser_screenshot = {
+                "artifact_id": artifact_ref or f"browser_screenshot:{normalized_action}",
+                "caption": _compact_trace_text(artifact_ref or "Browser screenshot"),
+                "width": 0,
+                "height": 0,
+            }
+
+    return {
+        "capability_id": _infer_trace_capability_id(normalized_connector, normalized_action),
+        "search_query": search_query,
+        "search_results": search_results,
+        "browser_action": browser_action,
+        "browser_screenshot": browser_screenshot,
+        "result_summary": _compact_trace_text(result_text or payload.get("query") or payload.get("url")),
+    }
+
+
 def direct_tool_followup_message(tool_name: str, result_text: str) -> str:
     cleaned_result = str(result_text or "").strip() or "No result."
     return (

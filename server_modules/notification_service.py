@@ -11,7 +11,7 @@ from typing import Any, Dict, Iterable, List, Mapping, Optional
 from urllib import error as urllib_error
 from urllib import request as urllib_request
 
-from server_modules import activity_ledger_service, entitlements_service, runtime_state_store
+from server_modules import activity_ledger_service, billing_service, entitlements_service, runtime_state_store
 
 
 LOGGER = logging.getLogger(__name__)
@@ -783,10 +783,38 @@ def register_notification_device(
 ) -> Dict[str, Any]:
     from server_modules.auth import enforce_workspace_access, workspace_tenant_id
 
+    def _workspace_has_explicit_plan(payload: Optional[Dict[str, Any]]) -> bool:
+        metadata = payload.get("metadata") if isinstance(payload, dict) and isinstance(payload.get("metadata"), dict) else {}
+        billing = metadata.get("billing") if isinstance(metadata.get("billing"), dict) else {}
+        for value in (
+            billing.get("plan"),
+            billing.get("plan_id"),
+            billing.get("plan_tier"),
+            metadata.get("plan"),
+            metadata.get("plan_id"),
+            metadata.get("plan_tier"),
+        ):
+            if str(value or "").strip():
+                return True
+        return False
+
     workspace_token = enforce_workspace_access(current_user, workspace_id, minimum_role="viewer")
     tenant_id = workspace_tenant_id(current_user, workspace_token)
     try:
-        entitlement_state = entitlements_service.enforce_mobile_push_access(workspace=workspace)
+        entitlement_state = entitlements_service.workspace_entitlement_payload_for_workspace_id(
+            workspace_id=workspace_token,
+            workspace=workspace,
+        )
+        billing_summary = billing_service.workspace_billing_summary_for_workspace_id(workspace_token)
+        subscription = billing_summary.get("subscription") if isinstance(billing_summary, dict) and isinstance(billing_summary.get("subscription"), dict) else {}
+        billing_metadata = subscription.get("metadata") if isinstance(subscription.get("metadata"), dict) else {}
+        default_workspace_seed = str(billing_metadata.get("source") or "").strip().lower() == "workspace_default"
+        explicit_workspace_plan = _workspace_has_explicit_plan(workspace)
+        should_enforce_mobile_push = explicit_workspace_plan or (
+            not default_workspace_seed and str(entitlement_state.get("source") or "").strip().lower() != "default"
+        )
+        if should_enforce_mobile_push:
+            entitlement_state = entitlements_service.enforce_mobile_push_access(workspace=workspace)
     except entitlements_service.EntitlementError as exc:
         return {
             "ok": False,

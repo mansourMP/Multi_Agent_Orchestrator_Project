@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional
 
+from server_modules.conversation_memory_policy import DIRECT_CHAT_PROFILE, get_memory_policy_profile
+
 
 @dataclass(slots=True)
 class PreparedDirectChatRequest:
@@ -130,7 +132,7 @@ def prepare_direct_chat_request(
     compaction = compact_conversation_history_fn(
         normalized_prior_messages,
         max_tokens=direct_chat_compaction_token_limit,
-        preserve_last_messages=10,
+        preserve_last_messages=get_memory_policy_profile(DIRECT_CHAT_PROFILE).preserve_last_messages,
     )
     compacted_prior_messages = [
         item

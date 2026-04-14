@@ -7,6 +7,8 @@ from fastapi import HTTPException
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from server_modules.agent_turn import AgentTurnRequest
+from server_modules import error_response_service
+from server_modules.error_contracts import INTERNAL_ERROR, POLICY_BLOCK, USER_INPUT_ERROR
 
 
 @dataclass(slots=True)
@@ -95,13 +97,40 @@ async def build_agent_turn_stream_response(
         try:
             first_event = next(producer_iter)
         except StopIteration:
-            return JSONResponse(
+            error = error_response_service.platform_error(
+                code="chat_unavailable",
+                message="Chat ended before producing a response.",
+                error_class=INTERNAL_ERROR,
+                retryable=True,
                 status_code=500,
-                content={"error": "chat_unavailable", "message": "Chat ended before producing a response."},
+                request_id=client_request_id,
             )
+            content = error_response_service.serialize_http_error_envelope(
+                error_response_service.build_http_error_envelope(error)
+            )
+            content.update(
+                {
+                    "error_code": error.code,
+                    "message": error.message,
+                }
+            )
+            return JSONResponse(status_code=500, content=content)
         immediate_error = services.extract_direct_chat_error_response(first_event)
         if isinstance(immediate_error, dict):
-            return JSONResponse(status_code=409, content=immediate_error)
+            error = error_response_service.platform_error(
+                code=str(immediate_error.get("error") or "direct_chat_conflict").strip() or "direct_chat_conflict",
+                message=str(immediate_error.get("message") or "Direct chat could not start.").strip()
+                or "Direct chat could not start.",
+                error_class=POLICY_BLOCK,
+                retryable=True,
+                status_code=409,
+                request_id=client_request_id,
+            )
+            content = error_response_service.serialize_http_error_envelope(
+                error_response_service.build_http_error_envelope(error)
+            )
+            content.update(immediate_error)
+            return JSONResponse(status_code=409, content=content)
 
         def replaying_producer():
             yield first_event
@@ -137,7 +166,14 @@ async def build_direct_chat_stream_response(
             request_signature_fn=services.chat_stream_request_signature,
         )
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "code": "invalid_direct_chat_request",
+                "message": str(exc),
+                "class": USER_INPUT_ERROR,
+            },
+        ) from exc
 
     return await build_agent_turn_stream_response(
         current_user=current_user,

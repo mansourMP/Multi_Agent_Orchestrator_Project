@@ -23,7 +23,7 @@ function createMembership({
   role = 'member',
   permissions = ['chat.read'],
   membershipVersion = 'v1',
-  defaultRoute = `/w/${workspaceId}/chat`,
+  defaultRoute = 'chat',
   preferredShellProfileId = null,
 }) {
   return {
@@ -49,7 +49,7 @@ function createBootstrap({
   role = 'member',
   permissions = ['chat.read'],
   capabilities = {},
-  defaultRoute = `/w/${workspaceId}/chat`,
+  defaultRoute = 'chat',
   preferredProfile = 'personal_shell',
 } = {}) {
   return {
@@ -160,23 +160,27 @@ test('account shell keeps only global session and workspace memberships', () => 
   const rememberedState = reduceAccountShellState(activeState, {
     type: 'remember_workspace_route',
     workspaceId: 'ws_law',
-    route: '/w/ws_law/workstation',
+    route: 'runs',
   });
 
   assert.equal(rememberedState.status, 'authenticated');
   assert.equal(rememberedState.session.connectionMode, 'platform_first');
   assert.equal(rememberedState.activeWorkspaceId, 'ws_law');
   assert.deepEqual(Object.keys(rememberedState.workspaceMembershipIndex).sort(), ['ws_law', 'ws_personal']);
-  assert.equal(rememberedState.lastVisitedWorkspaceRouteById.ws_law, '/w/ws_law/workstation');
-  assert.equal(resolveWorkspaceNavigationTarget(rememberedState, 'ws_law'), '/w/ws_law/workstation');
+  assert.equal(rememberedState.lastVisitedWorkspaceRouteIdById.ws_law, 'runs');
+  assert.equal(resolveWorkspaceNavigationTarget(rememberedState, 'ws_law'), 'runs');
 
   const snapshot = createAccountShellSnapshot(rememberedState);
   assert.deepEqual(snapshot, {
     accountId: 'acct_1',
     apiBaseUrl: 'https://api.empyralis.example',
     activeWorkspaceId: 'ws_law',
-    lastVisitedWorkspaceRouteById: {
-      ws_law: '/w/ws_law/workstation',
+    lastVisitedWorkspaceRouteIdById: {
+      ws_law: 'runs',
+    },
+    workspaceRouteStateById: {
+      ws_law: 'v1:chat:chat.read',
+      ws_personal: 'v1:chat:chat.read',
     },
   });
   assert.equal('queryClient' in rememberedState, false);
@@ -204,7 +208,7 @@ test('mobile foundation reuses the workspace bootstrap contract and derives work
         artifacts_enabled: true,
         approvals_enabled: true,
       },
-      defaultRoute: '/w/ws_ops/admin',
+      defaultRoute: 'approvals',
       preferredProfile: 'operations_admin_shell',
     }),
     storage,
@@ -213,9 +217,10 @@ test('mobile foundation reuses the workspace bootstrap contract and derives work
   assert.equal(foundation.connectionMode, 'platform_first');
   assert.equal(foundation.shellProfile.id, 'operations_admin_shell');
   assert.equal(foundation.boundaryKey, 'ws_ops:membership-ws_ops:operations_admin_shell');
-  assert.equal(foundation.routeManifest.defaultRoute, '/w/ws_ops/admin');
-  assert.ok(foundation.routeManifest.routeIds.includes('admin'));
-  assert.ok(foundation.routeManifest.routeIds.includes('admin/billing'));
+  assert.equal(foundation.routeManifest.defaultRouteId, 'approvals');
+  assert.equal(foundation.routeManifest.defaultRoute, '/(workspace)/approvals');
+  assert.ok(foundation.routeManifest.routeIds.includes('chat'));
+  assert.ok(foundation.routeManifest.routeIds.includes('approvals'));
   assert.equal(foundation.services.snapshot().transport.connectionMode, 'platform_first');
 });
 
@@ -244,7 +249,7 @@ test('mobile workspace services scope persistence and query state to accountId p
       capabilities: {
         document_workstation_enabled: true,
       },
-      defaultRoute: '/w/ws_law/workstation',
+      defaultRoute: 'chat',
       preferredProfile: 'document_workstation_shell',
     }),
     storage,
@@ -314,7 +319,6 @@ test('fetchWorkspaceBootstrap and foundation loading use the shared public boots
   const foundation = await loadMobileWorkspaceFoundation({
     workspaceId: 'ws_personal',
     session: {
-      accountId: 'acct_1',
       apiBaseUrl: 'https://api.empyralis.example/',
       accessToken: 'token',
       runtimeUrl: 'http://127.0.0.1:7000',

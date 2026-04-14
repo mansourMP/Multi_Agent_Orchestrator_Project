@@ -52,10 +52,13 @@ def _patch_delivery_state(event: "OutboxEvent", delivery_state: Dict[str, Any]) 
 
     if not isinstance(delivery_state, dict) or not delivery_state:
         return
-    run_state_repository.sync_patch_outbox_event_payload(
-        event.event_id,
-        {"delivery": delivery_state},
-    )
+    try:
+        run_state_repository.sync_patch_outbox_event_payload(
+            event.event_id,
+            {"delivery": delivery_state},
+        )
+    except run_state_repository.RunStatePersistenceError:
+        return
 
 
 def _connector_delivery_receipt(connector_state: Dict[str, Any], provider_idempotency_key: str) -> Dict[str, Any] | None:
@@ -135,7 +138,7 @@ def _deliver_telegram(event: "OutboxEvent") -> bool:
         chat_id=chat_id,
         workspace_id=event.workspace_id,
         connector_id=connector_id,
-        session_key=registry.session_key_builder(chat_id),
+        session_key=str(payload.get("session_key") or "").strip() or registry.session_key_builder(chat_id),
         profile=profile,
         run_id=run_id,
         pending_message_id=str(payload.get("pending_message_id") or "").strip() or None,
@@ -150,6 +153,12 @@ def _deliver_telegram(event: "OutboxEvent") -> bool:
         edit_message=registry.edit_message,
         set_connector_state=state_service.set_connector_state,
         provider_idempotency_key=str(delivery_state.get("provider_idempotency_key") or "").strip() or None,
+        tenant_id=str(payload.get("tenant_id") or "").strip() or None,
+        thread_id=str(payload.get("thread_id") or "").strip() or None,
+        owner_install_id=str(payload.get("owner_install_id") or "").strip() or None,
+        owner_label=str(payload.get("owner_label") or "").strip() or None,
+        owner_type=str(payload.get("owner_type") or "").strip() or None,
+        deployed_agent_id=str(payload.get("deployed_agent_id") or "").strip() or None,
     )
     patched_delivery = (
         dict(delivery_result.get("delivery") or {})

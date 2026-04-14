@@ -8,6 +8,7 @@ from typing import Any, AsyncIterator, Dict, Optional
 
 from server_modules import control_plane_repository
 from server_modules.db import asyncpg
+from server_modules import quota_policy_service, quota_response_service
 
 
 _WORKSPACE_DEFAULT_MAX_ACTIVE_THREADS = 24
@@ -132,7 +133,7 @@ def resolve_channel_quota_snapshot(
 def _thread_busy_error(quota_snapshot: ChannelQuotaSnapshot) -> ChannelExecutionLimitError:
     return ChannelExecutionLimitError(
         reason="thread_busy",
-        message="I’m still finishing the previous message in this conversation. One moment.",
+        message=quota_response_service.channel_reply_for_reason("thread_busy"),
         retry_after_seconds=2,
         quota_snapshot=quota_snapshot,
     )
@@ -141,7 +142,7 @@ def _thread_busy_error(quota_snapshot: ChannelQuotaSnapshot) -> ChannelExecution
 def _agent_limit_error(quota_snapshot: ChannelQuotaSnapshot) -> ChannelExecutionLimitError:
     return ChannelExecutionLimitError(
         reason="agent_limit_exceeded",
-        message="This specialist is helping other customers right now. Please try again in a moment.",
+        message=quota_response_service.channel_reply_for_reason("agent_limit_exceeded"),
         retry_after_seconds=5,
         quota_snapshot=quota_snapshot,
     )
@@ -150,7 +151,7 @@ def _agent_limit_error(quota_snapshot: ChannelQuotaSnapshot) -> ChannelExecution
 def _workspace_limit_error(quota_snapshot: ChannelQuotaSnapshot) -> ChannelExecutionLimitError:
     return ChannelExecutionLimitError(
         reason="workspace_limit_exceeded",
-        message="The workspace is helping other customers right now. Please try again in a moment.",
+        message=quota_response_service.channel_reply_for_reason("workspace_limit_exceeded"),
         retry_after_seconds=5,
         quota_snapshot=quota_snapshot,
     )
@@ -159,65 +160,26 @@ def _workspace_limit_error(quota_snapshot: ChannelQuotaSnapshot) -> ChannelExecu
 def _workspace_rate_limit_error(quota_snapshot: ChannelQuotaSnapshot) -> ChannelExecutionLimitError:
     return ChannelExecutionLimitError(
         reason="workspace_rate_limited",
-        message="I’m receiving too many requests right now. Please try again in a moment.",
+        message=quota_response_service.channel_reply_for_reason("workspace_rate_limited"),
         retry_after_seconds=10,
         quota_snapshot=quota_snapshot,
     )
 
 
 def build_limit_result(*, error: ChannelExecutionLimitError) -> Dict[str, Any]:
-    status = {
-        "thread_busy": "thread_busy",
-        "agent_limit_exceeded": "agent_busy",
-        "workspace_limit_exceeded": "workspace_busy",
-        "workspace_rate_limited": "rate_limited",
-    }.get(error.reason, "workspace_busy")
-    return {
-        "status": status,
-        "reply": error.message,
-        "artifact": None,
-        "steps": [
-            {
-                "label": "Execution gate",
-                "detail": error.reason.replace("_", " "),
-                "status": "error",
-                "kind": "thinking",
-            }
-        ],
-        "critic": {
-            "mode": "rewrite",
-            "reply": error.message,
-            "violations": [error.reason],
-        },
-        "quota_snapshot": error.quota_snapshot.as_dict(),
-        "retry_after_seconds": error.retry_after_seconds,
-        "limit_reason": error.reason,
-    }
+    decision = quota_policy_service.channel_limit_error_decision(
+        subject=quota_policy_service.QuotaSubject(surface_kind="deployed_agent_channel"),
+        error=error,
+    )
+    return quota_response_service.channel_payload_from_quota_decision(decision=decision)
 
 
 def build_runtime_capped_result(*, quota_snapshot: ChannelQuotaSnapshot) -> Dict[str, Any]:
-    message = "I’m taking longer than the current service window allows. Please try again in a moment."
-    return {
-        "status": "runtime_capped",
-        "reply": message,
-        "artifact": None,
-        "steps": [
-            {
-                "label": "Runtime cap reached",
-                "detail": f"Customer execution exceeded {quota_snapshot.max_runtime_seconds}s.",
-                "status": "error",
-                "kind": "thinking",
-            }
-        ],
-        "critic": {
-            "mode": "rewrite",
-            "reply": message,
-            "violations": ["runtime_cap_exceeded"],
-        },
-        "quota_snapshot": quota_snapshot.as_dict(),
-        "retry_after_seconds": max(min(quota_snapshot.max_runtime_seconds // 2, 30), 5),
-        "limit_reason": "runtime_cap_exceeded",
-    }
+    decision = quota_policy_service.runtime_cap_quota_decision(
+        subject=quota_policy_service.QuotaSubject(surface_kind="deployed_agent_channel"),
+        quota_snapshot=quota_snapshot,
+    )
+    return quota_response_service.channel_payload_from_quota_decision(decision=decision)
 
 
 def _is_thread_lease_conflict(error: Exception) -> bool:
@@ -268,24 +230,6 @@ async def acquire_channel_execution_lease(
                 str(tenant_id or "").strip(),
                 str(workspace_id or "").strip(),
             )
-            recent_turn_count = int(
-                await connection.fetchval(
-                    """
-                    SELECT COUNT(*)
-                    FROM agent_channel_events
-                    WHERE tenant_id = $1
-                      AND workspace_id = $2
-                      AND direction = 'inbound'
-                      AND event_type = 'message'
-                      AND created_at >= NOW() - INTERVAL '60 seconds'
-                    """,
-                    str(tenant_id or "").strip(),
-                    str(workspace_id or "").strip(),
-                )
-                or 0
-            )
-            if recent_turn_count > quota_snapshot.max_workspace_turns_per_minute:
-                raise _workspace_rate_limit_error(quota_snapshot)
             active_thread = await connection.fetchval(
                 """
                 SELECT 1
@@ -302,22 +246,6 @@ async def acquire_channel_execution_lease(
             )
             if active_thread:
                 raise _thread_busy_error(quota_snapshot)
-            active_workspace_count = int(
-                await connection.fetchval(
-                    """
-                    SELECT COUNT(*)
-                    FROM agent_channel_execution_leases
-                    WHERE tenant_id = $1
-                      AND workspace_id = $2
-                      AND expires_at > NOW()
-                    """,
-                    str(tenant_id or "").strip(),
-                    str(workspace_id or "").strip(),
-                )
-                or 0
-            )
-            if active_workspace_count >= quota_snapshot.max_workspace_active_threads:
-                raise _workspace_limit_error(quota_snapshot)
             if str(responder_install_id or "").strip():
                 active_agent_count = int(
                     await connection.fetchval(
@@ -337,6 +265,40 @@ async def acquire_channel_execution_lease(
                 )
                 if active_agent_count >= quota_snapshot.max_agent_active_threads:
                     raise _agent_limit_error(quota_snapshot)
+            active_workspace_count = int(
+                await connection.fetchval(
+                    """
+                    SELECT COUNT(*)
+                    FROM agent_channel_execution_leases
+                    WHERE tenant_id = $1
+                      AND workspace_id = $2
+                      AND expires_at > NOW()
+                    """,
+                    str(tenant_id or "").strip(),
+                    str(workspace_id or "").strip(),
+                )
+                or 0
+            )
+            if active_workspace_count >= quota_snapshot.max_workspace_active_threads:
+                raise _workspace_limit_error(quota_snapshot)
+            recent_turn_count = int(
+                await connection.fetchval(
+                    """
+                    SELECT COUNT(*)
+                    FROM agent_channel_events
+                    WHERE tenant_id = $1
+                      AND workspace_id = $2
+                      AND direction = 'inbound'
+                      AND event_type = 'message'
+                      AND created_at >= NOW() - INTERVAL '60 seconds'
+                    """,
+                    str(tenant_id or "").strip(),
+                    str(workspace_id or "").strip(),
+                )
+                or 0
+            )
+            if recent_turn_count > quota_snapshot.max_workspace_turns_per_minute:
+                raise _workspace_rate_limit_error(quota_snapshot)
             try:
                 await connection.execute(
                     """

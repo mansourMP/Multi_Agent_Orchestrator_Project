@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 
+import { AppButton } from '@/lib/ui/primitives';
 import { useWorkspaceBoundary } from '@/lib/workspace/workspace-boundary';
 import { useWorkstationKernel, useWorkstationStreamState } from '@/lib/workspace/workspace-services';
 import { useWorkstationStageIntentState, type WorkstationStageIntentKind } from '@/lib/workspace/workstation-stage-intent';
@@ -83,7 +84,7 @@ function buildAgentItems({
       kind: 'agent',
       label: 'Document Specialist',
       subtitle: 'Document workstation routing',
-      description: 'Bootstrap indicates document-heavy workspace traits, so document-centric work is enabled.',
+      description: 'Document-heavy work is enabled for this workspace.',
       metadata: {
         documentHeavy: true,
       },
@@ -95,8 +96,8 @@ function buildAgentItems({
       id: 'agent:operations-supervisor',
       kind: 'agent',
       label: 'Operations Supervisor',
-      subtitle: 'Admin/ops oversight',
-      description: 'Bootstrap indicates elevated operations or admin posture for this workspace.',
+      subtitle: 'Oversight and governance',
+      description: 'Administrative and operational controls are available for this workspace.',
       metadata: {
         adminHeavy: Boolean(workspaceTraits['adminHeavy']),
         role,
@@ -113,8 +114,8 @@ function buildApplicationItems(routeManifest: ReturnType<typeof useWorkspaceBoun
       id: `application:${route.id}`,
       kind: 'application' as const,
       label: route.label,
-      subtitle: `${group.label} route`,
-      description: `Canonical workstation application surface mounted at ${route.href}.`,
+      subtitle: group.label,
+      description: `Open ${route.label.toLowerCase()} inside the current workspace surface.`,
       href: route.href,
       metadata: {
         routeId: route.id,
@@ -134,8 +135,8 @@ function buildRuntimeTargetItems(
     label: target.label,
     subtitle: `${target.kind}${target.preferred ? ' · preferred' : ''}`,
     description: target.online
-      ? 'This runtime target is currently available for workstation execution.'
-      : 'This runtime target is currently offline.',
+      ? 'Available for workstation execution.'
+      : 'Currently unavailable.',
     statusLabel: target.online ? 'online' : 'offline',
     metadata: {
       runtimeTargetId: target.id,
@@ -173,7 +174,7 @@ function buildRosterSections({
     },
     {
       id: 'runtime_target',
-      label: 'Runtime Targets',
+      label: 'Runtime targets',
       items: buildRuntimeTargetItems(bootstrap.runtime.runtimeTargets),
     },
   ];
@@ -233,27 +234,46 @@ export function WorkstationRosterPane() {
       style={{
         display: 'grid',
         gap: '1rem',
-        padding: '1rem 1.1rem',
+        padding: '1rem',
       }}
     >
-      <div
+      <section
         style={{
           display: 'grid',
           gap: '0.8rem',
           padding: '0.95rem 1rem',
           borderRadius: '1rem',
-          border: '1px solid #dbeafe',
-          background: '#eff6ff',
+          border: '1px solid var(--app-border-subtle)',
+          background: 'color-mix(in srgb, var(--app-bg-panel-elevated) 78%, var(--app-bg-overlay) 22%)',
         }}
       >
-        <div style={{ display: 'grid', gap: '0.2rem' }}>
-          <strong style={{ color: '#1d4ed8' }}>Kernel-scoped roster</strong>
-          <span style={{ color: '#1e3a8a', fontSize: '0.9rem', lineHeight: 1.5 }}>
-            Pane 2 is built from bootstrap and canonical workstation truth only. Selection drives stage intent and nothing else.
-          </span>
-          <span style={{ color: '#1e3a8a', fontSize: '0.82rem' }}>
-            {streamState.notifications.unreadCount} notifications live, {streamState.activity.totalCount} activity events.
-          </span>
+        <div
+          style={{
+            display: 'flex',
+            justifyContent: 'space-between',
+            gap: '0.75rem',
+            alignItems: 'start',
+            flexWrap: 'wrap',
+          }}
+        >
+          <div style={{ display: 'grid', gap: '0.2rem' }}>
+            <strong style={{ color: 'var(--app-text-primary)' }}>Inventory</strong>
+            <span style={{ color: 'var(--app-text-secondary)', fontSize: '0.84rem', lineHeight: 1.5 }}>
+              {totalItemCount} items available · {streamState.notifications.unreadCount} unread · {streamState.activity.totalCount} recent events
+            </span>
+          </div>
+
+          {intent ? (
+            <AppButton
+              type="button"
+              tone="ghost"
+              onClick={() => {
+                clearIntent();
+              }}
+            >
+              Clear selection
+            </AppButton>
+          ) : null}
         </div>
 
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.45rem' }}>
@@ -275,12 +295,16 @@ export function WorkstationRosterPane() {
                   }));
                 }}
                 style={{
-                  border: active ? '1px solid #1d4ed8' : '1px solid #bfdbfe',
+                  minHeight: '2rem',
+                  padding: '0.34rem 0.72rem',
                   borderRadius: '999px',
-                  background: active ? '#dbeafe' : '#ffffff',
-                  color: active ? '#1d4ed8' : '#334155',
-                  padding: '0.35rem 0.7rem',
-                  fontWeight: 600,
+                  border: active ? '1px solid var(--app-border-accent)' : '1px solid var(--app-border-subtle)',
+                  background: active
+                    ? 'color-mix(in srgb, var(--app-accent-muted) 76%, var(--app-bg-panel) 24%)'
+                    : 'color-mix(in srgb, var(--app-bg-panel) 84%, var(--app-bg-overlay) 16%)',
+                  color: active ? 'var(--app-accent-text)' : 'var(--app-text-secondary)',
+                  fontSize: '0.8rem',
+                  fontWeight: 620,
                   cursor: 'pointer',
                 }}
               >
@@ -288,62 +312,48 @@ export function WorkstationRosterPane() {
               </button>
             );
           })}
-        </div>
 
-        <label style={{ display: 'flex', gap: '0.55rem', alignItems: 'center', color: '#334155' }}>
-          <input
-            type="checkbox"
-            checked={uiState.showOfflineRuntimeTargets}
-            onChange={(event) => {
+          <button
+            type="button"
+            onClick={() => {
               setUiState((current) => ({
                 ...current,
-                showOfflineRuntimeTargets: event.currentTarget.checked,
+                showOfflineRuntimeTargets: !current.showOfflineRuntimeTargets,
               }));
             }}
-          />
-          Show offline runtime targets
-        </label>
-      </div>
-
-      <div style={{ display: 'grid', gap: '0.55rem' }}>
-        <span style={{ color: '#64748b', fontSize: '0.82rem' }}>
-          {totalItemCount} roster items from bootstrap/canonical truth
-        </span>
-        <button
-          type="button"
-          onClick={() => {
-            clearIntent();
-          }}
-          style={{
-            justifySelf: 'start',
-            border: '1px solid #cbd5e1',
-            borderRadius: '999px',
-            background: '#ffffff',
-            color: '#334155',
-            padding: '0.35rem 0.7rem',
-            cursor: 'pointer',
-          }}
-        >
-          Clear stage intent
-        </button>
-      </div>
+            style={{
+              minHeight: '2rem',
+              padding: '0.34rem 0.72rem',
+              borderRadius: '999px',
+              border: '1px solid var(--app-border-subtle)',
+              background: 'color-mix(in srgb, var(--app-bg-panel) 84%, var(--app-bg-overlay) 16%)',
+              color: 'var(--app-text-secondary)',
+              fontSize: '0.8rem',
+              fontWeight: 620,
+              cursor: 'pointer',
+            }}
+          >
+            {uiState.showOfflineRuntimeTargets ? 'Hide offline runtime targets' : 'Show offline runtime targets'}
+          </button>
+        </div>
+      </section>
 
       {visibleSections.map((section) => (
         <section
           key={section.id}
           style={{
             display: 'grid',
-            gap: '0.7rem',
+            gap: '0.75rem',
           }}
         >
-          <div style={{ display: 'grid', gap: '0.15rem' }}>
-            <strong style={{ color: '#0f172a' }}>{section.label}</strong>
-            <span style={{ color: '#64748b', fontSize: '0.82rem' }}>
+          <div style={{ display: 'grid', gap: '0.18rem' }}>
+            <strong style={{ color: 'var(--app-text-primary)' }}>{section.label}</strong>
+            <span style={{ color: 'var(--app-text-tertiary)', fontSize: '0.8rem' }}>
               {section.items.length} visible
             </span>
           </div>
 
-          <div style={{ display: 'grid', gap: '0.7rem' }}>
+          <div style={{ display: 'grid', gap: '0.65rem' }}>
             {section.items.map((item) => {
               const isSelected = intent?.id === item.id;
               return (
@@ -370,24 +380,26 @@ export function WorkstationRosterPane() {
                     textAlign: 'left',
                     padding: '0.9rem 0.95rem',
                     borderRadius: '0.95rem',
-                    border: isSelected ? '1px solid #0f172a' : '1px solid #e2e8f0',
-                    background: isSelected ? '#e2e8f0' : '#ffffff',
+                    border: isSelected ? '1px solid var(--app-border-accent)' : '1px solid var(--app-border-subtle)',
+                    background: isSelected
+                      ? 'color-mix(in srgb, var(--app-accent-muted) 76%, var(--app-bg-panel) 24%)'
+                      : 'color-mix(in srgb, var(--app-bg-panel) 88%, var(--app-bg-overlay) 12%)',
                     cursor: 'pointer',
                   }}
                 >
                   <div style={{ display: 'flex', justifyContent: 'space-between', gap: '0.6rem', alignItems: 'start' }}>
-                    <div style={{ display: 'grid', gap: '0.15rem' }}>
-                      <strong style={{ color: '#0f172a' }}>{item.label}</strong>
-                      <span style={{ color: '#475569', fontSize: '0.84rem' }}>{item.subtitle}</span>
+                    <div style={{ display: 'grid', gap: '0.15rem', minWidth: 0 }}>
+                      <strong style={{ color: 'var(--app-text-primary)' }}>{item.label}</strong>
+                      <span style={{ color: 'var(--app-text-secondary)', fontSize: '0.82rem' }}>{item.subtitle}</span>
                     </div>
                     <span
                       style={{
                         padding: '0.18rem 0.5rem',
                         borderRadius: '999px',
-                        background: '#f8fafc',
-                        border: '1px solid #e2e8f0',
-                        color: '#475569',
-                        fontSize: '0.74rem',
+                        border: '1px solid var(--app-border-subtle)',
+                        background: 'color-mix(in srgb, var(--app-bg-panel-elevated) 80%, var(--app-bg-overlay) 20%)',
+                        color: 'var(--app-text-secondary)',
+                        fontSize: '0.72rem',
                         fontWeight: 700,
                         textTransform: 'uppercase',
                       }}
@@ -396,22 +408,30 @@ export function WorkstationRosterPane() {
                     </span>
                   </div>
 
-                  <span style={{ color: '#334155', fontSize: '0.88rem', lineHeight: 1.5 }}>
+                  <span style={{ color: 'var(--app-text-secondary)', fontSize: '0.86rem', lineHeight: 1.55 }}>
                     {item.description}
                   </span>
 
-                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.45rem' }}>
-                    {item.statusLabel ? (
-                      <span style={{ color: item.statusLabel === 'online' ? '#166534' : '#b45309', fontSize: '0.8rem', fontWeight: 600 }}>
-                        {item.statusLabel}
-                      </span>
-                    ) : null}
-                    {item.href ? (
-                      <span style={{ color: '#64748b', fontSize: '0.8rem', overflowWrap: 'anywhere' }}>
-                        {item.href}
-                      </span>
-                    ) : null}
-                  </div>
+                  {(item.statusLabel || item.href) ? (
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.45rem' }}>
+                      {item.statusLabel ? (
+                        <span
+                          style={{
+                            color: item.statusLabel === 'online' ? 'var(--app-success)' : 'var(--app-warning)',
+                            fontSize: '0.78rem',
+                            fontWeight: 620,
+                          }}
+                        >
+                          {item.statusLabel}
+                        </span>
+                      ) : null}
+                      {item.href ? (
+                        <span style={{ color: 'var(--app-text-tertiary)', fontSize: '0.78rem', overflowWrap: 'anywhere' }}>
+                          {item.href}
+                        </span>
+                      ) : null}
+                    </div>
+                  ) : null}
                 </button>
               );
             })}

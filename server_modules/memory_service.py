@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 import hashlib
@@ -13,6 +14,8 @@ from typing import Any, Callable, Dict, List, Optional, Set
 from fastapi import HTTPException
 
 from server_modules import agent_memory as _workspace_memory_store
+from server_modules import memory_summary_service
+from server_modules import workspace_context_memory_adapter
 from server_modules.telemetry import get_tracer, set_span_attributes
 from server_modules.workspace_context import read_workspace_context_files
 
@@ -613,13 +616,18 @@ def direct_chat_memory_context_message(
     system_prefix: str,
     agent_install_id: str | None = None,
 ) -> Dict[str, str] | None:
-    memory = get_memory(workspace_id, agent_install_id=agent_install_id)
-    if not memory:
-        return None
-    return {
-        "role": "system",
-        "content": f"{system_prefix}{memory}",
-    }
+    from server_modules.conversation_memory_policy import DIRECT_CHAT_PROFILE, get_memory_policy_profile
+
+    payload = workspace_context_memory_adapter.load_workspace_context_payload(
+        workspace_id=workspace_id,
+        memory_query="",
+        agent_install_id=agent_install_id,
+        policy_profile=get_memory_policy_profile(DIRECT_CHAT_PROFILE),
+    )
+    return workspace_context_memory_adapter.build_workspace_memory_context_message(
+        system_prefix=system_prefix,
+        contextual_blocks=list(payload.get("contextual_blocks") or []),
+    )
 
 
 def direct_chat_workspace_context_text(
@@ -628,46 +636,17 @@ def direct_chat_workspace_context_text(
     memory_query: str = "",
     agent_install_id: str | None = None,
 ) -> str:
-    sections: List[str] = []
-    try:
-        context_files = read_workspace_context_files(
-            workspace_id=workspace_id,
-            agent_install_id=str(agent_install_id or "").strip() or None,
-        )
-    except Exception:
-        context_files = {}
+    from server_modules.conversation_memory_policy import DIRECT_CHAT_PROFILE, get_memory_policy_profile
 
-    for filename in ("SOUL.md", "USER.md", "MEMORY.md"):
-        content = str(context_files.get(filename) or "").strip()
-        if content:
-            sections.append(f"{filename}\n{content}")
-
-    recent_logs = get_recent_logs(workspace_id, days=7, agent_install_id=agent_install_id)
-    if recent_logs:
-        sections.append(f"Recent Daily Logs\n{recent_logs[:6000].rstrip()}")
-
-    memory_entries = (
-        semantic_search(workspace_id, memory_query, top_k=5, agent_install_id=agent_install_id)
-        if str(memory_query or "").strip()
-        else []
+    payload = workspace_context_memory_adapter.load_workspace_context_payload(
+        workspace_id=workspace_id,
+        memory_query=memory_query,
+        agent_install_id=agent_install_id,
+        policy_profile=get_memory_policy_profile(DIRECT_CHAT_PROFILE),
     )
-    if memory_entries:
-        memory_facts = "\n".join(
-            f"- {str(item.get('key') or '').strip()}: {str(item.get('content') or '').strip()}"
-            for item in memory_entries
-            if str(item.get("content") or "").strip()
-        ).strip()
-    else:
-        memory_facts = get_memory(workspace_id, agent_install_id=agent_install_id)
-    if memory_facts:
-        sections.append(f"Runtime Memory Facts\n{memory_facts}")
-
-    if not sections:
-        return ""
-    return (
-        "Workspace context files. Use these as durable background instructions and facts when they are relevant.\n\n"
-        + "\n\n".join(sections)
-    ).strip()
+    return workspace_context_memory_adapter.render_workspace_context_text(
+        list(payload.get("contextual_blocks") or []),
+    )
 
 
 def store_direct_chat_memory_fact(workspace_id: str, fact: str) -> None:
@@ -679,16 +658,10 @@ def store_direct_chat_memory_fact(workspace_id: str, fact: str) -> None:
 
 
 def build_direct_chat_daily_log_summary(*, user_message: str, assistant_reply: str) -> str:
-    normalized_user_message = re.sub(r"\s+", " ", str(user_message or "").strip())
-    normalized_assistant_reply = re.sub(r"\s+", " ", str(assistant_reply or "").strip())
-    if not normalized_user_message or not normalized_assistant_reply:
-        return ""
-    user_excerpt = normalized_user_message[:320].rstrip()
-    assistant_excerpt = normalized_assistant_reply[:500].rstrip()
-    return (
-        f"- User: {user_excerpt}\n"
-        f"- Assistant: {assistant_excerpt}"
-    ).strip()
+    return memory_summary_service.build_direct_chat_daily_log_summary(
+        user_message=user_message,
+        assistant_reply=assistant_reply,
+    )
 
 
 def save_direct_chat_daily_log_summary(*, workspace_id: str, user_message: str, assistant_reply: str) -> str:
@@ -1358,28 +1331,54 @@ def hydrate_run_memory_context(run_id: str, run: Dict[str, Any]) -> None:
     _hydrate_run_memory_context(run_id, run)
 
 
+@contextmanager
+def _suspend_run_persistence_notifications(run: Dict[str, Any]):
+    payload = getattr(getattr(run, "record", None), "payload", None)
+    if payload is None or not hasattr(payload, "_suspend_notifications"):
+        yield
+        return
+    previous = bool(getattr(payload, "_suspend_notifications", False))
+    payload._suspend_notifications = True
+    try:
+        yield
+    finally:
+        payload._suspend_notifications = previous
+
+
 def _persist_run_memory(run_id: str, run: Dict[str, Any]) -> None:
-    trace = run.setdefault(
-        "memory_trace",
-        {"enabled": runtime_memory.ORION_MEMORY_ENABLED, "reads": [], "writes": [], "last_error": None, "updated_at": None},
-    )
+    existing_trace = run.get("memory_trace") if isinstance(run.get("memory_trace"), dict) else {}
+    trace: Dict[str, Any] = {
+        "enabled": bool(existing_trace.get("enabled", runtime_memory.ORION_MEMORY_ENABLED)),
+        "reads": list(existing_trace.get("reads") or []),
+        "writes": list(existing_trace.get("writes") or []),
+        "last_error": existing_trace.get("last_error"),
+        "updated_at": existing_trace.get("updated_at"),
+    }
     if not runtime_memory.ORION_MEMORY_ENABLED:
         trace["enabled"] = False
         trace["updated_at"] = _runtime_utc_now_iso()
+        with _suspend_run_persistence_notifications(run):
+            run["memory_trace"] = trace
         return
     manager = runtime_memory._memory_manager()
     if manager is None:
         trace["last_error"] = runtime_memory.MEMORY_MANAGER_ERROR or "memory_unavailable"
         trace["updated_at"] = _runtime_utc_now_iso()
+        with _suspend_run_persistence_notifications(run):
+            run["memory_trace"] = trace
         return
     if str(run.get("status") or "").strip().lower() != "completed":
         trace["updated_at"] = _runtime_utc_now_iso()
+        with _suspend_run_persistence_notifications(run):
+            run["memory_trace"] = trace
         return
 
     context = run.get("context") if isinstance(run.get("context"), dict) else {}
     metadata = context.get("metadata") if isinstance(context.get("metadata"), dict) else {}
     if str(metadata.get("memory_write_enabled") or "1").strip().lower() in {"0", "false", "no", "off"}:
         trace["updated_at"] = _runtime_utc_now_iso()
+        with _suspend_run_persistence_notifications(run):
+            run["memory_trace"] = trace
         return
 
     scope = _memory_scope_from_context(context)
@@ -1404,7 +1403,7 @@ def _persist_run_memory(run_id: str, run: Dict[str, Any]) -> None:
     if scope.get("profile_id"):
         targets.append({"bucket": "profile", "profile_id": scope["profile_id"]})
 
-    writes = trace.get("writes") if isinstance(trace.get("writes"), list) else []
+    writes = list(trace.get("writes") or [])
     for target in targets:
         bucket = str(target.get("bucket") or "").strip().lower()
         if bucket not in runtime_memory.MEMORY_BUCKETS:
@@ -1430,7 +1429,8 @@ def _persist_run_memory(run_id: str, run: Dict[str, Any]) -> None:
 
     trace["writes"] = writes[-20:]
     trace["updated_at"] = _runtime_utc_now_iso()
-    run["memory_trace"] = trace
+    with _suspend_run_persistence_notifications(run):
+        run["memory_trace"] = trace
     runtime_memory._refresh_archived_run_snapshot(run_id, run)
     if writes:
         runtime_memory._emit_log(

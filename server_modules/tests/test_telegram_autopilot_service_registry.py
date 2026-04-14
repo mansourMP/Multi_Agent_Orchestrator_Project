@@ -116,6 +116,7 @@ class TelegramAutopilotServiceRegistryTests(unittest.TestCase):
             can_auto_approve_wait=lambda run: False,
             pending_confirmation_payload=lambda run: {},
             emit_channel_run_delivery_event=lambda **kwargs: None,
+            record_activity_event=lambda **kwargs: None,
             sleep=lambda seconds: None,
         )
 
@@ -129,6 +130,7 @@ class TelegramAutopilotServiceRegistryTests(unittest.TestCase):
         registry = self._make_registry()
         poll_service = registry.telegram_connector_poll_service()
         self.assertIs(poll_service, registry.telegram_connector_poll_service())
+        self.assertIsNotNone(registry.telegram_ingress_service())
         self.assertIsNotNone(registry.telegram_poll_dispatch_service())
         self.assertIsNotNone(registry.telegram_poll_state_service())
         self.assertIsNotNone(registry.telegram_webhook_service())

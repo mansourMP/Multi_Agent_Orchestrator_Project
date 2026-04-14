@@ -192,6 +192,24 @@ class AutopilotRunEntryServiceTests(unittest.TestCase):
         self.assertEqual(self.telegram_started, [])
         self.assertEqual(self.events, [])
 
+    def test_create_telegram_run_requires_canonical_ingress_callbacks(self) -> None:
+        service = self._make_service(
+            route_transport_channel_message=None,
+            run_start_request_class=None,
+            start_run_request=None,
+            execute_agent_turn_request=None,
+        )
+
+        with self.assertRaises(RuntimeError):
+            service.create_telegram_run(
+                goal="Investigate",
+                workspace_id="default",
+                connector_id="cred-telegram",
+                chat_id="123",
+                sender_id="456",
+                update_id=1,
+            )
+
     def test_can_auto_approve_wait_requires_matching_owner_and_approval(self) -> None:
         service = self._make_service()
         run = {

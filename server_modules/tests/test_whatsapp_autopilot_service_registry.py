@@ -46,9 +46,9 @@ class WhatsAppAutopilotServiceRegistryTests(unittest.TestCase):
             route_message=lambda body, profile: {"action": "ignore"},
             help_text=lambda profile: "help",
             runtime_status_text=lambda workspace_id: "status",
-            approvals_list=lambda limit: {"events": []},
+            approvals_list=lambda limit, workspace_id=None: {"events": []},
             approvals_text=lambda payload, prefix: "approvals",
-            approval_resolve=lambda event_id, approved, note: {"ok": True},
+            approval_resolve=lambda event_id, approved, note, workspace_id=None: {"ok": True},
             approval_result_text=lambda payload, approved: "approved",
             create_run=lambda **kwargs: {"run_id": "run-1"},
             session_key_builder=lambda inbound_from, inbound_to: f"{inbound_from}:{inbound_to}",
@@ -60,16 +60,18 @@ class WhatsAppAutopilotServiceRegistryTests(unittest.TestCase):
         self.assertIs(registry.whatsapp_transport_service(), registry.whatsapp_transport_service())
         self.assertIs(registry.whatsapp_autopilot_state_service(), registry.whatsapp_autopilot_state_service())
         self.assertIs(registry.whatsapp_run_dispatch_service(), registry.whatsapp_run_dispatch_service())
+        self.assertIs(registry.whatsapp_ingress_service(), registry.whatsapp_ingress_service())
         self.assertIs(registry.whatsapp_webhook_service(), registry.whatsapp_webhook_service())
 
-    def test_webhook_service_uses_registry_run_dispatch(self) -> None:
+    def test_webhook_service_wraps_registry_ingress_service(self) -> None:
         registry = self._make_registry()
         service = registry.whatsapp_webhook_service()
-        self.assertIs(service.run_dispatch_service(), registry.whatsapp_run_dispatch_service())
-        self.assertEqual(service.normalize_number("+100"), "whatsapp:+100")
-        self.assertTrue(service.require_explicit_opt_in)
-        self.assertTrue(service.redact_event_text)
-        self.assertEqual(service.retention_days, 30)
+        ingress = registry.whatsapp_ingress_service()
+        self.assertIs(service.ingress_service(), ingress)
+        self.assertEqual(service.parse_form_urlencoded(b"Body=hello"), {"Body": "hello"})
+        self.assertTrue(ingress.require_explicit_opt_in)
+        self.assertTrue(ingress.redact_event_text)
+        self.assertEqual(ingress.retention_days, 30)
 
 
 if __name__ == "__main__":

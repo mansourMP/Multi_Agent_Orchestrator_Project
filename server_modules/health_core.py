@@ -13,6 +13,7 @@ from server_modules import shared as shared
 from server_modules import runtime_common as common
 from server_modules import runs_core as runs_core
 from server_modules import provider_profiles as provider_profiles_service
+from server_modules import healthguide_safety_service
 from server_modules.health_diagnostics import _build_cognitive_operator_policy, _runtime_skills_snapshot
 from server_modules.memory_service import runtime_memory_search, runtime_memory_upsert
 
@@ -291,6 +292,7 @@ async def health():
     memory_snapshot = _memory_health_snapshot()
     runtime_skills = _runtime_skills_snapshot()
     direct_chat_session_manager = _direct_chat_session_manager_snapshot()
+    healthguide_safety_policy = healthguide_safety_service.runtime_policy_snapshot()
     auth_mode = str(ORION_AUTH_MODE or "").strip().lower()
     cloud_provider_ready = bool(openai_probe["openai_key_valid"])
     cloud_provider_source = "openai_probe" if cloud_provider_ready else "none"
@@ -427,6 +429,7 @@ async def health():
         "runtime_skills_assistant_defaults_count": len(((runtime_skills.get("bindings") or {}).get("assistant_defaults") or [])),
         "runtime_skills_automation_defaults_count": len(((runtime_skills.get("bindings") or {}).get("automation_defaults") or [])),
         "runtime_skills_updated_at": runtime_skills.get("updated_at"),
+        "healthguide_safety_policy": healthguide_safety_policy,
         "idempotency_file": str(ORION_IDEMPOTENCY_FILE),
         "direct_chat_session_manager_enabled": bool(direct_chat_session_manager.get("enabled")),
         "direct_chat_session_manager_active_sessions": int(((direct_chat_session_manager.get("runtime_cache") or {}).get("active_sessions") or 0)),

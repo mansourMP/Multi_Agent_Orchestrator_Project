@@ -15,8 +15,6 @@ from server_modules.auth import (
 )
 
 from server_modules.agent_turn import (
-    agent_turn as execute_canonical_agent_turn,
-    normalize_server_owned_turn_request,
     resolve_direct_chat_turn_request,
     resolve_run_start_turn_request,
 )
@@ -34,6 +32,7 @@ from server_modules.api_contract import (
     normalize_session_record,
     request_body_to_turn_request,
 )
+from server_modules import turn_ingress_service
 from server_modules import session_service
 from server_modules import thread_service
 from server_modules import run_state_repository
@@ -62,8 +61,6 @@ from server_modules.run_service import (
 )
 from server_modules.turn_runtime import (
     build_turn_execution_services,
-    execute_run_start_request_via_turn_runtime,
-    execute_system_run_start_request_via_turn_runtime,
 )
 from server_modules.runtime_policy import (
     browser_automation_plan_hash_from_pack_inputs,
@@ -98,6 +95,10 @@ _WEBHOOK_TRIGGER_LOCK = threading.Lock()
 _WEBHOOK_TRIGGERS_LOADED = False
 _WEBHOOK_TRIGGERS: dict[str, dict[str, Any]] = {}
 
+# Transitional compatibility shim for tests and older helper wiring.
+# Prompt 02 routes execution through `turn_ingress_service.start_turn`.
+execute_canonical_agent_turn = turn_ingress_service.start_turn
+
 
 def _late_server_export(name: str):
     import server as _server
@@ -122,6 +123,10 @@ def _utc_now() -> datetime:
 
 def _utc_now_iso() -> str:
     return _chat_stream_now_iso()
+
+
+def _coerce_dict(value: Any) -> dict[str, Any]:
+    return dict(value or {}) if isinstance(value, dict) else {}
 
 
 def _workspace_filtered_items(items: list[dict[str, Any]], current_user: Any) -> list[dict[str, Any]]:
@@ -205,10 +210,10 @@ def normalize_thread_turn_record(record: Dict[str, Any]) -> Dict[str, Any]:
         "status": str(payload.get("status") or "").strip() or None,
         "content": str(payload.get("content") or ""),
         "run_id": str(payload.get("run_id") or "").strip() or None,
-        "actor": dict(payload.get("actor") or {}),
+        "actor": _coerce_dict(payload.get("actor")),
         "approvals": list(payload.get("approvals") or []),
         "interventions": list(payload.get("interventions") or []),
-        "metadata": dict(payload.get("metadata") or {}),
+        "metadata": _coerce_dict(payload.get("metadata")),
         "created_at": str(payload.get("created_at") or "").strip() or None,
         "updated_at": str(payload.get("updated_at") or "").strip() or None,
     }
@@ -226,7 +231,7 @@ def normalize_thread_record(record: Dict[str, Any]) -> Dict[str, Any]:
         "channel": str(payload.get("channel") or "").strip() or None,
         "title": str(payload.get("title") or "").strip() or "New chat",
         "status": str(payload.get("status") or "").strip() or None,
-        "metadata": dict(payload.get("metadata") or {}),
+        "metadata": _coerce_dict(payload.get("metadata")),
         "created_at": str(payload.get("created_at") or "").strip() or None,
         "updated_at": str(payload.get("updated_at") or "").strip() or None,
         "last_turn_at": str(payload.get("last_turn_at") or "").strip() or None,
@@ -463,7 +468,10 @@ _direct_chat_stream_runtime_bindings = chat_stream_runtime_service.build_direct_
     chat_stream_key=_chat_stream_key,
     resolve_direct_chat_turn_request=resolve_direct_chat_turn_request,
     chat_stream_request_signature=_chat_stream_request_signature,
-    execute_agent_turn_request=execute_canonical_agent_turn,
+    execute_agent_turn_request=lambda **kwargs: turn_ingress_service.start_turn(
+        return_result_only=True,
+        **kwargs,
+    ),
     build_turn_execution_services=build_turn_execution_services,
     run_execution_services=_run_execution_services,
     extract_direct_chat_error_response=lambda *args, **kwargs: _extract_direct_chat_error_response(*args, **kwargs),
@@ -626,41 +634,10 @@ def register_run_routes(app) -> None:
         runs=_server.runs,
         iter_logs_for_run=_server.iter_logs_for_run,
         get_replay_payload=_server._get_replay_payload,
-        execute_run_start_request_via_turn_runtime=execute_run_start_request_via_turn_runtime,
-        execute_system_run_start_request_via_turn_runtime=execute_system_run_start_request_via_turn_runtime,
+        execute_run_start_request_via_turn_runtime=turn_ingress_service.start_run_start,
+        execute_system_run_start_request_via_turn_runtime=turn_ingress_service.start_system_run_start,
         enforce_run_owner_access=_enforce_run_owner_access,
     )
-
-    def _looks_like_legacy_direct_chat_body(payload: dict[str, Any]) -> bool:
-        if not isinstance(payload, dict):
-            return False
-        if any(
-            key in payload
-            for key in (
-                "session_id",
-                "actor",
-                "execution_mode",
-                "response_mode",
-                "context_hints",
-                "attachments",
-                "policy_context",
-                "machine_target",
-            )
-        ):
-            return False
-        if any(
-            key in payload
-            for key in (
-                "prior_messages",
-                "approved_action",
-                "availability",
-                "last_event_id",
-            )
-        ):
-            return True
-        if "thread_id" in payload:
-            return True
-        return "message" in payload and "actor" not in payload
 
     @app.post("/turn", dependencies=[Depends(member_dependency)], response_model=ApiAgentTurnResponse)
     async def canonical_turn(
@@ -673,8 +650,6 @@ def register_run_routes(app) -> None:
         if not raw_payload:
             raw_payload = await request.json()
             if not isinstance(raw_payload, dict):
-                from fastapi import HTTPException
-
                 raise HTTPException(status_code=400, detail="Invalid turn payload")
         payload = dict(raw_payload)
         payload = _stamp_workspace_authorization_on_turn_payload(
@@ -682,64 +657,23 @@ def register_run_routes(app) -> None:
             current_user=current_user,
             minimum_role="member",
         )
-        legacy_direct_resolution = None
-        run_request = None
-        chat_body = None
-
-        # Freeze legacy growth here: compatibility payloads are normalized to AgentTurnRequest
-        # at the runtime boundary and do not execute through alternate ingress contracts.
-        if _looks_like_legacy_direct_chat_body(raw_payload):
-            legacy_direct_resolution = resolve_direct_chat_turn_request(
-                current_user=current_user,
-                body=payload,
-                request_signature_fn=_chat_stream_request_signature,
-            )
-            turn_request = legacy_direct_resolution.turn_request
-            chat_body = dict(payload)
-        elif _looks_like_legacy_run_start_body(raw_payload):
-            from server_modules.runtime_models import RunStartRequest
-
-            raw_run_request = RunStartRequest(**payload)
-            resolution = resolve_run_start_turn_request(
-                current_user=current_user,
-                body=raw_run_request,
-                stamp_request_owner_fn=_stamp_request_owner,
-            )
-            turn_request = resolution.turn_request
-            run_request = resolution.request
-        else:
-            turn_request = request_body_to_turn_request(payload)
-            turn_request = normalize_server_owned_turn_request(
-                current_user=current_user,
-                turn_request=turn_request,
-            )
 
         try:
-            if (
-                str(turn_request.execution_mode or "").strip().lower() == "sync"
-                and str(turn_request.response_mode or "").strip().lower() == "stream"
-            ):
-                turn_context_hints = model_to_dict(turn_request.context_hints)
-                return await build_agent_turn_stream_response(
-                    current_user=current_user,
-                    turn_request=turn_request,
-                    last_event_id=request.headers.get("last-event-id") or turn_context_hints.get("last_event_id"),
-                    services=_direct_chat_stream_response_services(),
-                    chat_body=chat_body,
-                    fallback_workspace_id=legacy_direct_resolution.workspace_id if legacy_direct_resolution else None,
-                    fallback_thread_id=legacy_direct_resolution.thread_id if legacy_direct_resolution else None,
-                    fallback_client_request_id=legacy_direct_resolution.client_request_id if legacy_direct_resolution else None,
-                )
-
-            result = await execute_canonical_agent_turn(
-                turn_request=turn_request,
+            ingress = await turn_ingress_service.start_turn(
+                payload=payload,
+                compatibility_payload=raw_payload,
                 current_user=current_user,
                 run_execution_services=_run_execution_services(),
                 direct_chat_services=_direct_chat_execution_services(),
-                chat_body=chat_body,
-                run_request=run_request,
+                stamp_request_owner_fn=_stamp_request_owner,
+                request_signature_fn=_chat_stream_request_signature,
+                stream_response_builder=build_agent_turn_stream_response,
+                stream_response_services=_direct_chat_stream_response_services(),
+                stream_last_event_id=request.headers.get("last-event-id"),
             )
-            return normalize_agent_turn_result(result, turn_request=turn_request)
+            if not isinstance(ingress.result, dict) or str(ingress.result.get("kind") or "").strip().lower() == "stream":
+                return ingress.result
+            return normalize_agent_turn_result(ingress.result, turn_request=ingress.turn_request)
         except session_service.SessionScopeViolationError as exc:
             raise HTTPException(
                 status_code=409,
@@ -842,6 +776,22 @@ def register_run_routes(app) -> None:
             "workspace_id": str(requested_workspace_id or "default").strip() or "default",
         }
 
+    @app.get("/approvals/{approval_id}", dependencies=[Depends(viewer_dependency)])
+    async def get_approval_detail(
+        approval_id: str,
+        current_user=Depends(viewer_dependency),
+    ):
+        _refresh_server_exports()
+        return runtime_run_approval_service.build_approval_detail_response(
+            approval_id,
+            current_user=current_user,
+            enforce_workspace_access_fn=enforce_workspace_access,
+            workspace_entitlement_payload_fn=_workspace_entitlement_payload,
+            current_user_is_privileged_fn=_current_user_is_privileged,
+            find_run_snapshot_for_approval_fn=run_state_repository.sync_find_run_snapshot_for_approval_id,
+            enforce_run_owner_access_fn=_enforce_run_owner_access,
+        )
+
     @app.post("/sessions", dependencies=[Depends(member_dependency)], response_model=ApiSessionResponse)
     async def create_runtime_session(
         body: ApiSessionRequest,
@@ -855,7 +805,7 @@ def register_run_routes(app) -> None:
             minimum_role="member",
         )
         tenant_id = workspace_tenant_id(current_user, workspace_id)
-        actor = dict(payload.get("actor") or {})
+        actor = _coerce_dict(payload.get("actor"))
         if not str(actor.get("id") or "").strip():
             actor["id"] = str((current_user or {}).get("user_id") or (current_user or {}).get("email") or "anonymous").strip()
         if not str(actor.get("display_name") or "").strip():
@@ -865,7 +815,7 @@ def register_run_routes(app) -> None:
             tenant_id=tenant_id,
             actor=actor,
             channel=str(payload.get("channel") or "web").strip() or "web",
-            metadata=dict(payload.get("metadata") or {}),
+            metadata=_coerce_dict(payload.get("metadata")),
             session_id=str(payload.get("session_id") or "").strip() or None,
         )
         record = await session_service.get_session(session_id) or {
@@ -874,7 +824,7 @@ def register_run_routes(app) -> None:
             "tenant_id": tenant_id,
             "channel": str(payload.get("channel") or "web").strip() or "web",
             "actor": actor,
-            "metadata": dict(payload.get("metadata") or {}),
+            "metadata": _coerce_dict(payload.get("metadata")),
             "status": "active",
         }
         return normalize_session_record(record)

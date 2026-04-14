@@ -6,6 +6,29 @@ from server_modules import agent_channel_router, channel_concurrency_service, sa
 from server_modules.agent_manifest import AgentManifest
 
 
+def _deployed_agent_row(
+    *,
+    deployment_state: str = "live",
+    metadata: dict[str, object] | None = None,
+) -> dict[str, object]:
+    return {
+        "id": "dagent_1",
+        "tenant_id": "tenant-1",
+        "owner_workspace_id": "workspace-1",
+        "backing_install_id": "install-specialist",
+        "name": "Parts Pro",
+        "deployment_state": deployment_state,
+        "metadata": dict(metadata or {}),
+        "channels": {
+            "telegram": {
+                "enabled": True,
+                "is_inbound_owner": True,
+                "endpoint_key": "@partspro_bot",
+            }
+        },
+    }
+
+
 class AgentChannelRouterTests(unittest.IsolatedAsyncioTestCase):
     def tearDown(self) -> None:
         safe_mode_service.reset_state_for_tests()
@@ -54,6 +77,14 @@ class AgentChannelRouterTests(unittest.IsolatedAsyncioTestCase):
                 "label": "Parts Pro",
                 "owner_user_id": "user-1",
                 "runtime_mode": "hosted_secure",
+                "metadata": {
+                    "provider": "deepseek",
+                    "model": "deepseek-reasoner",
+                    "deployed_agent": {
+                        "provider": "deepseek",
+                        "model": "deepseek-reasoner",
+                    },
+                },
                 "runtime_profile_id": "runtime-cloud",
                 "runtime_profile": {
                     "id": "runtime-cloud",
@@ -85,6 +116,10 @@ class AgentChannelRouterTests(unittest.IsolatedAsyncioTestCase):
             patch(
                 "server_modules.agent_channel_router.agent_specialist_repository.resolve_active_inbound_channel_owner",
                 new=AsyncMock(return_value=owner_route),
+            ),
+            patch(
+                "server_modules.agent_channel_router.deployed_agent_service.resolve_deployed_agent_for_channel_owner",
+                new=AsyncMock(return_value=_deployed_agent_row(deployment_state="live")),
             ),
             patch(
                 "server_modules.agent_channel_router.agent_registry_repository.get_workspace_master_agent_install",
@@ -136,6 +171,8 @@ class AgentChannelRouterTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(turn_request.context_hints["metadata"]["active_agent_install_id"], "install-specialist")
         self.assertEqual(turn_request.context_hints["metadata"]["master_agent_install_id"], "install-sage")
         self.assertEqual(turn_request.context_hints["metadata"]["runtime_profile_id"], "runtime-cloud")
+        self.assertEqual(turn_request.context_hints["provider"], "deepseek")
+        self.assertEqual(turn_request.context_hints["model"], "deepseek-reasoner")
         self.assertEqual(execute_mock.await_args.kwargs["current_user"]["user_id"], "user-1")
 
     async def test_route_inbound_channel_message_gracefully_handles_thread_busy(self):
@@ -203,6 +240,8 @@ class AgentChannelRouterTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["status"], "thread_busy")
         self.assertEqual(result["retry_after_seconds"], 2)
         self.assertEqual(result["limit_reason"], "thread_busy")
+        self.assertEqual((result.get("error") or {}).get("code"), "thread_busy")
+        self.assertEqual((result.get("error") or {}).get("class"), "rate_limit")
         self.assertIn("previous message", result["reply"])
         self.assertEqual(append_event_mock.await_count, 2)
         execute_mock.assert_not_awaited()
@@ -271,7 +310,104 @@ class AgentChannelRouterTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(result["status"], "runtime_capped")
         self.assertEqual(result["limit_reason"], "runtime_cap_exceeded")
+        self.assertEqual((result.get("error") or {}).get("code"), "runtime_cap_exceeded")
+        self.assertEqual((result.get("error") or {}).get("class"), "execution_timeout")
         self.assertIn("service window", result["reply"])
+
+    async def test_route_inbound_channel_message_surfaces_nonfatal_degraded_operations(self):
+        manifest = AgentManifest(
+            manifest_id="manifest-parts-pro",
+            identity={
+                "name": "Parts Pro",
+                "role": "Inventory Specialist",
+                "archetype": "support_specialist",
+                "summary": "Help customers find in-stock parts.",
+            },
+        )
+        owner_route = {
+            "install": {
+                "id": "install-specialist",
+                "label": "Parts Pro",
+                "owner_user_id": "user-1",
+                "runtime_mode": "hosted_secure",
+            },
+            "manifest": manifest,
+            "owner_type": "specialist",
+        }
+
+        @asynccontextmanager
+        async def _slot(*args, **kwargs):
+            yield {
+                "lease_id": "lease-1",
+                "quota_snapshot": channel_concurrency_service.ChannelQuotaSnapshot(
+                    max_workspace_active_threads=24,
+                    max_agent_active_threads=8,
+                    max_workspace_turns_per_minute=180,
+                    max_runtime_seconds=45,
+                ),
+            }
+
+        degraded_notice = {
+            "error": {
+                "code": "channel_memory_snapshot_persist_failed",
+                "message": "Failed to persist deployed-agent memory snapshot.",
+                "class": "storage_write_failure",
+                "retryable": False,
+                "status_code": 500,
+                "request_id": "evt-in",
+                "trace_id": None,
+                "details": {},
+            },
+            "error_code": "channel_memory_snapshot_persist_failed",
+            "error_class": "storage_write_failure",
+            "degraded_component": "channel_memory_snapshot",
+            "severity": "error",
+            "swallowed_intentionally": True,
+            "metadata": {"workspace_id": "workspace-1"},
+        }
+
+        with (
+            patch(
+                "server_modules.agent_channel_router.agent_specialist_repository.resolve_active_inbound_channel_owner",
+                new=AsyncMock(return_value=owner_route),
+            ),
+            patch(
+                "server_modules.agent_channel_router.agent_registry_repository.get_workspace_master_agent_install",
+                new=AsyncMock(return_value={"id": "install-sage", "label": "Sage"}),
+            ),
+            patch(
+                "server_modules.agent_channel_router.control_plane_repository.append_agent_channel_event",
+                new=AsyncMock(side_effect=[{"id": "evt-in"}, {"id": "evt-out"}]),
+            ),
+            patch("server_modules.agent_channel_router.channel_concurrency_service.channel_execution_slot", new=_slot),
+            patch(
+                "server_modules.agent_channel_router.execute_canonical_channel_turn",
+                new=AsyncMock(
+                    return_value={
+                        "kind": "durable_run",
+                        "result": {
+                            "status": "accepted",
+                            "run_id": "run-1",
+                        },
+                    }
+                ),
+            ),
+            patch("server_modules.agent_channel_router.persist_snapshot", new=AsyncMock(return_value=degraded_notice)),
+            patch("server_modules.agent_channel_router.record_channel_activity", new=AsyncMock(return_value=None)),
+        ):
+            result = await agent_channel_router.route_inbound_channel_message(
+                tenant_id="tenant-1",
+                workspace_id="workspace-1",
+                channel_key="telegram",
+                endpoint_key="@partspro_bot",
+                customer_message="Hello?",
+                actor_id="telegram-user-1",
+            )
+
+        self.assertEqual(result["status"], "accepted")
+        self.assertEqual(result["metadata"]["degraded_operation_count"], 1)
+        self.assertTrue(result["metadata"]["degraded"])
+        self.assertEqual(result["degraded_operations"][0]["error_code"], "channel_memory_snapshot_persist_failed")
 
     async def test_route_inbound_channel_message_rejects_unbound_endpoint(self):
         with patch(
@@ -472,6 +608,781 @@ class AgentChannelRouterTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["audit"]["outbound_event_id"], "evt-out")
         self.assertEqual(append_event_mock.await_count, 2)
         execute_mock.assert_not_awaited()
+
+    async def test_route_inbound_channel_message_routes_live_deployed_agent_and_tags_channel_events(self):
+        manifest = AgentManifest(
+            manifest_id="manifest-parts-pro",
+            identity={
+                "name": "Parts Pro",
+                "role": "Inventory Specialist",
+                "archetype": "support_specialist",
+                "summary": "Help customers find in-stock parts.",
+            },
+            channels={"telegram": True},
+        )
+        owner_route = {
+            "install": {
+                "id": "install-specialist",
+                "label": "Parts Pro",
+                "owner_user_id": "user-1",
+                "runtime_mode": "hosted_secure",
+                "metadata": {"source": "deployed_agent"},
+            },
+            "manifest": manifest,
+            "owner_type": "specialist",
+        }
+
+        @asynccontextmanager
+        async def _slot(*args, **kwargs):
+            yield {
+                "lease_id": "lease-1",
+                "quota_snapshot": channel_concurrency_service.ChannelQuotaSnapshot(
+                    max_workspace_active_threads=24,
+                    max_agent_active_threads=8,
+                    max_workspace_turns_per_minute=180,
+                    max_runtime_seconds=45,
+                ),
+            }
+
+        with (
+            patch(
+                "server_modules.agent_channel_router.agent_specialist_repository.resolve_active_inbound_channel_owner",
+                new=AsyncMock(return_value=owner_route),
+            ),
+            patch(
+                "server_modules.agent_channel_router.deployed_agent_service.resolve_deployed_agent_for_channel_owner",
+                new=AsyncMock(return_value=_deployed_agent_row(deployment_state="live")),
+            ),
+            patch(
+                "server_modules.agent_channel_router.agent_registry_repository.get_workspace_master_agent_install",
+                new=AsyncMock(return_value={"id": "install-sage", "label": "Sage"}),
+            ),
+            patch(
+                "server_modules.agent_channel_router.control_plane_repository.append_agent_channel_event",
+                new=AsyncMock(side_effect=[{"id": "evt-in"}, {"id": "evt-out"}]),
+            ) as append_event_mock,
+            patch(
+                "server_modules.agent_channel_router.execute_canonical_channel_turn",
+                new=AsyncMock(
+                    return_value={
+                        "kind": "durable_run",
+                        "result": {
+                            "status": "accepted",
+                            "run_id": "run-1",
+                            "engine": "orion",
+                            "route": {"selected": "cloud"},
+                        },
+                    }
+                ),
+            ) as execute_mock,
+            patch("server_modules.agent_channel_router.channel_concurrency_service.channel_execution_slot", new=_slot),
+        ):
+            result = await agent_channel_router.route_inbound_channel_message(
+                tenant_id="tenant-1",
+                workspace_id="workspace-1",
+                channel_key="telegram",
+                endpoint_key="@partspro_bot",
+                customer_message="Need brake pads",
+                actor_id="telegram-user-1",
+                message_id="tg-msg-1",
+            )
+
+        self.assertEqual(result["status"], "accepted")
+        self.assertEqual(result["run_id"], "run-1")
+        inbound_kwargs = append_event_mock.await_args_list[0].kwargs
+        outbound_kwargs = append_event_mock.await_args_list[1].kwargs
+        self.assertEqual(inbound_kwargs["deployed_agent_id"], "dagent_1")
+        self.assertEqual(outbound_kwargs["deployed_agent_id"], "dagent_1")
+        self.assertEqual(inbound_kwargs["thread_id"], "thread-workspace-1-telegram-partspro-bot-telegram-partspro-bot-telegram-user-1")
+        self.assertEqual(outbound_kwargs["run_id"], "run-1")
+        self.assertEqual(inbound_kwargs["metadata"]["deployed_agent_id"], "dagent_1")
+        self.assertEqual(execute_mock.await_args.kwargs["turn_request"].context_hints["metadata"]["deployed_agent_id"], "dagent_1")
+
+    async def test_route_inbound_channel_message_returns_paused_reply_for_paused_deployed_agent(self):
+        manifest = AgentManifest(
+            manifest_id="manifest-parts-pro",
+            identity={
+                "name": "Parts Pro",
+                "role": "Inventory Specialist",
+                "archetype": "support_specialist",
+                "summary": "Help customers find in-stock parts.",
+            },
+        )
+        owner_route = {
+            "install": {
+                "id": "install-specialist",
+                "label": "Parts Pro",
+                "owner_user_id": "user-1",
+                "runtime_mode": "hosted_secure",
+                "metadata": {"source": "deployed_agent"},
+            },
+            "manifest": manifest,
+            "owner_type": "specialist",
+        }
+
+        with (
+            patch(
+                "server_modules.agent_channel_router.agent_specialist_repository.resolve_active_inbound_channel_owner",
+                new=AsyncMock(return_value=owner_route),
+            ),
+            patch(
+                "server_modules.agent_channel_router.deployed_agent_service.resolve_deployed_agent_for_channel_owner",
+                new=AsyncMock(return_value=_deployed_agent_row(deployment_state="paused")),
+            ),
+            patch(
+                "server_modules.agent_channel_router.agent_registry_repository.get_workspace_master_agent_install",
+                new=AsyncMock(return_value={"id": "install-sage", "label": "Sage"}),
+            ),
+            patch(
+                "server_modules.agent_channel_router.control_plane_repository.append_agent_channel_event",
+                new=AsyncMock(side_effect=[{"id": "evt-in"}, {"id": "evt-out"}]),
+            ) as append_event_mock,
+            patch("server_modules.agent_channel_router.execute_canonical_channel_turn", new=AsyncMock()) as execute_mock,
+        ):
+            result = await agent_channel_router.route_inbound_channel_message(
+                tenant_id="tenant-1",
+                workspace_id="workspace-1",
+                channel_key="telegram",
+                endpoint_key="@partspro_bot",
+                customer_message="Hello",
+                actor_id="telegram-user-1",
+                message_id="msg-paused",
+            )
+
+        self.assertEqual(result["status"], "paused")
+        self.assertEqual(result["limit_reason"], "deployment_paused")
+        self.assertIn("temporarily paused", result["reply"])
+        self.assertEqual(append_event_mock.await_count, 2)
+        execute_mock.assert_not_awaited()
+        outbound_kwargs = append_event_mock.await_args_list[1].kwargs
+        self.assertEqual(outbound_kwargs["deployed_agent_id"], "dagent_1")
+        self.assertEqual(outbound_kwargs["status"], "paused")
+
+    async def test_route_inbound_channel_message_returns_branded_quota_reply_for_rate_limited_deployed_agent(self):
+        manifest = AgentManifest(
+            manifest_id="manifest-parts-pro",
+            identity={
+                "name": "Parts Pro",
+                "role": "Inventory Specialist",
+                "archetype": "support_specialist",
+                "summary": "Help customers find in-stock parts.",
+            },
+        )
+        owner_route = {
+            "install": {
+                "id": "install-specialist",
+                "label": "Parts Pro",
+                "owner_user_id": "user-1",
+                "runtime_mode": "hosted_secure",
+                "metadata": {"source": "deployed_agent"},
+            },
+            "manifest": manifest,
+            "owner_type": "specialist",
+        }
+        deployed_agent = _deployed_agent_row(
+            deployment_state="live",
+            metadata={
+                "daily_message_limit": 2,
+                "upgrade_cta_url": "https://app.empyralist.com/signup",
+                "upgrade_cta_label": "Continue on Empyralist",
+            },
+        )
+
+        with (
+            patch(
+                "server_modules.agent_channel_router.agent_specialist_repository.resolve_active_inbound_channel_owner",
+                new=AsyncMock(return_value=owner_route),
+            ),
+            patch(
+                "server_modules.agent_channel_router.deployed_agent_service.resolve_deployed_agent_for_channel_owner",
+                new=AsyncMock(return_value=deployed_agent),
+            ),
+            patch(
+                "server_modules.agent_channel_router.deployed_agent_rate_limit_service.enforce_deployed_agent_daily_message_limit",
+                new=AsyncMock(
+                    return_value={
+                        "applied": True,
+                        "allowed": False,
+                        "daily_message_limit": 2,
+                        "message_count": 2,
+                        "remaining": 0,
+                        "usage_day": "2026-04-13",
+                        "retry_after_seconds": 3600,
+                        "upgrade_cta_url": "https://app.empyralist.com/signup",
+                        "upgrade_cta_label": "Continue on Empyralist",
+                    }
+                ),
+            ),
+            patch(
+                "server_modules.agent_channel_router.agent_registry_repository.get_workspace_master_agent_install",
+                new=AsyncMock(return_value={"id": "install-sage", "label": "Sage"}),
+            ),
+            patch(
+                "server_modules.agent_channel_router.control_plane_repository.append_agent_channel_event",
+                new=AsyncMock(side_effect=[{"id": "evt-in"}, {"id": "evt-out"}]),
+            ) as append_event_mock,
+            patch("server_modules.agent_channel_router.execute_canonical_channel_turn", new=AsyncMock()) as execute_mock,
+        ):
+            result = await agent_channel_router.route_inbound_channel_message(
+                tenant_id="tenant-1",
+                workspace_id="workspace-1",
+                channel_key="telegram",
+                endpoint_key="@partspro_bot",
+                customer_message="Need brake pads",
+                actor_id="telegram-user-1",
+                message_id="msg-quota",
+            )
+
+        self.assertEqual(result["status"], "rate_limited")
+        self.assertEqual(result["limit_reason"], "deployed_agent_daily_limit_exceeded")
+        self.assertEqual(result["retry_after_seconds"], 3600)
+        self.assertIn("Parts Pro has reached today's free message limit.", result["reply"])
+        self.assertIn("Continue on Empyralist: https://app.empyralist.com/signup", result["reply"])
+        self.assertIn("/privacy", result["reply"])
+        execute_mock.assert_not_awaited()
+        outbound_kwargs = append_event_mock.await_args_list[1].kwargs
+        self.assertEqual(outbound_kwargs["status"], "rate_limited")
+        self.assertEqual(outbound_kwargs["deployed_agent_id"], "dagent_1")
+        self.assertEqual(outbound_kwargs["metadata"]["rate_limit_scope"], "deployed_agent_external_user_day")
+        self.assertEqual(outbound_kwargs["payload"]["daily_message_limit"], 2)
+        self.assertEqual(outbound_kwargs["payload"]["message_count"], 2)
+
+    async def test_route_inbound_channel_message_uses_custom_paused_message_for_paused_deployed_agent(self):
+        manifest = AgentManifest(
+            manifest_id="manifest-parts-pro",
+            identity={
+                "name": "Parts Pro",
+                "role": "Inventory Specialist",
+                "archetype": "support_specialist",
+                "summary": "Help customers find in-stock parts.",
+            },
+        )
+        owner_route = {
+            "install": {
+                "id": "install-specialist",
+                "label": "Parts Pro",
+                "owner_user_id": "user-1",
+                "runtime_mode": "hosted_secure",
+                "metadata": {"source": "deployed_agent"},
+            },
+            "manifest": manifest,
+            "owner_type": "specialist",
+        }
+
+        with (
+            patch(
+                "server_modules.agent_channel_router.agent_specialist_repository.resolve_active_inbound_channel_owner",
+                new=AsyncMock(return_value=owner_route),
+            ),
+            patch(
+                "server_modules.agent_channel_router.deployed_agent_service.resolve_deployed_agent_for_channel_owner",
+                new=AsyncMock(
+                    return_value=_deployed_agent_row(
+                        deployment_state="paused",
+                        metadata={"paused_message": "The Parts Pro desk is offline for stock count. Please try again after 2 PM."},
+                    )
+                ),
+            ),
+            patch(
+                "server_modules.agent_channel_router.agent_registry_repository.get_workspace_master_agent_install",
+                new=AsyncMock(return_value={"id": "install-sage", "label": "Sage"}),
+            ),
+            patch(
+                "server_modules.agent_channel_router.control_plane_repository.append_agent_channel_event",
+                new=AsyncMock(side_effect=[{"id": "evt-in"}, {"id": "evt-out"}]),
+            ) as append_event_mock,
+            patch("server_modules.agent_channel_router.execute_canonical_channel_turn", new=AsyncMock()) as execute_mock,
+        ):
+            result = await agent_channel_router.route_inbound_channel_message(
+                tenant_id="tenant-1",
+                workspace_id="workspace-1",
+                channel_key="telegram",
+                endpoint_key="@partspro_bot",
+                customer_message="Hello",
+                actor_id="telegram-user-1",
+                message_id="msg-paused-custom",
+            )
+
+        self.assertEqual(
+            result["reply"],
+            "The Parts Pro desk is offline for stock count. Please try again after 2 PM.",
+        )
+        outbound_kwargs = append_event_mock.await_args_list[1].kwargs
+        self.assertEqual(
+            outbound_kwargs["text"],
+            "The Parts Pro desk is offline for stock count. Please try again after 2 PM.",
+        )
+        execute_mock.assert_not_awaited()
+
+    async def test_route_inbound_channel_message_rejects_draft_deployed_agent_without_master_fallback(self):
+        manifest = AgentManifest(
+            manifest_id="manifest-parts-pro",
+            identity={
+                "name": "Parts Pro",
+                "role": "Inventory Specialist",
+                "archetype": "support_specialist",
+                "summary": "Help customers find in-stock parts.",
+            },
+        )
+        owner_route = {
+            "install": {
+                "id": "install-specialist",
+                "label": "Parts Pro",
+                "owner_user_id": "user-1",
+                "runtime_mode": "hosted_secure",
+                "metadata": {"source": "deployed_agent"},
+            },
+            "manifest": manifest,
+            "owner_type": "specialist",
+        }
+
+        with (
+            patch(
+                "server_modules.agent_channel_router.agent_specialist_repository.resolve_active_inbound_channel_owner",
+                new=AsyncMock(return_value=owner_route),
+            ),
+            patch(
+                "server_modules.agent_channel_router.deployed_agent_service.resolve_deployed_agent_for_channel_owner",
+                new=AsyncMock(return_value=_deployed_agent_row(deployment_state="draft")),
+            ),
+            patch(
+                "server_modules.agent_channel_router.agent_registry_repository.get_workspace_master_agent_install",
+                new=AsyncMock(),
+            ) as master_install_mock,
+            patch("server_modules.agent_channel_router.control_plane_repository.append_agent_channel_event", new=AsyncMock()) as append_event_mock,
+            patch("server_modules.agent_channel_router.execute_canonical_channel_turn", new=AsyncMock()) as execute_mock,
+        ):
+            with self.assertRaises(agent_channel_router.ChannelOwnerNotFoundError):
+                await agent_channel_router.route_inbound_channel_message(
+                    tenant_id="tenant-1",
+                    workspace_id="workspace-1",
+                    channel_key="telegram",
+                    endpoint_key="@partspro_bot",
+                    customer_message="Hello",
+                    actor_id="telegram-user-1",
+                )
+
+        master_install_mock.assert_not_awaited()
+        append_event_mock.assert_not_awaited()
+        execute_mock.assert_not_awaited()
+
+    async def test_route_inbound_channel_message_injects_memory_context_for_enabled_deployment(self):
+        manifest = AgentManifest(
+            manifest_id="manifest-parts-pro",
+            identity={
+                "name": "Parts Pro",
+                "role": "Inventory Specialist",
+                "archetype": "support_specialist",
+                "summary": "Help customers find in-stock parts.",
+            },
+            channels={"telegram": True},
+        )
+        owner_route = {
+            "install": {
+                "id": "install-specialist",
+                "label": "Parts Pro",
+                "owner_user_id": "user-1",
+                "runtime_mode": "hosted_secure",
+                "metadata": {"source": "deployed_agent"},
+            },
+            "manifest": manifest,
+            "owner_type": "specialist",
+        }
+
+        @asynccontextmanager
+        async def _slot(*args, **kwargs):
+            yield {
+                "lease_id": "lease-1",
+                "quota_snapshot": channel_concurrency_service.ChannelQuotaSnapshot(
+                    max_workspace_active_threads=24,
+                    max_agent_active_threads=8,
+                    max_workspace_turns_per_minute=180,
+                    max_runtime_seconds=45,
+                ),
+            }
+
+        with (
+            patch(
+                "server_modules.agent_channel_router.agent_specialist_repository.resolve_active_inbound_channel_owner",
+                new=AsyncMock(return_value=owner_route),
+            ),
+            patch(
+                "server_modules.agent_channel_router.deployed_agent_service.resolve_deployed_agent_for_channel_owner",
+                new=AsyncMock(return_value=_deployed_agent_row(metadata={"memory_enabled": True})),
+            ),
+            patch(
+                "server_modules.agent_channel_router.agent_registry_repository.get_workspace_master_agent_install",
+                new=AsyncMock(return_value={"id": "install-sage", "label": "Sage"}),
+            ),
+            patch(
+                "server_modules.agent_channel_router.control_plane_repository.append_agent_channel_event",
+                new=AsyncMock(side_effect=[{"id": "evt-in"}, {"id": "evt-out"}]),
+            ),
+            patch(
+                "server_modules.agent_channel_router.deployed_agent_memory_service.load_deployed_agent_memory_context",
+                new=AsyncMock(
+                    return_value={
+                        "applied": True,
+                        "enabled": True,
+                        "prior_messages": [
+                            {
+                                "role": "assistant",
+                                "content": "Persistent customer memory:\nEarlier persisted summary:\nCustomer prefers OEM parts.",
+                            },
+                            {
+                                "role": "user",
+                                "content": "I need brake pads for a 2022 Tesla Model 3.",
+                            },
+                        ],
+                        "business_plan": "Conversation memory for this returning channel user.",
+                        "summary_present": True,
+                        "message_count": 2,
+                        "compacted": False,
+                    }
+                ),
+            ) as load_memory_mock,
+            patch(
+                "server_modules.agent_channel_router.deployed_agent_memory_service.persist_deployed_agent_memory_snapshot",
+                new=AsyncMock(return_value={"id": "mem-1"}),
+            ) as persist_memory_mock,
+            patch(
+                "server_modules.agent_channel_router.execute_canonical_channel_turn",
+                new=AsyncMock(
+                    return_value={
+                        "kind": "durable_run",
+                        "result": {
+                            "status": "accepted",
+                            "run_id": "run-1",
+                            "engine": "orion",
+                            "route": {"selected": "cloud"},
+                        },
+                    }
+                ),
+            ) as execute_mock,
+            patch("server_modules.agent_channel_router.channel_concurrency_service.channel_execution_slot", new=_slot),
+        ):
+            result = await agent_channel_router.route_inbound_channel_message(
+                tenant_id="tenant-1",
+                workspace_id="workspace-1",
+                channel_key="telegram",
+                endpoint_key="@partspro_bot",
+                customer_message="Need brake pads",
+                actor_id="telegram-user-1",
+                message_id="tg-msg-1",
+            )
+
+        self.assertEqual(result["status"], "accepted")
+        turn_request = execute_mock.await_args.kwargs["turn_request"]
+        self.assertEqual(
+            turn_request.context_hints["prior_messages"][0]["content"],
+            "Persistent customer memory:\nEarlier persisted summary:\nCustomer prefers OEM parts.",
+        )
+        self.assertIn(
+            "Conversation memory for this returning channel user.",
+            turn_request.context_hints["business_plan"],
+        )
+        self.assertTrue(turn_request.context_hints["metadata"]["conversation_memory_enabled"])
+        self.assertTrue(turn_request.context_hints["metadata"]["conversation_memory_summary_present"])
+        self.assertEqual(turn_request.context_hints["metadata"]["conversation_memory_message_count"], 2)
+        self.assertEqual(load_memory_mock.await_args.kwargs["external_user_id"], "telegram-user-1")
+        self.assertEqual(persist_memory_mock.await_args.kwargs["assistant_reply"], result["reply"])
+
+    async def test_route_inbound_channel_message_leaves_memory_out_when_deployment_memory_is_disabled(self):
+        manifest = AgentManifest(
+            manifest_id="manifest-parts-pro",
+            identity={
+                "name": "Parts Pro",
+                "role": "Inventory Specialist",
+                "archetype": "support_specialist",
+                "summary": "Help customers find in-stock parts.",
+            },
+            channels={"telegram": True},
+        )
+        owner_route = {
+            "install": {
+                "id": "install-specialist",
+                "label": "Parts Pro",
+                "owner_user_id": "user-1",
+                "runtime_mode": "hosted_secure",
+                "metadata": {"source": "deployed_agent"},
+            },
+            "manifest": manifest,
+            "owner_type": "specialist",
+        }
+
+        @asynccontextmanager
+        async def _slot(*args, **kwargs):
+            yield {
+                "lease_id": "lease-1",
+                "quota_snapshot": channel_concurrency_service.ChannelQuotaSnapshot(
+                    max_workspace_active_threads=24,
+                    max_agent_active_threads=8,
+                    max_workspace_turns_per_minute=180,
+                    max_runtime_seconds=45,
+                ),
+            }
+
+        with (
+            patch(
+                "server_modules.agent_channel_router.agent_specialist_repository.resolve_active_inbound_channel_owner",
+                new=AsyncMock(return_value=owner_route),
+            ),
+            patch(
+                "server_modules.agent_channel_router.deployed_agent_service.resolve_deployed_agent_for_channel_owner",
+                new=AsyncMock(return_value=_deployed_agent_row(metadata={"memory_enabled": False})),
+            ),
+            patch(
+                "server_modules.agent_channel_router.agent_registry_repository.get_workspace_master_agent_install",
+                new=AsyncMock(return_value={"id": "install-sage", "label": "Sage"}),
+            ),
+            patch(
+                "server_modules.agent_channel_router.control_plane_repository.append_agent_channel_event",
+                new=AsyncMock(side_effect=[{"id": "evt-in"}, {"id": "evt-out"}]),
+            ),
+            patch(
+                "server_modules.agent_channel_router.deployed_agent_memory_service.load_deployed_agent_memory_context",
+                new=AsyncMock(
+                    return_value={
+                        "applied": False,
+                        "enabled": False,
+                        "prior_messages": [],
+                        "business_plan": "",
+                        "summary_present": False,
+                        "message_count": 0,
+                        "compacted": False,
+                    }
+                ),
+            ),
+            patch(
+                "server_modules.agent_channel_router.deployed_agent_memory_service.persist_deployed_agent_memory_snapshot",
+                new=AsyncMock(return_value=None),
+            ),
+            patch(
+                "server_modules.agent_channel_router.execute_canonical_channel_turn",
+                new=AsyncMock(
+                    return_value={
+                        "kind": "durable_run",
+                        "result": {
+                            "status": "accepted",
+                            "run_id": "run-1",
+                            "engine": "orion",
+                            "route": {"selected": "cloud"},
+                        },
+                    }
+                ),
+            ) as execute_mock,
+            patch("server_modules.agent_channel_router.channel_concurrency_service.channel_execution_slot", new=_slot),
+        ):
+            result = await agent_channel_router.route_inbound_channel_message(
+                tenant_id="tenant-1",
+                workspace_id="workspace-1",
+                channel_key="telegram",
+                endpoint_key="@partspro_bot",
+                customer_message="Need brake pads",
+                actor_id="telegram-user-1",
+                message_id="tg-msg-1",
+            )
+
+        self.assertEqual(result["status"], "accepted")
+        turn_request = execute_mock.await_args.kwargs["turn_request"]
+        self.assertNotIn("prior_messages", turn_request.context_hints)
+        self.assertNotIn("business_plan", turn_request.context_hints)
+        self.assertNotIn("conversation_memory_enabled", turn_request.context_hints["metadata"])
+
+    async def test_route_inbound_channel_message_applies_health_safety_and_logs_red_flag_escalation(self):
+        manifest = AgentManifest(
+            manifest_id="manifest-healthguide",
+            identity={
+                "name": "HealthGuide",
+                "role": "Health Assistant",
+                "archetype": "support_specialist",
+                "summary": "Provide general health information.",
+            },
+            channels={"telegram": True},
+        )
+        owner_route = {
+            "install": {
+                "id": "install-healthguide",
+                "label": "HealthGuide",
+                "owner_user_id": "user-1",
+                "runtime_mode": "hosted_secure",
+                "metadata": {"source": "deployed_agent"},
+            },
+            "manifest": manifest,
+            "owner_type": "specialist",
+        }
+
+        @asynccontextmanager
+        async def _slot(*args, **kwargs):
+            yield {
+                "lease_id": "lease-1",
+                "quota_snapshot": channel_concurrency_service.ChannelQuotaSnapshot(
+                    max_workspace_active_threads=24,
+                    max_agent_active_threads=8,
+                    max_workspace_turns_per_minute=180,
+                    max_runtime_seconds=45,
+                ),
+            }
+
+        with (
+            patch(
+                "server_modules.agent_channel_router.agent_specialist_repository.resolve_active_inbound_channel_owner",
+                new=AsyncMock(return_value=owner_route),
+            ),
+            patch(
+                "server_modules.agent_channel_router.deployed_agent_service.resolve_deployed_agent_for_channel_owner",
+                new=AsyncMock(
+                    return_value=_deployed_agent_row(
+                        metadata={
+                            "health_safety_enabled": True,
+                            "memory_enabled": False,
+                        }
+                    )
+                ),
+            ),
+            patch(
+                "server_modules.agent_channel_router.agent_registry_repository.get_workspace_master_agent_install",
+                new=AsyncMock(return_value={"id": "install-sage", "label": "Sage"}),
+            ),
+            patch(
+                "server_modules.agent_channel_router.control_plane_repository.append_agent_channel_event",
+                new=AsyncMock(side_effect=[{"id": "evt-in"}, {"id": "evt-out"}]),
+            ) as append_event_mock,
+            patch(
+                "server_modules.agent_channel_router.deployed_agent_memory_service.load_deployed_agent_memory_context",
+                new=AsyncMock(return_value={"enabled": False}),
+            ),
+            patch(
+                "server_modules.agent_channel_router.deployed_agent_memory_service.persist_deployed_agent_memory_snapshot",
+                new=AsyncMock(return_value=None),
+            ),
+            patch(
+                "server_modules.agent_channel_router.execute_canonical_channel_turn",
+                new=AsyncMock(
+                    return_value={
+                        "status": "completed",
+                        "reply": "You may be okay to rest at home.",
+                        "run_id": "run-1",
+                        "metadata": {},
+                    }
+                ),
+            ) as execute_mock,
+            patch(
+                "server_modules.activity_ledger_service.append_activity_event",
+                new=AsyncMock(return_value={"id": "activity-1"}),
+            ) as append_activity_mock,
+            patch("server_modules.agent_channel_router.channel_concurrency_service.channel_execution_slot", new=_slot),
+        ):
+            result = await agent_channel_router.route_inbound_channel_message(
+                tenant_id="tenant-1",
+                workspace_id="workspace-1",
+                channel_key="telegram",
+                endpoint_key="@partspro_bot",
+                customer_message="I have chest pain and trouble breathing.",
+                actor_id="telegram-user-1",
+                message_id="tg-health-1",
+            )
+
+        self.assertEqual(result["status"], "completed")
+        self.assertIn("urgent medical attention", result["reply"])
+        self.assertIn("not a doctor", result["reply"])
+        self.assertIn("without verified citations", result["reply"])
+        turn_request = execute_mock.await_args.kwargs["turn_request"]
+        self.assertTrue(turn_request.context_hints["metadata"]["health_safety_enabled"])
+        self.assertIn("healthguide_safety_policy_v1", turn_request.context_hints["business_plan"])
+        outbound_kwargs = append_event_mock.await_args_list[1].kwargs
+        self.assertTrue(outbound_kwargs["payload"]["health_safety"]["red_flag_triggered"])
+        self.assertEqual(outbound_kwargs["payload"]["health_safety"]["citation_mode"], "disclosed_unverified")
+        self.assertTrue(any(call.kwargs.get("action") == "escalated" for call in append_activity_mock.await_args_list))
+
+    async def test_route_inbound_channel_message_leaves_non_health_reply_unchanged(self):
+        manifest = AgentManifest(
+            manifest_id="manifest-parts-pro",
+            identity={
+                "name": "Parts Pro",
+                "role": "Inventory Specialist",
+                "archetype": "support_specialist",
+                "summary": "Help customers find in-stock parts.",
+            },
+            channels={"telegram": True},
+        )
+        owner_route = {
+            "install": {
+                "id": "install-specialist",
+                "label": "Parts Pro",
+                "owner_user_id": "user-1",
+                "runtime_mode": "hosted_secure",
+                "metadata": {"source": "deployed_agent"},
+            },
+            "manifest": manifest,
+            "owner_type": "specialist",
+        }
+
+        @asynccontextmanager
+        async def _slot(*args, **kwargs):
+            yield {
+                "lease_id": "lease-1",
+                "quota_snapshot": channel_concurrency_service.ChannelQuotaSnapshot(
+                    max_workspace_active_threads=24,
+                    max_agent_active_threads=8,
+                    max_workspace_turns_per_minute=180,
+                    max_runtime_seconds=45,
+                ),
+            }
+
+        with (
+            patch(
+                "server_modules.agent_channel_router.agent_specialist_repository.resolve_active_inbound_channel_owner",
+                new=AsyncMock(return_value=owner_route),
+            ),
+            patch(
+                "server_modules.agent_channel_router.deployed_agent_service.resolve_deployed_agent_for_channel_owner",
+                new=AsyncMock(return_value=_deployed_agent_row(metadata={"health_safety_enabled": False})),
+            ),
+            patch(
+                "server_modules.agent_channel_router.agent_registry_repository.get_workspace_master_agent_install",
+                new=AsyncMock(return_value={"id": "install-sage", "label": "Sage"}),
+            ),
+            patch(
+                "server_modules.agent_channel_router.control_plane_repository.append_agent_channel_event",
+                new=AsyncMock(side_effect=[{"id": "evt-in"}, {"id": "evt-out"}]),
+            ),
+            patch(
+                "server_modules.agent_channel_router.deployed_agent_memory_service.load_deployed_agent_memory_context",
+                new=AsyncMock(return_value={"enabled": False}),
+            ),
+            patch(
+                "server_modules.agent_channel_router.deployed_agent_memory_service.persist_deployed_agent_memory_snapshot",
+                new=AsyncMock(return_value=None),
+            ),
+            patch(
+                "server_modules.agent_channel_router.execute_canonical_channel_turn",
+                new=AsyncMock(
+                    return_value={
+                        "status": "completed",
+                        "reply": "We have OEM brake pads in stock.",
+                        "run_id": "run-1",
+                        "metadata": {},
+                    }
+                ),
+            ),
+            patch(
+                "server_modules.activity_ledger_service.append_activity_event",
+                new=AsyncMock(return_value={"id": "activity-1"}),
+            ),
+            patch("server_modules.agent_channel_router.channel_concurrency_service.channel_execution_slot", new=_slot),
+        ):
+            result = await agent_channel_router.route_inbound_channel_message(
+                tenant_id="tenant-1",
+                workspace_id="workspace-1",
+                channel_key="telegram",
+                endpoint_key="@partspro_bot",
+                customer_message="Need brake pads",
+                actor_id="telegram-user-1",
+                message_id="tg-parts-1",
+            )
+
+        self.assertEqual(result["reply"], "We have OEM brake pads in stock.")
 
 
 if __name__ == "__main__":

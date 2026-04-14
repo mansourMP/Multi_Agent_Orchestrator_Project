@@ -20,9 +20,36 @@ export type WorkspaceMembershipRecord = {
   membershipVersion: string;
   defaultRoute: string;
   preferredShellProfileId?: string | null;
+  setupCompleted: boolean;
+  requiresOnboarding: boolean;
 };
 
 export type WorkspaceMembershipMap = Record<string, WorkspaceMembershipRecord>;
+
+function extractWorkspaceIdFromRoute(route: string | null | undefined): string | null {
+  if (!route || typeof route !== 'string') {
+    return null;
+  }
+
+  const normalizedRoute = route.trim();
+  if (!normalizedRoute.startsWith('/w/')) {
+    return null;
+  }
+
+  const segments = normalizedRoute.split('/').filter(Boolean);
+  if (segments[0] !== 'w' || !segments[1]) {
+    return null;
+  }
+
+  return decodeURIComponent(segments[1]);
+}
+
+function normalizeWorkspaceRoute(route: string): string {
+  if (route.endsWith('/dashboard')) {
+    return `${route.slice(0, -10)}/admin`;
+  }
+  return route;
+}
 
 export function indexWorkspaceMemberships(
   memberships: WorkspaceMembershipRecord[],
@@ -56,23 +83,43 @@ export function resolveRouteWorkspaceId(
     return routeWorkspaceId;
   }
 
-  return routeWorkspaceId;
+  return null;
 }
 
 export function sanitizeWorkspaceRoute(route: string | null | undefined, fallbackRoute: string): string {
   if (!route || typeof route !== 'string') {
-    return fallbackRoute;
+    return normalizeWorkspaceRoute(fallbackRoute);
   }
 
-  if (!route.startsWith('/')) {
-    return fallbackRoute;
+  const normalizedRoute = route.trim();
+  if (!normalizedRoute.startsWith('/')) {
+    return normalizeWorkspaceRoute(fallbackRoute);
   }
 
-  if (route.startsWith('//')) {
-    return fallbackRoute;
+  if (normalizedRoute.startsWith('//')) {
+    return normalizeWorkspaceRoute(fallbackRoute);
   }
 
-  return route;
+  const fallbackWorkspaceId = extractWorkspaceIdFromRoute(fallbackRoute);
+  const routeWorkspaceId = extractWorkspaceIdFromRoute(normalizedRoute);
+
+  if (normalizedRoute.startsWith('/w/') && !routeWorkspaceId) {
+    return normalizeWorkspaceRoute(fallbackRoute);
+  }
+
+  if (routeWorkspaceId) {
+    if (fallbackWorkspaceId && routeWorkspaceId !== fallbackWorkspaceId) {
+      return normalizeWorkspaceRoute(fallbackRoute);
+    }
+    return normalizeWorkspaceRoute(normalizedRoute);
+  }
+
+  if (fallbackWorkspaceId) {
+    const suffix = normalizedRoute === '/' ? '' : normalizedRoute;
+    return normalizeWorkspaceRoute(`/w/${encodeURIComponent(fallbackWorkspaceId)}${suffix}`);
+  }
+
+  return normalizeWorkspaceRoute(normalizedRoute);
 }
 
 export function getWorkspaceMembership(

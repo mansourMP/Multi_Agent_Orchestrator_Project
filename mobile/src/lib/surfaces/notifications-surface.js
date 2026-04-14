@@ -1,12 +1,42 @@
 import {
   assertWorkspaceRouteAvailable,
   loadWorkspaceSurfaceResource,
+  normalizeSurfaceRecord,
   normalizeListPayload,
+  pickFirstString,
   resolveMobileWorkspaceApiPaths,
 } from './shared.js';
 
 function normalizeNotificationsPayload(payload) {
-  return normalizeListPayload(payload, ['notifications', 'items', 'data']);
+  return normalizeListPayload(payload, ['notifications', 'items', 'data']).map((notification) => {
+    const normalized = normalizeSurfaceRecord(notification, {
+      titleKeys: ['title', 'summary', 'message', 'label', 'id'],
+      subtitleKeys: ['body', 'detail', 'source', 'kind'],
+      statusKeys: ['level', 'status', 'state'],
+    });
+
+    return {
+      ...normalized,
+      detailLines: [
+        {
+          label: 'Notification',
+          value: normalized.id,
+        },
+        {
+          label: 'Level',
+          value: normalized.status ?? 'Info',
+        },
+        {
+          label: 'Source',
+          value: pickFirstString(notification, ['source', 'origin', 'kind'], 'Workspace'),
+        },
+        {
+          label: 'Received',
+          value: normalized.timestamp ?? 'Unavailable',
+        },
+      ],
+    };
+  });
 }
 
 export function createNotificationsSurface({
@@ -17,7 +47,7 @@ export function createNotificationsSurface({
   const route = assertWorkspaceRouteAvailable(foundation, 'notifications', 'notifications');
 
   return {
-    route: route.href,
+    route: route.screen,
     async loadNotifications({ refresh = false } = {}) {
       return loadWorkspaceSurfaceResource({
         foundation,

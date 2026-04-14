@@ -12,12 +12,13 @@ import shutil
 import subprocess
 import base64
 import sys
+from functools import lru_cache
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
 from urllib.parse import quote_plus
 
-from server_modules.usage_reporting import build_usage_record
+from server_modules import platform_config_schema, pricing_registry_service, usage_accounting_service
 
 # ---------------------------------------------------------------------------
 # Imports from server.py globals – these must be supplied by the caller or
@@ -207,6 +208,7 @@ PROVIDER_CATALOG = {
         ],
         "default_auth_mode": "api_key",
         "default_model": "gpt-4o",
+        "models": ["gpt-4o", "gpt-4o-mini", "gpt-4.1", "gpt-4.1-mini"],
         "note": "Direct OpenAI credentials only. Empyralis does not provide an in-product ChatGPT or Codex sign-in flow yet.",
     },
     "openai-codex": {
@@ -217,6 +219,7 @@ PROVIDER_CATALOG = {
         ],
         "default_auth_mode": "oauth_token",
         "default_model": "gpt-5.4",
+        "models": ["gpt-5.4", "gpt-5.3-codex", "gpt-5.2"],
         "note": "ChatGPT / Codex OAuth session for the Codex transport.",
     },
     "anthropic": {
@@ -228,6 +231,7 @@ PROVIDER_CATALOG = {
         ],
         "default_auth_mode": "api_key",
         "default_model": "claude-3-5-sonnet-20241022",
+        "models": ["claude-3-5-sonnet-20241022", "claude-3-5-haiku-20241022", "claude-3-7-sonnet-latest"],
         "note": "Use a direct Anthropic API key or the local Claude subscription already signed into the Claude CLI on this machine.",
     },
     "claude_code_cli": {
@@ -250,6 +254,7 @@ PROVIDER_CATALOG = {
         ],
         "default_auth_mode": "api_key",
         "default_model": "gemini-1.5-flash",
+        "models": ["gemini-1.5-flash", "gemini-1.5-pro", "gemini-2.0-flash"],
         "note": "Direct Gemini API key or Gemini CLI OAuth.",
     },
     "vertex": {
@@ -260,6 +265,7 @@ PROVIDER_CATALOG = {
         ],
         "default_auth_mode": "access_token",
         "default_model": "gemini-1.5-pro",
+        "models": ["gemini-1.5-pro", "gemini-1.5-flash"],
         "note": "Direct Vertex AI access token with project and region.",
     },
     "qwen": {
@@ -312,6 +318,432 @@ PROVIDER_CATALOG = {
     },
 }
 
+PROVIDER_GOVERNANCE_CATALOG = {
+    "openai": {
+        "privacy_posture": "Managed API with vendor-hosted processing.",
+        "jurisdiction": "United States",
+        "residency": "Provider-managed cloud regions.",
+        "enterprise_risk_note": "Review regional residency and vendor retention requirements before sending regulated data.",
+        "capability_labels": ["Tools", "Fast", "Hosted API"],
+        "local_self_hosted_compatible": False,
+    },
+    "openai-codex": {
+        "privacy_posture": "Managed Codex transport tied to a saved ChatGPT / Codex session.",
+        "jurisdiction": "United States",
+        "residency": "Provider-managed cloud regions.",
+        "enterprise_risk_note": "Saved-session transports require tighter session lifecycle and audit controls than API-key providers.",
+        "capability_labels": ["Reasoning", "Codex transport", "Hosted API"],
+        "local_self_hosted_compatible": False,
+    },
+    "anthropic": {
+        "privacy_posture": "Managed API or local Claude subscription transport.",
+        "jurisdiction": "United States",
+        "residency": "Provider-managed cloud regions or local CLI session.",
+        "enterprise_risk_note": "Validate whether tenant contracts require dedicated data controls beyond the shared hosted API.",
+        "capability_labels": ["Reasoning", "Long context", "Tools"],
+        "local_self_hosted_compatible": False,
+    },
+    "gemini": {
+        "privacy_posture": "Managed Google-hosted API.",
+        "jurisdiction": "United States",
+        "residency": "Google-managed cloud regions.",
+        "enterprise_risk_note": "Enterprise deployments should align Gemini usage with Google Cloud governance and data-processing terms.",
+        "capability_labels": ["Fast", "Tools", "Multimodal"],
+        "local_self_hosted_compatible": False,
+    },
+    "vertex": {
+        "privacy_posture": "Managed Google Cloud API with project-scoped access.",
+        "jurisdiction": "Google Cloud project region",
+        "residency": "Selected Vertex project region.",
+        "enterprise_risk_note": "Region pinning helps, but operators still need to align project policy, logging, and retention controls.",
+        "capability_labels": ["Enterprise", "Tools", "Project-scoped"],
+        "local_self_hosted_compatible": False,
+    },
+    "qwen": {
+        "privacy_posture": "Managed third-party API.",
+        "jurisdiction": "Alibaba Cloud regions",
+        "residency": "Provider-managed cloud regions.",
+        "enterprise_risk_note": "Review provider-region and sector-specific compliance requirements before routing regulated user data.",
+        "capability_labels": ["Fast", "Hosted API"],
+        "local_self_hosted_compatible": False,
+    },
+    "deepseek": {
+        "privacy_posture": "Managed third-party API. DeepSeek's privacy policy says prompts, chat history, and uploaded content may be collected and stored by the provider.",
+        "jurisdiction": "People's Republic of China",
+        "residency": "DeepSeek states personal information it collects is stored on secure servers located in the PRC, with policy-governed cross-border transfers.",
+        "enterprise_risk_note": "Enterprise and regulated buyers should review PRC data residency, prompt retention, and sector-specific compliance exposure before sending user conversations.",
+        "capability_labels": ["Reasoning", "Cost-efficient", "Hosted API"],
+        "local_self_hosted_compatible": False,
+    },
+    "mistral": {
+        "privacy_posture": "Managed third-party API.",
+        "jurisdiction": "European Union",
+        "residency": "Provider-managed cloud regions.",
+        "enterprise_risk_note": "Validate chosen hosting region and contractual controls if workloads require strict residency guarantees.",
+        "capability_labels": ["Fast", "Long context", "Hosted API"],
+        "local_self_hosted_compatible": False,
+    },
+    "ollama": {
+        "privacy_posture": "Local or self-hosted inference on your own machine.",
+        "jurisdiction": "Self-hosted / operator-controlled",
+        "residency": "Local machine or self-hosted runtime.",
+        "enterprise_risk_note": "Operational risk shifts to the operator because patching, logging, and perimeter controls are self-managed.",
+        "capability_labels": ["Local", "Self-hosted", "Offline-capable"],
+        "local_self_hosted_compatible": True,
+    },
+}
+
+PROVIDER_MODEL_CATALOG = {
+    "openai": {
+        "gpt-4o": {
+            "label": "GPT-4o",
+            "context_window_tokens": 128000,
+            "input_cost_per_1k_usd": 0.005,
+            "output_cost_per_1k_usd": 0.015,
+            "supports_tools": True,
+            "supports_reasoning": True,
+            "capability_labels": ["Balanced", "Tools", "Multimodal"],
+        },
+        "gpt-4o-mini": {
+            "label": "GPT-4o Mini",
+            "context_window_tokens": 128000,
+            "input_cost_per_1k_usd": 0.00015,
+            "output_cost_per_1k_usd": 0.0006,
+            "supports_tools": True,
+            "supports_reasoning": False,
+            "capability_labels": ["Low cost", "Fast", "Tools"],
+        },
+        "gpt-4.1": {
+            "label": "GPT-4.1",
+            "context_window_tokens": 1000000,
+            "input_cost_per_1k_usd": 0.002,
+            "output_cost_per_1k_usd": 0.008,
+            "supports_tools": True,
+            "supports_reasoning": True,
+            "capability_labels": ["Long context", "Tools", "High quality"],
+        },
+        "gpt-4.1-mini": {
+            "label": "GPT-4.1 Mini",
+            "context_window_tokens": 1000000,
+            "input_cost_per_1k_usd": 0.0004,
+            "output_cost_per_1k_usd": 0.0016,
+            "supports_tools": True,
+            "supports_reasoning": True,
+            "capability_labels": ["Long context", "Fast", "Tools"],
+        },
+    },
+    "openai-codex": {
+        "gpt-5.4": {
+            "label": "GPT-5.4",
+            "context_window_tokens": 400000,
+            "input_cost_per_1k_usd": 0.0,
+            "output_cost_per_1k_usd": 0.0,
+            "supports_tools": True,
+            "supports_reasoning": True,
+            "capability_labels": ["Reasoning", "Codex", "High quality"],
+        },
+        "gpt-5.3-codex": {
+            "label": "GPT-5.3 Codex",
+            "context_window_tokens": 400000,
+            "input_cost_per_1k_usd": 0.0,
+            "output_cost_per_1k_usd": 0.0,
+            "supports_tools": True,
+            "supports_reasoning": True,
+            "capability_labels": ["Reasoning", "Codex", "Engineering"],
+        },
+        "gpt-5.2": {
+            "label": "GPT-5.2",
+            "context_window_tokens": 400000,
+            "input_cost_per_1k_usd": 0.0,
+            "output_cost_per_1k_usd": 0.0,
+            "supports_tools": True,
+            "supports_reasoning": True,
+            "capability_labels": ["Reasoning", "Codex", "Balanced"],
+        },
+    },
+    "anthropic": {
+        "claude-3-5-sonnet-20241022": {
+            "label": "Claude 3.5 Sonnet",
+            "context_window_tokens": 200000,
+            "input_cost_per_1k_usd": 0.003,
+            "output_cost_per_1k_usd": 0.015,
+            "supports_tools": True,
+            "supports_reasoning": True,
+            "capability_labels": ["Reasoning", "Long context", "Tools"],
+        },
+        "claude-3-5-haiku-20241022": {
+            "label": "Claude 3.5 Haiku",
+            "context_window_tokens": 200000,
+            "input_cost_per_1k_usd": 0.0008,
+            "output_cost_per_1k_usd": 0.004,
+            "supports_tools": True,
+            "supports_reasoning": False,
+            "capability_labels": ["Low cost", "Fast", "Tools"],
+        },
+        "claude-3-7-sonnet-latest": {
+            "label": "Claude 3.7 Sonnet",
+            "context_window_tokens": 200000,
+            "input_cost_per_1k_usd": 0.003,
+            "output_cost_per_1k_usd": 0.015,
+            "supports_tools": True,
+            "supports_reasoning": True,
+            "capability_labels": ["Reasoning", "Long context", "Tools"],
+        },
+    },
+    "gemini": {
+        "gemini-1.5-flash": {
+            "label": "Gemini 1.5 Flash",
+            "context_window_tokens": 1000000,
+            "input_cost_per_1k_usd": 0.000075,
+            "output_cost_per_1k_usd": 0.0003,
+            "supports_tools": True,
+            "supports_reasoning": False,
+            "capability_labels": ["Low cost", "Fast", "Long context"],
+        },
+        "gemini-1.5-pro": {
+            "label": "Gemini 1.5 Pro",
+            "context_window_tokens": 2000000,
+            "input_cost_per_1k_usd": 0.00125,
+            "output_cost_per_1k_usd": 0.005,
+            "supports_tools": True,
+            "supports_reasoning": True,
+            "capability_labels": ["Long context", "Multimodal", "Tools"],
+        },
+        "gemini-2.0-flash": {
+            "label": "Gemini 2.0 Flash",
+            "context_window_tokens": 1000000,
+            "input_cost_per_1k_usd": 0.0001,
+            "output_cost_per_1k_usd": 0.0004,
+            "supports_tools": True,
+            "supports_reasoning": True,
+            "capability_labels": ["Fast", "Reasoning", "Tools"],
+        },
+    },
+    "vertex": {
+        "gemini-1.5-pro": {
+            "label": "Vertex Gemini 1.5 Pro",
+            "context_window_tokens": 2000000,
+            "input_cost_per_1k_usd": 0.00125,
+            "output_cost_per_1k_usd": 0.005,
+            "supports_tools": True,
+            "supports_reasoning": True,
+            "capability_labels": ["Enterprise", "Long context", "Tools"],
+        },
+        "gemini-1.5-flash": {
+            "label": "Vertex Gemini 1.5 Flash",
+            "context_window_tokens": 1000000,
+            "input_cost_per_1k_usd": 0.000075,
+            "output_cost_per_1k_usd": 0.0003,
+            "supports_tools": True,
+            "supports_reasoning": False,
+            "capability_labels": ["Enterprise", "Low cost", "Fast"],
+        },
+    },
+    "qwen": {
+        "qwen-plus": {
+            "label": "Qwen Plus",
+            "context_window_tokens": 131072,
+            "input_cost_per_1k_usd": 0.0,
+            "output_cost_per_1k_usd": 0.0,
+            "supports_tools": True,
+            "supports_reasoning": True,
+            "capability_labels": ["Reasoning", "Hosted API"],
+        },
+        "qwen-turbo": {
+            "label": "Qwen Turbo",
+            "context_window_tokens": 1000000,
+            "input_cost_per_1k_usd": 0.0,
+            "output_cost_per_1k_usd": 0.0,
+            "supports_tools": True,
+            "supports_reasoning": False,
+            "capability_labels": ["Fast", "Long context"],
+        },
+        "qwen-max": {
+            "label": "Qwen Max",
+            "context_window_tokens": 32768,
+            "input_cost_per_1k_usd": 0.0,
+            "output_cost_per_1k_usd": 0.0,
+            "supports_tools": True,
+            "supports_reasoning": True,
+            "capability_labels": ["High quality", "Reasoning"],
+        },
+    },
+    "deepseek": {
+        "deepseek-chat": {
+            "label": "DeepSeek Chat",
+            "context_window_tokens": 128000,
+            "input_cost_per_1k_usd": 0.00028,
+            "output_cost_per_1k_usd": 0.00042,
+            "supports_tools": True,
+            "supports_reasoning": False,
+            "capability_labels": ["Low cost", "Fast", "Hosted API"],
+        },
+        "deepseek-reasoner": {
+            "label": "DeepSeek Reasoner",
+            "context_window_tokens": 128000,
+            "input_cost_per_1k_usd": 0.00028,
+            "output_cost_per_1k_usd": 0.00042,
+            "supports_tools": True,
+            "supports_reasoning": True,
+            "capability_labels": ["Reasoning", "Low cost", "Hosted API"],
+        },
+    },
+    "mistral": {
+        "mistral-large-latest": {
+            "label": "Mistral Large",
+            "context_window_tokens": 131072,
+            "input_cost_per_1k_usd": 0.0,
+            "output_cost_per_1k_usd": 0.0,
+            "supports_tools": True,
+            "supports_reasoning": True,
+            "capability_labels": ["Reasoning", "Long context", "Hosted API"],
+        },
+        "mistral-medium-latest": {
+            "label": "Mistral Medium",
+            "context_window_tokens": 32768,
+            "input_cost_per_1k_usd": 0.0,
+            "output_cost_per_1k_usd": 0.0,
+            "supports_tools": True,
+            "supports_reasoning": False,
+            "capability_labels": ["Balanced", "Hosted API"],
+        },
+        "mistral-small-latest": {
+            "label": "Mistral Small",
+            "context_window_tokens": 32768,
+            "input_cost_per_1k_usd": 0.0,
+            "output_cost_per_1k_usd": 0.0,
+            "supports_tools": True,
+            "supports_reasoning": False,
+            "capability_labels": ["Low cost", "Fast", "Hosted API"],
+        },
+    },
+    "ollama": {
+        "llama3.2": {
+            "label": "Llama 3.2",
+            "context_window_tokens": 128000,
+            "input_cost_per_1k_usd": 0.0,
+            "output_cost_per_1k_usd": 0.0,
+            "supports_tools": False,
+            "supports_reasoning": False,
+            "local_self_hosted_compatible": True,
+            "capability_labels": ["Local", "Self-hosted", "Offline-capable"],
+        },
+        "llama3": {
+            "label": "Llama 3",
+            "context_window_tokens": 8192,
+            "input_cost_per_1k_usd": 0.0,
+            "output_cost_per_1k_usd": 0.0,
+            "supports_tools": False,
+            "supports_reasoning": False,
+            "local_self_hosted_compatible": True,
+            "capability_labels": ["Local", "Self-hosted"],
+        },
+        "mistral": {
+            "label": "Mistral (Ollama)",
+            "context_window_tokens": 32768,
+            "input_cost_per_1k_usd": 0.0,
+            "output_cost_per_1k_usd": 0.0,
+            "supports_tools": False,
+            "supports_reasoning": False,
+            "local_self_hosted_compatible": True,
+            "capability_labels": ["Local", "Self-hosted"],
+        },
+        "gemma": {
+            "label": "Gemma (Ollama)",
+            "context_window_tokens": 8192,
+            "input_cost_per_1k_usd": 0.0,
+            "output_cost_per_1k_usd": 0.0,
+            "supports_tools": False,
+            "supports_reasoning": False,
+            "local_self_hosted_compatible": True,
+            "capability_labels": ["Local", "Self-hosted"],
+        },
+        "phi3": {
+            "label": "Phi-3 (Ollama)",
+            "context_window_tokens": 128000,
+            "input_cost_per_1k_usd": 0.0,
+            "output_cost_per_1k_usd": 0.0,
+            "supports_tools": False,
+            "supports_reasoning": False,
+            "local_self_hosted_compatible": True,
+            "capability_labels": ["Local", "Self-hosted"],
+        },
+    },
+}
+
+
+@lru_cache(maxsize=1)
+def _platform_provider_catalog_config() -> platform_config_schema.PlatformProviderCatalogConfig:
+    return platform_config_schema.build_platform_provider_catalog_config(
+        provider_catalog=PROVIDER_CATALOG,
+        governance_catalog=PROVIDER_GOVERNANCE_CATALOG,
+        model_catalog=PROVIDER_MODEL_CATALOG,
+    )
+
+
+def provider_governance_entry(provider: Any) -> Dict[str, Any]:
+    provider_id = normalize_provider_id(provider)
+    entry = _platform_provider_catalog_config().provider_governance(provider_id)
+    return entry.model_dump(exclude_none=True) if entry is not None else {}
+
+
+def _default_model_choice_label(model_id: str) -> str:
+    return " ".join(part for part in str(model_id or "").replace("_", "-").split("-") if part).strip() or str(model_id or "")
+
+
+def _provider_model_identifier_list(provider: Any) -> List[str]:
+    provider_id = normalize_provider_id(provider)
+    entry = provider_catalog_entry(provider_id)
+    explicit = [str(item).strip() for item in entry.get("models", []) if str(item).strip()]
+    if explicit:
+        return explicit
+    default_model = str(entry.get("default_model") or "").strip()
+    return [default_model] if default_model else []
+
+
+def provider_model_catalog(provider: Any) -> List[Dict[str, Any]]:
+    provider_id = normalize_provider_id(provider)
+    governance = provider_governance_entry(provider_id)
+    model_entries = {
+        item.id: item.model_dump(exclude_none=True)
+        for item in _platform_provider_catalog_config().provider_models(provider_id)
+    }
+    items: List[Dict[str, Any]] = []
+    for model_id in _provider_model_identifier_list(provider_id):
+        metadata = dict(model_entries.get(model_id) or {})
+        pricing_projection = pricing_registry_service.catalog_price_projection(provider_id, model_id)
+        supports_tools = bool(metadata.get("supports_tools"))
+        supports_reasoning = bool(metadata.get("supports_reasoning"))
+        capability_labels = [
+            str(label).strip()
+            for label in metadata.get("capability_labels", [])
+            if str(label).strip()
+        ]
+        if supports_tools and "Tools" not in capability_labels:
+            capability_labels.append("Tools")
+        if supports_reasoning and "Reasoning" not in capability_labels:
+            capability_labels.append("Reasoning")
+        if bool(metadata.get("local_self_hosted_compatible") or governance.get("local_self_hosted_compatible")) and "Local / self-hosted" not in capability_labels:
+            capability_labels.append("Local / self-hosted")
+        items.append(
+            {
+                "id": model_id,
+                "label": str(metadata.get("label") or _default_model_choice_label(model_id)),
+                "provider": provider_id,
+                "context_window_tokens": int(metadata.get("context_window_tokens") or 0) or None,
+                "input_cost_per_1k_usd": float(pricing_projection.get("input_cost_per_1k_usd") or 0.0),
+                "output_cost_per_1k_usd": float(pricing_projection.get("output_cost_per_1k_usd") or 0.0),
+                "pricing_known": bool(pricing_projection.get("pricing_known")),
+                "pricing_source": pricing_projection.get("pricing_source"),
+                "pricing_registry_version": pricing_projection.get("pricing_registry_version"),
+                "supports_tools": supports_tools,
+                "supports_reasoning": supports_reasoning,
+                "local_self_hosted_compatible": bool(metadata.get("local_self_hosted_compatible") or governance.get("local_self_hosted_compatible")),
+                "capability_labels": capability_labels,
+            }
+        )
+    return items
+
 
 def normalize_provider_id(provider: Any) -> str:
     provider_id = str(provider or "").strip().lower()
@@ -320,7 +752,8 @@ def normalize_provider_id(provider: Any) -> str:
 
 def provider_catalog_entry(provider: Any) -> Dict[str, Any]:
     provider_id = normalize_provider_id(provider)
-    return PROVIDER_CATALOG.get(provider_id, {})
+    entry = _platform_provider_catalog_config().provider(provider_id)
+    return entry.model_dump(exclude_none=True) if entry is not None else {}
 
 
 def normalize_auth_mode(provider: Any, auth_mode: Any = None, credentials: Optional[Dict[str, Any]] = None) -> str:
@@ -1079,56 +1512,33 @@ PROVIDER_ADAPTERS: Dict[str, ProviderAdapter] = {
 }
 
 # Approximate token pricing per 1K tokens; used only for masked telemetry.
+# For DeepSeek, the official public pricing page currently lists cache-hit, cache-miss,
+# and output token rates. The masked telemetry fallback uses the cache-miss input rate
+# plus standard output rate so estimates do not understate spend.
 PROVIDER_COST_PER_1K = {
-    "openai": {"input": 0.0050, "output": 0.0150},
-    "openai-codex": {"input": 0.0, "output": 0.0},
-    "anthropic": {"input": 0.0030, "output": 0.0150},
-    "claude_code_cli": {"input": 0.0, "output": 0.0},
-    "gemini": {"input": 0.0010, "output": 0.0030},
-    "vertex": {"input": 0.0010, "output": 0.0030},
-    "qwen": {"input": 0.0, "output": 0.0},
-    "deepseek": {"input": 0.0, "output": 0.0},
-    "mistral": {"input": 0.0, "output": 0.0},
-    "ollama": {"input": 0.0, "output": 0.0},
+    provider: {
+        "input": float(payload.get("input") or 0.0),
+        "output": float(payload.get("output") or 0.0),
+    }
+    for provider, payload in pricing_registry_service.provider_fallback_rates_per_1k().items()
 }
 
 
 def estimate_tokens(text: str) -> int:
-    if not text:
-        return 0
-    return max(1, len(text) // 4)
+    return usage_accounting_service.estimate_tokens(text)
 
 
 def masked_cost_band(cost_usd: float) -> str:
-    if cost_usd < 0.001:
-        return "< $0.001"
-    if cost_usd < 0.01:
-        return "$0.001 - $0.01"
-    if cost_usd < 0.05:
-        return "$0.01 - $0.05"
-    if cost_usd < 0.10:
-        return "$0.05 - $0.10"
-    return ">= $0.10"
+    return usage_accounting_service.masked_cost_band(cost_usd)
 
 
 def build_masked_usage(provider: str, model: str, input_text: str, output_text: str) -> Dict[str, Any]:
-    input_tokens = estimate_tokens(input_text)
-    output_tokens = estimate_tokens(output_text)
-    usage = build_usage_record(
+    return usage_accounting_service.build_masked_usage(
         provider,
         model,
-        input_tokens,
-        output_tokens,
-        input_tokens + output_tokens,
+        input_text,
+        output_text,
     )
-    if usage.get("estimated_cost_usd") is None:
-        rates = PROVIDER_COST_PER_1K.get(provider, {"input": 0.0030, "output": 0.0100})
-        cost_est = ((input_tokens / 1000.0) * rates["input"]) + ((output_tokens / 1000.0) * rates["output"])
-        cost_est = round(cost_est, 6)
-        usage["estimated_cost_usd"] = cost_est
-        usage["cost_est_usd"] = cost_est
-        usage["cost_band"] = masked_cost_band(cost_est)
-    return usage
 
 
 # ---------------------------------------------------------------------------

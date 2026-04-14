@@ -30,9 +30,21 @@ class _SenderFilterStub:
 
 
 class _ActionStub:
-    def __init__(self, result=None):
+    def __init__(self, result=None, *, public_start=False, public_action=None):
         self.result = result or {"handled": True, "action": "help"}
+        self.public_start = bool(public_start)
+        self.public_action_payload = public_action
         self.calls = []
+
+    def should_handle_public_start(self, profile, raw_message_text):
+        return self.public_start
+
+    def public_action(self, profile, raw_message_text):
+        if self.public_action_payload is not None:
+            return self.public_action_payload
+        if self.public_start:
+            return {"action": "public_start", "routed": {"campaign_token": "campaign"}}
+        return None
 
     def handle_non_run_action(self, **kwargs):
         self.calls.append(kwargs)
@@ -147,6 +159,82 @@ class TelegramPollDispatchServiceTests(unittest.TestCase):
         self.assertTrue(result["processed"])
         self.assertEqual(result["run_id"], "run-123")
         self.assertEqual(len(run_action.calls), 1)
+
+    def test_public_start_bypasses_pairing_and_run_dispatch(self) -> None:
+        action_service = _ActionStub(
+            {"handled": True, "action": "public_start"},
+            public_action={"action": "public_start", "routed": {"campaign_token": "youtube-health"}},
+        )
+        pairing_service = _PairingStub()
+        run_action = _RunActionStub()
+        service = self._make_service(
+            action_service=action_service,
+            pairing_service=pairing_service,
+            run_action_service=run_action,
+        )
+
+        result = service.handle_update(
+            entry={},
+            label="Telegram",
+            workspace_id="ws",
+            profile={"deployed_agent_id": "dagent-1"},
+            allow_from=[],
+            connector_state={},
+            connector_id="conn",
+            bot_token="token",
+            configured_chat_id="chat-1",
+            extracted_message={
+                "message": {"text": "/start youtube-health", "message_id": "msg-1"},
+                "chat": {"id": "chat-1"},
+                "sender": {"id": "user-1", "username": "alice", "first_name": "Alice"},
+            },
+            update_id=11,
+        )
+
+        self.assertTrue(result["processed"])
+        self.assertEqual(result["action"], "public_start")
+        self.assertEqual(len(action_service.calls), 1)
+        self.assertEqual(action_service.calls[0]["routed"]["campaign_token"], "youtube-health")
+        self.assertEqual(len(pairing_service.calls), 0)
+        self.assertEqual(len(run_action.calls), 0)
+
+    def test_public_delete_request_bypasses_pairing_and_run_dispatch(self) -> None:
+        action_service = _ActionStub(
+            {"handled": True, "action": "privacy_delete_request"},
+            public_action={"action": "privacy_delete_request", "routed": {"note": "erase history"}},
+        )
+        pairing_service = _PairingStub()
+        run_action = _RunActionStub()
+        service = self._make_service(
+            action_service=action_service,
+            pairing_service=pairing_service,
+            run_action_service=run_action,
+        )
+
+        result = service.handle_update(
+            entry={},
+            label="Telegram",
+            workspace_id="ws",
+            profile={"deployed_agent_id": "dagent-1"},
+            allow_from=[],
+            connector_state={},
+            connector_id="conn",
+            bot_token="token",
+            configured_chat_id="chat-1",
+            extracted_message={
+                "message": {"text": "/delete erase history", "message_id": "msg-2"},
+                "chat": {"id": "chat-1"},
+                "sender": {"id": "user-1", "username": "alice", "first_name": "Alice"},
+            },
+            update_id=12,
+        )
+
+        self.assertTrue(result["processed"])
+        self.assertEqual(result["action"], "privacy_delete_request")
+        self.assertEqual(len(action_service.calls), 1)
+        self.assertEqual(action_service.calls[0]["routed"]["note"], "erase history")
+        self.assertEqual(len(pairing_service.calls), 0)
+        self.assertEqual(len(run_action.calls), 0)
 
     def test_non_run_unhandled_falls_back_to_help_message(self) -> None:
         inbound = _InboundContextStub(

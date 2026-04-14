@@ -58,11 +58,33 @@ def _to_json(value: Any, *, default: Any) -> str:
 
 
 def _dict_json(value: Any) -> Dict[str, Any]:
-    return dict(value) if isinstance(value, dict) else {}
+    if isinstance(value, dict):
+        return dict(value)
+    if isinstance(value, str):
+        token = value.strip()
+        if not token:
+            return {}
+        try:
+            parsed = json.loads(token)
+        except Exception:
+            return {}
+        return dict(parsed) if isinstance(parsed, dict) else {}
+    return {}
 
 
 def _list_json(value: Any) -> List[Any]:
-    return list(value) if isinstance(value, list) else []
+    if isinstance(value, list):
+        return list(value)
+    if isinstance(value, str):
+        token = value.strip()
+        if not token:
+            return []
+        try:
+            parsed = json.loads(token)
+        except Exception:
+            return []
+        return list(parsed) if isinstance(parsed, list) else []
+    return []
 
 
 def _iso(value: Any) -> Optional[str]:

@@ -32,6 +32,22 @@ class RuntimeUsageServiceTests(unittest.TestCase):
             {"archived-1", "live-1"},
         )
 
+    def test_usage_snapshots_for_user_includes_usage_accounting_only_runs(self):
+        snapshots = runtime_usage_service.usage_snapshots_for_user(
+            {"user_id": "user-1"},
+            refresh_server_exports=lambda: None,
+            run_history_lock=threading.Lock(),
+            run_history=[],
+            runs={
+                "live-1": {"usage_accounting": {"usage_record_id": "uacct_1"}, "owner_user_id": "user-1"},
+            },
+            serialize_snapshot=lambda run_id, run: {"run_id": run_id, "owner_user_id": run.get("owner_user_id")},
+            current_user_is_privileged=lambda current_user: False,
+            extract_run_owner_user_id=lambda payload: str(payload.get("owner_user_id") or ""),
+        )
+
+        self.assertEqual([item["run_id"] for item in snapshots], ["live-1"])
+
     def test_usage_snapshots_for_user_requires_user_id_for_non_privileged_users(self):
         with self.assertRaises(HTTPException):
             runtime_usage_service.usage_snapshots_for_user(

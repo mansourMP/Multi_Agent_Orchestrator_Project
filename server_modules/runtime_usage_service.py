@@ -4,6 +4,7 @@ from typing import Any, Callable
 
 from fastapi import HTTPException
 from server_modules import run_state_repository
+from server_modules import usage_accounting_service
 
 
 def normalize_usage_period(period: Any) -> str:
@@ -46,7 +47,7 @@ def usage_snapshots_for_user(
     for run_id, run in live_run_items:
         if not isinstance(run, dict):
             continue
-        if not isinstance(run.get("usage_masked"), dict):
+        if not isinstance(run.get("usage_masked"), dict) and not isinstance(run.get("usage_accounting"), dict):
             continue
         if not run_id:
             continue
@@ -94,3 +95,7 @@ def usage_runs_payload(
         limit=limit,
         offset=offset,
     )
+
+
+def summarize_provider_model_cost_rows(rows: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
+    return usage_accounting_service.summarize_provider_model_cost_rows(list(rows or []))

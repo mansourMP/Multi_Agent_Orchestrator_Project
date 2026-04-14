@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 import hashlib
@@ -15,8 +16,11 @@ import uuid
 from fastapi import HTTPException
 
 from server_modules.agent_turn import AgentTurnRequest, bind_agent_turn_metadata, resolve_run_start_turn_request
+from server_modules import agent_trace_service
 from server_modules import app_bridge_service
+from server_modules import deployed_agent_cost_cap_service
 from server_modules.doctor_gate import build_doctor_run_gate_live
+from server_modules.direct_tool_config_service import run_async_tool_call
 from server_modules import execution_sandbox_service
 from server_modules import machine_lease_service
 from server_modules import outbox_service
@@ -344,25 +348,31 @@ def register_live_run(
     if callable(create_live_run_initial_fn):
         payload_builder = serialize_durable_run_payload_fn or _serialize_run_for_durable_repository
         initial_snapshot = payload_builder(run_id, run)
-        created = create_live_run_initial_fn(
-            run_id,
-            _run_workspace_id(run),
-            _run_tenant_id(run),
-            state,
-            initial_snapshot,
-            trace_id,
-        )
+        try:
+            created = create_live_run_initial_fn(
+                run_id,
+                _run_workspace_id(run),
+                _run_tenant_id(run),
+                state,
+                initial_snapshot,
+                trace_id,
+            )
+        except run_state_repository.RunStatePersistenceError:
+            raise
         run["_durable_version"] = int((created or {}).get("version") or 0)
         if (created or {}).get("registered_at"):
             run["_durable_registered_at"] = created["registered_at"]
         if callable(record_transition_fn):
-            record_transition_fn(
-                run_id,
-                "unknown",
-                state,
-                "runtime",
-                trace_id,
-            )
+            try:
+                record_transition_fn(
+                    run_id,
+                    "unknown",
+                    state,
+                    "runtime",
+                    trace_id,
+                )
+            except run_state_repository.RunStatePersistenceError:
+                pass
     runs_by_id[run_id] = run
     log_queue = run.get("logs")
     if log_queue is not None:
@@ -386,6 +396,31 @@ def _serialize_run_for_durable_repository(run_id: str, run: Dict[str, Any]) -> D
     return durable_run_payload(run_id, run, json_safe=_json_safe_run_payload)
 
 
+def _run_payload_store(run: Dict[str, Any]) -> Any:
+    record = getattr(run, "record", None)
+    payload = getattr(record, "payload", None)
+    return payload if isinstance(payload, dict) else None
+
+
+@contextmanager
+def _suspend_run_persistence_notifications(run: Dict[str, Any]):
+    payload = _run_payload_store(run)
+    if payload is None or not hasattr(payload, "_suspend_notifications"):
+        yield
+        return
+    previous = bool(getattr(payload, "_suspend_notifications", False))
+    payload._suspend_notifications = True
+    try:
+        yield
+    finally:
+        payload._suspend_notifications = previous
+
+
+def _set_run_field_quietly(run: Dict[str, Any], key: str, value: Any) -> None:
+    with _suspend_run_persistence_notifications(run):
+        run[key] = value
+
+
 def _run_durable_version(run: Dict[str, Any]) -> int:
     try:
         return max(0, int(run.get("_durable_version") or 0))
@@ -399,6 +434,11 @@ def _persist_live_run_state_with_version(
     *,
     persist_live_run_state_fn: Callable[[str, Dict[str, Any]], Any],
 ) -> int:
+    if (
+        getattr(persist_live_run_state_fn, "__module__", "") == "server_modules.runs_output"
+        and getattr(persist_live_run_state_fn, "__name__", "") == "_persist_live_run_state"
+    ):
+        return _run_durable_version(run)
     current_version = _run_durable_version(run)
     persist_live_run_state_fn(run_id, run)
     run["_durable_version"] = current_version + 1
@@ -427,6 +467,142 @@ def _run_trace_id(run: Dict[str, Any], *, fallback: Optional[str] = None) -> str
         or str(fallback or "").strip()
     )
     return token
+
+
+def _trace_surface_for_channel(channel: Any) -> str:
+    normalized = str(channel or "").strip().lower()
+    if normalized in {"web", "mobile", "desktop", "api"}:
+        return normalized
+    return "channel"
+
+
+def _trace_root_agent_id_for_metadata(metadata: Optional[Dict[str, Any]]) -> str:
+    safe_metadata = metadata if isinstance(metadata, dict) else {}
+    install_id = (
+        str(safe_metadata.get("active_agent_install_id") or "").strip()
+        or str(safe_metadata.get("master_agent_install_id") or "").strip()
+        or str(safe_metadata.get("workspace_agent_install_id") or "").strip()
+    )
+    if install_id:
+        return f"specialist:{install_id}"
+    return "sage"
+
+
+def _trace_runtime_target_for_turn_request(turn_request: AgentTurnRequest) -> str:
+    hints = turn_request.context_hints.get("metadata") if isinstance(turn_request.context_hints.get("metadata"), dict) else {}
+    return (
+        str(turn_request.machine_target or "").strip()
+        or str(turn_request.policy_context.get("execution_target") or "").strip()
+        or str(hints.get("execution_target_selected") or "").strip()
+        or str(hints.get("execution_target") or "").strip()
+        or "cloud"
+    )
+
+
+def _trace_provider_for_turn_request(turn_request: AgentTurnRequest, *, base_request: Optional[Any] = None) -> str:
+    return (
+        str(turn_request.context_hints.get("provider") or "").strip()
+        or str(getattr(base_request, "provider", None) or "").strip()
+    )
+
+
+def _trace_model_for_turn_request(turn_request: AgentTurnRequest, *, base_request: Optional[Any] = None) -> str:
+    return (
+        str(turn_request.context_hints.get("model") or "").strip()
+        or str(getattr(base_request, "model", None) or "").strip()
+    )
+
+
+def _trace_routing_reason_for_turn_request(turn_request: AgentTurnRequest) -> str:
+    metadata = turn_request.context_hints.get("metadata") if isinstance(turn_request.context_hints.get("metadata"), dict) else {}
+    return (
+        str(metadata.get("primary_engine_reason") or "").strip()
+        or str(metadata.get("routing_reason") or "").strip()
+        or (
+            "execution_mode:durable"
+            if str(turn_request.execution_mode or "").strip().lower() == "durable"
+            else "execution_mode:sync"
+        )
+    )
+
+
+def _resume_run_trace_context(run: Dict[str, Any]) -> Optional[Any]:
+    if not isinstance(run, dict):
+        return None
+    trace_id = _run_trace_id(run)
+    if not trace_id:
+        return None
+    context = run.get("context") if isinstance(run.get("context"), dict) else {}
+    metadata = context.get("metadata") if isinstance(context.get("metadata"), dict) else {}
+    thread_id = (
+        str(run.get("thread_id") or "").strip()
+        or str(context.get("thread_id") or "").strip()
+        or str(metadata.get("thread_id") or "").strip()
+        or str(metadata.get("session_id") or "").strip()
+        or None
+    )
+    run_id = str(run.get("run_id") or "").strip() or None
+    try:
+        return run_async_tool_call(
+            agent_trace_service.resume_trace(
+                trace_id=trace_id,
+                tenant_id=_run_tenant_id(run),
+                workspace_id=_run_workspace_id(run),
+                thread_id=thread_id,
+                run_id=run_id,
+            )
+        )
+    except Exception as exc:
+        LOGGER.warning("Failed to resume trace context for run %s: %s", run_id or "unknown", exc)
+        return None
+
+
+def _emit_trace_call(awaitable: Any, *, operation: str) -> Any:
+    try:
+        return run_async_tool_call(awaitable)
+    except Exception as exc:
+        LOGGER.warning("Failed to emit durable trace event during %s: %s", operation, exc)
+        return None
+
+
+def _emit_artifact_trace_events(run_id: str, *, run: Dict[str, Any], trace_context: Any) -> None:
+    result_data = run.get("result_data") if isinstance(run.get("result_data"), dict) else {}
+    outputs = result_data.get("outputs") if isinstance(result_data.get("outputs"), dict) else {}
+    artifacts = outputs.get("artifacts") if isinstance(outputs.get("artifacts"), list) else []
+    for index, artifact in enumerate(artifacts):
+        if not isinstance(artifact, dict):
+            continue
+        artifact_id = (
+            str(artifact.get("id") or "").strip()
+            or str(artifact.get("artifact_id") or "").strip()
+            or f"{run_id}:artifact:{index}"
+        )
+        title = (
+            str(artifact.get("title") or "").strip()
+            or str(artifact.get("name") or "").strip()
+            or artifact_id
+        )
+        kind = (
+            str(artifact.get("kind") or "").strip()
+            or str(artifact.get("type") or "").strip()
+            or str(artifact.get("artifact_type") or "").strip()
+            or "artifact"
+        )
+        mime_type = (
+            str(artifact.get("mime_type") or "").strip()
+            or str(artifact.get("content_type") or "").strip()
+            or None
+        )
+        _emit_trace_call(
+            agent_trace_service.emit_artifact_created(
+                trace_context,
+                artifact_id,
+                kind,
+                title,
+                mime_type,
+            ),
+            operation=f"artifact.created:{run_id}:{index}",
+        )
 
 
 def _elapsed_ms_between_iso(started_at: Any, ended_at: Any) -> Optional[float]:
@@ -472,6 +648,7 @@ def _persist_run_repository_snapshot(
             _write_snapshot(),
             operation=f"update_live_run_if_version_matches:{run_id}:{state}:{expected_version}",
         )
+        _set_run_field_quietly(run, "_durable_version", expected_version + 1)
     except Exception as exc:
         LOGGER.warning("Failed to dispatch live run repository update for %s: %s", run_id, exc)
 
@@ -833,28 +1010,32 @@ def begin_run_pending_confirmation(
         "target": approval_target,
         "metadata": safe_metadata,
     }
-    durable_request = run_state_repository.sync_create_or_update_approval_request(
+    durable_payload = _durable_approval_request_payload(
         run_id,
-        approval_id,
-        _durable_approval_request_payload(
-            run_id,
-            run,
-            prompt=prompt,
-            approval_id=approval_id,
-            correlation_id=correlation_id,
-            requested_at=requested_at,
-            expires_at=expires_at,
-            ttl_seconds=ttl_seconds,
-            source=source,
-            approval_actions=approval_actions,
-            approval_target=approval_target,
-            safe_metadata=safe_metadata,
-        ),
-        "system",
-        _run_trace_id(run, fallback=correlation_id),
-        metadata=safe_metadata,
+        run,
+        prompt=prompt,
+        approval_id=approval_id,
+        correlation_id=correlation_id,
+        requested_at=requested_at,
         expires_at=expires_at,
+        ttl_seconds=ttl_seconds,
+        source=source,
+        approval_actions=approval_actions,
+        approval_target=approval_target,
+        safe_metadata=safe_metadata,
     )
+    try:
+        durable_request = run_state_repository.sync_create_or_update_approval_request(
+            run_id,
+            approval_id,
+            durable_payload,
+            "system",
+            _run_trace_id(run, fallback=correlation_id),
+            metadata=safe_metadata,
+            expires_at=expires_at,
+        )
+    except run_state_repository.RunStatePersistenceError:
+        durable_request = durable_payload
     if isinstance(durable_request, dict):
         payload["_durable_approval_version"] = int(durable_request.get("version") or 0)
     set_pending_confirmation(run, payload)
@@ -877,6 +1058,19 @@ def begin_run_pending_confirmation(
         )
     except Exception as exc:
         LOGGER.warning("Failed to emit outbox approval_requested for %s: %s", run_id, exc)
+    trace_context = _resume_run_trace_context(run)
+    if trace_context is not None:
+        _emit_trace_call(
+            agent_trace_service.emit_approval_requested(
+                trace_context,
+                approval_id,
+                str(safe_metadata.get("kind") or source or "approval").strip() or "approval",
+                str(prompt or "").strip() or "Approval required.",
+                str(safe_metadata.get("description") or safe_metadata.get("summary") or "").strip() or None,
+                str(safe_metadata.get("approval_node_key") or approval_id).strip() or approval_id,
+            ),
+            operation=f"approval.requested:{run_id}:{approval_id}",
+        )
     emit_log_fn(
         run["logs"],
         "warn",
@@ -1158,14 +1352,17 @@ def wait_for_human_response(
                         "resumed_after_restart": True,
                     },
                 )
-            run_state_repository.sync_record_approval_resolution(
-                run_id,
-                approval_id,
-                ("approved" if approved else "escalated" if escalated else "expired" if decision_text == "expired" else "rejected"),
-                "runtime",
-                correlation_id,
-                note=decision_note,
-            )
+            try:
+                run_state_repository.sync_record_approval_resolution(
+                    run_id,
+                    approval_id,
+                    ("approved" if approved else "escalated" if escalated else "expired" if decision_text == "expired" else "rejected"),
+                    "runtime",
+                    correlation_id,
+                    note=decision_note,
+                )
+            except run_state_repository.RunStatePersistenceError:
+                pass
             record_run_approval_resolution(
                 run,
                 existing_pending,
@@ -1582,37 +1779,38 @@ def transition_live_run_status(
             },
         )
         try:
-            if previous == "waiting_for_input" and status != "waiting_for_input":
-                wait_start = run.get("_hitl_wait_start_mono")
-                if isinstance(wait_start, (int, float)):
-                    waited_ms = max(0.0, (now_mono - wait_start) * 1000.0)
-                    run["_hitl_wait_total_ms"] = run.get("_hitl_wait_total_ms", 0.0) + waited_ms
-                    metrics_add_fn("hitl_wait_sum_ms", waited_ms)
-                    metrics_inc_fn("hitl_wait_count", 1)
-                    run["_hitl_wait_start_mono"] = None
+            with _suspend_run_persistence_notifications(run):
+                if previous == "waiting_for_input" and status != "waiting_for_input":
+                    wait_start = run.get("_hitl_wait_start_mono")
+                    if isinstance(wait_start, (int, float)):
+                        waited_ms = max(0.0, (now_mono - wait_start) * 1000.0)
+                        run["_hitl_wait_total_ms"] = run.get("_hitl_wait_total_ms", 0.0) + waited_ms
+                        metrics_add_fn("hitl_wait_sum_ms", waited_ms)
+                        metrics_inc_fn("hitl_wait_count", 1)
+                        run["_hitl_wait_start_mono"] = None
 
-            if status == "waiting_for_input":
-                run["_hitl_wait_start_mono"] = now_mono
-                metrics_inc_fn("runs_waiting_for_input", 1)
+                if status == "waiting_for_input":
+                    run["_hitl_wait_start_mono"] = now_mono
+                    metrics_inc_fn("runs_waiting_for_input", 1)
 
-            if status in {"completed", "failed", "timeout"} and run.get("_finished_mono") is None:
-                run["_finished_mono"] = now_mono
-                started = run.get("_started_mono")
-                if isinstance(started, (int, float)):
-                    duration_ms = max(0.0, (now_mono - started) * 1000.0)
-                    run["duration_ms"] = round(duration_ms, 2)
-                    metrics_add_fn("run_duration_sum_ms", duration_ms)
-                    metrics_inc_fn("run_duration_count", 1)
-                run["completed_at"] = now_iso
-                if status == "completed":
-                    metrics_inc_fn("runs_completed", 1)
-                elif status == "failed":
-                    metrics_inc_fn("runs_failed", 1)
-                elif status == "timeout":
-                    metrics_inc_fn("runs_timeout", 1)
+                if status in {"completed", "failed", "timeout"} and run.get("_finished_mono") is None:
+                    run["_finished_mono"] = now_mono
+                    started = run.get("_started_mono")
+                    if isinstance(started, (int, float)):
+                        duration_ms = max(0.0, (now_mono - started) * 1000.0)
+                        run["duration_ms"] = round(duration_ms, 2)
+                        metrics_add_fn("run_duration_sum_ms", duration_ms)
+                        metrics_inc_fn("run_duration_count", 1)
+                    run["completed_at"] = now_iso
+                    if status == "completed":
+                        metrics_inc_fn("runs_completed", 1)
+                    elif status == "failed":
+                        metrics_inc_fn("runs_failed", 1)
+                    elif status == "timeout":
+                        metrics_inc_fn("runs_timeout", 1)
 
-            run["status"] = status
-            run["updated_at"] = now_iso
+                run["status"] = status
+                run["updated_at"] = now_iso
             trace_id = _run_trace_id(run, fallback=f"{span.get_span_context().trace_id:032x}" if span is not None else None)
             _persist_run_repository_snapshot(run_id, run, state=status, trace_id=trace_id)
             _record_run_repository_transition(
@@ -1631,14 +1829,65 @@ def transition_live_run_status(
                 trace_id=trace_id,
             )
             if status in {"completed", "failed", "timeout"}:
+                trace_context = _resume_run_trace_context(run) if str(previous or "").strip() != str(status or "").strip() else None
                 if status == "completed" and str(previous or "").strip() != "completed":
                     _publish_local_completion_summary_bridge(run_id, run)
                 if str(previous or "").strip() != str(status or "").strip():
+                    if str((context.get("metadata") if isinstance(context.get("metadata"), dict) else {}).get("deployed_agent_id") or "").strip():
+                        try:
+                            run_async_tool_call(
+                                deployed_agent_cost_cap_service.settle_deployed_agent_monthly_cost_cap(
+                                    run_id=run_id,
+                                    run=run,
+                                    status=status,
+                                    now_iso=now_iso,
+                                )
+                            )
+                        except Exception as exc:
+                            LOGGER.warning("Failed to settle deployed-agent cost cap for %s: %s", run_id, exc)
                     _emit_artifact_outbox_events(
                         run_id,
                         run=run,
                         trace_id=trace_id,
                     )
+                    if trace_context is not None:
+                        _emit_artifact_trace_events(run_id, run=run, trace_context=trace_context)
+                        if status == "completed":
+                            _emit_trace_call(
+                                agent_trace_service.emit_trace_completed(
+                                    trace_context,
+                                    int(float(run.get("duration_ms") or 0.0)),
+                                    None,
+                                ),
+                                operation=f"trace.completed:{run_id}",
+                            )
+                            _emit_trace_call(
+                                agent_trace_service.finish_trace(
+                                    trace_context,
+                                    outcome="success",
+                                    final_message_id=None,
+                                ),
+                                operation=f"trace.finish:{run_id}:success",
+                            )
+                        else:
+                            _emit_trace_call(
+                                agent_trace_service.emit_trace_failed(
+                                    trace_context,
+                                    "run_timeout" if status == "timeout" else "run_failed",
+                                    str(run.get("error") or run.get("result") or f"Run ended with status {status}.")[:400],
+                                    bool(status == "timeout"),
+                                    None,
+                                ),
+                                operation=f"trace.failed:{run_id}:{status}",
+                            )
+                            _emit_trace_call(
+                                agent_trace_service.finish_trace(
+                                    trace_context,
+                                    outcome="partial",
+                                    final_message_id=None,
+                                ),
+                                operation=f"trace.finish:{run_id}:partial",
+                            )
                 machine_lease_service.reconcile_machine_lease_release(
                     run_id,
                     local_queue_lock=local_queue_lock,
@@ -1666,6 +1915,12 @@ def transition_live_run_status(
                 span.record_exception(exc)
             except Exception:
                 pass
+            LOGGER.warning(
+                "transition_live_run_status failed for %s -> %s: %s",
+                str(run_id or "").strip() or "unknown",
+                str(status or "").strip() or "unknown",
+                str(exc or "unknown error"),
+            )
             raise
 
 
@@ -1906,20 +2161,34 @@ async def execute_run_start_request_via_turn_runtime(
     resolve_run_start_turn_request_fn: Any = resolve_run_start_turn_request,
     execute_durable_turn_request_fn: Any = None,
 ) -> Dict[str, Any]:
-    durable_execute = execute_durable_turn_request_fn or execute_durable_turn_request
-    resolution = resolve_run_start_turn_request_fn(
+    if (
+        resolve_run_start_turn_request_fn is not resolve_run_start_turn_request
+        or execute_durable_turn_request_fn is not None
+    ):
+        resolved_services = services() if callable(services) else services
+        execution_fn = execute_durable_turn_request_fn or execute_durable_turn_request
+        resolution = resolve_run_start_turn_request_fn(
+            current_user=current_user,
+            body=request,
+            stamp_request_owner_fn=stamp_request_owner_fn,
+        )
+        execution = await execution_fn(
+            turn_request=resolution.turn_request,
+            current_user=current_user,
+            services=resolved_services,
+            base_request=resolution.request,
+        )
+        result = execution.get("result")
+        return dict(result) if isinstance(result, dict) else {"result": result}
+
+    from server_modules import turn_ingress_service
+
+    return await turn_ingress_service.start_run_start(
+        request,
         current_user=current_user,
-        body=request,
         stamp_request_owner_fn=stamp_request_owner_fn,
-    )
-    execution = await durable_execute(
-        turn_request=resolution.turn_request,
-        current_user=current_user,
         services=services,
-        base_request=resolution.request,
     )
-    result = execution.get("result")
-    return dict(result) if isinstance(result, dict) else {"result": result}
 
 
 def execute_system_run_start_request_via_turn_runtime(
@@ -1930,19 +2199,27 @@ def execute_system_run_start_request_via_turn_runtime(
     current_user: Optional[Dict[str, Any]] = None,
     execute_run_start_request_via_turn_runtime_fn: Any = None,
 ) -> Dict[str, Any]:
-    execute_fn = execute_run_start_request_via_turn_runtime_fn or execute_run_start_request_via_turn_runtime
-    system_user = (
-        dict(current_user)
-        if isinstance(current_user, dict)
-        else {"auth_type": "api_key", "user_id": "", "email": ""}
-    )
-    return asyncio.run(
-        execute_fn(
-            request,
-            current_user=system_user,
-            stamp_request_owner_fn=stamp_request_owner_fn,
-            services=services,
+    if execute_run_start_request_via_turn_runtime_fn is not None:
+        return run_async_tool_call(
+            execute_run_start_request_via_turn_runtime_fn(
+                request,
+                current_user=(
+                    dict(current_user)
+                    if isinstance(current_user, dict)
+                    else {"auth_type": "api_key", "user_id": "", "email": ""}
+                ),
+                stamp_request_owner_fn=stamp_request_owner_fn,
+                services=services,
+            )
         )
+
+    from server_modules import turn_ingress_service
+
+    return turn_ingress_service.start_system_run_start(
+        request,
+        stamp_request_owner_fn=stamp_request_owner_fn,
+        services=services,
+        current_user=current_user,
     )
 
 
@@ -2114,11 +2391,12 @@ def load_live_runtime_state(
         if is_local_runtime_run(run):
             if status == "running_local" and run_id not in local_claimed_runs:
                 previous_status = status
-                run["status"] = "queued_local"
-                run["local_worker_id"] = None
-                run["local_claimed_at"] = None
-                run["local_last_heartbeat_at"] = None
-                run["updated_at"] = now_iso_fn()
+                with _suspend_run_persistence_notifications(run):
+                    run["status"] = "queued_local"
+                    run["local_worker_id"] = None
+                    run["local_claimed_at"] = None
+                    run["local_last_heartbeat_at"] = None
+                    run["updated_at"] = now_iso_fn()
                 with local_queue_lock:
                     if run_id not in local_pending_run_ids:
                         local_pending_run_ids.append(run_id)
@@ -2140,8 +2418,9 @@ def load_live_runtime_state(
                 continue
             if status in {"starting", "queued_local"}:
                 previous_status = status
-                run["status"] = "queued_local"
-                run["updated_at"] = now_iso_fn()
+                with _suspend_run_persistence_notifications(run):
+                    run["status"] = "queued_local"
+                    run["updated_at"] = now_iso_fn()
                 with local_queue_lock:
                     if run_id not in local_pending_run_ids and run_id not in local_claimed_runs:
                         local_pending_run_ids.append(run_id)
@@ -3189,6 +3468,7 @@ async def execute_durable_agent_turn_dispatch(
     current_user: Any,
     services: RunExecutionServices,
     base_request: Optional[Any] = None,
+    trace_context: Optional[Any] = None,
     execute_durable_turn_request_fn: Any = None,
 ) -> Optional[dict[str, Any]]:
     # Internal delegate. Not an alternate turn engine. Called only from agent_turn().
@@ -3200,6 +3480,7 @@ async def execute_durable_agent_turn_dispatch(
         current_user=current_user,
         services=services,
         base_request=base_request,
+        trace_context=trace_context,
     )
 
 
@@ -5798,38 +6079,84 @@ async def execute_durable_turn_request(
     current_user: Any,
     services: RunExecutionServices,
     base_request: Optional[Any] = None,
+    trace_context: Optional[Any] = None,
 ) -> Dict[str, Any]:
     # Canonical durable execution should run from AgentTurnRequest-derived state directly.
     # RunStartRequest remains a compatibility input at the edges, not the primary internal shape here.
     req = build_durable_turn_execution_request(turn_request, base_request=base_request)
-    req = services.stamp_request_owner(req, current_user)
-    req = await resolve_turn_runtime_attachment_selection(req, turn_request=turn_request)
-    prepared = services.prepare_run_start_request(req)
-    metadata, route = resolve_run_execution_boundary(
-        dict(prepared["metadata"]),
-        decide_execution_target_fn=decide_execution_target,
-        apply_execution_route_metadata_fn=apply_execution_route_metadata,
-    )
-    doctor_preflight = await build_doctor_run_gate_live(
-        execution_target=route["selected"],
-        metadata=metadata,
-        provider=req.provider,
-        credential_id=req.credential_id,
-    )
-    if bool(doctor_preflight.get("blocking")):
-        raise HTTPException(
-            status_code=409,
-            detail=str(
-                doctor_preflight.get("detail")
-                or doctor_preflight.get("title")
-                or "Run blocked by doctor policy."
-            ),
+    created_trace_context = False
+    if trace_context is None:
+        trace_context = await agent_trace_service.start_trace(
+            workspace_id=str(turn_request.workspace_id or "").strip() or "default",
+            tenant_id=str(turn_request.tenant_id or "").strip() or "default",
+            thread_id=str(turn_request.thread_id or turn_request.session_id or "").strip() or None,
+            run_id=None,
+            surface=_trace_surface_for_channel(turn_request.channel),
+            runtime_target=_trace_runtime_target_for_turn_request(turn_request),
+            provider=_trace_provider_for_turn_request(turn_request, base_request=base_request),
+            model=_trace_model_for_turn_request(turn_request, base_request=base_request),
+            root_agent_id=_trace_root_agent_id_for_metadata(req.metadata if isinstance(req.metadata, dict) else {}),
         )
-    result = services.create_run_from_request(req)
-    if isinstance(result, dict):
-        result["doctor_preflight"] = doctor_preflight
-    return {
-        "kind": "durable_run",
-        "result": result,
-        "turn_request": turn_request,
-    }
+        created_trace_context = trace_context is not None
+        if created_trace_context:
+            await agent_trace_service.emit_trace_started(trace_context, "text")
+    if trace_context is not None:
+        req.metadata = dict(req.metadata or {})
+        req.metadata["trace_id"] = str(trace_context.trace_id or "").strip()
+        req.metadata.setdefault("request_trace_id", str(trace_context.trace_id or "").strip())
+    req = services.stamp_request_owner(req, current_user)
+    try:
+        req = await resolve_turn_runtime_attachment_selection(req, turn_request=turn_request)
+        prepared = services.prepare_run_start_request(req)
+        metadata, route = resolve_run_execution_boundary(
+            dict(prepared["metadata"]),
+            decide_execution_target_fn=decide_execution_target,
+            apply_execution_route_metadata_fn=apply_execution_route_metadata,
+        )
+        if created_trace_context and trace_context is not None:
+            await agent_trace_service.emit_trace_routed(
+                trace_context,
+                "durable",
+                str(route.get("selected") or "").strip() or _trace_runtime_target_for_turn_request(turn_request),
+                _trace_provider_for_turn_request(turn_request, base_request=base_request),
+                _trace_model_for_turn_request(turn_request, base_request=base_request),
+                _trace_routing_reason_for_turn_request(turn_request),
+            )
+        doctor_preflight = await build_doctor_run_gate_live(
+            execution_target=route["selected"],
+            metadata=metadata,
+            provider=req.provider,
+            credential_id=req.credential_id,
+        )
+        if bool(doctor_preflight.get("blocking")):
+            raise HTTPException(
+                status_code=409,
+                detail=str(
+                    doctor_preflight.get("detail")
+                    or doctor_preflight.get("title")
+                    or "Run blocked by doctor policy."
+                ),
+            )
+        result = services.create_run_from_request(req)
+        if isinstance(result, dict):
+            result["doctor_preflight"] = doctor_preflight
+        return {
+            "kind": "durable_run",
+            "result": result,
+            "turn_request": turn_request,
+        }
+    except Exception as exc:
+        if created_trace_context and trace_context is not None:
+            await agent_trace_service.emit_trace_failed(
+                trace_context,
+                "durable_run_start_failed",
+                str(exc)[:400],
+                isinstance(exc, HTTPException) and int(getattr(exc, "status_code", 0) or 0) >= 500,
+                None,
+            )
+            await agent_trace_service.finish_trace(
+                trace_context,
+                outcome="partial",
+                final_message_id=None,
+            )
+        raise

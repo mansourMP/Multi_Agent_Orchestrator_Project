@@ -75,27 +75,27 @@ class DiscordConnectorTests(unittest.TestCase):
         )
 
         appended = []
-        created = []
+        executed = []
 
         def fake_append_event(**kwargs):
             appended.append(kwargs)
             return kwargs
 
-        def fake_create_run(*, context):
-            created.append(context)
-            return "run-discord-1"
+        def fake_execute_agent_turn_request(*, turn_request):
+            executed.append(turn_request)
+            return {"run_id": "run-discord-1"}
 
         result = discord_connector.dispatch_inbound_event(
             parsed,
             connector_entry={"id": "cred-discord", "workspace_id": "default", "metadata": {}},
             credentials={"bot_token": "discord-token", "channel_id": "123", "guild_id": "456"},
             append_event_fn=fake_append_event,
-            create_run_fn=fake_create_run,
+            execute_agent_turn_request=fake_execute_agent_turn_request,
         )
 
         self.assertTrue(result["triggered"])
         self.assertEqual(result["run_id"], "run-discord-1")
-        self.assertEqual(created[0]["user_goal"], "please investigate this")
+        self.assertEqual(executed[0].message, "please investigate this")
         self.assertEqual(appended[0]["channel"], "discord")
         self.assertEqual(appended[0]["direction"], "inbound")
 
@@ -115,15 +115,9 @@ class DiscordConnectorTests(unittest.TestCase):
         )
 
         captured = {}
-        legacy_calls = []
-
         def fake_start_run(request):
             captured["request"] = request
             return {"run_id": "run-discord-2", "status": "starting"}
-
-        def fake_create_run(*, context):
-            legacy_calls.append(context)
-            return "run-legacy"
 
         result = discord_connector.dispatch_inbound_event(
             parsed,
@@ -132,7 +126,6 @@ class DiscordConnectorTests(unittest.TestCase):
             append_event_fn=None,
             run_start_request_class=lambda **kwargs: SimpleNamespace(**kwargs),
             start_run_request=fake_start_run,
-            create_run_fn=fake_create_run,
         )
 
         self.assertTrue(result["triggered"])
@@ -142,7 +135,29 @@ class DiscordConnectorTests(unittest.TestCase):
         self.assertEqual(captured["request"].metadata["channel"], "discord")
         self.assertEqual(captured["request"].metadata["agent_turn_request"]["channel"], "discord")
         self.assertEqual(captured["request"].metadata["agent_turn_request"]["message"], "please investigate this")
-        self.assertEqual(legacy_calls, [])
+
+    def test_inbound_message_requires_canonical_ingress_callbacks(self):
+        parsed = discord_connector.parse_inbound_event(
+            {
+                "t": "MESSAGE_CREATE",
+                "d": {
+                    "id": "msg-1",
+                    "channel_id": "123",
+                    "guild_id": "456",
+                    "content": "<@999> please investigate this",
+                    "author": {"id": "321", "username": "alice"},
+                    "mentions": [{"id": "999"}],
+                },
+            }
+        )
+
+        with self.assertRaises(RuntimeError):
+            discord_connector.dispatch_inbound_event(
+                parsed,
+                connector_entry={"id": "cred-discord", "workspace_id": "default", "metadata": {}},
+                credentials={"bot_token": "discord-token", "channel_id": "123", "guild_id": "456"},
+                append_event_fn=None,
+            )
 
     def test_guild_list_parsed(self):
         calls = []

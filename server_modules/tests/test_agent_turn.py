@@ -2,6 +2,7 @@ import unittest
 import asyncio
 from unittest.mock import AsyncMock, patch
 
+from server_modules import agent_trace_service
 from server_modules.agent_turn import (
     AgentTurnRequest,
     agent_turn,
@@ -33,6 +34,210 @@ from server_modules.runtime_models import RunStartRequest
 
 
 class AgentTurnTests(unittest.TestCase):
+    def test_agent_turn_starts_trace_emits_routed_and_returns_trace_id_in_sync_result(self):
+        turn_request = AgentTurnRequest(
+            tenant_id="tenant-1",
+            workspace_id="workspace-1",
+            thread_id="thread-1",
+            session_id="session-1",
+            channel="web",
+            actor=TurnActor(type="user", id="user-1", display_name="Alice"),
+            message="hello world",
+            execution_mode="sync",
+            response_mode="stream",
+            context_hints={
+                "provider": "openai",
+                "model": "gpt-5.4",
+                "metadata": {
+                    "workspace_agent_install_id": "install-1",
+                    "runtime_profile_id": "profile-1",
+                },
+            },
+        )
+        trace_context = agent_trace_service.TraceContext(
+            trace_id="trace-turn-1",
+            workspace_id="workspace-1",
+            tenant_id="tenant-1",
+            thread_id="thread-1",
+            run_id=None,
+            root_agent_id="specialist:install-1",
+        )
+
+        async def _run():
+            with patch("server_modules.agent_turn.agent_trace_service.start_trace", new=AsyncMock(return_value=trace_context)) as start_trace, patch("server_modules.agent_turn.agent_trace_service.emit_trace_routed", new=AsyncMock(return_value="tevent_1")) as emit_trace_routed, patch("server_modules.agent_turn.session_service.get_session_scoped", new=AsyncMock(return_value={
+                "session_id": "session-1",
+                "workspace_id": "workspace-1",
+                "tenant_id": "tenant-1",
+                "channel": "web",
+                "actor": {"type": "user", "id": "user-1"},
+                "created_at": "2026-04-08T00:00:00Z",
+                "expires_at": "2099-01-01T00:00:00Z",
+                "metadata": {"thread_id": "thread-1"},
+                "status": "active",
+            })), patch("server_modules.agent_turn.session_service.extend_session", new=AsyncMock(return_value=None)), patch("server_modules.agent_turn.thread_service.ensure_master_thread", new=AsyncMock(return_value={"id": "thread-1"})), patch("server_modules.agent_turn.thread_service.record_user_turn", new=AsyncMock(return_value={"thread": {"id": "thread-1"}, "turn": {"id": "turn-user"}})), patch("server_modules.agent_turn.thread_service.record_assistant_turn", new=AsyncMock(return_value={"thread": {"id": "thread-1"}, "turn": {"id": "turn-assistant"}})), patch("server_modules.turn_runtime.build_turn_execution_services", return_value={"services": "ok"}), patch("server_modules.turn_runtime.execute_agent_turn_request", new=AsyncMock(return_value={
+                "status": "completed",
+                "reply": "done",
+                "run_id": "run-1",
+                "approvals": [],
+                "interventions": [],
+                "metadata": {"agent_role": "master-agent"},
+            })):
+                result = await agent_turn(
+                    turn_request=turn_request,
+                    current_user={"user_id": "user-1", "role": "owner", "is_admin": True},
+                    run_execution_services={"run": "services"},
+                    direct_chat_services={"direct_chat": "services"},
+                )
+                return result, start_trace, emit_trace_routed
+
+        result, start_trace, emit_trace_routed = asyncio.run(_run())
+        self.assertEqual(result["metadata"]["trace_id"], "trace-turn-1")
+        start_trace.assert_awaited_once()
+        self.assertEqual(start_trace.await_args.kwargs["root_agent_id"], "specialist:install-1")
+        emit_trace_routed.assert_awaited_once()
+        self.assertEqual(emit_trace_routed.await_args.args[1], "sync")
+
+    def test_agent_turn_returns_trace_id_in_direct_chat_stream_result(self):
+        turn_request = AgentTurnRequest(
+            tenant_id="tenant-1",
+            workspace_id="workspace-1",
+            thread_id="thread-1",
+            session_id="session-1",
+            channel="web",
+            actor=TurnActor(type="user", id="user-1", display_name="Alice"),
+            message="hello world",
+            execution_mode="sync",
+            response_mode="stream",
+            context_hints={"metadata": {}},
+        )
+        trace_context = agent_trace_service.TraceContext(
+            trace_id="trace-stream-1",
+            workspace_id="workspace-1",
+            tenant_id="tenant-1",
+            thread_id="thread-1",
+            run_id=None,
+            root_agent_id="sage",
+        )
+
+        async def _run():
+            with patch("server_modules.agent_turn.agent_trace_service.start_trace", new=AsyncMock(return_value=trace_context)), patch("server_modules.agent_turn.agent_trace_service.emit_trace_routed", new=AsyncMock(return_value="tevent_1")), patch("server_modules.agent_turn.session_service.get_session_scoped", new=AsyncMock(return_value={
+                "session_id": "session-1",
+                "workspace_id": "workspace-1",
+                "tenant_id": "tenant-1",
+                "channel": "web",
+                "actor": {"type": "user", "id": "user-1"},
+                "created_at": "2026-04-08T00:00:00Z",
+                "expires_at": "2099-01-01T00:00:00Z",
+                "metadata": {"thread_id": "thread-1"},
+                "status": "active",
+            })), patch("server_modules.agent_turn.session_service.extend_session", new=AsyncMock(return_value=None)), patch("server_modules.agent_turn.thread_service.ensure_master_thread", new=AsyncMock(return_value={"id": "thread-1"})), patch("server_modules.agent_turn.thread_service.record_user_turn", new=AsyncMock(return_value={"thread": {"id": "thread-1"}, "turn": {"id": "turn-user"}})), patch("server_modules.agent_turn.thread_service.record_assistant_turn", new=AsyncMock(return_value={"thread": {"id": "thread-1"}, "turn": {"id": "turn-assistant"}})), patch("server_modules.turn_runtime.build_turn_execution_services", return_value={"services": "ok"}), patch("server_modules.turn_runtime.execute_agent_turn_request", new=AsyncMock(return_value={
+                "kind": "direct_chat_stream",
+                "workspace_id": "workspace-1",
+                "session_key": "session-1",
+                "thread_id": "thread-1",
+                "client_request_id": "req-1",
+            })):
+                return await agent_turn(
+                    turn_request=turn_request,
+                    current_user={"user_id": "user-1", "role": "owner", "is_admin": True},
+                    run_execution_services={"run": "services"},
+                    direct_chat_services={"direct_chat": "services"},
+                )
+
+        result = asyncio.run(_run())
+        self.assertEqual(result["metadata"]["trace_id"], "trace-stream-1")
+        self.assertEqual(result["trace_id"], "trace-stream-1")
+
+    def test_agent_turn_completes_when_trace_service_throws(self):
+        turn_request = AgentTurnRequest(
+            tenant_id="tenant-1",
+            workspace_id="workspace-1",
+            thread_id="thread-1",
+            session_id="session-1",
+            channel="web",
+            actor=TurnActor(type="user", id="user-1", display_name="Alice"),
+            message="hello world",
+            execution_mode="sync",
+            response_mode="stream",
+            context_hints={"metadata": {}},
+        )
+
+        async def _run():
+            with patch("server_modules.agent_turn.agent_trace_service.start_trace", new=AsyncMock(side_effect=RuntimeError("trace unavailable"))), patch("server_modules.agent_turn.session_service.get_session_scoped", new=AsyncMock(return_value={
+                "session_id": "session-1",
+                "workspace_id": "workspace-1",
+                "tenant_id": "tenant-1",
+                "channel": "web",
+                "actor": {"type": "user", "id": "user-1"},
+                "created_at": "2026-04-08T00:00:00Z",
+                "expires_at": "2099-01-01T00:00:00Z",
+                "metadata": {"thread_id": "thread-1"},
+                "status": "active",
+            })), patch("server_modules.agent_turn.session_service.extend_session", new=AsyncMock(return_value=None)), patch("server_modules.agent_turn.thread_service.ensure_master_thread", new=AsyncMock(return_value={"id": "thread-1"})), patch("server_modules.agent_turn.thread_service.record_user_turn", new=AsyncMock(return_value={"thread": {"id": "thread-1"}, "turn": {"id": "turn-user"}})), patch("server_modules.agent_turn.thread_service.record_assistant_turn", new=AsyncMock(return_value={"thread": {"id": "thread-1"}, "turn": {"id": "turn-assistant"}})), patch("server_modules.turn_runtime.build_turn_execution_services", return_value={"services": "ok"}), patch("server_modules.turn_runtime.execute_agent_turn_request", new=AsyncMock(return_value={
+                "status": "completed",
+                "reply": "done",
+                "metadata": {},
+            })):
+                return await agent_turn(
+                    turn_request=turn_request,
+                    current_user={"user_id": "user-1", "role": "owner", "is_admin": True},
+                    run_execution_services={"run": "services"},
+                    direct_chat_services={"direct_chat": "services"},
+                )
+
+        result = asyncio.run(_run())
+        self.assertEqual(result["reply"], "done")
+        self.assertNotIn("trace_id", result["metadata"])
+
+    def test_agent_turn_injects_health_safety_business_plan_when_enabled(self):
+        turn_request = AgentTurnRequest(
+            tenant_id="tenant-1",
+            workspace_id="workspace-1",
+            thread_id="thread-1",
+            session_id="session-1",
+            channel="telegram",
+            actor=TurnActor(type="user", id="user-1", display_name="Alice"),
+            message="I have chest pain.",
+            execution_mode="durable",
+            response_mode="channel_reply",
+            context_hints={
+                "metadata": {
+                    "health_safety_enabled": True,
+                    "health_safety_assistant_name": "HealthGuide",
+                },
+            },
+        )
+
+        async def _run():
+            with patch("server_modules.agent_turn.agent_trace_service.start_trace", new=AsyncMock(return_value=None)), patch("server_modules.agent_turn.session_service.get_session_scoped", new=AsyncMock(return_value={
+                "session_id": "session-1",
+                "workspace_id": "workspace-1",
+                "tenant_id": "tenant-1",
+                "channel": "telegram",
+                "actor": {"type": "user", "id": "user-1"},
+                "created_at": "2026-04-08T00:00:00Z",
+                "expires_at": "2099-01-01T00:00:00Z",
+                "metadata": {"thread_id": "thread-1"},
+                "status": "active",
+            })), patch("server_modules.agent_turn.session_service.extend_session", new=AsyncMock(return_value=None)), patch("server_modules.agent_turn.thread_service.ensure_master_thread", new=AsyncMock(return_value={"id": "thread-1"})), patch("server_modules.agent_turn.thread_service.record_user_turn", new=AsyncMock(return_value={"thread": {"id": "thread-1"}, "turn": {"id": "turn-user"}})), patch("server_modules.agent_turn.thread_service.record_assistant_turn", new=AsyncMock(return_value={"thread": {"id": "thread-1"}, "turn": {"id": "turn-assistant"}})), patch("server_modules.turn_runtime.build_turn_execution_services", return_value={"services": "ok"}), patch("server_modules.turn_runtime.execute_agent_turn_request", new=AsyncMock(return_value={
+                "status": "completed",
+                "reply": "done",
+                "metadata": {"agent_role": "master-agent"},
+            })) as execute_mock:
+                result = await agent_turn(
+                    turn_request=turn_request,
+                    current_user={"user_id": "user-1", "role": "owner", "is_admin": True},
+                    run_execution_services={"run": "services"},
+                    direct_chat_services={"direct_chat": "services"},
+                )
+                return result, execute_mock
+
+        result, execute_mock = asyncio.run(_run())
+        self.assertEqual(result["reply"], "done")
+        forwarded_turn_request = execute_mock.await_args.kwargs["turn_request"]
+        self.assertTrue(forwarded_turn_request.context_hints["metadata"]["health_safety_enabled"])
+        self.assertIn("healthguide_safety_policy_v1", forwarded_turn_request.context_hints["business_plan"])
+
     def test_agent_turn_persists_master_thread_and_turns(self):
         turn_request = AgentTurnRequest(
             tenant_id="tenant-1",

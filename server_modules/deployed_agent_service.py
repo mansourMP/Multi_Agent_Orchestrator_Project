@@ -1,0 +1,2056 @@
+from __future__ import annotations
+
+from datetime import datetime, timezone
+from typing import Any, Dict, List, Optional
+
+from fastapi import HTTPException
+
+from server_modules import agent_specialist_repository
+from server_modules import auth as auth_module
+from server_modules import config_defaults_service
+from server_modules import control_plane_repository
+from server_modules import deployed_agent_config_schema
+from server_modules import deployed_agent_analytics_service
+from server_modules import external_user_privacy_service
+from server_modules import provider_catalog_service
+from server_modules import run_state_repository
+from server_modules import session_service
+from server_modules import workspace_config_schema
+from server_modules.agent_manifest import (
+    AgentManifest,
+    AgentManifestBible,
+    AgentManifestChannels,
+    AgentManifestIdentity,
+    AgentManifestRuntime,
+    AgentManifestVoiceProfile,
+)
+
+
+DEPLOYED_AGENT_ALLOWED_STATES = frozenset({"draft", "staging", "live", "paused"})
+DEPLOYED_AGENT_LIVE_CHANNELS = config_defaults_service.live_deployment_channels()
+DEPLOYED_AGENT_PUBLIC_FIELDS = (
+    "id",
+    "owner_workspace_id",
+    "name",
+    "avatar",
+    "persona",
+    "system_prompt",
+    "deployment_state",
+    "channels",
+    "knowledge_sources",
+    "runtime_target",
+    "billing_plan",
+    "created_at",
+    "updated_at",
+)
+DEPLOYED_AGENT_INTERNAL_FIELDS = (
+    "tenant_id",
+    "backing_install_id",
+    "created_by_user_id",
+    "last_deployed_at",
+    "last_paused_at",
+    "metadata",
+)
+_INLINE_KNOWLEDGE_KEYS = frozenset({"content", "text", "body", "raw_text", "raw_content", "data", "bytes"})
+_REFERENCE_KEYS = frozenset({"id", "source_id", "uri", "path", "connector_key", "document_id", "record_id", "external_id"})
+_MANIFEST_CHANNEL_KEYS = tuple(AgentManifestChannels.model_fields.keys())
+_ESCALATION_PRESET_TRIGGERS = {
+    "standard": "low confidence\nexplicit human request\npolicy conflict",
+    "conservative": "low confidence\nexplicit human request\nhealth or safety concern\npolicy conflict",
+    "high_touch": "low confidence\nexplicit human request\nrefund or billing exception\npolicy conflict",
+}
+
+
+def _utc_now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _normalize_text(value: Any, *, default: str = "") -> str:
+    token = str(value or "").strip()
+    return token or default
+
+
+def _normalize_optional_text(value: Any) -> Optional[str]:
+    token = str(value or "").strip()
+    return token or None
+
+
+def _normalize_optional_positive_int(value: Any) -> Optional[int]:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        raise ValueError("daily_message_limit must be a positive integer.")
+    token = str(value).strip()
+    if not token:
+        return None
+    try:
+        parsed = int(token)
+    except (TypeError, ValueError) as error:
+        raise ValueError("daily_message_limit must be a positive integer.") from error
+    if parsed <= 0:
+        return None
+    return parsed
+
+
+def _normalize_optional_positive_usd(value: Any) -> Optional[float]:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        raise ValueError("monthly_cost_cap_usd must be a positive USD amount.")
+    token = str(value).strip()
+    if not token:
+        return None
+    try:
+        parsed = round(float(token), 6)
+    except (TypeError, ValueError) as error:
+        raise ValueError("monthly_cost_cap_usd must be a positive USD amount.") from error
+    if parsed <= 0:
+        return None
+    return parsed
+
+
+def _normalize_bool(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    token = str(value or "").strip().lower()
+    return token in {"1", "true", "yes", "on", "enabled"}
+
+
+def _normalize_runtime_target(value: Any) -> str:
+    token = str(value or "").strip().lower()
+    if token in {"cloud", "cloud_default", "hosted_secure", "cloud_only"}:
+        return "cloud"
+    if token in {"local", "local_secure", "local_only", "local_companion"}:
+        return "local"
+    if token in {"device", "desktop", "privileged_device"}:
+        return "device"
+    return token or config_defaults_service.default_deployed_agent_runtime_target()
+
+
+def _runtime_target_to_specialist_mode(runtime_target: Any) -> str:
+    token = _normalize_runtime_target(runtime_target)
+    if token == "local":
+        return "local_secure"
+    if token == "device":
+        return "privileged_device"
+    return "hosted_secure"
+
+
+def _normalize_deployment_state(value: Any, *, default: str = "draft") -> str:
+    token = str(value or "").strip().lower()
+    return token if token in DEPLOYED_AGENT_ALLOWED_STATES else default
+
+
+def _normalize_channels(value: Any) -> Dict[str, Dict[str, Any]]:
+    return deployed_agent_config_schema.normalize_deployed_agent_channels(value)
+
+
+def _normalize_knowledge_sources(value: Any) -> List[Dict[str, Any]]:
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        raise ValueError("knowledge_sources must be a list of structured references.")
+    normalized: List[Dict[str, Any]] = []
+    for item in value:
+        if not isinstance(item, dict):
+            raise ValueError("knowledge_sources entries must be objects.")
+        payload = {str(key): val for key, val in item.items() if str(key or "").strip()}
+        if any(payload.get(key) for key in _INLINE_KNOWLEDGE_KEYS):
+            raise ValueError("knowledge_sources must store references only, not raw inline content.")
+        if not any(payload.get(key) for key in _REFERENCE_KEYS):
+            raise ValueError("knowledge_sources entries must contain a reference identifier.")
+        normalized.append(payload)
+    return normalized
+
+
+def _channel_enabled(config: Any) -> bool:
+    if isinstance(config, dict):
+        return bool(config.get("enabled"))
+    return bool(config)
+
+
+def _live_channel_keys(channels: Dict[str, Any]) -> set[str]:
+    return {
+        str(channel_key or "").strip().lower()
+        for channel_key, config in dict(channels or {}).items()
+        if str(channel_key or "").strip() and _channel_enabled(config)
+    }
+
+
+def _channel_config_matches_endpoint(
+    *,
+    deployed_agent: Dict[str, Any],
+    channel_key: str,
+    endpoint_key: Any,
+) -> bool:
+    normalized_channel_key = _normalize_text(channel_key).lower()
+    normalized_channels = _normalize_channels(deployed_agent.get("channels") or {})
+    channel_config = normalized_channels.get(normalized_channel_key)
+    if not _channel_enabled(channel_config):
+        return False
+    if isinstance(channel_config, dict):
+        configured_endpoint = _normalize_optional_text(channel_config.get("endpoint_key"))
+        requested_endpoint = _normalize_optional_text(endpoint_key)
+        if configured_endpoint and requested_endpoint:
+            return configured_endpoint.lower() == requested_endpoint.lower()
+        if configured_endpoint and not requested_endpoint:
+            return False
+    return True
+
+
+def _http_bad_request(detail: str) -> HTTPException:
+    return HTTPException(status_code=400, detail=detail)
+
+
+def _http_conflict(detail: str) -> HTTPException:
+    return HTTPException(status_code=409, detail=detail)
+
+
+def _coerce_dict(value: Any) -> Dict[str, Any]:
+    return dict(value or {}) if isinstance(value, dict) else {}
+
+
+def _config_from_record(
+    record: Optional[Dict[str, Any]],
+    *,
+    runtime_profile_id: Any = None,
+) -> deployed_agent_config_schema.DeployedAgentConfig:
+    return deployed_agent_config_schema.deployed_agent_config_from_record(
+        record,
+        runtime_profile_id=runtime_profile_id,
+    )
+
+
+def _operational_state_from_record(
+    record: Optional[Dict[str, Any]],
+) -> deployed_agent_config_schema.DeployedAgentOperationalState:
+    return deployed_agent_config_schema.deployed_agent_operational_state_from_record(record)
+
+
+def _metadata_from_config(
+    config: deployed_agent_config_schema.DeployedAgentConfig,
+    *,
+    existing_metadata: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    return deployed_agent_config_schema.metadata_from_deployed_agent_config(
+        config,
+        existing_metadata=existing_metadata,
+    )
+
+
+def _serialized_operational_state(
+    state: deployed_agent_config_schema.DeployedAgentOperationalState,
+) -> Dict[str, Any]:
+    return deployed_agent_config_schema.operational_state_payload(state)
+
+
+def _config_payload(
+    config: deployed_agent_config_schema.DeployedAgentConfig,
+) -> Dict[str, Any]:
+    return config.model_dump(exclude_none=True)
+
+
+def _operational_state_payload(
+    state: deployed_agent_config_schema.DeployedAgentOperationalState,
+) -> Dict[str, Any]:
+    return state.model_dump(exclude_none=True)
+
+
+def _channels_payload_from_config(
+    config: deployed_agent_config_schema.DeployedAgentConfig,
+) -> Dict[str, Dict[str, Any]]:
+    payload = _config_payload(config)
+    return dict(payload.get("channels") or {})
+
+
+def _workspace_admin_defaults(
+    workspace_record: Optional[Dict[str, Any]],
+) -> workspace_config_schema.WorkspaceAdminDefaultsConfig:
+    metadata = _coerce_dict((workspace_record or {}).get("metadata"))
+    return workspace_config_schema.workspace_admin_defaults_from_metadata(metadata)
+
+
+def _config_field_present(config_payload: Optional[Dict[str, Any]], *path: str) -> bool:
+    current: Any = config_payload if isinstance(config_payload, dict) else {}
+    for key in path:
+        if not isinstance(current, dict) or key not in current:
+            return False
+        current = current.get(key)
+    return True
+
+
+def _apply_workspace_admin_defaults_to_config(
+    config: deployed_agent_config_schema.DeployedAgentConfig,
+    *,
+    workspace_defaults: workspace_config_schema.WorkspaceAdminDefaultsConfig,
+    runtime_target_supplied: bool = False,
+    billing_plan_supplied: bool = False,
+    config_payload: Optional[Dict[str, Any]] = None,
+    legacy_metadata: Optional[Dict[str, Any]] = None,
+) -> deployed_agent_config_schema.DeployedAgentConfig:
+    owner_metadata = _coerce_dict(legacy_metadata)
+    payload = config.model_dump(exclude_none=True)
+    if not runtime_target_supplied and not _config_field_present(config_payload, "runtime_target"):
+        payload["runtime_target"] = str(workspace_defaults.runtime_target or config.runtime_target).strip() or config.runtime_target
+    if not billing_plan_supplied and not _config_field_present(config_payload, "billing_plan"):
+        payload["billing_plan"] = str(workspace_defaults.billing_plan or config.billing_plan).strip() or config.billing_plan
+
+    customer_policy = dict(payload.get("customer_policy") or {})
+    if not _config_field_present(config_payload, "customer_policy", "public_start_cta_label"):
+        if not str(customer_policy.get("public_start_cta_label") or "").strip():
+            customer_policy["public_start_cta_label"] = workspace_defaults.public_start_cta_label
+    if not _config_field_present(config_payload, "customer_policy", "public_start_cta_url"):
+        if not str(customer_policy.get("public_start_cta_url") or "").strip():
+            customer_policy["public_start_cta_url"] = workspace_defaults.public_start_cta_url
+    payload["customer_policy"] = customer_policy
+
+    memory_policy = dict(payload.get("memory_policy") or {})
+    if (
+        not _config_field_present(config_payload, "memory_policy", "context_budget_preset")
+        and "context_budget_preset" not in owner_metadata
+    ):
+        memory_policy["context_budget_preset"] = workspace_defaults.context_budget_preset
+    if (
+        not _config_field_present(config_payload, "memory_policy", "retention_preset")
+        and "retention_preset" not in owner_metadata
+    ):
+        memory_policy["retention_preset"] = workspace_defaults.retention_preset
+    payload["memory_policy"] = memory_policy
+
+    safety_policy = dict(payload.get("safety_policy") or {})
+    if (
+        not _config_field_present(config_payload, "safety_policy", "health_safety_enabled")
+        and "health_safety_enabled" not in owner_metadata
+    ):
+        safety_policy["health_safety_enabled"] = bool(workspace_defaults.health_safety_enabled)
+    payload["safety_policy"] = safety_policy
+    return deployed_agent_config_schema.DeployedAgentConfig.model_validate(payload)
+
+
+def _allowed_live_channels_for_workspace(workspace_record: Optional[Dict[str, Any]]) -> frozenset[str]:
+    defaults = _workspace_admin_defaults(workspace_record)
+    tokens = [str(item or "").strip().lower() for item in defaults.allowed_live_channels]
+    normalized = frozenset(token for token in tokens if token)
+    return normalized or DEPLOYED_AGENT_LIVE_CHANNELS
+
+
+def _escalation_triggers_for_config(
+    config: deployed_agent_config_schema.DeployedAgentConfig,
+) -> str:
+    preset = _normalize_text(
+        config.escalation_policy.preset,
+        default=config_defaults_service.default_deployed_agent_escalation_preset(),
+    ).lower()
+    return _ESCALATION_PRESET_TRIGGERS.get(
+        preset,
+        _ESCALATION_PRESET_TRIGGERS[config_defaults_service.default_deployed_agent_escalation_preset()],
+    )
+
+
+def _apply_provider_model_selection_to_config(
+    config: deployed_agent_config_schema.DeployedAgentConfig,
+    *,
+    provider: Any = None,
+    model: Any = None,
+) -> deployed_agent_config_schema.DeployedAgentConfig:
+    resolved = provider_catalog_service.resolve_provider_model_selection(
+        provider=provider if provider is not None else config.provider,
+        model=model if model is not None else config.model,
+        existing_provider=config.provider,
+        existing_model=config.model,
+    )
+    next_payload = config.model_dump(exclude_none=True)
+    next_payload["provider"] = resolved.get("provider")
+    next_payload["model"] = resolved.get("model")
+    return deployed_agent_config_schema.DeployedAgentConfig.model_validate(next_payload)
+
+
+def _normalize_deployed_agent_metadata(
+    value: Any,
+    *,
+    existing: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    if value is not None and not isinstance(value, dict):
+        raise ValueError("metadata must be an object.")
+    config = _config_from_record(
+        {
+            "name": "Draft deployed agent",
+            "metadata": {
+                **_coerce_dict(existing),
+                **_coerce_dict(value),
+            },
+        }
+    )
+    return _metadata_from_config(config, existing_metadata=existing)
+
+
+def _selected_provider(value: Any) -> Optional[str]:
+    config = _config_from_record({"name": "Draft deployed agent", "metadata": _coerce_dict(value)})
+    return config.provider
+
+
+def _selected_model(value: Any) -> Optional[str]:
+    config = _config_from_record({"name": "Draft deployed agent", "metadata": _coerce_dict(value)})
+    return config.model
+
+
+def _apply_provider_model_selection(
+    metadata: Dict[str, Any],
+    *,
+    provider: Any = None,
+    model: Any = None,
+) -> Dict[str, Any]:
+    config = _config_from_record({"name": "Draft deployed agent", "metadata": metadata})
+    return _metadata_from_config(
+        _apply_provider_model_selection_to_config(
+            config,
+            provider=provider,
+            model=model,
+        ),
+        existing_metadata=metadata,
+    )
+
+
+def _compact_text(value: Any, *, limit: int = 220) -> Optional[str]:
+    text = " ".join(str(value or "").strip().split())
+    if not text:
+        return None
+    if len(text) <= limit:
+        return text
+    return text[: limit - 1].rstrip() + "…"
+
+
+def _normalize_pagination(limit: Any, offset: Any) -> tuple[int, int]:
+    return max(1, min(int(limit or 50), 100)), max(0, int(offset or 0))
+
+
+def _timestamp_token(value: Any) -> str:
+    return str(value or "").strip()
+
+
+def _actor_summary(actor: Any) -> Dict[str, Any]:
+    payload = _coerce_dict(actor)
+    actor_id = (
+        _normalize_optional_text(payload.get("id"))
+        or _normalize_optional_text(payload.get("user_id"))
+        or _normalize_optional_text(payload.get("external_id"))
+        or _normalize_optional_text(payload.get("username"))
+        or _normalize_optional_text(payload.get("handle"))
+    )
+    label = (
+        _normalize_optional_text(payload.get("display_name"))
+        or _normalize_optional_text(payload.get("name"))
+        or _normalize_optional_text(payload.get("username"))
+        or _normalize_optional_text(payload.get("handle"))
+        or actor_id
+    )
+    summary = {
+        "id": actor_id,
+        "label": label,
+        "type": _normalize_optional_text(payload.get("type")) or "customer",
+        "username": _normalize_optional_text(payload.get("username")),
+        "handle": _normalize_optional_text(payload.get("handle")),
+    }
+    return {key: value for key, value in summary.items() if value is not None}
+
+
+def _result_connector_action(result_data: Any) -> Optional[Dict[str, Any]]:
+    payload = _coerce_dict(result_data)
+    connector_action = payload.get("connector_action")
+    if isinstance(connector_action, dict):
+        return dict(connector_action)
+    last_node_data = payload.get("last_node_data")
+    if isinstance(last_node_data, dict) and isinstance(last_node_data.get("connector_action"), dict):
+        return dict(last_node_data.get("connector_action") or {})
+    return None
+
+
+def _approval_id_from_payload(payload: Dict[str, Any]) -> Optional[str]:
+    candidates = [
+        payload,
+        _coerce_dict(payload.get("metadata")),
+        _coerce_dict(payload.get("decision_payload")),
+        _coerce_dict(payload.get("request_payload")),
+        _coerce_dict(payload.get("outbox_payload")),
+        _coerce_dict(payload.get("notification")),
+        _coerce_dict(payload.get("pending_approval")),
+        _coerce_dict(payload.get("pending_confirmation")),
+    ]
+    for candidate in candidates:
+        approval_id = _normalize_optional_text(candidate.get("approval_id"))
+        if approval_id:
+            return approval_id
+    return None
+
+
+def _is_approval_activity(row: Dict[str, Any]) -> bool:
+    action = _normalize_text(row.get("action")).lower()
+    event_class = _normalize_text(row.get("event_class")).lower()
+    payload = _coerce_dict(row.get("payload"))
+    metadata = _coerce_dict(row.get("metadata"))
+    return (
+        event_class == "approval"
+        or "approval" in action
+        or _approval_id_from_payload(payload) is not None
+        or _approval_id_from_payload(metadata) is not None
+    )
+
+
+def _is_escalation_activity(row: Dict[str, Any]) -> bool:
+    action = _normalize_text(row.get("action")).lower()
+    event_class = _normalize_text(row.get("event_class")).lower()
+    summary_blob = " ".join(
+        [
+            _normalize_text(row.get("title")),
+            _normalize_text(row.get("summary")),
+        ]
+    ).lower()
+    payload = _coerce_dict(row.get("payload"))
+    metadata = _coerce_dict(row.get("metadata"))
+    resolution = _normalize_text(payload.get("resolution") or metadata.get("resolution")).lower()
+    return (
+        event_class == "blocked_action"
+        or action in {"escalate", "escalated"}
+        or resolution == "escalated"
+        or bool(payload.get("escalated"))
+        or bool(metadata.get("escalated"))
+        or "escalat" in summary_blob
+    )
+
+
+def _tool_call_entry_from_activity(row: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    payload = _coerce_dict(row.get("payload"))
+    metadata = _coerce_dict(row.get("metadata"))
+    connector_action = None
+    for candidate in (
+        payload.get("connector_action"),
+        metadata.get("connector_action"),
+        _coerce_dict(payload.get("result_data")).get("connector_action"),
+    ):
+        if isinstance(candidate, dict):
+            connector_action = dict(candidate)
+            break
+    tool_name = (
+        _normalize_optional_text(metadata.get("tool_name"))
+        or _normalize_optional_text(payload.get("tool_name"))
+        or (
+            f"{_normalize_text(connector_action.get('connector')).lower()}.{_normalize_text(connector_action.get('action_id')).lower()}"
+            if isinstance(connector_action, dict)
+            and _normalize_optional_text(connector_action.get("connector"))
+            and _normalize_optional_text(connector_action.get("action_id"))
+            else None
+        )
+    )
+    if not tool_name and not isinstance(connector_action, dict):
+        return None
+    return {
+        "id": str(row.get("id") or "").strip() or None,
+        "kind": "tool_call",
+        "ts": str(row.get("created_at") or "").strip() or None,
+        "run_id": _normalize_optional_text(row.get("run_id")),
+        "thread_id": _normalize_optional_text(row.get("thread_id")),
+        "tool_name": tool_name,
+        "status": _normalize_optional_text(row.get("status")) or "logged",
+        "summary": _compact_text(row.get("summary") or row.get("title") or tool_name),
+        "details": connector_action or payload or metadata,
+    }
+
+
+def _tool_call_entry_from_run(run_id: str, run_snapshot: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    connector_action = _result_connector_action(run_snapshot.get("result_data"))
+    if not isinstance(connector_action, dict):
+        return None
+    connector_id = _normalize_optional_text(connector_action.get("connector"))
+    action_id = _normalize_optional_text(connector_action.get("action_id"))
+    tool_name = (
+        f"{connector_id}.{action_id}".lower()
+        if connector_id and action_id
+        else connector_id
+        or action_id
+    )
+    return {
+        "id": f"run-tool:{run_id}",
+        "kind": "tool_call",
+        "ts": (
+            _normalize_optional_text(run_snapshot.get("completed_at"))
+            or _normalize_optional_text(run_snapshot.get("updated_at"))
+            or _normalize_optional_text(run_snapshot.get("started_at"))
+            or _normalize_optional_text(run_snapshot.get("created_at"))
+        ),
+        "run_id": run_id,
+        "thread_id": _normalize_optional_text(run_snapshot.get("thread_id")),
+        "tool_name": tool_name,
+        "status": _normalize_optional_text(run_snapshot.get("status")) or "completed",
+        "summary": _compact_text(
+            run_snapshot.get("summary")
+            or _coerce_dict(run_snapshot.get("result_data")).get("summary")
+            or f"Connector action completed: {tool_name or 'tool'}."
+        ),
+        "details": connector_action,
+    }
+
+
+def _run_step_number(value: Any) -> Optional[int]:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float) and value.is_integer():
+        return int(value)
+    text = _normalize_optional_text(value)
+    if not text:
+        return None
+    try:
+        return int(text)
+    except (TypeError, ValueError):
+        return None
+
+
+def _run_step_entry_from_activity(row: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    run_id = _normalize_optional_text(row.get("run_id"))
+    if not run_id or _is_approval_activity(row) or _is_escalation_activity(row):
+        return None
+    payload = _coerce_dict(row.get("payload"))
+    metadata = _coerce_dict(row.get("metadata"))
+    event_class = _normalize_optional_text(row.get("event_class")) or "activity"
+    action = (
+        _normalize_optional_text(row.get("action"))
+        or _normalize_optional_text(payload.get("event"))
+        or _normalize_optional_text(metadata.get("event"))
+        or "step"
+    )
+    step_id = (
+        _normalize_optional_text(payload.get("step_id"))
+        or _normalize_optional_text(metadata.get("step_id"))
+        or _normalize_optional_text(payload.get("id"))
+        or _normalize_optional_text(metadata.get("id"))
+    )
+    step_index = _run_step_number(payload.get("step_index"))
+    if step_index is None:
+        step_index = _run_step_number(metadata.get("step_index"))
+    step_number = _run_step_number(payload.get("step_number"))
+    if step_number is None:
+        step_number = _run_step_number(metadata.get("step_number"))
+    summary = _compact_text(
+        row.get("summary")
+        or row.get("title")
+        or payload.get("message")
+        or metadata.get("message")
+        or action
+    )
+    return {
+        "id": str(row.get("id") or "").strip() or f"run-step:{run_id}:{action}:{_timestamp_token(row.get('created_at'))}",
+        "kind": "run_step",
+        "source": "activity",
+        "ts": _normalize_optional_text(row.get("created_at")),
+        "run_id": run_id,
+        "thread_id": _normalize_optional_text(row.get("thread_id")),
+        "event_class": event_class,
+        "action": action,
+        "status": _normalize_optional_text(row.get("status")) or "logged",
+        "step_id": step_id,
+        "step_index": step_index,
+        "step_number": step_number,
+        "summary": summary,
+        "details": payload or metadata or {"summary": summary, "event_class": event_class, "action": action},
+    }
+
+
+def _run_step_entries_from_run(run_id: str, run_snapshot: Dict[str, Any]) -> List[Dict[str, Any]]:
+    entries: List[Dict[str, Any]] = []
+    thread_id = _normalize_optional_text(run_snapshot.get("thread_id"))
+    snapshot_events = run_snapshot.get("events") if isinstance(run_snapshot.get("events"), list) else []
+    for index, event in enumerate(snapshot_events):
+        if not isinstance(event, dict):
+            continue
+        action = (
+            _normalize_optional_text(event.get("event"))
+            or _normalize_optional_text(event.get("type"))
+            or "step"
+        )
+        step_id = _normalize_optional_text(event.get("step_id")) or _normalize_optional_text(event.get("id"))
+        step_index = _run_step_number(event.get("step_index"))
+        step_number = _run_step_number(event.get("step_number"))
+        ts = (
+            _normalize_optional_text(event.get("ts"))
+            or _normalize_optional_text(event.get("created_at"))
+            or _normalize_optional_text(event.get("updated_at"))
+            or _normalize_optional_text(run_snapshot.get("completed_at"))
+            or _normalize_optional_text(run_snapshot.get("updated_at"))
+            or _normalize_optional_text(run_snapshot.get("started_at"))
+            or _normalize_optional_text(run_snapshot.get("created_at"))
+        )
+        summary = _compact_text(
+            event.get("message")
+            or event.get("label")
+            or event.get("summary")
+            or action
+        )
+        entries.append(
+            {
+                "id": step_id or f"run-step:{run_id}:event:{index}",
+                "kind": "run_step",
+                "source": "run_snapshot",
+                "ts": ts,
+                "run_id": run_id,
+                "thread_id": thread_id,
+                "event_class": "run_event",
+                "action": action,
+                "status": _normalize_optional_text(event.get("status"))
+                or _normalize_optional_text(event.get("level"))
+                or _normalize_optional_text(run_snapshot.get("status"))
+                or "logged",
+                "step_id": step_id,
+                "step_index": step_index,
+                "step_number": step_number,
+                "summary": summary,
+                "details": dict(event),
+            }
+        )
+    if entries:
+        return entries
+    status = _normalize_optional_text(run_snapshot.get("status")) or _normalize_optional_text(run_snapshot.get("state"))
+    if not status:
+        return []
+    summary = _compact_text(
+        run_snapshot.get("summary")
+        or _coerce_dict(run_snapshot.get("result_data")).get("summary")
+        or f"Run {status}."
+    )
+    return [
+        {
+            "id": f"run-step:{run_id}:status",
+            "kind": "run_step",
+            "source": "run_snapshot",
+            "ts": (
+                _normalize_optional_text(run_snapshot.get("completed_at"))
+                or _normalize_optional_text(run_snapshot.get("updated_at"))
+                or _normalize_optional_text(run_snapshot.get("started_at"))
+                or _normalize_optional_text(run_snapshot.get("created_at"))
+            ),
+            "run_id": run_id,
+            "thread_id": thread_id,
+            "event_class": "run_status",
+            "action": status,
+            "status": status,
+            "step_id": None,
+            "step_index": None,
+            "step_number": None,
+            "summary": summary,
+            "details": {
+                "status": status,
+                "summary": summary,
+                "result_data": _coerce_dict(run_snapshot.get("result_data")),
+            },
+        }
+    ]
+
+
+def _message_entry_from_channel_event(event: Dict[str, Any]) -> Dict[str, Any]:
+    payload = _coerce_dict(event.get("payload"))
+    text = _normalize_text(
+        event.get("text")
+        or payload.get("text")
+        or payload.get("summary")
+        or payload.get("message")
+    )
+    return {
+        "id": str(event.get("id") or "").strip() or None,
+        "kind": "message",
+        "ts": _normalize_optional_text(event.get("created_at")),
+        "direction": _normalize_optional_text(event.get("direction")) or "system",
+        "event_type": _normalize_optional_text(event.get("event_type")) or "message",
+        "run_id": _normalize_optional_text(event.get("run_id")),
+        "thread_id": _normalize_optional_text(event.get("thread_id")),
+        "channel": _normalize_optional_text(event.get("channel_key")),
+        "status": _normalize_optional_text(event.get("status")) or "logged",
+        "text": text,
+        "actor": _coerce_dict(event.get("actor")),
+        "payload": payload,
+    }
+
+
+def _approval_entry_from_activity(
+    row: Dict[str, Any],
+    *,
+    approval_record: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    payload = _coerce_dict(row.get("payload"))
+    metadata = _coerce_dict(row.get("metadata"))
+    record = approval_record if isinstance(approval_record, dict) else {}
+    resolution = (
+        _normalize_optional_text(record.get("resolution"))
+        or _normalize_optional_text(payload.get("resolution"))
+        or _normalize_optional_text(metadata.get("resolution"))
+        or (
+            "requested"
+            if _normalize_text(row.get("action")).lower() == "approval_requested"
+            else None
+        )
+    )
+    return {
+        "id": str(row.get("id") or "").strip() or None,
+        "kind": "approval",
+        "ts": _normalize_optional_text(row.get("created_at")),
+        "run_id": _normalize_optional_text(row.get("run_id")) or _normalize_optional_text(record.get("run_id")),
+        "thread_id": _normalize_optional_text(row.get("thread_id")),
+        "approval_id": _approval_id_from_payload(payload) or _approval_id_from_payload(metadata) or _normalize_optional_text(record.get("approval_id")),
+        "action": _normalize_optional_text(row.get("action")) or "approval",
+        "status": _normalize_optional_text(record.get("status")) or _normalize_optional_text(row.get("status")) or "logged",
+        "resolution": resolution,
+        "summary": _compact_text(row.get("summary") or row.get("title") or resolution or "Approval event"),
+        "details": record or payload or metadata,
+    }
+
+
+def _escalation_entry_from_activity(row: Dict[str, Any]) -> Dict[str, Any]:
+    payload = _coerce_dict(row.get("payload"))
+    metadata = _coerce_dict(row.get("metadata"))
+    return {
+        "id": str(row.get("id") or "").strip() or None,
+        "kind": "escalation",
+        "ts": _normalize_optional_text(row.get("created_at")),
+        "run_id": _normalize_optional_text(row.get("run_id")),
+        "thread_id": _normalize_optional_text(row.get("thread_id")),
+        "action": _normalize_optional_text(row.get("action")) or "escalated",
+        "status": _normalize_optional_text(row.get("status")) or "logged",
+        "summary": _compact_text(row.get("summary") or row.get("title") or "Escalation triggered."),
+        "details": payload or metadata,
+    }
+
+
+def _entry_sort_key(entry: Dict[str, Any]) -> tuple[str, int, str]:
+    order = {"message": 0, "run_step": 1, "tool_call": 2, "approval": 3, "escalation": 4}
+    return (
+        _timestamp_token(entry.get("ts")),
+        order.get(str(entry.get("kind") or ""), 9),
+        str(entry.get("id") or ""),
+    )
+
+
+def _derive_escalation_state(activity_rows: List[Dict[str, Any]]) -> str:
+    latest_state = "clear"
+    for row in sorted(activity_rows, key=lambda item: (_timestamp_token(item.get("created_at")), str(item.get("id") or ""))):
+        if _is_escalation_activity(row):
+            latest_state = "escalated"
+            continue
+        if _is_approval_activity(row):
+            action = _normalize_text(row.get("action")).lower()
+            payload = _coerce_dict(row.get("payload"))
+            metadata = _coerce_dict(row.get("metadata"))
+            resolution = _normalize_text(payload.get("resolution") or metadata.get("resolution")).lower()
+            if action == "approval_requested":
+                latest_state = "approval_requested"
+            elif resolution:
+                latest_state = resolution
+    return latest_state
+
+
+def _derive_outcome(
+    *,
+    activity_rows: List[Dict[str, Any]],
+    run_snapshots: Dict[str, Dict[str, Any]],
+) -> Optional[str]:
+    ordered_activity = sorted(
+        activity_rows,
+        key=lambda item: (_timestamp_token(item.get("created_at")), str(item.get("id") or "")),
+    )
+    for row in reversed(ordered_activity):
+        event_class = _normalize_text(row.get("event_class")).lower()
+        action = _normalize_text(row.get("action")).lower()
+        status = _normalize_text(row.get("status")).lower()
+        payload = _coerce_dict(row.get("payload"))
+        metadata = _coerce_dict(row.get("metadata"))
+        resolution = _normalize_text(payload.get("resolution") or metadata.get("resolution")).lower()
+        if event_class == "run_status" and action:
+            return action
+        if resolution:
+            return resolution
+        if status in {"completed", "failed", "timeout", "rejected", "approved", "escalated"}:
+            return status
+    for run_snapshot in run_snapshots.values():
+        status = _normalize_optional_text(run_snapshot.get("status")) or _normalize_optional_text(run_snapshot.get("state"))
+        if status:
+            return status.lower()
+    return None
+
+
+async def _get_run_snapshot(run_id: str) -> Optional[Dict[str, Any]]:
+    token = _normalize_optional_text(run_id)
+    if not token:
+        return None
+    live_run = await run_state_repository.get_live_run(token)
+    if isinstance(live_run, dict):
+        return {"source": "live", "payload": live_run}
+    archived_run = await run_state_repository.get_archived_run(token)
+    if isinstance(archived_run, dict):
+        return {"source": "archive", "payload": archived_run}
+    return None
+
+
+async def _load_conversation_activity(
+    *,
+    tenant_id: str,
+    workspace_id: str,
+    backing_install_id: str,
+    session_id: str,
+    thread_id: Optional[str],
+    run_ids: List[str],
+) -> List[Dict[str, Any]]:
+    rows_by_id: Dict[str, Dict[str, Any]] = {}
+
+    async def _merge(**filters: Any) -> None:
+        rows = await control_plane_repository.list_activity_ledger_events(
+            tenant_id=tenant_id,
+            workspace_id=workspace_id,
+            install_id=backing_install_id,
+            limit=300,
+            **filters,
+        )
+        for row in rows:
+            row_id = str((row or {}).get("id") or "").strip()
+            if row_id and row_id not in rows_by_id:
+                rows_by_id[row_id] = dict(row)
+
+    await _merge(session_key=session_id)
+    if thread_id:
+        await _merge(thread_id=thread_id)
+    for run_id in run_ids:
+        await _merge(run_id=run_id)
+    return sorted(
+        rows_by_id.values(),
+        key=lambda item: (_timestamp_token(item.get("created_at")), str(item.get("id") or "")),
+    )
+
+
+async def resolve_deployed_agent_for_channel_owner(
+    *,
+    tenant_id: str,
+    owner_workspace_id: str,
+    backing_install_id: str,
+    channel_key: str,
+    endpoint_key: Any,
+) -> Optional[Dict[str, Any]]:
+    deployed_agent = await control_plane_repository.get_deployed_agent_by_backing_install_id(
+        backing_install_id,
+        tenant_id=tenant_id,
+        owner_workspace_id=owner_workspace_id,
+    )
+    if not isinstance(deployed_agent, dict):
+        return None
+    if not _channel_config_matches_endpoint(
+        deployed_agent=deployed_agent,
+        channel_key=channel_key,
+        endpoint_key=endpoint_key,
+    ):
+        return None
+    return deployed_agent
+
+
+def paused_channel_reply(
+    *,
+    deployed_agent: Optional[Dict[str, Any]],
+) -> str:
+    config = _config_from_record(deployed_agent)
+    configured = _normalize_optional_text(config.customer_policy.paused_message)
+    if configured:
+        return configured
+    name = _normalize_optional_text((deployed_agent or {}).get("name")) or "This assistant"
+    return f"{name} is temporarily paused. Please try again shortly."
+
+
+def daily_limit_channel_reply(
+    *,
+    deployed_agent: Optional[Dict[str, Any]],
+    upgrade_cta_url: Optional[str] = None,
+    upgrade_cta_label: Optional[str] = None,
+) -> str:
+    config = _config_from_record(deployed_agent)
+    name = _normalize_optional_text((deployed_agent or {}).get("name")) or "This assistant"
+    resolved_url = _normalize_optional_text(upgrade_cta_url) or _normalize_optional_text(
+        config.customer_policy.upgrade_cta_url
+    )
+    resolved_label = _normalize_optional_text(upgrade_cta_label) or _normalize_optional_text(
+        config.customer_policy.upgrade_cta_label
+    )
+    reply = f"{name} has reached today's free message limit."
+    if resolved_url and resolved_label:
+        reply = f"{reply} {resolved_label}: {resolved_url}"
+    elif resolved_url:
+        reply = f"{reply} Continue here: {resolved_url}"
+    else:
+        reply = f"{reply} Please come back tomorrow."
+    return external_user_privacy_service.get_external_user_privacy_service().append_privacy_policy_line(
+        reply,
+        workspace_id=_normalize_optional_text((deployed_agent or {}).get("owner_workspace_id")),
+    )
+
+
+def _require_live_channel_configuration(
+    channels: Dict[str, Any],
+    *,
+    allowed_live_channels: Optional[set[str] | frozenset[str]] = None,
+) -> None:
+    resolved_allowed = frozenset(
+        str(channel or "").strip().lower()
+        for channel in (allowed_live_channels or DEPLOYED_AGENT_LIVE_CHANNELS)
+        if str(channel or "").strip()
+    ) or DEPLOYED_AGENT_LIVE_CHANNELS
+    live_channels = _live_channel_keys(channels)
+    if not live_channels:
+        raise ValueError("A Telegram inbound binding is required before a deployed agent can go live.")
+    unsupported = sorted(live_channels - resolved_allowed)
+    if unsupported:
+        allowed_label = ", ".join(channel.title() for channel in sorted(resolved_allowed))
+        raise ValueError(f"Only {allowed_label} may be activated for live deployment in Phase 2.")
+    telegram_binding = dict(channels.get("telegram") or {})
+    if "telegram" in resolved_allowed and not bool(telegram_binding.get("enabled")):
+        raise ValueError("Telegram must be enabled before a deployed agent can go live.")
+    if "telegram" in resolved_allowed and not bool(telegram_binding.get("is_inbound_owner")):
+        raise ValueError("Telegram live deployments must claim inbound ownership.")
+    if "telegram" in resolved_allowed and not _normalize_optional_text(telegram_binding.get("endpoint_key")):
+        raise ValueError("Telegram live deployments require an endpoint_key.")
+
+
+def _base_manifest(
+    *,
+    name: str,
+    persona: str,
+    system_prompt: str,
+    runtime_target: str,
+    channels: Dict[str, Any],
+    escalation_triggers: Optional[str] = None,
+) -> AgentManifest:
+    manifest_channels = {
+        channel_key: bool(_channel_enabled(channels.get(channel_key)))
+        for channel_key in _MANIFEST_CHANNEL_KEYS
+    }
+    summary = persona or system_prompt[:240] or f"{name} customer-facing specialist"
+    return AgentManifest(
+        manifest_id=f"deployed-agent-{name.lower().replace(' ', '-')}",
+        identity=AgentManifestIdentity(
+            name=name,
+            role="Customer-facing service specialist",
+            archetype="support_specialist",
+            summary=summary,
+            owner_mode_enabled=True,
+            customer_mode_enabled=True,
+        ),
+        voice=AgentManifestVoiceProfile(
+            tone=persona,
+            response_style="Answer clearly, stay within configured boundaries, and escalate when uncertain.",
+            service_boundaries="Never imply access beyond configured knowledge, connectors, and approvals.",
+        ),
+        bible=AgentManifestBible(
+            mission=f"Serve as {name} for customer-facing conversations and execution requests.",
+            hard_context=system_prompt,
+            operational_policy="Use configured knowledge and tools, respect approval boundaries, and escalate when uncertain.",
+            core_responsibilities="Answer requests, retrieve allowed data, and keep customer-facing interactions legible.",
+            guardrails="Do not expose owner-only context. Do not exceed configured connector, memory, or tool scope.",
+            escalation_triggers=_normalize_text(
+                escalation_triggers,
+                default=_ESCALATION_PRESET_TRIGGERS[config_defaults_service.default_deployed_agent_escalation_preset()],
+            ),
+        ),
+        channels=AgentManifestChannels.model_validate(manifest_channels),
+        runtime=AgentManifestRuntime(mode=_runtime_target_to_specialist_mode(runtime_target)),
+    )
+
+
+def require_deployed_agent_admin_access(
+    *,
+    current_user: Optional[Dict[str, Any]],
+    workspace_id: str,
+) -> str:
+    resolved_workspace_id = str(workspace_id or "").strip()
+    if not resolved_workspace_id:
+        raise HTTPException(status_code=400, detail="workspace_id is required.")
+    if auth_module.current_user_has_auth_admin_access(current_user):
+        return resolved_workspace_id
+    return auth_module.enforce_workspace_access(
+        current_user,
+        resolved_workspace_id,
+        minimum_role="owner",
+    )
+
+
+def project_deployed_agent(
+    deployed_agent: Optional[Dict[str, Any]],
+    *,
+    include_internal: bool = False,
+) -> Optional[Dict[str, Any]]:
+    if not isinstance(deployed_agent, dict):
+        return None
+    config = _config_from_record(deployed_agent)
+    operational_state = _operational_state_from_record(deployed_agent)
+    projected = {
+        field: deployed_agent.get(field)
+        for field in DEPLOYED_AGENT_PUBLIC_FIELDS
+    }
+    projected["provider"] = _normalize_optional_text(config.provider)
+    projected["model"] = _normalize_optional_text(config.model)
+    projected["config"] = _config_payload(config)
+    projected["operational_state"] = _operational_state_payload(operational_state)
+    if include_internal:
+        for field in DEPLOYED_AGENT_INTERNAL_FIELDS:
+            if field == "metadata":
+                projected[field] = _metadata_from_config(
+                    config,
+                    existing_metadata=_coerce_dict(deployed_agent.get("metadata")),
+                )
+            else:
+                projected[field] = deployed_agent.get(field)
+    return projected
+
+
+def validate_state_transition(current_state: Any, next_state: Any) -> str:
+    resolved_current = _normalize_deployment_state(current_state)
+    resolved_next = _normalize_deployment_state(next_state)
+    allowed_transitions = {
+        "draft": {"draft", "staging", "live", "paused"},
+        "staging": {"staging", "live", "paused"},
+        "live": {"live", "paused"},
+        "paused": {"paused", "staging", "live"},
+    }
+    if resolved_next not in allowed_transitions.get(resolved_current, set()):
+        raise ValueError(f"Unsupported deployed-agent state transition: {resolved_current} -> {resolved_next}.")
+    return resolved_next
+
+
+def validate_can_deploy(
+    *,
+    deployed_agent: Optional[Dict[str, Any]],
+    backing_install: Optional[Dict[str, Any]],
+    allowed_live_channels: Optional[set[str] | frozenset[str]] = None,
+) -> bool:
+    if not isinstance(deployed_agent, dict):
+        raise ValueError("Deployed agent is required.")
+    if not isinstance(backing_install, dict):
+        raise ValueError("Backing specialist install is required.")
+    if str(deployed_agent.get("backing_install_id") or "").strip() != str(backing_install.get("id") or "").strip():
+        raise ValueError("Deployed agent backing install does not match the specialist install.")
+    if str(deployed_agent.get("tenant_id") or "").strip() != str(backing_install.get("tenant_id") or "").strip():
+        raise ValueError("Deployed agent and backing specialist tenant scope must match.")
+    if str(deployed_agent.get("owner_workspace_id") or "").strip() != str(backing_install.get("workspace_id") or "").strip():
+        raise ValueError("Deployed agent and backing specialist workspace scope must match.")
+    live_channels = _live_channel_keys(deployed_agent.get("channels") or {})
+    resolved_allowed = frozenset(
+        str(channel or "").strip().lower()
+        for channel in (allowed_live_channels or DEPLOYED_AGENT_LIVE_CHANNELS)
+        if str(channel or "").strip()
+    ) or DEPLOYED_AGENT_LIVE_CHANNELS
+    unsupported = sorted(live_channels - resolved_allowed)
+    if unsupported:
+        allowed_label = ", ".join(channel.title() for channel in sorted(resolved_allowed))
+        raise ValueError(f"Only {allowed_label} may be activated for live deployment in Phase 1.")
+    specialist_mode = str(
+        backing_install.get("specialist_mode")
+        or (backing_install.get("metadata") or {}).get("specialist_mode")
+        or ""
+    ).strip().lower()
+    if specialist_mode != "customer_live":
+        raise ValueError("Backing specialist must be in customer_live mode before deployment can go live.")
+    return True
+
+
+async def mirror_deployed_agent_to_backing_specialist(
+    *,
+    deployed_agent: Dict[str, Any],
+    backing_install: Optional[Dict[str, Any]] = None,
+    updated_by_user_id: Optional[str] = None,
+    specialist_mode_override: Optional[str] = None,
+    deployment_state_override: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    if not isinstance(deployed_agent, dict):
+        return None
+    tenant_id = _normalize_text(deployed_agent.get("tenant_id"))
+    workspace_id = _normalize_text(deployed_agent.get("owner_workspace_id"))
+    backing_install_id = _normalize_text(deployed_agent.get("backing_install_id"))
+    if not tenant_id or not workspace_id or not backing_install_id:
+        raise ValueError("Deployed agent is missing required backing specialist linkage.")
+    install = backing_install or await agent_specialist_repository.get_workspace_specialist(
+        backing_install_id,
+        tenant_id=tenant_id,
+        workspace_id=workspace_id,
+    )
+    if not isinstance(install, dict):
+        raise ValueError("Backing specialist install is unavailable.")
+    config = _config_from_record(
+        deployed_agent,
+        runtime_profile_id=install.get("runtime_profile_id"),
+    )
+    manifest = agent_specialist_repository.manifest_from_install_bundle(install) or _base_manifest(
+        name=config.name,
+        persona=config.persona,
+        system_prompt=config.system_prompt,
+        runtime_target=config.runtime_target,
+        channels=_channels_payload_from_config(config),
+        escalation_triggers=_escalation_triggers_for_config(config),
+    )
+    channels = _channels_payload_from_config(config)
+    runtime_target = config.runtime_target
+    selected_provider = _normalize_optional_text(config.provider)
+    selected_model = _normalize_optional_text(config.model)
+    manifest.identity.name = _normalize_text(config.name, default=manifest.identity.name)
+    manifest.identity.summary = _normalize_text(
+        config.persona,
+        default=manifest.identity.summary or manifest.identity.name,
+    )
+    manifest.voice.tone = _normalize_text(config.persona, default=manifest.voice.tone)
+    manifest.bible.hard_context = _normalize_text(
+        config.system_prompt,
+        default=manifest.bible.hard_context,
+    )
+    manifest.bible.escalation_triggers = _escalation_triggers_for_config(config)
+    manifest.runtime = AgentManifestRuntime(
+        mode=_runtime_target_to_specialist_mode(runtime_target),
+        profile_id=str(install.get("runtime_profile_id") or manifest.runtime.profile_id or "").strip() or None,
+    )
+    manifest.channels = AgentManifestChannels.model_validate(
+        {
+            channel_key: bool(_channel_enabled(channels.get(channel_key)))
+            for channel_key in _MANIFEST_CHANNEL_KEYS
+        }
+    )
+    specialist_mode = str(specialist_mode_override or install.get("specialist_mode") or "owner_edit").strip().lower() or "owner_edit"
+    if _normalize_deployment_state(
+        deployment_state_override if deployment_state_override is not None else deployed_agent.get("deployment_state")
+    ) == "live":
+        specialist_mode = "customer_live"
+    install_status = "active" if specialist_mode == "customer_live" else (
+        str(install.get("status") or "").strip().lower() or "draft"
+    )
+    metadata = {
+        "source": "deployed_agent",
+        "visibility": "private",
+        "status": install_status,
+        "specialist_mode": specialist_mode,
+        "deployed_agent": {
+            "id": deployed_agent.get("id"),
+            "owner_workspace_id": workspace_id,
+            "runtime_target": runtime_target,
+            "provider": selected_provider,
+            "model": selected_model,
+        },
+        "provider": selected_provider,
+        "model": selected_model,
+        "deployed_agent_knowledge_sources": deployed_agent.get("knowledge_sources") or [],
+        "public_intro": config.customer_policy.public_intro,
+        "public_core_value": config.customer_policy.public_core_value,
+        "platform_cta_label": config.customer_policy.public_start_cta_label,
+        "platform_cta_url": config.customer_policy.public_start_cta_url,
+        "public_source": "deployed_agent_owner",
+        "health_safety_enabled": bool(config.safety_policy.health_safety_enabled),
+        "health_safety_assistant_name": config.safety_policy.assistant_name,
+        "context_budget_preset": config.memory_policy.context_budget_preset,
+        "retention_preset": config.memory_policy.retention_preset,
+        "escalation_preset": config.escalation_policy.preset,
+        "handoff_mode": config.escalation_policy.handoff_mode,
+        "owner_notification_destination": config.escalation_policy.owner_notification_destination,
+    }
+    return await agent_specialist_repository.update_workspace_specialist_manifest(
+        backing_install_id,
+        tenant_id=tenant_id,
+        workspace_id=workspace_id,
+        manifest=manifest,
+        updated_by_user_id=updated_by_user_id,
+        runtime_profile_id=str(install.get("runtime_profile_id") or "").strip() or None,
+        runtime_mode=_runtime_target_to_specialist_mode(runtime_target),
+        connector_bindings=dict(install.get("connector_bindings") or {}),
+        channel_bindings=channels,
+        metadata=metadata,
+        write_bible_version=True,
+    )
+
+
+async def create_draft_deployed_agent(
+    *,
+    current_user: Optional[Dict[str, Any]],
+    owner_workspace_id: str,
+    name: str,
+    avatar: Optional[str] = None,
+    persona: str = "",
+    system_prompt: str = "",
+    channels: Optional[Dict[str, Any]] = None,
+    knowledge_sources: Optional[List[Dict[str, Any]]] = None,
+    runtime_target: Optional[str] = None,
+    billing_plan: Optional[str] = None,
+    metadata: Optional[Dict[str, Any]] = None,
+    config: Optional[Dict[str, Any]] = None,
+    runtime_profile_id: Optional[str] = None,
+    provider: Optional[str] = None,
+    model: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    resolved_workspace_id = require_deployed_agent_admin_access(
+        current_user=current_user,
+        workspace_id=owner_workspace_id,
+    )
+    workspace = await control_plane_repository.get_workspace_by_id(resolved_workspace_id)
+    if not isinstance(workspace, dict):
+        raise ValueError("Workspace is unavailable.")
+    tenant_id = _normalize_text(workspace.get("tenant_id"))
+    if not tenant_id:
+        raise ValueError("Workspace is missing a tenant binding.")
+    normalized_name = _normalize_text(name)
+    if not normalized_name:
+        raise ValueError("name is required.")
+    workspace_defaults = _workspace_admin_defaults(workspace)
+    draft_config = _apply_provider_model_selection_to_config(
+        _apply_workspace_admin_defaults_to_config(
+            _config_from_record(
+                {
+                    "name": normalized_name,
+                    "avatar": avatar,
+                    "persona": persona,
+                    "system_prompt": system_prompt,
+                    "channels": channels,
+                    "knowledge_sources": _normalize_knowledge_sources(knowledge_sources),
+                    "runtime_target": runtime_target,
+                    "billing_plan": billing_plan,
+                    "metadata": _normalize_deployed_agent_metadata(metadata),
+                    "config": _coerce_dict(config),
+                },
+                runtime_profile_id=runtime_profile_id,
+            ),
+            workspace_defaults=workspace_defaults,
+            runtime_target_supplied=runtime_target is not None,
+            billing_plan_supplied=billing_plan is not None,
+            config_payload=_coerce_dict(config),
+            legacy_metadata=_coerce_dict(metadata),
+        ),
+        provider=provider,
+        model=model,
+    )
+    operational_state = _operational_state_from_record({"deployment_state": "draft"})
+    manifest = _base_manifest(
+        name=draft_config.name,
+        persona=draft_config.persona,
+        system_prompt=draft_config.system_prompt,
+        runtime_target=draft_config.runtime_target,
+        channels=_channels_payload_from_config(draft_config),
+        escalation_triggers=_escalation_triggers_for_config(draft_config),
+    )
+    backing_install = await agent_specialist_repository.create_workspace_specialist(
+        tenant_id=tenant_id,
+        workspace_id=resolved_workspace_id,
+        manifest=manifest,
+        created_by_user_id=_normalize_optional_text((current_user or {}).get("user_id")),
+        label=draft_config.name,
+        runtime_profile_id=_normalize_optional_text(runtime_profile_id),
+        runtime_mode=_runtime_target_to_specialist_mode(draft_config.runtime_target),
+        channel_bindings=_channels_payload_from_config(draft_config),
+        metadata={
+            **_metadata_from_config(draft_config),
+            "source": "deployed_agent",
+            "visibility": "private",
+            "specialist_mode": "owner_edit",
+            "public_intro": draft_config.customer_policy.public_intro,
+            "public_core_value": draft_config.customer_policy.public_core_value,
+            "platform_cta_label": draft_config.customer_policy.public_start_cta_label,
+            "platform_cta_url": draft_config.customer_policy.public_start_cta_url,
+            "health_safety_assistant_name": draft_config.safety_policy.assistant_name,
+            "context_budget_preset": draft_config.memory_policy.context_budget_preset,
+            "retention_preset": draft_config.memory_policy.retention_preset,
+            "escalation_preset": draft_config.escalation_policy.preset,
+            "handoff_mode": draft_config.escalation_policy.handoff_mode,
+            "owner_notification_destination": draft_config.escalation_policy.owner_notification_destination,
+        },
+    )
+    if not isinstance(backing_install, dict):
+        raise ValueError("Failed to create backing specialist install.")
+    deployed_agent = await control_plane_repository.create_deployed_agent(
+        tenant_id=tenant_id,
+        owner_workspace_id=resolved_workspace_id,
+        backing_install_id=_normalize_text(backing_install.get("id")),
+        created_by_user_id=_normalize_optional_text((current_user or {}).get("user_id")),
+        name=draft_config.name,
+        avatar=draft_config.avatar,
+        persona=draft_config.persona,
+        system_prompt=draft_config.system_prompt,
+        deployment_state="draft",
+        channels=_channels_payload_from_config(draft_config),
+        knowledge_sources=draft_config.knowledge_sources,
+        runtime_target=draft_config.runtime_target,
+        billing_plan=draft_config.billing_plan,
+        metadata=_metadata_from_config(draft_config),
+        operational_state=_serialized_operational_state(operational_state),
+    )
+    if not isinstance(deployed_agent, dict):
+        raise ValueError("Failed to persist deployed agent.")
+    await mirror_deployed_agent_to_backing_specialist(
+        deployed_agent=deployed_agent,
+        backing_install=backing_install,
+        updated_by_user_id=_normalize_optional_text((current_user or {}).get("user_id")),
+    )
+    return project_deployed_agent(deployed_agent, include_internal=True)
+
+
+async def list_deployed_agents(
+    *,
+    current_user: Optional[Dict[str, Any]],
+    owner_workspace_id: str,
+    deployment_state: Optional[str] = None,
+) -> Dict[str, Any]:
+    resolved_workspace_id = require_deployed_agent_admin_access(
+        current_user=current_user,
+        workspace_id=owner_workspace_id,
+    )
+    workspace = await control_plane_repository.get_workspace_by_id(resolved_workspace_id)
+    if not isinstance(workspace, dict):
+        raise _http_bad_request("Workspace is unavailable.")
+    tenant_id = _normalize_text(workspace.get("tenant_id"))
+    items = await control_plane_repository.list_deployed_agents_for_workspace(
+        resolved_workspace_id,
+        tenant_id=tenant_id,
+        deployment_state=_normalize_deployment_state(deployment_state, default="") if deployment_state else None,
+    )
+    return {
+        "items": [
+            project_deployed_agent(item, include_internal=True)
+            for item in items
+            if isinstance(item, dict)
+        ]
+    }
+
+
+async def get_deployed_agent_detail(
+    *,
+    deployed_agent_id: str,
+    current_user: Optional[Dict[str, Any]],
+    owner_workspace_id: str,
+) -> Optional[Dict[str, Any]]:
+    resolved_workspace_id = require_deployed_agent_admin_access(
+        current_user=current_user,
+        workspace_id=owner_workspace_id,
+    )
+    workspace = await control_plane_repository.get_workspace_by_id(resolved_workspace_id)
+    if not isinstance(workspace, dict):
+        raise _http_bad_request("Workspace is unavailable.")
+    tenant_id = _normalize_text(workspace.get("tenant_id"))
+    deployed_agent = await control_plane_repository.get_deployed_agent_by_id(
+        deployed_agent_id,
+        tenant_id=tenant_id,
+        owner_workspace_id=resolved_workspace_id,
+    )
+    if not isinstance(deployed_agent, dict):
+        return None
+    backing_install = await agent_specialist_repository.get_workspace_specialist(
+        _normalize_text(deployed_agent.get("backing_install_id")),
+        tenant_id=tenant_id,
+        workspace_id=resolved_workspace_id,
+    )
+    return {
+        **dict(project_deployed_agent(deployed_agent, include_internal=True) or {}),
+        "backing_install": backing_install,
+    }
+
+
+async def list_deployed_agent_analytics(
+    *,
+    current_user: Optional[Dict[str, Any]],
+    owner_workspace_id: str,
+) -> Dict[str, Any]:
+    resolved_workspace_id = require_deployed_agent_admin_access(
+        current_user=current_user,
+        workspace_id=owner_workspace_id,
+    )
+    workspace = await control_plane_repository.get_workspace_by_id(resolved_workspace_id)
+    if not isinstance(workspace, dict):
+        raise _http_bad_request("Workspace is unavailable.")
+    tenant_id = _normalize_text(workspace.get("tenant_id"))
+    deployed_agents = await control_plane_repository.list_deployed_agents_for_workspace(
+        resolved_workspace_id,
+        tenant_id=tenant_id,
+    )
+    return await deployed_agent_analytics_service.summarize_workspace_deployed_agent_analytics(
+        tenant_id=tenant_id,
+        workspace_id=resolved_workspace_id,
+        deployed_agents=deployed_agents,
+    )
+
+
+async def get_deployed_agent_analytics(
+    *,
+    deployed_agent_id: str,
+    current_user: Optional[Dict[str, Any]],
+    owner_workspace_id: str,
+) -> Optional[Dict[str, Any]]:
+    resolved_workspace_id = require_deployed_agent_admin_access(
+        current_user=current_user,
+        workspace_id=owner_workspace_id,
+    )
+    workspace = await control_plane_repository.get_workspace_by_id(resolved_workspace_id)
+    if not isinstance(workspace, dict):
+        raise _http_bad_request("Workspace is unavailable.")
+    tenant_id = _normalize_text(workspace.get("tenant_id"))
+    deployed_agent = await control_plane_repository.get_deployed_agent_by_id(
+        deployed_agent_id,
+        tenant_id=tenant_id,
+        owner_workspace_id=resolved_workspace_id,
+    )
+    if not isinstance(deployed_agent, dict):
+        return None
+    return await deployed_agent_analytics_service.summarize_deployed_agent_analytics(
+        tenant_id=tenant_id,
+        workspace_id=resolved_workspace_id,
+        deployed_agent=deployed_agent,
+    )
+
+
+async def update_deployed_agent(
+    *,
+    deployed_agent_id: str,
+    current_user: Optional[Dict[str, Any]],
+    owner_workspace_id: str,
+    updates: Dict[str, Any],
+) -> Optional[Dict[str, Any]]:
+    resolved_workspace_id = require_deployed_agent_admin_access(
+        current_user=current_user,
+        workspace_id=owner_workspace_id,
+    )
+    workspace = await control_plane_repository.get_workspace_by_id(resolved_workspace_id)
+    if not isinstance(workspace, dict):
+        raise _http_bad_request("Workspace is unavailable.")
+    tenant_id = _normalize_text(workspace.get("tenant_id"))
+    existing = await control_plane_repository.get_deployed_agent_by_id(
+        deployed_agent_id,
+        tenant_id=tenant_id,
+        owner_workspace_id=resolved_workspace_id,
+    )
+    if not isinstance(existing, dict):
+        return None
+    normalized_updates: Dict[str, Any] = {}
+    candidate_record: Dict[str, Any] = dict(existing)
+    if "name" in updates:
+        clean_name = _normalize_text(updates.get("name"))
+        if not clean_name:
+            raise _http_bad_request("name cannot be empty.")
+        candidate_record["name"] = clean_name
+    if "avatar" in updates:
+        candidate_record["avatar"] = _normalize_optional_text(updates.get("avatar"))
+    if "persona" in updates:
+        candidate_record["persona"] = _normalize_text(updates.get("persona"))
+    if "system_prompt" in updates:
+        candidate_record["system_prompt"] = _normalize_text(updates.get("system_prompt"))
+    if "channels" in updates:
+        try:
+            candidate_record["channels"] = _normalize_channels(updates.get("channels"))
+        except ValueError as error:
+            raise _http_bad_request(str(error)) from error
+    if "knowledge_sources" in updates:
+        try:
+            candidate_record["knowledge_sources"] = _normalize_knowledge_sources(updates.get("knowledge_sources"))
+        except ValueError as error:
+            raise _http_bad_request(str(error)) from error
+    if "runtime_target" in updates:
+        candidate_record["runtime_target"] = _normalize_runtime_target(updates.get("runtime_target"))
+    if "billing_plan" in updates:
+        candidate_record["billing_plan"] = _normalize_text(
+            updates.get("billing_plan"),
+            default=config_defaults_service.default_deployed_agent_billing_plan(),
+        )
+    if "metadata" in updates:
+        try:
+            candidate_record["metadata"] = _normalize_deployed_agent_metadata(
+                updates.get("metadata"),
+                existing=_coerce_dict(existing.get("metadata")),
+            )
+        except ValueError as error:
+            raise _http_bad_request(str(error)) from error
+    if "config" in updates:
+        if updates.get("config") is not None and not isinstance(updates.get("config"), dict):
+            raise _http_bad_request("config must be an object.")
+        candidate_record["config"] = _coerce_dict(updates.get("config"))
+    if "deployment_state" in updates and updates.get("deployment_state") is not None:
+        next_state = str(updates.get("deployment_state") or "").strip().lower()
+        try:
+            validated_state = validate_state_transition(existing.get("deployment_state"), next_state)
+        except ValueError as error:
+            raise _http_conflict(str(error)) from error
+        if validated_state in {"live", "paused"}:
+            raise _http_conflict("Use the dedicated deploy or pause endpoint for live and paused transitions.")
+        candidate_record["deployment_state"] = validated_state
+    if candidate_record == existing and "provider" not in updates and "model" not in updates:
+        raise _http_bad_request("At least one deployed-agent field must be supplied.")
+    try:
+        next_config = _apply_provider_model_selection_to_config(
+            _config_from_record(candidate_record),
+            provider=updates.get("provider") if "provider" in updates else None,
+            model=updates.get("model") if "model" in updates else None,
+        )
+    except ValueError as error:
+        raise _http_bad_request(str(error)) from error
+    next_state = _operational_state_from_record(
+        {
+            **existing,
+            "deployment_state": candidate_record.get(
+                "deployment_state",
+                existing.get("deployment_state"),
+            ),
+        }
+    )
+    normalized_updates = {
+        "name": next_config.name,
+        "avatar": next_config.avatar,
+        "persona": next_config.persona,
+        "system_prompt": next_config.system_prompt,
+        "channels": _channels_payload_from_config(next_config),
+        "knowledge_sources": next_config.knowledge_sources,
+        "runtime_target": next_config.runtime_target,
+        "billing_plan": next_config.billing_plan,
+        "metadata": _metadata_from_config(
+            next_config,
+            existing_metadata=_coerce_dict(existing.get("metadata")),
+        ),
+        "operational_state": _serialized_operational_state(next_state),
+    }
+    if "deployment_state" in candidate_record:
+        normalized_updates["deployment_state"] = candidate_record["deployment_state"]
+    next_record = {**existing, **normalized_updates}
+    updated_install = await mirror_deployed_agent_to_backing_specialist(
+        deployed_agent=next_record,
+        updated_by_user_id=_normalize_optional_text((current_user or {}).get("user_id")),
+    )
+    persisted = await control_plane_repository.update_deployed_agent(
+        deployed_agent_id,
+        tenant_id=tenant_id,
+        owner_workspace_id=resolved_workspace_id,
+        updates=normalized_updates,
+    )
+    if not isinstance(persisted, dict):
+        return None
+    return {
+        **dict(project_deployed_agent(persisted, include_internal=True) or {}),
+        "backing_install": updated_install,
+    }
+
+
+async def deploy_deployed_agent(
+    *,
+    deployed_agent_id: str,
+    current_user: Optional[Dict[str, Any]],
+    owner_workspace_id: str,
+) -> Optional[Dict[str, Any]]:
+    resolved_workspace_id = require_deployed_agent_admin_access(
+        current_user=current_user,
+        workspace_id=owner_workspace_id,
+    )
+    workspace = await control_plane_repository.get_workspace_by_id(resolved_workspace_id)
+    if not isinstance(workspace, dict):
+        raise _http_bad_request("Workspace is unavailable.")
+    tenant_id = _normalize_text(workspace.get("tenant_id"))
+    existing = await control_plane_repository.get_deployed_agent_by_id(
+        deployed_agent_id,
+        tenant_id=tenant_id,
+        owner_workspace_id=resolved_workspace_id,
+    )
+    if not isinstance(existing, dict):
+        return None
+    try:
+        validate_state_transition(existing.get("deployment_state"), "live")
+    except ValueError as error:
+        raise _http_conflict(str(error)) from error
+    channels = _normalize_channels(existing.get("channels") or {})
+    allowed_live_channels = _allowed_live_channels_for_workspace(workspace)
+    try:
+        _require_live_channel_configuration(
+            channels,
+            allowed_live_channels=allowed_live_channels,
+        )
+    except ValueError as error:
+        raise _http_conflict(str(error)) from error
+    next_record = {
+        **existing,
+        "deployment_state": "live",
+    }
+    updated_install = await mirror_deployed_agent_to_backing_specialist(
+        deployed_agent=next_record,
+        updated_by_user_id=_normalize_optional_text((current_user or {}).get("user_id")),
+        specialist_mode_override="customer_live",
+        deployment_state_override="live",
+    )
+    try:
+        validate_can_deploy(
+            deployed_agent=next_record,
+            backing_install=updated_install,
+            allowed_live_channels=allowed_live_channels,
+        )
+    except ValueError as error:
+        raise _http_conflict(str(error)) from error
+    next_state = _operational_state_from_record(
+        {
+            **existing,
+            "deployment_state": "live",
+            "last_deployed_at": _utc_now_iso(),
+        }
+    )
+    persisted = await control_plane_repository.set_deployed_agent_state(
+        deployed_agent_id,
+        tenant_id=tenant_id,
+        owner_workspace_id=resolved_workspace_id,
+        deployment_state="live",
+        last_deployed_at=next_state.last_deployed_at,
+        operational_state=_serialized_operational_state(next_state),
+    )
+    if not isinstance(persisted, dict):
+        return None
+    return {
+        **dict(project_deployed_agent(persisted, include_internal=True) or {}),
+        "backing_install": updated_install,
+    }
+
+
+async def pause_deployed_agent(
+    *,
+    deployed_agent_id: str,
+    current_user: Optional[Dict[str, Any]],
+    owner_workspace_id: str,
+) -> Optional[Dict[str, Any]]:
+    resolved_workspace_id = require_deployed_agent_admin_access(
+        current_user=current_user,
+        workspace_id=owner_workspace_id,
+    )
+    workspace = await control_plane_repository.get_workspace_by_id(resolved_workspace_id)
+    if not isinstance(workspace, dict):
+        raise ValueError("Workspace is unavailable.")
+    tenant_id = _normalize_text(workspace.get("tenant_id"))
+    deployed_agent = await control_plane_repository.get_deployed_agent_by_id(
+        deployed_agent_id,
+        tenant_id=tenant_id,
+        owner_workspace_id=resolved_workspace_id,
+    )
+    if not isinstance(deployed_agent, dict):
+        return None
+    try:
+        validate_state_transition(deployed_agent.get("deployment_state"), "paused")
+    except ValueError as error:
+        raise _http_conflict(str(error)) from error
+    next_state = _operational_state_from_record(
+        {
+            **deployed_agent,
+            "deployment_state": "paused",
+            "last_paused_at": _utc_now_iso(),
+        }
+    )
+    paused = await control_plane_repository.set_deployed_agent_state(
+        deployed_agent_id,
+        tenant_id=tenant_id,
+        owner_workspace_id=resolved_workspace_id,
+        deployment_state="paused",
+        last_paused_at=next_state.last_paused_at,
+        operational_state=_serialized_operational_state(next_state),
+    )
+    backing_install = await agent_specialist_repository.get_workspace_specialist(
+        _normalize_text(deployed_agent.get("backing_install_id")),
+        tenant_id=tenant_id,
+        workspace_id=resolved_workspace_id,
+    )
+    return {
+        **dict(project_deployed_agent(paused, include_internal=True) or {}),
+        "backing_install": backing_install,
+    }
+
+
+async def list_deployed_agent_conversations(
+    *,
+    deployed_agent_id: str,
+    current_user: Optional[Dict[str, Any]],
+    owner_workspace_id: str,
+    limit: int = 50,
+    offset: int = 0,
+) -> Optional[Dict[str, Any]]:
+    resolved_workspace_id = require_deployed_agent_admin_access(
+        current_user=current_user,
+        workspace_id=owner_workspace_id,
+    )
+    workspace = await control_plane_repository.get_workspace_by_id(resolved_workspace_id)
+    if not isinstance(workspace, dict):
+        raise _http_bad_request("Workspace is unavailable.")
+    tenant_id = _normalize_text(workspace.get("tenant_id"))
+    deployed_agent = await control_plane_repository.get_deployed_agent_by_id(
+        deployed_agent_id,
+        tenant_id=tenant_id,
+        owner_workspace_id=resolved_workspace_id,
+    )
+    if not isinstance(deployed_agent, dict):
+        return None
+    safe_limit, safe_offset = _normalize_pagination(limit, offset)
+    session_rows = await control_plane_repository.list_deployed_agent_conversation_sessions(
+        tenant_id=tenant_id,
+        workspace_id=resolved_workspace_id,
+        deployed_agent_id=_normalize_text(deployed_agent.get("id")),
+        backing_install_id=_normalize_text(deployed_agent.get("backing_install_id")),
+        limit=safe_limit + 1,
+        offset=safe_offset,
+    )
+    has_more = len(session_rows) > safe_limit
+    trimmed_rows = session_rows[:safe_limit]
+    items: List[Dict[str, Any]] = []
+    for row in trimmed_rows:
+        latest_run_id = _normalize_optional_text(row.get("latest_run_id"))
+        activity_rows: List[Dict[str, Any]] = []
+        if _normalize_optional_text(row.get("session_id")):
+            activity_rows = await _load_conversation_activity(
+                tenant_id=tenant_id,
+                workspace_id=resolved_workspace_id,
+                backing_install_id=_normalize_text(deployed_agent.get("backing_install_id")),
+                session_id=_normalize_text(row.get("session_id")),
+                thread_id=_normalize_optional_text(row.get("thread_id")),
+                run_ids=[latest_run_id] if latest_run_id else [],
+            )
+        items.append(
+            {
+                "session_id": row.get("session_id"),
+                "channel": row.get("channel"),
+                "last_message": _compact_text(row.get("last_message"), limit=160),
+                "last_message_at": row.get("last_message_at"),
+                "customer": _actor_summary(row.get("customer_actor")),
+                "customer_actor": _coerce_dict(row.get("customer_actor")),
+                "thread_id": row.get("thread_id"),
+                "latest_run_id": latest_run_id,
+                "escalation_state": _derive_escalation_state(activity_rows),
+                "outcome": _derive_outcome(activity_rows=activity_rows, run_snapshots={}),
+            }
+        )
+    return {
+        "deployed_agent_id": _normalize_text(deployed_agent.get("id")),
+        "items": items,
+        "offset": safe_offset,
+        "limit": safe_limit,
+        "has_more": has_more,
+    }
+
+
+async def get_deployed_agent_conversation_detail(
+    *,
+    deployed_agent_id: str,
+    session_id: str,
+    current_user: Optional[Dict[str, Any]],
+    owner_workspace_id: str,
+) -> Optional[Dict[str, Any]]:
+    resolved_workspace_id = require_deployed_agent_admin_access(
+        current_user=current_user,
+        workspace_id=owner_workspace_id,
+    )
+    workspace = await control_plane_repository.get_workspace_by_id(resolved_workspace_id)
+    if not isinstance(workspace, dict):
+        raise _http_bad_request("Workspace is unavailable.")
+    tenant_id = _normalize_text(workspace.get("tenant_id"))
+    deployed_agent = await control_plane_repository.get_deployed_agent_by_id(
+        deployed_agent_id,
+        tenant_id=tenant_id,
+        owner_workspace_id=resolved_workspace_id,
+    )
+    if not isinstance(deployed_agent, dict):
+        return None
+    channel_events = await control_plane_repository.list_deployed_agent_conversation_events(
+        tenant_id=tenant_id,
+        workspace_id=resolved_workspace_id,
+        deployed_agent_id=_normalize_text(deployed_agent.get("id")),
+        backing_install_id=_normalize_text(deployed_agent.get("backing_install_id")),
+        session_id=session_id,
+        limit=500,
+    )
+    if not channel_events:
+        return None
+    ordered_events = sorted(
+        channel_events,
+        key=lambda item: (_timestamp_token(item.get("created_at")), str(item.get("id") or "")),
+    )
+    run_ids: List[str] = []
+    for event in ordered_events:
+        run_id = _normalize_optional_text(event.get("run_id"))
+        if run_id and run_id not in run_ids:
+            run_ids.append(run_id)
+    thread_id = next(
+        (
+            _normalize_optional_text(event.get("thread_id"))
+            for event in reversed(ordered_events)
+            if _normalize_optional_text(event.get("thread_id"))
+        ),
+        None,
+    )
+    activity_rows = await _load_conversation_activity(
+        tenant_id=tenant_id,
+        workspace_id=resolved_workspace_id,
+        backing_install_id=_normalize_text(deployed_agent.get("backing_install_id")),
+        session_id=_normalize_text(session_id),
+        thread_id=thread_id,
+        run_ids=run_ids,
+    )
+    run_snapshots: Dict[str, Dict[str, Any]] = {}
+    for run_id in run_ids:
+        snapshot = await _get_run_snapshot(run_id)
+        if isinstance(snapshot, dict) and isinstance(snapshot.get("payload"), dict):
+            run_snapshots[run_id] = dict(snapshot.get("payload") or {})
+    message_entries = [_message_entry_from_channel_event(item) for item in ordered_events]
+    run_step_entries: List[Dict[str, Any]] = []
+    seen_run_step_ids: set[str] = set()
+    run_steps_per_run: Dict[str, int] = {}
+    for row in activity_rows:
+        entry = _run_step_entry_from_activity(row)
+        if not isinstance(entry, dict):
+            continue
+        entry_id = str(entry.get("id") or "").strip()
+        if entry_id and entry_id in seen_run_step_ids:
+            continue
+        if entry_id:
+            seen_run_step_ids.add(entry_id)
+        run_id = _normalize_optional_text(entry.get("run_id")) or ""
+        if run_id:
+            run_steps_per_run[run_id] = int(run_steps_per_run.get(run_id, 0)) + 1
+        run_step_entries.append(entry)
+    for run_id, snapshot in run_snapshots.items():
+        snapshot_entries = _run_step_entries_from_run(run_id, snapshot)
+        if run_steps_per_run.get(run_id):
+            snapshot_entries = [
+                entry
+                for entry in snapshot_entries
+                if _normalize_text(entry.get("event_class")).lower() != "run_status"
+            ]
+        for entry in snapshot_entries:
+            entry_id = str(entry.get("id") or "").strip()
+            if entry_id and entry_id in seen_run_step_ids:
+                continue
+            if entry_id:
+                seen_run_step_ids.add(entry_id)
+            run_step_entries.append(entry)
+    tool_call_entries: List[Dict[str, Any]] = []
+    seen_tool_ids: set[str] = set()
+    for row in activity_rows:
+        entry = _tool_call_entry_from_activity(row)
+        if not isinstance(entry, dict):
+            continue
+        entry_id = str(entry.get("id") or "").strip()
+        if entry_id and entry_id not in seen_tool_ids:
+            seen_tool_ids.add(entry_id)
+            tool_call_entries.append(entry)
+    for run_id, snapshot in run_snapshots.items():
+        entry = _tool_call_entry_from_run(run_id, snapshot)
+        if not isinstance(entry, dict):
+            continue
+        entry_id = str(entry.get("id") or "").strip()
+        if entry_id and entry_id not in seen_tool_ids:
+            seen_tool_ids.add(entry_id)
+            tool_call_entries.append(entry)
+    approval_entries: List[Dict[str, Any]] = []
+    escalation_entries: List[Dict[str, Any]] = []
+    approval_cache: Dict[str, Dict[str, Any]] = {}
+    for row in activity_rows:
+        if _is_approval_activity(row):
+            approval_payload = _coerce_dict(row.get("payload"))
+            approval_metadata = _coerce_dict(row.get("metadata"))
+            approval_id = _approval_id_from_payload(approval_payload) or _approval_id_from_payload(approval_metadata)
+            approval_record = None
+            if approval_id:
+                approval_record = approval_cache.get(approval_id)
+                if approval_record is None:
+                    fetched = await run_state_repository.get_approval_record(approval_id)
+                    approval_record = dict(fetched or {}) if isinstance(fetched, dict) else {}
+                    approval_cache[approval_id] = approval_record
+            approval_entries.append(
+                _approval_entry_from_activity(
+                    row,
+                    approval_record=approval_record,
+                )
+            )
+        if _is_escalation_activity(row):
+            escalation_entries.append(_escalation_entry_from_activity(row))
+    transcript_entries = sorted(
+        [
+            *message_entries,
+            *run_step_entries,
+            *tool_call_entries,
+            *approval_entries,
+            *escalation_entries,
+        ],
+        key=_entry_sort_key,
+    )
+    return {
+        "deployed_agent_id": _normalize_text(deployed_agent.get("id")),
+        "session_id": _normalize_text(session_id),
+        "channel": _normalize_optional_text(ordered_events[-1].get("channel_key")) or _normalize_optional_text(ordered_events[0].get("channel_key")),
+        "thread_id": thread_id,
+        "run_ids": run_ids,
+        "messages": message_entries,
+        "run_steps": sorted(run_step_entries, key=_entry_sort_key),
+        "tool_calls": sorted(tool_call_entries, key=_entry_sort_key),
+        "approval_events": sorted(approval_entries, key=_entry_sort_key),
+        "escalation_events": sorted(escalation_entries, key=_entry_sort_key),
+        "entries": transcript_entries,
+        "outcome": _derive_outcome(activity_rows=activity_rows, run_snapshots=run_snapshots),
+        "customer": _actor_summary(
+            next(
+                (
+                    event.get("actor")
+                    for event in ordered_events
+                    if _normalize_text(event.get("direction")).lower() == "inbound"
+                ),
+                {},
+            )
+        ),
+    }
+
+
+async def delete_deployed_agent_external_user_data(
+    *,
+    deployed_agent_id: str,
+    external_user_id: str,
+    channel_key: str,
+    current_user: Optional[Dict[str, Any]],
+    owner_workspace_id: str,
+    note: Optional[str] = None,
+    session_id: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    resolved_workspace_id = require_deployed_agent_admin_access(
+        current_user=current_user,
+        workspace_id=owner_workspace_id,
+    )
+    workspace = await control_plane_repository.get_workspace_by_id(resolved_workspace_id)
+    if not isinstance(workspace, dict):
+        raise _http_bad_request("Workspace is unavailable.")
+    tenant_id = _normalize_text(workspace.get("tenant_id"))
+    deployed_agent = await control_plane_repository.get_deployed_agent_by_id(
+        deployed_agent_id,
+        tenant_id=tenant_id,
+        owner_workspace_id=resolved_workspace_id,
+    )
+    if not isinstance(deployed_agent, dict):
+        return None
+    resolved_channel_key = _normalize_text(channel_key).lower()
+    if not resolved_channel_key:
+        raise _http_bad_request("channel is required.")
+    resolved_external_user_id = _normalize_text(external_user_id)
+    if not resolved_external_user_id:
+        raise _http_bad_request("external_user_id is required.")
+    purge_result = await external_user_privacy_service.get_external_user_privacy_service().purge_deployed_agent_external_user_data(
+        tenant_id=tenant_id,
+        workspace_id=resolved_workspace_id,
+        deployed_agent_id=_normalize_text(deployed_agent.get("id")),
+        channel_key=resolved_channel_key,
+        external_user_id=resolved_external_user_id,
+        actor_user_id=_normalize_text(_coerce_dict(current_user).get("user_id")) or None,
+        note=_normalize_text(note) or None,
+        metadata={
+            "session_id": _normalize_text(session_id) or None,
+            "deployed_agent_name": _normalize_text(deployed_agent.get("name")) or None,
+        },
+    )
+    terminated_session_ids = {
+        token
+        for token in (
+            _normalize_text(session_id),
+            _normalize_text(_coerce_dict(purge_result.get("request")).get("session_key")),
+        )
+        if token
+    }
+    for token in terminated_session_ids:
+        await session_service.terminate_session(token)
+    return {
+        "deployed_agent_id": _normalize_text(deployed_agent.get("id")),
+        "channel": resolved_channel_key,
+        "external_user_id": resolved_external_user_id,
+        "deleted_counts": _coerce_dict(purge_result.get("deleted_counts")),
+        "request": _coerce_dict(purge_result.get("request")),
+        "audit": _coerce_dict(purge_result.get("audit")),
+    }

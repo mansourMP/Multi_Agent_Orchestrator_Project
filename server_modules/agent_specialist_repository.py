@@ -40,7 +40,18 @@ def _normalize_token(value: Any) -> Optional[str]:
 
 
 def _dict_json(value: Any) -> Dict[str, Any]:
-    return dict(value) if isinstance(value, dict) else {}
+    if isinstance(value, dict):
+        return dict(value)
+    if isinstance(value, str):
+        token = value.strip()
+        if not token:
+            return {}
+        try:
+            parsed = json.loads(token)
+        except Exception:
+            return {}
+        return dict(parsed) if isinstance(parsed, dict) else {}
+    return {}
 
 
 def _to_json(value: Any, *, default: Any) -> str:
@@ -496,6 +507,7 @@ async def _sync_install_projection(
     tenant_id: str,
     workspace_id: str,
     manifest: AgentManifest,
+    status: str,
     runtime_profile_id: Optional[str],
     runtime_mode: str,
     connector_bindings: Dict[str, Any],
@@ -518,9 +530,10 @@ async def _sync_install_projection(
         UPDATE workspace_agent_installs
         SET
             label = $4,
-            runtime_profile_id = $5,
-            connector_bindings = $6::jsonb,
-            metadata = $7::jsonb,
+            status = $5,
+            runtime_profile_id = $6,
+            connector_bindings = $7::jsonb,
+            metadata = $8::jsonb,
             updated_at = NOW()
         WHERE id = $1 AND tenant_id = $2 AND workspace_id = $3
         """,
@@ -528,6 +541,7 @@ async def _sync_install_projection(
         tenant_id,
         workspace_id,
         manifest.identity.name,
+        status,
         runtime_profile_id,
         _to_json(connector_bindings, default={}),
         _to_json(next_metadata, default={}),
@@ -866,6 +880,7 @@ async def _persist_specialist_state(
         tenant_id=tenant_id,
         workspace_id=workspace_id,
         manifest=manifest,
+        status=status,
         runtime_profile_id=runtime_profile_id,
         runtime_mode=runtime_mode,
         connector_bindings=connector_bindings,

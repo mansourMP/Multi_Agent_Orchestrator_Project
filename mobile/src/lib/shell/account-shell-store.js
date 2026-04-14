@@ -1,6 +1,7 @@
 import {
   getWorkspaceMembership,
   indexWorkspaceMemberships,
+  resolvePrimaryWorkspaceId,
   resolveRouteWorkspaceId,
   sanitizeWorkspaceRoute,
 } from './workspace-membership-model.js';
@@ -19,13 +20,112 @@ function normalizeApiBaseUrl(value) {
   return value.replace(/\/+$/, '');
 }
 
-export function normalizePlatformSession(session) {
+function normalizePermissions(value) {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value.filter((entry) => typeof entry === 'string').sort();
+}
+
+export function createWorkspaceRouteStateKey({
+  membershipVersion,
+  defaultRoute,
+  permissions,
+}) {
+  const version = typeof membershipVersion === 'string' && membershipVersion.trim()
+    ? membershipVersion
+    : 'unknown';
+  return `${version}:${defaultRoute}:${permissions.join(',')}`;
+}
+
+function normalizeWorkspaceMembership(membership) {
+  if (!membership || typeof membership !== 'object') {
+    return null;
+  }
+
+  const workspace = membership.workspace;
+  if (!workspace || typeof workspace !== 'object') {
+    return null;
+  }
+
+  const workspaceId = requireString(workspace.id, 'workspaceMembership.workspace.id');
+  const membershipVersion = String(
+    membership.version
+    ?? membership.membershipVersion
+    ?? `membership:${workspaceId}`,
+  );
+  const permissions = normalizePermissions(membership.permissions);
+  const defaultRoute = sanitizeWorkspaceRoute(
+    membership.defaultRoute,
+    'chat',
+    workspaceId,
+  );
+
+  return {
+    ...membership,
+    workspace: {
+      id: workspaceId,
+      tenantId: requireString(workspace.tenantId ?? `tenant-${workspaceId}`, 'workspaceMembership.workspace.tenantId'),
+      label: requireString(workspace.label ?? workspaceId, 'workspaceMembership.workspace.label'),
+      kind: requireString(workspace.kind ?? 'workspace', 'workspaceMembership.workspace.kind'),
+    },
+    role: requireString(membership.role ?? 'member', 'workspaceMembership.role'),
+    permissions,
+    version: membershipVersion,
+    defaultRoute,
+    routeStateKey: createWorkspaceRouteStateKey({
+      membershipVersion,
+      defaultRoute,
+      permissions,
+    }),
+  };
+}
+
+function createWorkspaceRouteStateMap(workspaceMemberships) {
+  return workspaceMemberships.reduce((accumulator, membership) => {
+    accumulator[membership.workspace.id] = membership.routeStateKey;
+    return accumulator;
+  }, {});
+}
+
+function restoreRememberedRoutes(workspaceMemberships, persistedSnapshot) {
+  if (!persistedSnapshot || typeof persistedSnapshot !== 'object') {
+    return {};
+  }
+
+  const rememberedRoutes =
+    persistedSnapshot.lastVisitedWorkspaceRouteIdById
+    ?? persistedSnapshot.lastVisitedWorkspaceRouteById
+    ?? {};
+  const persistedRouteState = persistedSnapshot.workspaceRouteStateById ?? {};
+
+  return workspaceMemberships.reduce((accumulator, membership) => {
+    if (persistedRouteState[membership.workspace.id] !== membership.routeStateKey) {
+      return accumulator;
+    }
+
+    const rememberedRoute = sanitizeWorkspaceRoute(
+      rememberedRoutes[membership.workspace.id],
+      membership.defaultRoute,
+      membership.workspace.id,
+    );
+    if (rememberedRoute === membership.defaultRoute) {
+      return accumulator;
+    }
+
+    accumulator[membership.workspace.id] = rememberedRoute;
+    return accumulator;
+  }, {});
+}
+
+export function normalizePlatformSession(session, { fallbackAccountId = null } = {}) {
   if (!session || typeof session !== 'object') {
     throw new Error('Mobile platform session must be an object.');
   }
 
   return {
-    accountId: requireString(session.accountId, 'session.accountId'),
+    accountId: requireString(session.accountId ?? fallbackAccountId, 'session.accountId'),
     apiBaseUrl: normalizeApiBaseUrl(session.apiBaseUrl ?? session.platformBaseUrl),
     accessToken: typeof session.accessToken === 'string' ? session.accessToken : null,
     refreshToken: typeof session.refreshToken === 'string' ? session.refreshToken : null,
@@ -42,7 +142,8 @@ export function createInitialAccountShellState() {
     workspaceMemberships: [],
     workspaceMembershipIndex: {},
     activeWorkspaceId: null,
-    lastVisitedWorkspaceRouteById: {},
+    lastVisitedWorkspaceRouteIdById: {},
+    workspaceRouteStateById: {},
   };
 }
 
@@ -53,9 +154,19 @@ export function reduceAccountShellState(state, action) {
         return createInitialAccountShellState();
       }
 
-      const session = normalizePlatformSession(action.payload.session);
-      const workspaceMemberships = action.payload.workspaceMemberships;
+      const session = normalizePlatformSession(action.payload.session, {
+        fallbackAccountId: action.payload.account?.id ?? action.persistedSnapshot?.accountId ?? null,
+      });
+      const workspaceMemberships = (action.payload.workspaceMemberships ?? [])
+        .map(normalizeWorkspaceMembership)
+        .filter(Boolean);
       const workspaceMembershipIndex = indexWorkspaceMemberships(workspaceMemberships);
+      const routeStateById = createWorkspaceRouteStateMap(workspaceMemberships);
+      const accountMatches = action.persistedSnapshot?.accountId === action.payload.account.id;
+      const activeWorkspaceId =
+        accountMatches && workspaceMembershipIndex[action.persistedSnapshot.activeWorkspaceId]
+          ? action.persistedSnapshot.activeWorkspaceId
+          : resolvePrimaryWorkspaceId(workspaceMemberships);
 
       return {
         status: 'authenticated',
@@ -63,16 +174,16 @@ export function reduceAccountShellState(state, action) {
         account: action.payload.account,
         workspaceMemberships,
         workspaceMembershipIndex,
-        activeWorkspaceId: null,
-        lastVisitedWorkspaceRouteById:
-          action.persistedSnapshot?.accountId === action.payload.account.id
-            ? action.persistedSnapshot.lastVisitedWorkspaceRouteById
-            : {},
+        activeWorkspaceId,
+        lastVisitedWorkspaceRouteIdById: accountMatches
+          ? restoreRememberedRoutes(workspaceMemberships, action.persistedSnapshot)
+          : {},
+        workspaceRouteStateById: routeStateById,
       };
     }
     case 'sync_workspace_from_route': {
       const activeWorkspaceId = resolveRouteWorkspaceId(state.workspaceMemberships, action.workspaceId);
-      if (state.activeWorkspaceId === activeWorkspaceId) {
+      if (!activeWorkspaceId || state.activeWorkspaceId === activeWorkspaceId) {
         return state;
       }
 
@@ -87,15 +198,15 @@ export function reduceAccountShellState(state, action) {
         return state;
       }
 
-      const route = sanitizeWorkspaceRoute(action.route, membership.defaultRoute);
-      if (state.lastVisitedWorkspaceRouteById[action.workspaceId] === route) {
+      const route = sanitizeWorkspaceRoute(action.route, membership.defaultRoute, action.workspaceId);
+      if (state.lastVisitedWorkspaceRouteIdById[action.workspaceId] === route) {
         return state;
       }
 
       return {
         ...state,
-        lastVisitedWorkspaceRouteById: {
-          ...state.lastVisitedWorkspaceRouteById,
+        lastVisitedWorkspaceRouteIdById: {
+          ...state.lastVisitedWorkspaceRouteIdById,
           [action.workspaceId]: route,
         },
       };
@@ -112,7 +223,8 @@ export function createAccountShellSnapshot(state) {
     accountId: state.account?.id ?? null,
     apiBaseUrl: state.session?.apiBaseUrl ?? null,
     activeWorkspaceId: state.activeWorkspaceId,
-    lastVisitedWorkspaceRouteById: state.lastVisitedWorkspaceRouteById,
+    lastVisitedWorkspaceRouteIdById: state.lastVisitedWorkspaceRouteIdById,
+    workspaceRouteStateById: state.workspaceRouteStateById,
   };
 }
 
@@ -123,7 +235,8 @@ export function resolveWorkspaceNavigationTarget(state, workspaceId) {
   }
 
   return sanitizeWorkspaceRoute(
-    state.lastVisitedWorkspaceRouteById[workspaceId],
+    state.lastVisitedWorkspaceRouteIdById[workspaceId],
     membership.defaultRoute,
+    workspaceId,
   );
 }

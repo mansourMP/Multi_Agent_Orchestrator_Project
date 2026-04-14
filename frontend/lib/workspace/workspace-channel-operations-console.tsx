@@ -1,7 +1,21 @@
 'use client';
 
-import { type ReactNode, useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 
+import {
+  DataBadge,
+  DataTable,
+  DataTableCell,
+  DataTableHeader,
+  DataTableHeaderCell,
+  DataTableRow,
+} from '@/lib/ui/data-table';
+import { EmptyPanel } from '@/lib/ui/empty-panel';
+import { FormGrid, FormReadout } from '@/lib/ui/form-controls';
+import { ListDetailColumns, ListDetailPanel, ListDetailShell } from '@/lib/ui/list-detail';
+import { SkeletonBlock } from '@/lib/ui/skeleton-block';
+import { StateBanner } from '@/lib/ui/state-banner';
+import { AppButton } from '@/lib/ui/primitives';
 import { useWorkspaceBoundary } from '@/lib/workspace/workspace-boundary';
 import { useWorkspaceServices } from '@/lib/workspace/workspace-services';
 
@@ -89,24 +103,12 @@ type ChannelOperationsPayload = {
       poisoned_count: number;
       total_retry_count: number;
       max_retry_count: number;
-      last_delivery_error?: {
-        event_id?: string | null;
-        message?: string | null;
-        last_attempted_at?: string | null;
-        retry_count?: number | null;
-      } | null;
     };
     workspace_summary: {
       pending_count: number;
       retry_count_total: number;
       max_retry_count: number;
       pending_by_channel: Record<string, number>;
-      last_delivery_error?: {
-        event_id?: string | null;
-        message?: string | null;
-        last_attempted_at?: string | null;
-        retry_count?: number | null;
-      } | null;
     };
     pending: DeliveryPendingRecord[];
     dead_letters: DeadLetterRecord[];
@@ -143,18 +145,18 @@ function titleCase(token: string | null | undefined): string {
     .join(' ');
 }
 
-function statusTone(status: string | null | undefined): string {
+function statusTone(status: string | null | undefined): 'neutral' | 'success' | 'warning' | 'danger' {
   const token = String(status || '').trim().toLowerCase();
-  if (token === 'live') {
-    return '#166534';
+  if (token === 'live' || token === 'healthy' || token === 'ok') {
+    return 'success';
+  }
+  if (token === 'setup_needed' || token === 'degraded') {
+    return 'warning';
   }
   if (token === 'disabled') {
-    return '#6b7280';
+    return 'neutral';
   }
-  if (token === 'setup_needed') {
-    return '#92400e';
-  }
-  return '#991b1b';
+  return 'danger';
 }
 
 async function requestChannelOperationsJson<T>(
@@ -185,83 +187,6 @@ async function requestChannelOperationsJson<T>(
   }
 
   return payload;
-}
-
-function StatusBadge({ status }: { status: string }) {
-  return (
-    <span
-      style={{
-        display: 'inline-flex',
-        alignItems: 'center',
-        gap: '0.35rem',
-        padding: '0.2rem 0.55rem',
-        borderRadius: '999px',
-        background: '#f8fafc',
-        border: `1px solid ${statusTone(status)}`,
-        color: statusTone(status),
-        fontSize: '0.82rem',
-        fontWeight: 600,
-      }}
-    >
-      {titleCase(status)}
-    </span>
-  );
-}
-
-function MetricCard({
-  label,
-  value,
-  hint,
-}: {
-  label: string;
-  value: string;
-  hint: string;
-}) {
-  return (
-    <article
-      style={{
-        border: '1px solid #e2e8f0',
-        borderRadius: '1rem',
-        padding: '1rem',
-        background: '#ffffff',
-        display: 'grid',
-        gap: '0.35rem',
-      }}
-    >
-      <span style={{ fontSize: '0.82rem', color: '#475569', fontWeight: 600 }}>{label}</span>
-      <strong style={{ fontSize: '1.3rem', color: '#0f172a' }}>{value}</strong>
-      <span style={{ fontSize: '0.82rem', color: '#64748b', lineHeight: 1.5 }}>{hint}</span>
-    </article>
-  );
-}
-
-function Section({
-  title,
-  description,
-  children,
-}: {
-  title: string;
-  description: string;
-  children: ReactNode;
-}) {
-  return (
-    <section
-      style={{
-        border: '1px solid #e2e8f0',
-        borderRadius: '1.25rem',
-        padding: '1.25rem',
-        background: '#ffffff',
-        display: 'grid',
-        gap: '1rem',
-      }}
-    >
-      <header style={{ display: 'grid', gap: '0.35rem' }}>
-        <h2 style={{ margin: 0, fontSize: '1.1rem', color: '#0f172a' }}>{title}</h2>
-        <p style={{ margin: 0, color: '#475569', lineHeight: 1.6 }}>{description}</p>
-      </header>
-      {children}
-    </section>
-  );
 }
 
 export function WorkspaceChannelOperationsConsole() {
@@ -295,7 +220,7 @@ export function WorkspaceChannelOperationsConsole() {
       services.persistence.setJson(cacheKey, nextPayload);
       setPayload(nextPayload);
       if (!options.silent) {
-        setStatusMessage(`Refreshed operator state from backend truth at ${formatTimestamp(nextPayload.generated_at)}.`);
+        setStatusMessage(`Refreshed backend operator state at ${formatTimestamp(nextPayload.generated_at)}.`);
       }
     } catch (error) {
       const fallback =
@@ -303,7 +228,7 @@ export function WorkspaceChannelOperationsConsole() {
         ?? services.persistence.getJson<ChannelOperationsPayload>(cacheKey);
       if (fallback) {
         setPayload(fallback);
-        setStatusMessage('Showing cached channel operations data because the backend is temporarily unreachable.');
+        setStatusMessage('Showing cached operator state because the backend is temporarily unreachable.');
       }
       setErrorMessage(error instanceof Error ? error.message : 'Could not load channel operations state.');
     } finally {
@@ -324,243 +249,272 @@ export function WorkspaceChannelOperationsConsole() {
 
   if (!hasCapability('workspace_admin_enabled')) {
     return (
-      <main style={{ minHeight: '100vh', padding: '3rem', display: 'grid', gap: '0.75rem' }}>
-        <h1 style={{ margin: 0, fontSize: '1.6rem' }}>Channel Operations</h1>
-        <p style={{ margin: 0, color: '#475569', lineHeight: 1.6 }}>
-          This workspace membership does not have permission to inspect Telegram and WhatsApp operations.
-        </p>
-      </main>
+      <div data-workstation-surface="admin/channel-operations">
+        <ListDetailShell
+          title="Channel operations"
+          subtitle="Workspace-scoped Telegram and WhatsApp delivery health."
+        >
+          <StateBanner
+            tone="warning"
+            title="Access restricted"
+            detail="This workspace membership does not have permission to inspect channel operations."
+          />
+        </ListDetailShell>
+      </div>
     );
   }
 
-  const telegram = payload?.channels.telegram;
-  const whatsapp = payload?.channels.whatsapp;
+  const providers = [
+    payload?.channels.telegram,
+    payload?.channels.whatsapp,
+  ].filter((provider): provider is ChannelOperationsProviderRecord => Boolean(provider));
 
   return (
-    <main
-      style={{
-        minHeight: '100vh',
-        padding: '2rem',
-        display: 'grid',
-        gap: '1.25rem',
-        background: '#f8fafc',
-      }}
-    >
-      <header style={{ display: 'grid', gap: '0.6rem' }}>
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.75rem', alignItems: 'center' }}>
-          <h1 style={{ margin: 0, fontSize: '1.7rem', color: '#0f172a' }}>Channel Operations Console</h1>
-          <StatusBadge status={telegram?.workspace_status ?? 'setup_needed'} />
-          <StatusBadge status={whatsapp?.workspace_status ?? 'setup_needed'} />
-        </div>
-        <p style={{ margin: 0, maxWidth: '70rem', color: '#475569', lineHeight: 1.6 }}>
-          Workspace-scoped operator view for Telegram and WhatsApp. This surface reads connector health,
-          webhook status, delivery backlog, recent channel events, and dead letters directly from backend runtime truth.
-        </p>
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '1rem', color: '#64748b', fontSize: '0.88rem' }}>
-          <span>Workspace: <strong style={{ color: '#0f172a' }}>{bootstrap.workspace.label}</strong></span>
-          <span>Profile: <strong style={{ color: '#0f172a' }}>{shellProfile.label}</strong></span>
-          <span>Plan: <strong style={{ color: '#0f172a' }}>{titleCase(bootstrap.entitlements.plan)}</strong></span>
-          <span>Last refresh: <strong style={{ color: '#0f172a' }}>{formatTimestamp(payload?.generated_at)}</strong></span>
-        </div>
-        {statusMessage ? <p style={{ margin: 0, color: '#0369a1' }}>{statusMessage}</p> : null}
-        {errorMessage ? <p style={{ margin: 0, color: '#b91c1c' }}>{errorMessage}</p> : null}
-        {loading ? <p style={{ margin: 0, color: '#475569' }}>Loading channel operations state…</p> : null}
-      </header>
-
-      <div
-        style={{
-          display: 'grid',
-          gap: '1rem',
-          gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
-        }}
+    <div data-workstation-surface="admin/channel-operations">
+      <ListDetailShell
+        title="Channel operations"
+        subtitle="Operator view for Telegram and WhatsApp runtime health, delivery backlog, and recent event flow."
+        actions={(
+          <AppButton
+            type="button"
+            tone="secondary"
+            disabled={loading}
+            onClick={() => {
+              void refresh();
+            }}
+          >
+            Refresh
+          </AppButton>
+        )}
       >
-        <MetricCard
-          label="Telegram"
-          value={titleCase(telegram?.workspace_status ?? 'setup_needed')}
-          hint={telegram?.workspace_configured ? `${telegram.connectors.length} connector(s) in this workspace` : 'No Telegram connector configured for this workspace'}
+        <StateBanner
+          title="Workspace scope"
+          detail={`Workspace ${bootstrap.workspace.label} · Profile ${shellProfile.label} · Plan ${titleCase(bootstrap.entitlements.plan)} · Last refresh ${formatTimestamp(payload?.generated_at)}`}
         />
-        <MetricCard
-          label="WhatsApp"
-          value={titleCase(whatsapp?.workspace_status ?? 'setup_needed')}
-          hint={whatsapp?.workspace_configured ? `${whatsapp.connectors.length} connector(s) in this workspace` : 'No WhatsApp connector configured for this workspace'}
-        />
-        <MetricCard
-          label="Pending Deliveries"
-          value={String(payload?.delivery.workspace_summary.pending_count ?? 0)}
-          hint={`Workspace queue · retries ${payload?.delivery.workspace_summary.retry_count_total ?? 0}`}
-        />
-        <MetricCard
-          label="Recent Pairing Failures"
-          value={String(payload?.events.pairing_failures.length ?? 0)}
-          hint="Unpaired or failed pairing attempts seen in recent channel traffic"
-        />
-      </div>
+        {statusMessage ? <StateBanner tone="success" title="Updated" detail={statusMessage} /> : null}
+        {errorMessage ? <StateBanner tone="danger" title="Operator state degraded" detail={errorMessage} /> : null}
+        {loading && !payload ? (
+          <div style={{ display: 'grid', gap: '0.7rem' }}>
+            <SkeletonBlock height="3rem" />
+            <SkeletonBlock height="6rem" />
+            <SkeletonBlock height="6rem" />
+          </div>
+        ) : null}
 
-      {[telegram, whatsapp].map((provider) => (
-        <Section
-          key={provider?.provider ?? 'unknown'}
-          title={`${titleCase(provider?.provider)} Health`}
-          description="Connector state, webhook contract, and runtime issues visible to workspace operators."
-        >
-          {!provider ? null : (
-            <>
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.75rem', alignItems: 'center' }}>
-                <StatusBadge status={provider.workspace_status} />
-                <span style={{ color: '#475569' }}>
-                  Webhook: <strong style={{ color: '#0f172a' }}>{titleCase(String(provider.webhook.status || 'unknown'))}</strong>
-                </span>
-                <span style={{ color: '#475569' }}>
-                  Configured: <strong style={{ color: '#0f172a' }}>{provider.workspace_configured ? 'Yes' : 'No'}</strong>
-                </span>
-              </div>
-              <div style={{ display: 'grid', gap: '0.35rem', color: '#475569', fontSize: '0.92rem' }}>
-                {'public_url_template' in provider.webhook && typeof provider.webhook.public_url_template === 'string' ? (
-                  <div>Webhook template: <code>{provider.webhook.public_url_template}</code></div>
-                ) : null}
-                {'public_url' in provider.webhook && typeof provider.webhook.public_url === 'string' ? (
-                  <div>Webhook URL: <code>{provider.webhook.public_url}</code></div>
-                ) : null}
-                {typeof provider.webhook.guidance === 'string' && provider.webhook.guidance ? (
-                  <div>Guidance: {provider.webhook.guidance}</div>
-                ) : null}
-              </div>
+        <ListDetailColumns
+          primary={(
+            <div style={{ display: 'grid', gap: '1rem' }}>
+              <ListDetailPanel
+                eyebrow="Providers"
+                title="Provider health"
+                subtitle="Connector readiness and webhook health for each supported provider."
+              >
+                {providers.length === 0 ? (
+                  <EmptyPanel
+                    title="No provider state"
+                    body="Channel operations payload is empty for this workspace."
+                  />
+                ) : (
+                  <DataTable>
+                    <DataTableHeader columns="minmax(0, 1.2fr) minmax(8rem, 0.85fr) minmax(9rem, 0.9fr) minmax(8rem, 0.7fr)">
+                      <DataTableHeaderCell>Provider</DataTableHeaderCell>
+                      <DataTableHeaderCell>Status</DataTableHeaderCell>
+                      <DataTableHeaderCell>Webhook</DataTableHeaderCell>
+                      <DataTableHeaderCell>Connectors</DataTableHeaderCell>
+                    </DataTableHeader>
+                    {providers.map((provider) => (
+                      <DataTableRow
+                        key={provider.provider}
+                        columns="minmax(0, 1.2fr) minmax(8rem, 0.85fr) minmax(9rem, 0.9fr) minmax(8rem, 0.7fr)"
+                      >
+                        <DataTableCell
+                          primary={titleCase(provider.provider)}
+                          secondary={provider.workspace_configured ? 'Configured for this workspace' : 'Not configured'}
+                          meta={provider.vault_error ? `Vault error: ${provider.vault_error}` : undefined}
+                        />
+                        <DataTableCell
+                          primary={<DataBadge tone={statusTone(provider.workspace_status)}>{titleCase(provider.workspace_status)}</DataBadge>}
+                          secondary={provider.profile_issue || provider.last_error || 'No current profile issue'}
+                        />
+                        <DataTableCell
+                          primary={<DataBadge tone={statusTone(String(provider.webhook.status || 'unknown'))}>{titleCase(String(provider.webhook.status || 'unknown'))}</DataBadge>}
+                          secondary={typeof provider.webhook.guidance === 'string' ? provider.webhook.guidance : 'Webhook guidance unavailable'}
+                        />
+                        <DataTableCell
+                          primary={String(provider.connectors.length)}
+                          secondary={provider.connectors.length === 1 ? 'connector' : 'connectors'}
+                        />
+                      </DataTableRow>
+                    ))}
+                  </DataTable>
+                )}
+              </ListDetailPanel>
 
-              <div style={{ display: 'grid', gap: '0.75rem', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))' }}>
-                <article style={{ border: '1px solid #e2e8f0', borderRadius: '1rem', padding: '1rem', display: 'grid', gap: '0.5rem' }}>
-                  <strong style={{ color: '#0f172a' }}>Issues</strong>
-                  {provider.issues.length === 0 ? (
-                    <span style={{ color: '#166534' }}>No current issues recorded for this workspace.</span>
-                  ) : provider.issues.map((issue) => (
-                    <div key={`${issue.code}:${issue.connector_id ?? 'workspace'}`} style={{ display: 'grid', gap: '0.2rem' }}>
-                      <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
-                        <StatusBadge status={issue.severity ?? 'degraded'} />
-                        <code>{issue.code || 'issue'}</code>
-                      </div>
-                      <span style={{ color: '#475569' }}>{issue.message || 'Issue detail unavailable.'}</span>
-                    </div>
-                  ))}
-                </article>
+              <ListDetailPanel
+                eyebrow="Connectors"
+                title="Active bindings"
+                subtitle="Connector health and last runtime activity bound to this workspace."
+              >
+                {providers.every((provider) => provider.connectors.length === 0) ? (
+                  <EmptyPanel
+                    title="No connector bindings"
+                    body="No Telegram or WhatsApp connectors are attached to this workspace yet."
+                  />
+                ) : (
+                  <DataTable>
+                    <DataTableHeader columns="minmax(0, 1.1fr) minmax(0, 1fr) minmax(10rem, 0.8fr)">
+                      <DataTableHeaderCell>Connector</DataTableHeaderCell>
+                      <DataTableHeaderCell>Health</DataTableHeaderCell>
+                      <DataTableHeaderCell>Last activity</DataTableHeaderCell>
+                    </DataTableHeader>
+                    {providers.flatMap((provider) =>
+                      provider.connectors.map((connector) => (
+                        <DataTableRow
+                          key={connector.id}
+                          columns="minmax(0, 1.1fr) minmax(0, 1fr) minmax(10rem, 0.8fr)"
+                        >
+                          <DataTableCell
+                            primary={connector.label || connector.id}
+                            secondary={titleCase(provider.provider)}
+                            meta={connector.webhook_url || undefined}
+                          />
+                          <DataTableCell
+                            primary={<DataBadge tone={statusTone(connector.profile_status ?? provider.workspace_status)}>{titleCase(connector.profile_status ?? provider.workspace_status)}</DataBadge>}
+                            secondary={connector.last_error || connector.profile_issue || 'No current connector issue'}
+                          />
+                          <DataTableCell
+                            primary={formatTimestamp(connector.last_processed_at ?? connector.last_error_at)}
+                            secondary={connector.last_action ? `Action ${connector.last_action}` : 'No action recorded'}
+                            meta={connector.last_run_id ? `Run ${connector.last_run_id}` : undefined}
+                          />
+                        </DataTableRow>
+                      )),
+                    )}
+                  </DataTable>
+                )}
+              </ListDetailPanel>
 
-                <article style={{ border: '1px solid #e2e8f0', borderRadius: '1rem', padding: '1rem', display: 'grid', gap: '0.5rem' }}>
-                  <strong style={{ color: '#0f172a' }}>Connectors</strong>
-                  {provider.connectors.length === 0 ? (
-                    <span style={{ color: '#92400e' }}>No connectors are bound to this workspace yet.</span>
-                  ) : provider.connectors.map((connector) => (
-                    <div key={connector.id} style={{ borderTop: '1px solid #f1f5f9', paddingTop: '0.75rem', display: 'grid', gap: '0.2rem' }}>
-                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem', alignItems: 'center' }}>
-                        <strong style={{ color: '#0f172a' }}>{connector.label || connector.id}</strong>
-                        <StatusBadge status={connector.profile_status ?? provider.workspace_status} />
-                      </div>
-                      {connector.last_run_id ? <span style={{ color: '#475569' }}>Last run: <code>{connector.last_run_id}</code></span> : null}
-                      {connector.last_action ? <span style={{ color: '#475569' }}>Last action: <code>{connector.last_action}</code></span> : null}
-                      {connector.last_processed_at ? <span style={{ color: '#475569' }}>Last processed: {formatTimestamp(connector.last_processed_at)}</span> : null}
-                      {connector.last_error ? <span style={{ color: '#b91c1c' }}>Last error: {connector.last_error}</span> : null}
-                      {connector.webhook_url ? <span style={{ color: '#475569' }}>Webhook: <code>{connector.webhook_url}</code></span> : null}
-                    </div>
-                  ))}
-                </article>
-              </div>
-            </>
-          )}
-        </Section>
-      ))}
-
-      <Section
-        title="Delivery Queue"
-        description="Durable outbox backlog for this workspace plus runtime-wide queue pressure indicators."
-      >
-        <div style={{ display: 'grid', gap: '1rem', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))' }}>
-          <MetricCard
-            label="Workspace Pending"
-            value={String(payload?.delivery.workspace_summary.pending_count ?? 0)}
-            hint={`By channel: ${Object.entries(payload?.delivery.workspace_summary.pending_by_channel ?? {}).map(([channel, count]) => `${channel} ${count}`).join(' · ') || 'none'}`}
-          />
-          <MetricCard
-            label="Runtime Undelivered"
-            value={String(payload?.delivery.runtime_summary.undelivered_count ?? 0)}
-            hint={`Poisoned ${payload?.delivery.runtime_summary.poisoned_count ?? 0} · max retry ${payload?.delivery.runtime_summary.max_retry_count ?? 0}`}
-          />
-        </div>
-        <div style={{ display: 'grid', gap: '0.65rem' }}>
-          <strong style={{ color: '#0f172a' }}>Pending workspace deliveries</strong>
-          {payload?.delivery.pending.length ? payload.delivery.pending.map((item) => (
-            <div key={item.event_id} style={{ border: '1px solid #e2e8f0', borderRadius: '0.9rem', padding: '0.85rem', display: 'grid', gap: '0.25rem' }}>
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem', alignItems: 'center' }}>
-                <code>{item.event_id}</code>
-                <StatusBadge status={String((item.payload || {}).channel || 'queued')} />
-              </div>
-              <span style={{ color: '#475569' }}>Retries: {item.retry_count} · Last attempt: {formatTimestamp(item.last_attempted_at)}</span>
-              {item.last_delivery_error ? <span style={{ color: '#b91c1c' }}>{item.last_delivery_error}</span> : null}
+              <ListDetailPanel
+                eyebrow="Events"
+                title="Recent channel events"
+                subtitle="Latest workspace-scoped inbound and outbound activity."
+              >
+                {!payload?.events.recent.length ? (
+                  <EmptyPanel
+                    title="No recent events"
+                    body="No recent Telegram or WhatsApp events are recorded for this workspace."
+                  />
+                ) : (
+                  <DataTable>
+                    <DataTableHeader columns="minmax(0, 1.1fr) minmax(0, 1.8fr) minmax(10rem, 0.8fr)">
+                      <DataTableHeaderCell>Event</DataTableHeaderCell>
+                      <DataTableHeaderCell>Detail</DataTableHeaderCell>
+                      <DataTableHeaderCell>Timestamp</DataTableHeaderCell>
+                    </DataTableHeader>
+                    {payload.events.recent.slice(0, 20).map((event) => (
+                      <DataTableRow
+                        key={event.id}
+                        columns="minmax(0, 1.1fr) minmax(0, 1.8fr) minmax(10rem, 0.8fr)"
+                      >
+                        <DataTableCell
+                          primary={`${event.channel || 'channel'} · ${event.direction || 'unknown'}`}
+                          secondary={event.action || event.event_type || 'event'}
+                          meta={event.trace_id ? `Trace ${event.trace_id}` : undefined}
+                        />
+                        <DataTableCell
+                          primary={event.text || 'Event detail unavailable.'}
+                          secondary={event.run_id ? `Run ${event.run_id}` : 'No run reference'}
+                        />
+                        <DataTableCell primary={formatTimestamp(event.ts)} />
+                      </DataTableRow>
+                    ))}
+                  </DataTable>
+                )}
+              </ListDetailPanel>
             </div>
-          )) : (
-            <span style={{ color: '#166534' }}>No pending Telegram or WhatsApp final deliveries for this workspace.</span>
           )}
-        </div>
-      </Section>
+          secondary={(
+            <div style={{ display: 'grid', gap: '1rem' }}>
+              <ListDetailPanel
+                eyebrow="Queue"
+                title="Delivery summary"
+                subtitle="Durable queue pressure and workspace-specific delivery load."
+              >
+                <FormGrid columns="repeat(2, minmax(0, 1fr))">
+                  <FormReadout label="Workspace pending" value={String(payload?.delivery.workspace_summary.pending_count ?? 0)} />
+                  <FormReadout label="Workspace retries" value={String(payload?.delivery.workspace_summary.retry_count_total ?? 0)} />
+                  <FormReadout label="Runtime undelivered" value={String(payload?.delivery.runtime_summary.undelivered_count ?? 0)} />
+                  <FormReadout label="Poisoned" value={String(payload?.delivery.runtime_summary.poisoned_count ?? 0)} />
+                </FormGrid>
+              </ListDetailPanel>
 
-      <Section
-        title="Failures"
-        description="Pairing failures from recent traffic and delivery dead letters that require operator attention."
-      >
-        <div style={{ display: 'grid', gap: '1rem', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))' }}>
-          <article style={{ border: '1px solid #e2e8f0', borderRadius: '1rem', padding: '1rem', display: 'grid', gap: '0.6rem' }}>
-            <strong style={{ color: '#0f172a' }}>Pairing Failures</strong>
-            {payload?.events.pairing_failures.length ? payload.events.pairing_failures.map((item) => (
-              <div key={item.id} style={{ borderTop: '1px solid #f1f5f9', paddingTop: '0.75rem', display: 'grid', gap: '0.2rem' }}>
-                <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
-                  <StatusBadge status={item.action ?? 'pairing_failed'} />
-                  <code>{item.channel || 'channel'}</code>
-                </div>
-                <span style={{ color: '#475569' }}>{item.text || 'Pairing failure detail unavailable.'}</span>
-                <span style={{ color: '#64748b' }}>{formatTimestamp(item.ts)}</span>
-              </div>
-            )) : (
-              <span style={{ color: '#166534' }}>No recent pairing failures recorded.</span>
-            )}
-          </article>
+              <ListDetailPanel
+                eyebrow="Issues"
+                title="Provider issues"
+                subtitle="Current connector or provider-level issues visible to workspace operators."
+              >
+                {providers.every((provider) => provider.issues.length === 0) ? (
+                  <EmptyPanel
+                    title="No current issues"
+                    body="No Telegram or WhatsApp issues are currently recorded for this workspace."
+                  />
+                ) : (
+                  <div style={{ display: 'grid', gap: '0.65rem' }}>
+                    {providers.flatMap((provider) =>
+                      provider.issues.map((issue) => (
+                        <StateBanner
+                          key={`${provider.provider}:${issue.code ?? issue.message ?? 'issue'}`}
+                          tone={statusTone(issue.severity)}
+                          title={`${titleCase(provider.provider)} · ${issue.code || 'Issue'}`}
+                          detail={issue.message || 'Issue detail unavailable.'}
+                        >
+                          {issue.connector_id ? `Connector ${issue.connector_id}` : ''}
+                        </StateBanner>
+                      )),
+                    )}
+                  </div>
+                )}
+              </ListDetailPanel>
 
-          <article style={{ border: '1px solid #e2e8f0', borderRadius: '1rem', padding: '1rem', display: 'grid', gap: '0.6rem' }}>
-            <strong style={{ color: '#0f172a' }}>Delivery Dead Letters</strong>
-            {payload?.delivery.dead_letters.length ? payload.delivery.dead_letters.map((item) => (
-              <div key={item.id} style={{ borderTop: '1px solid #f1f5f9', paddingTop: '0.75rem', display: 'grid', gap: '0.2rem' }}>
-                  <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
-                    <code>{item.channel || 'channel'}</code>
-                    <code>{item.reason || 'delivery_failed'}</code>
-                </div>
-                <span style={{ color: '#475569' }}>{item.text || 'Dead-letter detail unavailable.'}</span>
-                <span style={{ color: '#64748b' }}>{formatTimestamp(item.ts)}</span>
-              </div>
-            )) : (
-              <span style={{ color: '#166534' }}>No dead-lettered Telegram or WhatsApp events recorded for this workspace.</span>
-            )}
-          </article>
-        </div>
-      </Section>
-
-      <Section
-        title="Recent Channel Events"
-        description="Latest inbound and outbound Telegram and WhatsApp activity for this workspace."
-      >
-        <div style={{ display: 'grid', gap: '0.65rem' }}>
-          {payload?.events.recent.length ? payload.events.recent.map((item) => (
-            <div key={item.id} style={{ border: '1px solid #e2e8f0', borderRadius: '0.9rem', padding: '0.85rem', display: 'grid', gap: '0.25rem' }}>
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem', alignItems: 'center' }}>
-                <code>{item.channel || 'channel'}</code>
-                <code>{item.direction || 'unknown'}</code>
-                <code>{item.action || item.event_type || 'event'}</code>
-              </div>
-              <span style={{ color: '#475569' }}>{item.text || 'Event text unavailable.'}</span>
-              <span style={{ color: '#64748b' }}>
-                {formatTimestamp(item.ts)}
-                {item.run_id ? ` · run ${item.run_id}` : ''}
-                {item.trace_id ? ` · trace ${item.trace_id}` : ''}
-              </span>
+              <ListDetailPanel
+                eyebrow="Failures"
+                title="Pairing failures and dead letters"
+                subtitle="Recent failures that still need operator attention."
+              >
+                {!(payload?.events.pairing_failures.length || payload?.delivery.dead_letters.length) ? (
+                  <EmptyPanel
+                    title="No recent failures"
+                    body="Pairing failures and dead-letter events will surface here when intervention is required."
+                  />
+                ) : (
+                  <div style={{ display: 'grid', gap: '0.65rem' }}>
+                    {payload?.events.pairing_failures.slice(0, 6).map((event) => (
+                      <StateBanner
+                        key={`pairing:${event.id}`}
+                        tone="warning"
+                        title={`${event.channel || 'channel'} pairing failure`}
+                        detail={event.text || 'Pairing failure detail unavailable.'}
+                      >
+                        {formatTimestamp(event.ts)}
+                      </StateBanner>
+                    ))}
+                    {payload?.delivery.dead_letters.slice(0, 6).map((event) => (
+                      <StateBanner
+                        key={`dead:${event.id}`}
+                        tone="danger"
+                        title={`${event.channel || 'channel'} dead letter`}
+                        detail={event.text || event.reason || 'Dead-letter detail unavailable.'}
+                      >
+                        {formatTimestamp(event.ts)}
+                      </StateBanner>
+                    ))}
+                  </div>
+                )}
+              </ListDetailPanel>
             </div>
-          )) : (
-            <span style={{ color: '#475569' }}>No recent Telegram or WhatsApp events recorded for this workspace.</span>
           )}
-        </div>
-      </Section>
-    </main>
+        />
+      </ListDetailShell>
+    </div>
   );
 }

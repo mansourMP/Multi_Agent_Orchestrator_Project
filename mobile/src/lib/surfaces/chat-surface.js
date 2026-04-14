@@ -17,6 +17,12 @@ function normalizeChatPayload(payload, threadId) {
         runId: typeof turn?.run_id === 'string' ? turn.run_id : null,
         approvals: Array.isArray(turn?.approvals) ? turn.approvals : [],
         interventions: Array.isArray(turn?.interventions) ? turn.interventions : [],
+        createdAt:
+          typeof turn?.created_at === 'string'
+            ? turn.created_at
+            : typeof turn?.createdAt === 'string'
+              ? turn.createdAt
+              : null,
       }))
     : Array.isArray(payload)
       ? payload
@@ -40,6 +46,7 @@ function createUserMessage(text, threadId) {
     runId: null,
     approvals: [],
     interventions: [],
+    createdAt: new Date().toISOString(),
   };
 }
 
@@ -52,7 +59,7 @@ function createAssistantMessage(response, threadId) {
     || (approvals.length > 0
       ? 'Approval is required before this run can continue.'
       : runId
-        ? 'Run accepted. Open the runs surface for status updates.'
+        ? 'Run accepted. Execution is now in progress.'
         : `Turn ${String(response?.status ?? 'completed')}.`);
 
   if (!content.trim()) {
@@ -67,6 +74,7 @@ function createAssistantMessage(response, threadId) {
     runId,
     approvals,
     interventions,
+    createdAt: new Date().toISOString(),
   };
 }
 
@@ -136,7 +144,12 @@ export function createChatSurface({
   }
 
   return {
-    route: route.href,
+    route: route.screen,
+    getThreadSnapshot(threadId = 'primary') {
+      return foundation.services.queryClient.peek(threadQueryKey(threadId))
+        ?? foundation.services.persistence.getJson(threadPersistenceKey(threadId))
+        ?? null;
+    },
     getDraft(threadId = 'primary') {
       return foundation.services.persistence.getJson(draftPersistenceKey(threadId)) ?? null;
     },
@@ -331,7 +344,7 @@ export function createChatSurface({
           status: 'ready',
           statusMessage:
             Array.isArray(response?.approvals) && response.approvals.length > 0
-              ? 'Turn submitted. Approval is now pending in the canonical approval queue.'
+              ? 'Turn submitted. Approval is waiting inline in this conversation.'
               : null,
           source: 'live',
           data: thread,

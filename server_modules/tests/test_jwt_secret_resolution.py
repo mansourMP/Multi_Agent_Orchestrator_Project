@@ -29,9 +29,10 @@ class JwtSecretResolutionTests(unittest.TestCase):
                 patch.dict("os.environ", {"ORION_API_KEY": "api-key-secret"}, clear=True),
             ):
                 resolved = jwt_secret.resolve_jwt_secret()
+                persisted = secret_file.read_text(encoding="utf-8").strip()
 
         self.assertNotEqual(resolved, "api-key-secret")
-        self.assertNotEqual(secret_file.read_text(encoding="utf-8").strip(), "api-key-secret")
+        self.assertNotEqual(persisted, "api-key-secret")
 
 
 if __name__ == "__main__":

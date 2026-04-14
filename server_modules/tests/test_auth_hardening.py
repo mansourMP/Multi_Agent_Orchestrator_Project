@@ -181,12 +181,12 @@ class AuthHardeningTests(unittest.TestCase):
         self.assertEqual(user["role"], "viewer")
         self.assertFalse(user["is_admin"])
 
-    def test_get_current_user_elevates_admin_allowlist_to_owner(self):
+    def test_get_current_user_marks_allowlisted_admin_without_rewriting_workspace_role(self):
         request = _request()
         token = auth.issue_token("admin-1", email="admin@example.com", role="member")
         with patch.object(auth, "ORION_ADMIN_USER_IDS", {"admin-1"}), patch.object(auth, "ORION_ADMIN_EMAILS", set()):
             user = auth.get_current_user(request=request, authorization=f"Bearer {token}")
-        self.assertEqual(user["role"], "owner")
+        self.assertEqual(user["role"], "member")
         self.assertTrue(user["is_admin"])
 
 

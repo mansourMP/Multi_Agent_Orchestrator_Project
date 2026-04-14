@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Callable, Dict, List
+from typing import Any, Callable, Dict, List, Optional
 
 
 class TelegramConnectorPollService:
@@ -18,6 +18,7 @@ class TelegramConnectorPollService:
         inbound_context_service: Callable[[], Any],
         poll_dispatch_service: Callable[[], Any],
         poll_state_service: Callable[[], Any],
+        ingress_service: Optional[Callable[[], Any]] = None,
     ) -> None:
         self.default_workspace_id = str(default_workspace_id or "default").strip() or "default"
         self.normalize_workspace_id = normalize_workspace_id
@@ -27,6 +28,7 @@ class TelegramConnectorPollService:
         self.connector_state = connector_state
         self.resolve_secret = resolve_secret
         self.poll_cycle_service = poll_cycle_service
+        self.ingress_service = ingress_service
         self.inbound_context_service = inbound_context_service
         self.poll_dispatch_service = poll_dispatch_service
         self.poll_state_service = poll_state_service
@@ -74,14 +76,24 @@ class TelegramConnectorPollService:
             for update in updates:
                 if not isinstance(update, dict):
                     continue
+                update_id = int(update.get("update_id") or 0)
+                if update_id <= max_seen:
+                    continue
+                max_seen = update_id
+                if self.ingress_service is not None:
+                    dispatch_result = self.ingress_service().ingest_update(
+                        source="polling",
+                        entry=entry,
+                        update=update,
+                    )
+                    if not bool(dispatch_result.get("processed")):
+                        continue
+                    continue
                 extracted_message = self.inbound_context_service().extract_inbound_message(
                     update=update,
                     configured_chat_id=configured_chat_id,
                 )
                 update_id = int(extracted_message.get("update_id") or 0)
-                if update_id <= max_seen:
-                    continue
-                max_seen = update_id
                 if not bool(extracted_message.get("handled")):
                     continue
                 dispatch_result = self.poll_dispatch_service().handle_update(

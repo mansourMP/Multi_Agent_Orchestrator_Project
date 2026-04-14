@@ -439,6 +439,8 @@ async def list_pending_approvals(
         workspace_entitlement_payload_fn=_workspace_entitlement_payload,
         current_user_is_privileged_fn=_current_user_is_privileged,
         extract_run_owner_user_id_fn=_extract_owner_user_id,
+        list_pending_approvals_fn=run_state_repository.sync_list_pending_approvals,
+        list_live_runs_fn=run_state_repository.sync_list_live_runs,
     )
 
 async def get_audit(

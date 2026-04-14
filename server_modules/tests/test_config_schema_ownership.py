@@ -1,0 +1,97 @@
+from __future__ import annotations
+
+from server_modules import deployed_agent_config_schema
+from server_modules import platform_config_schema
+from server_modules import workspace_config_schema
+
+
+def test_deployed_agent_schema_splits_owner_config_from_operational_state() -> None:
+    record = {
+        "name": "Store Assistant",
+        "persona": "Helpful retail agent",
+        "system_prompt": "Use the catalog and return policy.",
+        "runtime_target": "cloud",
+        "billing_plan": "free",
+        "channels": {"telegram": {"enabled": True, "endpoint_key": "store-bot"}},
+        "metadata": {
+            "monthly_cost_cap_usd": 25.0,
+            "memory_enabled": True,
+            "provider": "openai",
+            "model": "gpt-4o",
+            "current_budget_cycle": {
+                "usage_month": "2026-04-01",
+                "current_burn_usd": 8.5,
+            },
+        },
+    }
+
+    config = deployed_agent_config_schema.deployed_agent_config_from_record(record)
+    state = deployed_agent_config_schema.deployed_agent_operational_state_from_record(record)
+    metadata = deployed_agent_config_schema.metadata_from_deployed_agent_config(
+        config,
+        existing_metadata=record["metadata"],
+    )
+
+    assert config.commerce_policy.monthly_cost_cap_usd == 25.0
+    assert config.memory_policy.memory_enabled is True
+    assert config.provider == "openai"
+    assert state.current_budget_cycle["current_burn_usd"] == 8.5
+    assert "current_budget_cycle" not in metadata
+
+
+def test_workspace_policy_schema_normalizes_legacy_payload() -> None:
+    config = workspace_config_schema.workspace_policy_config_from_legacy(
+        {
+            "workspace_id": "ws-1",
+            "tenant_id": "tenant-1",
+            "capabilities": {"allow": ["runs.read", "runs.read"], "deny": ["runs.write"]},
+            "dangerous_action_classes": {"allow": [], "deny": ["shell.exec"]},
+            "connectors": {"allow": ["telegram"], "deny": []},
+            "machine_enrollment_scope": "tenant",
+            "trusted_owner_machine_ids": ["machine-a", "machine-a"],
+        }
+    )
+
+    assert config.capabilities.allow == ["runs.read"]
+    assert config.machine_policy.machine_enrollment_scope == "tenant"
+    assert config.machine_policy.trusted_owner_machine_ids == ["machine-a"]
+    assert workspace_config_schema.workspace_policy_envelope(config)["schema_version"] >= 1
+
+
+def test_platform_config_schema_builds_provider_defaults_and_models() -> None:
+    config = platform_config_schema.build_platform_provider_catalog_config(
+        provider_catalog={
+            "openai": {
+                "label": "OpenAI",
+                "auth": ["api_key"],
+                "auth_modes": [{"id": "api_key", "label": "API Key", "secret_required": True}],
+                "default_auth_mode": "api_key",
+                "default_model": "gpt-4o",
+                "models": ["gpt-4o"],
+            }
+        },
+        governance_catalog={
+            "openai": {
+                "privacy_posture": "Managed API",
+                "jurisdiction": "United States",
+                "capability_labels": ["Tools"],
+            }
+        },
+        model_catalog={
+            "openai": {
+                "gpt-4o": {
+                    "label": "GPT-4o",
+                    "context_window_tokens": 128000,
+                    "supports_tools": True,
+                }
+            }
+        },
+    )
+
+    provider = config.provider("openai")
+    models = config.provider_models("openai")
+
+    assert provider is not None
+    assert provider.default_model == "gpt-4o"
+    assert provider.default_auth_mode == "api_key"
+    assert models[0].id == "gpt-4o"

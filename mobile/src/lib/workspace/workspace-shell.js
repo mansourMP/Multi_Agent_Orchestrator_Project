@@ -2,108 +2,55 @@ export const SHELL_PROFILE_DEFINITIONS = {
   personal_shell: {
     id: 'personal_shell',
     label: 'Personal Shell',
-    description: 'General-purpose personal workspace layout.',
+    description: 'General-purpose mobile workspace shell.',
     homeRouteId: 'chat',
   },
   document_workstation_shell: {
     id: 'document_workstation_shell',
     label: 'Document Workstation Shell',
-    description: 'Document-heavy split workstation layout.',
-    homeRouteId: 'workstation',
+    description: 'Document-heavy workflow shell adapted for mobile.',
+    homeRouteId: 'chat',
   },
   operations_admin_shell: {
     id: 'operations_admin_shell',
     label: 'Operations Admin Shell',
-    description: 'Admin-first operations shell for billing, routing, and governance.',
-    homeRouteId: 'admin',
+    description: 'Admin-first workflow shell adapted for mobile.',
+    homeRouteId: 'approvals',
   },
 };
 
 const ROUTE_DEFINITIONS = [
-  { id: 'chat', label: 'Chat', groupId: 'primary', href: (workspaceId) => `/w/${workspaceId}/chat` },
   {
-    id: 'workstation',
-    label: 'Workstation',
+    id: 'chat',
+    label: 'Chat',
     groupId: 'primary',
-    href: (workspaceId) => `/w/${workspaceId}/workstation`,
-    requiredCapabilities: ['document_workstation_enabled'],
-    profileIds: ['document_workstation_shell'],
+    screen: '/(workspace)/chat',
   },
-  { id: 'runs', label: 'Runs', groupId: 'primary', href: (workspaceId) => `/w/${workspaceId}/runs` },
+  {
+    id: 'runs',
+    label: 'Runs',
+    groupId: 'primary',
+    screen: '/(workspace)/runs',
+  },
   {
     id: 'approvals',
     label: 'Approvals',
     groupId: 'primary',
-    href: (workspaceId) => `/w/${workspaceId}/approvals`,
+    screen: '/(workspace)/approvals',
     requiredCapabilities: ['approvals_enabled'],
+  },
+  {
+    id: 'notifications',
+    label: 'Inbox',
+    groupId: 'secondary',
+    screen: '/(workspace)/notifications',
   },
   {
     id: 'artifacts',
     label: 'Artifacts',
-    groupId: 'workspace',
-    href: (workspaceId) => `/w/${workspaceId}/artifacts`,
+    groupId: 'secondary',
+    screen: '/(workspace)/artifacts',
     requiredCapabilities: ['artifacts_enabled'],
-  },
-  {
-    id: 'notifications',
-    label: 'Notifications',
-    groupId: 'workspace',
-    href: (workspaceId) => `/w/${workspaceId}/notifications`,
-  },
-  {
-    id: 'applications',
-    label: 'Applications',
-    groupId: 'workspace',
-    href: (workspaceId) => `/w/${workspaceId}/applications`,
-  },
-  { id: 'agents', label: 'Agents', groupId: 'workspace', href: (workspaceId) => `/w/${workspaceId}/agents` },
-  { id: 'activity', label: 'Activity', groupId: 'workspace', href: (workspaceId) => `/w/${workspaceId}/activity` },
-  {
-    id: 'integrations',
-    label: 'Integrations',
-    groupId: 'workspace',
-    href: (workspaceId) => `/w/${workspaceId}/integrations`,
-  },
-  { id: 'settings', label: 'Settings', groupId: 'workspace', href: (workspaceId) => `/w/${workspaceId}/settings` },
-  {
-    id: 'admin',
-    label: 'Admin',
-    groupId: 'operations',
-    href: (workspaceId) => `/w/${workspaceId}/admin`,
-    requiredCapabilities: ['workspace_admin_enabled'],
-    profileIds: ['operations_admin_shell'],
-  },
-  {
-    id: 'admin/billing',
-    label: 'Billing',
-    groupId: 'operations',
-    href: (workspaceId) => `/w/${workspaceId}/admin/billing`,
-    requiredCapabilities: ['billing_read_enabled'],
-    profileIds: ['operations_admin_shell'],
-  },
-  {
-    id: 'admin/routing',
-    label: 'Routing',
-    groupId: 'operations',
-    href: (workspaceId) => `/w/${workspaceId}/admin/routing`,
-    requiredCapabilities: ['routing_read_enabled'],
-    profileIds: ['operations_admin_shell'],
-  },
-  {
-    id: 'admin/members',
-    label: 'Members',
-    groupId: 'operations',
-    href: (workspaceId) => `/w/${workspaceId}/admin/members`,
-    requiredCapabilities: ['workspace_admin_enabled'],
-    profileIds: ['operations_admin_shell'],
-  },
-  {
-    id: 'admin/policies',
-    label: 'Policies',
-    groupId: 'operations',
-    href: (workspaceId) => `/w/${workspaceId}/admin/policies`,
-    requiredCapabilities: ['workspace_admin_enabled'],
-    profileIds: ['operations_admin_shell'],
   },
 ];
 
@@ -120,13 +67,31 @@ function normalizeShellProfileId(value) {
 }
 
 function groupLabel(groupId) {
-  if (groupId === 'operations') {
-    return 'Operations';
-  }
-  if (groupId === 'workspace') {
+  if (groupId === 'secondary') {
     return 'Workspace';
   }
   return 'Primary';
+}
+
+function isKnownRouteId(value) {
+  return ROUTE_DEFINITIONS.some((definition) => definition.id === value);
+}
+
+function extractRouteIdFromWorkspacePath(workspaceId, candidate) {
+  if (!candidate.startsWith('/w/')) {
+    return null;
+  }
+
+  const segments = candidate.split('/').filter(Boolean);
+  if (segments.length < 3 || segments[0] !== 'w') {
+    return null;
+  }
+
+  if (workspaceId && segments[1] !== workspaceId) {
+    return null;
+  }
+
+  return segments.slice(2).join('/');
 }
 
 export function hasWorkspaceCapability(bootstrap, capability) {
@@ -176,22 +141,39 @@ function routeMatchesCapabilities(definition, bootstrap) {
   );
 }
 
+export function resolveRouteIdFromTarget(workspaceId, candidate) {
+  if (typeof candidate !== 'string' || !candidate.trim()) {
+    return null;
+  }
+
+  const normalized = candidate.trim();
+  if (isKnownRouteId(normalized)) {
+    return normalized;
+  }
+
+  if (normalized.startsWith('/(workspace)/')) {
+    const routeId = normalized.slice('/(workspace)/'.length);
+    return isKnownRouteId(routeId) ? routeId : null;
+  }
+
+  if (normalized.startsWith('/w/')) {
+    const routeId = extractRouteIdFromWorkspacePath(workspaceId, normalized);
+    return routeId && isKnownRouteId(routeId) ? routeId : null;
+  }
+
+  if (normalized.startsWith('/')) {
+    const routeId = normalized.replace(/^\/+/, '');
+    return isKnownRouteId(routeId) ? routeId : null;
+  }
+
+  return null;
+}
+
 export function resolveRouteIdFromHref(workspaceId, href) {
-  if (!href) {
-    return null;
-  }
-
-  const prefix = `/w/${workspaceId}/`;
-  if (!href.startsWith(prefix)) {
-    return null;
-  }
-
-  const routeId = href.slice(prefix.length);
-  return ROUTE_DEFINITIONS.some((definition) => definition.id === routeId) ? routeId : null;
+  return resolveRouteIdFromTarget(workspaceId, href);
 }
 
 export function buildRouteManifest(shellProfile, bootstrap) {
-  const workspaceId = bootstrap.workspace.id;
   const allowedRoutes = ROUTE_DEFINITIONS.flatMap((definition) => {
     if (!routeMatchesProfile(definition, shellProfile.id)) {
       return [];
@@ -203,7 +185,7 @@ export function buildRouteManifest(shellProfile, bootstrap) {
     return [{
       id: definition.id,
       label: definition.label,
-      href: definition.href(workspaceId),
+      screen: definition.screen,
       groupId: definition.groupId,
       requiredCapabilities: [...(definition.requiredCapabilities ?? [])],
     }];
@@ -215,28 +197,31 @@ export function buildRouteManifest(shellProfile, bootstrap) {
   }, {});
 
   const preferredDefaultRouteId =
-    resolveRouteIdFromHref(workspaceId, bootstrap.shellHints.defaultRoute) ?? shellProfile.homeRouteId;
+    resolveRouteIdFromTarget(bootstrap.workspace.id, bootstrap.shellHints.defaultRoute)
+    ?? shellProfile.homeRouteId;
+  const defaultRouteId =
+    routeIndex[preferredDefaultRouteId]?.id
+    ?? allowedRoutes[0]?.id
+    ?? shellProfile.homeRouteId;
   const defaultRoute =
-    routeIndex[preferredDefaultRouteId]?.href
-    ?? routeIndex[shellProfile.homeRouteId]?.href
-    ?? allowedRoutes[0]?.href
-    ?? `/w/${workspaceId}/chat`;
+    routeIndex[defaultRouteId]?.screen
+    ?? '/(workspace)/chat';
 
-  const navGroups = Array.from(
+  const navGroups = Object.values(
     allowedRoutes.reduce((accumulator, route) => {
-      const groupRoutes = accumulator.get(route.groupId) ?? [];
-      groupRoutes.push(route);
-      accumulator.set(route.groupId, groupRoutes);
+      const existingGroup = accumulator[route.groupId] ?? {
+        id: route.groupId,
+        label: groupLabel(route.groupId),
+        routes: [],
+      };
+      existingGroup.routes.push(route);
+      accumulator[route.groupId] = existingGroup;
       return accumulator;
-    }, new Map()),
-  ).map(([groupId, routes]) => ({
-    id: groupId,
-    label: groupLabel(groupId),
-    routes,
-  }));
+    }, {}),
+  );
 
   return {
-    shellProfileId: shellProfile.id,
+    defaultRouteId,
     defaultRoute,
     routeIds: allowedRoutes.map((route) => route.id),
     routeIndex,

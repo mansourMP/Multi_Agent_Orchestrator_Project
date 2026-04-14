@@ -5,6 +5,7 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 import json
 from math import ceil
+import os
 import sys
 from threading import Lock
 from typing import Any, Dict, Iterable, Iterator, Mapping, Optional, Sequence
@@ -126,6 +127,10 @@ def _initialize_tracing() -> None:
         if _INITIALIZED:
             return
         if not _OTEL_AVAILABLE:
+            _INITIALIZED = True
+            return
+        traces_exporter = str(os.getenv("OTEL_TRACES_EXPORTER") or "").strip().lower()
+        if traces_exporter == "none":
             _INITIALIZED = True
             return
         try:

@@ -147,7 +147,7 @@ class LocalQueueMachineControlTests(unittest.TestCase):
         try:
             with (
                 patch.object(local_queue.machine_lease_service, "cleanup_stale_machine_leases", side_effect=lambda **kwargs: cleanup_calls.append(kwargs) or []),
-                patch.object(local_queue.time, "monotonic", side_effect=[100.0, 101.0, 106.0]),
+                patch.object(local_queue, "_monotonic", side_effect=[100.0, 101.0, 106.0]),
             ):
                 self.assertEqual(local_queue._cleanup_stale_local_claims(), [])
                 self.assertEqual(local_queue._cleanup_stale_local_claims(), [])
@@ -187,7 +187,7 @@ class LocalQueueMachineControlTests(unittest.TestCase):
                     "sync_release_claim",
                     side_effect=lambda run_id, **kwargs: release_calls.append((run_id, kwargs.get("lease_id"))) or False,
                 ),
-                patch.object(local_queue.time, "monotonic", return_value=100.0),
+                patch.object(local_queue, "_monotonic", return_value=100.0),
             ):
                 recovered = local_queue._cleanup_stale_local_claims()
                 remaining_claims = dict(local_queue._server.LOCAL_CLAIMED_RUNS)

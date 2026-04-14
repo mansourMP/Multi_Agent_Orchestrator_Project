@@ -2,6 +2,15 @@ import type { PropsWithChildren, ReactNode } from 'react';
 
 import Link from 'next/link';
 
+import { ScrollRegion } from '@/lib/ui/scroll-region';
+
+function humanizeSurface(surface: string): string {
+  return surface
+    .split('/')
+    .map((segment) => segment.charAt(0).toUpperCase() + segment.slice(1))
+    .join(' / ');
+}
+
 export function WorkstationShellFrame({
   switcherPane,
   kernelPane,
@@ -16,17 +25,16 @@ export function WorkstationShellFrame({
         minHeight: '100vh',
         display: 'grid',
         gridTemplateColumns: '18rem minmax(0, 1fr)',
-        background:
-          'linear-gradient(180deg, #f8fafc 0%, #e2e8f0 100%)',
+        background: 'var(--app-bg-shell)',
       }}
     >
       <aside
         data-workstation-pane="1"
         style={{
           minWidth: 0,
-          borderRight: '1px solid #cbd5e1',
-          background: 'rgba(248, 250, 252, 0.96)',
-          backdropFilter: 'blur(12px)',
+          minHeight: '100vh',
+          borderRight: '1px solid var(--app-border-subtle)',
+          background: 'color-mix(in srgb, var(--app-bg-shell) 92%, var(--app-bg-overlay) 8%)',
         }}
       >
         {switcherPane}
@@ -37,7 +45,8 @@ export function WorkstationShellFrame({
         style={{
           minWidth: 0,
           minHeight: '100vh',
-          padding: '1rem',
+          padding: '0.85rem',
+          background: 'var(--app-bg-canvas)',
         }}
       >
         {kernelPane}
@@ -48,25 +57,25 @@ export function WorkstationShellFrame({
 
 export function WorkstationSurfaceViewport({
   children,
-}: PropsWithChildren) {
+  surface,
+}: PropsWithChildren<{
+  surface?: string;
+}>) {
   return (
-    <div
+    <ScrollRegion
       data-workstation-surface="viewport"
+      data-workstation-surface-view={surface ?? 'unknown'}
       style={{
-        minWidth: 0,
-        minHeight: 0,
-        height: '100%',
-        overflow: 'auto',
+        padding: '1.1rem 1.15rem 1.35rem',
       }}
     >
       {children}
-    </div>
+    </ScrollRegion>
   );
 }
 
 export function WorkstationRouteFallback({
   surface,
-  shellProfileId,
   fallbackHref,
 }: {
   surface: string;
@@ -78,40 +87,59 @@ export function WorkstationRouteFallback({
       data-workstation-surface="fallback"
       style={{
         height: '100%',
-        padding: '2rem',
+        padding: '1.35rem',
         display: 'grid',
         alignContent: 'start',
-        gap: '0.9rem',
+        gap: '0.85rem',
+        borderRadius: '1rem',
+        border: '1px solid var(--app-border-subtle)',
+        background: 'var(--app-bg-panel)',
       }}
     >
-      <div style={{ display: 'grid', gap: '0.35rem' }}>
+      <div style={{ display: 'grid', gap: '0.3rem' }}>
         <span
           style={{
             width: 'fit-content',
-            padding: '0.25rem 0.55rem',
+            padding: '0.24rem 0.56rem',
             borderRadius: '999px',
-            background: '#dbeafe',
-            color: '#1d4ed8',
-            fontSize: '0.78rem',
-            fontWeight: 700,
-            letterSpacing: '0.04em',
+            background: 'color-mix(in srgb, var(--app-accent-muted) 80%, var(--app-bg-panel) 20%)',
+            color: 'var(--app-accent-text)',
+            fontSize: '0.74rem',
+            fontWeight: 650,
+            letterSpacing: '0.08em',
             textTransform: 'uppercase',
           }}
         >
-          Route guard
+          Unavailable
         </span>
-        <h1 style={{ margin: 0, fontSize: '1.4rem', color: '#0f172a' }}>Route Not Available</h1>
+        <h1 style={{ margin: 0, fontSize: '1.2rem', color: 'var(--app-text-primary)' }}>
+          This view is not available here
+        </h1>
       </div>
 
-      <p style={{ margin: 0, color: '#334155', lineHeight: 1.6 }}>
-        This workspace does not expose <code>{surface}</code> in the active shell profile.
+      <p style={{ margin: 0, color: 'var(--app-text-secondary)', lineHeight: 1.6 }}>
+        {humanizeSurface(surface)} is not enabled for the current workspace configuration.
       </p>
-      <p style={{ margin: 0, color: '#475569' }}>
-        Active shell profile: <code>{shellProfileId}</code>
-      </p>
-      <p style={{ margin: 0 }}>
-        Safe fallback: <Link href={fallbackHref}>{fallbackHref}</Link>
-      </p>
+
+      <div>
+        <Link
+          href={fallbackHref}
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            minHeight: '2.2rem',
+            padding: '0.5rem 0.9rem',
+            borderRadius: '999px',
+            border: '1px solid var(--app-border-accent)',
+            background: 'color-mix(in srgb, var(--app-accent) 18%, var(--app-bg-overlay) 82%)',
+            color: 'var(--app-accent-text)',
+            fontWeight: 620,
+            textDecoration: 'none',
+          }}
+        >
+          Open workspace default view
+        </Link>
+      </div>
     </div>
   );
 }

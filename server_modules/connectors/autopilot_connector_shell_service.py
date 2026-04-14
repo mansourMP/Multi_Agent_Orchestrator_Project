@@ -262,7 +262,7 @@ class AutopilotConnectorShellService:
                 decide_execution_target=self.decide_execution_target,
                 apply_execution_route_metadata=self.apply_execution_route_metadata,
                 execute_agent_turn_request=lambda **kwargs: (
-                    __import__("server_modules.agent_turn", fromlist=["execute_system_agent_turn"]).execute_system_agent_turn(
+                    __import__("server_modules.turn_ingress_service", fromlist=["start_system_turn"]).start_system_turn(
                         run_execution_services=self._g("_run_execution_services")(),
                         **kwargs,
                     )
@@ -271,11 +271,11 @@ class AutopilotConnectorShellService:
                     else None
                 ),
                 run_start_request_class=lambda **kwargs: __import__("server_modules.runtime_models", fromlist=["RunStartRequest"]).RunStartRequest(**kwargs),
-                start_run_request=lambda request: self._g("execute_system_run_start_request_via_turn_runtime")(
+                start_run_request=lambda request: __import__("server_modules.turn_ingress_service", fromlist=["start_system_run_start"]).start_system_run_start(
                     request,
                     stamp_request_owner_fn=self._g("_stamp_request_owner"),
                     services=self._g("_run_execution_services")(),
-                ) if callable(self._g("execute_system_run_start_request_via_turn_runtime", None)) and callable(self._g("_run_execution_services", None)) else None,
+                ) if callable(self._g("_run_execution_services", None)) else None,
                 create_run=self.create_run,
                 inherit_owner_user_id=lambda owner_user_id=None: __import__("server_modules.runtime_config", fromlist=["x"]).agent_machine_inherited_owner_user_id(owner_user_id),
                 agent_machine_full_trust_enabled=lambda owner_user_id: __import__("server_modules.runtime_config", fromlist=["x"]).agent_machine_full_trust_enabled(owner_user_id),
@@ -343,7 +343,7 @@ class AutopilotConnectorShellService:
                 extract_message=lambda update: self.telegram_helper_registry().media_service().extract_message(update),
                 build_goal_with_attachments=lambda goal, attachments: self.telegram_helper_registry().media_service().build_goal_with_attachments(goal, attachments),
                 route_message=lambda raw_text, profile: self.telegram_helper_registry().routing_service().route_message(raw_text, profile),
-                parse_form_urlencoded=lambda raw: self.whatsapp_service_registry().whatsapp_webhook_service().parse_form_urlencoded(raw),
+                parse_form_urlencoded=lambda raw: self.whatsapp_service_registry().whatsapp_ingress_service().parse_form_urlencoded(raw),
                 error_response=lambda status_code, content: self._g("Response")(status_code=status_code, content=content),
                 telegram_delivery_mode_getter=lambda: str(self._g("ORION_TELEGRAM_AUTOPILOT_DELIVERY_MODE") or "polling"),
                 telegram_configured_webhook_secret_getter=lambda: str(self._g("ORION_TELEGRAM_AUTOPILOT_WEBHOOK_SECRET") or ""),

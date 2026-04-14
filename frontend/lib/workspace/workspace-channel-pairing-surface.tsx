@@ -2,8 +2,19 @@
 
 import { useEffect, useMemo, useState } from 'react';
 
+import { AppButton } from '@/lib/ui/primitives';
+import { CommandSheet } from '@/lib/ui/command-sheet';
+import { ConfirmDialog } from '@/lib/ui/confirm-dialog';
+import { DataBadge, DataTable, DataTableCell, DataTableHeader, DataTableHeaderCell, DataTableRow } from '@/lib/ui/data-table';
+import { EmptyPanel } from '@/lib/ui/empty-panel';
+import { FormGrid, FormReadout } from '@/lib/ui/form-controls';
+import { ListDetailColumns, ListDetailPanel, ListDetailShell } from '@/lib/ui/list-detail';
+import { ModalSection } from '@/lib/ui/modal';
+import { SkeletonBlock } from '@/lib/ui/skeleton-block';
+import { StateBanner } from '@/lib/ui/state-banner';
 import { useWorkspaceBoundary } from '@/lib/workspace/workspace-boundary';
 import { useWorkspaceServices } from '@/lib/workspace/workspace-services';
+import { WorkstationSurfaceRoot } from '@/lib/workspace/workstation-surface-primitives';
 
 type ChannelPairingFeatureId = 'settings' | 'integrations';
 type ChannelProvider = 'telegram' | 'whatsapp';
@@ -54,7 +65,7 @@ const CHANNEL_PROVIDER_DEFINITIONS: Record<
   telegram: {
     label: 'Telegram',
     commandExample: '/pair EMP-ABCD-EFGH',
-    helpText: 'Open the Telegram bot chat, paste the pairing command, then send your next message there.',
+    helpText: 'Open the Telegram bot chat, paste the pairing command, then continue your conversation there.',
     capabilityKey: 'telegram_channel_enabled',
   },
   whatsapp: {
@@ -69,7 +80,6 @@ function formatTimestamp(value: number | null | undefined): string {
   if (!value) {
     return 'n/a';
   }
-
   try {
     return new Intl.DateTimeFormat(undefined, {
       dateStyle: 'medium',
@@ -82,6 +92,12 @@ function formatTimestamp(value: number | null | undefined): string {
 
 function isIntentActive(intent: ChannelPairingIntentRecord | null | undefined): boolean {
   return Boolean(intent && intent.expires_at * 1000 > Date.now());
+}
+
+function summarizeLinkStatus(links: ChannelLinkRecord[]): string {
+  const activeCount = links.filter((link) => link.status === 'active').length;
+  const revokedCount = links.filter((link) => link.status === 'revoked').length;
+  return `${activeCount} active · ${revokedCount} revoked`;
 }
 
 async function requestChannelPairingJson<T>(
@@ -118,10 +134,31 @@ async function requestChannelPairingJson<T>(
   return payload;
 }
 
-function summarizeLinkStatus(links: ChannelLinkRecord[]): string {
-  const activeCount = links.filter((link) => link.status === 'active').length;
-  const revokedCount = links.filter((link) => link.status === 'revoked').length;
-  return `${activeCount} active · ${revokedCount} revoked`;
+function IntegrationsSkeleton() {
+  return (
+    <ListDetailColumns
+      primary={(
+        <div style={{ display: 'grid', gap: '1rem' }}>
+          <ListDetailPanel eyebrow="Providers" title="Loading provider state">
+            <SkeletonBlock height="4rem" />
+            <SkeletonBlock height="4rem" />
+          </ListDetailPanel>
+          <ListDetailPanel eyebrow="Links" title="Loading linked channels">
+            <SkeletonBlock height="2.8rem" />
+            <SkeletonBlock height="2.8rem" />
+            <SkeletonBlock height="2.8rem" />
+          </ListDetailPanel>
+        </div>
+      )}
+      secondary={(
+        <ListDetailPanel eyebrow="Selection" title="Loading pairing detail">
+          <SkeletonBlock height="3.2rem" />
+          <SkeletonBlock height="3.2rem" />
+          <SkeletonBlock height="3.2rem" />
+        </ListDetailPanel>
+      )}
+    />
+  );
 }
 
 export function WorkspaceChannelPairingSurface({
@@ -129,11 +166,12 @@ export function WorkspaceChannelPairingSurface({
 }: {
   featureId: ChannelPairingFeatureId;
 }) {
-  const { bootstrap, hasCapability, shellProfile, routeManifest } = useWorkspaceBoundary();
+  const { bootstrap, hasCapability, shellProfile } = useWorkspaceBoundary();
   const services = useWorkspaceServices();
   const workspaceId = bootstrap.workspace.id;
   const linksCacheKey = 'channel-pairing:links';
   const intentsCacheKey = 'channel-pairing:intents';
+
   const initialLinks = useMemo(
     () =>
       services.queryClient.peek<ChannelLinksResponse>(linksCacheKey)
@@ -150,11 +188,20 @@ export function WorkspaceChannelPairingSurface({
 
   const [linksResponse, setLinksResponse] = useState<ChannelLinksResponse>(initialLinks);
   const [intentByProvider, setIntentByProvider] = useState<Partial<Record<ChannelProvider, ChannelPairingIntentRecord | null>>>(initialIntents);
+  const [selectedProvider, setSelectedProvider] = useState<ChannelProvider>('telegram');
   const [loading, setLoading] = useState(false);
+  const [isLoadedOnce, setIsLoadedOnce] = useState(initialLinks.links.length > 0);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [actionProvider, setActionProvider] = useState<ChannelProvider | null>(null);
+  const [pendingRelinkProvider, setPendingRelinkProvider] = useState<ChannelProvider | null>(null);
   const [revokingLinkId, setRevokingLinkId] = useState<string | null>(null);
+  const [pendingRevokeLink, setPendingRevokeLink] = useState<ChannelLinkRecord | null>(null);
+  const [codeSheetProvider, setCodeSheetProvider] = useState<ChannelProvider | null>(null);
+
+  useEffect(() => {
+    services.persistence.setJson(intentsCacheKey, intentByProvider);
+  }, [intentByProvider, intentsCacheKey, services]);
 
   const canPairChannels = hasCapability('channel_pairing_enabled');
   const activeLinks = useMemo(
@@ -165,12 +212,10 @@ export function WorkspaceChannelPairingSurface({
     () => linksResponse.links.filter((link) => link.status === 'revoked'),
     [linksResponse.links],
   );
-
-  const title = featureId === 'settings' ? 'Channel Pairing' : 'Workspace Integrations';
-  const intro =
-    featureId === 'settings'
-      ? 'Create pairing codes, review active links, and revoke or relink channel identities from workspace-backed settings.'
-      : 'Telegram and WhatsApp pairing is managed from backend truth here, under the same workspace boundary and capability model.';
+  const selectedDefinition = CHANNEL_PROVIDER_DEFINITIONS[selectedProvider];
+  const selectedIntent = intentByProvider[selectedProvider] ?? null;
+  const selectedProviderLinks = activeLinks.filter((link) => link.provider === selectedProvider);
+  const providerEnabled = hasCapability(selectedDefinition.capabilityKey);
 
   async function refreshLinks(options: { silent?: boolean } = {}): Promise<ChannelLinksResponse> {
     if (!options.silent) {
@@ -186,6 +231,7 @@ export function WorkspaceChannelPairingSurface({
       services.queryClient.set(linksCacheKey, payload);
       services.persistence.setJson(linksCacheKey, payload);
       setLinksResponse(payload);
+      setIsLoadedOnce(true);
       if (!options.silent) {
         setStatusMessage(`Refreshed channel link state from the backend. ${summarizeLinkStatus(payload.links)}`);
       }
@@ -194,6 +240,7 @@ export function WorkspaceChannelPairingSurface({
       const fallback = services.persistence.getJson<ChannelLinksResponse>(linksCacheKey);
       if (fallback) {
         setLinksResponse(fallback);
+        setIsLoadedOnce(true);
         setStatusMessage('Showing cached pairing state because the backend is temporarily unreachable.');
       }
       const message = error instanceof Error ? error.message : 'Could not load channel links.';
@@ -211,11 +258,7 @@ export function WorkspaceChannelPairingSurface({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [workspaceId]);
 
-  useEffect(() => {
-    services.persistence.setJson(intentsCacheKey, intentByProvider);
-  }, [intentByProvider, intentsCacheKey, services]);
-
-  const createIntent = async (provider: ChannelProvider) => {
+  const createIntentRequest = async (provider: ChannelProvider, allowRelink: boolean) => {
     if (!canPairChannels) {
       setErrorMessage('Channel pairing is blocked for this workspace membership.');
       return;
@@ -223,18 +266,6 @@ export function WorkspaceChannelPairingSurface({
     if (!hasCapability(CHANNEL_PROVIDER_DEFINITIONS[provider].capabilityKey)) {
       setErrorMessage(`${CHANNEL_PROVIDER_DEFINITIONS[provider].label} is not enabled for this workspace plan.`);
       return;
-    }
-
-    const providerActiveLinks = activeLinks.filter((link) => link.provider === provider);
-    let allowRelink = false;
-    if (providerActiveLinks.length > 0) {
-      allowRelink = window.confirm(
-        `${CHANNEL_PROVIDER_DEFINITIONS[provider].label} already has an active link in this workspace. Create a re-link code anyway?`,
-      );
-      if (!allowRelink) {
-        setStatusMessage(`Re-link cancelled for ${CHANNEL_PROVIDER_DEFINITIONS[provider].label}.`);
-        return;
-      }
     }
 
     setActionProvider(provider);
@@ -260,6 +291,8 @@ export function WorkspaceChannelPairingSurface({
         ...current,
         [provider]: payload.intent,
       }));
+      setSelectedProvider(provider);
+      setCodeSheetProvider(provider);
       setStatusMessage(
         `${CHANNEL_PROVIDER_DEFINITIONS[provider].label} pairing code created. Expires ${formatTimestamp(payload.intent.expires_at)}.`,
       );
@@ -268,17 +301,20 @@ export function WorkspaceChannelPairingSurface({
       setErrorMessage(error instanceof Error ? error.message : 'Could not create channel pairing code.');
     } finally {
       setActionProvider(null);
+      setPendingRelinkProvider(null);
     }
   };
 
-  const revokeLink = async (link: ChannelLinkRecord) => {
-    const confirmed = window.confirm(
-      `Revoke ${CHANNEL_PROVIDER_DEFINITIONS[link.provider as ChannelProvider]?.label ?? link.provider} link ${link.external_subject_hint ?? link.link_id}?`,
-    );
-    if (!confirmed) {
+  const createIntent = async (provider: ChannelProvider) => {
+    const providerLinks = activeLinks.filter((link) => link.provider === provider);
+    if (providerLinks.length > 0) {
+      setPendingRelinkProvider(provider);
       return;
     }
+    await createIntentRequest(provider, false);
+  };
 
+  const revokeLink = async (link: ChannelLinkRecord) => {
     setRevokingLinkId(link.link_id);
     setErrorMessage(null);
     try {
@@ -301,338 +337,331 @@ export function WorkspaceChannelPairingSurface({
       setErrorMessage(error instanceof Error ? error.message : 'Could not revoke channel link.');
     } finally {
       setRevokingLinkId(null);
+      setPendingRevokeLink(null);
     }
   };
 
+  const title = featureId === 'settings' ? 'Channel pairing' : 'Integrations';
+  const intro =
+    featureId === 'settings'
+      ? 'Generate pairing codes, review active links, and manage channel identities from workspace-backed settings.'
+      : 'Telegram and WhatsApp pairing are managed here from backend truth under the same workspace boundary and capability model.';
+
   return (
-    <main
-      style={{
-        minHeight: '100vh',
-        padding: '2rem 3rem',
-        display: 'grid',
-        gap: '1.5rem',
-      }}
-    >
-      <header style={{ display: 'grid', gap: '0.5rem' }}>
-        <h1 style={{ margin: 0, fontSize: '1.6rem' }}>{title}</h1>
-        <p style={{ margin: 0, maxWidth: '58rem', lineHeight: 1.6 }}>{intro}</p>
-      </header>
-
-      <section
-        style={{
-          display: 'grid',
-          gridTemplateColumns: 'repeat(auto-fit, minmax(16rem, 1fr))',
-          gap: '0.9rem',
-        }}
-      >
-        <SummaryCard label="Workspace" value={bootstrap.workspace.label} />
-        <SummaryCard label="Shell Profile" value={shellProfile.label} />
-        <SummaryCard label="Pairing Capability" value={canPairChannels ? 'enabled' : 'blocked'} />
-        <SummaryCard label="Link Status" value={summarizeLinkStatus(linksResponse.links)} />
-      </section>
-
-      {statusMessage ? <StatusBanner tone="info" message={statusMessage} /> : null}
-      {errorMessage ? <StatusBanner tone="error" message={errorMessage} /> : null}
-
-      {!canPairChannels ? (
-        <section
-          style={{
-            display: 'grid',
-            gap: '0.5rem',
-            padding: '1rem',
-            borderRadius: '1rem',
-            border: '1px solid #fecaca',
-            background: '#fef2f2',
-          }}
-        >
-          <strong>Channel pairing is blocked for this workspace.</strong>
-          <p style={{ margin: 0, lineHeight: 1.6 }}>
-            Pairing codes require a member-or-higher workspace role and an enabled Telegram or WhatsApp channel entitlement.
-          </p>
-          <p style={{ margin: 0, lineHeight: 1.6 }}>
-            Active shell default route remains <code>{routeManifest.defaultRoute}</code>.
-          </p>
-        </section>
-      ) : null}
-
-      <section
-        style={{
-          display: 'grid',
-          gridTemplateColumns: 'repeat(auto-fit, minmax(20rem, 1fr))',
-          gap: '1rem',
-        }}
-      >
-        {(Object.keys(CHANNEL_PROVIDER_DEFINITIONS) as ChannelProvider[]).map((provider) => {
-          const definition = CHANNEL_PROVIDER_DEFINITIONS[provider];
-          const providerLinks = activeLinks.filter((link) => link.provider === provider);
-          const latestIntent = intentByProvider[provider];
-          const providerEnabled = hasCapability(definition.capabilityKey);
-
-          return (
-            <section
-              key={provider}
-              style={{
-                display: 'grid',
-                gap: '0.85rem',
-                padding: '1rem',
-                borderRadius: '1rem',
-                border: '1px solid #cbd5e1',
-                background: '#ffffff',
-              }}
-            >
-              <div style={{ display: 'grid', gap: '0.25rem' }}>
-                <strong>{definition.label}</strong>
-                <span style={{ color: '#475569', lineHeight: 1.5 }}>{definition.helpText}</span>
-              </div>
-
-              <div style={{ display: 'grid', gap: '0.35rem', color: '#334155', fontSize: '0.92rem' }}>
-                <span>Plan enabled: <strong>{providerEnabled ? 'yes' : 'no'}</strong></span>
-                <span>Active links: <strong>{providerLinks.length}</strong></span>
-                <span>Command: <code>{definition.commandExample}</code></span>
-              </div>
-
-              <button
-                type="button"
-                disabled={!providerEnabled || actionProvider === provider || loading}
-                onClick={() => {
-                  void createIntent(provider);
-                }}
-                style={buttonStyle({ muted: false, disabled: !providerEnabled || actionProvider === provider || loading })}
-              >
-                {actionProvider === provider
-                  ? 'Creating pairing code...'
-                  : providerLinks.length > 0
-                    ? 'Create re-link code'
-                    : 'Create pairing code'}
-              </button>
-
-              {latestIntent && isIntentActive(latestIntent) ? (
-                <div
-                  style={{
-                    display: 'grid',
-                    gap: '0.45rem',
-                    padding: '0.85rem',
-                    borderRadius: '0.85rem',
-                    background: '#eff6ff',
-                    border: '1px solid #bfdbfe',
-                  }}
-                >
-                  <strong>Latest pairing code</strong>
-                  <code style={{ fontSize: '1rem' }}>{latestIntent.pairing_code}</code>
-                  <span style={{ color: '#1e3a8a', lineHeight: 1.5 }}>{latestIntent.instructions}</span>
-                  <span style={{ color: '#334155', fontSize: '0.9rem' }}>
-                    Expires {formatTimestamp(latestIntent.expires_at)}
-                    {latestIntent.allow_relink ? ' · relink enabled' : ''}
-                  </span>
-                </div>
-              ) : null}
-
-              <div style={{ display: 'grid', gap: '0.45rem' }}>
-                {providerLinks.length > 0 ? (
-                  providerLinks.map((link) => (
-                    <div
-                      key={link.link_id}
-                      style={{
-                        display: 'grid',
-                        gap: '0.4rem',
-                        padding: '0.85rem',
-                        borderRadius: '0.85rem',
-                        background: '#f8fafc',
-                        border: '1px solid #e2e8f0',
-                      }}
-                    >
-                      <span>
-                        Linked subject: <strong>{link.external_subject_hint ?? link.link_id}</strong>
-                      </span>
-                      <span>Linked at: {formatTimestamp(link.linked_at)}</span>
-                      <span>Scopes: {link.scopes.join(', ') || 'default'}</span>
-                      <button
-                        type="button"
-                        disabled={revokingLinkId === link.link_id}
-                        onClick={() => {
-                          void revokeLink(link);
-                        }}
-                        style={buttonStyle({ muted: true, disabled: revokingLinkId === link.link_id })}
-                      >
-                        {revokingLinkId === link.link_id ? 'Revoking...' : 'Revoke link'}
-                      </button>
-                    </div>
-                  ))
-                ) : (
-                  <div
-                    style={{
-                      padding: '0.85rem',
-                      borderRadius: '0.85rem',
-                      background: '#f8fafc',
-                      border: '1px dashed #cbd5e1',
-                      color: '#475569',
-                    }}
-                  >
-                    No active {definition.label} links for this workspace yet.
-                  </div>
-                )}
-              </div>
-            </section>
-          );
-        })}
-      </section>
-
-      <section
-        style={{
-          display: 'grid',
-          gap: '0.75rem',
-          padding: '1rem',
-          borderRadius: '1rem',
-          border: '1px solid #cbd5e1',
-          background: '#f8fafc',
-        }}
-      >
-        <div style={{ display: 'flex', justifyContent: 'space-between', gap: '1rem', flexWrap: 'wrap' }}>
-          <strong>Workspace-backed channel links</strong>
-          <button
+    <WorkstationSurfaceRoot surface={featureId}>
+      <ListDetailShell
+        title={title}
+        subtitle={intro}
+        actions={(
+          <AppButton
             type="button"
+            tone="secondary"
             onClick={() => {
               void refreshLinks();
             }}
             disabled={loading}
-            style={buttonStyle({ muted: true, disabled: loading })}
           >
-            {loading ? 'Refreshing...' : 'Refresh backend state'}
-          </button>
-        </div>
-
-        <pre
-          style={{
-            margin: 0,
-            padding: '1rem',
-            borderRadius: '0.85rem',
-            background: '#0f172a',
-            color: '#e2e8f0',
-            overflow: 'auto',
-          }}
+            {loading ? 'Refreshing…' : 'Refresh'}
+          </AppButton>
+        )}
+      >
+        <StateBanner
+          tone={canPairChannels ? 'neutral' : 'warning'}
+          title={canPairChannels ? 'Workspace pairing is available' : 'Workspace pairing is blocked'}
+          detail={`${bootstrap.workspace.label} · shell profile ${shellProfile.label}`}
         >
-          {JSON.stringify(
-            {
-              workspaceId,
-              shellProfileId: shellProfile.id,
-              canPairChannels,
-              routeManifestDefaultRoute: routeManifest.defaultRoute,
-              activeLinks,
-              revokedLinks,
-              cachedIntentProviders: Object.keys(intentByProvider).filter((provider) =>
-                isIntentActive(intentByProvider[provider as ChannelProvider]),
-              ),
-              serviceSnapshot: services.snapshot(),
-            },
-            null,
-            2,
-          )}
-        </pre>
-      </section>
+          {canPairChannels
+            ? `Link status ${summarizeLinkStatus(linksResponse.links)}.`
+            : 'Pairing codes require the correct workspace role and enabled channel entitlements.'}
+        </StateBanner>
 
-      {revokedLinks.length > 0 ? (
-        <section
-          style={{
-            display: 'grid',
-            gap: '0.75rem',
-            padding: '1rem',
-            borderRadius: '1rem',
-            border: '1px solid #e2e8f0',
-            background: '#ffffff',
-          }}
-        >
-          <strong>Revoked link history</strong>
-          <div style={{ display: 'grid', gap: '0.6rem' }}>
-            {revokedLinks.map((link) => (
-              <div
-                key={link.link_id}
-                style={{
-                  display: 'grid',
-                  gap: '0.3rem',
-                  padding: '0.8rem',
-                  borderRadius: '0.85rem',
-                  background: '#f8fafc',
-                  border: '1px solid #e2e8f0',
-                }}
-              >
-                <span>
-                  {CHANNEL_PROVIDER_DEFINITIONS[link.provider as ChannelProvider]?.label ?? link.provider} · {link.external_subject_hint ?? link.link_id}
-                </span>
-                <span>Revoked at: {formatTimestamp(link.revoked_at)}</span>
-                <span>Reason: {link.revoked_reason ?? 'No reason recorded.'}</span>
+        {statusMessage ? (
+          <StateBanner tone="success" title="Integrations updated">
+            {statusMessage}
+          </StateBanner>
+        ) : null}
+        {errorMessage ? (
+          <StateBanner tone="danger" title="Integrations are degraded">
+            {errorMessage}
+          </StateBanner>
+        ) : null}
+
+        {(!isLoadedOnce && loading) ? (
+          <IntegrationsSkeleton />
+        ) : (
+          <ListDetailColumns
+            primary={(
+              <div style={{ display: 'grid', gap: '1rem' }}>
+                <ListDetailPanel
+                  eyebrow="Providers"
+                  title="Connected channel providers"
+                  subtitle="Select a provider to inspect pairing readiness, live links, and the most recent pairing code."
+                >
+                  <div style={{ display: 'grid', gap: '0.65rem' }}>
+                    {(Object.keys(CHANNEL_PROVIDER_DEFINITIONS) as ChannelProvider[]).map((provider) => {
+                      const definition = CHANNEL_PROVIDER_DEFINITIONS[provider];
+                      const providerLinks = activeLinks.filter((link) => link.provider === provider);
+                      const enabled = hasCapability(definition.capabilityKey);
+                      const selected = provider === selectedProvider;
+                      return (
+                        <button
+                          key={provider}
+                          type="button"
+                          onClick={() => setSelectedProvider(provider)}
+                          style={{
+                            display: 'grid',
+                            gap: '0.22rem',
+                            padding: '0.9rem 0.95rem',
+                            borderRadius: '0.98rem',
+                            border: selected ? '1px solid var(--app-border-accent)' : '1px solid var(--app-border-subtle)',
+                            background: selected
+                              ? 'color-mix(in srgb, var(--app-accent-muted) 40%, var(--app-bg-panel) 60%)'
+                              : 'color-mix(in srgb, var(--app-bg-panel-elevated) 82%, var(--app-bg-overlay) 18%)',
+                            textAlign: 'left',
+                            cursor: 'pointer',
+                          }}
+                        >
+                          <div style={{ display: 'flex', justifyContent: 'space-between', gap: '0.6rem', flexWrap: 'wrap' }}>
+                            <strong style={{ color: 'var(--app-text-primary)' }}>{definition.label}</strong>
+                            <DataBadge tone={!enabled ? 'warning' : providerLinks.length > 0 ? 'success' : 'accent'}>
+                              {!enabled ? 'Disabled' : providerLinks.length > 0 ? `${providerLinks.length} linked` : 'Ready'}
+                            </DataBadge>
+                          </div>
+                          <span style={{ color: 'var(--app-text-secondary)', fontSize: '0.8rem', lineHeight: 1.55 }}>
+                            {definition.helpText}
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </ListDetailPanel>
+
+                <ListDetailPanel
+                  eyebrow="Links"
+                  title="Active channel links"
+                  subtitle={`${activeLinks.length} active links currently attached to this workspace.`}
+                >
+                  {activeLinks.length === 0 ? (
+                    <EmptyPanel
+                      title="No active links"
+                      body="Generate a pairing code from the selected provider to connect a Telegram or WhatsApp identity to this workspace."
+                    />
+                  ) : (
+                    <DataTable>
+                      <DataTableHeader columns="minmax(0, 0.75fr) minmax(0, 1fr) minmax(0, 0.9fr) auto">
+                        <DataTableHeaderCell>Provider</DataTableHeaderCell>
+                        <DataTableHeaderCell>Linked subject</DataTableHeaderCell>
+                        <DataTableHeaderCell>Linked</DataTableHeaderCell>
+                        <DataTableHeaderCell align="end">Actions</DataTableHeaderCell>
+                      </DataTableHeader>
+                      {activeLinks.map((link) => (
+                        <DataTableRow
+                          key={link.link_id}
+                          columns="minmax(0, 0.75fr) minmax(0, 1fr) minmax(0, 0.9fr) auto"
+                        >
+                          <DataTableCell primary={CHANNEL_PROVIDER_DEFINITIONS[link.provider as ChannelProvider]?.label ?? link.provider} />
+                          <DataTableCell
+                            primary={link.external_subject_hint ?? link.link_id}
+                            secondary={link.scopes.join(', ') || 'default scopes'}
+                          />
+                          <DataTableCell primary={formatTimestamp(link.linked_at)} />
+                          <DataTableCell
+                            align="end"
+                            primary={(
+                              <div style={{ display: 'flex', gap: '0.45rem', justifyContent: 'flex-end', flexWrap: 'wrap' }}>
+                                <AppButton
+                                  type="button"
+                                  tone="secondary"
+                                  onClick={() => setSelectedProvider(link.provider as ChannelProvider)}
+                                >
+                                  Inspect
+                                </AppButton>
+                                <AppButton
+                                  type="button"
+                                  tone="danger"
+                                  onClick={() => setPendingRevokeLink(link)}
+                                  disabled={revokingLinkId === link.link_id}
+                                >
+                                  {revokingLinkId === link.link_id ? 'Revoking…' : 'Revoke'}
+                                </AppButton>
+                              </div>
+                            )}
+                          />
+                        </DataTableRow>
+                      ))}
+                    </DataTable>
+                  )}
+                </ListDetailPanel>
+
+                {revokedLinks.length > 0 ? (
+                  <ListDetailPanel
+                    eyebrow="History"
+                    title="Revoked link history"
+                    subtitle={`${revokedLinks.length} revoked links retained for workspace audit context.`}
+                  >
+                    <div style={{ display: 'grid', gap: '0.55rem' }}>
+                      {revokedLinks.map((link) => (
+                        <div
+                          key={link.link_id}
+                          style={{
+                            display: 'grid',
+                            gap: '0.18rem',
+                            padding: '0.78rem 0.84rem',
+                            borderRadius: '0.9rem',
+                            border: '1px solid var(--app-border-subtle)',
+                            background: 'color-mix(in srgb, var(--app-bg-panel-elevated) 82%, var(--app-bg-overlay) 18%)',
+                          }}
+                        >
+                          <strong style={{ color: 'var(--app-text-primary)' }}>
+                            {CHANNEL_PROVIDER_DEFINITIONS[link.provider as ChannelProvider]?.label ?? link.provider} · {link.external_subject_hint ?? link.link_id}
+                          </strong>
+                          <span style={{ color: 'var(--app-text-secondary)', fontSize: '0.8rem' }}>
+                            Revoked {formatTimestamp(link.revoked_at)} · {link.revoked_reason ?? 'No reason recorded.'}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  </ListDetailPanel>
+                ) : null}
               </div>
-            ))}
-          </div>
-        </section>
-      ) : null}
-    </main>
+            )}
+            secondary={(
+              <ListDetailPanel
+                eyebrow="Selection"
+                title={`${selectedDefinition.label} pairing`}
+                subtitle="Current provider readiness, latest pairing code, and active workspace link state."
+                actions={(
+                  <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+                    {selectedIntent && isIntentActive(selectedIntent) ? (
+                      <AppButton
+                        type="button"
+                        tone="secondary"
+                        onClick={() => setCodeSheetProvider(selectedProvider)}
+                      >
+                        View code
+                      </AppButton>
+                    ) : null}
+                    <AppButton
+                      type="button"
+                      disabled={!providerEnabled || actionProvider === selectedProvider || loading}
+                      onClick={() => {
+                        void createIntent(selectedProvider);
+                      }}
+                    >
+                      {actionProvider === selectedProvider
+                        ? 'Creating…'
+                        : selectedProviderLinks.length > 0
+                          ? 'Create re-link code'
+                          : 'Create pairing code'}
+                    </AppButton>
+                  </div>
+                )}
+              >
+                <StateBanner
+                  tone={!providerEnabled ? 'warning' : selectedProviderLinks.length > 0 ? 'success' : 'neutral'}
+                  title={!providerEnabled ? 'Provider disabled for this plan' : selectedProviderLinks.length > 0 ? 'Provider linked' : 'Provider ready to pair'}
+                  detail={`${selectedProviderLinks.length} active links · command ${selectedDefinition.commandExample}`}
+                >
+                  {selectedDefinition.helpText}
+                </StateBanner>
+
+                <FormGrid>
+                  <FormReadout label="Workspace" value={bootstrap.workspace.label} />
+                  <FormReadout label="Shell profile" value={shellProfile.label} />
+                  <FormReadout label="Command" value={selectedDefinition.commandExample} />
+                  <FormReadout label="Plan enabled" value={providerEnabled ? 'Yes' : 'No'} />
+                  <FormReadout label="Active links" value={String(selectedProviderLinks.length)} />
+                  <FormReadout label="Latest code" value={selectedIntent && isIntentActive(selectedIntent) ? selectedIntent.pairing_code : 'No active code'} />
+                </FormGrid>
+
+                {selectedProviderLinks.length === 0 ? (
+                  <EmptyPanel
+                    title={`No active ${selectedDefinition.label} links`}
+                    body={`Generate a pairing code to link a ${selectedDefinition.label} identity to this workspace.`}
+                  />
+                ) : (
+                  <div style={{ display: 'grid', gap: '0.55rem' }}>
+                    {selectedProviderLinks.map((link) => (
+                      <div
+                        key={link.link_id}
+                        style={{
+                          display: 'grid',
+                          gap: '0.18rem',
+                          padding: '0.78rem 0.84rem',
+                          borderRadius: '0.9rem',
+                          border: '1px solid var(--app-border-subtle)',
+                          background: 'color-mix(in srgb, var(--app-bg-panel-elevated) 82%, var(--app-bg-overlay) 18%)',
+                        }}
+                      >
+                        <strong style={{ color: 'var(--app-text-primary)' }}>{link.external_subject_hint ?? link.link_id}</strong>
+                        <span style={{ color: 'var(--app-text-secondary)', fontSize: '0.8rem' }}>
+                          Linked {formatTimestamp(link.linked_at)} · scopes {link.scopes.join(', ') || 'default'}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </ListDetailPanel>
+            )}
+          />
+        )}
+      </ListDetailShell>
+
+      <CommandSheet
+        open={Boolean(codeSheetProvider && intentByProvider[codeSheetProvider] && isIntentActive(intentByProvider[codeSheetProvider] ?? null))}
+        title={codeSheetProvider ? `${CHANNEL_PROVIDER_DEFINITIONS[codeSheetProvider].label} pairing code` : 'Pairing code'}
+        description="Copy the pairing code and follow the provider-specific command instructions in the linked channel."
+        onClose={() => setCodeSheetProvider(null)}
+        actions={<AppButton type="button" tone="secondary" onClick={() => setCodeSheetProvider(null)}>Done</AppButton>}
+      >
+        {codeSheetProvider && intentByProvider[codeSheetProvider] ? (
+          <>
+            <ModalSection title="Pairing code" description="Paste this exact code into the selected provider chat to complete the link.">
+              <FormGrid columns="1fr">
+                <FormReadout label="Code" value={intentByProvider[codeSheetProvider]?.pairing_code ?? 'n/a'} />
+                <FormReadout label="Expires" value={formatTimestamp(intentByProvider[codeSheetProvider]?.expires_at ?? null)} />
+                <FormReadout label="Command" value={CHANNEL_PROVIDER_DEFINITIONS[codeSheetProvider].commandExample} />
+              </FormGrid>
+            </ModalSection>
+            <ModalSection title="Instructions" description="Operator guidance for completing the link.">
+              <div style={{ color: 'var(--app-text-secondary)', fontSize: '0.84rem', lineHeight: 1.65 }}>
+                {intentByProvider[codeSheetProvider]?.instructions ?? CHANNEL_PROVIDER_DEFINITIONS[codeSheetProvider].helpText}
+              </div>
+            </ModalSection>
+          </>
+        ) : null}
+      </CommandSheet>
+
+      <ConfirmDialog
+        open={Boolean(pendingRelinkProvider)}
+        title="Create re-link code"
+        body={pendingRelinkProvider ? `${CHANNEL_PROVIDER_DEFINITIONS[pendingRelinkProvider].label} already has an active link in this workspace. Create a re-link code anyway?` : 'Create a re-link code anyway?'}
+        confirmLabel="Create re-link code"
+        confirmTone="primary"
+        busy={pendingRelinkProvider ? actionProvider === pendingRelinkProvider : false}
+        onCancel={() => setPendingRelinkProvider(null)}
+        onConfirm={() => {
+          if (!pendingRelinkProvider) {
+            return;
+          }
+          void createIntentRequest(pendingRelinkProvider, true);
+        }}
+      />
+
+      <ConfirmDialog
+        open={Boolean(pendingRevokeLink)}
+        title="Revoke linked channel"
+        body={pendingRevokeLink ? `Revoke ${CHANNEL_PROVIDER_DEFINITIONS[pendingRevokeLink.provider as ChannelProvider]?.label ?? pendingRevokeLink.provider} link ${pendingRevokeLink.external_subject_hint ?? pendingRevokeLink.link_id}?` : 'Revoke linked channel?'}
+        confirmLabel="Revoke link"
+        busy={pendingRevokeLink ? revokingLinkId === pendingRevokeLink.link_id : false}
+        onCancel={() => setPendingRevokeLink(null)}
+        onConfirm={() => {
+          if (!pendingRevokeLink) {
+            return;
+          }
+          void revokeLink(pendingRevokeLink);
+        }}
+      />
+    </WorkstationSurfaceRoot>
   );
-}
-
-function SummaryCard({
-  label,
-  value,
-}: {
-  label: string;
-  value: string;
-}) {
-  return (
-    <div
-      style={{
-        padding: '1rem',
-        borderRadius: '1rem',
-        border: '1px solid #cbd5e1',
-        background: '#ffffff',
-        display: 'grid',
-        gap: '0.35rem',
-      }}
-    >
-      <span style={{ fontSize: '0.85rem', color: '#64748b' }}>{label}</span>
-      <strong>{value}</strong>
-    </div>
-  );
-}
-
-function StatusBanner({
-  message,
-  tone,
-}: {
-  message: string;
-  tone: 'info' | 'error';
-}) {
-  const background = tone === 'error' ? '#fef2f2' : '#eff6ff';
-  const border = tone === 'error' ? '#fecaca' : '#bfdbfe';
-  const color = tone === 'error' ? '#991b1b' : '#1d4ed8';
-
-  return (
-    <section
-      style={{
-        padding: '0.95rem 1rem',
-        borderRadius: '1rem',
-        border: `1px solid ${border}`,
-        background,
-        color,
-      }}
-    >
-      {message}
-    </section>
-  );
-}
-
-function buttonStyle({
-  muted,
-  disabled,
-}: {
-  muted: boolean;
-  disabled: boolean;
-}): React.CSSProperties {
-  return {
-    border: '1px solid #94a3b8',
-    borderRadius: '999px',
-    background: disabled ? '#e2e8f0' : muted ? '#f8fafc' : '#0f172a',
-    color: disabled ? '#64748b' : muted ? '#0f172a' : '#f8fafc',
-    padding: '0.55rem 0.95rem',
-    cursor: disabled ? 'not-allowed' : 'pointer',
-    fontWeight: 600,
-  };
 }

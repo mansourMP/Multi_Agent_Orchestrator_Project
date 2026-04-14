@@ -2,16 +2,22 @@ import 'server-only';
 
 export function resolveControlPlaneBaseUrl(
   env: Partial<Record<
-    'EMPYRALIS_API_URL' | 'NEXT_PUBLIC_ORION_API_URL' | 'NEXT_PUBLIC_API_URL' | 'EMPYRALIS_PUBLIC_URL',
+    'EMPYRALIS_API_URL' | 'ORION_API_URL' | 'NEXT_PUBLIC_ORION_API_URL' | 'NEXT_PUBLIC_API_URL',
     string | undefined
   >> = process.env,
 ): string {
   const rawValue =
     env.EMPYRALIS_API_URL
+    ?? env.ORION_API_URL
     ?? env.NEXT_PUBLIC_ORION_API_URL
     ?? env.NEXT_PUBLIC_API_URL
-    ?? env.EMPYRALIS_PUBLIC_URL
-    ?? 'http://127.0.0.1:8000';
+    ?? (process.env.NODE_ENV === 'production' ? undefined : 'http://127.0.0.1:8001');
+
+  if (!rawValue || !rawValue.trim()) {
+    throw new Error(
+      'Control-plane base URL is not configured. Set EMPYRALIS_API_URL or ORION_API_URL.',
+    );
+  }
 
   return rawValue.replace(/\/+$/, '');
 }

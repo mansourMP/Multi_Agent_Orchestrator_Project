@@ -80,6 +80,33 @@ class SessionTranscriptStoreTests(unittest.TestCase):
         self.assertNotIn("Continue the specialist flow.", shared_logs)
         self.assertIn("Continue the specialist flow.", install_logs)
 
+    def test_save_session_transcript_reports_daily_log_degradation(self) -> None:
+        with patch("server_modules.session_transcript_store.save_daily_log", side_effect=RuntimeError("disk full")):
+            result = session_transcript_store.save_session_transcript(
+                workspace_id="default",
+                thread_id="thread-3",
+                provider="openai",
+                model="gpt-test",
+                messages=[{"role": "user", "content": "Hello"}],
+                user_message="Hello",
+                assistant_reply="Hi",
+            )
+
+        self.assertEqual(len(result["degraded_operations"]), 1)
+        self.assertEqual(result["degraded_operations"][0]["error_code"], "daily_log_persist_failed")
+
+    def test_list_session_transcript_summaries_logs_parse_degradation(self) -> None:
+        transcript_dir = self._transcripts_root / "default"
+        transcript_dir.mkdir(parents=True, exist_ok=True)
+        (transcript_dir / "2026-04-14.jsonl").write_text("{not-json}\n", encoding="utf-8")
+
+        with patch("server_modules.session_transcript_store.logger.warning") as warning_mock:
+            payload = session_transcript_store.list_session_transcript_summaries(workspace_id="default")
+
+        self.assertEqual(payload, [])
+        warning_mock.assert_called_once()
+        self.assertEqual(warning_mock.call_args.kwargs["extra"]["error_code"], "transcript_parse_failed")
+
 
 if __name__ == "__main__":
     unittest.main()

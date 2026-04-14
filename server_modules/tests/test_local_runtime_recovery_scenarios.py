@@ -379,7 +379,7 @@ class LocalRuntimeRecoveryScenarioTests(unittest.TestCase):
                         with patch.object(
                             __import__("server_modules.run_state_repository", fromlist=["sync_release_claim"]),
                             "sync_release_claim",
-                            side_effect=lambda run_id: released.append(run_id),
+                            side_effect=lambda run_id, **_kwargs: released.append(run_id) or True,
                         ):
                             recovered = local_queue.recover_expired_worker_leases_on_startup()
         finally:

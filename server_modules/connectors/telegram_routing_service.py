@@ -63,7 +63,7 @@ class TelegramRoutingService:
         remainder = str(tokens[1] or "").strip() if len(tokens) > 1 else ""
 
         if command in {"start", "onboard", "setup"}:
-            return {"action": "onboard_start"}
+            return {"action": "onboard_start", "payload": remainder}
         if command in {"help", "h", "?", "commands", "cmd"}:
             return {"action": "help"} if bool(profile.get("allow_help")) else {"action": "ignore", "reason": "help_disabled"}
         if command in {"home", "main"}:
@@ -201,7 +201,7 @@ class TelegramRoutingService:
             if skill:
                 return {"action": "run", "goal": self.skill_goal_builder(skill), "source": "skill_menu", "skill": skill}
         if normalized_content in {"start", "start onboarding", "onboard me"}:
-            return {"action": "onboard_start"}
+            return {"action": "onboard_start", "payload": ""}
 
         quick_goal = self.menu_goal_templates.get(normalized_content) or self.quick_goal_templates.get(normalized_content)
         if quick_goal:

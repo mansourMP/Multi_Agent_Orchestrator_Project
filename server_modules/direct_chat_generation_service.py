@@ -1,9 +1,15 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import time
 from typing import Any, Callable, Dict, Iterator, List, Optional
+import uuid
 
+from server_modules import agent_trace_service
+from server_modules import direct_tool_execution_service
+from server_modules import healthguide_safety_service
 from server_modules.direct_chat_intervention_service import build_intervention
+from server_modules.direct_tool_config_service import run_async_tool_call
 
 
 @dataclass(slots=True)
@@ -25,6 +31,79 @@ class DirectChatGenerationServices:
     direct_chat_error_reply: Callable[[str], str]
     capture_exception: Callable[[BaseException], None]
     generate_chat_reply_stream_with_provider_fallback: Callable[..., Iterator[Dict[str, Any]]]
+
+
+def _compact_trace_text(value: Any, limit: int = 280) -> str:
+    text = " ".join(str(value or "").split()).strip()
+    if len(text) <= limit:
+        return text
+    return f"{text[: max(0, limit - 1)].rstrip()}…"
+
+
+def _trace_raw_event(envelope: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    if not isinstance(envelope, dict):
+        return None
+    return {
+        "type": "trace",
+        "payload": envelope,
+    }
+
+
+def _emit_trace_event(
+    trace_context: Optional[Any],
+    *,
+    event_type: str,
+    data: Optional[Dict[str, Any]],
+    persisted: bool,
+    parent_id: Optional[str] = None,
+    item_id: Optional[str] = None,
+    tool_call_id: Optional[str] = None,
+    child_run_id: Optional[str] = None,
+    approval_id: Optional[str] = None,
+    artifact_id: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    if trace_context is None:
+        return None
+    if persisted:
+        envelope = run_async_tool_call(
+            agent_trace_service.emit_with_envelope(
+                trace_context,
+                event_type,
+                data,
+                persisted=True,
+                parent_id=parent_id,
+                item_id=item_id,
+                tool_call_id=tool_call_id,
+                child_run_id=child_run_id,
+                approval_id=approval_id,
+                artifact_id=artifact_id,
+            )
+        )
+    else:
+        envelope = agent_trace_service.build_ephemeral_envelope(
+            trace_context,
+            event_type,
+            data,
+            parent_id=parent_id,
+            item_id=item_id,
+            tool_call_id=tool_call_id,
+            child_run_id=child_run_id,
+            approval_id=approval_id,
+            artifact_id=artifact_id,
+        )
+    return _trace_raw_event(envelope)
+
+
+def _finish_trace(trace_context: Optional[Any], *, outcome: str, final_message_id: Optional[str]) -> None:
+    if trace_context is None:
+        return
+    run_async_tool_call(
+        agent_trace_service.finish_trace(
+            trace_context,
+            outcome=outcome,
+            final_message_id=final_message_id,
+        )
+    )
 
 
 def stream_provider_backed_direct_chat(
@@ -51,6 +130,7 @@ def stream_provider_backed_direct_chat(
     tool_loop_session_key: str,
     fallback_reason: Optional[str],
     session_ctx: Optional[Dict[str, Any]],
+    trace_context: Optional[Any],
     resolved_chat_max_iterations: int,
     direct_tool_result_summary_system_message: str,
 ) -> Iterator[Dict[str, Any]]:
@@ -64,6 +144,71 @@ def stream_provider_backed_direct_chat(
     conversation_messages.extend(compacted_prior_messages)
     current_prompt = normalized_message
     max_iterations = resolved_chat_max_iterations
+    trace_started_at = time.monotonic()
+    trace_plan_id = uuid.uuid4().hex
+    planning_item_id = uuid.uuid4().hex
+    assistant_message_id = uuid.uuid4().hex
+    health_safety_context = healthguide_safety_service.resolve_health_safety_context(session_ctx=session_ctx)
+    trace_started_raw = _emit_trace_event(
+        trace_context,
+        event_type="trace.started",
+        data={"input_mode": "text"},
+        persisted=True,
+    )
+    if trace_started_raw is not None:
+        yield trace_started_raw
+    trace_plan_started = _emit_trace_event(
+        trace_context,
+        event_type="plan.started",
+        data={
+            "plan_id": trace_plan_id,
+            "title": "Sage Plan",
+            "summary": "Review the request, decide whether tools are needed, and produce the final answer.",
+        },
+        persisted=True,
+    )
+    if trace_plan_started is not None:
+        yield trace_plan_started
+    trace_plan_item = _emit_trace_event(
+        trace_context,
+        event_type="plan.item.created",
+        data={
+            "plan_id": trace_plan_id,
+            "item_id": planning_item_id,
+            "index": 1,
+            "title": "Review the request and choose the next action",
+            "kind": "respond",
+            "owner": "sage",
+            "depends_on": [],
+            "rationale_summary": "Start by planning the response before deciding whether a tool call is necessary.",
+        },
+        persisted=True,
+        item_id=planning_item_id,
+    )
+    if trace_plan_item is not None:
+        yield trace_plan_item
+    trace_plan_item_running = _emit_trace_event(
+        trace_context,
+        event_type="plan.item.updated",
+        data={
+            "item_id": planning_item_id,
+            "status": "running",
+            "summary": "Planning the response.",
+        },
+        persisted=True,
+        item_id=planning_item_id,
+    )
+    if trace_plan_item_running is not None:
+        yield trace_plan_item_running
+    reasoning_started = _emit_trace_event(
+        trace_context,
+        event_type="reasoning.summary.delta",
+        data={"delta": "Planning the response."},
+        persisted=False,
+        item_id=planning_item_id,
+    )
+    if reasoning_started is not None:
+        yield reasoning_started
 
     for iteration in range(max_iterations):
         thinking_iteration = iteration + 1
@@ -87,6 +232,17 @@ def stream_provider_backed_direct_chat(
                 if delta:
                     iteration_reply += delta
                     yield {"type": "chunk", "delta": delta}
+                    trace_delta = _emit_trace_event(
+                        trace_context,
+                        event_type="assistant.message.delta",
+                        data={
+                            "message_id": assistant_message_id,
+                            "delta": delta,
+                        },
+                        persisted=False,
+                    )
+                    if trace_delta is not None:
+                        yield trace_delta
                 continue
             if event_type == "result":
                 final_reply = str(event.get("reply") or "").strip() or iteration_reply
@@ -107,12 +263,40 @@ def stream_provider_backed_direct_chat(
                     conversation_messages.append({"role": "assistant", "content": final_reply})
 
                 if iteration_tool_calls:
+                    plan_done = _emit_trace_event(
+                        trace_context,
+                        event_type="plan.item.updated",
+                        data={
+                            "item_id": planning_item_id,
+                            "status": "done",
+                            "summary": "Tool calls are required before answering.",
+                        },
+                        persisted=True,
+                        item_id=planning_item_id,
+                    )
+                    if plan_done is not None:
+                        yield plan_done
                     loop_detected = any(
                         services.record_direct_tool_signature(tool_loop_session_key, tool_call)
                         for tool_call in iteration_tool_calls
                         if isinstance(tool_call, dict)
                     )
                     if loop_detected:
+                        trace_failed = _emit_trace_event(
+                            trace_context,
+                            event_type="trace.failed",
+                            data={
+                                "code": "tool_loop_detected",
+                                "message": "The same direct tool action repeated and execution was halted.",
+                                "retryable": False,
+                                "failed_item_id": planning_item_id,
+                            },
+                            persisted=True,
+                            item_id=planning_item_id,
+                        )
+                        if trace_failed is not None:
+                            yield trace_failed
+                        _finish_trace(trace_context, outcome="partial", final_message_id=None)
                         yield {
                             "type": "final",
                             "payload": {
@@ -160,6 +344,31 @@ def stream_provider_backed_direct_chat(
                         session_ctx=session_ctx,
                     )
                     if approval_payload is not None:
+                        approval_blocked = _emit_trace_event(
+                            trace_context,
+                            event_type="plan.item.updated",
+                            data={
+                                "item_id": planning_item_id,
+                                "status": "blocked",
+                                "summary": "Waiting for approval before running direct tools.",
+                            },
+                            persisted=True,
+                            item_id=planning_item_id,
+                        )
+                        if approval_blocked is not None:
+                            yield approval_blocked
+                        trace_completed = _emit_trace_event(
+                            trace_context,
+                            event_type="trace.completed",
+                            data={
+                                "duration_ms": int((time.monotonic() - trace_started_at) * 1000),
+                                "final_message_id": None,
+                            },
+                            persisted=True,
+                        )
+                        if trace_completed is not None:
+                            yield trace_completed
+                        _finish_trace(trace_context, outcome="needs_input", final_message_id=None)
                         yield {
                             "type": "final",
                             "payload": {
@@ -202,6 +411,101 @@ def stream_provider_backed_direct_chat(
                                 if isinstance(nested_input, dict):
                                     argument_payload = nested_input
                             step_id = f"tool:{thinking_iteration}:{tool_index}"
+                            tool_item_id = uuid.uuid4().hex
+                            tool_call_id = str(tool_call.get("id") or "").strip() or f"toolcall_{uuid.uuid4().hex}"
+                            tool_name = str(tool_call.get("name") or f"{connector_id}__{action_id}").strip()
+                            tool_trace_metadata = direct_tool_execution_service.build_direct_tool_trace_metadata(
+                                connector_id,
+                                action_id,
+                                argument_payload,
+                            )
+                            tool_plan_item = _emit_trace_event(
+                                trace_context,
+                                event_type="plan.item.created",
+                                data={
+                                    "plan_id": trace_plan_id,
+                                    "item_id": tool_item_id,
+                                    "index": tool_index + 1,
+                                    "title": f"Run {tool_name}",
+                                    "kind": "tool",
+                                    "owner": "sage",
+                                    "depends_on": [planning_item_id],
+                                    "rationale_summary": "A direct tool call is needed to complete the request.",
+                                },
+                                persisted=True,
+                                item_id=tool_item_id,
+                            )
+                            if tool_plan_item is not None:
+                                yield tool_plan_item
+                            tool_plan_running = _emit_trace_event(
+                                trace_context,
+                                event_type="plan.item.updated",
+                                data={
+                                    "item_id": tool_item_id,
+                                    "status": "running",
+                                    "summary": f"Running {tool_name}.",
+                                },
+                                persisted=True,
+                                item_id=tool_item_id,
+                            )
+                            if tool_plan_running is not None:
+                                yield tool_plan_running
+                            tool_started = _emit_trace_event(
+                                trace_context,
+                                event_type="tool.started",
+                                data={
+                                    "tool_name": tool_name,
+                                    "capability_id": tool_trace_metadata.get("capability_id"),
+                                    "connector_id": connector_id or None,
+                                    "args_preview": argument_payload,
+                                },
+                                persisted=True,
+                                item_id=tool_item_id,
+                                tool_call_id=tool_call_id,
+                            )
+                            if tool_started is not None:
+                                yield tool_started
+                            tool_progress = _emit_trace_event(
+                                trace_context,
+                                event_type="tool.progress",
+                                data={
+                                    "message": f"Running {tool_name}",
+                                    "percent": 0,
+                                },
+                                persisted=False,
+                                tool_call_id=tool_call_id,
+                            )
+                            if tool_progress is not None:
+                                yield tool_progress
+                            if str(tool_trace_metadata.get("search_query") or "").strip():
+                                trace_search_query = _emit_trace_event(
+                                    trace_context,
+                                    event_type="search.query",
+                                    data={
+                                        "provider": connector_id or "web",
+                                        "query": str(tool_trace_metadata.get("search_query") or "").strip(),
+                                        "filters": {},
+                                    },
+                                    persisted=True,
+                                    tool_call_id=tool_call_id,
+                                )
+                                if trace_search_query is not None:
+                                    yield trace_search_query
+                            if isinstance(tool_trace_metadata.get("browser_action"), dict):
+                                browser_action_payload = dict(tool_trace_metadata.get("browser_action") or {})
+                                trace_browser_action = _emit_trace_event(
+                                    trace_context,
+                                    event_type="browser.action",
+                                    data={
+                                        "action": str(browser_action_payload.get("action") or action_id or "").strip(),
+                                        "target_summary": str(browser_action_payload.get("target_summary") or "").strip(),
+                                        "url": browser_action_payload.get("url"),
+                                    },
+                                    persisted=True,
+                                    tool_call_id=tool_call_id,
+                                )
+                                if trace_browser_action is not None:
+                                    yield trace_browser_action
                             yield services.direct_tool_step_payload(
                                 connector_id,
                                 action_id,
@@ -221,6 +525,69 @@ def stream_provider_backed_direct_chat(
                                 session_ctx=session_ctx,
                             )
                             executed_any_tools = True
+                            completed_trace_metadata = direct_tool_execution_service.build_direct_tool_trace_metadata(
+                                connector_id,
+                                action_id,
+                                argument_payload,
+                                result_text=tool_result,
+                            )
+                            if isinstance(completed_trace_metadata.get("search_results"), list) and completed_trace_metadata.get("search_results"):
+                                trace_search_results = _emit_trace_event(
+                                    trace_context,
+                                    event_type="search.results",
+                                    data={"results": list(completed_trace_metadata.get("search_results") or [])},
+                                    persisted=True,
+                                    tool_call_id=tool_call_id,
+                                )
+                                if trace_search_results is not None:
+                                    yield trace_search_results
+                            if isinstance(completed_trace_metadata.get("browser_screenshot"), dict):
+                                browser_screenshot_payload = dict(completed_trace_metadata.get("browser_screenshot") or {})
+                                trace_browser_screenshot = _emit_trace_event(
+                                    trace_context,
+                                    event_type="browser.screenshot",
+                                    data={
+                                        "caption": str(browser_screenshot_payload.get("caption") or "").strip(),
+                                        "width": int(browser_screenshot_payload.get("width") or 0),
+                                        "height": int(browser_screenshot_payload.get("height") or 0),
+                                    },
+                                    persisted=True,
+                                    tool_call_id=tool_call_id,
+                                    artifact_id=str(browser_screenshot_payload.get("artifact_id") or "").strip() or None,
+                                )
+                                if trace_browser_screenshot is not None:
+                                    yield trace_browser_screenshot
+                            tool_result_event = _emit_trace_event(
+                                trace_context,
+                                event_type="tool.result",
+                                data={
+                                    "status": "ok",
+                                    "summary": str(completed_trace_metadata.get("result_summary") or tool_result or "").strip(),
+                                    "artifact_ids": (
+                                        [str((completed_trace_metadata.get("browser_screenshot") or {}).get("artifact_id") or "").strip()]
+                                        if isinstance(completed_trace_metadata.get("browser_screenshot"), dict)
+                                        and str((completed_trace_metadata.get("browser_screenshot") or {}).get("artifact_id") or "").strip()
+                                        else []
+                                    ),
+                                },
+                                persisted=True,
+                                tool_call_id=tool_call_id,
+                            )
+                            if tool_result_event is not None:
+                                yield tool_result_event
+                            tool_plan_done = _emit_trace_event(
+                                trace_context,
+                                event_type="plan.item.updated",
+                                data={
+                                    "item_id": tool_item_id,
+                                    "status": "done",
+                                    "summary": f"Completed {tool_name}.",
+                                },
+                                persisted=True,
+                                item_id=tool_item_id,
+                            )
+                            if tool_plan_done is not None:
+                                yield tool_plan_done
                             yield services.direct_tool_step_payload(
                                 connector_id,
                                 action_id,
@@ -246,6 +613,34 @@ def stream_provider_backed_direct_chat(
                     except Exception as exc:
                         llm_error = str(exc).strip() or "connector_action_failed"
                         services.capture_exception(exc)
+                        tool_failure = _emit_trace_event(
+                            trace_context,
+                            event_type="tool.result",
+                            data={
+                                "status": "error",
+                                "summary": llm_error,
+                                "artifact_ids": [],
+                            },
+                            persisted=True,
+                            tool_call_id=f"toolcall_error:{thinking_iteration}",
+                        )
+                        if tool_failure is not None:
+                            yield tool_failure
+                        trace_failed = _emit_trace_event(
+                            trace_context,
+                            event_type="trace.failed",
+                            data={
+                                "code": llm_error,
+                                "message": llm_error,
+                                "retryable": False,
+                                "failed_item_id": planning_item_id,
+                            },
+                            persisted=True,
+                            item_id=planning_item_id,
+                        )
+                        if trace_failed is not None:
+                            yield trace_failed
+                        _finish_trace(trace_context, outcome="partial", final_message_id=None)
                         yield services.direct_tool_step_payload(
                             connector_id,
                             action_id,
@@ -296,6 +691,63 @@ def stream_provider_backed_direct_chat(
                         return
 
                 actions = [] if executed_any_tools else services.suggest_actions(normalized_message, availability_payload)
+                citation_refs: List[str] = []
+                if health_safety_context.get("enabled"):
+                    safety_result = healthguide_safety_service.apply_health_safety_to_reply(
+                        reply=final_reply,
+                        user_message=normalized_message,
+                        assistant_name=str(health_safety_context.get("assistant_name") or "").strip() or None,
+                        response_payload=event,
+                    )
+                    final_reply = str(safety_result.get("reply") or final_reply).strip()
+                    citation_refs = list(safety_result.get("citation_refs") or [])
+                    if (
+                        conversation_messages
+                        and isinstance(conversation_messages[-1], dict)
+                        and str(conversation_messages[-1].get("role") or "").strip() == "assistant"
+                    ):
+                        conversation_messages[-1] = {
+                            **conversation_messages[-1],
+                            "content": final_reply,
+                        }
+                trace_plan_answer_done = _emit_trace_event(
+                    trace_context,
+                    event_type="plan.item.updated",
+                    data={
+                        "item_id": planning_item_id,
+                        "status": "done",
+                        "summary": "Final answer is ready.",
+                    },
+                    persisted=True,
+                    item_id=planning_item_id,
+                )
+                if trace_plan_answer_done is not None:
+                    yield trace_plan_answer_done
+                trace_message_completed = _emit_trace_event(
+                    trace_context,
+                    event_type="assistant.message.completed",
+                    data={
+                        "message_id": assistant_message_id,
+                        "text": final_reply,
+                        "citation_refs": citation_refs,
+                        "artifact_ids": [],
+                    },
+                    persisted=True,
+                )
+                if trace_message_completed is not None:
+                    yield trace_message_completed
+                trace_completed = _emit_trace_event(
+                    trace_context,
+                    event_type="trace.completed",
+                    data={
+                        "duration_ms": int((time.monotonic() - trace_started_at) * 1000),
+                        "final_message_id": assistant_message_id,
+                    },
+                    persisted=True,
+                )
+                if trace_completed is not None:
+                    yield trace_completed
+                _finish_trace(trace_context, outcome="success", final_message_id=assistant_message_id)
                 yield {
                     "type": "final",
                     "payload": {
@@ -349,6 +801,19 @@ def stream_provider_backed_direct_chat(
             if event_type == "failure":
                 attempted_providers = str(event.get("attempted_providers") or "").strip()
                 llm_error = str(event.get("error") or "").strip()
+                trace_plan_failure = _emit_trace_event(
+                    trace_context,
+                    event_type="plan.item.updated",
+                    data={
+                        "item_id": planning_item_id,
+                        "status": "failed",
+                        "summary": llm_error or "Model call failed",
+                    },
+                    persisted=True,
+                    item_id=planning_item_id,
+                )
+                if trace_plan_failure is not None:
+                    yield trace_plan_failure
                 yield services.thinking_step_payload(thinking_iteration, "error", llm_error or "Model call failed")
                 iteration_failed = True
                 break
@@ -362,6 +827,21 @@ def stream_provider_backed_direct_chat(
 
     actions = [] if executed_any_tools else services.suggest_actions(normalized_message, availability_payload)
     services.clear_direct_tool_loop_state(tool_loop_session_key)
+    trace_failed = _emit_trace_event(
+        trace_context,
+        event_type="trace.failed",
+        data={
+            "code": llm_error or "unknown_error",
+            "message": services.direct_chat_error_reply(llm_error),
+            "retryable": False,
+            "failed_item_id": planning_item_id,
+        },
+        persisted=True,
+        item_id=planning_item_id,
+    )
+    if trace_failed is not None:
+        yield trace_failed
+    _finish_trace(trace_context, outcome="partial", final_message_id=None)
     yield {
         "type": "final",
         "payload": {

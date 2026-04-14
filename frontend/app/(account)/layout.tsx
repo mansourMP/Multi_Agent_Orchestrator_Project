@@ -1,18 +1,15 @@
 import type { ReactNode } from 'react';
 
-import { AccountTenantSwitcher } from '@/app/(account)/AccountTenantSwitcher';
+import { redirect } from 'next/navigation';
 
-export default function AccountLayout({ children }: { children: ReactNode }) {
-  return (
-    <div
-      style={{
-        minHeight: '100vh',
-        display: 'grid',
-        gridTemplateColumns: '20rem minmax(0, 1fr)',
-      }}
-    >
-      <AccountTenantSwitcher />
-      <div>{children}</div>
-    </div>
-  );
+import { loadAccountShellSession } from '@/lib/server/load-account-shell-session';
+
+export default async function AccountLayout({ children }: { children: ReactNode }) {
+  const session = await loadAccountShellSession();
+
+  if (!session) {
+    redirect('/login');
+  }
+
+  return children;
 }

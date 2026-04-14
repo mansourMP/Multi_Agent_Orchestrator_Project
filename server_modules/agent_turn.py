@@ -1,3 +1,14 @@
+"""
+Canonical turn contract for the platform.
+
+Prompt 01 freezes this module as the owner of `AgentTurnRequest` and the request
+builders that normalize user-facing and system-facing work into one turn shape
+before handing execution to `turn_runtime`.
+
+Connectors, route handlers, and UI surfaces should converge on these builders
+instead of inventing parallel turn contracts.
+"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -5,7 +16,9 @@ import logging
 import re
 from typing import Any, Dict, List, Literal, Optional, Protocol
 
+from server_modules import agent_trace_service
 from server_modules import agent_registry_repository
+from server_modules import healthguide_safety_service
 from server_modules import session_service
 from server_modules import thread_service
 from server_modules.telemetry import get_tracer, set_span_attributes
@@ -161,6 +174,87 @@ def normalize_session_mode(value: Any) -> SessionMode:
 
 def _metadata_dict(value: Any) -> Dict[str, Any]:
     return dict(value) if isinstance(value, dict) else {}
+
+
+def _trace_root_agent_id(binding_metadata: Dict[str, Any]) -> str:
+    install_id = (
+        str(binding_metadata.get("active_agent_install_id") or "").strip()
+        or str(binding_metadata.get("master_agent_install_id") or "").strip()
+        or str(binding_metadata.get("workspace_agent_install_id") or "").strip()
+    )
+    if install_id:
+        return f"specialist:{install_id}"
+    return "sage"
+
+
+def _trace_surface(channel: Any) -> str:
+    normalized = normalize_channel(channel)
+    if normalized in {"web", "mobile", "desktop", "api"}:
+        return normalized
+    return "channel"
+
+
+def _trace_runtime_target(turn_request: AgentTurnRequest) -> str:
+    hints = _metadata_dict(turn_request.context_hints.get("metadata"))
+    return (
+        str(turn_request.machine_target or "").strip()
+        or str(turn_request.policy_context.get("execution_target") or "").strip()
+        or str(hints.get("execution_target_selected") or "").strip()
+        or str(hints.get("execution_target") or "").strip()
+        or "cloud"
+    )
+
+
+def _trace_provider(turn_request: AgentTurnRequest) -> str:
+    return str(turn_request.context_hints.get("provider") or "").strip()
+
+
+def _trace_model(turn_request: AgentTurnRequest) -> str:
+    return str(turn_request.context_hints.get("model") or "").strip()
+
+
+def _trace_routing_reason(turn_request: AgentTurnRequest) -> str:
+    metadata = _metadata_dict(turn_request.context_hints.get("metadata"))
+    return (
+        str(metadata.get("primary_engine_reason") or "").strip()
+        or str(metadata.get("routing_reason") or "").strip()
+        or (
+            "execution_mode:durable"
+            if str(turn_request.execution_mode or "").strip().lower() == "durable"
+            else "execution_mode:sync"
+        )
+    )
+
+
+def _result_trace_id(result: Dict[str, Any]) -> Optional[str]:
+    if not isinstance(result, dict):
+        return None
+    metadata = _metadata_dict(result.get("metadata"))
+    trace_id = str(metadata.get("trace_id") or result.get("trace_id") or "").strip()
+    if trace_id:
+        return trace_id
+    nested = result.get("result") if isinstance(result.get("result"), dict) else {}
+    nested_metadata = _metadata_dict(nested.get("metadata"))
+    nested_trace_id = str(nested_metadata.get("trace_id") or "").strip()
+    return nested_trace_id or None
+
+
+def _bind_trace_id_to_turn_result(result: Any, trace_id: Optional[str]) -> Any:
+    if not trace_id or not isinstance(result, dict):
+        return result
+    payload = dict(result)
+    metadata = _metadata_dict(payload.get("metadata"))
+    metadata["trace_id"] = trace_id
+    payload["metadata"] = metadata
+    payload["trace_id"] = trace_id
+    nested = payload.get("result") if isinstance(payload.get("result"), dict) else None
+    if isinstance(nested, dict):
+        nested_payload = dict(nested)
+        nested_metadata = _metadata_dict(nested_payload.get("metadata"))
+        nested_metadata["trace_id"] = trace_id
+        nested_payload["metadata"] = nested_metadata
+        payload["result"] = nested_payload
+    return payload
 
 
 def _direct_chat_request_metadata(body: Dict[str, Any]) -> Dict[str, Any]:
@@ -524,6 +618,8 @@ def build_inbound_agent_turn_request(
     actor_display_name: str = "",
     message: str,
     attachments: Optional[List[Dict[str, Any]]] = None,
+    prior_messages: Optional[List[Dict[str, Any]]] = None,
+    business_plan: Optional[str] = None,
     context_hints: Optional[Dict[str, Any]] = None,
     execution_mode: ExecutionMode = "sync",
     response_mode: ResponseMode = "stream",
@@ -532,8 +628,14 @@ def build_inbound_agent_turn_request(
 ) -> AgentTurnRequest:
     resolved_session_id = str(session_id or "agent-turn").strip() or "agent-turn"
     resolved_thread_id = str(thread_id or resolved_session_id).strip() or resolved_session_id
+    next_context_hints = dict(context_hints or {})
+    if isinstance(prior_messages, list) and prior_messages:
+        next_context_hints["prior_messages"] = [dict(item) for item in prior_messages if isinstance(item, dict)]
+    resolved_business_plan = str(business_plan or "").strip()
+    if resolved_business_plan:
+        next_context_hints["business_plan"] = resolved_business_plan
     return AgentTurnRequest(
-        tenant_id=str(tenant_id or actor_id or "default").strip() or "default",
+        tenant_id=str(tenant_id or "default").strip() or "default",
         workspace_id=str(workspace_id or "default").strip() or "default",
         thread_id=resolved_thread_id,
         session_id=resolved_session_id,
@@ -545,7 +647,7 @@ def build_inbound_agent_turn_request(
         ),
         message=str(message or ""),
         attachments=_attachments_from_payload(attachments or []),
-        context_hints=dict(context_hints or {}),
+        context_hints=next_context_hints,
         execution_mode=execution_mode,
         response_mode=response_mode,
         machine_target=str(machine_target or "").strip() or None,
@@ -1074,14 +1176,39 @@ async def agent_turn(
         workspace_id=resolved_turn_request.workspace_id,
         session_id=resolved_turn_request.session_id,
     )
+    resolved_turn_request = healthguide_safety_service.apply_health_safety_to_turn_request(resolved_turn_request)
     preferred_session_id = str(turn_request.session_id or "").strip()
     resolved_thread_id = str(turn_request.thread_id or preferred_session_id or "").strip()
     if not resolved_thread_id:
         raise ValueError("AgentTurnRequest.thread_id is required.")
     resolved_turn_request.thread_id = resolved_thread_id
+    binding_metadata = _metadata_dict(resolved_turn_request.context_hints.get("metadata"))
+    trace_context = None
+    try:
+        trace_context = await agent_trace_service.start_trace(
+            workspace_id=resolved_turn_request.workspace_id,
+            tenant_id=resolved_turn_request.tenant_id,
+            thread_id=resolved_thread_id,
+            run_id=(
+                str(getattr(run_request, "run_id", None) or "").strip()
+                or str((chat_body or {}).get("run_id") or "").strip()
+                or None
+            ),
+            surface=_trace_surface(resolved_turn_request.channel),
+            runtime_target=_trace_runtime_target(resolved_turn_request),
+            provider=_trace_provider(resolved_turn_request),
+            model=_trace_model(resolved_turn_request),
+            root_agent_id=_trace_root_agent_id(binding_metadata),
+        )
+        if trace_context is not None:
+            try:
+                await agent_trace_service.emit_trace_started(trace_context, "text")
+            except Exception:
+                pass
+    except Exception:
+        trace_context = None
     session_record = None
     if preferred_session_id:
-        binding_metadata = _metadata_dict(resolved_turn_request.context_hints.get("metadata"))
         session_record = await session_service.get_session_scoped(
             preferred_session_id,
             workspace_id=turn_request.workspace_id,
@@ -1095,10 +1222,16 @@ async def agent_turn(
             and not scope_mismatch
             and str(session_record.get("status") or "").strip().lower() != "expired"
         ):
-            await session_service.extend_session(
-                preferred_session_id,
-                metadata_updates={"thread_id": resolved_thread_id},
+            session_metadata = session_record.get("metadata") if isinstance(session_record.get("metadata"), dict) else {}
+            metadata_updates = (
+                {"thread_id": resolved_thread_id}
+                if str(session_metadata.get("thread_id") or "").strip()
+                else None
             )
+            if isinstance(metadata_updates, dict):
+                await session_service.extend_session(preferred_session_id, metadata_updates=metadata_updates)
+            else:
+                await session_service.extend_session(preferred_session_id)
         else:
             resolved_turn_request.session_id = await session_service.create_session(
                 workspace_id=turn_request.workspace_id,
@@ -1116,7 +1249,6 @@ async def agent_turn(
             )
             session_record = await session_service.get_session(resolved_turn_request.session_id)
     else:
-        binding_metadata = _metadata_dict(resolved_turn_request.context_hints.get("metadata"))
         resolved_turn_request.session_id = await session_service.create_session(
             workspace_id=turn_request.workspace_id,
             tenant_id=turn_request.tenant_id,
@@ -1169,7 +1301,22 @@ async def agent_turn(
         content=resolved_turn_request.message,
         runtime_profile_id=runtime_profile_id,
         metadata={
-            **_metadata_dict(resolved_turn_request.context_hints),
+            **{
+                **{
+                    key: value
+                    for key, value in _metadata_dict(resolved_turn_request.context_hints).items()
+                    if key not in {"prior_messages", "business_plan"}
+                },
+                "prior_messages_count": (
+                    len(resolved_turn_request.context_hints.get("prior_messages"))
+                    if isinstance(resolved_turn_request.context_hints.get("prior_messages"), list)
+                    else 0
+                ),
+                "business_plan_present": bool(str(resolved_turn_request.context_hints.get("business_plan") or "").strip()),
+                "business_plan_preview": (
+                    str(resolved_turn_request.context_hints.get("business_plan") or "").strip()[:240].rstrip() or None
+                ),
+            },
             "request_id": str(resolved_turn_request.context_hints.get("request_id") or "").strip() or None,
         },
     )
@@ -1199,6 +1346,17 @@ async def agent_turn(
             },
         )
         try:
+            try:
+                await agent_trace_service.emit_trace_routed(
+                    trace_context,
+                    str(resolved_turn_request.execution_mode or "").strip().lower() or "sync",
+                    _trace_runtime_target(resolved_turn_request),
+                    _trace_provider(resolved_turn_request),
+                    _trace_model(resolved_turn_request),
+                    _trace_routing_reason(resolved_turn_request),
+                )
+            except Exception:
+                pass
             services = build_turn_execution_services(
                 run_execution=run_execution_services,
                 direct_chat=direct_chat_services or _build_noop_direct_chat_execution_services(),
@@ -1209,7 +1367,10 @@ async def agent_turn(
                 services=services,
                 chat_body=chat_body,
                 run_request=run_request,
+                trace_context=trace_context,
             )
+            trace_id = trace_context.trace_id if trace_context is not None else None
+            result = _bind_trace_id_to_turn_result(result, trace_id)
             if isinstance(result, dict):
                 await thread_service.record_assistant_turn(
                     thread_id=resolved_thread_id,
@@ -1238,12 +1399,23 @@ async def agent_turn(
                     {
                         "run_id": str(result.get("run_id") or "").strip() or None,
                         "turn_status": str(result.get("status") or "").strip() or None,
+                        "trace_id": _result_trace_id(result),
                     },
                 )
             return result
         except Exception as exc:
             try:
                 span.record_exception(exc)
+            except Exception:
+                pass
+            try:
+                await agent_trace_service.emit_trace_failed(
+                    trace_context,
+                    code=exc.__class__.__name__,
+                    message=str(exc),
+                    retryable=False,
+                    failed_item_id=None,
+                )
             except Exception:
                 pass
             raise

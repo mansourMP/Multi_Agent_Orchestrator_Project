@@ -1,13 +1,23 @@
 'use client';
 
-import { useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 
 import { useWorkspaceBoundary } from '@/lib/workspace/workspace-boundary';
+
+type RawDesktopWindowState = {
+  maximized?: boolean;
+};
 
 type RawEmpyralisDesktopBridge = {
   desktop?: boolean;
   platform?: string;
   openExternal?: (target: string) => Promise<boolean>;
+  markShellReady?: () => Promise<boolean>;
+  getWindowState?: () => Promise<RawDesktopWindowState>;
+  minimizeWindow?: () => Promise<boolean>;
+  toggleMaximizeWindow?: () => Promise<RawDesktopWindowState>;
+  closeWindow?: () => Promise<boolean>;
+  startWindowDrag?: () => Promise<boolean>;
   openPermissionSettings?: (permission: string) => Promise<boolean>;
   bootstrapMachineEnrollment?: (intent: unknown) => Promise<unknown>;
   openaiCodexOauthLogin?: () => Promise<unknown>;
@@ -25,10 +35,25 @@ export type WorkstationDesktopLocalCompanionState = {
   preferred: boolean;
 };
 
+export type WorkstationDesktopWindowState = {
+  maximized: boolean;
+};
+
 export type WorkstationDesktopBridgeState = {
   available: boolean;
   platform: string | null;
   localCompanion: WorkstationDesktopLocalCompanionState;
+  nativeChrome: boolean;
+  shellReady: () => Promise<boolean>;
+  window: {
+    supported: boolean;
+    maximized: boolean;
+    refresh: () => Promise<WorkstationDesktopWindowState>;
+    minimize: () => Promise<boolean>;
+    toggleMaximize: () => Promise<WorkstationDesktopWindowState>;
+    close: () => Promise<boolean>;
+    startDrag: () => Promise<boolean>;
+  };
   openExternal: (target: string) => Promise<boolean>;
   openPermissionSettings: (permission: 'screen_recording' | 'accessibility' | 'filesystem') => Promise<boolean>;
 };
@@ -55,23 +80,116 @@ function isLocalCompanionTarget(target: { id: string; kind: string }): boolean {
   return id === 'local_companion' || kind === 'local_companion';
 }
 
+function normalizeWindowState(value: RawDesktopWindowState | null | undefined): WorkstationDesktopWindowState {
+  return {
+    maximized: Boolean(value?.maximized),
+  };
+}
+
 export function useWorkstationDesktopBridge(): WorkstationDesktopBridgeState {
   const { bootstrap } = useWorkspaceBoundary();
+  const [windowState, setWindowState] = useState<WorkstationDesktopWindowState>({ maximized: false });
+
+  const desktopBridge = useMemo(() => resolveWorkstationDesktopBridge(), []);
+
+  useEffect(() => {
+    if (!desktopBridge || typeof desktopBridge.getWindowState !== 'function') {
+      return undefined;
+    }
+
+    let active = true;
+    const refresh = async () => {
+      try {
+        const next = normalizeWindowState(await desktopBridge.getWindowState?.());
+        if (active) {
+          setWindowState(next);
+        }
+      } catch {
+        if (active) {
+          setWindowState({ maximized: false });
+        }
+      }
+    };
+
+    void refresh();
+    const interval = window.setInterval(() => {
+      void refresh();
+    }, 1500);
+    const onResize = () => {
+      void refresh();
+    };
+    window.addEventListener('resize', onResize);
+    return () => {
+      active = false;
+      window.clearInterval(interval);
+      window.removeEventListener('resize', onResize);
+    };
+  }, [desktopBridge]);
 
   return useMemo(() => {
-    const bridge = resolveWorkstationDesktopBridge();
     const localCompanionTarget = bootstrap.runtime.runtimeTargets.find((target) =>
       isLocalCompanionTarget(target),
     );
 
+    const refreshWindowState = async () => {
+      if (!desktopBridge || typeof desktopBridge.getWindowState !== 'function') {
+        const fallback = { maximized: false };
+        setWindowState(fallback);
+        return fallback;
+      }
+      const next = normalizeWindowState(await desktopBridge.getWindowState());
+      setWindowState(next);
+      return next;
+    };
+
     return {
-      available: Boolean(bridge),
-      platform: typeof bridge?.platform === 'string' ? bridge.platform : null,
+      available: Boolean(desktopBridge),
+      platform: typeof desktopBridge?.platform === 'string' ? desktopBridge.platform : null,
+      nativeChrome: Boolean(desktopBridge),
       localCompanion: {
         present: Boolean(localCompanionTarget),
         label: localCompanionTarget?.label ?? null,
         online: Boolean(localCompanionTarget?.online),
         preferred: Boolean(localCompanionTarget?.preferred),
+      },
+      shellReady: async () => {
+        if (!desktopBridge || typeof desktopBridge.markShellReady !== 'function') {
+          return false;
+        }
+        return Boolean(await desktopBridge.markShellReady());
+      },
+      window: {
+        supported: Boolean(desktopBridge),
+        maximized: windowState.maximized,
+        refresh: refreshWindowState,
+        minimize: async () => {
+          if (!desktopBridge || typeof desktopBridge.minimizeWindow !== 'function') {
+            return false;
+          }
+          return Boolean(await desktopBridge.minimizeWindow());
+        },
+        toggleMaximize: async () => {
+          if (!desktopBridge || typeof desktopBridge.toggleMaximizeWindow !== 'function') {
+            const fallback = { maximized: false };
+            setWindowState(fallback);
+            return fallback;
+          }
+          const next = normalizeWindowState(await desktopBridge.toggleMaximizeWindow());
+          setWindowState(next);
+          return next;
+        },
+        close: async () => {
+          if (!desktopBridge || typeof desktopBridge.closeWindow !== 'function') {
+            return false;
+          }
+          return Boolean(await desktopBridge.closeWindow());
+        },
+        startDrag: async () => {
+          if (!desktopBridge || typeof desktopBridge.startWindowDrag !== 'function') {
+            return false;
+          }
+          return Boolean(await desktopBridge.startWindowDrag());
+        },
       },
       openExternal: async (target: string) => {
         const normalized = target.trim();
@@ -79,8 +197,8 @@ export function useWorkstationDesktopBridge(): WorkstationDesktopBridgeState {
           return false;
         }
 
-        if (bridge && typeof bridge.openExternal === 'function') {
-          return Boolean(await bridge.openExternal(normalized));
+        if (desktopBridge && typeof desktopBridge.openExternal === 'function') {
+          return Boolean(await desktopBridge.openExternal(normalized));
         }
 
         if (typeof window !== 'undefined' && /^https?:\/\//.test(normalized)) {
@@ -91,11 +209,11 @@ export function useWorkstationDesktopBridge(): WorkstationDesktopBridgeState {
         return false;
       },
       openPermissionSettings: async (permission) => {
-        if (!bridge || typeof bridge.openPermissionSettings !== 'function') {
+        if (!desktopBridge || typeof desktopBridge.openPermissionSettings !== 'function') {
           return false;
         }
-        return Boolean(await bridge.openPermissionSettings(permission));
+        return Boolean(await desktopBridge.openPermissionSettings(permission));
       },
     };
-  }, [bootstrap.runtime.runtimeTargets]);
+  }, [bootstrap.runtime.runtimeTargets, desktopBridge, windowState.maximized]);
 }

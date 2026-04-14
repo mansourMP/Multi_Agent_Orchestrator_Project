@@ -1,7 +1,7 @@
 import { loadMobileWorkspaceFoundation } from '../mobile-foundation.js';
 import { resolveWorkspaceNavigationTarget } from '../shell/account-shell-store.js';
 import { getWorkspaceMembership } from '../shell/workspace-membership-model.js';
-import { resolveAllowedWorkspaceRoute } from './shared.js';
+import { resolveAllowedWorkspaceRoute, resolveAllowedWorkspaceScreen } from './shared.js';
 
 export function createWorkspaceSwitcherSurface({
   accountState,
@@ -16,7 +16,8 @@ export function createWorkspaceSwitcherSurface({
       label: membership.workspace.label,
       kind: membership.workspace.kind,
       role: membership.role,
-      defaultRoute: membership.defaultRoute,
+      defaultRouteId: membership.defaultRoute,
+      lastVisitedRouteId: resolveWorkspaceNavigationTarget(accountState, membership.workspace.id),
       isActive: membership.workspace.id === accountState.activeWorkspaceId,
     })),
     async switchWorkspace(workspaceId) {
@@ -32,7 +33,8 @@ export function createWorkspaceSwitcherSurface({
         fetchImpl,
       });
       const rememberedRoute = resolveWorkspaceNavigationTarget(accountState, workspaceId);
-      const targetRoute = resolveAllowedWorkspaceRoute(nextFoundation, rememberedRoute);
+      const targetRouteId = resolveAllowedWorkspaceRoute(nextFoundation, rememberedRoute);
+      const targetScreen = resolveAllowedWorkspaceScreen(nextFoundation, rememberedRoute);
 
       if (currentFoundation && currentFoundation.boundaryKey !== nextFoundation.boundaryKey) {
         currentFoundation.dispose();
@@ -40,7 +42,8 @@ export function createWorkspaceSwitcherSurface({
 
       return {
         workspaceId,
-        targetRoute,
+        targetRouteId,
+        targetScreen,
         shellProfileId: nextFoundation.shellProfile.id,
         foundation: nextFoundation,
       };

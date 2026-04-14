@@ -1,218 +1,212 @@
 # Frontend Map
 
-Last verified: 2026-04-11
+Last verified: 2026-04-14
 
-## Frontend Truth
+This document reflects the current active frontend structure.
+It replaces older maps that still referenced deleted roots such as `frontend/components`, `frontend/app/(shell)`, `mobile/src/screens`, and the old mobile `(tabs)` shell.
 
-The frontend is not allowed to become another brain.
+## Active Frontend Roots
 
-UI responsibilities are:
-- render backend state
-- collect user intent
-- drive surface-specific ergonomics
-- present motion, hierarchy, and feedback
+- `frontend/app`: Next.js App Router entrypoints, public pages, account shell routes, and BFF proxy routes
+- `frontend/lib`: client-side auth, shell state, UI primitives, workspace surfaces, and server-facing helpers used by the web shell
+- `shared/design-system`: canonical cross-platform token source
+- `mobile/app`: Expo Router route groups for auth and the native workspace shell
+- `mobile/src`: native runtime, storage, shell model, surfaces, and UI primitives
+- `src-tauri`: desktop window shell and sidecar lifecycle for the repo-local desktop target
 
-UI responsibilities are not:
-- deciding policy
-- deciding memory access
-- deciding runtime placement
-- inventing app-agent contracts
-- inventing capability differences by surface
+Roots that are not current truth:
 
-This is a strict dumb-UI strategy.
+- `frontend/components` does not exist
+- `mobile/app/(tabs)` is no longer an active route contract
+- `frontend/lib/account-shell` currently exists as an empty directory and should not be treated as active architecture
 
-## Surface Structure
+## Web App Structure
 
-### Web / Desktop-Power
+### App Router Root
 
-Current code roots:
-- `frontend/app`
-- `frontend/components`
-- `frontend/lib`
+Current top-level files and route groups under `frontend/app`:
 
-Desktop-power owns:
-- specialist creation and configuration
-- connector and runtime management
-- hybrid placement visibility
-- deeper activity timeline
-- memory and privacy controls
-- admin and debug depth
+- `layout.tsx`
+- `globals.css`
+- `not-found.tsx`
+- `login/page.tsx`
+- `signup/page.tsx`
+- `privacy/page.tsx`
+- `onboarding/page.tsx`
+- `onboarding/OnboardingClient.tsx`
+- `preview/page.tsx`
+- `preview/PublicWorkstationPreview.tsx`
 
-### Mobile Daily-Use Surface
+### Account Shell Route Group
 
-Current code roots:
-- `mobile/app`
-- `mobile/src/lib`
+Current authenticated shell lives under `frontend/app/(account)`:
 
-Mobile stays the daily-use surface with the fixed tab contract:
-- Home
-- Chat
-- Applications
-- Notifications
-- Profile
+- `layout.tsx`
+- `page.tsx`
+- `AccountHomeClient.tsx`
+- `AccountTenantSwitcher.tsx`
+- `settings/account/page.tsx`
+- `settings/devices/page.tsx`
+- `workspaces/new/page.tsx`
+- `workspaces/new/NewWorkspacePageClient.tsx`
 
-Mobile must still hit the same backend contracts as desktop-power.
+Workspace routes live under `frontend/app/(account)/w/[workspaceId]`:
 
-### Channel Shells
+- `page.tsx`
+- `layout.tsx`
+- `WorkspaceHomeRedirect.tsx`
+- `WorkspaceSurfacePage.tsx`
+- `chat/page.tsx`
+- `workstation/page.tsx`
+- `runs/page.tsx`
+- `approvals/page.tsx`
+- `artifacts/page.tsx`
+- `notifications/page.tsx`
+- `activity/page.tsx`
+- `applications/page.tsx`
+- `agents/page.tsx`
+- `deployed-agents/page.tsx`
+- `integrations/page.tsx`
+- `settings/page.tsx`
+- `admin/page.tsx`
+- `admin/platform/page.tsx`
+- `admin/billing/page.tsx`
+- `admin/routing/page.tsx`
+- `admin/members/page.tsx`
+- `admin/policies/page.tsx`
+- `trace-preview/page.tsx`
 
-Messaging shells are frozen as `channel_shell` surfaces:
-- Telegram
-- WhatsApp
+Notes:
 
-They may do:
-- conversation
-- summaries
-- notifications
-- lightweight approvals where supported
+- `trace-preview` is still a preview harness route, not canonical product IA.
+- The route tree still uses historical route ids; canonical IA is documented in [docs/DECISIONS.md](/Users/mansur/Multi_Agent_Orchestrator_Project/docs/DECISIONS.md).
 
-They may not become:
-- deep admin surfaces
-- separate product brains
-- separate policy engines
+### Web BFF And Proxy Routes
 
-They still share the same captain identity and run engine truth as full shells.
+Current server-side route handlers under `frontend/app/api` and related proxy routes:
 
-## Upcoming UI Purge
+- `api/[...path]/route.ts`
+- `api/activity/timeline/route.ts`
+- `api/auth/account-shell/route.ts`
+- `api/auth/login/route.ts`
+- `api/auth/logout/route.ts`
+- `api/auth/me/route.ts`
+- `api/auth/refresh/route.ts`
+- `api/auth/register/route.ts`
+- `api/auth/signup/route.ts`
+- `api/channel-pairing/intents/route.ts`
+- `api/channel-pairing/links/route.ts`
+- `api/channel-pairing/links/[linkId]/revoke/route.ts`
+- `api/workspaces/[workspaceId]/channel-operations/route.ts`
+- `agent-registry/[...path]/route.ts`
+- `agents/[...path]/route.ts`
+- `apps/[...path]/route.ts`
 
-The current frontend still carries too many legacy and exploratory surfaces.
+## Web Library Structure
 
-The next frontend phase should be a deliberate rebuild that removes route sprawl and keeps only the product surfaces justified by the current platform truth.
+Current active directories under `frontend/lib`:
 
-Targets for purge or aggressive consolidation include:
-- builder-heavy legacy flows
-- exploratory or demo-oriented routes
-- duplicated setup surfaces
-- disconnected solution/store metaphors that do not match the captain-specialist-app model
-- any page that smuggles product logic into the client
+- `account`
+  Workspace listing, creation, and account-shell bootstrap client logic
+- `auth`
+  Auth client helpers and CSRF header helpers
+- `server`
+  Server-only proxy and control-plane base URL helpers
+- `shell`
+  Account shell context, payload parsing, storage, and membership models
+- `ui`
+  Shared web primitives and token consumers such as `primitives.tsx`, `list-detail.tsx`, `data-table.tsx`, `form-controls.tsx`, and `chrome.css`
+- `workspace`
+  Workspace bootstrap, route manifest logic, boundary providers, service layer, desktop bridge, and all workstation surfaces
 
-The rebuild should start from the canonical platform contracts, not from preserving every existing route.
+Important workspace files:
 
-## Dumb UI Strategy
+- `workspace-shell.ts`
+- `workspace-boundary.tsx`
+- `workspace-services.tsx`
+- `workstation-kernel-shell.tsx`
+- `workstation-titlebar.tsx`
+- `workstation-command-bar.tsx`
+- `workstation-shell-frame.tsx`
+- `workstation-*.tsx` surface files
 
-Every surface must follow these rules:
+## Shared Design System
 
-### 1. Shared Contracts
+Current cross-platform design-token root:
 
-Mobile and desktop-power must use the same backend semantics for:
-- Sage context
-- specialist inventory
-- runtime attachments
-- activity
-- approvals
-- app-agent contracts
+- `shared/design-system/tokens.ts`
 
-### 2. Thin Client State
+Role:
 
-Client state is allowed for:
-- loading
-- optimistic interaction
-- local presentation state
-- animation state
+- one canonical token source for web, Tauri, and mobile
+- web and Tauri consume CSS-variable output
+- mobile consumes TypeScript constants
 
-Client state is not allowed to become durable truth for:
-- capability policy
-- hybrid placement policy
-- memory routing
-- secret access
-- entitlement enforcement
+## Mobile Structure
 
-### 3. No Surface Downgrade
+### Expo Router
 
-If a specialist can do something through the authorized runtime and policy path, mobile must not be artificially weaker than desktop.
+Current route groups under `mobile/app`:
 
-Desktop may expose more control depth. It may not expose a stronger intelligence model.
+- `_layout.tsx`
+- `index.tsx`
+- `(auth)/login.tsx`
+- `(workspace)/_layout.tsx`
+- `(workspace)/index.tsx`
+- `(workspace)/chat.tsx`
+- `(workspace)/runs.tsx`
+- `(workspace)/approvals.tsx`
+- `(workspace)/notifications.tsx`
+- `(workspace)/artifacts.tsx`
+- `(workspace)/account.tsx`
+- `(workspace)/switcher.tsx`
 
-## Design System Rule
+Notes:
 
-The frontend rebuild must use:
-- Radix primitives for interaction, accessibility, layering, focus, and composition
-- Framer Motion for motion orchestration and transitions
+- `(workspace)` is the active native shell.
+- `mobile/app/(tabs)/_layout.tsx` was dead code and has been removed.
+- The current mobile shell still exposes a narrower operational tab set than the canonical 5-destination IA.
 
-The direction is:
-- custom visual system on top of Radix primitives
-- not random component sprawl
-- not ad hoc mixed interaction libraries
+### Mobile Runtime And Surfaces
 
-## Motion Rule
+Current active directories under `mobile/src`:
 
-Motion must feel deliberate and premium.
+- `lib`
+  Native runtime state, workspace foundation, storage adapters, shell models, and surface factories
+- `ui`
+  Native token consumers, primitives, state screens, chat UI, and list-detail primitives
 
-Use spring-based motion with Apple-level feel:
-- responsive spring entry and exit
-- no cheap easing spam
-- no generic CSS transitions everywhere
-- no motion that hides state truth
+Important mobile files:
 
-Recommended baseline:
-- Framer Motion spring transitions
-- stiffness roughly in the `300-420` range
-- damping roughly in the `28-38` range
-- mass roughly in the `0.8-1.0` range
+- `lib/mobile-runtime.js`
+- `lib/mobile-workspace-surfaces.js`
+- `lib/workspace/workspace-shell.js`
+- `lib/workspace/workspace-services.js`
+- `ui/tokens.ts`
+- `ui/primitives.tsx`
+- `ui/list-detail.tsx`
 
-Exact numbers can vary by interaction, but the product should feel physically coherent.
+## Desktop / Tauri Structure
 
-## Current Code Reality
+Current desktop shell lives under `src-tauri`:
 
-Current web surface already has parity-oriented wiring in:
-- `frontend/lib/api.ts`
-- `frontend/lib/productArchitecture.ts`
-- `frontend/app/(shell)/page.tsx`
-- `frontend/app/api/activity/timeline/route.ts`
+- `src/main.rs`
+- `src/lib.rs`
 
-Current mobile surface already has parity-oriented wiring in:
-- `mobile/src/lib/mobile-data.ts`
-- `mobile/app/status.tsx`
-- `mobile/src/screens/HomeScreen.tsx`
-- `mobile/app/(tabs)/_layout.tsx`
+Responsibilities:
 
-Backend and BFF contract alignment is proven for:
-- `/runs`
-- `/activity/timeline`
-- `/approvals`
-- notifications
+- create the frameless desktop window
+- expose native window commands
+- boot runtime, Next, and worker sidecars for the supported repo-local desktop target
+- preserve the same web shell instead of inventing a separate desktop product
 
-Current rendered truth:
-- web auth/session is proven through the real browser path
-- the current web shell can render a real cloud-backed assistant answer
-- the current web shell now routes serious first-send task requests into the durable run path
-- lightweight question-and-answer chat is still allowed to stay on the direct chat path
-- rendered local and hybrid proof is still not complete
+## Current Fragmentation To Remember
 
-This is not the final UI. It is the contract-aligned implementation layer that the rebuild must respect.
+These paths are real and active even if they are not the final shape:
 
-## Frozen Rebuild Boundary
+- `frontend/app/preview`
+- `frontend/app/(account)/w/[workspaceId]/trace-preview`
+- legacy route ids such as `workstation`, `applications`, and `admin/*`
 
-The new UI must consume these backend and BFF contracts as fixed truth:
-- `/api/control-plane/session`
-- `/api/control-plane/auth/me`
-- `/api/control-plane/providers/runtime-availability`
-- `/api/chat/master-context`
-- `/api/turn`
-- `/api/runs`
-- `/api/activity/timeline`
-- `/api/approvals`
-- `/api/approvals/resolve`
-
-The rebuild is allowed to change:
-- shell layout and route structure
-- interaction patterns and motion system
-- component inventory
-- visual language, typography, spacing, and hierarchy
-- how existing backend truth is grouped and presented
-
-The rebuild is not allowed to change:
-- auth and workspace semantics
-- `/turn` versus `/runs` semantics
-- memory, approval, notification, and placement truth
-- app-agent contract meaning
-- any runtime or policy decision in the client
-
-## Rebuild Rule For The Next Session
-
-When rebuilding UI:
-- start from `docs/context.md`
-- keep the platform dumb-UI
-- keep mobile and desktop on the same contracts
-- make desktop deeper, not smarter
-- make mobile smaller, not weaker
-- do not ship the new shell until the durable run path is proven across the primary rendered surfaces
+These are implementation facts, not architectural truth.
+Future cleanup should remove or consolidate them without changing the backend contract.

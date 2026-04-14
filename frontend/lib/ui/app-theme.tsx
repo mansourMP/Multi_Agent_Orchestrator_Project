@@ -15,6 +15,7 @@ import {
   APP_THEME_ATTRIBUTE,
   type AppResolvedTheme,
   type AppThemePreference,
+  resolveAppThemeCssVariables,
   resolveAppThemePreference,
 } from '@/lib/ui/tokens';
 
@@ -66,8 +67,12 @@ export function AppThemeProvider({
     if (typeof document === 'undefined') {
       return;
     }
+    const cssVariables = resolveAppThemeCssVariables(resolvedTheme);
     document.documentElement.setAttribute(APP_THEME_ATTRIBUTE, resolvedTheme);
     document.documentElement.style.colorScheme = resolvedTheme;
+    for (const [name, value] of Object.entries(cssVariables)) {
+      document.documentElement.style.setProperty(name, value);
+    }
     document.body.setAttribute(APP_THEME_ATTRIBUTE, resolvedTheme);
   }, [resolvedTheme]);
 

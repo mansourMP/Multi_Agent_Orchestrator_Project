@@ -56,48 +56,10 @@ function WorkstationPane({
   subtitle: string;
 }>) {
   return (
-    <section
-      data-workstation-pane={paneId}
-      style={{
-        minWidth: 0,
-        minHeight: 0,
-        display: 'grid',
-        gridTemplateRows: 'auto minmax(0, 1fr)',
-        borderRadius: '1.15rem',
-        border: '1px solid var(--app-border-subtle)',
-        background: 'var(--app-bg-panel)',
-        overflow: 'hidden',
-        boxShadow: 'var(--app-shadow-panel)',
-      }}
-    >
-      <header
-        style={{
-          display: 'grid',
-          gap: '0.22rem',
-          padding: '0.95rem 1rem 0.9rem',
-          borderBottom: '1px solid var(--app-border-subtle)',
-          background: 'color-mix(in srgb, var(--app-bg-panel-elevated) 82%, var(--app-bg-overlay) 18%)',
-        }}
-      >
-        <strong
-          style={{
-            color: 'var(--app-text-primary)',
-            fontSize: '0.92rem',
-            fontWeight: 650,
-            letterSpacing: '0.01em',
-          }}
-        >
-          {title}
-        </strong>
-        <span
-          style={{
-            color: 'var(--app-text-secondary)',
-            fontSize: '0.82rem',
-            lineHeight: 1.45,
-          }}
-        >
-          {subtitle}
-        </span>
+    <section data-workstation-pane={paneId} className="workstation-pane">
+      <header className="workstation-pane__header">
+        <strong className="workstation-pane__title">{title}</strong>
+        <span className="workstation-pane__subtitle">{subtitle}</span>
       </header>
 
       <ScrollRegion>{children}</ScrollRegion>
@@ -133,16 +95,7 @@ export function WorkstationKernelShell({
   const stageSubtitle = 'Focused detail, selection, and action context';
 
   return (
-    <div
-      data-workstation-shell="kernel"
-      style={{
-        minWidth: 0,
-        minHeight: 'calc(100vh - 1.7rem)',
-        display: 'grid',
-        gridTemplateRows: 'auto auto auto auto minmax(0, 1fr)',
-        gap: '0.85rem',
-      }}
-    >
+    <div data-workstation-shell="kernel" className="workstation-shell">
       <WorkstationTitlebar
         surfaceLabel={currentRouteLabel}
         diagnosticsVisible={showDiagnostics}

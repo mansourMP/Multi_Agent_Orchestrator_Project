@@ -197,7 +197,7 @@ export function WorkstationActivityPane() {
                     body="As runs, approvals, and system events occur, they will surface here in chronological order."
                   />
                 ) : (
-                  <div style={{ display: 'grid', gap: '0.65rem' }}>
+                  <div className="app-stack-3">
                     {items.map((item, index) => {
                       const id = String(item.id ?? `activity-${index}`).trim();
                       const selected = id === selectedId;
@@ -207,30 +207,18 @@ export function WorkstationActivityPane() {
                           key={id}
                           type="button"
                           onClick={() => setSelectedId(id)}
-                          style={{
-                            display: 'grid',
-                            gap: '0.28rem',
-                            padding: '0.85rem 0.9rem',
-                            borderRadius: '0.95rem',
-                            border: selected ? '1px solid var(--app-border-accent)' : '1px solid var(--app-border-subtle)',
-                            background: selected
-                              ? 'color-mix(in srgb, var(--app-accent-muted) 40%, var(--app-bg-panel) 60%)'
-                              : 'color-mix(in srgb, var(--app-bg-panel-elevated) 82%, var(--app-bg-overlay) 18%)',
-                            textAlign: 'left',
-                            cursor: 'pointer',
-                            boxShadow: 'var(--app-shadow-panel)',
-                          }}
+                          className={`app-card-button${selected ? ' app-card-button--selected' : ''}`}
                         >
-                          <div style={{ display: 'flex', justifyContent: 'space-between', gap: '0.6rem', flexWrap: 'wrap' }}>
-                            <strong style={{ color: 'var(--app-text-primary)', fontSize: '0.86rem' }}>
+                          <div className="app-inline-actions app-inline-actions--between app-inline-actions--start">
+                            <strong className="app-card-button__title">
                               {readString(item.title ?? item.action, 'Activity')}
                             </strong>
                             <DataBadge tone={tone}>{readString(item.event_class, 'event')}</DataBadge>
                           </div>
-                          <span style={{ color: 'var(--app-text-secondary)', fontSize: '0.8rem', lineHeight: 1.55 }}>
+                          <span className="app-card-button__subtitle">
                             {readString(item.summary, 'No activity summary is available.')}
                           </span>
-                          <span style={{ color: 'var(--app-text-tertiary)', fontSize: '0.74rem' }}>
+                          <span className="app-card-button__meta">
                             {formatTimestamp(item.created_at)}
                           </span>
                         </button>
@@ -260,14 +248,14 @@ export function WorkstationActivityPane() {
                     >
                       {readString(selectedActivity.summary, 'No activity summary is available.')}
                     </StateBanner>
-                    <div style={{ display: 'grid', gap: '0.7rem' }}>
-                      <div style={{ display: 'grid', gap: '0.18rem' }}>
-                        <span style={{ color: 'var(--app-text-tertiary)', fontSize: '0.72rem', textTransform: 'uppercase', letterSpacing: '0.08em', fontWeight: 650 }}>Event id</span>
-                        <span style={{ color: 'var(--app-text-primary)', fontFamily: 'var(--app-font-mono)', overflowWrap: 'anywhere' }}>{readString(selectedActivity.id, 'No identifier recorded')}</span>
+                    <div className="app-meta-list">
+                      <div className="app-meta-item">
+                        <span className="app-meta-label">Event id</span>
+                        <span className="app-meta-value app-meta-value--mono">{readString(selectedActivity.id, 'No identifier recorded')}</span>
                       </div>
-                      <div style={{ display: 'grid', gap: '0.18rem' }}>
-                        <span style={{ color: 'var(--app-text-tertiary)', fontSize: '0.72rem', textTransform: 'uppercase', letterSpacing: '0.08em', fontWeight: 650 }}>Summary</span>
-                        <span style={{ color: 'var(--app-text-secondary)', lineHeight: 1.6 }}>{readString(selectedActivity.summary, 'No activity summary is available.')}</span>
+                      <div className="app-meta-item">
+                        <span className="app-meta-label">Summary</span>
+                        <span className="app-meta-value app-meta-value--body">{readString(selectedActivity.summary, 'No activity summary is available.')}</span>
                       </div>
                     </div>
                   </>

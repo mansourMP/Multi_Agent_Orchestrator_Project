@@ -3,6 +3,14 @@
 import type { HTMLAttributes, PropsWithChildren, ReactNode } from 'react';
 
 import { joinClassNames } from '@/lib/ui/primitives';
+import {
+  APP_LINE_HEIGHT,
+  APP_RADIUS,
+  APP_SHADOW,
+  APP_SPACE_SCALE,
+  APP_SPACING,
+  APP_TYPE_SCALE,
+} from '@/lib/ui/tokens';
 
 type StateBannerTone = 'neutral' | 'success' | 'warning' | 'danger';
 
@@ -60,12 +68,12 @@ export function StateBanner({
       className={joinClassNames('app-state-banner', className)}
       style={{
         display: 'grid',
-        gap: '0.5rem',
-        padding: '0.8rem 0.9rem',
-        borderRadius: '1rem',
+        gap: APP_SPACING[2],
+        padding: `${APP_SPACING[3]} ${APP_SPACE_SCALE.px14}`,
+        borderRadius: APP_RADIUS.lg,
         border: `1px solid ${palette.border}`,
         background: palette.background,
-        boxShadow: 'var(--app-shadow-panel)',
+        boxShadow: APP_SHADOW.panel,
       }}
     >
       <div
@@ -73,18 +81,24 @@ export function StateBanner({
           display: 'flex',
           alignItems: 'start',
           justifyContent: 'space-between',
-          gap: '0.85rem',
+          gap: APP_SPACE_SCALE.px14,
           flexWrap: 'wrap',
         }}
       >
-        <div style={{ display: 'grid', gap: '0.18rem' }}>
+        <div style={{ display: 'grid', gap: APP_SPACING[1] }}>
           {title ? (
-            <strong style={{ color: 'var(--app-text-primary)', fontSize: '0.88rem' }}>
+            <strong style={{ color: 'var(--app-text-primary)', fontSize: APP_TYPE_SCALE[14] }}>
               {title}
             </strong>
           ) : null}
           {detail ? (
-            <span style={{ color: 'var(--app-text-secondary)', fontSize: '0.82rem', lineHeight: 1.55 }}>
+            <span
+              style={{
+                color: 'var(--app-text-secondary)',
+                fontSize: APP_TYPE_SCALE[13],
+                lineHeight: APP_LINE_HEIGHT.body,
+              }}
+            >
               {detail}
             </span>
           ) : null}
@@ -92,7 +106,7 @@ export function StateBanner({
         {actions}
       </div>
       {children ? (
-        <div style={{ color: palette.accent, fontSize: '0.8rem', lineHeight: 1.5 }}>
+        <div style={{ color: palette.accent, fontSize: APP_TYPE_SCALE[12], lineHeight: APP_LINE_HEIGHT.compact }}>
           {children}
         </div>
       ) : null}

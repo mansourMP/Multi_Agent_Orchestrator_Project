@@ -275,11 +275,11 @@ export function WorkstationApprovalsPane() {
                           <DataTableCell
                             align="end"
                             primary={(
-                              <div style={{ display: 'flex', gap: '0.45rem', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                              <div className="app-inline-actions app-inline-actions--end app-inline-actions--tight">
                                 <AppButton
                                   type="button"
                                   tone="secondary"
-                                  style={{ minHeight: '1.9rem', padding: '0.32rem 0.68rem' }}
+                                  className="app-button--compact"
                                   onClick={(event) => {
                                     event.stopPropagation();
                                     focusApproval(approvalId);
@@ -289,7 +289,7 @@ export function WorkstationApprovalsPane() {
                                 </AppButton>
                                 <AppButton
                                   type="button"
-                                  style={{ minHeight: '1.9rem', padding: '0.32rem 0.68rem' }}
+                                  className="app-button--compact"
                                   disabled={resolving}
                                   onClick={(event) => {
                                     event.stopPropagation();
@@ -301,7 +301,7 @@ export function WorkstationApprovalsPane() {
                                 <AppButton
                                   type="button"
                                   tone="danger"
-                                  style={{ minHeight: '1.9rem', padding: '0.32rem 0.68rem' }}
+                                  className="app-button--compact"
                                   disabled={resolving}
                                   onClick={(event) => {
                                     event.stopPropagation();
@@ -353,14 +353,14 @@ export function WorkstationApprovalsPane() {
                     >
                       Operator action here updates the canonical approval record and the related run state.
                     </StateBanner>
-                    <div style={{ display: 'grid', gap: '0.7rem' }}>
-                      <div style={{ display: 'grid', gap: '0.18rem' }}>
-                        <span style={{ color: 'var(--app-text-tertiary)', fontSize: '0.72rem', textTransform: 'uppercase', letterSpacing: '0.08em', fontWeight: 650 }}>Approval id</span>
-                        <span style={{ color: 'var(--app-text-primary)', fontFamily: 'var(--app-font-mono)', overflowWrap: 'anywhere' }}>{selectedApprovalId}</span>
+                    <div className="app-meta-list">
+                      <div className="app-meta-item">
+                        <span className="app-meta-label">Approval id</span>
+                        <span className="app-meta-value app-meta-value--mono">{selectedApprovalId}</span>
                       </div>
-                      <div style={{ display: 'grid', gap: '0.18rem' }}>
-                        <span style={{ color: 'var(--app-text-tertiary)', fontSize: '0.72rem', textTransform: 'uppercase', letterSpacing: '0.08em', fontWeight: 650 }}>Run</span>
-                        <span style={{ color: 'var(--app-text-secondary)' }}>{readString(selectedApproval.run_id, 'Awaiting run linkage')}</span>
+                      <div className="app-meta-item">
+                        <span className="app-meta-label">Run</span>
+                        <span className="app-meta-value app-meta-value--secondary">{readString(selectedApproval.run_id, 'Awaiting run linkage')}</span>
                       </div>
                     </div>
                   </>

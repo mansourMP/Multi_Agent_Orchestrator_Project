@@ -2,6 +2,7 @@
 
 import type { ReactNode } from 'react';
 
+import { joinClassNames } from '@/lib/ui/primitives';
 import { useWorkstationDesktopBridge } from '@/lib/workspace/workstation-desktop-bridge';
 
 function WindowControlIcon({
@@ -35,33 +36,17 @@ function MacTrafficLight({
   label: string;
   onClick: () => void;
 }) {
-  const background =
-    tone === 'close'
-      ? '#ff5f57'
-      : tone === 'minimize'
-        ? '#febc2e'
-        : '#28c840';
-
   return (
     <button
       type="button"
       aria-label={label}
+      className={joinClassNames(
+        'desktop-window-controls__traffic-light',
+        `desktop-window-controls__traffic-light--${tone}`,
+      )}
       onClick={(event) => {
         event.stopPropagation();
         onClick();
-      }}
-      style={{
-        width: '0.82rem',
-        height: '0.82rem',
-        borderRadius: '999px',
-        border: '1px solid color-mix(in srgb, black 18%, transparent 82%)',
-        background,
-        padding: 0,
-        display: 'inline-flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        boxShadow: '0 1px 0 color-mix(in srgb, white 18%, transparent 82%) inset',
-        cursor: 'pointer',
       }}
     />
   );
@@ -82,23 +67,13 @@ function AppWindowButton({
     <button
       type="button"
       aria-label={label}
+      className={joinClassNames(
+        'desktop-window-controls__button',
+        tone === 'danger' && 'desktop-window-controls__button--danger',
+      )}
       onClick={(event) => {
         event.stopPropagation();
         onClick();
-      }}
-      style={{
-        width: '1.9rem',
-        height: '1.7rem',
-        borderRadius: '0.58rem',
-        border: tone === 'danger' ? '1px solid color-mix(in srgb, var(--app-danger) 36%, var(--app-border-subtle) 64%)' : '1px solid var(--app-border-subtle)',
-        background: tone === 'danger'
-          ? 'color-mix(in srgb, var(--app-danger) 10%, var(--app-bg-panel) 90%)'
-          : 'color-mix(in srgb, var(--app-bg-panel-elevated) 84%, var(--app-bg-overlay) 16%)',
-        color: tone === 'danger' ? 'var(--app-danger)' : 'var(--app-text-secondary)',
-        display: 'inline-flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        cursor: 'pointer',
       }}
     >
       {children}
@@ -115,13 +90,7 @@ export function DesktopWindowControls() {
 
   if (desktop.platform === 'macos') {
     return (
-      <div
-        style={{
-          display: 'inline-flex',
-          alignItems: 'center',
-          gap: '0.45rem',
-        }}
-      >
+      <div className="desktop-window-controls desktop-window-controls--macos">
         <MacTrafficLight
           tone="close"
           label="Close window"
@@ -148,13 +117,7 @@ export function DesktopWindowControls() {
   }
 
   return (
-    <div
-      style={{
-        display: 'inline-flex',
-        alignItems: 'center',
-        gap: '0.4rem',
-      }}
-    >
+    <div className="desktop-window-controls">
       <AppWindowButton
         label="Minimize window"
         onClick={() => {

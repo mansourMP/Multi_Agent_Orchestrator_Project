@@ -247,7 +247,7 @@ export function WorkstationArtifactsPane() {
                           <DataTableCell primary={formatByteSize(item.byte_size)} meta={formatTimestamp(item.created_at)} />
                           <DataTableCell
                             align="end"
-                            primary={selected ? <DataBadge tone="accent">Selected</DataBadge> : <span style={{ color: 'var(--app-text-tertiary)', fontSize: '0.78rem' }}>Inspect</span>}
+                            primary={selected ? <DataBadge tone="accent">Selected</DataBadge> : <span className="app-data-table__hint">Inspect</span>}
                           />
                         </DataTableRow>
                       );
@@ -262,7 +262,7 @@ export function WorkstationArtifactsPane() {
                 title={selectedArtifact ? readString(selectedArtifact.label ?? selectedArtifact.file_name, selectedArtifactId || 'Artifact') : 'No artifact selected'}
                 subtitle={selectedArtifactId || 'Choose an artifact from the catalog to focus the inspector.'}
                 actions={selectedArtifactId ? (
-                  <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+                  <div className="app-inline-actions">
                     <AppButton
                       type="button"
                       tone={inspectorFocused ? 'secondary' : 'primary'}
@@ -302,14 +302,14 @@ export function WorkstationArtifactsPane() {
                     >
                       {readString(selectedArtifact.run_id, 'Generated artifact')}
                     </StateBanner>
-                    <div style={{ display: 'grid', gap: '0.7rem' }}>
-                      <div style={{ display: 'grid', gap: '0.18rem' }}>
-                        <span style={{ color: 'var(--app-text-tertiary)', fontSize: '0.72rem', textTransform: 'uppercase', letterSpacing: '0.08em', fontWeight: 650 }}>Artifact id</span>
-                        <span style={{ color: 'var(--app-text-primary)', fontFamily: 'var(--app-font-mono)', overflowWrap: 'anywhere' }}>{selectedArtifactId}</span>
+                    <div className="app-meta-list">
+                      <div className="app-meta-item">
+                        <span className="app-meta-label">Artifact id</span>
+                        <span className="app-meta-value app-meta-value--mono">{selectedArtifactId}</span>
                       </div>
-                      <div style={{ display: 'grid', gap: '0.18rem' }}>
-                        <span style={{ color: 'var(--app-text-tertiary)', fontSize: '0.72rem', textTransform: 'uppercase', letterSpacing: '0.08em', fontWeight: 650 }}>Created</span>
-                        <span style={{ color: 'var(--app-text-secondary)' }}>{formatTimestamp(selectedArtifact.created_at)}</span>
+                      <div className="app-meta-item">
+                        <span className="app-meta-label">Created</span>
+                        <span className="app-meta-value app-meta-value--secondary">{formatTimestamp(selectedArtifact.created_at)}</span>
                       </div>
                     </div>
                   </>

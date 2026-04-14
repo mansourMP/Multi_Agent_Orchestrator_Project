@@ -1,8 +1,9 @@
 'use client';
 
-import type { HTMLAttributes, PropsWithChildren, ReactNode } from 'react';
+import type { HTMLAttributes, KeyboardEvent, PropsWithChildren, ReactNode } from 'react';
+import { useState } from 'react';
 
-import { AppInput, AppSelect, AppTextarea, joinClassNames } from '@/lib/ui/primitives';
+import { AppButton, AppInput, AppSelect, AppTextarea, joinClassNames } from '@/lib/ui/primitives';
 
 function resolveFormGridVariant(columns: string | undefined): string {
   if (columns === '1fr') {
@@ -80,6 +81,85 @@ export function FormField({
 export const FormInput = AppInput;
 export const FormTextarea = AppTextarea;
 export const FormSelect = AppSelect;
+
+export function FormTokenListEditor({
+  value,
+  onChange,
+  placeholder = 'Add item',
+  addLabel = 'Add',
+  emptyLabel = 'No items added.',
+}: {
+  value: string[];
+  onChange: (nextValue: string[]) => void;
+  placeholder?: string;
+  addLabel?: string;
+  emptyLabel?: string;
+}) {
+  const [draft, setDraft] = useState('');
+
+  function commitDraft() {
+    const token = draft.trim();
+    if (!token) {
+      return;
+    }
+    if (!value.includes(token)) {
+      onChange([...value, token]);
+    }
+    setDraft('');
+  }
+
+  function handleKeyDown(event: KeyboardEvent<HTMLInputElement>) {
+    if (event.key === 'Enter' || event.key === ',') {
+      event.preventDefault();
+      commitDraft();
+    }
+  }
+
+  return (
+    <div className="app-token-editor">
+      {value.length > 0 ? (
+        <div className="app-token-editor__list">
+          {value.map((item) => (
+            <span key={item} className="app-token-editor__item">
+              {item}
+              <button
+                type="button"
+                className="app-token-editor__item-remove"
+                aria-label={`Remove ${item}`}
+                onClick={() => {
+                  onChange(value.filter((entry) => entry !== item));
+                }}
+              >
+                ×
+              </button>
+            </span>
+          ))}
+        </div>
+      ) : (
+        <div className="app-token-editor__empty">{emptyLabel}</div>
+      )}
+
+      <div className="app-token-editor__composer">
+        <AppInput
+          value={draft}
+          placeholder={placeholder}
+          onChange={(event) => {
+            setDraft(event.currentTarget.value);
+          }}
+          onKeyDown={handleKeyDown}
+        />
+        <AppButton
+          type="button"
+          tone="secondary"
+          className="app-button--compact"
+          onClick={commitDraft}
+        >
+          {addLabel}
+        </AppButton>
+      </div>
+    </div>
+  );
+}
 
 export function FormReadout({
   label,

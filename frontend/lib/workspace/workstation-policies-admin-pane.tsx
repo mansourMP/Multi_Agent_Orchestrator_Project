@@ -5,29 +5,17 @@ import { useEffect, useState } from 'react';
 import {
   FormField,
   FormGrid,
-  FormInput,
   FormReadout,
   FormSection,
   FormSelect,
+  FormTokenListEditor,
 } from '@/lib/ui/form-controls';
 import { ListDetailColumns, ListDetailPanel, ListDetailShell } from '@/lib/ui/list-detail';
 import { SkeletonBlock } from '@/lib/ui/skeleton-block';
 import { StateBanner } from '@/lib/ui/state-banner';
 import { AppButton } from '@/lib/ui/primitives';
+import { WorkstationSurfaceRoot } from '@/lib/workspace/workstation-surface-primitives';
 import { useWorkspaceServices } from '@/lib/workspace/workspace-services';
-
-function tokensToText(value: unknown): string {
-  return Array.isArray(value)
-    ? value.filter((item): item is string => typeof item === 'string' && item.trim()).join(', ')
-    : '';
-}
-
-function textToTokens(value: string): string[] {
-  return value
-    .split(',')
-    .map((item) => item.trim())
-    .filter(Boolean);
-}
 
 type PolicySnapshot = {
   capabilities: {
@@ -56,13 +44,13 @@ const EMPTY_POLICY: PolicySnapshot = {
 
 export function WorkstationPoliciesAdminPane() {
   const services = useWorkspaceServices();
-  const [allowCapabilities, setAllowCapabilities] = useState('');
-  const [denyCapabilities, setDenyCapabilities] = useState('');
-  const [allowConnectors, setAllowConnectors] = useState('');
-  const [denyConnectors, setDenyConnectors] = useState('');
-  const [allowDangerous, setAllowDangerous] = useState('');
-  const [denyDangerous, setDenyDangerous] = useState('');
-  const [trustedMachines, setTrustedMachines] = useState('');
+  const [allowCapabilities, setAllowCapabilities] = useState<string[]>([]);
+  const [denyCapabilities, setDenyCapabilities] = useState<string[]>([]);
+  const [allowConnectors, setAllowConnectors] = useState<string[]>([]);
+  const [denyConnectors, setDenyConnectors] = useState<string[]>([]);
+  const [allowDangerous, setAllowDangerous] = useState<string[]>([]);
+  const [denyDangerous, setDenyDangerous] = useState<string[]>([]);
+  const [trustedMachines, setTrustedMachines] = useState<string[]>([]);
   const [machineEnrollmentScope, setMachineEnrollmentScope] = useState('workspace');
   const [lastSavedPolicy, setLastSavedPolicy] = useState<PolicySnapshot>(EMPTY_POLICY);
   const [isLoading, setIsLoading] = useState(true);
@@ -98,13 +86,13 @@ export function WorkstationPoliciesAdminPane() {
         : [],
       machine_enrollment_scope: String(policy.machine_enrollment_scope ?? 'workspace'),
     };
-    setAllowCapabilities(tokensToText(snapshot.capabilities.allow));
-    setDenyCapabilities(tokensToText(snapshot.capabilities.deny));
-    setAllowConnectors(tokensToText(snapshot.connectors.allow));
-    setDenyConnectors(tokensToText(snapshot.connectors.deny));
-    setAllowDangerous(tokensToText(snapshot.dangerous_action_classes.allow));
-    setDenyDangerous(tokensToText(snapshot.dangerous_action_classes.deny));
-    setTrustedMachines(tokensToText(snapshot.trusted_owner_machine_ids));
+    setAllowCapabilities(snapshot.capabilities.allow);
+    setDenyCapabilities(snapshot.capabilities.deny);
+    setAllowConnectors(snapshot.connectors.allow);
+    setDenyConnectors(snapshot.connectors.deny);
+    setAllowDangerous(snapshot.dangerous_action_classes.allow);
+    setDenyDangerous(snapshot.dangerous_action_classes.deny);
+    setTrustedMachines(snapshot.trusted_owner_machine_ids);
     setMachineEnrollmentScope(snapshot.machine_enrollment_scope);
     setLastSavedPolicy(snapshot);
   };
@@ -138,7 +126,7 @@ export function WorkstationPoliciesAdminPane() {
   }, [services.client]);
 
   return (
-    <div data-workstation-surface="admin/policies">
+    <WorkstationSurfaceRoot surface="admin/policies">
       <ListDetailShell
         title="Workspace policy"
         subtitle="Apply the canonical workspace policy and immediately read back the server-normalized result."
@@ -178,7 +166,7 @@ export function WorkstationPoliciesAdminPane() {
               subtitle="Each save writes the policy and then reloads the canonical server representation."
             >
               {isLoading ? (
-                <div style={{ display: 'grid', gap: '0.6rem' }}>
+                <div className="app-stack-3">
                   <SkeletonBlock height="3rem" />
                   <SkeletonBlock height="3rem" />
                   <SkeletonBlock height="3rem" />
@@ -191,11 +179,21 @@ export function WorkstationPoliciesAdminPane() {
                     description="Allow and deny lists for high-level workspace capabilities."
                   >
                     <FormGrid>
-                      <FormField label="Capability allow" hint="Comma separated tokens.">
-                        <FormInput value={allowCapabilities} onChange={(event) => setAllowCapabilities(event.currentTarget.value)} />
+                      <FormField label="Capability allow" hint="Add allowed capability tokens one at a time.">
+                        <FormTokenListEditor
+                          value={allowCapabilities}
+                          onChange={setAllowCapabilities}
+                          placeholder="workspace.manage"
+                          emptyLabel="No allowed capabilities."
+                        />
                       </FormField>
                       <FormField label="Capability deny" hint="Explicit capability blocks.">
-                        <FormInput value={denyCapabilities} onChange={(event) => setDenyCapabilities(event.currentTarget.value)} />
+                        <FormTokenListEditor
+                          value={denyCapabilities}
+                          onChange={setDenyCapabilities}
+                          placeholder="workspace.delete"
+                          emptyLabel="No denied capabilities."
+                        />
                       </FormField>
                     </FormGrid>
                   </FormSection>
@@ -205,11 +203,21 @@ export function WorkstationPoliciesAdminPane() {
                     description="Connector-level allow and deny lists for this workspace."
                   >
                     <FormGrid>
-                      <FormField label="Connector allow" hint="Comma separated connector identifiers.">
-                        <FormInput value={allowConnectors} onChange={(event) => setAllowConnectors(event.currentTarget.value)} />
+                      <FormField label="Connector allow" hint="Allowed connector identifiers.">
+                        <FormTokenListEditor
+                          value={allowConnectors}
+                          onChange={setAllowConnectors}
+                          placeholder="github"
+                          emptyLabel="No allowed connectors."
+                        />
                       </FormField>
                       <FormField label="Connector deny" hint="Use for explicit blocks.">
-                        <FormInput value={denyConnectors} onChange={(event) => setDenyConnectors(event.currentTarget.value)} />
+                        <FormTokenListEditor
+                          value={denyConnectors}
+                          onChange={setDenyConnectors}
+                          placeholder="gmail"
+                          emptyLabel="No denied connectors."
+                        />
                       </FormField>
                     </FormGrid>
                   </FormSection>
@@ -220,10 +228,20 @@ export function WorkstationPoliciesAdminPane() {
                   >
                     <FormGrid>
                       <FormField label="Dangerous allow" hint="Explicit exceptions for restricted classes.">
-                        <FormInput value={allowDangerous} onChange={(event) => setAllowDangerous(event.currentTarget.value)} />
+                        <FormTokenListEditor
+                          value={allowDangerous}
+                          onChange={setAllowDangerous}
+                          placeholder="filesystem_read"
+                          emptyLabel="No dangerous-action exceptions."
+                        />
                       </FormField>
                       <FormField label="Dangerous deny" hint="Blocks for dangerous action classes.">
-                        <FormInput value={denyDangerous} onChange={(event) => setDenyDangerous(event.currentTarget.value)} />
+                        <FormTokenListEditor
+                          value={denyDangerous}
+                          onChange={setDenyDangerous}
+                          placeholder="filesystem_write"
+                          emptyLabel="No denied dangerous-action classes."
+                        />
                       </FormField>
                     </FormGrid>
                   </FormSection>
@@ -243,13 +261,18 @@ export function WorkstationPoliciesAdminPane() {
                           <option value="global">global</option>
                         </FormSelect>
                       </FormField>
-                      <FormField label="Trusted owner machine ids" hint="Comma separated machine identifiers.">
-                        <FormInput value={trustedMachines} onChange={(event) => setTrustedMachines(event.currentTarget.value)} />
+                      <FormField label="Trusted owner machine ids" hint="Add each trusted machine identifier separately.">
+                        <FormTokenListEditor
+                          value={trustedMachines}
+                          onChange={setTrustedMachines}
+                          placeholder="machine_123"
+                          emptyLabel="No trusted owner machines."
+                        />
                       </FormField>
                     </FormGrid>
                   </FormSection>
 
-                  <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+                  <div className="app-inline-actions app-inline-actions--end">
                     <AppButton
                       type="button"
                       disabled={isSaving}
@@ -259,18 +282,18 @@ export function WorkstationPoliciesAdminPane() {
                         setStatus(null);
                         void services.client.updateWorkspacePolicies({
                           capabilities: {
-                            allow: textToTokens(allowCapabilities),
-                            deny: textToTokens(denyCapabilities),
+                            allow: allowCapabilities,
+                            deny: denyCapabilities,
                           },
                           connectors: {
-                            allow: textToTokens(allowConnectors),
-                            deny: textToTokens(denyConnectors),
+                            allow: allowConnectors,
+                            deny: denyConnectors,
                           },
                           dangerous_action_classes: {
-                            allow: textToTokens(allowDangerous),
-                            deny: textToTokens(denyDangerous),
+                            allow: allowDangerous,
+                            deny: denyDangerous,
                           },
-                          trusted_owner_machine_ids: textToTokens(trustedMachines),
+                          trusted_owner_machine_ids: trustedMachines,
                           machine_enrollment_scope: machineEnrollmentScope,
                         })
                           .then(async () => {
@@ -293,14 +316,14 @@ export function WorkstationPoliciesAdminPane() {
             </ListDetailPanel>
           )}
           secondary={(
-            <div style={{ display: 'grid', gap: '1rem' }}>
+            <div className="app-stack-4">
               <ListDetailPanel
                 eyebrow="Server truth"
                 title="Canonical snapshot"
                 subtitle="These values reflect the most recent server-normalized policy state."
               >
                 {isLoading ? (
-                  <div style={{ display: 'grid', gap: '0.55rem' }}>
+                  <div className="app-stack-3">
                     <SkeletonBlock height="2.8rem" />
                     <SkeletonBlock height="2.8rem" />
                     <SkeletonBlock height="2.8rem" />
@@ -322,6 +345,6 @@ export function WorkstationPoliciesAdminPane() {
           )}
         />
       </ListDetailShell>
-    </div>
+    </WorkstationSurfaceRoot>
   );
 }

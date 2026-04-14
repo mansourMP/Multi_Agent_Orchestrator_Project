@@ -7,7 +7,7 @@ export default function AccountSettingsPage() {
       title="Account settings"
       subtitle="Account-global identity and recovery settings live outside any single workspace, but they still render inside the same product chrome."
     >
-      <div data-account-settings-page="shell" style={{ display: 'grid', gap: '1rem' }}>
+      <div data-account-settings-page="shell" className="app-stack-4">
         <ListDetailPanel
           eyebrow="Account"
           title="Identity scope"

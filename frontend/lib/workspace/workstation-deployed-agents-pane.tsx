@@ -804,7 +804,7 @@ function DeployedAgentsSkeleton() {
         </ListDetailPanel>
       )}
       secondary={(
-        <div style={{ display: 'grid', gap: '1rem' }}>
+        <div className="app-stack-4">
           <ListDetailPanel eyebrow="Detail" title="Loading deployment detail">
             <SkeletonBlock height="4rem" />
             <SkeletonBlock height="5rem" />
@@ -827,28 +827,11 @@ function TranscriptEntryCard({
   const runId = readOptionalString(entry.run_id);
   const threadId = readOptionalString(entry.thread_id);
   return (
-    <article
-      style={{
-        display: 'grid',
-        gap: '0.45rem',
-        padding: '0.9rem 0.95rem',
-        borderRadius: '0.95rem',
-        border: '1px solid var(--app-border-subtle)',
-        background: 'color-mix(in srgb, var(--app-bg-panel-elevated) 80%, var(--app-bg-overlay) 20%)',
-      }}
-    >
-      <div
-        style={{
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'start',
-          gap: '0.75rem',
-          flexWrap: 'wrap',
-        }}
-      >
-        <div style={{ display: 'grid', gap: '0.16rem' }}>
-          <strong style={{ color: 'var(--app-text-primary)', fontSize: '0.86rem' }}>{transcriptEntryTitle(entry)}</strong>
-          <span style={{ color: 'var(--app-text-tertiary)', fontSize: '0.76rem' }}>
+    <article className="deployed-agents-transcript-card">
+      <div className="deployed-agents-transcript-card__header">
+        <div className="deployed-agents-transcript-card__copy">
+          <strong className="deployed-agents-transcript-card__title">{transcriptEntryTitle(entry)}</strong>
+          <span className="deployed-agents-transcript-card__timestamp">
             {formatTimestamp(entry.ts)}
           </span>
         </div>
@@ -856,19 +839,11 @@ function TranscriptEntryCard({
           {humanizeToken(entry.kind, 'Event')}
         </DataBadge>
       </div>
-      <div style={{ color: 'var(--app-text-secondary)', fontSize: '0.83rem', lineHeight: 1.6 }}>
+      <div className="deployed-agents-transcript-card__body">
         {transcriptEntryBody(entry)}
       </div>
       {(runId || threadId || readOptionalString(entry.status)) ? (
-        <div
-          style={{
-            display: 'flex',
-            gap: '0.5rem',
-            flexWrap: 'wrap',
-            color: 'var(--app-text-tertiary)',
-            fontSize: '0.74rem',
-          }}
-        >
+        <div className="deployed-agents-transcript-card__meta">
           {runId ? <span>Run {runId}</span> : null}
           {threadId ? <span>Thread {threadId}</span> : null}
           {readOptionalString(entry.status) ? <span>{humanizeToken(entry.status, 'Logged')}</span> : null}
@@ -1434,7 +1409,7 @@ export function WorkstationDeployedAgentsPane() {
         title="Deployed Agents"
         subtitle="Create customer-facing specialist deployments, manage Telegram launch state, and inspect the live conversation inbox without leaving the workstation shell."
         actions={(
-          <div style={{ display: 'flex', gap: '0.6rem', flexWrap: 'wrap' }}>
+          <div className="app-inline-actions">
             <AppButton
               type="button"
               tone="secondary"
@@ -1473,7 +1448,7 @@ export function WorkstationDeployedAgentsPane() {
         ) : (
           <ListDetailColumns
             primary={(
-              <div style={{ display: 'grid', gap: '1rem' }}>
+              <div className="app-stack-4">
                 <ListDetailPanel
                   eyebrow="Index"
                   title="Workspace deployments"
@@ -1553,13 +1528,13 @@ export function WorkstationDeployedAgentsPane() {
               </div>
             )}
             secondary={(
-              <div style={{ display: 'grid', gap: '1rem' }}>
+              <div className="app-stack-4">
                 <ListDetailPanel
                   eyebrow="Detail"
                   title={selectedAgent ? readString(selectedAgent.name, 'Deployment detail') : 'Deployment detail'}
                   subtitle={selectedAgent ? readString(selectedAgent.persona, 'Customer-facing deployed agent') : 'Select a deployment to inspect its launch state and configuration.'}
                   actions={selectedAgent ? (
-                    <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+                    <div className="app-inline-actions app-inline-actions--tight">
                       <AppButton type="button" tone="secondary" onClick={openEditWizard}>
                         Edit
                       </AppButton>
@@ -1648,11 +1623,11 @@ export function WorkstationDeployedAgentsPane() {
                           <FormReadout label="Outcomes" value={formatOutcomeSummary(selectedAnalytics)} />
                         </FormGrid>
                       </div>
-                      <div style={{ display: 'grid', gap: '0.55rem' }}>
-                        <div style={{ color: 'var(--app-text-tertiary)', fontSize: '0.73rem', fontWeight: 650, letterSpacing: '0.08em', textTransform: 'uppercase' }}>
+                      <div className="app-meta-item">
+                        <div className="app-meta-label">
                           System prompt
                         </div>
-                        <div style={{ color: 'var(--app-text-secondary)', fontSize: '0.83rem', lineHeight: 1.6 }}>
+                        <div className="app-meta-value app-meta-value--body">
                           {readString(selectedAgent.system_prompt, 'No launch prompt configured yet.')}
                         </div>
                       </div>
@@ -1682,10 +1657,7 @@ export function WorkstationDeployedAgentsPane() {
                     />
                   ) : (
                     <div data-deployed-agent-conversations="list">
-                      <div
-                        data-deployed-agent-conversations="filters"
-                        style={{ display: 'grid', gap: '0.8rem', marginBottom: '0.85rem' }}
-                      >
+                      <div data-deployed-agent-conversations="filters" className="deployed-agents-filter-bar">
                         <FormGrid columns="repeat(auto-fit, minmax(10rem, 1fr))">
                           <FormField label="Channel filter" hint="Keep the inbox focused on one customer channel at a time.">
                             <FormSelect
@@ -1736,21 +1708,14 @@ export function WorkstationDeployedAgentsPane() {
                             </FormSelect>
                           </FormField>
                         </FormGrid>
-                        <div
-                          style={{
-                            display: 'flex',
-                            justifyContent: 'space-between',
-                            alignItems: 'center',
-                            gap: '0.75rem',
-                            flexWrap: 'wrap',
-                          }}
-                        >
-                          <div style={{ color: 'var(--app-text-tertiary)', fontSize: '0.76rem' }}>
+                        <div className="deployed-agents-filter-summary">
+                          <div className="app-data-table__hint">
                             Showing {filteredConversations.length} of {conversations.length} customer sessions.
                           </div>
                           <AppButton
                             type="button"
                             tone="secondary"
+                            className="app-button--compact"
                             onClick={() => setConversationFilters({ channel: 'all', escalationState: 'all', outcome: 'all' })}
                           >
                             Clear filters
@@ -1786,7 +1751,7 @@ export function WorkstationDeployedAgentsPane() {
                               />
                               <DataTableCell
                                 primary={(
-                                  <div style={{ display: 'flex', gap: '0.35rem', flexWrap: 'wrap' }}>
+                                  <div className="deployed-agents-badge-row">
                                     <DataBadge tone={escalationTone(conversation.escalation_state)}>
                                       {humanizeToken(conversation.escalation_state, 'Clear')}
                                     </DataBadge>
@@ -1841,7 +1806,7 @@ export function WorkstationDeployedAgentsPane() {
                       body="The session exists, but the transcript detail could not be loaded right now."
                     />
                   ) : (
-                    <div data-deployed-agent-transcript="detail" style={{ display: 'grid', gap: '0.8rem' }}>
+                    <div data-deployed-agent-transcript="detail" className="app-stack-3">
                       <FormGrid columns="repeat(auto-fit, minmax(10rem, 1fr))">
                         <FormReadout label="Channel" value={humanizeToken(selectedTranscript.channel, 'Telegram')} />
                         <FormReadout label="Outcome" value={humanizeToken(selectedTranscript.outcome, 'Open')} />
@@ -1878,7 +1843,7 @@ export function WorkstationDeployedAgentsPane() {
           description="Four steps define the customer-facing identity, knowledge references, live channel configuration, and launch controls."
           onClose={closeWizard}
           actions={(
-            <div style={{ display: 'flex', gap: '0.6rem', flexWrap: 'wrap' }}>
+            <div className="app-inline-actions">
               {wizardStepIndex > 0 ? (
                 <AppButton
                   type="button"
@@ -1911,33 +1876,19 @@ export function WorkstationDeployedAgentsPane() {
             </div>
           )}
         >
-          <div data-deployed-agent-wizard="root" style={{ display: 'grid', gap: '0.9rem' }}>
-            <div
-              style={{
-                display: 'grid',
-                gridTemplateColumns: 'repeat(4, minmax(0, 1fr))',
-                gap: '0.6rem',
-              }}
-            >
+          <div data-deployed-agent-wizard="root" className="deployed-agents-wizard">
+            <div className="deployed-agents-wizard__steps">
               {DEPLOYED_AGENT_WIZARD_STEPS.map((step, index) => (
                 <div
                   key={step.id}
                   data-deployed-agent-wizard-step={step.id}
-                  style={{
-                    display: 'grid',
-                    gap: '0.22rem',
-                    padding: '0.7rem 0.75rem',
-                    borderRadius: '0.9rem',
-                    border: index === wizardStepIndex ? '1px solid var(--app-border-accent)' : '1px solid var(--app-border-subtle)',
-                    background: index === wizardStepIndex
-                      ? 'color-mix(in srgb, var(--app-accent-muted) 34%, var(--app-bg-panel) 66%)'
-                      : 'color-mix(in srgb, var(--app-bg-panel-elevated) 82%, var(--app-bg-overlay) 18%)',
-                  }}
+                  className="deployed-agents-wizard__step"
+                  data-active={index === wizardStepIndex ? 'true' : 'false'}
                 >
-                  <span style={{ color: 'var(--app-text-tertiary)', fontSize: '0.72rem', fontWeight: 650, letterSpacing: '0.08em', textTransform: 'uppercase' }}>
+                  <span className="deployed-agents-wizard__step-eyebrow">
                     Step {index + 1}
                   </span>
-                  <strong style={{ color: 'var(--app-text-primary)', fontSize: '0.84rem' }}>{step.label}</strong>
+                  <strong className="deployed-agents-wizard__step-title">{step.label}</strong>
                 </div>
               ))}
             </div>
@@ -1979,7 +1930,7 @@ export function WorkstationDeployedAgentsPane() {
               ) : null}
 
               {wizardStep.id === 'knowledge' ? (
-                <div style={{ display: 'grid', gap: '0.8rem' }}>
+                <div className="app-stack-3">
                   <FormField label="Knowledge references" hint="Enter one reference URI per line. These remain references only in this sprint.">
                     <FormTextarea
                       rows={8}
@@ -1996,7 +1947,7 @@ export function WorkstationDeployedAgentsPane() {
               ) : null}
 
               {wizardStep.id === 'channels' ? (
-                <div style={{ display: 'grid', gap: '0.8rem' }}>
+                <div className="app-stack-3">
                   <FormGrid columns="repeat(auto-fit, minmax(14rem, 1fr))">
                     <FormField label="Telegram state" hint="Telegram is the only actionable live customer channel in this sprint.">
                       <FormSelect
@@ -2024,7 +1975,7 @@ export function WorkstationDeployedAgentsPane() {
               ) : null}
 
               {wizardStep.id === 'launch' ? (
-                <div style={{ display: 'grid', gap: '0.8rem' }}>
+                <div className="app-stack-3">
                   <FormGrid columns="repeat(auto-fit, minmax(14rem, 1fr))">
                     <FormField label="Provider" hint="Pins the deployed agent to one LLM provider instead of relying on tribal knowledge.">
                       <FormSelect
@@ -2272,7 +2223,7 @@ export function WorkstationDeployedAgentsPane() {
                     </FormGrid>
                   ) : null}
                   {wizardMode === 'edit' && selectedAgent ? (
-                    <div style={{ display: 'flex', gap: '0.6rem', flexWrap: 'wrap' }}>
+                    <div className="app-inline-actions">
                       <AppButton
                         type="button"
                         onClick={() => {

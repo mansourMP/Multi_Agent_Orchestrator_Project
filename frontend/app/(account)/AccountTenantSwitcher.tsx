@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { useEffect, useMemo } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
 
+import { joinClassNames } from '@/lib/ui/primitives';
 import { useAccountShell } from '@/lib/shell/account-shell-context';
 import {
   resolvePrimaryWorkspaceId,
@@ -90,179 +91,15 @@ export function AccountTenantSwitcher() {
   );
 
   return (
-    <aside
-      data-workstation-switcher="rail"
-      style={{
-        height: '100%',
-        display: 'grid',
-        gridTemplateRows: 'auto auto auto minmax(0, 1fr)',
-        gap: '0.95rem',
-        padding: '1rem 0.9rem',
-        background: 'color-mix(in srgb, var(--app-bg-shell) 92%, var(--app-bg-overlay) 8%)',
-      }}
-    >
-      <div
-        style={{
-          display: 'grid',
-          gap: '0.35rem',
-          padding: '0.95rem 1rem',
-          borderRadius: '1rem',
-          border: '1px solid var(--app-border-subtle)',
-          background: 'color-mix(in srgb, var(--app-bg-panel) 76%, var(--app-bg-overlay) 24%)',
-        }}
-      >
-        <span
-          style={{
-            color: 'var(--app-text-tertiary)',
-            fontSize: '0.72rem',
-            fontWeight: 650,
-            letterSpacing: '0.08em',
-            textTransform: 'uppercase',
-          }}
-        >
-          Empyralis
-        </span>
-        <h1
-          style={{
-            margin: 0,
-            color: 'var(--app-text-primary)',
-            fontSize: '1rem',
-            fontWeight: 680,
-            letterSpacing: '-0.015em',
-          }}
-        >
-          Workspaces
-        </h1>
-        <p
-          style={{
-            margin: 0,
-            color: 'var(--app-text-secondary)',
-            fontSize: '0.86rem',
-            lineHeight: 1.5,
-          }}
-        >
-          Switch operational context without leaving the workstation shell.
-        </p>
-      </div>
+    <aside data-workstation-switcher="rail" className="account-switcher">
+      <div className="account-switcher__brand">Empyralis</div>
 
-      {activeWorkspace ? (
-        <div
-          style={{
-            display: 'grid',
-            gap: '0.55rem',
-            padding: '0.95rem 1rem',
-            borderRadius: '1rem',
-            border: '1px solid var(--app-border-subtle)',
-            background: 'color-mix(in srgb, var(--app-bg-panel-elevated) 80%, var(--app-bg-overlay) 20%)',
-          }}
-        >
-          <div style={{ display: 'grid', gap: '0.18rem' }}>
-            <span
-              style={{
-                color: 'var(--app-text-tertiary)',
-                fontSize: '0.72rem',
-                fontWeight: 650,
-                letterSpacing: '0.08em',
-                textTransform: 'uppercase',
-              }}
-            >
-              Current workspace
-            </span>
-            <strong style={{ color: 'var(--app-text-primary)', fontSize: '0.96rem' }}>
-              {activeWorkspace.workspace.label}
-            </strong>
-          </div>
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.45rem' }}>
-            <span
-              style={{
-                display: 'inline-flex',
-                alignItems: 'center',
-                minHeight: '1.8rem',
-                padding: '0.28rem 0.55rem',
-                borderRadius: '999px',
-                border: '1px solid var(--app-border-subtle)',
-                background: 'color-mix(in srgb, var(--app-bg-panel) 84%, var(--app-bg-overlay) 16%)',
-                color: 'var(--app-text-secondary)',
-                fontSize: '0.76rem',
-              }}
-            >
-              {shellProfileLabel(activeWorkspace.preferredShellProfileId)}
-            </span>
-            <span
-              style={{
-                display: 'inline-flex',
-                alignItems: 'center',
-                minHeight: '1.8rem',
-                padding: '0.28rem 0.55rem',
-                borderRadius: '999px',
-                border: '1px solid var(--app-border-subtle)',
-                background: 'color-mix(in srgb, var(--app-bg-panel) 84%, var(--app-bg-overlay) 16%)',
-                color: 'var(--app-text-secondary)',
-                fontSize: '0.76rem',
-              }}
-            >
-              {activeWorkspace.role}
-            </span>
-            <span
-              style={{
-                display: 'inline-flex',
-                alignItems: 'center',
-                minHeight: '1.8rem',
-                padding: '0.28rem 0.55rem',
-                borderRadius: '999px',
-                border: '1px solid var(--app-border-subtle)',
-                background: activeWorkspace.requiresOnboarding
-                  ? 'color-mix(in srgb, var(--app-warning-muted) 80%, var(--app-bg-panel) 20%)'
-                  : 'color-mix(in srgb, var(--app-success-muted) 80%, var(--app-bg-panel) 20%)',
-                color: activeWorkspace.requiresOnboarding ? 'var(--app-warning)' : 'var(--app-success)',
-                fontSize: '0.76rem',
-                fontWeight: 620,
-              }}
-            >
-              {workspaceStatusLabel(activeWorkspace)}
-            </span>
-          </div>
-        </div>
-      ) : null}
-
-      <Link
-        href="/workspaces/new"
-        prefetch
-        style={{
-          display: 'inline-flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          minHeight: '2.4rem',
-          padding: '0.55rem 0.95rem',
-          borderRadius: '999px',
-          border: '1px solid var(--app-border-accent)',
-          background: 'color-mix(in srgb, var(--app-accent) 18%, var(--app-bg-overlay) 82%)',
-          color: 'var(--app-accent-text)',
-          textDecoration: 'none',
-          fontSize: '0.84rem',
-          fontWeight: 640,
-        }}
-      >
-        Create workspace
-      </Link>
-
-      <nav
-        aria-label="Workspace switcher"
-        style={{
-          display: 'grid',
-          gap: '0.7rem',
-          alignContent: 'start',
-          minHeight: 0,
-          overflow: 'auto',
-        }}
-      >
+      <nav aria-label="Workspace switcher" className="account-switcher__nav">
         {state.workspaceMemberships.map((membership) => {
           const workspaceId = membership.workspace.id;
           const isActive = routeWorkspaceId === workspaceId;
           const rememberedRoute = actions.resolveWorkspaceHref(workspaceId);
           const targetHref = resolveSafeWorkspaceHref(membership, rememberedRoute);
-          const shellProfile = shellProfileLabel(membership.preferredShellProfileId);
-          const isSuggested = suggestedWorkspaceId === workspaceId;
 
           return (
             <Link
@@ -271,84 +108,35 @@ export function AccountTenantSwitcher() {
               prefetch
               aria-current={isActive ? 'page' : undefined}
               data-workstation-switcher-link={workspaceId}
+              className={joinClassNames(
+                'account-switcher__link',
+                isActive && 'account-switcher__link--active',
+              )}
               onMouseEnter={() => {
                 router.prefetch(targetHref);
               }}
               onFocus={() => {
                 router.prefetch(targetHref);
               }}
-              style={{
-                display: 'grid',
-                gap: '0.7rem',
-                padding: '0.95rem 1rem',
-                borderRadius: '1rem',
-                border: isActive ? '1px solid var(--app-border-accent)' : '1px solid var(--app-border-subtle)',
-                background: isActive
-                  ? 'color-mix(in srgb, var(--app-accent-muted) 74%, var(--app-bg-panel) 26%)'
-                  : 'color-mix(in srgb, var(--app-bg-panel) 86%, var(--app-bg-overlay) 14%)',
-                color: 'var(--app-text-primary)',
-                textDecoration: 'none',
-                boxShadow: isActive ? 'var(--app-shadow-panel)' : 'none',
-              }}
             >
-              <div style={{ display: 'flex', justifyContent: 'space-between', gap: '0.75rem', alignItems: 'start' }}>
-                <div style={{ display: 'grid', gap: '0.18rem', minWidth: 0 }}>
-                  <span style={{ fontWeight: 660, fontSize: '0.94rem', overflowWrap: 'anywhere' }}>
-                    {membership.workspace.label}
-                  </span>
-                  <span style={{ fontSize: '0.8rem', color: 'var(--app-text-secondary)' }}>
-                    {membership.workspace.kind}
-                  </span>
-                </div>
-                <span
-                  style={{
-                    padding: '0.18rem 0.55rem',
-                    borderRadius: '999px',
-                    background: isActive
-                      ? 'color-mix(in srgb, var(--app-accent) 24%, var(--app-bg-overlay) 76%)'
-                      : 'color-mix(in srgb, var(--app-bg-panel-elevated) 80%, var(--app-bg-overlay) 20%)',
-                    color: isActive ? 'var(--app-accent-text)' : 'var(--app-text-secondary)',
-                    fontSize: '0.74rem',
-                    fontWeight: 700,
-                    textTransform: 'uppercase',
-                  }}
-                >
-                  {membership.role}
-                </span>
-              </div>
-
-              <div
-                style={{
-                  display: 'flex',
-                  flexWrap: 'wrap',
-                  gap: '0.45rem',
-                }}
-              >
-                {[shellProfile, workspaceStatusLabel(membership), isSuggested ? 'Primary' : null]
-                  .filter(Boolean)
-                  .map((label) => (
-                    <span
-                      key={label}
-                      style={{
-                        display: 'inline-flex',
-                        alignItems: 'center',
-                        minHeight: '1.75rem',
-                        padding: '0.22rem 0.5rem',
-                        borderRadius: '999px',
-                        border: '1px solid var(--app-border-subtle)',
-                        background: 'color-mix(in srgb, var(--app-bg-panel-elevated) 82%, var(--app-bg-overlay) 18%)',
-                        color: 'var(--app-text-secondary)',
-                        fontSize: '0.74rem',
-                      }}
-                    >
-                      {label}
-                    </span>
-                  ))}
-              </div>
+              {membership.workspace.label}
             </Link>
           );
         })}
       </nav>
+
+      <div className="app-stack-2">
+        <Link href="/workspaces/new" prefetch className="account-switcher__action">
+          Create workspace
+        </Link>
+        {activeWorkspace ? (
+          <div className="account-switcher__meta">
+            {shellProfileLabel(activeWorkspace.preferredShellProfileId)} · {activeWorkspace.role} ·{' '}
+            {workspaceStatusLabel(activeWorkspace)}
+            {suggestedWorkspaceId === activeWorkspace.workspace.id ? ' · Primary' : ''}
+          </div>
+        ) : null}
+      </div>
     </aside>
   );
 }

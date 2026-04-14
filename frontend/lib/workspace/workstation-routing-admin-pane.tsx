@@ -143,7 +143,7 @@ export function WorkstationRoutingAdminPane() {
         title="Routing and runtime"
         subtitle="Inspect the runtime targets, shell defaults, and channel delivery posture currently bound to this workspace."
         actions={(
-          <div style={{ display: 'flex', gap: '0.6rem', flexWrap: 'wrap' }}>
+          <div className="app-inline-actions">
             <AppButton
               type="button"
               tone="secondary"
@@ -214,14 +214,14 @@ export function WorkstationRoutingAdminPane() {
 
         <ListDetailColumns
           primary={(
-            <div style={{ display: 'grid', gap: '1rem' }}>
+            <div className="app-stack-4">
               <ListDetailPanel
                 eyebrow="Targets"
                 title="Runtime targets"
                 subtitle="Targets exposed to the current workspace execution contract."
               >
                 {isLoading ? (
-                  <div style={{ display: 'grid', gap: '0.55rem' }}>
+                  <div className="app-stack-3">
                     <SkeletonBlock height="3.2rem" />
                     <SkeletonBlock height="3.2rem" />
                     <SkeletonBlock height="3.2rem" />
@@ -300,20 +300,20 @@ export function WorkstationRoutingAdminPane() {
             </div>
           )}
           secondary={(
-            <div style={{ display: 'grid', gap: '1rem' }}>
+            <div className="app-stack-4">
               <ListDetailPanel
                 eyebrow="Workspace"
                 title="Admin defaults"
                 subtitle="Edit the runtime, privacy, memory, and rollout defaults that owners inherit when they create or operate deployments."
               >
                 {isLoading ? (
-                  <div style={{ display: 'grid', gap: '0.55rem' }}>
+                  <div className="app-stack-3">
                     <SkeletonBlock height="2.8rem" />
                     <SkeletonBlock height="2.8rem" />
                     <SkeletonBlock height="2.8rem" />
                   </div>
                 ) : (
-                  <div style={{ display: 'grid', gap: '0.85rem' }}>
+                  <div className="app-stack-4">
                     <FormGrid columns="repeat(auto-fit, minmax(12rem, 1fr))">
                       <FormField label="Default runtime target" hint="Applied to new deployments unless an owner overrides it explicitly.">
                         <FormSelect

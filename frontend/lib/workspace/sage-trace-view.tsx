@@ -449,7 +449,7 @@ function EventMetaLine({ timestamp }: { timestamp: string | null }) {
     return null;
   }
   return (
-    <div style={{ color: 'var(--app-text-tertiary)', fontSize: '0.74rem' }}>
+    <div className="sage-trace-meta-line">
       {timestamp}
     </div>
   );
@@ -671,30 +671,17 @@ export function SageTraceView({
   const traceLabel = summarizeRootAgent(rootAgentId);
 
   const summaryStrip = (
-    <div
-      data-sage-trace-summary="true"
-      style={{
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        gap: '0.75rem',
-        flexWrap: 'wrap',
-        padding: '0.8rem 0.9rem',
-        borderRadius: '1rem',
-        border: '1px solid var(--app-border-subtle)',
-        background: 'color-mix(in srgb, var(--app-bg-panel-elevated) 82%, var(--app-bg-overlay) 18%)',
-      }}
-    >
-      <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', flexWrap: 'wrap' }}>
+    <div data-sage-trace-summary="true" className="sage-trace-summary">
+      <div className="sage-trace-summary__metrics">
         <DataBadge tone={badgeToneForStatus(summary.outcome)}>{summary.outcome}</DataBadge>
-        <span style={{ color: 'var(--app-text-secondary)', fontSize: '0.84rem' }}>
+        <span className="sage-trace-summary__metric">
           {summary.stepCount} steps
         </span>
-        <span style={{ color: 'var(--app-text-secondary)', fontSize: '0.84rem' }}>
+        <span className="sage-trace-summary__metric">
           {summary.toolCount} tools
         </span>
         {summary.duration ? (
-          <span style={{ color: 'var(--app-text-secondary)', fontSize: '0.84rem' }}>
+          <span className="sage-trace-summary__metric">
             {summary.duration}
           </span>
         ) : null}
@@ -703,6 +690,7 @@ export function SageTraceView({
         <AppButton
           type="button"
           tone="secondary"
+          className="app-button--compact"
           onClick={() => {
             setIsExpanded((value) => !value);
           }}
@@ -724,17 +712,9 @@ export function SageTraceView({
         data-sage-trace-mode={mode}
         data-sage-trace-root-agent={rootAgentId ?? 'unknown'}
       >
-        <div style={{ display: 'grid', gap: '0.9rem' }}>
+        <div className="app-stack-3">
           {routedEvent ? (
-            <div
-              data-sage-trace-routed="true"
-              style={{
-                display: 'flex',
-                gap: '0.45rem',
-                alignItems: 'center',
-                flexWrap: 'wrap',
-              }}
-            >
+            <div data-sage-trace-routed="true" className="app-inline-actions app-inline-actions--tight">
               <DataBadge tone="accent">{readString(routedEvent.data.runtime_target, readString(trace?.runtime_target, 'runtime'))}</DataBadge>
               <DataBadge tone="neutral">{readString(routedEvent.data.provider, readString(trace?.provider, 'provider'))}</DataBadge>
               <DataBadge tone="neutral">{readString(routedEvent.data.model, readString(trace?.model, 'model'))}</DataBadge>
@@ -759,43 +739,26 @@ export function SageTraceView({
           ) : null}
 
           {isExpanded ? (
-            <div style={{ display: 'grid', gap: '0.95rem' }}>
+            <div className="app-stack-3">
               {planModel.items.length > 0 ? (
-                <section
-                  data-sage-trace-plan="true"
-                  style={{
-                    display: 'grid',
-                    gap: '0.7rem',
-                    padding: '0.9rem',
-                    borderRadius: '1rem',
-                    border: '1px solid var(--app-border-subtle)',
-                    background: 'color-mix(in srgb, var(--app-bg-panel) 84%, var(--app-bg-overlay) 16%)',
-                  }}
-                >
-                  <div style={{ display: 'grid', gap: '0.18rem' }}>
-                    <strong style={{ color: 'var(--app-text-primary)' }}>{planModel.title || 'Sage Plan'}</strong>
+                <section data-sage-trace-plan="true" className="sage-trace-section">
+                  <div className="app-stack-1">
+                    <strong className="sage-trace-title">{planModel.title || 'Sage Plan'}</strong>
                     {planModel.summary ? (
-                      <span style={{ color: 'var(--app-text-secondary)', fontSize: '0.84rem', lineHeight: 1.55 }}>
+                      <span className="sage-trace-copy">
                         {planModel.summary}
                       </span>
                     ) : null}
                   </div>
-                  <div style={{ display: 'grid', gap: '0.65rem' }}>
+                  <div className="app-stack-2">
                     {planModel.items.map((item) => (
                       <article
                         key={item.id}
                         data-sage-trace-plan-item={item.id}
-                        style={{
-                          display: 'grid',
-                          gap: '0.45rem',
-                          padding: '0.8rem 0.85rem',
-                          borderRadius: '0.95rem',
-                          border: '1px solid var(--app-border-subtle)',
-                          background: 'color-mix(in srgb, var(--app-bg-panel-elevated) 82%, var(--app-bg-overlay) 18%)',
-                        }}
+                        className="sage-trace-card"
                       >
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', flexWrap: 'wrap' }}>
-                          <strong style={{ color: 'var(--app-text-primary)' }}>
+                        <div className="app-inline-actions app-inline-actions--tight">
+                          <strong className="sage-trace-title">
                             {item.index}. {item.title}
                           </strong>
                           <DataBadge tone="neutral">{kindLabel(item.kind)}</DataBadge>
@@ -803,21 +766,21 @@ export function SageTraceView({
                           <DataBadge tone={badgeToneForStatus(item.status)}>{item.status}</DataBadge>
                         </div>
                         {item.rationale ? (
-                          <div style={{ color: 'var(--app-text-secondary)', fontSize: '0.84rem', lineHeight: 1.55 }}>
+                          <div className="sage-trace-copy">
                             {item.rationale}
                           </div>
                         ) : null}
                         {item.summary ? (
-                          <div style={{ color: 'var(--app-text-secondary)', fontSize: '0.82rem', lineHeight: 1.5 }}>
+                          <div className="sage-trace-copy sage-trace-copy--compact">
                             {item.summary}
                           </div>
                         ) : null}
                         {item.reasoning ? (
                           <details data-sage-trace-reasoning={item.id}>
-                            <summary style={{ cursor: 'pointer', color: 'var(--app-text-tertiary)', fontSize: '0.8rem' }}>
+                            <summary className="sage-trace-disclosure">
                               Why this step
                             </summary>
-                            <div style={{ marginTop: '0.45rem', color: 'var(--app-text-secondary)', fontSize: '0.82rem', lineHeight: 1.55 }}>
+                            <div className="sage-trace-details-body">
                               {item.reasoning}
                             </div>
                           </details>
@@ -832,17 +795,10 @@ export function SageTraceView({
                 <article
                   key={tool.id}
                   data-sage-trace-tool-card={tool.toolCallId}
-                  style={{
-                    display: 'grid',
-                    gap: '0.6rem',
-                    padding: '0.9rem',
-                    borderRadius: '1rem',
-                    border: '1px solid var(--app-border-subtle)',
-                    background: 'color-mix(in srgb, var(--app-bg-panel-elevated) 80%, var(--app-bg-overlay) 20%)',
-                  }}
+                  className="sage-trace-card"
                 >
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', flexWrap: 'wrap' }}>
-                    <strong style={{ color: 'var(--app-text-primary)' }}>{tool.toolName}</strong>
+                  <div className="app-inline-actions app-inline-actions--tight">
+                    <strong className="sage-trace-title">{tool.toolName}</strong>
                     <DataBadge tone={tool.resultStatus ? badgeToneForStatus(tool.resultStatus) : 'accent'}>
                       {tool.resultStatus || 'running'}
                     </DataBadge>
@@ -850,57 +806,40 @@ export function SageTraceView({
                   </div>
                   {Object.keys(tool.argsPreview).length > 0 ? (
                     <details>
-                      <summary style={{ cursor: 'pointer', color: 'var(--app-text-tertiary)', fontSize: '0.8rem' }}>
+                      <summary className="sage-trace-disclosure">
                         Tool arguments
                       </summary>
-                      <pre
-                        style={{
-                          margin: '0.45rem 0 0',
-                          padding: '0.7rem',
-                          overflowX: 'auto',
-                          borderRadius: '0.85rem',
-                          background: 'color-mix(in srgb, var(--app-bg-canvas) 84%, var(--app-bg-overlay) 16%)',
-                          color: 'var(--app-text-secondary)',
-                          fontSize: '0.78rem',
-                        }}
-                      >
+                      <pre className="sage-trace-code">
                         {JSON.stringify(tool.argsPreview, null, 2)}
                       </pre>
                     </details>
                   ) : null}
                   {tool.progressMessages.length > 0 ? (
-                    <div style={{ display: 'grid', gap: '0.28rem' }}>
+                    <div className="app-stack-1">
                       {tool.progressMessages.map((message, index) => (
-                        <span key={`${tool.id}:progress:${index}`} style={{ color: 'var(--app-text-secondary)', fontSize: '0.82rem' }}>
+                        <span key={`${tool.id}:progress:${index}`} className="sage-trace-copy sage-trace-copy--compact">
                           {message}
                         </span>
                       ))}
                     </div>
                   ) : null}
                   {tool.queries.map((query, index) => (
-                    <div key={`${tool.id}:query:${index}`} style={{ display: 'grid', gap: '0.35rem' }}>
-                      <div style={{ color: 'var(--app-text-secondary)', fontSize: '0.84rem' }}>
-                        Searching: <strong style={{ color: 'var(--app-text-primary)' }}>{query.query}</strong>
+                    <div key={`${tool.id}:query:${index}`} className="app-stack-1">
+                      <div className="sage-trace-copy">
+                        Searching: <strong className="sage-trace-text-strong">{query.query}</strong>
                       </div>
                       {tool.results.length > 0 && index === tool.queries.length - 1 ? (
                         <details>
-                          <summary style={{ cursor: 'pointer', color: 'var(--app-text-tertiary)', fontSize: '0.8rem' }}>
+                          <summary className="sage-trace-disclosure">
                             Sources ({Math.min(tool.results.length, 5)})
                           </summary>
-                          <div style={{ display: 'grid', gap: '0.45rem', marginTop: '0.45rem' }}>
+                          <div className="sage-trace-source-list">
                             {tool.results.slice(0, 5).map((result, resultIndex) => (
                               <article
                                 key={`${tool.id}:result:${resultIndex}`}
-                                style={{
-                                  display: 'grid',
-                                  gap: '0.18rem',
-                                  padding: '0.65rem 0.7rem',
-                                  borderRadius: '0.85rem',
-                                  border: '1px solid var(--app-border-subtle)',
-                                  background: 'color-mix(in srgb, var(--app-bg-panel) 84%, var(--app-bg-overlay) 16%)',
-                                }}
+                                className="sage-trace-result-card"
                               >
-                                <strong style={{ color: 'var(--app-text-primary)', fontSize: '0.82rem' }}>
+                                <strong className="sage-trace-result-title">
                                   {readString(result.title, `Source ${resultIndex + 1}`)}
                                 </strong>
                                 {readString(result.url) ? (
@@ -908,7 +847,7 @@ export function SageTraceView({
                                     href={readString(result.url)}
                                     target="_blank"
                                     rel="noreferrer"
-                                    style={{ color: 'var(--app-accent)', fontSize: '0.78rem', overflowWrap: 'anywhere' }}
+                                    className="sage-trace-result-link"
                                   >
                                     {readString(result.url)}
                                   </a>
@@ -921,9 +860,9 @@ export function SageTraceView({
                     </div>
                   ))}
                   {tool.browserActions.length > 0 ? (
-                    <div style={{ display: 'grid', gap: '0.35rem' }}>
+                    <div className="app-stack-1">
                       {tool.browserActions.map((action, index) => (
-                        <div key={`${tool.id}:action:${index}`} style={{ color: 'var(--app-text-secondary)', fontSize: '0.82rem' }}>
+                        <div key={`${tool.id}:action:${index}`} className="sage-trace-copy sage-trace-copy--compact">
                           {action.action}: {action.targetSummary}
                           {action.url ? ` (${action.url})` : ''}
                         </div>
@@ -931,47 +870,31 @@ export function SageTraceView({
                     </div>
                   ) : null}
                   {tool.screenshots.length > 0 ? (
-                    <div style={{ display: 'flex', gap: '0.7rem', flexWrap: 'wrap' }}>
+                    <div className="sage-trace-screenshot-grid">
                       {tool.screenshots.map((shot, index) => {
                         const src = shot.artifactId ? services.client.artifactFileUrl(shot.artifactId) : '';
                         return (
                           <button
                             key={`${tool.id}:shot:${index}`}
                             type="button"
+                            className="sage-trace-screenshot-button"
+                            disabled={!src}
                             onClick={() => {
                               if (src) {
                                 setLightboxImage({ src, caption: shot.caption });
                               }
                             }}
-                            style={{
-                              display: 'grid',
-                              gap: '0.35rem',
-                              padding: 0,
-                              border: 'none',
-                              background: 'transparent',
-                              textAlign: 'left',
-                              cursor: src ? 'pointer' : 'default',
-                            }}
                           >
-                            <div
-                              style={{
-                                width: '9rem',
-                                height: '5.8rem',
-                                overflow: 'hidden',
-                                borderRadius: '0.9rem',
-                                border: '1px solid var(--app-border-subtle)',
-                                background: 'color-mix(in srgb, var(--app-bg-canvas) 86%, var(--app-bg-overlay) 14%)',
-                              }}
-                            >
+                            <div className="sage-trace-screenshot-frame">
                               {src ? (
                                 <img
                                   src={src}
                                   alt={shot.caption || 'Browser screenshot'}
-                                  style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                                  className="sage-trace-screenshot-image"
                                 />
                               ) : null}
                             </div>
-                            <span style={{ color: 'var(--app-text-secondary)', fontSize: '0.78rem' }}>
+                            <span className="sage-trace-screenshot-caption">
                               {shot.caption || 'Screenshot'}
                             </span>
                           </button>
@@ -980,30 +903,19 @@ export function SageTraceView({
                     </div>
                   ) : null}
                   {tool.resultSummary ? (
-                    <div style={{ color: 'var(--app-text-secondary)', fontSize: '0.84rem', lineHeight: 1.55 }}>
+                    <div className="sage-trace-copy">
                       {tool.resultSummary}
                     </div>
                   ) : null}
                   {tool.artifactIds.length > 0 ? (
-                    <div style={{ display: 'flex', gap: '0.45rem', flexWrap: 'wrap' }}>
+                    <div className="app-inline-actions app-inline-actions--tight">
                       {tool.artifactIds.map((artifactId) => (
                         <a
                           key={artifactId}
                           href={services.client.artifactFileUrl(artifactId)}
                           target="_blank"
                           rel="noreferrer"
-                          style={{
-                            display: 'inline-flex',
-                            alignItems: 'center',
-                            minHeight: '1.45rem',
-                            padding: '0.12rem 0.45rem',
-                            borderRadius: '999px',
-                            border: '1px solid var(--app-border-subtle)',
-                            background: 'color-mix(in srgb, var(--app-bg-panel) 84%, var(--app-bg-overlay) 16%)',
-                            color: 'var(--app-text-secondary)',
-                            fontSize: '0.76rem',
-                            textDecoration: 'none',
-                          }}
+                          className="sage-trace-pill-link"
                         >
                           Artifact {artifactId}
                         </a>
@@ -1017,26 +929,19 @@ export function SageTraceView({
                 <article
                   key={delegation.id}
                   data-sage-trace-delegation-card={delegation.childRunId}
-                  style={{
-                    display: 'grid',
-                    gap: '0.45rem',
-                    padding: '0.9rem',
-                    borderRadius: '1rem',
-                    border: '1px solid var(--app-border-subtle)',
-                    background: 'color-mix(in srgb, var(--app-bg-panel-elevated) 80%, var(--app-bg-overlay) 20%)',
-                  }}
+                  className="sage-trace-card"
                 >
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', flexWrap: 'wrap' }}>
-                    <strong style={{ color: 'var(--app-text-primary)' }}>{delegation.specialistName}</strong>
+                  <div className="app-inline-actions app-inline-actions--tight">
+                    <strong className="sage-trace-title">{delegation.specialistName}</strong>
                     <DataBadge tone={badgeToneForStatus(delegation.status)}>{delegation.status}</DataBadge>
                   </div>
                   {delegation.taskSummary ? (
-                    <div style={{ color: 'var(--app-text-secondary)', fontSize: '0.84rem', lineHeight: 1.55 }}>
+                    <div className="sage-trace-copy">
                       {delegation.taskSummary}
                     </div>
                   ) : null}
                   {delegation.resultSummary ? (
-                    <div style={{ color: 'var(--app-text-secondary)', fontSize: '0.82rem', lineHeight: 1.5 }}>
+                    <div className="sage-trace-copy sage-trace-copy--compact">
                       {delegation.resultSummary}
                     </div>
                   ) : null}
@@ -1047,17 +952,10 @@ export function SageTraceView({
                 <article
                   key={event.id}
                   data-sage-trace-approval-card={event.approval_id ?? event.id}
-                  style={{
-                    display: 'grid',
-                    gap: '0.35rem',
-                    padding: '0.9rem',
-                    borderRadius: '1rem',
-                    border: '1px solid color-mix(in srgb, var(--app-warning) 35%, var(--app-border-subtle) 65%)',
-                    background: 'color-mix(in srgb, var(--app-warning) 8%, var(--app-bg-panel) 92%)',
-                  }}
+                  className="sage-trace-approval-card"
                 >
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', flexWrap: 'wrap' }}>
-                    <strong style={{ color: 'var(--app-text-primary)' }}>
+                  <div className="app-inline-actions app-inline-actions--tight">
+                    <strong className="sage-trace-title">
                       {event.event_type === 'approval.requested' ? readString(event.data.title, 'Approval requested') : 'Approval resolved'}
                     </strong>
                     <DataBadge tone={event.event_type === 'approval.requested' ? 'warning' : badgeToneForStatus(readString(event.data.decision, 'resolved'))}>
@@ -1065,7 +963,7 @@ export function SageTraceView({
                     </DataBadge>
                   </div>
                   {readString(event.data.description || event.data.note) ? (
-                    <div style={{ color: 'var(--app-text-secondary)', fontSize: '0.84rem', lineHeight: 1.55 }}>
+                    <div className="sage-trace-copy">
                       {readString(event.data.description || event.data.note)}
                     </div>
                   ) : null}
@@ -1074,31 +972,19 @@ export function SageTraceView({
               ))}
 
               {artifactEvents.length > 0 ? (
-                <section style={{ display: 'grid', gap: '0.5rem' }}>
-                  <strong style={{ color: 'var(--app-text-primary)' }}>Artifacts</strong>
-                  <div style={{ display: 'flex', gap: '0.45rem', flexWrap: 'wrap' }}>
+                <section className="app-stack-2">
+                  <strong className="sage-trace-title">Artifacts</strong>
+                  <div className="app-inline-actions app-inline-actions--tight">
                     {artifactEvents.map((event) => (
                       <a
                         key={event.id}
                         href={event.artifact_id ? services.client.artifactFileUrl(event.artifact_id) : '#'}
                         target="_blank"
                         rel="noreferrer"
-                        style={{
-                          display: 'inline-flex',
-                          alignItems: 'center',
-                          gap: '0.35rem',
-                          minHeight: '1.6rem',
-                          padding: '0.14rem 0.5rem',
-                          borderRadius: '999px',
-                          border: '1px solid var(--app-border-subtle)',
-                          background: 'color-mix(in srgb, var(--app-bg-panel-elevated) 82%, var(--app-bg-overlay) 18%)',
-                          color: 'var(--app-text-secondary)',
-                          fontSize: '0.76rem',
-                          textDecoration: 'none',
-                        }}
+                        className="sage-trace-pill-link"
                       >
                         <span>{readString(event.data.kind, 'artifact')}</span>
-                        <strong style={{ color: 'var(--app-text-primary)' }}>{readString(event.data.title, event.artifact_id ?? 'artifact')}</strong>
+                        <strong className="sage-trace-pill-link__title">{readString(event.data.title, event.artifact_id ?? 'artifact')}</strong>
                       </a>
                     ))}
                   </div>
@@ -1129,14 +1015,7 @@ export function SageTraceView({
           <img
             src={lightboxImage.src}
             alt={lightboxImage.caption || 'Trace screenshot'}
-            style={{
-              width: '100%',
-              maxHeight: '70vh',
-              objectFit: 'contain',
-              borderRadius: '0.9rem',
-              border: '1px solid var(--app-border-subtle)',
-              background: 'color-mix(in srgb, var(--app-bg-canvas) 88%, var(--app-bg-overlay) 12%)',
-            }}
+            className="sage-trace-lightbox-image"
           />
         ) : null}
       </Modal>

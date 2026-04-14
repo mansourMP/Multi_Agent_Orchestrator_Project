@@ -183,7 +183,7 @@ export function WorkstationRunDetail({
 
         {detail.result_summary ? (
           <StageDetailSection title="Summary">
-            <div style={{ color: 'var(--app-text-secondary)', lineHeight: 1.6 }}>
+            <div className="app-meta-value app-meta-value--body">
               {String(detail.result_summary)}
             </div>
           </StageDetailSection>

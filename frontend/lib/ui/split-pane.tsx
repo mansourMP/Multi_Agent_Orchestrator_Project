@@ -2,6 +2,8 @@
 
 import { Children, type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
 
+import { APP_MOTION, APP_RADIUS, APP_SPACING } from '@/lib/ui/tokens';
+
 type SplitPaneOrientation = 'horizontal' | 'vertical';
 type SplitPanePrimary = 'first' | 'second';
 
@@ -76,16 +78,16 @@ export function SplitPane({
       return {
         gridTemplateColumns:
           primary === 'first'
-            ? `${normalizedSize}px 0.8rem minmax(0, 1fr)`
-            : `minmax(0, 1fr) 0.8rem ${normalizedSize}px`,
+            ? `${normalizedSize}px ${APP_SPACING[3]} minmax(0, 1fr)`
+            : `minmax(0, 1fr) ${APP_SPACING[3]} ${normalizedSize}px`,
       };
     }
 
     return {
       gridTemplateRows:
         primary === 'first'
-          ? `${normalizedSize}px 0.8rem minmax(0, 1fr)`
-          : `minmax(0, 1fr) 0.8rem ${normalizedSize}px`,
+          ? `${normalizedSize}px ${APP_SPACING[3]} minmax(0, 1fr)`
+          : `minmax(0, 1fr) ${APP_SPACING[3]} ${normalizedSize}px`,
     };
   }, [normalizedSize, orientation, primary]);
 
@@ -117,8 +119,8 @@ export function SplitPane({
         }}
         style={{
           position: 'relative',
-          minWidth: orientation === 'horizontal' ? '0.8rem' : undefined,
-          minHeight: orientation === 'vertical' ? '0.8rem' : undefined,
+          minWidth: orientation === 'horizontal' ? APP_SPACING[3] : undefined,
+          minHeight: orientation === 'vertical' ? APP_SPACING[3] : undefined,
           cursor: orientation === 'horizontal' ? 'col-resize' : 'row-resize',
           touchAction: 'none',
         }}
@@ -127,11 +129,11 @@ export function SplitPane({
           aria-hidden="true"
           style={{
             position: 'absolute',
-            inset: orientation === 'horizontal' ? '0 0.25rem' : '0.25rem 0',
-            borderRadius: '999px',
+            inset: orientation === 'horizontal' ? `0 ${APP_SPACING[1]}` : `${APP_SPACING[1]} 0`,
+            borderRadius: APP_RADIUS.pill,
             background: 'var(--app-border-strong)',
             opacity: dragging ? 1 : 0.55,
-            transition: 'opacity var(--app-motion-fast) ease',
+            transition: `opacity ${APP_MOTION.fast} ease`,
           }}
         />
       </div>

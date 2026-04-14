@@ -138,7 +138,7 @@ function IntegrationsSkeleton() {
   return (
     <ListDetailColumns
       primary={(
-        <div style={{ display: 'grid', gap: '1rem' }}>
+        <div className="app-stack-4">
           <ListDetailPanel eyebrow="Providers" title="Loading provider state">
             <SkeletonBlock height="4rem" />
             <SkeletonBlock height="4rem" />
@@ -391,13 +391,13 @@ export function WorkspaceChannelPairingSurface({
         ) : (
           <ListDetailColumns
             primary={(
-              <div style={{ display: 'grid', gap: '1rem' }}>
+              <div className="app-stack-4">
                 <ListDetailPanel
                   eyebrow="Providers"
                   title="Connected channel providers"
                   subtitle="Select a provider to inspect pairing readiness, live links, and the most recent pairing code."
                 >
-                  <div style={{ display: 'grid', gap: '0.65rem' }}>
+                  <div className="app-stack-3">
                     {(Object.keys(CHANNEL_PROVIDER_DEFINITIONS) as ChannelProvider[]).map((provider) => {
                       const definition = CHANNEL_PROVIDER_DEFINITIONS[provider];
                       const providerLinks = activeLinks.filter((link) => link.provider === provider);
@@ -408,26 +408,15 @@ export function WorkspaceChannelPairingSurface({
                           key={provider}
                           type="button"
                           onClick={() => setSelectedProvider(provider)}
-                          style={{
-                            display: 'grid',
-                            gap: '0.22rem',
-                            padding: '0.9rem 0.95rem',
-                            borderRadius: '0.98rem',
-                            border: selected ? '1px solid var(--app-border-accent)' : '1px solid var(--app-border-subtle)',
-                            background: selected
-                              ? 'color-mix(in srgb, var(--app-accent-muted) 40%, var(--app-bg-panel) 60%)'
-                              : 'color-mix(in srgb, var(--app-bg-panel-elevated) 82%, var(--app-bg-overlay) 18%)',
-                            textAlign: 'left',
-                            cursor: 'pointer',
-                          }}
+                          className={`app-card-button${selected ? ' app-card-button--selected' : ''}`}
                         >
-                          <div style={{ display: 'flex', justifyContent: 'space-between', gap: '0.6rem', flexWrap: 'wrap' }}>
-                            <strong style={{ color: 'var(--app-text-primary)' }}>{definition.label}</strong>
+                          <div className="app-inline-actions app-inline-actions--between app-inline-actions--start">
+                            <strong className="app-card-button__title">{definition.label}</strong>
                             <DataBadge tone={!enabled ? 'warning' : providerLinks.length > 0 ? 'success' : 'accent'}>
                               {!enabled ? 'Disabled' : providerLinks.length > 0 ? `${providerLinks.length} linked` : 'Ready'}
                             </DataBadge>
                           </div>
-                          <span style={{ color: 'var(--app-text-secondary)', fontSize: '0.8rem', lineHeight: 1.55 }}>
+                          <span className="app-card-button__subtitle">
                             {definition.helpText}
                           </span>
                         </button>
@@ -468,7 +457,7 @@ export function WorkspaceChannelPairingSurface({
                           <DataTableCell
                             align="end"
                             primary={(
-                              <div style={{ display: 'flex', gap: '0.45rem', justifyContent: 'flex-end', flexWrap: 'wrap' }}>
+                              <div className="app-inline-actions app-inline-actions--end app-inline-actions--tight">
                                 <AppButton
                                   type="button"
                                   tone="secondary"
@@ -499,23 +488,16 @@ export function WorkspaceChannelPairingSurface({
                     title="Revoked link history"
                     subtitle={`${revokedLinks.length} revoked links retained for workspace audit context.`}
                   >
-                    <div style={{ display: 'grid', gap: '0.55rem' }}>
+                    <div className="app-stack-3">
                       {revokedLinks.map((link) => (
                         <div
                           key={link.link_id}
-                          style={{
-                            display: 'grid',
-                            gap: '0.18rem',
-                            padding: '0.78rem 0.84rem',
-                            borderRadius: '0.9rem',
-                            border: '1px solid var(--app-border-subtle)',
-                            background: 'color-mix(in srgb, var(--app-bg-panel-elevated) 82%, var(--app-bg-overlay) 18%)',
-                          }}
+                          className="app-card-button"
                         >
-                          <strong style={{ color: 'var(--app-text-primary)' }}>
+                          <strong className="app-card-button__title">
                             {CHANNEL_PROVIDER_DEFINITIONS[link.provider as ChannelProvider]?.label ?? link.provider} · {link.external_subject_hint ?? link.link_id}
                           </strong>
-                          <span style={{ color: 'var(--app-text-secondary)', fontSize: '0.8rem' }}>
+                          <span className="app-card-button__subtitle">
                             Revoked {formatTimestamp(link.revoked_at)} · {link.revoked_reason ?? 'No reason recorded.'}
                           </span>
                         </div>
@@ -531,7 +513,7 @@ export function WorkspaceChannelPairingSurface({
                 title={`${selectedDefinition.label} pairing`}
                 subtitle="Current provider readiness, latest pairing code, and active workspace link state."
                 actions={(
-                  <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+                  <div className="app-inline-actions">
                     {selectedIntent && isIntentActive(selectedIntent) ? (
                       <AppButton
                         type="button"
@@ -580,21 +562,14 @@ export function WorkspaceChannelPairingSurface({
                     body={`Generate a pairing code to link a ${selectedDefinition.label} identity to this workspace.`}
                   />
                 ) : (
-                  <div style={{ display: 'grid', gap: '0.55rem' }}>
+                  <div className="app-stack-3">
                     {selectedProviderLinks.map((link) => (
                       <div
                         key={link.link_id}
-                        style={{
-                          display: 'grid',
-                          gap: '0.18rem',
-                          padding: '0.78rem 0.84rem',
-                          borderRadius: '0.9rem',
-                          border: '1px solid var(--app-border-subtle)',
-                          background: 'color-mix(in srgb, var(--app-bg-panel-elevated) 82%, var(--app-bg-overlay) 18%)',
-                        }}
+                        className="app-card-button"
                       >
-                        <strong style={{ color: 'var(--app-text-primary)' }}>{link.external_subject_hint ?? link.link_id}</strong>
-                        <span style={{ color: 'var(--app-text-secondary)', fontSize: '0.8rem' }}>
+                        <strong className="app-card-button__title">{link.external_subject_hint ?? link.link_id}</strong>
+                        <span className="app-card-button__subtitle">
                           Linked {formatTimestamp(link.linked_at)} · scopes {link.scopes.join(', ') || 'default'}
                         </span>
                       </div>
@@ -624,7 +599,7 @@ export function WorkspaceChannelPairingSurface({
               </FormGrid>
             </ModalSection>
             <ModalSection title="Instructions" description="Operator guidance for completing the link.">
-              <div style={{ color: 'var(--app-text-secondary)', fontSize: '0.84rem', lineHeight: 1.65 }}>
+              <div className="app-meta-value app-meta-value--body">
                 {intentByProvider[codeSheetProvider]?.instructions ?? CHANNEL_PROVIDER_DEFINITIONS[codeSheetProvider].helpText}
               </div>
             </ModalSection>

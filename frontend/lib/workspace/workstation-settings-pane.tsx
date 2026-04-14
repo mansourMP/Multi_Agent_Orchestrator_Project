@@ -71,7 +71,7 @@ export function WorkstationSettingsPane() {
 
         <ListDetailColumns
           primary={(
-            <div style={{ display: 'grid', gap: '1rem' }}>
+            <div className="app-stack-4">
               <ListDetailPanel
                 eyebrow="Identity"
                 title={bootstrap.workspace.label}
@@ -104,33 +104,22 @@ export function WorkstationSettingsPane() {
             </div>
           )}
           secondary={(
-            <div style={{ display: 'grid', gap: '1rem' }}>
+            <div className="app-stack-4">
               <ListDetailPanel
                 eyebrow="Navigation"
                 title="Settings surfaces"
                 subtitle="Continue into the relevant routed product surfaces when you need to change policy or onboarding state."
               >
-                <div style={{ display: 'grid', gap: '0.6rem' }}>
+                <div className="app-stack-3">
                   {navigationActions.map((action) => (
                     <button
                       key={action.id}
                       type="button"
                       onClick={() => router.push(action.href)}
-                      style={{
-                        display: 'grid',
-                        gap: '0.18rem',
-                        padding: '0.8rem 0.85rem',
-                        borderRadius: '0.95rem',
-                        border: '1px solid var(--app-border-subtle)',
-                        background: 'color-mix(in srgb, var(--app-bg-panel-elevated) 82%, var(--app-bg-overlay) 18%)',
-                        textAlign: 'left',
-                        cursor: 'pointer',
-                      }}
+                      className="app-card-button"
                     >
-                      <strong style={{ color: 'var(--app-text-primary)', fontSize: '0.86rem' }}>{action.label}</strong>
-                      <span style={{ color: 'var(--app-text-secondary)', fontSize: '0.8rem', lineHeight: 1.55 }}>
-                        {action.description}
-                      </span>
+                      <strong className="app-card-button__title">{action.label}</strong>
+                      <span className="app-card-button__subtitle">{action.description}</span>
                     </button>
                   ))}
                 </div>
@@ -175,7 +164,7 @@ export function WorkstationSettingsPane() {
         actions={<AppButton type="button" tone="secondary" onClick={() => setIsActionSheetOpen(false)}>Done</AppButton>}
       >
         <ModalSection title="Available surfaces" description="Each action keeps you inside owned product chrome and routes to the relevant workstation surface.">
-          <div style={{ display: 'grid', gap: '0.65rem' }}>
+          <div className="app-stack-3">
             {navigationActions.map((action) => (
               <button
                 key={action.id}
@@ -184,19 +173,10 @@ export function WorkstationSettingsPane() {
                   setIsActionSheetOpen(false);
                   router.push(action.href);
                 }}
-                style={{
-                  display: 'grid',
-                  gap: '0.18rem',
-                  padding: '0.85rem 0.9rem',
-                  borderRadius: '0.95rem',
-                  border: '1px solid var(--app-border-subtle)',
-                  background: 'color-mix(in srgb, var(--app-bg-panel-elevated) 82%, var(--app-bg-overlay) 18%)',
-                  textAlign: 'left',
-                  cursor: 'pointer',
-                }}
+                className="app-card-button"
               >
-                <strong style={{ color: 'var(--app-text-primary)', fontSize: '0.87rem' }}>{action.label}</strong>
-                <span style={{ color: 'var(--app-text-secondary)', fontSize: '0.8rem', lineHeight: 1.55 }}>{action.description}</span>
+                <strong className="app-card-button__title">{action.label}</strong>
+                <span className="app-card-button__subtitle">{action.description}</span>
               </button>
             ))}
           </div>

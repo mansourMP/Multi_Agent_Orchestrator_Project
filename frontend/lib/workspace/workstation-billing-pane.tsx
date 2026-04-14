@@ -125,7 +125,7 @@ export function WorkstationBillingPane() {
         title="Subscription"
         description="Canonical billing state for this workspace."
         actions={(
-          <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+          <div className="app-inline-actions">
             <WorkstationActionButton type="button" tone="secondary" onClick={reloadSummary}>
               Refresh
             </WorkstationActionButton>

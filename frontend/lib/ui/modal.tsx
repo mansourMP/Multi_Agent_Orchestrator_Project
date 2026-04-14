@@ -3,6 +3,14 @@
 import { useEffect, type HTMLAttributes, type PropsWithChildren, type ReactNode } from 'react';
 
 import { AppButton, joinClassNames } from '@/lib/ui/primitives';
+import {
+  APP_LINE_HEIGHT,
+  APP_RADIUS,
+  APP_SHADOW,
+  APP_SPACE_SCALE,
+  APP_SPACING,
+  APP_TYPE_SCALE,
+} from '@/lib/ui/tokens';
 
 export function Modal({
   open,
@@ -58,7 +66,7 @@ export function Modal({
         zIndex: 80,
         display: 'grid',
         placeItems: 'center',
-        padding: '1.25rem',
+        padding: APP_SPACING[5],
         background: 'color-mix(in srgb, var(--app-bg-overlay) 76%, transparent 24%)',
         backdropFilter: 'blur(12px)',
       }}
@@ -74,13 +82,13 @@ export function Modal({
           width,
           display: 'grid',
           gridTemplateRows: 'auto minmax(0, 1fr) auto',
-          gap: '0.95rem',
-          maxHeight: 'calc(100vh - 2.5rem)',
-          padding: '1rem 1.05rem 1.05rem',
-          borderRadius: '1.15rem',
+          gap: APP_SPACE_SCALE.px16,
+          maxHeight: `calc(100vh - ${APP_SPACING[10]})`,
+          padding: `${APP_SPACING[4]} ${APP_SPACING[4]} ${APP_SPACING[4]}`,
+          borderRadius: APP_SPACE_SCALE.px18,
           border: '1px solid var(--app-border-subtle)',
           background: 'color-mix(in srgb, var(--app-bg-panel) 90%, var(--app-bg-overlay) 10%)',
-          boxShadow: 'var(--app-shadow-panel)',
+          boxShadow: APP_SHADOW.panel,
           overflow: 'hidden',
         }}
       >
@@ -89,13 +97,19 @@ export function Modal({
             display: 'flex',
             justifyContent: 'space-between',
             alignItems: 'start',
-            gap: '0.8rem',
+            gap: APP_SPACING[3],
           }}
         >
-          <div style={{ display: 'grid', gap: '0.24rem', minWidth: 0 }}>
-            <strong style={{ color: 'var(--app-text-primary)', fontSize: '0.98rem' }}>{title}</strong>
+          <div style={{ display: 'grid', gap: APP_SPACING[1], minWidth: 0 }}>
+            <strong style={{ color: 'var(--app-text-primary)', fontSize: APP_TYPE_SCALE[16] }}>{title}</strong>
             {description ? (
-              <span style={{ color: 'var(--app-text-secondary)', fontSize: '0.84rem', lineHeight: 1.6 }}>
+              <span
+                style={{
+                  color: 'var(--app-text-secondary)',
+                  fontSize: APP_TYPE_SCALE[13],
+                  lineHeight: APP_LINE_HEIGHT.relaxed,
+                }}
+              >
                 {description}
               </span>
             ) : null}
@@ -108,17 +122,17 @@ export function Modal({
         <div
           style={{
             display: 'grid',
-            gap: '0.85rem',
+            gap: APP_SPACE_SCALE.px14,
             minHeight: 0,
             overflowY: 'auto',
-            paddingRight: '0.15rem',
+            paddingRight: APP_SPACING[1],
           }}
         >
           {children}
         </div>
 
         {actions ? (
-          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.6rem', flexWrap: 'wrap' }}>
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: APP_SPACE_SCALE.px10, flexWrap: 'wrap' }}>
             {actions}
           </div>
         ) : null}
@@ -143,17 +157,23 @@ export function ModalSection({
       className={joinClassNames('app-modal-section', className)}
       style={{
         display: 'grid',
-        gap: '0.6rem',
-        padding: '0.85rem 0.9rem',
-        borderRadius: '0.95rem',
+        gap: APP_SPACE_SCALE.px10,
+        padding: `${APP_SPACE_SCALE.px14} ${APP_SPACE_SCALE.px14}`,
+        borderRadius: APP_RADIUS.lg,
         border: '1px solid var(--app-border-subtle)',
         background: 'color-mix(in srgb, var(--app-bg-panel-elevated) 82%, var(--app-bg-overlay) 18%)',
       }}
     >
-      <div style={{ display: 'grid', gap: '0.16rem' }}>
-        <strong style={{ color: 'var(--app-text-primary)', fontSize: '0.88rem' }}>{title}</strong>
+      <div style={{ display: 'grid', gap: APP_SPACING[1] }}>
+        <strong style={{ color: 'var(--app-text-primary)', fontSize: APP_TYPE_SCALE[14] }}>{title}</strong>
         {description ? (
-          <span style={{ color: 'var(--app-text-secondary)', fontSize: '0.8rem', lineHeight: 1.55 }}>
+          <span
+            style={{
+              color: 'var(--app-text-secondary)',
+              fontSize: APP_TYPE_SCALE[12],
+              lineHeight: APP_LINE_HEIGHT.body,
+            }}
+          >
             {description}
           </span>
         ) : null}

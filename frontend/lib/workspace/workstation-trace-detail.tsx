@@ -79,8 +79,8 @@ export function WorkstationTraceDetail({
   }
 
   return (
-    <div data-workstation-trace-detail="pane" style={{ display: 'grid', gap: '0.9rem' }}>
-      <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+    <div data-workstation-trace-detail="pane" className="app-stack-4">
+      <div className="app-inline-actions app-inline-actions--end">
         <AppButton
           type="button"
           tone="secondary"

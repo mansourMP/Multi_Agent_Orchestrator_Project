@@ -28,56 +28,15 @@ export function StageDetailLayout({
   className?: string;
 }>) {
   return (
-    <section
-      className={joinClassNames('stage-detail-layout', className)}
-      style={{
-        display: 'grid',
-        gap: '0.95rem',
-        padding: '1rem',
-        borderRadius: '1.05rem',
-        border: '1px solid var(--app-border-subtle)',
-        background: 'var(--app-bg-panel)',
-        boxShadow: 'var(--app-shadow-panel)',
-      }}
-    >
-      <div
-        style={{
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'start',
-          gap: '0.85rem',
-          flexWrap: 'wrap',
-        }}
-      >
-        <div style={{ display: 'grid', gap: '0.2rem', minWidth: 0 }}>
+    <section className={joinClassNames('stage-detail-layout', className)}>
+      <div className="stage-detail-layout__header">
+        <div className="stage-detail-layout__copy">
           {eyebrow ? (
-            <span
-              style={{
-                color: 'var(--app-text-tertiary)',
-                fontSize: '0.72rem',
-                fontWeight: 650,
-                letterSpacing: '0.08em',
-                textTransform: 'uppercase',
-              }}
-            >
-              {eyebrow}
-            </span>
+            <span className="stage-detail-layout__eyebrow">{eyebrow}</span>
           ) : null}
-          <h2
-            style={{
-              margin: 0,
-              color: 'var(--app-text-primary)',
-              fontSize: '1.02rem',
-              fontWeight: 670,
-              letterSpacing: '-0.02em',
-            }}
-          >
-            {title}
-          </h2>
+          <h2 className="stage-detail-layout__title">{title}</h2>
           {subtitle ? (
-            <div style={{ color: 'var(--app-text-secondary)', fontSize: '0.85rem', lineHeight: 1.55 }}>
-              {subtitle}
-            </div>
+            <div className="stage-detail-layout__subtitle">{subtitle}</div>
           ) : null}
         </div>
         {actions}
@@ -89,9 +48,7 @@ export function StageDetailLayout({
         </AppNotice>
       ) : null}
 
-      <div style={{ display: 'grid', gap: '0.95rem' }}>
-        {children}
-      </div>
+      <div className="stage-detail-layout__body">{children}</div>
     </section>
   );
 }
@@ -107,20 +64,11 @@ export function StageDetailSection({
   className?: string;
 }>) {
   return (
-    <section
-      className={joinClassNames('stage-detail-section', className)}
-      style={{
-        display: 'grid',
-        gap: '0.75rem',
-        paddingTop: '0.1rem',
-      }}
-    >
-      <div style={{ display: 'grid', gap: '0.18rem' }}>
-        <strong style={{ color: 'var(--app-text-primary)', fontSize: '0.88rem' }}>{title}</strong>
+    <section className={joinClassNames('stage-detail-section', className)}>
+      <div className="stage-detail-section__header">
+        <strong className="stage-detail-section__title">{title}</strong>
         {description ? (
-          <div style={{ color: 'var(--app-text-secondary)', fontSize: '0.82rem', lineHeight: 1.5 }}>
-            {description}
-          </div>
+          <div className="stage-detail-section__description">{description}</div>
         ) : null}
       </div>
       {children}
@@ -137,12 +85,6 @@ export function StageDetailFieldGrid({
     <dl
       {...props}
       className={joinClassNames('stage-detail-field-grid', className)}
-      style={{
-        margin: 0,
-        display: 'grid',
-        gridTemplateColumns: 'repeat(auto-fit, minmax(12rem, 1fr))',
-        gap: '0.75rem',
-      }}
     >
       {children}
     </dl>
@@ -160,47 +102,10 @@ export function StageDetailField({
   tone?: 'default' | 'success' | 'warning' | 'danger';
   mono?: boolean;
 }) {
-  const color =
-    tone === 'success'
-      ? 'var(--app-success)'
-      : tone === 'warning'
-        ? 'var(--app-warning)'
-        : tone === 'danger'
-          ? 'var(--app-danger)'
-          : 'var(--app-text-primary)';
-
   return (
-    <div
-      style={{
-        display: 'grid',
-        gap: '0.2rem',
-        padding: '0.8rem 0.9rem',
-        borderRadius: '0.95rem',
-        border: '1px solid var(--app-border-subtle)',
-        background: 'color-mix(in srgb, var(--app-bg-panel-elevated) 78%, var(--app-bg-overlay) 22%)',
-      }}
-    >
-      <dt
-        style={{
-          color: 'var(--app-text-tertiary)',
-          fontSize: '0.74rem',
-          fontWeight: 650,
-          letterSpacing: '0.08em',
-          textTransform: 'uppercase',
-        }}
-      >
-        {label}
-      </dt>
-      <dd
-        style={{
-          margin: 0,
-          color,
-          fontSize: '0.88rem',
-          lineHeight: 1.5,
-          overflowWrap: 'anywhere',
-          fontFamily: mono ? 'var(--app-font-mono)' : 'inherit',
-        }}
-      >
+    <div className="stage-detail-field" data-tone={tone}>
+      <dt className="stage-detail-field__label">{label}</dt>
+      <dd className={joinClassNames('stage-detail-field__value', mono && 'stage-detail-field__value--mono')}>
         {value}
       </dd>
     </div>

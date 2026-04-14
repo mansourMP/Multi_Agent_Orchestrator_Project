@@ -140,7 +140,7 @@ export function WorkstationNotificationsPane() {
         title="Notifications"
         subtitle="Operator-facing workspace alerts, stream-backed unread state, and the current notification focus."
         actions={(
-          <div style={{ display: 'flex', gap: '0.55rem', flexWrap: 'wrap' }}>
+          <div className="app-inline-actions">
             <AppButton
               type="button"
               tone="secondary"
@@ -214,7 +214,7 @@ export function WorkstationNotificationsPane() {
                     body="Alerts, activity summaries, and operator-facing notices will surface here as the workspace produces them."
                   />
                 ) : (
-                  <div style={{ display: 'grid', gap: '0.65rem' }}>
+                  <div className="app-stack-3">
                     {items.map((item, index) => {
                       const id = String(item.id ?? `notification-${index}`).trim();
                       const selected = id === selectedId;
@@ -224,32 +224,20 @@ export function WorkstationNotificationsPane() {
                           key={id}
                           type="button"
                           onClick={() => setSelectedId(id)}
-                          style={{
-                            display: 'grid',
-                            gap: '0.28rem',
-                            padding: '0.85rem 0.9rem',
-                            borderRadius: '0.95rem',
-                            border: selected ? '1px solid var(--app-border-accent)' : '1px solid var(--app-border-subtle)',
-                            background: selected
-                              ? 'color-mix(in srgb, var(--app-accent-muted) 40%, var(--app-bg-panel) 60%)'
-                              : 'color-mix(in srgb, var(--app-bg-panel-elevated) 82%, var(--app-bg-overlay) 18%)',
-                            textAlign: 'left',
-                            cursor: 'pointer',
-                            boxShadow: 'var(--app-shadow-panel)',
-                          }}
+                          className={`app-card-button${selected ? ' app-card-button--selected' : ''}`}
                         >
-                          <div style={{ display: 'flex', justifyContent: 'space-between', gap: '0.6rem', flexWrap: 'wrap' }}>
-                            <strong style={{ color: 'var(--app-text-primary)', fontSize: '0.86rem' }}>
+                          <div className="app-inline-actions app-inline-actions--between app-inline-actions--start">
+                            <strong className="app-card-button__title">
                               {readString(item.title ?? item.event_type, 'Notification')}
                             </strong>
                             <DataBadge tone={unread ? 'accent' : 'neutral'}>
                               {unread ? 'Unread' : 'Read'}
                             </DataBadge>
                           </div>
-                          <span style={{ color: 'var(--app-text-secondary)', fontSize: '0.8rem', lineHeight: 1.55 }}>
+                          <span className="app-card-button__subtitle">
                             {readString(item.summary ?? item.text, 'No notification summary is available.')}
                           </span>
-                          <span style={{ color: 'var(--app-text-tertiary)', fontSize: '0.74rem' }}>
+                          <span className="app-card-button__meta">
                             {readString(item.channel, 'workspace')} · {formatTimestamp(item.created_at)}
                           </span>
                         </button>
@@ -279,14 +267,14 @@ export function WorkstationNotificationsPane() {
                     >
                       {readString(selectedNotification.summary ?? selectedNotification.text, 'No notification summary is available.')}
                     </StateBanner>
-                    <div style={{ display: 'grid', gap: '0.7rem' }}>
-                      <div style={{ display: 'grid', gap: '0.18rem' }}>
-                        <span style={{ color: 'var(--app-text-tertiary)', fontSize: '0.72rem', textTransform: 'uppercase', letterSpacing: '0.08em', fontWeight: 650 }}>Notification id</span>
-                        <span style={{ color: 'var(--app-text-primary)', fontFamily: 'var(--app-font-mono)', overflowWrap: 'anywhere' }}>{readString(selectedNotification.id, 'No identifier recorded')}</span>
+                    <div className="app-meta-list">
+                      <div className="app-meta-item">
+                        <span className="app-meta-label">Notification id</span>
+                        <span className="app-meta-value app-meta-value--mono">{readString(selectedNotification.id, 'No identifier recorded')}</span>
                       </div>
-                      <div style={{ display: 'grid', gap: '0.18rem' }}>
-                        <span style={{ color: 'var(--app-text-tertiary)', fontSize: '0.72rem', textTransform: 'uppercase', letterSpacing: '0.08em', fontWeight: 650 }}>Message</span>
-                        <span style={{ color: 'var(--app-text-secondary)', lineHeight: 1.6 }}>{readString(selectedNotification.text ?? selectedNotification.summary, 'No notification body is available.')}</span>
+                      <div className="app-meta-item">
+                        <span className="app-meta-label">Message</span>
+                        <span className="app-meta-value app-meta-value--body">{readString(selectedNotification.text ?? selectedNotification.summary, 'No notification body is available.')}</span>
                       </div>
                     </div>
                   </>

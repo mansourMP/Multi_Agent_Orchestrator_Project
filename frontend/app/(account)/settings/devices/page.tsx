@@ -7,7 +7,7 @@ export default function DeviceSettingsPage() {
       title="Device sessions"
       subtitle="Operator machine and session inventory is account-global, but it should still read like part of the workstation product."
     >
-      <div data-device-settings-page="shell" style={{ display: 'grid', gap: '1rem' }}>
+      <div data-device-settings-page="shell" className="app-stack-4">
         <ListDetailPanel
           eyebrow="Devices"
           title="Session scope"

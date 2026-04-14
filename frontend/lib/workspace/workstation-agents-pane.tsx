@@ -61,7 +61,7 @@ function AgentsSkeleton() {
   return (
     <ListDetailColumns
       primary={(
-        <div style={{ display: 'grid', gap: '1rem' }}>
+        <div className="app-stack-4">
           <ListDetailPanel eyebrow="Installed" title="Loading installed agents">
             <SkeletonBlock height="2.8rem" />
             <SkeletonBlock height="2.8rem" />
@@ -212,7 +212,7 @@ export function WorkstationAgentsPane() {
         ) : (
           <ListDetailColumns
             primary={(
-              <div style={{ display: 'grid', gap: '1rem' }}>
+              <div className="app-stack-4">
                 <ListDetailPanel
                   eyebrow="Installed"
                   title="Installed agents"
@@ -247,7 +247,7 @@ export function WorkstationAgentsPane() {
                             <DataTableCell primary={<DataBadge tone={agentTone(item.status)}>{readString(item.status, 'active')}</DataBadge>} />
                             <DataTableCell
                               align="end"
-                              primary={selected ? <DataBadge tone="accent">Selected</DataBadge> : <span style={{ color: 'var(--app-text-tertiary)', fontSize: '0.78rem' }}>Inspect</span>}
+                              primary={selected ? <DataBadge tone="accent">Selected</DataBadge> : <span className="app-data-table__hint">Inspect</span>}
                             />
                           </DataTableRow>
                         );
@@ -267,21 +267,14 @@ export function WorkstationAgentsPane() {
                       body="Agent definitions will appear here once the workspace registry exposes them."
                     />
                   ) : (
-                    <div style={{ display: 'grid', gap: '0.55rem' }}>
+                    <div className="app-stack-3">
                       {definitions.slice(0, 8).map((item, index) => (
                         <div
                           key={String(item.id ?? `definition-${index}`)}
-                          style={{
-                            display: 'grid',
-                            gap: '0.18rem',
-                            padding: '0.78rem 0.84rem',
-                            borderRadius: '0.9rem',
-                            border: '1px solid var(--app-border-subtle)',
-                            background: 'color-mix(in srgb, var(--app-bg-panel-elevated) 82%, var(--app-bg-overlay) 18%)',
-                          }}
+                          className="app-card-button"
                         >
-                          <strong style={{ color: 'var(--app-text-primary)' }}>{readString(item.name ?? item.slug ?? item.id, 'Definition')}</strong>
-                          <span style={{ color: 'var(--app-text-secondary)', fontSize: '0.8rem' }}>
+                          <strong className="app-card-button__title">{readString(item.name ?? item.slug ?? item.id, 'Definition')}</strong>
+                          <span className="app-card-button__subtitle">
                             {readString(item.description, 'No definition description is available.')}
                           </span>
                         </div>
@@ -292,7 +285,7 @@ export function WorkstationAgentsPane() {
               </div>
             )}
             secondary={(
-              <div style={{ display: 'grid', gap: '1rem' }}>
+              <div className="app-stack-4">
                 <ListDetailPanel
                   eyebrow="Selection"
                   title={selectedInstall ? readString(selectedInstall.label ?? selectedInstall.name, selectedInstallId || 'Agent') : 'No installed agent selected'}
@@ -338,26 +331,19 @@ export function WorkstationAgentsPane() {
                       body="Runtime execution targets will appear here once the agent registry exposes them."
                     />
                   ) : (
-                    <div style={{ display: 'grid', gap: '0.55rem' }}>
+                    <div className="app-stack-3">
                       {runtimeTargets.map((item, index) => (
                         <div
                           key={String(item.id ?? `runtime-${index}`)}
-                          style={{
-                            display: 'grid',
-                            gap: '0.18rem',
-                            padding: '0.78rem 0.84rem',
-                            borderRadius: '0.9rem',
-                            border: '1px solid var(--app-border-subtle)',
-                            background: 'color-mix(in srgb, var(--app-bg-panel-elevated) 82%, var(--app-bg-overlay) 18%)',
-                          }}
+                          className="app-card-button"
                         >
-                          <div style={{ display: 'flex', justifyContent: 'space-between', gap: '0.5rem', flexWrap: 'wrap' }}>
-                            <strong style={{ color: 'var(--app-text-primary)' }}>{readString(item.label ?? item.id, 'Runtime target')}</strong>
+                          <div className="app-inline-actions app-inline-actions--between app-inline-actions--start">
+                            <strong className="app-card-button__title">{readString(item.label ?? item.id, 'Runtime target')}</strong>
                             <DataBadge tone={Boolean(item.online) ? 'success' : 'warning'}>
                               {Boolean(item.online) ? 'Online' : 'Offline'}
                             </DataBadge>
                           </div>
-                          <span style={{ color: 'var(--app-text-secondary)', fontSize: '0.8rem' }}>
+                          <span className="app-card-button__subtitle">
                             {readString(item.kind, 'runtime')}{Boolean(item.preferred) ? ' · preferred target' : ''}
                           </span>
                         </div>

@@ -86,30 +86,9 @@ function ContextField({
   value: string;
 }) {
   return (
-    <div
-      style={{
-        display: 'grid',
-        gap: '0.18rem',
-        padding: '0.72rem 0.8rem',
-        borderRadius: '0.9rem',
-        border: '1px solid var(--app-border-subtle)',
-        background: 'color-mix(in srgb, var(--app-bg-panel-elevated) 82%, var(--app-bg-overlay) 18%)',
-      }}
-    >
-      <span
-        style={{
-          color: 'var(--app-text-tertiary)',
-          fontSize: '0.71rem',
-          fontWeight: 650,
-          letterSpacing: '0.08em',
-          textTransform: 'uppercase',
-        }}
-      >
-        {label}
-      </span>
-      <span style={{ color: 'var(--app-text-primary)', fontSize: '0.86rem', lineHeight: 1.45 }}>
-        {value}
-      </span>
+    <div className="app-form-readout">
+      <span className="app-form-readout__label">{label}</span>
+      <span className="app-form-readout__value">{value}</span>
     </div>
   );
 }
@@ -118,7 +97,7 @@ function LoadingOverview() {
   return (
     <ListDetailColumns
       primary={(
-        <div style={{ display: 'grid', gap: '1rem' }}>
+        <div className="app-stack-4">
           <ListDetailPanel eyebrow="Overview" title="Loading workspace queues" subtitle="Hydrating canonical overview panels.">
             <SkeletonBlock height="2.6rem" />
             <SkeletonBlock height="2.6rem" />
@@ -234,7 +213,7 @@ export function WorkstationHomePane() {
         title="Workspace overview"
         subtitle="Queue health, operator attention, and canonical workspace signals in one dense operational view."
         actions={(
-          <div style={{ display: 'flex', gap: '0.55rem', flexWrap: 'wrap' }}>
+          <div className="app-inline-actions">
             <AppButton
               type="button"
               tone="secondary"
@@ -270,12 +249,12 @@ export function WorkstationHomePane() {
         ) : (
           <ListDetailColumns
             primary={(
-              <div style={{ display: 'grid', gap: '1rem' }}>
+              <div className="app-stack-4">
                 <ListDetailPanel
                   eyebrow="Attention"
                   title="Approval queue"
                   subtitle="Operator decisions that will unblock execution."
-                  actions={<Link href={`/w/${encodeURIComponent(bootstrap.workspace.id)}/approvals`} style={{ color: 'var(--app-accent-strong)', fontSize: '0.82rem', textDecoration: 'none' }}>Open queue</Link>}
+                  actions={<Link href={`/w/${encodeURIComponent(bootstrap.workspace.id)}/approvals`} className="app-inline-link">Open queue</Link>}
                 >
                   {state.approvals.length === 0 ? (
                     <EmptyPanel
@@ -310,7 +289,7 @@ export function WorkstationHomePane() {
                   eyebrow="Execution"
                   title="Recent runs"
                   subtitle="Canonical execution history for the current workspace."
-                  actions={<Link href={`/w/${encodeURIComponent(bootstrap.workspace.id)}/runs`} style={{ color: 'var(--app-accent-strong)', fontSize: '0.82rem', textDecoration: 'none' }}>Open runs</Link>}
+                  actions={<Link href={`/w/${encodeURIComponent(bootstrap.workspace.id)}/runs`} className="app-inline-link">Open runs</Link>}
                 >
                   {state.runs.length === 0 ? (
                     <EmptyPanel
@@ -346,7 +325,7 @@ export function WorkstationHomePane() {
                   eyebrow="Signals"
                   title="Notifications"
                   subtitle="Incoming workspace alerts and operator-facing system messages."
-                  actions={<Link href={`/w/${encodeURIComponent(bootstrap.workspace.id)}/notifications`} style={{ color: 'var(--app-accent-strong)', fontSize: '0.82rem', textDecoration: 'none' }}>Open feed</Link>}
+                  actions={<Link href={`/w/${encodeURIComponent(bootstrap.workspace.id)}/notifications`} className="app-inline-link">Open feed</Link>}
                 >
                   {state.notifications.length === 0 ? (
                     <EmptyPanel
@@ -354,28 +333,21 @@ export function WorkstationHomePane() {
                       body="Workspace notifications will surface here when operators or system events need attention."
                     />
                   ) : (
-                    <div style={{ display: 'grid', gap: '0.65rem' }}>
+                    <div className="app-stack-3">
                       {state.notifications.map((item, index) => (
                         <div
                           key={readString(item.id, `notification-${index}`)}
-                          style={{
-                            display: 'grid',
-                            gap: '0.22rem',
-                            padding: '0.8rem 0.9rem',
-                            borderRadius: '0.95rem',
-                            border: '1px solid var(--app-border-subtle)',
-                            background: 'color-mix(in srgb, var(--app-bg-panel-elevated) 80%, var(--app-bg-overlay) 20%)',
-                          }}
+                          className="app-card-button"
                         >
-                          <div style={{ display: 'flex', justifyContent: 'space-between', gap: '0.6rem', flexWrap: 'wrap' }}>
-                            <strong style={{ color: 'var(--app-text-primary)', fontSize: '0.86rem' }}>
+                          <div className="app-inline-actions app-inline-actions--between app-inline-actions--start">
+                            <strong className="app-card-button__title">
                               {readString(item.title ?? item.event_type, 'Notification')}
                             </strong>
                             <DataBadge tone={item.read_at ? 'neutral' : 'accent'}>
                               {item.read_at ? 'Read' : 'Unread'}
                             </DataBadge>
                           </div>
-                          <span style={{ color: 'var(--app-text-secondary)', fontSize: '0.8rem', lineHeight: 1.55 }}>
+                          <span className="app-card-button__subtitle">
                             {readString(item.summary ?? item.text, 'No notification summary is available.')}
                           </span>
                         </div>
@@ -386,13 +358,13 @@ export function WorkstationHomePane() {
               </div>
             )}
             secondary={(
-              <div style={{ display: 'grid', gap: '1rem' }}>
+              <div className="app-stack-4">
                 <ListDetailPanel
                   eyebrow="Context"
                   title={bootstrap.workspace.label}
                   subtitle={`${bootstrap.workspace.kind} workspace · ${bootstrap.entitlements.plan} plan`}
                 >
-                  <div style={{ display: 'grid', gap: '0.65rem' }}>
+                  <div className="app-stack-3">
                     <ContextField label="Shell profile" value={bootstrap.shellHints.preferredProfile} />
                     <ContextField label="Default route" value={bootstrap.shellHints.defaultRoute} />
                     <ContextField label="Runtime mode" value={bootstrap.runtime.deploymentMode} />
@@ -441,26 +413,19 @@ export function WorkstationHomePane() {
                       body="Live activity will fill this panel once the workspace starts generating events."
                     />
                   ) : (
-                    <div style={{ display: 'grid', gap: '0.65rem' }}>
+                    <div className="app-stack-3">
                       {state.activity.slice(0, 4).map((item, index) => (
                         <div
                           key={readString(item.id, `activity-${index}`)}
-                          style={{
-                            display: 'grid',
-                            gap: '0.2rem',
-                            padding: '0.74rem 0.8rem',
-                            borderRadius: '0.9rem',
-                            border: '1px solid var(--app-border-subtle)',
-                            background: 'color-mix(in srgb, var(--app-bg-panel-elevated) 82%, var(--app-bg-overlay) 18%)',
-                          }}
+                          className="app-card-button"
                         >
-                          <strong style={{ color: 'var(--app-text-primary)', fontSize: '0.84rem' }}>
+                          <strong className="app-card-button__title">
                             {readString(item.title ?? item.action, 'Activity')}
                           </strong>
-                          <span style={{ color: 'var(--app-text-secondary)', fontSize: '0.79rem', lineHeight: 1.5 }}>
+                          <span className="app-card-button__subtitle">
                             {readString(item.summary, 'No activity summary is available.')}
                           </span>
-                          <span style={{ color: 'var(--app-text-tertiary)', fontSize: '0.74rem' }}>
+                          <span className="app-card-button__meta">
                             {formatTimestamp(item.created_at)}
                           </span>
                         </div>

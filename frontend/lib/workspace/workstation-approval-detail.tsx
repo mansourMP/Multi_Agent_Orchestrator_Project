@@ -159,7 +159,7 @@ export function WorkstationApprovalDetail({
         : 'neutral';
 
   return (
-    <div data-workstation-approval-detail="pane" style={{ display: 'grid', gap: '1rem' }}>
+    <div data-workstation-approval-detail="pane" className="app-stack-4">
       <StageDetailLayout
         eyebrow="Approval"
         title={String(detail.prompt ?? 'Approval request')}
@@ -169,7 +169,7 @@ export function WorkstationApprovalDetail({
           message: noticeMessage,
         } : null}
         actions={(
-          <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+          <div className="app-inline-actions">
             <AppButton
               type="button"
               tone="secondary"

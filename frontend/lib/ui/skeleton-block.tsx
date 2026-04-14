@@ -3,11 +3,12 @@
 import type { CSSProperties, HTMLAttributes } from 'react';
 
 import { joinClassNames } from '@/lib/ui/primitives';
+import { APP_RADIUS, APP_SPACING } from '@/lib/ui/tokens';
 
 export function SkeletonBlock({
   width = '100%',
-  height = '1rem',
-  radius = '0.8rem',
+  height = APP_SPACING[4],
+  radius = APP_RADIUS.md,
   className,
   style,
   ...props

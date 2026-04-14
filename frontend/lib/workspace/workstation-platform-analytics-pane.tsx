@@ -142,14 +142,14 @@ export function WorkstationPlatformAnalyticsPane() {
         {hasCapability('platform_admin_enabled') ? (
           <ListDetailColumns
             primary={(
-              <div style={{ display: 'grid', gap: '1rem' }}>
+              <div className="app-stack-4">
                 <ListDetailPanel
                   eyebrow="Platform scope"
                   title="Cross-workspace totals"
                   subtitle="Thirty-day active users and current-month activity rolled up across deployed agents."
                 >
                   {isLoading ? (
-                    <div style={{ display: 'grid', gap: '0.55rem' }}>
+                    <div className="app-stack-3">
                       <SkeletonBlock height="5rem" />
                       <SkeletonBlock height="5rem" />
                     </div>
@@ -171,7 +171,7 @@ export function WorkstationPlatformAnalyticsPane() {
                   subtitle="Sorted by message volume and active users, with a billing proxy attached to each deployment row."
                 >
                   {isLoading ? (
-                    <div style={{ display: 'grid', gap: '0.55rem' }}>
+                    <div className="app-stack-3">
                       <SkeletonBlock height="3.2rem" />
                       <SkeletonBlock height="3.2rem" />
                       <SkeletonBlock height="3.2rem" />
@@ -229,14 +229,14 @@ export function WorkstationPlatformAnalyticsPane() {
               </div>
             )}
             secondary={(
-              <div style={{ display: 'grid', gap: '1rem' }}>
+              <div className="app-stack-4">
                 <ListDetailPanel
                   eyebrow="Cost mix"
                   title="Model and provider cost breakdown"
                   subtitle="Current-month estimated cost grouped by provider and model from the deployed-agent cost ledger."
                 >
                   {isLoading ? (
-                    <div style={{ display: 'grid', gap: '0.55rem' }}>
+                    <div className="app-stack-3">
                       <SkeletonBlock height="3rem" />
                       <SkeletonBlock height="3rem" />
                     </div>

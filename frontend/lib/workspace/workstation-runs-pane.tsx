@@ -396,7 +396,7 @@ export function WorkstationRunsPane() {
                           <DataTableCell primary={formatTimestamp(item.recordedAt)} />
                           <DataTableCell
                             align="end"
-                            primary={selected ? <DataBadge tone="accent">Selected</DataBadge> : <span style={{ color: 'var(--app-text-tertiary)', fontSize: '0.78rem' }}>Inspect</span>}
+                            primary={selected ? <DataBadge tone="accent">Selected</DataBadge> : <span className="app-data-table__hint">Inspect</span>}
                           />
                         </DataTableRow>
                       );
@@ -438,14 +438,14 @@ export function WorkstationRunsPane() {
                     >
                       {selectedRun.subtitle}
                     </StateBanner>
-                    <div style={{ display: 'grid', gap: '0.65rem' }}>
-                      <div style={{ display: 'grid', gap: '0.18rem' }}>
-                        <span style={{ color: 'var(--app-text-tertiary)', fontSize: '0.72rem', textTransform: 'uppercase', letterSpacing: '0.08em', fontWeight: 650 }}>Trace id</span>
-                        <span style={{ color: 'var(--app-text-primary)', fontFamily: 'var(--app-font-mono)', overflowWrap: 'anywhere' }}>{selectedRunId}</span>
+                    <div className="app-meta-list">
+                      <div className="app-meta-item">
+                        <span className="app-meta-label">Trace id</span>
+                        <span className="app-meta-value app-meta-value--mono">{selectedRunId}</span>
                       </div>
-                      <div style={{ display: 'grid', gap: '0.18rem' }}>
-                        <span style={{ color: 'var(--app-text-tertiary)', fontSize: '0.72rem', textTransform: 'uppercase', letterSpacing: '0.08em', fontWeight: 650 }}>Root agent</span>
-                        <span style={{ color: 'var(--app-text-secondary)' }}>{readString(selectedRun.trace.root_agent_id, 'sage')}</span>
+                      <div className="app-meta-item">
+                        <span className="app-meta-label">Root agent</span>
+                        <span className="app-meta-value app-meta-value--secondary">{readString(selectedRun.trace.root_agent_id, 'sage')}</span>
                       </div>
                     </div>
                     <WorkstationTraceDetail traceId={selectedRunId} embedded />
@@ -459,14 +459,14 @@ export function WorkstationRunsPane() {
                     >
                       {selectedRun.subtitle}
                     </StateBanner>
-                    <div style={{ display: 'grid', gap: '0.65rem' }}>
-                      <div style={{ display: 'grid', gap: '0.18rem' }}>
-                        <span style={{ color: 'var(--app-text-tertiary)', fontSize: '0.72rem', textTransform: 'uppercase', letterSpacing: '0.08em', fontWeight: 650 }}>Run id</span>
-                        <span style={{ color: 'var(--app-text-primary)', fontFamily: 'var(--app-font-mono)', overflowWrap: 'anywhere' }}>{selectedRunId}</span>
+                    <div className="app-meta-list">
+                      <div className="app-meta-item">
+                        <span className="app-meta-label">Run id</span>
+                        <span className="app-meta-value app-meta-value--mono">{selectedRunId}</span>
                       </div>
-                      <div style={{ display: 'grid', gap: '0.18rem' }}>
-                        <span style={{ color: 'var(--app-text-tertiary)', fontSize: '0.72rem', textTransform: 'uppercase', letterSpacing: '0.08em', fontWeight: 650 }}>Recorded</span>
-                        <span style={{ color: 'var(--app-text-secondary)' }}>{formatTimestamp(selectedRun.recordedAt)}</span>
+                      <div className="app-meta-item">
+                        <span className="app-meta-label">Recorded</span>
+                        <span className="app-meta-value app-meta-value--secondary">{formatTimestamp(selectedRun.recordedAt)}</span>
                       </div>
                     </div>
                   </>

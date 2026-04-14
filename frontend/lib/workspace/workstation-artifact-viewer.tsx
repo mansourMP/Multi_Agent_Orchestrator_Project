@@ -136,7 +136,7 @@ export function WorkstationArtifactViewer({
         title={readArtifactString(detail.label ?? detail.file_name, artifactId)}
         subtitle={readArtifactString(detail.artifact_id, artifactId)}
         actions={(
-          <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+          <div className="app-inline-actions">
             <AppButton
               type="button"
               tone="secondary"
@@ -146,22 +146,7 @@ export function WorkstationArtifactViewer({
             >
               Refresh
             </AppButton>
-            <a
-              href={downloadUrl}
-              style={{
-                display: 'inline-flex',
-                alignItems: 'center',
-                minHeight: '2.2rem',
-                padding: '0.5rem 0.9rem',
-                borderRadius: '999px',
-                border: '1px solid var(--app-border-accent)',
-                background: 'color-mix(in srgb, var(--app-accent) 18%, var(--app-bg-overlay) 82%)',
-                color: 'var(--app-accent-text)',
-                fontSize: '0.84rem',
-                fontWeight: 620,
-                textDecoration: 'none',
-              }}
-            >
+            <a href={downloadUrl} className="app-link-button app-link-button--primary">
               Download
             </a>
           </div>
@@ -189,45 +174,17 @@ export function WorkstationArtifactViewer({
 
         <StageDetailSection title="Preview">
           {previewKind === 'image' ? (
-            <div
-              style={{
-                display: 'grid',
-                gap: '0.65rem',
-                padding: '0.85rem',
-                borderRadius: '1rem',
-                border: '1px solid var(--app-border-subtle)',
-                background: 'color-mix(in srgb, var(--app-bg-canvas) 82%, var(--app-bg-overlay) 18%)',
-              }}
-            >
+            <div className="artifact-preview">
               <img
                 alt={readArtifactString(detail.file_name ?? detail.label, artifactId)}
                 src={fileUrl}
-                style={{
-                  width: '100%',
-                  borderRadius: '0.9rem',
-                  border: '1px solid var(--app-border-subtle)',
-                  background: 'var(--app-bg-panel-elevated)',
-                }}
+                className="artifact-preview__image"
               />
             </div>
           ) : null}
 
           {previewKind === 'text' ? (
-            <pre
-              style={{
-                margin: 0,
-                padding: '0.95rem',
-                borderRadius: '1rem',
-                border: '1px solid var(--app-border-subtle)',
-                background: 'color-mix(in srgb, var(--app-bg-canvas) 82%, var(--app-bg-overlay) 18%)',
-                color: 'var(--app-text-secondary)',
-                overflow: 'auto',
-                fontSize: '0.83rem',
-                lineHeight: 1.6,
-                whiteSpace: 'pre-wrap',
-                wordBreak: 'break-word',
-              }}
-            >
+            <pre className="artifact-preview__text">
               {readArtifactString(detail.text_preview, '')}
             </pre>
           ) : null}

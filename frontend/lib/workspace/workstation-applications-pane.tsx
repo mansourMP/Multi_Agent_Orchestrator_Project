@@ -71,7 +71,7 @@ function ApplicationsSkeleton() {
   return (
     <ListDetailColumns
       primary={(
-        <div style={{ display: 'grid', gap: '1rem' }}>
+        <div className="app-stack-4">
           <ListDetailPanel eyebrow="Installed" title="Loading installed applications">
             <SkeletonBlock height="2.8rem" />
             <SkeletonBlock height="2.8rem" />
@@ -260,7 +260,7 @@ export function WorkstationApplicationsPane() {
         ) : (
           <ListDetailColumns
             primary={(
-              <div style={{ display: 'grid', gap: '1rem' }}>
+              <div className="app-stack-4">
                 <ListDetailPanel
                   eyebrow="Installed"
                   title="Installed application registry"
@@ -297,7 +297,7 @@ export function WorkstationApplicationsPane() {
                             <DataTableCell primary={`v${readString(item.version, 'n/a')}`} />
                             <DataTableCell
                               align="end"
-                              primary={selected ? <DataBadge tone="accent">Selected</DataBadge> : <span style={{ color: 'var(--app-text-tertiary)', fontSize: '0.78rem' }}>Inspect</span>}
+                              primary={selected ? <DataBadge tone="accent">Selected</DataBadge> : <span className="app-data-table__hint">Inspect</span>}
                             />
                           </DataTableRow>
                         );
@@ -317,10 +317,10 @@ export function WorkstationApplicationsPane() {
                       body="Additional installable applications and update notices will appear here when the registry exposes them."
                     />
                   ) : (
-                    <div style={{ display: 'grid', gap: '0.7rem' }}>
+                    <div className="app-stack-3">
                       {updates.length > 0 ? (
-                        <div style={{ display: 'grid', gap: '0.45rem' }}>
-                          <strong style={{ color: 'var(--app-text-primary)', fontSize: '0.85rem' }}>Update queue</strong>
+                        <div className="app-stack-2">
+                          <strong className="app-card-button__title">Update queue</strong>
                           {updates.map((item, index) => {
                             const appId = String(item.id ?? `update-${index}`);
                             return (
@@ -328,22 +328,13 @@ export function WorkstationApplicationsPane() {
                                 key={appId}
                                 type="button"
                                 onClick={() => setSelectedAppId(appId)}
-                                style={{
-                                  display: 'grid',
-                                  gap: '0.2rem',
-                                  padding: '0.78rem 0.84rem',
-                                  borderRadius: '0.9rem',
-                                  border: appId === selectedAppId ? '1px solid var(--app-border-accent)' : '1px solid var(--app-border-subtle)',
-                                  background: 'color-mix(in srgb, var(--app-bg-panel-elevated) 82%, var(--app-bg-overlay) 18%)',
-                                  textAlign: 'left',
-                                  cursor: 'pointer',
-                                }}
+                                className={`app-card-button${appId === selectedAppId ? ' app-card-button--selected' : ''}`}
                               >
-                                <div style={{ display: 'flex', justifyContent: 'space-between', gap: '0.6rem', flexWrap: 'wrap' }}>
-                                  <strong style={{ color: 'var(--app-text-primary)' }}>{readString(item.name, appId)}</strong>
+                                <div className="app-inline-actions app-inline-actions--between app-inline-actions--start">
+                                  <strong className="app-card-button__title">{readString(item.name, appId)}</strong>
                                   <DataBadge tone="warning">Update</DataBadge>
                                 </div>
-                                <span style={{ color: 'var(--app-text-secondary)', fontSize: '0.8rem' }}>
+                                <span className="app-card-button__subtitle">
                                   v{readString(item.version, 'n/a')} → v{readString(item.latest_version, 'n/a')}
                                 </span>
                               </button>
@@ -353,8 +344,8 @@ export function WorkstationApplicationsPane() {
                       ) : null}
 
                       {store.length > 0 ? (
-                        <div style={{ display: 'grid', gap: '0.45rem' }}>
-                          <strong style={{ color: 'var(--app-text-primary)', fontSize: '0.85rem' }}>Catalog</strong>
+                        <div className="app-stack-2">
+                          <strong className="app-card-button__title">Catalog</strong>
                           {store.map((item, index) => {
                             const appId = String(item.id ?? `store-${index}`);
                             return (
@@ -362,24 +353,15 @@ export function WorkstationApplicationsPane() {
                                 key={appId}
                                 type="button"
                                 onClick={() => setSelectedAppId(appId)}
-                                style={{
-                                  display: 'grid',
-                                  gap: '0.2rem',
-                                  padding: '0.78rem 0.84rem',
-                                  borderRadius: '0.9rem',
-                                  border: appId === selectedAppId ? '1px solid var(--app-border-accent)' : '1px solid var(--app-border-subtle)',
-                                  background: 'color-mix(in srgb, var(--app-bg-panel-elevated) 82%, var(--app-bg-overlay) 18%)',
-                                  textAlign: 'left',
-                                  cursor: 'pointer',
-                                }}
+                                className={`app-card-button${appId === selectedAppId ? ' app-card-button--selected' : ''}`}
                               >
-                                <div style={{ display: 'flex', justifyContent: 'space-between', gap: '0.6rem', flexWrap: 'wrap' }}>
-                                  <strong style={{ color: 'var(--app-text-primary)' }}>{readString(item.name, appId)}</strong>
+                                <div className="app-inline-actions app-inline-actions--between app-inline-actions--start">
+                                  <strong className="app-card-button__title">{readString(item.name, appId)}</strong>
                                   <DataBadge tone={installedById.has(appId) ? 'success' : 'accent'}>
                                     {installedById.has(appId) ? 'Installed' : 'Available'}
                                   </DataBadge>
                                 </div>
-                                <span style={{ color: 'var(--app-text-secondary)', fontSize: '0.8rem' }}>
+                                <span className="app-card-button__subtitle">
                                   {readString(item.description, 'Catalog application')}
                                 </span>
                               </button>
@@ -411,7 +393,7 @@ export function WorkstationApplicationsPane() {
                 ) : (
                   <>
                     <StateBanner
-                      tone={selectedUpdate ? 'warning' : selectedInstalled ? 'success' : 'accent'}
+                      tone={selectedUpdate ? 'warning' : selectedInstalled ? 'success' : 'neutral'}
                       title={selectedUpdate ? 'Update available' : selectedInstalled ? 'Installed in workspace' : 'Available for install'}
                       detail={selectedInstalled?.entry_route ? 'Launch route is available in the workstation.' : 'This module is managed inside the workspace registry.'}
                     >
@@ -422,7 +404,7 @@ export function WorkstationApplicationsPane() {
                           : 'Installed module metadata is loaded and ready for action.'}
                     </StateBanner>
 
-                    <div style={{ display: 'grid', gap: '0.7rem' }}>
+                    <div className="app-stack-3">
                       <FormReadout label="Application id" value={selectedAppIdSafe || 'No identifier recorded'} />
                       <FormReadout label="Installed version" value={`v${readString(selectedInstalled?.version ?? selectedApp.version, 'n/a')}`} />
                       <FormReadout label="Latest version" value={`v${readString(selectedUpdate?.latest_version ?? selectedCatalog?.latest_version ?? selectedApp.latest_version, readString(selectedApp.version, 'n/a'))}`} />
@@ -451,7 +433,7 @@ export function WorkstationApplicationsPane() {
         {selectedApp ? (
           <>
             <ModalSection title="Module state" description="Current registry and catalog status for the selected application.">
-              <div style={{ display: 'grid', gap: '0.65rem' }}>
+              <div className="app-stack-3">
                 <FormReadout label="Presence" value={selectedInstalled ? 'Installed in workspace' : 'Catalog only'} />
                 <FormReadout label="Version" value={`v${readString(selectedInstalled?.version ?? selectedApp.version, 'n/a')}`} />
                 <FormReadout label="Available update" value={selectedUpdate ? `v${readString(selectedUpdate.latest_version, 'n/a')}` : 'No update queued'} />
@@ -459,7 +441,7 @@ export function WorkstationApplicationsPane() {
             </ModalSection>
 
             <ModalSection title="Actions" description="Install, update, launch, or remove the selected module.">
-              <div style={{ display: 'flex', gap: '0.6rem', flexWrap: 'wrap' }}>
+              <div className="app-inline-actions">
                 {selectedInstalled?.entry_route ? (
                   <AppButton
                     type="button"

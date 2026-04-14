@@ -23,40 +23,14 @@ export function WorkstationDesktopStatus() {
   return (
     <section
       data-workstation-desktop-bridge="native"
-      style={{
-        display: 'flex',
-        justifyContent: 'space-between',
-        alignItems: 'center',
-        gap: '0.8rem',
-        flexWrap: 'wrap',
-        padding: '0.68rem 0.9rem',
-        borderRadius: '1rem',
-        border: '1px solid var(--app-border-subtle)',
-        background: 'color-mix(in srgb, var(--app-bg-panel) 86%, var(--app-bg-overlay) 14%)',
-      }}
+      className="workstation-desktop-status"
     >
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.55rem', alignItems: 'center' }}>
-        <span
-          style={{
-            display: 'inline-flex',
-            alignItems: 'center',
-            minHeight: '1.75rem',
-            padding: '0.26rem 0.56rem',
-            borderRadius: '999px',
-            border: '1px solid var(--app-border-subtle)',
-            background: 'color-mix(in srgb, var(--app-bg-panel-elevated) 82%, var(--app-bg-overlay) 18%)',
-            color: 'var(--app-text-secondary)',
-            fontSize: '0.78rem',
-            fontWeight: 620,
-          }}
-        >
+      <div className="workstation-desktop-status__summary">
+        <span className="workstation-desktop-status__badge">
           Native shell{desktop.platform ? ` · ${desktop.platform}` : ''}
         </span>
         <span
-          style={{
-            color: desktop.localCompanion.online ? 'var(--app-success)' : 'var(--app-text-secondary)',
-            fontSize: '0.82rem',
-          }}
+          className={`workstation-desktop-status__detail${desktop.localCompanion.online ? ' workstation-desktop-status__detail--ready' : ''}`}
         >
           {localCompanionLabel}
         </span>

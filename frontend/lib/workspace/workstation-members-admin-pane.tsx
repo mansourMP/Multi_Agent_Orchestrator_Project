@@ -181,14 +181,14 @@ export function WorkstationMembersAdminPane() {
 
         <ListDetailColumns
           primary={(
-            <div style={{ display: 'grid', gap: '1rem' }}>
+            <div className="app-stack-4">
               <ListDetailPanel
                 eyebrow="Members"
                 title="Role assignments"
                 subtitle="Owners can change roles, revoke access, and validate who still has direct control of the workspace."
               >
                 {isLoading ? (
-                  <div style={{ display: 'grid', gap: '0.55rem' }}>
+                  <div className="app-stack-3">
                     <SkeletonBlock height="3.5rem" />
                     <SkeletonBlock height="3.5rem" />
                     <SkeletonBlock height="3.5rem" />
@@ -224,15 +224,7 @@ export function WorkstationMembersAdminPane() {
                             primary={<DataBadge tone={memberTone(currentRole)}>{currentRole}</DataBadge>}
                             secondary={currentRole === 'owner' ? 'Full workspace administration' : 'Scoped workspace access'}
                           />
-                          <div
-                            style={{
-                              display: 'flex',
-                              gap: '0.5rem',
-                              flexWrap: 'wrap',
-                              justifyContent: 'flex-end',
-                              alignItems: 'center',
-                            }}
-                          >
+                          <div className="app-inline-actions app-inline-actions--end">
                             <FormSelect
                               value={draftRole}
                               disabled={isBusy}
@@ -298,7 +290,7 @@ export function WorkstationMembersAdminPane() {
                 subtitle="Open invitations that have not yet been accepted."
               >
                 {isLoading ? (
-                  <div style={{ display: 'grid', gap: '0.55rem' }}>
+                  <div className="app-stack-3">
                     <SkeletonBlock height="3.2rem" />
                     <SkeletonBlock height="3.2rem" />
                   </div>
@@ -332,7 +324,7 @@ export function WorkstationMembersAdminPane() {
                             primary={<DataBadge tone={inviteTone(statusToken)}>{statusToken}</DataBadge>}
                             secondary={statusToken === 'pending' ? 'Awaiting acceptance' : 'No longer actionable'}
                           />
-                          <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+                          <div className="app-inline-actions app-inline-actions--end">
                             <AppButton
                               type="button"
                               tone="danger"
@@ -394,7 +386,7 @@ export function WorkstationMembersAdminPane() {
             </div>
           )}
           secondary={(
-            <div style={{ display: 'grid', gap: '1rem' }}>
+            <div className="app-stack-4">
               <ListDetailPanel
                 eyebrow="Invite"
                 title="Create workspace invite"
@@ -421,7 +413,7 @@ export function WorkstationMembersAdminPane() {
                     </FormField>
                   </FormGrid>
                 </FormSection>
-                <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+                <div className="app-inline-actions app-inline-actions--end">
                   <AppButton
                     type="button"
                     disabled={!canInvite || Boolean(busyKey)}

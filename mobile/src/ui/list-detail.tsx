@@ -18,6 +18,7 @@ export type ListDetailItem = {
   id: string;
   title: string;
   subtitle?: string | null;
+  kind?: string | null;
   status?: string | null;
   timestamp?: string | null;
   detailLines?: Array<{

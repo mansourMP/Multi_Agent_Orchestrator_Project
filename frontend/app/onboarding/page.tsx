@@ -2,7 +2,10 @@ import { redirect } from 'next/navigation';
 
 import { OnboardingClient } from '@/app/onboarding/OnboardingClient';
 import { loadAccountShellSession } from '@/lib/server/load-account-shell-session';
-import type { WorkspaceMembershipRecord } from '@/lib/shell/workspace-membership-model';
+import {
+  resolvePrimaryReadyWorkspaceId,
+  type WorkspaceMembershipRecord,
+} from '@/lib/shell/workspace-membership-model';
 
 function resolveOnboardingWorkspaceId(
   workspaceMemberships: WorkspaceMembershipRecord[],
@@ -39,9 +42,16 @@ export default async function OnboardingPage({
   }
 
   const { workspaceId } = await searchParams;
+  const requestedWorkspaceId = typeof workspaceId === 'string' ? workspaceId : null;
+  const readyWorkspaceId = resolvePrimaryReadyWorkspaceId(session.workspaceMemberships);
+
+  if (!requestedWorkspaceId && readyWorkspaceId) {
+    redirect(`/w/${encodeURIComponent(readyWorkspaceId)}/sage`);
+  }
+
   const targetWorkspaceId = resolveOnboardingWorkspaceId(
     session.workspaceMemberships,
-    typeof workspaceId === 'string' ? workspaceId : null,
+    requestedWorkspaceId,
   );
 
   if (!targetWorkspaceId && session.workspaceMemberships.length === 0) {
@@ -51,7 +61,7 @@ export default async function OnboardingPage({
   return (
     <OnboardingClient
       targetWorkspaceId={targetWorkspaceId}
-      requestedWorkspaceId={typeof workspaceId === 'string' ? workspaceId : null}
+      requestedWorkspaceId={requestedWorkspaceId}
     />
   );
 }

@@ -115,7 +115,7 @@ export const WORKSPACE_MOBILE_NAV_GROUP_LABELS = WORKSPACE_WEB_NAV_GROUP_LABELS;
 export const WORKSPACE_ROUTE_DEFINITIONS: readonly WorkspaceNavRouteDefinition[] = [
   {
     id: 'chat',
-    label: 'Chat',
+    label: 'Sage',
     segment: 'sage',
     legacySegments: ['chat'],
     destinationId: 'sage',

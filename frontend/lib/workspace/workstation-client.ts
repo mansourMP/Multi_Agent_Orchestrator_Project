@@ -402,12 +402,36 @@ export class WorkstationClientError extends Error {
 
   readonly code: string | null;
 
-  constructor(message: string, status: number, detail: unknown, code: string | null = null) {
+  readonly retryable: boolean;
+
+  readonly retryAfterSeconds: number | null;
+
+  readonly errorClass: string | null;
+
+  constructor(
+    message: string,
+    status: number,
+    detail: unknown,
+    code: string | null = null,
+    options: {
+      retryable?: boolean;
+      retryAfterSeconds?: number | null;
+      errorClass?: string | null;
+    } = {},
+  ) {
     super(message);
     this.name = 'WorkstationClientError';
     this.status = status;
     this.detail = detail;
     this.code = code;
+    this.retryable = Boolean(options.retryable);
+    this.retryAfterSeconds = typeof options.retryAfterSeconds === 'number'
+      && Number.isFinite(options.retryAfterSeconds)
+      ? options.retryAfterSeconds
+      : null;
+    this.errorClass = typeof options.errorClass === 'string' && options.errorClass.trim()
+      ? options.errorClass.trim()
+      : null;
   }
 }
 
@@ -829,36 +853,125 @@ function extractErrorDetail(payload: unknown): unknown {
   return payload;
 }
 
-function extractErrorCode(payload: unknown, detail: unknown): string | null {
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null;
+}
+
+function extractPlatformError(payload: unknown, detail: unknown): Record<string, unknown> | null {
+  const payloadRecord = asRecord(payload);
+  const payloadError = asRecord(payloadRecord?.error);
+  if (payloadError) {
+    return payloadError;
+  }
+  const detailRecord = asRecord(detail);
+  const detailError = asRecord(detailRecord?.error);
+  if (detailError) {
+    return detailError;
+  }
+  return null;
+}
+
+function extractErrorCode(payload: unknown, detail: unknown, platformError: Record<string, unknown> | null): string | null {
   if (payload && typeof payload === 'object' && typeof (payload as Record<string, unknown>).code === 'string') {
-    return String((payload as Record<string, unknown>).code);
+    return String((payload as Record<string, unknown>).code).trim() || null;
   }
   if (detail && typeof detail === 'object' && typeof (detail as Record<string, unknown>).code === 'string') {
-    return String((detail as Record<string, unknown>).code);
+    return String((detail as Record<string, unknown>).code).trim() || null;
+  }
+  if (platformError && typeof platformError.code === 'string') {
+    return String(platformError.code).trim() || null;
   }
   return null;
 }
 
 function fallbackErrorMessage(status: number): string {
   if (status === 0) {
-    return 'The workstation request did not complete successfully.';
+    return 'Sage could not reach the service. Please try again.';
   }
   if (status === 401) {
-    return 'Authentication is required for this workstation request.';
+    return 'Your session expired. Sign in again and retry.';
   }
   if (status === 403) {
-    return 'This workstation request is outside the current workspace access scope.';
+    return 'Sage cannot run that request in this workspace right now.';
+  }
+  if (status === 429) {
+    return 'Sage is temporarily at capacity. Please try again in a moment.';
   }
   if (status === 404) {
-    return 'The requested workstation resource was not found.';
+    return 'The requested item could not be found.';
   }
   if (status === 409) {
-    return 'The workstation session scope changed. Renew the session and retry.';
+    return 'Session context changed. Retry your message once more.';
   }
   if (status >= 500) {
-    return 'The workstation backend is unavailable right now.';
+    return 'Sage hit a temporary service issue. Please try again.';
   }
-  return `Workstation request failed with status ${status}.`;
+  return 'Request failed. Please try again.';
+}
+
+function extractErrorMessage(detail: unknown, platformError: Record<string, unknown> | null): string {
+  if (typeof detail === 'string' && detail.trim()) {
+    return detail.trim();
+  }
+  const detailRecord = asRecord(detail);
+  if (detailRecord) {
+    const detailMessage = detailRecord.message ?? detailRecord.detail ?? detailRecord.error;
+    if (typeof detailMessage === 'string' && detailMessage.trim()) {
+      return detailMessage.trim();
+    }
+  }
+  if (platformError && typeof platformError.message === 'string' && platformError.message.trim()) {
+    return platformError.message.trim();
+  }
+  return '';
+}
+
+function inferRetryableFromStatus(status: number): boolean {
+  return status === 0 || status === 408 || status === 425 || status === 429 || status >= 500;
+}
+
+function extractRetryable(
+  status: number,
+  payload: unknown,
+  detail: unknown,
+  platformError: Record<string, unknown> | null,
+): boolean {
+  if (typeof platformError?.retryable === 'boolean') {
+    return platformError.retryable;
+  }
+  const detailRecord = asRecord(detail);
+  if (typeof detailRecord?.retryable === 'boolean') {
+    return detailRecord.retryable;
+  }
+  const payloadRecord = asRecord(payload);
+  if (typeof payloadRecord?.retryable === 'boolean') {
+    return payloadRecord.retryable;
+  }
+  return inferRetryableFromStatus(status);
+}
+
+function extractRetryAfterSeconds(
+  payload: unknown,
+  detail: unknown,
+  platformError: Record<string, unknown> | null,
+): number | null {
+  const maybeRetryAfter = platformError?.details && typeof platformError.details === 'object'
+    ? (platformError.details as Record<string, unknown>).retry_after_seconds
+    : null;
+  const candidates = [
+    maybeRetryAfter,
+    asRecord(detail)?.retry_after_seconds,
+    asRecord(payload)?.retry_after_seconds,
+  ];
+  for (const value of candidates) {
+    const parsed = typeof value === 'number' ? value : Number(value);
+    if (Number.isFinite(parsed) && parsed >= 0) {
+      return parsed;
+    }
+  }
+  return null;
 }
 
 const READ_REQUEST_POLICY: WorkstationRequestPolicy = {
@@ -887,22 +1000,33 @@ function resolveRequestPolicy(
 }
 
 function normalizeTransportFailure(error: unknown): WorkstationClientError {
-  const message =
+  const baseMessage =
     error instanceof Error && error.message.trim()
       ? error.message
       : 'The workstation request failed before the server responded.';
-  const code = /timed out/i.test(message) ? 'request_timeout' : 'transport_failure';
-  return new WorkstationClientError(message, 0, null, code);
+  const message = /timed out/i.test(baseMessage)
+    ? 'Sage took too long to respond. Please try again.'
+    : 'Sage could not reach the service. Please try again.';
+  const code = /timed out/i.test(baseMessage) ? 'request_timeout' : 'transport_failure';
+  return new WorkstationClientError(message, 0, null, code, {
+    retryable: true,
+  });
 }
 
 function normalizeClientError(status: number, payload: unknown): WorkstationClientError {
   const detail = extractErrorDetail(payload);
-  const code = extractErrorCode(payload, detail);
-  const message =
-    typeof detail === 'string' && detail.trim()
-      ? detail
-      : fallbackErrorMessage(status);
-  return new WorkstationClientError(message, status, detail, code);
+  const platformError = extractPlatformError(payload, detail);
+  const code = extractErrorCode(payload, detail, platformError);
+  const rawMessage = extractErrorMessage(detail, platformError);
+  const normalizedMessage =
+    status === 403 || status === 429 || status >= 500 || /rate.?limit/i.test(String(code ?? ''))
+      ? fallbackErrorMessage(status === 0 ? 429 : status)
+      : rawMessage || fallbackErrorMessage(status);
+  return new WorkstationClientError(normalizedMessage, status, detail, code, {
+    retryable: extractRetryable(status, payload, detail, platformError),
+    retryAfterSeconds: extractRetryAfterSeconds(payload, detail, platformError),
+    errorClass: typeof platformError?.error_class === 'string' ? platformError.error_class : null,
+  });
 }
 
 function mergeJsonHeaders(headers?: HeadersInit): Headers {

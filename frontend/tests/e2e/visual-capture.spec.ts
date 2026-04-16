@@ -2,8 +2,6 @@
 import path from 'node:path';
 import { expect, test } from '@playwright/test';
 
-import { loginAsOwner } from './support/auth';
-
 const SNAPSHOT_LABEL = process.env.VISUAL_LABEL ?? 'snapshot';
 
 const SURFACES: Array<{
@@ -16,12 +14,30 @@ const SURFACES: Array<{
   { id: 'settings', href: '/w/ws-1/settings', selector: '[data-workstation-surface="settings"]' },
 ];
 
+async function authenticateOwner(page) {
+  await page.context().clearCookies();
+  const response = await page.request.post('/api/auth/login', {
+    data: {
+      email: 'owner@example.com',
+      password: 'password-123',
+      channel: 'web',
+    },
+  });
+  expect(response.ok()).toBeTruthy();
+}
+
 async function waitForSurfaceReady(page, surface: (typeof SURFACES)[number]) {
-  await page.goto(surface.href, { waitUntil: 'domcontentloaded' });
+  await page.goto(surface.href, { waitUntil: 'networkidle' });
   await page.waitForSelector(surface.selector, { state: 'visible', timeout: 20_000 });
+  await expect(page.locator('[data-workstation-pane="rail"]')).toBeVisible({ timeout: 20_000 });
+  await expect(page.locator('[data-workstation-titlebar="root"]')).toBeVisible({ timeout: 20_000 });
   await expect(page.locator('.app-skeleton-block')).toHaveCount(0, { timeout: 20_000 });
   await expect(page.locator('body')).not.toContainText(/\bLoading\b/i, { timeout: 20_000 });
-  await page.waitForLoadState('networkidle');
+  if (surface.id === 'sage') {
+    await expect(page.locator('[data-workstation-chat-composer="root"]')).toBeVisible({ timeout: 20_000 });
+    await expect(page.locator('.app-chat-empty--hero')).toHaveCount(0, { timeout: 20_000 });
+    await expect(page.locator('body')).not.toContainText(/A calm space to think out loud\./i, { timeout: 20_000 });
+  }
   await page.waitForTimeout(750);
   await page.evaluate(() => {
     const activeElement = document.activeElement;
@@ -52,7 +68,7 @@ test.describe('visual capture', () => {
         window.localStorage.setItem(storageKey, JSON.stringify({ globalTheme: 'dark' }));
       }
     }, 'empyralis.account-shell.v2');
-    await loginAsOwner(page);
+    await authenticateOwner(page);
 
     for (const surface of SURFACES) {
       await waitForSurfaceReady(page, surface);
@@ -60,6 +76,12 @@ test.describe('visual capture', () => {
         path: path.join(process.cwd(), 'test-results', `${SNAPSHOT_LABEL}-${surface.id}.png`),
         fullPage: true,
       });
+      if (surface.id === 'sage') {
+        await page.screenshot({
+          path: path.join(process.cwd(), 'test-results', `${SNAPSHOT_LABEL}-main-shell.png`),
+          fullPage: true,
+        });
+      }
     }
   });
 });

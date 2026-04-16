@@ -6,22 +6,46 @@ import { useRouter } from 'next/navigation';
 import { useAccountShell } from '@/lib/shell/account-shell-context';
 import {
   getWorkspaceMembership,
-  resolvePrimaryWorkspaceId,
+  isWorkspaceReadyForProduct,
+  resolvePrimaryProductWorkspaceId,
+  sanitizeWorkspaceRoute,
 } from '@/lib/shell/workspace-membership-model';
+
+function canonicalSageHref(workspaceId: string): string {
+  return `/w/${encodeURIComponent(workspaceId)}/sage`;
+}
 
 export function AccountHomeClient() {
   const router = useRouter();
   const { state, actions } = useAccountShell();
-  const selectedWorkspaceId = state.selectedWorkspaceId ?? resolvePrimaryWorkspaceId(state.workspaceMemberships);
   const selectedMembership = getWorkspaceMembership(
+    state.workspaceMembershipIndex,
+    state.selectedWorkspaceId,
+  );
+  const selectedReadyWorkspaceId =
+    selectedMembership && isWorkspaceReadyForProduct(selectedMembership)
+      ? selectedMembership.workspace.id
+      : null;
+  const selectedWorkspaceId =
+    selectedReadyWorkspaceId ?? resolvePrimaryProductWorkspaceId(state.workspaceMemberships);
+  const selectedWorkspaceMembership = getWorkspaceMembership(
     state.workspaceMembershipIndex,
     selectedWorkspaceId,
   );
-  const suggestedHref = selectedMembership
-    ? selectedMembership.requiresOnboarding
-      ? `/onboarding?workspaceId=${encodeURIComponent(selectedMembership.workspace.id)}`
-      : actions.resolveWorkspaceHref(selectedMembership.workspace.id)
-          ?? `/w/${encodeURIComponent(selectedMembership.workspace.id)}`
+  const suggestedHref = selectedWorkspaceMembership
+    ? isWorkspaceReadyForProduct(selectedWorkspaceMembership)
+      ? (() => {
+          const workspaceId = selectedWorkspaceMembership.workspace.id;
+          const fallbackHref = canonicalSageHref(workspaceId);
+          const rememberedHref = sanitizeWorkspaceRoute(
+            actions.resolveWorkspaceHref(workspaceId),
+            fallbackHref,
+          );
+          return rememberedHref === `/w/${encodeURIComponent(workspaceId)}/chat`
+            ? fallbackHref
+            : rememberedHref;
+        })()
+      : `/onboarding?workspaceId=${encodeURIComponent(selectedWorkspaceMembership.workspace.id)}`
     : '/onboarding';
 
   useEffect(() => {

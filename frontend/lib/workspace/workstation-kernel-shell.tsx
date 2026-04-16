@@ -16,7 +16,7 @@ import { resolveRouteIdFromHref } from '@/lib/workspace/workspace-shell';
 import { getWorkspaceNavRouteDefinition, type WorkspaceNavDestinationId, type WorkspaceRouteId } from '../../../shared/nav-manifest';
 
 const CONTEXT_ROUTE_IDS_BY_DESTINATION: Record<WorkspaceNavDestinationId, readonly WorkspaceRouteId[]> = {
-  sage: ['runs', 'activity', 'notifications'],
+  sage: [],
   studio: ['studio', 'channels', 'inbox', 'deploy'],
   settings: ['settings'],
 };
@@ -54,6 +54,19 @@ export function WorkstationKernelShell({
     return getWorkspaceNavRouteDefinition(activeRouteId).destinationId;
   }, [activeRouteId]);
   const contextRoutes = useMemo(() => {
+    if (activeDestinationId === 'sage') {
+      const memoryRoute = routeManifest.routeIndex.activity;
+      const appsRoute = routeManifest.routeIndex.channels;
+      return [
+        memoryRoute
+          ? { ...memoryRoute, label: 'Memory' as const }
+          : null,
+        appsRoute
+          ? { ...appsRoute, label: 'Apps' as const }
+          : null,
+      ].filter((route): route is NonNullable<typeof route> => Boolean(route));
+    }
+
     const routeIds = CONTEXT_ROUTE_IDS_BY_DESTINATION[activeDestinationId];
     return routeIds.flatMap((routeId) => {
       const route = routeManifest.routeIndex[routeId];
@@ -77,71 +90,82 @@ export function WorkstationKernelShell({
         activeDestinationId === 'sage' && 'workstation-shell--sage',
         activeRouteId === 'chat' && 'workstation-shell--chat',
       )}
-      style={{ overflow: 'hidden', overflowX: 'hidden' }}
     >
-      <WorkstationTitlebar
-        surfaceLabel={currentRouteLabel}
-        diagnosticsVisible={showDiagnostics}
-        onToggleDiagnostics={() => {
-          setShowDiagnostics((current) => !current);
-        }}
-        navigation={contextRoutes.length > 1 ? contextRoutes.map((route) => (
-          <Link
-            key={route.id}
-            href={route.href}
-            prefetch
-            aria-current={route.id === activeRouteId ? 'page' : undefined}
-            className={joinClassNames(
-              'workstation-titlebar__link',
-              route.id === activeRouteId && 'workstation-titlebar__link--active',
-            )}
-          >
-            {route.label}
-          </Link>
-        )) : null}
-        actions={(
-          <>
-            <AppButton
-              type="button"
-              tone={showWorkspaceContext ? 'secondary' : 'ghost'}
-              className="workstation-titlebar__action"
-              onClick={() => {
-                setShowWorkspaceContext((current) => !current);
-                setShowInspector(false);
-              }}
+      <div className="workstation-shell__topbar" data-workstation-main-pane="topbar">
+        <WorkstationTitlebar
+          surfaceLabel={currentRouteLabel}
+          diagnosticsVisible={showDiagnostics}
+          onToggleDiagnostics={() => {
+            setShowDiagnostics((current) => !current);
+          }}
+          navigation={contextRoutes.length > 1 ? contextRoutes.map((route) => (
+            <Link
+              key={route.id}
+              href={route.href}
+              prefetch
+              aria-current={route.id === activeRouteId ? 'page' : undefined}
+              className={joinClassNames(
+                'workstation-titlebar__link',
+                route.id === activeRouteId && 'workstation-titlebar__link--active',
+              )}
             >
-              Workspace
-            </AppButton>
-            <AppButton
-              type="button"
-              tone={showInspector ? 'secondary' : 'ghost'}
-              className="workstation-titlebar__action"
-              onClick={() => {
-                setShowInspector((current) => !current);
-                setShowWorkspaceContext(false);
-              }}
-            >
-              Details
-            </AppButton>
-          </>
-        )}
-      />
-      {showDiagnostics ? <WorkstationDiagnostics onClose={() => setShowDiagnostics(false)} /> : null}
-      <div
-        className="workstation-layout"
-        data-workstation-destination={activeDestinationId}
-        data-workstation-main-zone="main"
-        style={{ minWidth: 0, overflow: 'hidden', overflowX: 'hidden' }}
-      >
-        <section
-          className="workstation-primary-canvas"
-          data-workstation-focus-surface={activeRouteId ?? 'unknown'}
-          data-workstation-main-pane="content"
-          style={{ minWidth: 0, width: '100%', overflowX: 'hidden' }}
-        >
-          {children}
-        </section>
+              {route.label}
+            </Link>
+          )) : null}
+          actions={(
+            <>
+              <AppButton
+                type="button"
+                tone={showWorkspaceContext ? 'secondary' : 'ghost'}
+                className="workstation-titlebar__action"
+                onClick={() => {
+                  setShowWorkspaceContext((current) => !current);
+                  setShowInspector(false);
+                }}
+              >
+                Workspace
+              </AppButton>
+              <AppButton
+                type="button"
+                tone={showInspector ? 'secondary' : 'ghost'}
+                className="workstation-titlebar__action"
+                onClick={() => {
+                  setShowInspector((current) => !current);
+                  setShowWorkspaceContext(false);
+                }}
+              >
+                Details
+              </AppButton>
+            </>
+          )}
+        />
       </div>
+      <div className="workstation-shell__body" data-workstation-main-pane="content-body">
+        <div
+          className="workstation-layout"
+          data-workstation-destination={activeDestinationId}
+          data-workstation-main-zone="main"
+        >
+          <section
+            className="workstation-primary-canvas"
+            data-workstation-focus-surface={activeRouteId ?? 'unknown'}
+            data-workstation-main-pane="content"
+          >
+            {children}
+          </section>
+        </div>
+      </div>
+
+      <CommandSheet
+        open={showDiagnostics}
+        title="Diagnostics"
+        description="Internal shell and stream state for debugging only."
+        onClose={() => {
+          setShowDiagnostics(false);
+        }}
+      >
+        <WorkstationDiagnostics onClose={() => setShowDiagnostics(false)} />
+      </CommandSheet>
 
       <CommandSheet
         open={showWorkspaceContext}

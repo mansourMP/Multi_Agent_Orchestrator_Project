@@ -2,6 +2,8 @@ import type { ReactNode } from 'react';
 import { notFound, redirect } from 'next/navigation';
 
 import { AccountTenantSwitcher } from '@/app/(account)/AccountTenantSwitcher';
+import { loadAccountShellSessionSafely } from '@/lib/server/load-account-shell-session';
+import { resolvePrimaryReadyWorkspaceId } from '@/lib/shell/workspace-membership-model';
 import {
   WorkspaceBootstrapError,
   loadWorkspaceBootstrap,
@@ -38,6 +40,13 @@ export default async function WorkspaceRouteLayout({
   }
 
   if (bootstrap.shellHints.requiresOnboarding) {
+    const session = await loadAccountShellSessionSafely();
+    const readyWorkspaceId = session
+      ? resolvePrimaryReadyWorkspaceId(session.workspaceMemberships)
+      : null;
+    if (readyWorkspaceId && readyWorkspaceId !== bootstrap.workspace.id) {
+      redirect(`/w/${encodeURIComponent(readyWorkspaceId)}/sage`);
+    }
     redirect(`/onboarding?workspaceId=${encodeURIComponent(bootstrap.workspace.id)}`);
   }
 

@@ -34,8 +34,6 @@ export function WorkstationTitlebar({
         className="workstation-titlebar__brand"
         data-tauri-drag-region={desktop.available ? '' : undefined}
       >
-        <span className="workstation-titlebar__brand-mark">Empyralis</span>
-        <span className="workstation-titlebar__separator" aria-hidden="true" />
         <span className="workstation-titlebar__surface">{surfaceLabel}</span>
       </div>
       {navigation ? (

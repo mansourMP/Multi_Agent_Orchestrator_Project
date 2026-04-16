@@ -77,6 +77,40 @@ export function resolvePrimaryWorkspaceId(
   return personalMembership?.workspace.id ?? memberships[0].workspace.id;
 }
 
+export function isWorkspaceReadyForProduct(membership: WorkspaceMembershipRecord): boolean {
+  return membership.setupCompleted && !membership.requiresOnboarding;
+}
+
+export function resolvePrimaryReadyWorkspaceId(
+  memberships: WorkspaceMembershipRecord[],
+): string | null {
+  if (memberships.length === 0) {
+    return null;
+  }
+
+  const readyOwnerOrAdmin = memberships.find(
+    (membership) => isWorkspaceReadyForProduct(membership)
+      && (membership.role === 'owner' || membership.role === 'admin'),
+  );
+  if (readyOwnerOrAdmin) {
+    return readyOwnerOrAdmin.workspace.id;
+  }
+
+  const readyMembership = memberships.find((membership) => isWorkspaceReadyForProduct(membership));
+  return readyMembership?.workspace.id ?? null;
+}
+
+export function resolvePrimaryProductWorkspaceId(
+  memberships: WorkspaceMembershipRecord[],
+): string | null {
+  const readyWorkspaceId = resolvePrimaryReadyWorkspaceId(memberships);
+  if (readyWorkspaceId) {
+    return readyWorkspaceId;
+  }
+
+  return resolvePrimaryWorkspaceId(memberships);
+}
+
 export function resolveRouteWorkspaceId(
   memberships: WorkspaceMembershipRecord[],
   routeWorkspaceId: string | null,

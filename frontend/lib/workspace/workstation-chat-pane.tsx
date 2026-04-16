@@ -15,7 +15,6 @@ import {
   type WorkstationChatArtifactReference,
   type WorkstationChatMessageRecord,
 } from '@/lib/workspace/chat-message';
-import { SageTraceView } from '@/lib/workspace/sage-trace-view';
 import type { WorkspaceBootstrapRuntimeTarget } from '@/lib/workspace/workspace-bootstrap';
 import {
   resolveWorkstationApproval,
@@ -95,6 +94,11 @@ type RuntimeSummaryCard = {
   body: string;
   preferredPill: string;
   localPill: string;
+};
+
+type SendFailureNotice = {
+  message: string;
+  retryable: boolean;
 };
 
 const PRIMARY_THREAD_ID = 'primary';
@@ -655,6 +659,7 @@ export function WorkstationChatPane() {
     () => services.queryClient.peek<SageMemorySnapshot>(SAGE_MEMORY_QUERY_KEY) ?? normalizeSageMemorySnapshot(null),
   );
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
+  const [sendFailureNotice, setSendFailureNotice] = useState<SendFailureNotice | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isSending, setIsSending] = useState(false);
   const [hasEnteredConversationFlow, setHasEnteredConversationFlow] = useState(false);
@@ -1107,6 +1112,7 @@ export function WorkstationChatPane() {
     const pendingMessage = createCanonicalUserMessage(message, requestedThreadId);
     setIsSending(true);
     setStatusMessage(null);
+    setSendFailureNotice(null);
     setPendingUserMessage(pendingMessage);
     setStreamingAssistantText('');
     setLiveTrace(null);
@@ -1261,145 +1267,37 @@ export function WorkstationChatPane() {
               ? 'Turn submitted after refreshing your session.'
               : null,
       );
+      setSendFailureNotice(null);
     } catch (error) {
       setPendingUserMessage(null);
       setStreamingAssistantText('');
-      setStatusMessage(
-        error instanceof WorkstationClientError || error instanceof Error
-          ? error.message
-          : 'Could not send this message.',
-      );
+      const message = error instanceof WorkstationClientError || error instanceof Error
+        ? error.message
+        : 'Could not send this message.';
+      setSendFailureNotice({
+        message,
+        retryable: error instanceof WorkstationClientError
+          ? error.retryable
+          : true,
+      });
     } finally {
       setIsSending(false);
     }
   };
 
-  const liveTraceView = liveTrace ? (
-    <SageTraceView
-      traceId={liveTrace.traceId}
-      mode="live"
-      liveTransport={liveTrace.transport === 'trace-stream' ? 'trace-stream' : 'external'}
-      initialTrace={liveTrace.trace}
-      initialEvents={liveTrace.transport === 'trace-stream' ? liveTrace.events : null}
-      additiveEvents={liveTrace.transport === 'external' ? liveTrace.events : null}
-    />
-  ) : null;
-
-  if (showFirstImpression) {
-    return (
-      <main
-        data-workstation-surface="chat"
-        data-workstation-chat="pane"
-        className="app-chat-page app-chat-page--surface app-chat-page--first-impression"
-      >
-        <section className="app-chat-first-impression app-chat-first-impression--surface" aria-label="Sage first impression">
-          <section className="app-chat-transcript app-chat-transcript--empty" aria-hidden="true" />
-
-          <ChatComposer
-            draft={draft}
-            onDraftChange={setDraft}
-            onSubmit={() => {
-              void sendMessage();
-            }}
-            executionPlacement={selectedExecutionPlacement === 'local' ? 'Local' : 'Cloud'}
-            onToggleExecutionPlacement={() => {
-              if (!localCompanionConnected) {
-                return;
-              }
-              setSelectedExecutionPlacement((current) => (current === 'local' ? 'cloud' : 'local'));
-            }}
-            executionPlacementDisabled={!localCompanionConnected}
-            pendingApprovalsCount={approvals.length}
-            onOpenApprovals={() => {
-              setIsApprovalsSheetOpen(true);
-            }}
-            permissionMode={permissionMode === 'auto' ? 'Auto-run' : 'Requires approval'}
-            onTogglePermissionMode={() => {
-              setPermissionMode((current) => (current === 'auto' ? 'approval' : 'auto'));
-            }}
-            busy={isSending}
-          />
-        </section>
-      </main>
-    );
-  }
-
   return (
-    <main data-workstation-surface="chat" data-workstation-chat="pane" className="app-chat-page app-chat-page--surface">
-      <header className="app-chat-header">
-        <div className="app-chat-header__copy">
-          <span className="app-chat-header__kicker">Sage</span>
-          <h1 className="app-chat-header__title">Sage</h1>
-          <p className="app-chat-header__subtitle">
-            Talk to Sage here. The conversation stays primary, with tasks, approvals, files, and memory attached when you need them.
-          </p>
-        </div>
-
-        <div className="app-inline-actions">
-          <AppButton
-            type="button"
-            tone="secondary"
-            onClick={() => {
-              void startNewThread();
-            }}
-          >
-            New thread
-          </AppButton>
-          <AppButton
-            type="button"
-            tone="secondary"
-            onClick={() => {
-              void refreshCanonicalState(activeThreadId).catch((error) => {
-                setStatusMessage(error instanceof Error ? error.message : 'Refresh failed.');
-              });
-            }}
-          >
-            Refresh
-          </AppButton>
-        </div>
-      </header>
-
-      <section className="app-chat-summary" aria-label="Conversation state">
-        <span className="app-chat-pill">{thread.title === 'Chat' ? 'Thread' : (thread.title || 'Thread')}</span>
-        <span className="app-chat-pill">{thread.messages.length} messages</span>
-        <span className="app-chat-pill">{summarizeApprovals(approvals)}</span>
-        <span className="app-chat-pill">{summarizeRuns(runs)}</span>
-        <span className="app-chat-pill">{runtimeCard.localPill}</span>
-      </section>
-
-      <section className="app-chat-recent-threads" aria-label="Recent threads">
-        <span className="app-chat-recent-threads__label">Recent threads</span>
-        <div className="app-chat-recent-threads__list">
-          {recentThreads.slice(0, 6).map((item) => (
-            <button
-              key={item.threadId}
-              type="button"
-              className={`workstation-command-bar__link${item.threadId === activeThreadId ? ' workstation-command-bar__link--active' : ''}`}
-              onClick={() => {
-                void openRecentThread(item.threadId);
-              }}
-            >
-              {item.title || item.threadId}
-            </button>
-          ))}
-        </div>
-      </section>
-
-      <section className={`app-chat-thread app-chat-thread--surface${showBlankTranscript ? ' app-chat-thread--blank' : ''}`}>
+    <main
+      data-workstation-surface="chat"
+      data-workstation-chat="pane"
+      className={`app-chat-page app-chat-page--surface${showFirstImpression ? ' app-chat-page--first-impression' : ''}`}
+    >
+      <section className={`app-chat-thread app-chat-thread--surface${showBlankTranscript || showFirstImpression ? ' app-chat-thread--blank' : ''}`}>
         <ScrollRegion className="app-chat-thread__scroll">
           <div className="app-chat-thread__body">
-            {isLoading && thread.messages.length === 0 ? (
-              <AppNotice>Loading conversation history.</AppNotice>
-            ) : null}
-
             {thread.messages.map((message) => (
               <ChatMessage
                 key={message.id}
                 message={message}
-                resolvingApprovalId={resolvingApprovalId}
-                onResolveApproval={(approvalId, resolution) => {
-                  void handleResolveApproval(approvalId, resolution);
-                }}
               />
             ))}
 
@@ -1407,10 +1305,6 @@ export function WorkstationChatPane() {
               <ChatMessage
                 key={pendingUserMessage.id}
                 message={pendingUserMessage}
-                resolvingApprovalId={resolvingApprovalId}
-                onResolveApproval={(approvalId, resolution) => {
-                  void handleResolveApproval(approvalId, resolution);
-                }}
               />
             ) : null}
 
@@ -1418,21 +1312,22 @@ export function WorkstationChatPane() {
               <ChatMessage
                 key={streamingAssistantMessage.id}
                 message={streamingAssistantMessage}
-                resolvingApprovalId={resolvingApprovalId}
-                onResolveApproval={(approvalId, resolution) => {
-                  void handleResolveApproval(approvalId, resolution);
-                }}
               />
-            ) : null}
-
-            {showTrace && liveTraceView ? (
-              <div className="app-chat-trace">
-                {liveTraceView}
-              </div>
             ) : null}
           </div>
         </ScrollRegion>
       </section>
+
+      {sendFailureNotice ? (
+        <AppNotice
+          tone="warning"
+          role="status"
+          aria-live="polite"
+        >
+          <span>{sendFailureNotice.message}</span>
+          {sendFailureNotice.retryable ? <span>Draft kept. Try again when ready.</span> : null}
+        </AppNotice>
+      ) : null}
 
       <ChatComposer
         draft={draft}
@@ -1458,179 +1353,6 @@ export function WorkstationChatPane() {
         }}
         busy={isSending}
       />
-
-      {statusMessage ? (
-        <AppNotice tone={/failed|unavailable|error/i.test(statusMessage) ? 'danger' : 'neutral'}>
-          {statusMessage}
-        </AppNotice>
-      ) : null}
-
-      <details className="app-chat-support-panel app-chat-support-panel--surface" aria-label="Sage support context">
-        <summary className="app-chat-support-panel__summary">
-          <span className="app-chat-support-panel__title">Tasks, approvals, files, and memory</span>
-          <span className="app-chat-support-panel__meta">
-            {approvals.length > 0
-              ? `${approvals.length} approval${approvals.length === 1 ? '' : 's'} waiting`
-              : latestRun
-                ? readString(latestRun.status) || 'Run status'
-                : 'No pending blockers'}
-          </span>
-        </summary>
-
-        <div className="app-chat-support-panel__body">
-          <section className="app-surface-stat-grid" aria-label="Sage context">
-            <ChatInlineStateCard
-              tone={approvals.length > 0 ? 'warning' : latestRun ? 'accent' : 'neutral'}
-              eyebrow="Next move"
-              title={nextStepTitle}
-              meta={nextStepMeta}
-              actions={approvals.length > 0 ? <Link href={`/w/${encodeURIComponent(bootstrap.workspace.id)}/approvals`} className="app-inline-link">Review approvals</Link> : latestRun ? <Link href={`/w/${encodeURIComponent(bootstrap.workspace.id)}/runs`} className="app-inline-link">Review runs</Link> : null}
-            >
-              {approvals.length > 0 ? latestApprovalSummary(latestApproval) : latestRunSummary(latestRun)}
-            </ChatInlineStateCard>
-            <ChatInlineStateCard
-              tone={runtimeCard.tone}
-              eyebrow="Where it runs"
-              title={runtimeCard.title}
-              meta={runtimeCard.meta}
-            >
-              {runtimeCard.body}
-            </ChatInlineStateCard>
-            <ChatInlineStateCard
-              tone="neutral"
-              eyebrow="Memory"
-              title={memoryCardTitle}
-              meta={totalMemoryCount > 0 ? `${totalMemoryCount} saved · ${pinnedMemoryCount} pinned` : memoryMeta}
-              actions={(
-                <AppButton
-                  type="button"
-                  tone="ghost"
-                  onClick={() => {
-                    openCreateMemory();
-                  }}
-                >
-                  Save memory
-                </AppButton>
-              )}
-            >
-              {memoryCardBody}
-            </ChatInlineStateCard>
-            <ChatInlineStateCard
-              tone={serviceTone}
-              eyebrow="Files"
-              title={serviceTitle}
-              meta={structuredServicesState}
-            >
-              {serviceBody}
-            </ChatInlineStateCard>
-          </section>
-
-          <section className="app-stack-3" aria-label="Sage memory">
-            <div className="app-inline-actions app-inline-actions--between app-inline-actions--start">
-              <div className="app-stack-1">
-                <strong className="workstation-pane__title">Sage memory</strong>
-                <span className="app-meta-value app-meta-value--secondary">
-                  {totalMemoryCount > 0
-                    ? `${totalMemoryCount} saved · updated ${formatTimestamp(memorySnapshot.updatedAt)}`
-                    : 'Save only what Sage should remember for later.'}
-                </span>
-              </div>
-              <AppButton
-                type="button"
-                tone="secondary"
-                onClick={() => {
-                  openCreateMemory(memoryFilter !== 'all' ? memoryFilter : undefined);
-                }}
-              >
-                Add memory
-              </AppButton>
-            </div>
-
-            <div className="app-inline-actions app-inline-actions--tight">
-              <button
-                type="button"
-                onClick={() => setMemoryFilter('all')}
-                className={`workstation-command-bar__link${memoryFilter === 'all' ? ' workstation-command-bar__link--active' : ''}`}
-              >
-                All
-              </button>
-              {memorySnapshot.categories.map((category) => (
-                <button
-                  key={category.id}
-                  type="button"
-                  onClick={() => setMemoryFilter(category.id)}
-                  className={`workstation-command-bar__link${memoryFilter === category.id ? ' workstation-command-bar__link--active' : ''}`}
-                >
-                  {category.label}
-                </button>
-              ))}
-            </div>
-
-            {visibleMemoryItems.length === 0 ? (
-              <AppNotice>
-                No memory is saved yet. Add profile facts, active work, app state, or preferences when you want Sage to remember them.
-              </AppNotice>
-            ) : (
-              <div className="app-stack-3">
-                {visibleMemoryItems.map((entry) => {
-                  const entryId = readString(entry.id);
-                  const isBusy = mutatingMemory === entryId;
-                  const isPinned = Boolean(entry.pinned);
-                  return (
-                    <ChatInlineStateCard
-                      key={entryId}
-                      tone={isPinned ? 'success' : 'neutral'}
-                      eyebrow={memoryCategoryLabel(memorySnapshot.categories, readString(entry.category))}
-                      title={readString(entry.title) || 'Saved memory'}
-                      meta={[
-                        isPinned ? 'Pinned' : null,
-                        readString(entry.source_label) || null,
-                        formatTimestamp(readString(entry.updated_at) || null),
-                      ].filter(Boolean).join(' · ')}
-                      actions={(
-                        <div className="app-inline-actions app-inline-actions--tight">
-                          <AppButton
-                            type="button"
-                            tone="ghost"
-                            disabled={isBusy}
-                            onClick={() => {
-                              void toggleMemoryPinned(entry);
-                            }}
-                          >
-                            {isPinned ? 'Unpin' : 'Pin'}
-                          </AppButton>
-                          <AppButton
-                            type="button"
-                            tone="ghost"
-                            disabled={isBusy}
-                            onClick={() => {
-                              openEditMemory(entry);
-                            }}
-                          >
-                            Correct
-                          </AppButton>
-                          <AppButton
-                            type="button"
-                            tone="ghost"
-                            disabled={isBusy}
-                            onClick={() => {
-                              setPendingDeleteMemoryId(entryId);
-                            }}
-                          >
-                            Forget
-                          </AppButton>
-                        </div>
-                      )}
-                    >
-                      {readString(entry.content)}
-                    </ChatInlineStateCard>
-                  );
-                })}
-              </div>
-            )}
-          </section>
-        </div>
-      </details>
 
       <CommandSheet
         open={isApprovalsSheetOpen}

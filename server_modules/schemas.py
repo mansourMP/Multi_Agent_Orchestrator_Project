@@ -62,6 +62,43 @@ class SageAppBridgeRequest(BaseModel):
     handoff_payload: Optional[Dict[str, Any]] = None
 
 
+class SageServiceProfileUpdateRequest(BaseModel):
+    workspace_id: str
+    profile: Dict[str, Any]
+
+
+class SageServiceEntryCreateRequest(BaseModel):
+    workspace_id: str
+    entry: Dict[str, Any]
+
+
+class SageServiceEntryUpdateRequest(BaseModel):
+    workspace_id: str
+    entry: Dict[str, Any]
+
+
+class SageServiceEntryPinRequest(BaseModel):
+    workspace_id: str
+    pinned: bool = True
+
+
+class SageMemoryEntryCreateRequest(BaseModel):
+    workspace_id: str
+    category: str
+    title: str
+    content: str
+    pinned: bool = False
+
+
+class SageMemoryEntryUpdateRequest(SageMemoryEntryCreateRequest):
+    pass
+
+
+class SageMemoryEntryPinRequest(BaseModel):
+    workspace_id: str
+    pinned: bool = True
+
+
 class AgentCreate(BaseModel):
     path: Optional[str] = None
     workspace_id: Optional[str] = None

@@ -87,14 +87,29 @@ async def test_build_workspace_bootstrap_composes_canonical_payload(monkeypatch:
                 {
                     "target_id": "cloud_default",
                     "label": "Cloud Default",
+                    "description": "Cloud-hosted execution for the workspace.",
+                    "available": True,
                     "online": True,
+                    "healthy": True,
+                    "status": "ready",
+                    "connection_mode": "platform_cloud",
+                    "execution_target": "cloud",
                     "default_for_workspace": True,
+                    "supports_runtime_modes": ["hosted_secure"],
                 },
                 {
                     "target_id": "local_companion",
                     "label": "Local Companion",
+                    "description": "Paired local companion execution.",
+                    "available": True,
                     "online": False,
+                    "healthy": False,
+                    "status": "offline",
+                    "connection_mode": "platform_relay",
+                    "execution_target": "local_companion",
                     "default_for_workspace": False,
+                    "supports_runtime_modes": ["local_secure", "privileged_device"],
+                    "sample_attachment_label": "Mansur Mac mini",
                 },
             ],
         }
@@ -138,6 +153,12 @@ async def test_build_workspace_bootstrap_composes_canonical_payload(monkeypatch:
     assert payload["capabilities"]["channel_pairing_enabled"] is True
     assert payload["runtime"]["deploymentMode"] == "hybrid"
     assert payload["runtime"]["runtimeTargets"][0]["id"] == "cloud_default"
+    assert payload["runtime"]["runtimeTargets"][0]["statusLabel"] == "Ready"
+    assert payload["runtime"]["runtimeTargets"][0]["approvalMode"] == "policy_bound"
+    assert payload["runtime"]["runtimeTargets"][1]["statusLabel"] == "Offline"
+    assert "will not start device work" in payload["runtime"]["runtimeTargets"][1]["statusReason"]
+    assert payload["runtime"]["runtimeTargets"][1]["approvalMode"] == "explicit_owner_approval"
+    assert payload["runtime"]["runtimeTargets"][1]["sampleAttachmentLabel"] == "Mansur Mac mini"
     assert payload["shellHints"]["defaultRoute"] == "/w/ws-1/chat"
     assert payload["shellHints"]["preferredProfile"] == "personal_shell"
     assert "channels.pair" in payload["membership"]["permissions"]

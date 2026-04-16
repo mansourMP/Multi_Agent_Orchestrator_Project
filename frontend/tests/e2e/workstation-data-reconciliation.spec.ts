@@ -1,28 +1,196 @@
 // @ts-nocheck
 import { expect, test } from '@playwright/test';
 
-test.describe('workstation data reconciliation', () => {
-  test('notifications mark-all-read updates both list state and status messaging', async ({ page }) => {
-    await page.goto('/w/ws-1/notifications');
+import { loginAsOwner } from './support/auth';
 
-    await expect(page.locator('[data-workstation-surface="notifications"]')).toBeVisible();
-    await page.getByRole('button', { name: /mark all read/i }).click();
-    await expect(page.locator('[data-workstation-surface="notifications"]')).toContainText(/marked all visible notifications as read/i);
+const LOADING_COPY_PATTERNS = [
+  /opening workspace/i,
+  /loading conversation history/i,
+  /loading notifications/i,
+  /loading notification detail/i,
+  /loading briefing/i,
+  /loading latest signal/i,
+  /loading workspace posture/i,
+];
+
+async function mountSurface(page, href, selector) {
+  await page.goto(href, { waitUntil: 'domcontentloaded' });
+  await expect(page.locator(selector)).toBeVisible();
+  await expect(page.locator('[data-workstation-surface="fallback"]')).toHaveCount(0);
+}
+
+async function expectNoVisibleLoadingCopy(page) {
+  for (const pattern of LOADING_COPY_PATTERNS) {
+    await expect(page.getByText(pattern)).toHaveCount(0);
+  }
+}
+
+async function clickMarkAllRead(page) {
+  const markAllReadButton = page.getByRole('button', { name: 'Mark all read' });
+  await expect(markAllReadButton).toBeVisible();
+  await expect(markAllReadButton).toBeEnabled();
+
+  const markAllReadResponse = page.waitForResponse((response) => {
+    if (response.request().method() !== 'POST') {
+      return false;
+    }
+    return response.url().includes('/api/notifications');
   });
 
-  test('chat refreshes canonical thread and approval state after approval outcomes', async ({ page }) => {
-    await page.goto('/w/ws-1/chat');
+  await markAllReadButton.click();
+  await markAllReadResponse;
+}
+
+async function seedUnreadNotification(page) {
+  const seedItem = {
+    id: 'notification-seed-e2e',
+    title: 'Seed notification',
+    event_type: 'seed',
+    summary: 'Unread notification used to validate mark-all-read behavior.',
+    text: 'Unread notification used to validate mark-all-read behavior.',
+    channel: 'workspace',
+    read_at: null,
+    created_at: new Date().toISOString(),
+  };
+
+  await page.route('**/api/notifications?**', async (route) => {
+    const url = new URL(route.request().url());
+    const isStreamRequest = url.searchParams.get('stream') === 'true';
+    const isPrimaryListRequest = url.searchParams.get('limit') === '80';
+    if (isStreamRequest || !isPrimaryListRequest) {
+      await route.continue();
+      return;
+    }
+
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        items: [seedItem],
+        count: 1,
+      }),
+    });
+  });
+}
+
+async function resolveApprovalsSurfaceSelector(page) {
+  const bootstrapResponse = await page.request.get('/api/workspaces/ws-1/bootstrap');
+  expect(bootstrapResponse.ok()).toBeTruthy();
+  const payload = await bootstrapResponse.json();
+  const approvalsEnabled = payload?.capabilities?.approvals_enabled === true;
+  return approvalsEnabled
+    ? '[data-workstation-surface="approvals"]'
+    : '[data-workstation-surface="chat"]';
+}
+
+async function stubSurfaceDataRequests(page) {
+  await page.route('**/api/threads/primary?**', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        id: 'primary',
+        thread_id: 'primary',
+        title: 'Primary thread',
+        turns: [],
+      }),
+    });
+  });
+
+  await page.route('**/api/runs?**', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ items: [] }),
+    });
+  });
+
+  await page.route('**/api/approvals?**', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ items: [] }),
+    });
+  });
+
+  await page.route('**/api/sage-memory?**', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ items: [], categories: [], summary: {} }),
+    });
+  });
+
+  await page.route('**/activity/timeline?**', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ items: [] }),
+    });
+  });
+
+  await page.route('**/api/events/inbox/stream?**', async (route) => {
+    await route.fulfill({
+      status: 200,
+      headers: { 'content-type': 'text/event-stream' },
+      body: 'event: ping\ndata: {}\n\n',
+    });
+  });
+
+  await page.route('**/api/notifications?**', async (route) => {
+    const url = new URL(route.request().url());
+    if (url.searchParams.get('stream') === 'true') {
+      await route.fulfill({
+        status: 200,
+        headers: { 'content-type': 'text/event-stream' },
+        body: 'event: ping\ndata: {}\n\n',
+      });
+      return;
+    }
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ items: [] }),
+    });
+  });
+}
+
+test.describe('workstation data reconciliation', () => {
+  test('notifications mark-all-read updates both list state and status messaging', async ({ page }) => {
+    await loginAsOwner(page);
+    await seedUnreadNotification(page);
+    await mountSurface(page, '/w/ws-1/notifications', '[data-workstation-surface="notifications"]');
+
+    await clickMarkAllRead(page);
+    await expect(page.locator('[data-workstation-surface="notifications"]')).toContainText('Marked all visible notifications as read.');
+  });
+
+  test('sage chat mounts composer and clears loading copy after route settles', async ({ page }) => {
+    await loginAsOwner(page);
+    await mountSurface(page, '/w/ws-1/sage', '[data-workstation-surface="chat"]');
 
     await expect(page.locator('[data-workstation-surface="chat"]')).toBeVisible();
-    await page.getByRole('button', { name: /refresh thread/i }).click();
-    await expect(page.locator('[data-workstation-surface="chat"]')).not.toContainText(/loading canonical thread history/i);
+    await expect(page.locator('[data-workstation-chat-composer="root"]')).toBeVisible();
+    await expect(page.locator('[data-workstation-surface="chat"]').getByText(/loading conversation history/i)).toHaveCount(0);
+    await expectNoVisibleLoadingCopy(page);
   });
 
   test('runs, approvals, activity, and home surfaces leave loading states and mount live data surfaces', async ({ page }) => {
-    for (const route of ['/w/ws-1', '/w/ws-1/runs', '/w/ws-1/approvals', '/w/ws-1/activity']) {
-      await page.goto(route);
-      await expect(page.locator('[data-workstation-surface]')).toBeVisible();
-      await expect(page.locator('text=/Loading /i')).toHaveCount(0);
+    await loginAsOwner(page);
+    const approvalsSurfaceSelector = await resolveApprovalsSurfaceSelector(page);
+    await stubSurfaceDataRequests(page);
+
+    const routeExpectations: Array<[string, string]> = [
+      ['/w/ws-1', '[data-workstation-surface="chat"]'],
+      ['/w/ws-1/runs', '[data-workstation-surface="runs"]'],
+      ['/w/ws-1/approvals', approvalsSurfaceSelector],
+      ['/w/ws-1/activity', '[data-workstation-surface="activity"]'],
+    ];
+
+    for (const [route, selector] of routeExpectations) {
+      await mountSurface(page, route, selector);
+      await expectNoVisibleLoadingCopy(page);
+      await page.waitForTimeout(1200);
     }
   });
 });

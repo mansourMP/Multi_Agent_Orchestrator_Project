@@ -41,13 +41,15 @@ export default async function WorkspaceRouteLayout({
     redirect(`/onboarding?workspaceId=${encodeURIComponent(bootstrap.workspace.id)}`);
   }
 
+  const resolvedWorkspaceId = bootstrap.workspace.id;
+
   return (
     <>
       <DesktopStartupScreen workspaceLabel={bootstrap.workspace.label} />
       <WorkstationShellFrame
         switcherPane={<AccountTenantSwitcher />}
         kernelPane={(
-          <WorkspaceBoundary workspaceId={workspaceId} bootstrap={bootstrap}>
+          <WorkspaceBoundary workspaceId={resolvedWorkspaceId} bootstrap={bootstrap}>
             <WorkstationKernelShell>
               {children}
             </WorkstationKernelShell>

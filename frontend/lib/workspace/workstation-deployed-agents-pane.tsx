@@ -30,6 +30,7 @@ import type {
   DeployedAgentConversationDetail,
   DeployedAgentConversationRecord,
   DeployedAgentRecord,
+  DeployedAgentTelegramReadinessRecord,
   ProviderCatalogModelRecord,
   ProviderCatalogRecord,
 } from '@/lib/workspace/workstation-client';
@@ -37,7 +38,8 @@ import { useWorkspaceServices } from '@/lib/workspace/workspace-services';
 import { WorkstationSurfaceRoot } from '@/lib/workspace/workstation-surface-primitives';
 
 type WizardMode = 'create' | 'edit';
-type WizardStepId = 'identity' | 'knowledge' | 'channels' | 'launch';
+type WizardStepId = 'name' | 'purpose' | 'tools' | 'memory' | 'telegram' | 'review' | 'deploy';
+type StudioSubview = 'agents' | 'inbox' | 'deploy';
 
 type WizardState = {
   name: string;
@@ -46,11 +48,13 @@ type WizardState = {
   systemPrompt: string;
   knowledgeSourceText: string;
   telegramEnabled: boolean;
+  telegramConnectorId: string;
   telegramEndpointKey: string;
   providerId: string;
   modelId: string;
   runtimeTarget: string;
   billingPlan: string;
+  selectedToolIds: string[];
   memoryEnabled: boolean;
   contextBudgetPreset: string;
   retentionPreset: string;
@@ -122,6 +126,38 @@ type ProviderCatalogSnapshot = {
   models: ProviderCatalogModelSnapshot[];
 };
 
+type TelegramReadinessIssue = {
+  code: string;
+  message: string;
+  guidance: string | null;
+  severity: string;
+};
+
+type TelegramConnectorOption = {
+  id: string;
+  label: string;
+  endpointKey: string | null;
+  botUsername: string | null;
+  webhookPath: string | null;
+  webhookUrl: string | null;
+  profileStatus: string | null;
+  profileIssue: string | null;
+  lastError: string | null;
+  lastErrorAt: string | null;
+};
+
+type TelegramReadinessSnapshot = {
+  readyForLive: boolean;
+  status: string;
+  nextAction: string | null;
+  blockers: TelegramReadinessIssue[];
+  warnings: TelegramReadinessIssue[];
+  connectors: TelegramConnectorOption[];
+  configuredBinding: Record<string, unknown>;
+  webhook: Record<string, unknown>;
+  autopilot: Record<string, unknown>;
+};
+
 type ConversationFilters = {
   channel: string;
   escalationState: string;
@@ -150,24 +186,66 @@ const DEPLOYED_AGENT_WIZARD_STEPS: Array<{
   description: string;
 }> = [
   {
-    id: 'identity',
-    label: 'Identity',
-    description: 'Define the public agent identity, persona, and service prompt.',
+    id: 'name',
+    label: 'Name',
+    description: 'Give the specialist a clear public name and optional avatar.',
   },
   {
-    id: 'knowledge',
-    label: 'Knowledge',
-    description: 'Attach referenced knowledge sources without adding a new ingestion pipeline.',
+    id: 'purpose',
+    label: 'Purpose',
+    description: 'Define purpose and response behavior for this Telegram specialist.',
   },
   {
-    id: 'channels',
-    label: 'Channels',
-    description: 'Configure Telegram now and keep other customer channels visibly out of live scope.',
+    id: 'tools',
+    label: 'Tools',
+    description: 'Choose only the tools this specialist truly needs.',
   },
   {
-    id: 'launch',
-    label: 'Launch',
-    description: 'Control runtime target, billing plan, and draft-to-live state from one place.',
+    id: 'memory',
+    label: 'Memory Scope',
+    description: 'Choose whether memory is on and how much context to retain.',
+  },
+  {
+    id: 'telegram',
+    label: 'Telegram Binding',
+    description: 'Bind to one Telegram connector and validate readiness.',
+  },
+  {
+    id: 'review',
+    label: 'Review',
+    description: 'Review the specialist setup, channel link, and launch readiness.',
+  },
+  {
+    id: 'deploy',
+    label: 'Deploy',
+    description: 'Save this specialist and launch it when ready.',
+  },
+];
+
+const STUDIO_TOOL_OPTIONS: ReadonlyArray<{
+  id: string;
+  label: string;
+  description: string;
+}> = [
+  {
+    id: 'web_search',
+    label: 'Web search',
+    description: 'Search public websites for current facts and references.',
+  },
+  {
+    id: 'http_request',
+    label: 'HTTP request',
+    description: 'Call approved APIs and webhooks for structured lookups.',
+  },
+  {
+    id: 'gmail_send',
+    label: 'Send email',
+    description: 'Draft or send Gmail replies from a connected workspace mailbox.',
+  },
+  {
+    id: 'calendar_write',
+    label: 'Calendar write',
+    description: 'Create or update calendar events for scheduling workflows.',
   },
 ];
 
@@ -371,6 +449,17 @@ function normalizeLabelList(value: unknown): string[] {
     : [];
 }
 
+function normalizeToolIds(value: unknown): string[] {
+  const allowed = new Set<string>(STUDIO_TOOL_OPTIONS.map((item) => item.id));
+  return normalizeLabelList(value)
+    .map((item) => item.toLowerCase())
+    .filter((item, index, array) => allowed.has(item) && array.indexOf(item) === index);
+}
+
+function toolLabel(toolId: string): string {
+  return STUDIO_TOOL_OPTIONS.find((item) => item.id === toolId)?.label ?? humanizeToken(toolId, toolId);
+}
+
 function readProviderCatalogItems(payload: unknown): ProviderCatalogRecord[] {
   if (!payload || typeof payload !== 'object') {
     return [];
@@ -418,6 +507,66 @@ function normalizeProviderCatalog(payload: unknown): ProviderCatalogSnapshot[] {
       } satisfies ProviderCatalogSnapshot;
     })
     .filter((item): item is ProviderCatalogSnapshot => Boolean(item));
+}
+
+function normalizeTelegramIssue(value: unknown): TelegramReadinessIssue | null {
+  const record = readRecord(value);
+  const message = readString(record.message);
+  if (!message) {
+    return null;
+  }
+  return {
+    code: readString(record.code, 'telegram_issue'),
+    message,
+    guidance: readOptionalString(record.guidance),
+    severity: readString(record.severity, 'warning'),
+  };
+}
+
+function normalizeTelegramConnector(value: unknown): TelegramConnectorOption | null {
+  const record = readRecord(value);
+  const id = readString(record.id);
+  if (!id) {
+    return null;
+  }
+  return {
+    id,
+    label: readString(record.label, id),
+    endpointKey: readOptionalString(record.endpoint_key),
+    botUsername: readOptionalString(record.bot_username),
+    webhookPath: readOptionalString(record.webhook_path),
+    webhookUrl: readOptionalString(record.webhook_url),
+    profileStatus: readOptionalString(record.profile_status),
+    profileIssue: readOptionalString(record.profile_issue),
+    lastError: readOptionalString(record.last_error),
+    lastErrorAt: readOptionalString(record.last_error_at),
+  };
+}
+
+function normalizeTelegramReadiness(payload: DeployedAgentTelegramReadinessRecord | null | undefined): TelegramReadinessSnapshot | null {
+  if (!payload || typeof payload !== 'object') {
+    return null;
+  }
+  const blockers = Array.isArray(payload.blockers)
+    ? payload.blockers.map((item) => normalizeTelegramIssue(item)).filter((item): item is TelegramReadinessIssue => Boolean(item))
+    : [];
+  const warnings = Array.isArray(payload.warnings)
+    ? payload.warnings.map((item) => normalizeTelegramIssue(item)).filter((item): item is TelegramReadinessIssue => Boolean(item))
+    : [];
+  const connectors = Array.isArray(payload.connectors)
+    ? payload.connectors.map((item) => normalizeTelegramConnector(item)).filter((item): item is TelegramConnectorOption => Boolean(item))
+    : [];
+  return {
+    readyForLive: payload.ready_for_live === true,
+    status: readString(payload.status, 'draft'),
+    nextAction: readOptionalString(payload.next_action),
+    blockers,
+    warnings,
+    connectors,
+    configuredBinding: readRecord(payload.configured_binding),
+    webhook: readRecord(payload.webhook),
+    autopilot: readRecord(payload.autopilot),
+  };
 }
 
 function selectedProviderId(agent?: DeployedAgentRecord | null): string {
@@ -488,6 +637,7 @@ function buildWizardState(agent?: DeployedAgentRecord | null): WizardState {
   const commercePolicy = readRecord(config.commerce_policy);
   const escalationPolicy = readRecord(config.escalation_policy);
   const metadata = readRecord(agent?.metadata);
+  const selectedToolIds = normalizeToolIds(readRecord(config.tool_policy).enabled_tools ?? metadata.selected_tool_ids);
   return {
     name: readString(agent?.name),
     avatar: readString(agent?.avatar),
@@ -495,11 +645,13 @@ function buildWizardState(agent?: DeployedAgentRecord | null): WizardState {
     systemPrompt: readString(agent?.system_prompt),
     knowledgeSourceText: serializeKnowledgeSources(agent?.knowledge_sources),
     telegramEnabled: telegram.enabled === true,
+    telegramConnectorId: readString(telegram.connector_id ?? telegram.credential_id),
     telegramEndpointKey: readString(telegram.endpoint_key),
     providerId: readString(agent?.provider ?? metadata.provider),
     modelId: readString(agent?.model ?? metadata.model),
     runtimeTarget: readString(agent?.runtime_target, 'cloud'),
     billingPlan: readString(agent?.billing_plan, 'free'),
+    selectedToolIds: selectedToolIds.length > 0 ? selectedToolIds : ['web_search'],
     memoryEnabled: memoryPolicy.memory_enabled === true || metadata.memory_enabled === true,
     contextBudgetPreset: readString(memoryPolicy.context_budget_preset ?? metadata.context_budget_preset, 'balanced'),
     retentionPreset: readString(memoryPolicy.retention_preset ?? metadata.retention_preset, 'standard'),
@@ -528,6 +680,8 @@ function buildChannelPayload(state: WizardState): Record<string, unknown> {
   return {
     telegram: {
       enabled: state.telegramEnabled,
+      connector_id: state.telegramConnectorId.trim() || undefined,
+      credential_id: state.telegramConnectorId.trim() || undefined,
       endpoint_key: state.telegramEndpointKey.trim() || undefined,
     },
     whatsapp: {
@@ -570,6 +724,9 @@ function buildDeploymentConfig(state: WizardState): Record<string, unknown> {
     },
     commerce_policy: {
       monthly_cost_cap_usd: monthlyCostCapUsd ? Number(monthlyCostCapUsd) : null,
+    },
+    tool_policy: {
+      enabled_tools: state.selectedToolIds,
     },
     escalation_policy: {
       preset: state.escalationPreset,
@@ -771,7 +928,7 @@ function transcriptEntryBody(entry: TimelineEntry): string {
     return readString(entry.summary ?? entry.resolution, 'An approval state change was recorded.');
   }
   if (kind === 'escalation') {
-    return readString(entry.summary ?? entry.action, 'The conversation escalated for operator attention.');
+    return readString(entry.summary ?? entry.action, 'This conversation needs team attention.');
   }
   return readString(entry.summary ?? entry.text, 'Conversation event recorded.');
 }
@@ -793,11 +950,28 @@ function transcriptEntryTone(entry: TimelineEntry): 'neutral' | 'success' | 'war
   return 'neutral';
 }
 
+function summarizeStudioErrorMessage(message: string | null): string | null {
+  if (!message) {
+    return null;
+  }
+  const normalized = message.replace(/\s+/g, ' ').trim();
+  if (!normalized) {
+    return null;
+  }
+  if (
+    normalized.length > 220
+    || /<!doctype|<html|<script|hydration|react/i.test(normalized)
+  ) {
+    return null;
+  }
+  return normalized;
+}
+
 function DeployedAgentsSkeleton() {
   return (
     <ListDetailColumns
       primary={(
-        <ListDetailPanel eyebrow="Deployments" title="Loading deployed agents">
+        <ListDetailPanel eyebrow="Specialists" title="Loading specialists">
           <SkeletonBlock height="3rem" />
           <SkeletonBlock height="3rem" />
           <SkeletonBlock height="3rem" />
@@ -805,7 +979,7 @@ function DeployedAgentsSkeleton() {
       )}
       secondary={(
         <div className="app-stack-4">
-          <ListDetailPanel eyebrow="Detail" title="Loading deployment detail">
+          <ListDetailPanel eyebrow="Detail" title="Loading specialist details">
             <SkeletonBlock height="4rem" />
             <SkeletonBlock height="5rem" />
           </ListDetailPanel>
@@ -853,7 +1027,11 @@ function TranscriptEntryCard({
   );
 }
 
-export function WorkstationDeployedAgentsPane() {
+export function WorkstationDeployedAgentsPane({
+  initialSubview = 'agents',
+}: {
+  initialSubview?: StudioSubview;
+}) {
   const services = useWorkspaceServices();
   const [providerCatalog, setProviderCatalog] = useState<ProviderCatalogSnapshot[]>([]);
   const [agents, setAgents] = useState<DeployedAgentRecord[]>([]);
@@ -862,6 +1040,7 @@ export function WorkstationDeployedAgentsPane() {
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
   const [selectedAgentDetail, setSelectedAgentDetail] = useState<DeployedAgentRecord | null>(null);
   const [selectedAgentAnalytics, setSelectedAgentAnalytics] = useState<AgentAnalyticsSnapshot | null>(null);
+  const [selectedTelegramReadiness, setSelectedTelegramReadiness] = useState<TelegramReadinessSnapshot | null>(null);
   const [conversations, setConversations] = useState<DeployedAgentConversationRecord[]>([]);
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
   const [selectedTranscript, setSelectedTranscript] = useState<DeployedAgentConversationDetail | null>(null);
@@ -869,6 +1048,7 @@ export function WorkstationDeployedAgentsPane() {
   const [isLoadingProviderCatalog, setIsLoadingProviderCatalog] = useState(false);
   const [isLoadingDetail, setIsLoadingDetail] = useState(false);
   const [isLoadingAnalytics, setIsLoadingAnalytics] = useState(false);
+  const [isLoadingTelegramReadiness, setIsLoadingTelegramReadiness] = useState(false);
   const [isLoadingConversations, setIsLoadingConversations] = useState(false);
   const [isLoadingTranscript, setIsLoadingTranscript] = useState(false);
   const [isWizardOpen, setIsWizardOpen] = useState(false);
@@ -913,6 +1093,10 @@ export function WorkstationDeployedAgentsPane() {
   const selectedProviderModelCatalog = useMemo(
     () => selectedProviderCatalog?.models.find((item) => item.id === wizardState.modelId) ?? null,
     [selectedProviderCatalog, wizardState.modelId],
+  );
+  const selectedWizardConnector = useMemo(
+    () => selectedTelegramReadiness?.connectors.find((item) => item.id === wizardState.telegramConnectorId) ?? null,
+    [selectedTelegramReadiness, wizardState.telegramConnectorId],
   );
   const filteredConversations = useMemo(
     () => conversations.filter((conversation) => matchesConversationFilters(conversation, conversationFilters)),
@@ -1077,6 +1261,22 @@ export function WorkstationDeployedAgentsPane() {
     }
   }
 
+  async function loadTelegramReadiness(agentId?: string | null) {
+    setIsLoadingTelegramReadiness(true);
+    try {
+      const payload = await services.client.getDeployedAgentTelegramReadiness({
+        deployedAgentId: agentId || undefined,
+        allowMissing: true,
+      });
+      setSelectedTelegramReadiness(normalizeTelegramReadiness(payload as DeployedAgentTelegramReadinessRecord | null));
+    } catch (error) {
+      setSelectedTelegramReadiness(null);
+      setErrorMessage(error instanceof Error ? error.message : 'Telegram launch readiness is unavailable.');
+    } finally {
+      setIsLoadingTelegramReadiness(false);
+    }
+  }
+
   async function loadConversations(agentId: string) {
     setIsLoadingConversations(true);
     try {
@@ -1143,6 +1343,7 @@ export function WorkstationDeployedAgentsPane() {
     if (!agentId) {
       setSelectedAgentDetail(null);
       setSelectedAgentAnalytics(null);
+      setSelectedTelegramReadiness(null);
       setConversations([]);
       setConversationFilters({
         channel: 'all',
@@ -1155,6 +1356,7 @@ export function WorkstationDeployedAgentsPane() {
     }
     setSelectedAgentDetail(null);
     setSelectedAgentAnalytics(null);
+    setSelectedTelegramReadiness(null);
     setConversations([]);
     setConversationFilters({
       channel: 'all',
@@ -1166,6 +1368,7 @@ export function WorkstationDeployedAgentsPane() {
     void Promise.all([
       loadAgentDetail(agentId),
       loadAgentAnalytics(agentId),
+      loadTelegramReadiness(agentId),
       loadConversations(agentId),
     ]);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1198,6 +1401,7 @@ export function WorkstationDeployedAgentsPane() {
     setWizardStepIndex(0);
     setWizardState(applyProviderCatalogDefaults(buildWizardState(null), providerCatalog));
     setIsWizardOpen(true);
+    void loadTelegramReadiness();
   }
 
   function openEditWizard() {
@@ -1205,6 +1409,7 @@ export function WorkstationDeployedAgentsPane() {
     setWizardStepIndex(0);
     setWizardState(applyProviderCatalogDefaults(buildWizardState(selectedAgent), providerCatalog));
     setIsWizardOpen(true);
+    void loadTelegramReadiness(readString(selectedAgent?.id) || undefined);
   }
 
   function closeWizard() {
@@ -1212,6 +1417,9 @@ export function WorkstationDeployedAgentsPane() {
       return;
     }
     setIsWizardOpen(false);
+    if (selectedAgentId) {
+      void loadTelegramReadiness(selectedAgentId);
+    }
   }
 
   function setWizardField<K extends keyof WizardState>(field: K, value: WizardState[K]) {
@@ -1221,15 +1429,31 @@ export function WorkstationDeployedAgentsPane() {
     }));
   }
 
+  function toggleWizardTool(toolId: string) {
+    setWizardState((current) => {
+      const selected = current.selectedToolIds.includes(toolId)
+        ? current.selectedToolIds.filter((item) => item !== toolId)
+        : [...current.selectedToolIds, toolId];
+      return {
+        ...current,
+        selectedToolIds: selected,
+      };
+    });
+  }
+
   async function persistWizard() {
     const dailyMessageLimit = wizardState.dailyMessageLimit.trim();
     const monthlyCostCapUsd = wizardState.monthlyCostCapUsd.trim();
     if (!wizardState.providerId.trim()) {
-      setErrorMessage('Choose a provider before saving this deployment.');
+      setErrorMessage('Choose a provider before saving this specialist.');
       return;
     }
     if (!wizardState.modelId.trim()) {
-      setErrorMessage('Choose a model before saving this deployment.');
+      setErrorMessage('Choose a model before saving this specialist.');
+      return;
+    }
+    if (wizardState.selectedToolIds.length === 0) {
+      setErrorMessage('Select at least one allowed tool before saving this Studio specialist.');
       return;
     }
     if (dailyMessageLimit) {
@@ -1254,6 +1478,10 @@ export function WorkstationDeployedAgentsPane() {
         return;
       }
     }
+    if (wizardState.telegramEnabled && !wizardState.telegramConnectorId.trim()) {
+      setErrorMessage('Choose a Telegram connector before saving a live-ready specialist.');
+      return;
+    }
     const payload = {
       name: wizardState.name.trim(),
       avatar: wizardState.avatar.trim() || null,
@@ -1269,7 +1497,7 @@ export function WorkstationDeployedAgentsPane() {
     };
 
     if (!payload.name) {
-      setErrorMessage('A deployed agent needs a public name before it can be saved.');
+      setErrorMessage('A specialist needs a public name before it can be saved.');
       return;
     }
 
@@ -1284,17 +1512,18 @@ export function WorkstationDeployedAgentsPane() {
         setSelectedAgentDetail(record);
         setSelectedAgentAnalytics(null);
         setSelectedAgentId(createdId || null);
-        setStatusMessage(`Created draft deployment ${readString(record.name, payload.name)}.`);
+        setStatusMessage(`Created draft specialist ${readString(record.name, payload.name)}.`);
         if (createdId) {
           await Promise.all([
             loadAgentAnalytics(createdId),
+            loadTelegramReadiness(createdId),
             loadConversations(createdId),
           ]);
         }
       } else {
         const agentId = readString(selectedAgent?.id);
         if (!agentId) {
-          throw new Error('Select a deployed agent before editing it.');
+          throw new Error('Select a specialist before editing it.');
         }
         const updated = await services.client.updateDeployedAgent({
           deployedAgentId: agentId,
@@ -1306,12 +1535,13 @@ export function WorkstationDeployedAgentsPane() {
         await Promise.all([
           refreshAgentAnalytics(upsertAgentRecord(agents, record)),
           loadAgentAnalytics(agentId),
+          loadTelegramReadiness(agentId),
         ]);
-        setStatusMessage(`Updated ${readString(record.name, 'deployment')} configuration.`);
+        setStatusMessage(`Updated ${readString(record.name, 'specialist')} settings.`);
       }
       setIsWizardOpen(false);
     } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : 'The deployment could not be saved.');
+      setErrorMessage(error instanceof Error ? error.message : 'The specialist could not be saved.');
     } finally {
       setIsSubmittingWizard(false);
     }
@@ -1320,6 +1550,23 @@ export function WorkstationDeployedAgentsPane() {
   async function handleDeploymentAction(action: 'deploy' | 'pause') {
     const agentId = readString(selectedAgent?.id);
     if (!agentId) {
+      return;
+    }
+    if (
+      action === 'deploy'
+      && !selectedTelegramReadiness
+    ) {
+      setErrorMessage('Launch checks are still loading. Wait for readiness to finish before going live.');
+      return;
+    }
+    if (
+      action === 'deploy'
+      && selectedTelegramReadiness
+      && selectedTelegramReadiness.readyForLive !== true
+    ) {
+      const firstBlocker = selectedTelegramReadiness.blockers[0];
+      const guidance = firstBlocker?.guidance || selectedTelegramReadiness.nextAction || 'Resolve the Telegram readiness blockers before deploying.';
+      setErrorMessage(firstBlocker?.message ? `${firstBlocker.message} ${guidance}` : guidance);
       return;
     }
     setBusyAgentId(agentId);
@@ -1334,12 +1581,13 @@ export function WorkstationDeployedAgentsPane() {
       setSelectedAgentDetail(record);
       setStatusMessage(
         action === 'deploy'
-          ? `${readString(record.name, 'Deployment')} is now live on its configured channels.`
-          : `${readString(record.name, 'Deployment')} is paused and will no longer accept live customer traffic.`,
+          ? `${readString(record.name, 'Specialist')} is now live on its configured channels.`
+          : `${readString(record.name, 'Specialist')} is paused and will no longer reply to live customer messages.`,
       );
       await Promise.all([
         refreshAgentAnalytics(upsertAgentRecord(agents, record)),
         loadAgentAnalytics(agentId),
+        loadTelegramReadiness(agentId),
       ]);
       if (isWizardOpen && wizardMode === 'edit') {
         setWizardState(applyProviderCatalogDefaults(buildWizardState(record), providerCatalog));
@@ -1356,6 +1604,22 @@ export function WorkstationDeployedAgentsPane() {
     ? selectedAgent.knowledge_sources
     : [];
   const knowledgeSourceCount = selectedKnowledgeSources.length;
+  const currentStudioSubview: StudioSubview = initialSubview;
+  const studioTitle = currentStudioSubview === 'agents'
+    ? 'Studio · Agents'
+    : currentStudioSubview === 'inbox'
+      ? 'Studio · Inbox'
+      : 'Studio · Deploy';
+  const studioSubtitle = currentStudioSubview === 'agents'
+    ? 'Build your specialist roster and review each selected specialist before launch.'
+    : currentStudioSubview === 'inbox'
+      ? 'Review live conversations and transcript timelines from your specialist inbox.'
+      : 'Use guided launch checks to move specialists from draft to live with confidence.';
+  const showAgentsIndex = currentStudioSubview === 'agents' || currentStudioSubview === 'inbox';
+  const showReadinessPanel = currentStudioSubview === 'agents' || currentStudioSubview === 'deploy';
+  const showDetailPanel = currentStudioSubview === 'agents' || currentStudioSubview === 'deploy';
+  const showInboxPanels = currentStudioSubview === 'inbox';
+  const visibleErrorMessage = summarizeStudioErrorMessage(errorMessage);
   const wizardStep = DEPLOYED_AGENT_WIZARD_STEPS[wizardStepIndex];
   const transcriptEntries: TimelineEntry[] = Array.isArray(selectedTranscript?.entries)
     ? (selectedTranscript.entries as TimelineEntry[])
@@ -1375,7 +1639,7 @@ export function WorkstationDeployedAgentsPane() {
       return;
     }
     const confirmed = window.confirm(
-      `Delete stored conversation data for ${selectedExternalUserLabel} from this deployment? This removes saved channel history, memory summaries, and rate-limit usage for that scoped user.`,
+      `Delete saved conversation data for ${selectedExternalUserLabel} from this specialist? This removes message history, memory summaries, and usage records for that user.`,
     );
     if (!confirmed) {
       return;
@@ -1395,7 +1659,7 @@ export function WorkstationDeployedAgentsPane() {
         loadConversations(agentId),
         loadAgentAnalytics(agentId),
       ]);
-      setStatusMessage(`Deleted stored data for ${selectedExternalUserLabel} from ${readString(selectedAgent?.name, 'this deployment')}.`);
+      setStatusMessage(`Deleted saved data for ${selectedExternalUserLabel} from ${readString(selectedAgent?.name, 'this specialist')}.`);
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : 'Customer data could not be deleted.');
     } finally {
@@ -1406,8 +1670,9 @@ export function WorkstationDeployedAgentsPane() {
   return (
     <WorkstationSurfaceRoot surface="deployed-agents">
       <ListDetailShell
-        title="Deployed Agents"
-        subtitle="Create customer-facing specialist deployments, manage Telegram launch state, and inspect the live conversation inbox without leaving the workstation shell."
+        className="app-studio-shell"
+        title={studioTitle}
+        subtitle={studioSubtitle}
         actions={(
           <div className="app-inline-actions">
             <AppButton
@@ -1423,23 +1688,23 @@ export function WorkstationDeployedAgentsPane() {
               Refresh
             </AppButton>
             <AppButton type="button" onClick={openCreateWizard}>
-              Create Deployed Agent
+              Create Specialist
             </AppButton>
           </div>
         )}
       >
         {statusMessage ? (
-          <StateBanner tone="success" title="Deployment state updated">
+          <StateBanner tone="success" title="Specialist updated">
             {statusMessage}
           </StateBanner>
         ) : null}
-        {errorMessage ? (
+        {visibleErrorMessage ? (
           <StateBanner
             tone="danger"
-            title="Deployed-agent surface is degraded"
-            detail="The surface keeps any successfully loaded deployment state visible while one or more backend requests are being retried."
+            title="Studio is having trouble loading"
+            detail="Studio keeps any successfully loaded specialist data visible while retrying failed requests."
           >
-            {errorMessage}
+            {visibleErrorMessage}
           </StateBanner>
         ) : null}
 
@@ -1449,90 +1714,95 @@ export function WorkstationDeployedAgentsPane() {
           <ListDetailColumns
             primary={(
               <div className="app-stack-4">
-                <ListDetailPanel
-                  eyebrow="Index"
-                  title="Workspace deployments"
-                  subtitle={`${agents.length} deployed-agent services currently defined for this workspace.`}
-                >
-                  {agents.length === 0 ? (
-                    <EmptyPanel
-                      title="No deployed agents yet"
-                      body="Start with a named customer-facing agent, connect Telegram routing, and keep the deployment in draft until the channel binding is ready."
-                      actions={(
-                        <AppButton type="button" onClick={openCreateWizard}>
-                          Start the 4-step wizard
-                        </AppButton>
-                      )}
-                    />
-                  ) : (
-                    <DataTable>
-                      <DataTableHeader columns="minmax(0, 1.1fr) auto minmax(0, 0.72fr) minmax(0, 0.9fr) auto">
-                        <DataTableHeaderCell>Deployment</DataTableHeaderCell>
-                        <DataTableHeaderCell>State</DataTableHeaderCell>
-                        <DataTableHeaderCell>Channels</DataTableHeaderCell>
-                        <DataTableHeaderCell>Operations</DataTableHeaderCell>
-                        <DataTableHeaderCell align="end">Updated</DataTableHeaderCell>
-                      </DataTableHeader>
-                      {agents.map((agent, index) => {
-                        const agentId = readString(agent.id, `deployed-agent-${index}`);
-                        const selected = agentId === selectedAgentId;
-                        const channels = listEnabledChannels(agent.channels);
-                        const metrics = agentMetricsById[agentId];
-                        const analytics = agentAnalyticsById[agentId] ?? null;
-                        return (
-                          <DataTableRow
-                            key={agentId}
-                            columns="minmax(0, 1.1fr) auto minmax(0, 0.72fr) minmax(0, 0.9fr) auto"
-                            selected={selected}
-                            onClick={() => setSelectedAgentId(agentId)}
-                          >
-                            <DataTableCell
-                              primary={readString(agent.name, agentId)}
-                              secondary={readString(agent.persona, 'Customer-facing deployment')}
-                              meta={`Backing install ${readString(agent.backing_install_id, 'pending')}`}
-                            />
-                            <DataTableCell
-                              primary={<DataBadge tone={deploymentTone(agent.deployment_state)}>{humanizeToken(agent.deployment_state, 'Draft')}</DataBadge>}
-                            />
-                            <DataTableCell
-                              primary={channels.length > 0 ? channels.join(', ') : 'No live channels'}
-                              secondary={`${readString(agent.runtime_target, 'cloud')} · ${formatDeploymentModelSummary(agent, providerCatalogIndex)}`}
-                            />
-                            <DataTableCell
-                              primary={formatAnalyticsRowPrimary(analytics)}
-                              secondary={formatAnalyticsRowSecondary(analytics)}
-                              meta={metrics?.latestActivityLabel ?? 'Fetching recent customer activity'}
-                            />
-                            <DataTableCell
-                              align="end"
-                              primary={formatTimestamp(agent.updated_at)}
-                            />
-                          </DataTableRow>
-                        );
-                      })}
-                    </DataTable>
-                  )}
-                </ListDetailPanel>
+                {showAgentsIndex ? (
+                  <ListDetailPanel
+                    eyebrow="Agents"
+                    title="Specialist roster"
+                    subtitle={`${agents.length} specialists currently configured for this workspace.`}
+                  >
+                    {agents.length === 0 ? (
+                      <EmptyPanel
+                        title="No specialists yet"
+                        body="Create your first specialist and use guided setup before launch."
+                        actions={(
+                          <AppButton type="button" onClick={openCreateWizard}>
+                            Start guided setup
+                          </AppButton>
+                        )}
+                      />
+                    ) : (
+                      <DataTable>
+                        <DataTableHeader columns="minmax(0, 1.1fr) auto minmax(0, 0.72fr) minmax(0, 0.9fr) auto">
+                          <DataTableHeaderCell>Specialist</DataTableHeaderCell>
+                          <DataTableHeaderCell>State</DataTableHeaderCell>
+                          <DataTableHeaderCell>Channels</DataTableHeaderCell>
+                          <DataTableHeaderCell>Operations</DataTableHeaderCell>
+                          <DataTableHeaderCell align="end">Updated</DataTableHeaderCell>
+                        </DataTableHeader>
+                        {agents.map((agent, index) => {
+                          const agentId = readString(agent.id, `deployed-agent-${index}`);
+                          const selected = agentId === selectedAgentId;
+                          const channels = listEnabledChannels(agent.channels);
+                          const metrics = agentMetricsById[agentId];
+                          const analytics = agentAnalyticsById[agentId] ?? null;
+                          return (
+                            <DataTableRow
+                              key={agentId}
+                              columns="minmax(0, 1.1fr) auto minmax(0, 0.72fr) minmax(0, 0.9fr) auto"
+                              selected={selected}
+                              onClick={() => setSelectedAgentId(agentId)}
+                            >
+                              <DataTableCell
+                                primary={readString(agent.name, agentId)}
+                                secondary={readString(agent.persona, 'Telegram specialist')}
+                                meta={`Runtime profile ${readString(agent.backing_install_id, 'pending')}`}
+                              />
+                              <DataTableCell
+                                primary={<DataBadge tone={deploymentTone(agent.deployment_state)}>{humanizeToken(agent.deployment_state, 'Draft')}</DataBadge>}
+                              />
+                              <DataTableCell
+                                primary={channels.length > 0 ? channels.join(', ') : 'No live channels'}
+                                secondary={`${readString(agent.runtime_target, 'cloud')} · ${formatDeploymentModelSummary(agent, providerCatalogIndex)}`}
+                              />
+                              <DataTableCell
+                                primary={formatAnalyticsRowPrimary(analytics)}
+                                secondary={formatAnalyticsRowSecondary(analytics)}
+                                meta={metrics?.latestActivityLabel ?? 'Fetching recent customer activity'}
+                              />
+                              <DataTableCell
+                                align="end"
+                                primary={formatTimestamp(agent.updated_at)}
+                              />
+                            </DataTableRow>
+                          );
+                        })}
+                      </DataTable>
+                    )}
+                  </ListDetailPanel>
+                ) : null}
 
-                <ListDetailPanel
-                  eyebrow="Readiness"
-                  title="Current launch model"
-                  subtitle="Telegram is the only live customer channel in scope for this sprint. Other customer channels remain visible but intentionally non-routable."
-                >
-                  <FormGrid columns="repeat(auto-fit, minmax(12rem, 1fr))">
-                    <FormReadout label="Live channel" value="Telegram" />
-                    <FormReadout label="Unsupported this sprint" value="WhatsApp, Instagram, widget, API endpoint" />
-                    <FormReadout label="Execution truth" value="Every deployed agent wraps one backing specialist install." />
-                  </FormGrid>
-                </ListDetailPanel>
+                {showReadinessPanel ? (
+                  <ListDetailPanel
+                    eyebrow="Readiness"
+                    title="Launch readiness"
+                    subtitle="Confirm channel availability and operational boundaries before going live."
+                  >
+                    <FormGrid columns="repeat(auto-fit, minmax(12rem, 1fr))">
+                      <FormReadout label="Live channel" value="Telegram" />
+                      <FormReadout label="Additional channels" value="Not enabled in this workspace yet" />
+                      <FormReadout label="Runtime profile" value="Each specialist runs with one linked runtime profile." />
+                    </FormGrid>
+                  </ListDetailPanel>
+                ) : null}
               </div>
             )}
             secondary={(
               <div className="app-stack-4">
+                {showDetailPanel ? (
                 <ListDetailPanel
                   eyebrow="Detail"
-                  title={selectedAgent ? readString(selectedAgent.name, 'Deployment detail') : 'Deployment detail'}
-                  subtitle={selectedAgent ? readString(selectedAgent.persona, 'Customer-facing deployed agent') : 'Select a deployment to inspect its launch state and configuration.'}
+                  title={selectedAgent ? readString(selectedAgent.name, 'Specialist details') : 'Specialist details'}
+                  subtitle={selectedAgent ? readString(selectedAgent.persona, 'Selected specialist overview and launch controls') : 'Select a specialist to review readiness, channels, and launch controls.'}
                   actions={selectedAgent ? (
                     <div className="app-inline-actions app-inline-actions--tight">
                       <AppButton type="button" tone="secondary" onClick={openEditWizard}>
@@ -1543,7 +1813,13 @@ export function WorkstationDeployedAgentsPane() {
                         onClick={() => {
                           void handleDeploymentAction('deploy');
                         }}
-                        disabled={busyAgentId === readString(selectedAgent.id) || readString(selectedAgent.deployment_state).toLowerCase() === 'live'}
+                        disabled={
+                          busyAgentId === readString(selectedAgent.id)
+                          || readString(selectedAgent.deployment_state).toLowerCase() === 'live'
+                          || isLoadingTelegramReadiness
+                          || !selectedTelegramReadiness
+                          || (selectedTelegramReadiness !== null && selectedTelegramReadiness.readyForLive !== true)
+                        }
                       >
                         Deploy
                       </AppButton>
@@ -1562,8 +1838,8 @@ export function WorkstationDeployedAgentsPane() {
                 >
                   {!selectedAgent ? (
                     <EmptyPanel
-                      title="No deployment selected"
-                      body="Pick a deployed agent from the index or start the wizard to create a new one."
+                      title="No specialist selected"
+                      body="Choose a specialist from the list or start guided setup to create one."
                     />
                   ) : isLoadingDetail ? (
                     <>
@@ -1572,9 +1848,22 @@ export function WorkstationDeployedAgentsPane() {
                     </>
                   ) : (
                     <>
+                      {selectedTelegramReadiness ? (
+                        <StateBanner
+                          tone={selectedTelegramReadiness.readyForLive ? 'success' : selectedTelegramReadiness.blockers.length > 0 ? 'warning' : 'neutral'}
+                          title={selectedTelegramReadiness.readyForLive ? 'Telegram launch ready' : 'Telegram launch not ready'}
+                          detail={selectedTelegramReadiness.nextAction ?? 'Studio verifies connector setup and message routing before launch.'}
+                        >
+                          {selectedTelegramReadiness.blockers.length > 0
+                            ? selectedTelegramReadiness.blockers.map((item) => item.message).join(' · ')
+                            : selectedTelegramReadiness.warnings.map((item) => item.message).join(' · ') || 'Telegram is currently the active Studio channel for live launch.'}
+                        </StateBanner>
+                      ) : isLoadingTelegramReadiness ? (
+                        <SkeletonBlock height="5rem" />
+                      ) : null}
                       <FormGrid columns="repeat(auto-fit, minmax(11rem, 1fr))">
                         <FormReadout label="State" value={humanizeToken(selectedAgent.deployment_state, 'Draft')} />
-                        <FormReadout label="Runtime" value={humanizeToken(selectedAgent.runtime_target, 'Cloud')} />
+                        <FormReadout label="Run environment" value={humanizeToken(selectedAgent.runtime_target, 'Cloud')} />
                         <FormReadout label="Provider" value={humanizeToken(selectedProviderId(selectedAgent), 'Not pinned')} />
                         <FormReadout label="Model" value={selectedModelId(selectedAgent) || 'Not pinned'} />
                         <FormReadout label="Billing plan" value={humanizeToken(selectedAgent.billing_plan, 'Free')} />
@@ -1594,13 +1883,36 @@ export function WorkstationDeployedAgentsPane() {
                             ?? readRecord(selectedAgent.metadata).monthly_cost_cap_usd,
                           )}
                         />
-                        <FormReadout label="Backing install" value={readString(selectedAgent.backing_install_id, 'pending')} />
+                        <FormReadout label="Specialist id" value={readString(selectedAgent.backing_install_id, 'pending')} />
                       </FormGrid>
                       <FormGrid columns="repeat(auto-fit, minmax(11rem, 1fr))">
                         <FormReadout label="Live channels" value={activeChannels.length > 0 ? activeChannels.join(', ') : 'No active channels'} />
+                        <FormReadout
+                          label="Allowed tools"
+                          value={
+                            normalizeToolIds(readRecord(readRecord(selectedAgent.config).tool_policy).enabled_tools ?? readRecord(selectedAgent.metadata).selected_tool_ids)
+                              .map((item) => toolLabel(item))
+                              .join(', ')
+                            || 'No tools selected'
+                          }
+                        />
+                        <FormReadout
+                          label="Telegram connector"
+                          value={readString(
+                            readRecord(selectedTelegramReadiness?.configuredBinding).label,
+                            readString(readRecord(selectedTelegramReadiness?.configuredBinding).connector_id, 'Not bound'),
+                          )}
+                        />
+                        <FormReadout
+                          label="Inbound key"
+                          value={readString(readRecord(selectedTelegramReadiness?.configuredBinding).endpoint_key, 'Not bound')}
+                        />
+                        <FormReadout
+                          label="Webhook status"
+                          value={humanizeToken(readRecord(selectedTelegramReadiness?.webhook).status, 'Checking')}
+                        />
                         <FormReadout label="Knowledge refs" value={`${knowledgeSourceCount} referenced sources`} />
                         <FormReadout label="Conversation count" value={selectedAgentMetrics?.conversationCountLabel ?? 'Syncing inbox'} />
-                        <FormReadout label="Open escalations" value={selectedAgentMetrics?.unresolvedEscalationsLabel ?? 'Open escalation state pending'} />
                         <FormReadout label="Latest activity" value={selectedAgentMetrics?.latestActivityLabel ?? 'Fetching recent customer activity'} />
                         <FormReadout label="Last updated" value={formatTimestamp(selectedAgent.updated_at)} />
                       </FormGrid>
@@ -1634,16 +1946,18 @@ export function WorkstationDeployedAgentsPane() {
                     </>
                   )}
                 </ListDetailPanel>
+                ) : null}
 
+                {showInboxPanels ? (
                 <ListDetailPanel
                   eyebrow="Conversations"
-                  title="Conversation inbox"
-                  subtitle="Filter recent customer sessions by channel, escalation state, and outcome while keeping transcript detail inside the same workstation shell."
+                  title="Live conversation inbox"
+                  subtitle="Review current customer sessions, filter by status, and open transcript details."
                 >
                   {!selectedAgent ? (
                     <EmptyPanel
-                      title="Select a deployment first"
-                      body="Conversation history only appears after a deployed agent has been selected."
+                      title="Select a specialist first"
+                      body="Conversation history appears after you select a specialist."
                     />
                   ) : isLoadingConversations ? (
                     <>
@@ -1653,7 +1967,7 @@ export function WorkstationDeployedAgentsPane() {
                   ) : conversations.length === 0 ? (
                     <EmptyPanel
                       title="No customer sessions yet"
-                      body="Telegram traffic logged against this deployment will appear here with the latest message, escalation state, and outcome."
+                      body="Conversations will appear here as this specialist starts receiving customer messages."
                     />
                   ) : (
                     <div data-deployed-agent-conversations="list">
@@ -1725,7 +2039,7 @@ export function WorkstationDeployedAgentsPane() {
                       {filteredConversations.length === 0 ? (
                         <EmptyPanel
                           title="No sessions match the active filters"
-                          body="Clear one or more filters to return to the full deployed-agent inbox."
+                          body="Clear one or more filters to return to the full inbox."
                         />
                       ) : (
                       <DataTable>
@@ -1771,11 +2085,13 @@ export function WorkstationDeployedAgentsPane() {
                     </div>
                   )}
                 </ListDetailPanel>
+                ) : null}
 
+                {showInboxPanels ? (
                 <ListDetailPanel
                   eyebrow="Transcript"
                   title={selectedConversation ? conversationCustomerLabel(selectedConversation) : 'Transcript detail'}
-                  subtitle="Ordered message, tool-call, approval, and escalation entries come directly from the deployed-agent transcript APIs."
+                  subtitle="Review message, tool, and escalation events in timeline order."
                   actions={selectedConversation && selectedExternalUserId ? (
                     <AppButton
                       type="button"
@@ -1792,7 +2108,7 @@ export function WorkstationDeployedAgentsPane() {
                   {!selectedConversation ? (
                     <EmptyPanel
                       title="Select a session"
-                      body="Choose a customer conversation from the inbox to inspect the ordered transcript."
+                      body="Choose a conversation from the inbox to review the timeline."
                     />
                   ) : isLoadingTranscript ? (
                     <>
@@ -1832,16 +2148,17 @@ export function WorkstationDeployedAgentsPane() {
                     </div>
                   )}
                 </ListDetailPanel>
+                ) : null}
               </div>
             )}
           />
         )}
 
-        <CommandSheet
-          open={isWizardOpen}
-          title={wizardMode === 'create' ? 'Create Deployed Agent' : 'Edit Deployed Agent'}
-          description="Four steps define the customer-facing identity, knowledge references, live channel configuration, and launch controls."
-          onClose={closeWizard}
+      <CommandSheet
+        open={isWizardOpen}
+        title={wizardMode === 'create' ? 'Create Telegram Specialist' : 'Edit Telegram Specialist'}
+        description="Seven guided steps define name, purpose, tools, memory, Telegram link, review, and launch readiness."
+        onClose={closeWizard}
           actions={(
             <div className="app-inline-actions">
               {wizardStepIndex > 0 ? (
@@ -1870,7 +2187,7 @@ export function WorkstationDeployedAgentsPane() {
                   }}
                   disabled={isSubmittingWizard}
                 >
-                  {wizardMode === 'create' ? 'Create draft deployment' : 'Save changes'}
+                  {wizardMode === 'create' ? 'Create draft specialist' : 'Save changes'}
                 </AppButton>
               )}
             </div>
@@ -1894,62 +2211,133 @@ export function WorkstationDeployedAgentsPane() {
             </div>
 
             <ModalSection title={wizardStep.label} description={wizardStep.description}>
-              {wizardStep.id === 'identity' ? (
+              {wizardStep.id === 'name' ? (
                 <FormGrid columns="repeat(auto-fit, minmax(14rem, 1fr))">
-                  <FormField label="Agent name" hint="The public name customers will see in Telegram and future channels.">
+                  <FormField label="Specialist name" hint="The public name customers will see in Telegram.">
                     <FormInput
                       value={wizardState.name}
                       onChange={(event) => setWizardField('name', event.currentTarget.value)}
-                      placeholder="Store Assistant"
+                      placeholder="Support Specialist"
                     />
                   </FormField>
-                  <FormField label="Avatar URL" hint="Optional public avatar or brand mark for the deployed agent.">
+                  <FormField label="Avatar URL" hint="Optional public avatar or brand mark.">
                     <FormInput
                       value={wizardState.avatar}
                       onChange={(event) => setWizardField('avatar', event.currentTarget.value)}
                       placeholder="https://example.com/avatar.png"
                     />
                   </FormField>
-                  <FormField label="Persona" hint="Short operator-facing description of the behavior and tone.">
+                </FormGrid>
+              ) : null}
+
+              {wizardStep.id === 'purpose' ? (
+                <FormGrid columns="repeat(auto-fit, minmax(14rem, 1fr))">
+                  <FormField label="Persona" hint="Short description of the specialist’s tone and behavior.">
                     <FormTextarea
                       rows={4}
                       value={wizardState.persona}
                       onChange={(event) => setWizardField('persona', event.currentTarget.value)}
-                      placeholder="Helpful retail support specialist"
+                      placeholder="Fast and calm Telegram support specialist"
                     />
                   </FormField>
-                  <FormField label="System prompt" hint="Service prompt for the backing specialist execution path.">
+                  <FormField label="Purpose and behavior" hint="Core instructions this specialist follows.">
                     <FormTextarea
                       rows={6}
                       value={wizardState.systemPrompt}
                       onChange={(event) => setWizardField('systemPrompt', event.currentTarget.value)}
-                      placeholder="Use the catalog, order status, and return policy to answer customers accurately."
+                      placeholder="Handle customer requests, escalate safely when needed, and keep replies short and accurate."
+                    />
+                  </FormField>
+                  <FormField label="Knowledge references" hint="Optional reference URIs (one per line).">
+                    <FormTextarea
+                      rows={6}
+                      value={wizardState.knowledgeSourceText}
+                      onChange={(event) => setWizardField('knowledgeSourceText', event.currentTarget.value)}
+                      placeholder={'kb://faq\nkb://returns'}
                     />
                   </FormField>
                 </FormGrid>
               ) : null}
 
-              {wizardStep.id === 'knowledge' ? (
+              {wizardStep.id === 'tools' ? (
                 <div className="app-stack-3">
-                  <FormField label="Knowledge references" hint="Enter one reference URI per line. These remain references only in this sprint.">
-                    <FormTextarea
-                      rows={8}
-                      value={wizardState.knowledgeSourceText}
-                      onChange={(event) => setWizardField('knowledgeSourceText', event.currentTarget.value)}
-                      placeholder={'kb://catalog\nkb://returns\nkb://faq'}
-                    />
+                  <FormField label="Allowed tools" hint="Select the minimum tool scope this specialist needs.">
+                    <div className="app-inline-actions" style={{ flexWrap: 'wrap' }}>
+                      {STUDIO_TOOL_OPTIONS.map((tool) => {
+                        const selected = wizardState.selectedToolIds.includes(tool.id);
+                        return (
+                          <AppButton
+                            key={tool.id}
+                            type="button"
+                            tone={selected ? 'primary' : 'secondary'}
+                            onClick={() => toggleWizardTool(tool.id)}
+                          >
+                            {selected ? `Enabled · ${tool.label}` : tool.label}
+                          </AppButton>
+                        );
+                      })}
+                    </div>
                   </FormField>
                   <FormGrid columns="repeat(auto-fit, minmax(12rem, 1fr))">
-                    <FormReadout label="Reference count" value={`${parseKnowledgeSources(wizardState.knowledgeSourceText).length} sources`} />
-                    <FormReadout label="Storage mode" value="Reference-only, no new ingestion subsystem" />
+                    <FormReadout label="Selected tools" value={wizardState.selectedToolIds.length ? wizardState.selectedToolIds.map((toolId) => toolLabel(toolId)).join(', ') : 'None'} />
+                    <FormReadout label="Scope policy" value="Explicit allow-list only" />
                   </FormGrid>
                 </div>
               ) : null}
 
-              {wizardStep.id === 'channels' ? (
+              {wizardStep.id === 'memory' ? (
                 <div className="app-stack-3">
                   <FormGrid columns="repeat(auto-fit, minmax(14rem, 1fr))">
-                    <FormField label="Telegram state" hint="Telegram is the only actionable live customer channel in this sprint.">
+                    <FormField label="Persistent memory" hint="Enable memory to retain customer context between sessions.">
+                      <FormSelect
+                        value={wizardState.memoryEnabled ? 'enabled' : 'disabled'}
+                        onChange={(event) => setWizardField('memoryEnabled', event.currentTarget.value === 'enabled')}
+                      >
+                        <option value="disabled">Disabled</option>
+                        <option value="enabled">Enabled</option>
+                      </FormSelect>
+                    </FormField>
+                    <FormField label="Context budget" hint="How much recent history to include while memory is enabled.">
+                      <FormSelect
+                        value={wizardState.contextBudgetPreset}
+                        onChange={(event) => setWizardField('contextBudgetPreset', event.currentTarget.value)}
+                      >
+                        <option value="compact">Compact</option>
+                        <option value="balanced">Balanced</option>
+                        <option value="deep">Deep</option>
+                      </FormSelect>
+                    </FormField>
+                    <FormField label="Retention" hint="How long memory remains eligible for reuse.">
+                      <FormSelect
+                        value={wizardState.retentionPreset}
+                        onChange={(event) => setWizardField('retentionPreset', event.currentTarget.value)}
+                      >
+                        <option value="short">Short</option>
+                        <option value="standard">Standard</option>
+                        <option value="extended">Extended</option>
+                      </FormSelect>
+                    </FormField>
+                  </FormGrid>
+                </div>
+              ) : null}
+
+              {wizardStep.id === 'telegram' ? (
+                <div className="app-stack-3">
+                  {selectedTelegramReadiness ? (
+                    <StateBanner
+                      tone={selectedTelegramReadiness.readyForLive ? 'success' : selectedTelegramReadiness.blockers.length > 0 ? 'warning' : 'neutral'}
+                      title={selectedTelegramReadiness.readyForLive ? 'Telegram launch path is ready' : 'Telegram launch checks'}
+                      detail={selectedTelegramReadiness.nextAction ?? 'Studio checks connector binding and message routing before live deploy.'}
+                    >
+                      {selectedTelegramReadiness.blockers.length > 0
+                        ? selectedTelegramReadiness.blockers.map((item) => item.message).join(' · ')
+                        : selectedTelegramReadiness.warnings.map((item) => item.message).join(' · ') || 'Telegram is currently the active live channel in Studio.'}
+                    </StateBanner>
+                  ) : isLoadingTelegramReadiness ? (
+                    <SkeletonBlock height="5rem" />
+                  ) : null}
+                  <FormGrid columns="repeat(auto-fit, minmax(14rem, 1fr))">
+                    <FormField label="Telegram state" hint="Enable Telegram when this specialist is ready for live customer conversations.">
                       <FormSelect
                         value={wizardState.telegramEnabled ? 'enabled' : 'disabled'}
                         onChange={(event) => setWizardField('telegramEnabled', event.currentTarget.value === 'enabled')}
@@ -1958,26 +2346,84 @@ export function WorkstationDeployedAgentsPane() {
                         <option value="enabled">Ready for live deploy</option>
                       </FormSelect>
                     </FormField>
-                    <FormField label="Telegram endpoint key" hint="Must match the existing inbound-owner binding when the deployment goes live.">
-                      <FormInput
-                        value={wizardState.telegramEndpointKey}
-                        onChange={(event) => setWizardField('telegramEndpointKey', event.currentTarget.value)}
-                        placeholder="store-bot"
-                      />
+                    <FormField label="Telegram connector" hint="Bind to one workspace Telegram bot.">
+                      <FormSelect
+                        value={wizardState.telegramConnectorId}
+                        onChange={(event) => {
+                          const nextConnectorId = event.currentTarget.value;
+                          const nextConnector = selectedTelegramReadiness?.connectors.find((item) => item.id === nextConnectorId) ?? null;
+                          setWizardState((current) => ({
+                            ...current,
+                            telegramConnectorId: nextConnectorId,
+                            telegramEndpointKey: nextConnector?.endpointKey ?? '',
+                          }));
+                        }}
+                        disabled={!wizardState.telegramEnabled || isLoadingTelegramReadiness}
+                      >
+                        <option value="">
+                          {isLoadingTelegramReadiness
+                            ? 'Checking Telegram connectors…'
+                            : selectedTelegramReadiness?.connectors.length
+                              ? 'Select a Telegram bot'
+                              : 'No Telegram connectors available'}
+                        </option>
+                        {(selectedTelegramReadiness?.connectors ?? []).map((connector) => (
+                          <option key={connector.id} value={connector.id}>
+                            {connector.label}
+                          </option>
+                        ))}
+                      </FormSelect>
                     </FormField>
                   </FormGrid>
                   <FormGrid columns="repeat(auto-fit, minmax(12rem, 1fr))">
-                    <FormReadout label="WhatsApp" value="Visible but not live-routable this sprint" />
-                    <FormReadout label="Instagram DMs" value="Visible but not live-routable this sprint" />
-                    <FormReadout label="Widget and API" value="Explicitly out of scope for Phase 5" />
+                    <FormReadout label="Inbound binding key" value={selectedWizardConnector?.endpointKey || wizardState.telegramEndpointKey || 'Select a connector'} />
+                    <FormReadout label="Bot username" value={selectedWizardConnector?.botUsername || 'Not exposed by connector'} />
+                    <FormReadout
+                      label="Webhook path"
+                      value={selectedWizardConnector?.webhookPath || readString(readRecord(selectedTelegramReadiness?.webhook).path_template, 'Awaiting connector')}
+                    />
+                    <FormReadout
+                      label="Webhook status"
+                      value={humanizeToken(readRecord(selectedTelegramReadiness?.webhook).status, 'Checking')}
+                    />
                   </FormGrid>
+                  <FormReadout label="Additional channels" value="Coming soon" />
                 </div>
               ) : null}
 
-              {wizardStep.id === 'launch' ? (
+              {wizardStep.id === 'review' ? (
                 <div className="app-stack-3">
                   <FormGrid columns="repeat(auto-fit, minmax(14rem, 1fr))">
-                    <FormField label="Provider" hint="Pins the deployed agent to one LLM provider instead of relying on tribal knowledge.">
+                    <FormReadout label="Name" value={wizardState.name || 'Not set'} />
+                    <FormReadout label="Purpose" value={wizardState.persona || 'Not set'} />
+                    <FormReadout
+                      label="Tools"
+                      value={wizardState.selectedToolIds.length ? wizardState.selectedToolIds.map((toolId) => toolLabel(toolId)).join(', ') : 'None selected'}
+                    />
+                    <FormReadout
+                      label="Memory scope"
+                      value={wizardState.memoryEnabled ? `${humanizeToken(wizardState.contextBudgetPreset)} · ${humanizeToken(wizardState.retentionPreset)}` : 'Disabled'}
+                    />
+                    <FormReadout
+                      label="Telegram binding"
+                      value={wizardState.telegramEnabled ? (selectedWizardConnector?.label || wizardState.telegramConnectorId || 'Pending connector') : 'Disabled'}
+                    />
+                    <FormReadout
+                      label="Readiness"
+                      value={selectedTelegramReadiness?.readyForLive ? 'Ready for deploy' : selectedTelegramReadiness?.nextAction || 'Pending checks'}
+                    />
+                  </FormGrid>
+                  <FormReadout
+                    label="System behavior"
+                    value={wizardState.systemPrompt || 'No system behavior added yet.'}
+                  />
+                </div>
+              ) : null}
+
+              {wizardStep.id === 'deploy' ? (
+                <div className="app-stack-3">
+                  <FormGrid columns="repeat(auto-fit, minmax(14rem, 1fr))">
+                    <FormField label="Provider" hint="Choose the AI provider for this specialist.">
                       <FormSelect
                         data-deployed-agent-provider-select="true"
                         value={wizardState.providerId}
@@ -2005,7 +2451,7 @@ export function WorkstationDeployedAgentsPane() {
                         ))}
                       </FormSelect>
                     </FormField>
-                    <FormField label="Model" hint="The selected model is persisted on the deployment and mirrored into the backing specialist metadata.">
+                    <FormField label="Model" hint="Choose the model this specialist should use.">
                       <FormSelect
                         data-deployed-agent-model-select="true"
                         value={wizardState.modelId}
@@ -2022,7 +2468,7 @@ export function WorkstationDeployedAgentsPane() {
                         ))}
                       </FormSelect>
                     </FormField>
-                    <FormField label="Runtime target" hint="Maps onto the existing backing specialist runtime selection.">
+                    <FormField label="Run environment" hint="Choose where this specialist runs.">
                       <FormSelect
                         value={wizardState.runtimeTarget}
                         onChange={(event) => setWizardField('runtimeTarget', event.currentTarget.value)}
@@ -2032,7 +2478,7 @@ export function WorkstationDeployedAgentsPane() {
                         <option value="device">Privileged device</option>
                       </FormSelect>
                     </FormField>
-                    <FormField label="Billing plan" hint="Persisted now for product shape; publisher billing arrives later.">
+                    <FormField label="Billing plan" hint="Choose the plan tied to this specialist.">
                       <FormSelect
                         value={wizardState.billingPlan}
                         onChange={(event) => setWizardField('billingPlan', event.currentTarget.value)}
@@ -2043,55 +2489,10 @@ export function WorkstationDeployedAgentsPane() {
                         <option value="enterprise">Enterprise</option>
                       </FormSelect>
                     </FormField>
-                    <FormField label="Persistent memory" hint="Loads recent channel history and summaries for returning users when enabled.">
-                      <FormSelect
-                        value={wizardState.memoryEnabled ? 'enabled' : 'disabled'}
-                        onChange={(event) => setWizardField('memoryEnabled', event.currentTarget.value === 'enabled')}
-                      >
-                        <option value="disabled">Disabled</option>
-                        <option value="enabled">Enabled</option>
-                      </FormSelect>
-                    </FormField>
-                    <FormField label="Context budget" hint="Controls how much recent conversation memory is packed into the prompt.">
-                      <FormSelect
-                        value={wizardState.contextBudgetPreset}
-                        onChange={(event) => setWizardField('contextBudgetPreset', event.currentTarget.value)}
-                      >
-                        <option value="compact">Compact</option>
-                        <option value="balanced">Balanced</option>
-                        <option value="deep">Deep</option>
-                      </FormSelect>
-                    </FormField>
-                    <FormField label="Retention preset" hint="Controls how long customer conversation memory stays eligible for runtime reuse.">
-                      <FormSelect
-                        value={wizardState.retentionPreset}
-                        onChange={(event) => setWizardField('retentionPreset', event.currentTarget.value)}
-                      >
-                        <option value="short">Short</option>
-                        <option value="standard">Standard</option>
-                        <option value="extended">Extended</option>
-                      </FormSelect>
-                    </FormField>
-                    <FormField label="Health safety mode" hint="Turns on the deployment health-safety overlay and disclosure behavior.">
-                      <FormSelect
-                        value={wizardState.healthSafetyEnabled ? 'enabled' : 'disabled'}
-                        onChange={(event) => setWizardField('healthSafetyEnabled', event.currentTarget.value === 'enabled')}
-                      >
-                        <option value="disabled">Disabled</option>
-                        <option value="enabled">Enabled</option>
-                      </FormSelect>
-                    </FormField>
-                    <FormField label="Safety assistant name" hint="Optional label used by the health-safety reply overlay when that mode is enabled.">
-                      <FormInput
-                        value={wizardState.healthSafetyAssistantName}
-                        onChange={(event) => setWizardField('healthSafetyAssistantName', event.currentTarget.value)}
-                        placeholder="HealthGuide"
-                      />
-                    </FormField>
                   </FormGrid>
                   <FormGrid columns="repeat(auto-fit, minmax(12rem, 1fr))">
                     <FormReadout label="Provider state" value={humanizeToken(selectedProviderCatalog?.state, isLoadingProviderCatalog ? 'Loading' : 'Unknown')} />
-                    <FormReadout label="Privacy posture" value={selectedProviderCatalog?.privacyPosture || 'n/a'} />
+                    <FormReadout label="Privacy profile" value={selectedProviderCatalog?.privacyPosture || 'n/a'} />
                     <FormReadout label="Jurisdiction" value={selectedProviderCatalog?.jurisdiction || 'n/a'} />
                     <FormReadout label="Residency" value={selectedProviderCatalog?.residency || 'n/a'} />
                     <FormReadout label="Context window" value={formatContextWindow(selectedProviderModelCatalog?.contextWindowTokens)} />
@@ -2105,9 +2506,9 @@ export function WorkstationDeployedAgentsPane() {
                     />
                   </FormGrid>
                   <FormReadout
-                    label="Capabilities"
-                    value={
-                      selectedProviderModelCatalog?.capabilityLabels.join(', ')
+                      label="Capabilities"
+                      value={
+                        selectedProviderModelCatalog?.capabilityLabels.join(', ')
                       || selectedProviderCatalog?.capabilityLabels.join(', ')
                       || 'No capability labels yet'
                     }
@@ -2121,7 +2522,7 @@ export function WorkstationDeployedAgentsPane() {
                         placeholder="25"
                       />
                     </FormField>
-                    <FormField label="Monthly cost cap (USD)" hint="Auto-pauses the deployment after the current UTC month burn reaches this cap.">
+                    <FormField label="Monthly cost cap (USD)" hint="Automatically pauses this specialist after reaching this monthly cap.">
                       <FormInput
                         value={wizardState.monthlyCostCapUsd}
                         onChange={(event) => setWizardField('monthlyCostCapUsd', event.currentTarget.value)}
@@ -2130,96 +2531,10 @@ export function WorkstationDeployedAgentsPane() {
                       />
                     </FormField>
                   </FormGrid>
-                  <FormGrid columns="repeat(auto-fit, minmax(14rem, 1fr))">
-                    <FormField label="Escalation preset" hint="Controls the default escalation trigger posture mirrored into the backing specialist contract.">
-                      <FormSelect
-                        value={wizardState.escalationPreset}
-                        onChange={(event) => setWizardField('escalationPreset', event.currentTarget.value)}
-                      >
-                        <option value="standard">Standard</option>
-                        <option value="conservative">Conservative</option>
-                        <option value="aggressive">Aggressive</option>
-                      </FormSelect>
-                    </FormField>
-                    <FormField label="Human handoff mode" hint="Defines what happens after escalation is triggered for a customer conversation.">
-                      <FormSelect
-                        value={wizardState.handoffMode}
-                        onChange={(event) => setWizardField('handoffMode', event.currentTarget.value)}
-                      >
-                        <option value="notify_owner">Notify owner</option>
-                        <option value="pause_per_user">Pause per customer</option>
-                        <option value="manual_resume">Manual resume</option>
-                      </FormSelect>
-                    </FormField>
-                    <FormField label="Owner notification destination" hint="Slack channel, email alias, or queue name used by the escalation workflow.">
-                      <FormInput
-                        value={wizardState.ownerNotificationDestination}
-                        onChange={(event) => setWizardField('ownerNotificationDestination', event.currentTarget.value)}
-                        placeholder="ops@example.com"
-                      />
-                    </FormField>
-                  </FormGrid>
-                  <FormGrid columns="repeat(auto-fit, minmax(14rem, 1fr))">
-                    <FormField label="Paused message" hint="Customer-facing copy returned while the deployment is manually paused.">
-                      <FormTextarea
-                        value={wizardState.pausedMessage}
-                        onChange={(event) => setWizardField('pausedMessage', event.currentTarget.value)}
-                        rows={3}
-                        placeholder="I’m temporarily paused right now. Please check back shortly."
-                      />
-                    </FormField>
-                    <FormField label="Welcome intro" hint="Primary public-start copy shown when a customer first lands on the deployment.">
-                      <FormTextarea
-                        value={wizardState.welcomeIntro}
-                        onChange={(event) => setWizardField('welcomeIntro', event.currentTarget.value)}
-                        rows={3}
-                        placeholder="Fast, reliable help for your customers on Telegram."
-                      />
-                    </FormField>
-                  </FormGrid>
-                  <FormGrid columns="repeat(auto-fit, minmax(14rem, 1fr))">
-                    <FormField label="Welcome core value" hint="Short value statement that explains what the bot does for the customer.">
-                      <FormInput
-                        value={wizardState.welcomeCoreValue}
-                        onChange={(event) => setWizardField('welcomeCoreValue', event.currentTarget.value)}
-                        placeholder="Get quick answers and a clean handoff when a human is needed."
-                      />
-                    </FormField>
-                    <FormField label="Public start CTA label" hint="Launch CTA shown in the public-start acquisition flow.">
-                      <FormInput
-                        value={wizardState.publicStartCtaLabel}
-                        onChange={(event) => setWizardField('publicStartCtaLabel', event.currentTarget.value)}
-                        placeholder="Continue on Empyralist"
-                      />
-                    </FormField>
-                    <FormField label="Public start CTA URL" hint="Destination for the public-start acquisition CTA.">
-                      <FormInput
-                        value={wizardState.publicStartCtaUrl}
-                        onChange={(event) => setWizardField('publicStartCtaUrl', event.currentTarget.value)}
-                        placeholder="https://app.empyralist.com/signup"
-                      />
-                    </FormField>
-                  </FormGrid>
-                  <FormGrid columns="repeat(auto-fit, minmax(14rem, 1fr))">
-                    <FormField label="Upgrade CTA label" hint="Shown in the branded quota message when the free tier is exhausted.">
-                      <FormInput
-                        value={wizardState.upgradeCtaLabel}
-                        onChange={(event) => setWizardField('upgradeCtaLabel', event.currentTarget.value)}
-                        placeholder="Continue on Empyralist"
-                      />
-                    </FormField>
-                  </FormGrid>
-                  <FormField label="Upgrade CTA URL" hint="Platform or signup URL appended to the quota message.">
-                    <FormInput
-                      value={wizardState.upgradeCtaUrl}
-                      onChange={(event) => setWizardField('upgradeCtaUrl', event.currentTarget.value)}
-                      placeholder="https://app.empyralist.com/signup?source=telegram"
-                    />
-                  </FormField>
                   {wizardMode === 'edit' && selectedAgent ? (
                     <FormGrid columns="repeat(auto-fit, minmax(12rem, 1fr))">
                       <FormReadout label="Current state" value={humanizeToken(selectedAgent.deployment_state, 'Draft')} />
-                      <FormReadout label="Backing install" value={readString(selectedAgent.backing_install_id, 'pending')} />
+                      <FormReadout label="Specialist id" value={readString(selectedAgent.backing_install_id, 'pending')} />
                     </FormGrid>
                   ) : null}
                   {wizardMode === 'edit' && selectedAgent ? (
@@ -2241,11 +2556,11 @@ export function WorkstationDeployedAgentsPane() {
                         }}
                         disabled={busyAgentId === readString(selectedAgent.id)}
                       >
-                        Pause deployment
+                        Pause specialist
                       </AppButton>
                     </div>
                   ) : (
-                    <FormReadout label="Launch control" value="Create the draft first, then use Deploy from the detail panel or edit step." />
+                    <FormReadout label="Launch" value="Create the draft first, then launch from the details panel or edit step." />
                   )}
                 </div>
               ) : null}

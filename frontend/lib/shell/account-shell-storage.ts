@@ -1,6 +1,6 @@
 import type { AccountShellSnapshot } from '@/lib/shell/account-shell-store';
 
-const ACCOUNT_SHELL_STORAGE_KEY = 'empyralis.account-shell.v2';
+export const ACCOUNT_SHELL_STORAGE_KEY = 'empyralis.account-shell.v2';
 
 function canUseStorage(): boolean {
   return typeof window !== 'undefined' && typeof window.localStorage !== 'undefined';

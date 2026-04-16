@@ -68,3 +68,42 @@ export function SettingsIcon(props: AppIconProps) {
     </AppIcon>
   );
 }
+
+export function StudioIcon(props: AppIconProps) {
+  return (
+    <AppIcon {...props}>
+      <rect x="2.25" y="2.25" width="4.5" height="4.5" rx="1" />
+      <rect x="9.25" y="2.25" width="4.5" height="4.5" rx="1" />
+      <rect x="2.25" y="9.25" width="4.5" height="4.5" rx="1" />
+      <rect x="9.25" y="9.25" width="4.5" height="4.5" rx="1" />
+    </AppIcon>
+  );
+}
+
+export function WorkspaceIcon(props: AppIconProps) {
+  return (
+    <AppIcon {...props}>
+      <path d="M2 4.5 8 2l6 2.5v7L8 14 2 11.5V4.5Z" />
+      <path d="M2 4.5 8 7l6-2.5" />
+      <path d="M8 7v7" />
+    </AppIcon>
+  );
+}
+
+export function ProfileIcon(props: AppIconProps) {
+  return (
+    <AppIcon {...props}>
+      <circle cx="8" cy="5.25" r="2.25" />
+      <path d="M3.25 13c.7-2.1 2.3-3.15 4.75-3.15S12.05 10.9 12.75 13" />
+    </AppIcon>
+  );
+}
+
+export function PanelsIcon(props: AppIconProps) {
+  return (
+    <AppIcon {...props}>
+      <rect x="2" y="3" width="12" height="10" rx="1.5" />
+      <path d="M6.5 3v10" />
+    </AppIcon>
+  );
+}

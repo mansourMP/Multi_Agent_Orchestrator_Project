@@ -2,6 +2,7 @@ import 'server-only';
 
 import { headers } from 'next/headers';
 
+import { controlPlaneBaseUrl } from '@/lib/server/control-plane-base-url';
 import {
   type WorkspaceBootstrapPayload,
   parseWorkspaceBootstrapPayload,
@@ -21,30 +22,65 @@ export class WorkspaceBootstrapError extends Error {
   }
 }
 
+const TRANSIENT_BOOTSTRAP_STATUSES = new Set([500, 502, 503, 504]);
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
 export async function loadWorkspaceBootstrap(workspaceId: string): Promise<WorkspaceBootstrapPayload> {
   const requestHeaders = await headers();
-  const host = requestHeaders.get('x-forwarded-host') ?? requestHeaders.get('host');
-  const proto = requestHeaders.get('x-forwarded-proto') ?? 'http';
-  if (!host) {
-    throw new WorkspaceBootstrapError(workspaceId, 500, 'Cannot resolve request host for workspace bootstrap.');
+  const url = `${controlPlaneBaseUrl()}/api/workspaces/${encodeURIComponent(workspaceId)}/bootstrap`;
+  const forwardHeaders: Record<string, string> = {
+    accept: 'application/json',
+  };
+  const cookie = requestHeaders.get('cookie');
+  const authorization = requestHeaders.get('authorization');
+  if (cookie) {
+    forwardHeaders.cookie = cookie;
   }
-  const origin = `${proto.split(',')[0].trim() || 'http'}://${host.split(',')[0].trim()}`;
-  const url = `${origin}/api/workspaces/${encodeURIComponent(workspaceId)}/bootstrap`;
-
-  const response = await fetch(url, {
-    method: 'GET',
-    cache: 'no-store',
-    headers: {
-      accept: 'application/json',
-      ...(requestHeaders.get('cookie') ? { cookie: requestHeaders.get('cookie') as string } : {}),
-      ...(requestHeaders.get('authorization') ? { authorization: requestHeaders.get('authorization') as string } : {}),
-    },
-  });
-
-  if (!response.ok) {
-    throw new WorkspaceBootstrapError(workspaceId, response.status);
+  if (authorization) {
+    forwardHeaders.authorization = authorization;
   }
 
-  const payload = await response.json();
-  return parseWorkspaceBootstrapPayload(payload);
+  let lastStatus = 500;
+  let lastError: unknown = null;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      const response = await fetch(url, {
+        method: 'GET',
+        cache: 'no-store',
+        headers: forwardHeaders,
+      });
+
+      if (response.ok) {
+        const payload = await response.json();
+        return parseWorkspaceBootstrapPayload(payload);
+      }
+
+      lastStatus = response.status;
+      if (!TRANSIENT_BOOTSTRAP_STATUSES.has(response.status) || attempt === 2) {
+        throw new WorkspaceBootstrapError(workspaceId, response.status);
+      }
+    } catch (error) {
+      lastError = error;
+      if (error instanceof WorkspaceBootstrapError && !TRANSIENT_BOOTSTRAP_STATUSES.has(error.status)) {
+        throw error;
+      }
+      if (attempt === 2) {
+        break;
+      }
+    }
+    await delay(150 * (attempt + 1));
+  }
+  if (lastError instanceof WorkspaceBootstrapError) {
+    throw lastError;
+  }
+  throw new WorkspaceBootstrapError(
+    workspaceId,
+    lastStatus,
+    lastError instanceof Error ? lastError.message : undefined,
+  );
 }

@@ -62,19 +62,19 @@ function AgentsSkeleton() {
     <ListDetailColumns
       primary={(
         <div className="app-stack-4">
-          <ListDetailPanel eyebrow="Installed" title="Loading installed agents">
+          <ListDetailPanel eyebrow="Runtime" title="Loading runtime agents">
             <SkeletonBlock height="2.8rem" />
             <SkeletonBlock height="2.8rem" />
             <SkeletonBlock height="2.8rem" />
           </ListDetailPanel>
-          <ListDetailPanel eyebrow="Definitions" title="Loading agent definitions">
+          <ListDetailPanel eyebrow="Definitions" title="Loading runtime definitions">
             <SkeletonBlock height="2.8rem" />
             <SkeletonBlock height="2.8rem" />
           </ListDetailPanel>
         </div>
       )}
       secondary={(
-        <ListDetailPanel eyebrow="Selection" title="Loading agent detail">
+        <ListDetailPanel eyebrow="Selection" title="Loading runtime detail">
           <SkeletonBlock height="3.2rem" />
           <SkeletonBlock height="3.2rem" />
           <SkeletonBlock height="3.2rem" />
@@ -178,8 +178,8 @@ export function WorkstationAgentsPane() {
   return (
     <WorkstationSurfaceRoot surface="agents">
       <ListDetailShell
-        title="Agents"
-        subtitle="Installed runtime agents, visible definitions, and execution targets managed inside workstation chrome."
+        title="Runtime Agents"
+        subtitle="Internal runtime modules and execution targets available to Sage and Studio."
         actions={(
           <AppButton
             type="button"
@@ -193,14 +193,14 @@ export function WorkstationAgentsPane() {
         )}
       >
         {status ? (
-          <StateBanner tone="success" title="Agent run started">
+          <StateBanner tone="success" title="Runtime agent run started">
             {status}
           </StateBanner>
         ) : null}
         {error ? (
-          <StateBanner
-            tone="danger"
-            title="Agent inventory is degraded"
+            <StateBanner
+              tone="danger"
+            title="Runtime inventory is degraded"
             detail="One or more agent registries did not load cleanly. Any successfully loaded data remains visible below."
           >
             {error}
@@ -214,19 +214,19 @@ export function WorkstationAgentsPane() {
             primary={(
               <div className="app-stack-4">
                 <ListDetailPanel
-                  eyebrow="Installed"
-                  title="Installed agents"
-                  subtitle={`${installs.length} workspace-scoped agents currently ready for execution.`}
+                  eyebrow="Runtime"
+                  title="Installed runtime agents"
+                  subtitle={`${installs.length} workspace-scoped runtime modules currently ready for execution.`}
                 >
                   {installs.length === 0 ? (
                     <EmptyPanel
-                      title="No installed agents"
-                      body="Installed agents will appear here when the workspace runtime exposes runnable agent modules."
+                      title="No installed runtime agents"
+                      body="Runtime agents will appear here when the workspace runtime exposes runnable modules."
                     />
                   ) : (
                     <DataTable>
                       <DataTableHeader columns="minmax(0, 1.1fr) minmax(0, 0.7fr) auto">
-                        <DataTableHeaderCell>Agent</DataTableHeaderCell>
+                        <DataTableHeaderCell>Runtime</DataTableHeaderCell>
                         <DataTableHeaderCell>Status</DataTableHeaderCell>
                         <DataTableHeaderCell align="end">Focus</DataTableHeaderCell>
                       </DataTableHeader>

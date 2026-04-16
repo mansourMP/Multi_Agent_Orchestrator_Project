@@ -6,5 +6,5 @@ export default async function WorkspaceWorkstationPage({
   params: Promise<{ workspaceId: string }>;
 }) {
   const { workspaceId } = await params;
-  redirect(`/w/${encodeURIComponent(workspaceId)}/home`);
+  redirect(`/w/${encodeURIComponent(workspaceId)}/sage`);
 }

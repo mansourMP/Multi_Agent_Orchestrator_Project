@@ -168,6 +168,36 @@ def _analytics_payload() -> dict[str, object]:
     }
 
 
+def _telegram_readiness_payload() -> dict[str, object]:
+    return {
+        "channel": "telegram",
+        "workspace_id": "ws-1",
+        "ready_for_live": True,
+        "status": "ready",
+        "blockers": [],
+        "warnings": [],
+        "next_action": "Telegram is ready.",
+        "configured_binding": {
+            "enabled": True,
+            "connector_id": "tg-1",
+            "endpoint_key": "store-bot",
+            "is_inbound_owner": True,
+        },
+        "connectors": [
+            {
+                "id": "tg-1",
+                "label": "Store Bot",
+                "endpoint_key": "store-bot",
+                "webhook_path": "/channels/telegram/webhook/tg-1",
+                "webhook_url": "https://runtime.example/channels/telegram/webhook/tg-1",
+            }
+        ],
+        "webhook": {"status": "live", "delivery_mode": "webhook"},
+        "autopilot": {"status": "live"},
+        "whatsapp": {"available": False, "status": "out_of_scope"},
+    }
+
+
 def _route_request(case: str) -> dict[str, object]:
     if case == "create":
         return {
@@ -412,6 +442,36 @@ async def test_create_deployed_agent_route_passes_typed_config(monkeypatch: pyte
         )
 
     assert response.status_code == 200
+
+
+@pytest.mark.anyio
+async def test_get_deployed_agent_telegram_readiness_route_returns_payload(monkeypatch: pytest.MonkeyPatch):
+    app = _build_app()
+    app.dependency_overrides[routes_deployed_agents.get_current_user] = _owner_user
+
+    async def fake_readiness(**kwargs):
+        assert kwargs["owner_workspace_id"] == "ws-1"
+        assert kwargs["deployed_agent_id"] == "dagent_1"
+        current_user = kwargs["current_user"]
+        assert isinstance(current_user, dict)
+        assert current_user["user_id"] == "user-owner"
+        return _telegram_readiness_payload()
+
+    monkeypatch.setattr(
+        routes_deployed_agents.deployed_agent_service,
+        "get_deployed_agent_telegram_readiness",
+        fake_readiness,
+    )
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        response = await client.get(
+            "/deployed-agents/telegram-readiness",
+            params={"workspace_id": "ws-1", "deployed_agent_id": "dagent_1"},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["ready_for_live"] is True
 
 
 @pytest.mark.anyio

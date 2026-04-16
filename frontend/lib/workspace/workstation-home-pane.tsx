@@ -5,11 +5,11 @@ import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 
 import { AppButton } from '@/lib/ui/primitives';
-import { DataBadge, DataTable, DataTableCell, DataTableHeader, DataTableHeaderCell, DataTableRow } from '@/lib/ui/data-table';
 import { EmptyPanel } from '@/lib/ui/empty-panel';
 import { ListDetailColumns, ListDetailPanel, ListDetailShell } from '@/lib/ui/list-detail';
 import { SkeletonBlock } from '@/lib/ui/skeleton-block';
 import { StateBanner } from '@/lib/ui/state-banner';
+import { ChatInlineStateCard } from '@/lib/workspace/chat-inline-state-card';
 import { subscribeWorkstationApprovalResolved } from '@/lib/workspace/workstation-approval-events';
 import { useWorkspaceBoundary } from '@/lib/workspace/workspace-boundary';
 import { useWorkspaceServices, useWorkstationStreamState } from '@/lib/workspace/workspace-services';
@@ -78,6 +78,11 @@ function statusTone(value: unknown): 'neutral' | 'success' | 'warning' | 'danger
   return 'neutral';
 }
 
+function preferredRuntimeLabel(runtimeTargets: Array<Record<string, unknown>> | Array<{ label: string; preferred: boolean }>): string {
+  const preferred = runtimeTargets.find((target) => Boolean(target.preferred)) ?? runtimeTargets[0] ?? null;
+  return preferred ? readString((preferred as Record<string, unknown>).label, 'Cloud runtime') : 'Cloud runtime';
+}
+
 function ContextField({
   label,
   value,
@@ -98,19 +103,18 @@ function LoadingOverview() {
     <ListDetailColumns
       primary={(
         <div className="app-stack-4">
-          <ListDetailPanel eyebrow="Overview" title="Loading workspace queues" subtitle="Hydrating canonical overview panels.">
+          <ListDetailPanel eyebrow="Sage" title="Loading briefing" subtitle="Hydrating the next action and carry-forward context.">
             <SkeletonBlock height="2.6rem" />
             <SkeletonBlock height="2.6rem" />
             <SkeletonBlock height="2.6rem" />
           </ListDetailPanel>
-          <ListDetailPanel eyebrow="Signals" title="Loading notification flow">
-            <SkeletonBlock height="4.4rem" />
+          <ListDetailPanel eyebrow="Signals" title="Loading latest signal">
             <SkeletonBlock height="4.4rem" />
           </ListDetailPanel>
         </div>
       )}
       secondary={(
-        <ListDetailPanel eyebrow="Context" title="Loading workspace context">
+        <ListDetailPanel eyebrow="Context" title="Loading workspace posture">
           <SkeletonBlock height="3.2rem" />
           <SkeletonBlock height="3.2rem" />
           <SkeletonBlock height="3.2rem" />
@@ -206,14 +210,30 @@ export function WorkstationHomePane() {
   const latestRun = state.runs[0] ?? null;
   const latestApproval = state.approvals[0] ?? null;
   const latestNotification = state.notifications[0] ?? null;
+  const latestActivity = state.activity[0] ?? null;
+  const primaryRuntime = preferredRuntimeLabel(bootstrap.runtime.runtimeTargets);
+  const operatingMode = readString(bootstrap.workspaceTraits.operatingMode, 'standard');
+  const complianceMode = readString(bootstrap.workspaceTraits.complianceMode, 'standard');
+  const serviceState = latestRun
+    ? readString(latestRun.result_summary ?? latestRun.status, 'Execution state is attached to chat.')
+    : 'Structured outputs will appear once Sage completes work from chat.';
+  const latestSignal = latestNotification ?? latestActivity;
 
   return (
     <WorkstationSurfaceRoot surface="workstation-home">
       <ListDetailShell
-        title="Workspace overview"
-        subtitle="Queue health, operator attention, and canonical workspace signals in one dense operational view."
+        title="Sage briefing"
+        subtitle="Home is the briefing layer only. Chat is the working surface where Sage keeps the live thread."
         actions={(
           <div className="app-inline-actions">
+            <AppButton
+              type="button"
+              onClick={() => {
+                router.push(`/w/${encodeURIComponent(bootstrap.workspace.id)}/sage`);
+              }}
+            >
+              Open Sage
+            </AppButton>
             <AppButton
               type="button"
               tone="secondary"
@@ -222,14 +242,6 @@ export function WorkstationHomePane() {
               }}
             >
               Refresh
-            </AppButton>
-            <AppButton
-              type="button"
-              onClick={() => {
-                router.push(`/w/${encodeURIComponent(bootstrap.workspace.id)}/chat`);
-              }}
-            >
-              Open chat
             </AppButton>
           </div>
         )}
@@ -251,107 +263,75 @@ export function WorkstationHomePane() {
             primary={(
               <div className="app-stack-4">
                 <ListDetailPanel
-                  eyebrow="Attention"
-                  title="Approval queue"
-                  subtitle="Operator decisions that will unblock execution."
-                  actions={<Link href={`/w/${encodeURIComponent(bootstrap.workspace.id)}/approvals`} className="app-inline-link">Open queue</Link>}
+                  eyebrow="Sage"
+                  title="Continue in chat"
+                  subtitle="Scan the next action here, then move into Chat where Sage keeps the live thread, memory, and execution."
                 >
-                  {state.approvals.length === 0 ? (
-                    <EmptyPanel
-                      title="No pending approvals"
-                      body="New approval requests will appear here as soon as a run pauses for operator input."
-                    />
-                  ) : (
-                    <DataTable>
-                      <DataTableHeader columns="minmax(0, 1.2fr) minmax(0, 0.6fr) minmax(0, 0.8fr)">
-                        <DataTableHeaderCell>Request</DataTableHeaderCell>
-                        <DataTableHeaderCell>Status</DataTableHeaderCell>
-                        <DataTableHeaderCell>Run</DataTableHeaderCell>
-                      </DataTableHeader>
-                      {state.approvals.map((item, index) => (
-                        <DataTableRow
-                          key={readString(item.approval_id ?? item.id, `approval-${index}`)}
-                          columns="minmax(0, 1.2fr) minmax(0, 0.6fr) minmax(0, 0.8fr)"
-                        >
-                          <DataTableCell
-                            primary={readString(item.prompt, 'Approval request')}
-                            secondary={readString(item.approval_id ?? item.id, 'No identifier recorded')}
-                          />
-                          <DataTableCell primary={<DataBadge tone={statusTone(item.status)}>{readString(item.status, 'pending')}</DataBadge>} />
-                          <DataTableCell primary={readString(item.run_id, 'Awaiting run linkage')} mono />
-                        </DataTableRow>
-                      ))}
-                    </DataTable>
-                  )}
-                </ListDetailPanel>
-
-                <ListDetailPanel
-                  eyebrow="Execution"
-                  title="Recent runs"
-                  subtitle="Canonical execution history for the current workspace."
-                  actions={<Link href={`/w/${encodeURIComponent(bootstrap.workspace.id)}/runs`} className="app-inline-link">Open runs</Link>}
-                >
-                  {state.runs.length === 0 ? (
-                    <EmptyPanel
-                      title="No runs recorded"
-                      body="The first successful turn will populate recent execution history here."
-                    />
-                  ) : (
-                    <DataTable>
-                      <DataTableHeader columns="minmax(0, 1fr) minmax(0, 0.7fr) minmax(0, 0.8fr)">
-                        <DataTableHeaderCell>Run</DataTableHeaderCell>
-                        <DataTableHeaderCell>Status</DataTableHeaderCell>
-                        <DataTableHeaderCell>Created</DataTableHeaderCell>
-                      </DataTableHeader>
-                      {state.runs.map((item, index) => (
-                        <DataTableRow
-                          key={readString(item.run_id, `run-${index}`)}
-                          columns="minmax(0, 1fr) minmax(0, 0.7fr) minmax(0, 0.8fr)"
-                        >
-                          <DataTableCell
-                            primary={readString(item.run_id, 'Run')}
-                            secondary={readString(item.result_summary, 'Canonical execution record')}
-                            mono
-                          />
-                          <DataTableCell primary={<DataBadge tone={statusTone(item.status)}>{readString(item.status, 'unknown')}</DataBadge>} />
-                          <DataTableCell primary={formatTimestamp(item.created_at)} />
-                        </DataTableRow>
-                      ))}
-                    </DataTable>
-                  )}
+                  <div className="app-stack-3">
+                    <ChatInlineStateCard
+                      tone={latestApproval ? 'warning' : 'neutral'}
+                      eyebrow="Next action"
+                      title={latestApproval ? 'Approval is waiting' : 'No approval is blocking Sage'}
+                      meta={latestApproval ? readString(latestApproval.status, 'pending') : `${state.approvals.length} pending`}
+                      actions={latestApproval ? <Link href={`/w/${encodeURIComponent(bootstrap.workspace.id)}/approvals`} className="app-inline-link">Open approvals</Link> : null}
+                    >
+                      {latestApproval
+                        ? readString(latestApproval.prompt, 'An approval decision is waiting before Sage can continue.')
+                        : 'Sage can continue without an operator decision right now.'}
+                    </ChatInlineStateCard>
+                    <ChatInlineStateCard
+                      tone={latestRun ? statusTone(latestRun.status) : 'neutral'}
+                      eyebrow="Execution"
+                      title={latestRun ? readString(latestRun.run_id, 'Latest run') : 'No active execution yet'}
+                      meta={latestRun ? formatTimestamp(latestRun.created_at) : 'Idle'}
+                      actions={latestRun ? <Link href={`/w/${encodeURIComponent(bootstrap.workspace.id)}/runs`} className="app-inline-link">Open runs</Link> : null}
+                    >
+                      {latestRun
+                        ? readString(latestRun.result_summary, `${readString(latestRun.status, 'unknown')} execution state.`)
+                        : 'The first chat turn that starts execution will surface here and stay attached to Sage.'}
+                    </ChatInlineStateCard>
+                    <ChatInlineStateCard
+                      tone="neutral"
+                      eyebrow="Memory"
+                      title="What Sage will carry into chat"
+                      meta={primaryRuntime}
+                    >
+                      Sage keeps the workspace posture, runtime target, approvals, and outputs attached to the live chat thread instead of splitting them into a second home workflow.
+                    </ChatInlineStateCard>
+                    <ChatInlineStateCard
+                      tone={latestRun ? 'success' : 'neutral'}
+                      eyebrow="Services"
+                      title={latestRun ? 'Structured work is active' : 'No structured work yet'}
+                      meta={bootstrap.entitlements.plan}
+                    >
+                      {serviceState}
+                    </ChatInlineStateCard>
+                  </div>
                 </ListDetailPanel>
 
                 <ListDetailPanel
                   eyebrow="Signals"
-                  title="Notifications"
-                  subtitle="Incoming workspace alerts and operator-facing system messages."
-                  actions={<Link href={`/w/${encodeURIComponent(bootstrap.workspace.id)}/notifications`} className="app-inline-link">Open feed</Link>}
+                  title="Latest signal"
+                  subtitle="Only the newest notification or activity stays here. The rest belongs in Chat and Work."
                 >
-                  {state.notifications.length === 0 ? (
+                  {!latestSignal ? (
                     <EmptyPanel
-                      title="No notifications"
-                      body="Workspace notifications will surface here when operators or system events need attention."
+                      title="Nothing new yet"
+                      body="The next notification or activity created by Sage will appear here as a lightweight briefing signal."
                     />
                   ) : (
                     <div className="app-stack-3">
-                      {state.notifications.map((item, index) => (
-                        <div
-                          key={readString(item.id, `notification-${index}`)}
-                          className="app-card-button"
-                        >
-                          <div className="app-inline-actions app-inline-actions--between app-inline-actions--start">
-                            <strong className="app-card-button__title">
-                              {readString(item.title ?? item.event_type, 'Notification')}
-                            </strong>
-                            <DataBadge tone={item.read_at ? 'neutral' : 'accent'}>
-                              {item.read_at ? 'Read' : 'Unread'}
-                            </DataBadge>
-                          </div>
-                          <span className="app-card-button__subtitle">
-                            {readString(item.summary ?? item.text, 'No notification summary is available.')}
-                          </span>
-                        </div>
-                      ))}
+                      <div className="app-card-button">
+                        <strong className="app-card-button__title">
+                          {readString(latestSignal.title ?? latestSignal.event_type ?? latestSignal.action, 'Signal')}
+                        </strong>
+                        <span className="app-card-button__subtitle">
+                          {readString(latestSignal.summary ?? latestSignal.text, 'No signal summary is available.')}
+                        </span>
+                        <span className="app-card-button__meta">
+                          {formatTimestamp(latestSignal.created_at)}
+                        </span>
+                      </div>
                     </div>
                   )}
                 </ListDetailPanel>
@@ -361,24 +341,23 @@ export function WorkstationHomePane() {
               <div className="app-stack-4">
                 <ListDetailPanel
                   eyebrow="Context"
-                  title={bootstrap.workspace.label}
-                  subtitle={`${bootstrap.workspace.kind} workspace · ${bootstrap.entitlements.plan} plan`}
+                  title="Workspace posture"
+                  subtitle={`${bootstrap.workspace.label} · ${bootstrap.workspace.kind} workspace`}
                 >
                   <div className="app-stack-3">
-                    <ContextField label="Shell profile" value={bootstrap.shellHints.preferredProfile} />
-                    <ContextField label="Default route" value={bootstrap.shellHints.defaultRoute} />
+                    <ContextField label="Primary surface" value="Chat" />
+                    <ContextField label="Runtime target" value={primaryRuntime} />
+                    <ContextField label="Plan" value={bootstrap.entitlements.plan} />
+                    <ContextField label="Operating mode" value={operatingMode} />
+                    <ContextField label="Compliance mode" value={complianceMode} />
                     <ContextField label="Runtime mode" value={bootstrap.runtime.deploymentMode} />
-                    <ContextField label="Unread notifications" value={String(streamState.notifications.unreadCount)} />
-                    <ContextField label="Activity entries" value={String(streamState.activity.totalCount)} />
-                    <ContextField label="Notification stream" value={streamState.notifications.connectionState} />
-                    <ContextField label="Activity stream" value={streamState.activity.connectionState} />
                   </div>
                 </ListDetailPanel>
 
                 <ListDetailPanel
-                  eyebrow="Now"
-                  title="Current operator picture"
-                  subtitle="Highest-signal items across execution, approvals, and system traffic."
+                  eyebrow="Focus"
+                  title="Stay in one working surface"
+                  subtitle="Home should only point you back to Chat, not create a second operating console."
                 >
                   {latestApproval ? (
                     <StateBanner
@@ -389,7 +368,7 @@ export function WorkstationHomePane() {
                       The next approval in queue is still waiting on an operator decision.
                     </StateBanner>
                   ) : null}
-                  {latestRun ? (
+                  {!latestApproval && latestRun ? (
                     <StateBanner
                       tone={statusTone(latestRun.status) === 'accent' ? 'neutral' : statusTone(latestRun.status) as 'neutral' | 'success' | 'warning' | 'danger'}
                       title={readString(latestRun.run_id, 'Latest run')}
@@ -407,31 +386,12 @@ export function WorkstationHomePane() {
                       {readString(latestNotification.summary ?? latestNotification.text, 'No notification summary is available.')}
                     </StateBanner>
                   ) : null}
-                  {state.activity.length === 0 ? (
+                  {!latestApproval && !latestRun && !latestNotification ? (
                     <EmptyPanel
-                      title="No recent activity"
-                      body="Live activity will fill this panel once the workspace starts generating events."
+                      title="Sage is clear to start"
+                      body="Open Chat to begin the next turn. Home does not maintain a second workflow anymore."
                     />
-                  ) : (
-                    <div className="app-stack-3">
-                      {state.activity.slice(0, 4).map((item, index) => (
-                        <div
-                          key={readString(item.id, `activity-${index}`)}
-                          className="app-card-button"
-                        >
-                          <strong className="app-card-button__title">
-                            {readString(item.title ?? item.action, 'Activity')}
-                          </strong>
-                          <span className="app-card-button__subtitle">
-                            {readString(item.summary, 'No activity summary is available.')}
-                          </span>
-                          <span className="app-card-button__meta">
-                            {formatTimestamp(item.created_at)}
-                          </span>
-                        </div>
-                      ))}
-                    </div>
-                  )}
+                  ) : null}
                 </ListDetailPanel>
               </div>
             )}

@@ -1126,11 +1126,10 @@ def memory_search_scoped(
 def _memory_scope_from_context(context: Dict[str, Any]) -> Dict[str, str]:
     metadata = context.get("metadata") if isinstance(context.get("metadata"), dict) else {}
     workspace_id = _runtime_workspace_id(context.get("workspace_id") or metadata.get("workspace_id"))
-    agent_install_id = str(
-        metadata.get("active_agent_install_id")
-        or metadata.get("workspace_agent_install_id")
-        or ""
-    ).strip()
+    # Memory namespace must be bound to the currently resolved active install.
+    # Do not fall back to workspace install metadata, which can be inherited from
+    # parent orchestration context and leak cross-install scope.
+    agent_install_id = str(metadata.get("active_agent_install_id") or "").strip()
     session_key = str(metadata.get("session_key") or "").strip()
     if not session_key:
         chat_id = str(metadata.get("chat_id") or "").strip()

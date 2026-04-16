@@ -1,5 +1,9 @@
+import asyncio
+import tempfile
 import unittest
 import json
+from pathlib import Path
+from unittest.mock import AsyncMock, patch
 
 from server_modules import direct_tool_execution_service
 from server_modules import skills_service
@@ -330,6 +334,86 @@ class SkillsServiceTests(unittest.TestCase):
         self.assertEqual(json.loads(search_raw)["results"][0]["max_results"], 3)
         self.assertEqual(json.loads(get_raw)["path"], "MEMORY.md")
         self.assertEqual(json.loads(get_raw)["from_line"], 2)
+
+    def test_build_builtin_direct_chat_tools_includes_sage_service_tools(self) -> None:
+        tool_names = {
+            item["name"]
+            for item in skills_service.build_builtin_direct_chat_tools()
+            if isinstance(item, dict)
+        }
+
+        self.assertIn("sage_service__list_state", tool_names)
+        self.assertIn("sage_service__update_profile", tool_names)
+        self.assertIn("sage_service__create_entry", tool_names)
+
+    def test_execute_single_direct_tool_call_dispatches_sage_service_tools(self) -> None:
+        callbacks = self._execution_callbacks()
+        callbacks = direct_tool_execution_service.DirectToolExecutionCallbacks(
+            **{
+                **callbacks.__dict__,
+                "run_async_tool_call": lambda awaitable: asyncio.run(awaitable),
+            }
+        )
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir) / "workspace-1"
+            with (
+                patch("server_modules.sage_services_service.workspace_context.workspace_scope_dir", return_value=root),
+                patch(
+                    "server_modules.sage_services_service.personal_context_engine.publish_event",
+                    new=AsyncMock(return_value={"id": "evt-1"}),
+                ),
+            ):
+                profile_raw = skills_service.execute_single_direct_tool_call(
+                    tool_call={
+                        "name": "sage_service__update_profile",
+                        "arguments": {
+                            "service_id": "language_coach",
+                            "profile": {
+                                "target_language": "Japanese",
+                                "current_level": "A2",
+                                "focus_area": "Travel",
+                            },
+                        },
+                    },
+                    workspace_id="workspace-1",
+                    thread_id="thread-1",
+                    callbacks=callbacks,
+                    session_ctx={"tenant_id": "tenant-1"},
+                )
+                entry_raw = skills_service.execute_single_direct_tool_call(
+                    tool_call={
+                        "name": "sage_service__create_entry",
+                        "arguments": {
+                            "service_id": "flashcards",
+                            "entry": {
+                                "deck": "M&A",
+                                "front": "SPA",
+                                "back": "Share Purchase Agreement",
+                            },
+                        },
+                    },
+                    workspace_id="workspace-1",
+                    thread_id="thread-1",
+                    callbacks=callbacks,
+                    session_ctx={"tenant_id": "tenant-1"},
+                )
+                state_raw = skills_service.execute_single_direct_tool_call(
+                    tool_call={
+                        "name": "sage_service__list_state",
+                        "arguments": {"service_id": "flashcards"},
+                    },
+                    workspace_id="workspace-1",
+                    thread_id="thread-1",
+                    callbacks=callbacks,
+                    session_ctx={"tenant_id": "tenant-1"},
+                )
+
+        profile_payload = json.loads(profile_raw)
+        entry_payload = json.loads(entry_raw)
+        state_payload = json.loads(state_raw)
+        self.assertEqual(profile_payload["profile"]["target_language"], "Japanese")
+        self.assertEqual(entry_payload["entries"][0]["front"], "SPA")
+        self.assertEqual(state_payload["entries"][0]["back"], "Share Purchase Agreement")
 
 
 if __name__ == "__main__":

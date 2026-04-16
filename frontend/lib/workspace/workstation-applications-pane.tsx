@@ -1,93 +1,212 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import { useRouter } from 'next/navigation';
 
-import { CommandSheet } from '@/lib/ui/command-sheet';
 import { ConfirmDialog } from '@/lib/ui/confirm-dialog';
-import { DataBadge, DataTable, DataTableCell, DataTableHeader, DataTableHeaderCell, DataTableRow } from '@/lib/ui/data-table';
+import {
+  DataBadge,
+  DataTable,
+  DataTableCell,
+  DataTableHeader,
+  DataTableHeaderCell,
+  DataTableRow,
+} from '@/lib/ui/data-table';
 import { EmptyPanel } from '@/lib/ui/empty-panel';
+import {
+  FormField,
+  FormGrid,
+  FormInput,
+  FormReadout,
+  FormSection,
+  FormTextarea,
+} from '@/lib/ui/form-controls';
 import { ListDetailColumns, ListDetailPanel, ListDetailShell } from '@/lib/ui/list-detail';
 import { SkeletonBlock } from '@/lib/ui/skeleton-block';
 import { StateBanner } from '@/lib/ui/state-banner';
 import { AppButton } from '@/lib/ui/primitives';
-import { ModalSection } from '@/lib/ui/modal';
-import { FormReadout } from '@/lib/ui/form-controls';
 import { useWorkspaceServices } from '@/lib/workspace/workspace-services';
+import {
+  type WorkstationSageServiceRecord,
+} from '@/lib/workspace/workstation-client';
 import { WorkstationSurfaceRoot } from '@/lib/workspace/workstation-surface-primitives';
 
-type AppRecord = Record<string, unknown> & {
-  id?: string | null;
-  name?: string | null;
-  description?: string | null;
-  version?: string | null;
-  latest_version?: string | null;
-  status?: string | null;
-  entry_route?: string | null;
+type ServiceRecord = WorkstationSageServiceRecord & {
+  id: 'flashcards' | 'language_coach' | 'nutrition_log';
 };
 
-function normalizeAppItems(payload: unknown): AppRecord[] {
+type DraftMap = Record<string, Record<string, string>>;
+
+type PendingDelete = {
+  serviceId: string;
+  entryId: string;
+  summary: string;
+} | null;
+
+function normalizeServices(payload: unknown): ServiceRecord[] {
   if (!payload || typeof payload !== 'object') {
     return [];
   }
   const items = (payload as Record<string, unknown>).items;
-  return Array.isArray(items)
-    ? items.filter((item): item is AppRecord => Boolean(item) && typeof item === 'object')
-    : [];
+  if (!Array.isArray(items)) {
+    return [];
+  }
+  return items.filter((item): item is ServiceRecord => {
+    if (!item || typeof item !== 'object') {
+      return false;
+    }
+    const id = String((item as Record<string, unknown>).id ?? '').trim();
+    return id === 'flashcards' || id === 'language_coach' || id === 'nutrition_log';
+  });
 }
 
-function readString(value: unknown, fallback: string): string {
+function readString(value: unknown, fallback = ''): string {
   return typeof value === 'string' && value.trim() ? value : fallback;
 }
 
-function statusTone(value: unknown): 'neutral' | 'success' | 'warning' | 'danger' | 'accent' {
-  const status = String(value ?? '').trim().toLowerCase();
-  if (status === 'installed' || status === 'active') {
+function readNumber(value: unknown): number | null {
+  const parsed = typeof value === 'number' ? value : Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function formatTimestamp(value: unknown): string {
+  const token = readString(value);
+  if (!token) {
+    return 'Not recorded';
+  }
+  const date = new Date(token);
+  if (Number.isNaN(date.getTime())) {
+    return token;
+  }
+  return date.toLocaleString();
+}
+
+function memoryLine(values: unknown): string {
+  if (!Array.isArray(values)) {
+    return 'Nothing recorded yet';
+  }
+  const filtered = values
+    .map((item) => readString(item))
+    .filter(Boolean)
+    .slice(0, 3);
+  return filtered.length > 0 ? filtered.join(' · ') : 'Nothing recorded yet';
+}
+
+function defaultProfileDraft(serviceId: string, profile: Record<string, unknown> | null | undefined): Record<string, string> {
+  if (serviceId === 'flashcards') {
+    return {
+      focus_topic: readString(profile?.focus_topic),
+      active_deck: readString(profile?.active_deck),
+    };
+  }
+  if (serviceId === 'language_coach') {
+    return {
+      target_language: readString(profile?.target_language),
+      current_level: readString(profile?.current_level),
+      focus_area: readString(profile?.focus_area),
+    };
+  }
+  return {
+    daily_calorie_target: profile?.daily_calorie_target == null ? '' : String(profile.daily_calorie_target),
+    daily_protein_target: profile?.daily_protein_target == null ? '' : String(profile.daily_protein_target),
+    dietary_pattern: readString(profile?.dietary_pattern),
+  };
+}
+
+function defaultEntryDraft(serviceId: string): Record<string, string> {
+  if (serviceId === 'flashcards') {
+    return { deck: '', topic: '', front: '', back: '' };
+  }
+  if (serviceId === 'language_coach') {
+    return { language: '', phrase: '', translation: '', notes: '', confidence: '' };
+  }
+  return { meal: '', calories: '', protein_grams: '', occurred_on: '', notes: '' };
+}
+
+function payloadFromDraft(serviceId: string, draft: Record<string, string>): Record<string, unknown> {
+  if (serviceId === 'flashcards') {
+    return {
+      deck: readString(draft.deck),
+      topic: readString(draft.topic),
+      front: readString(draft.front),
+      back: readString(draft.back),
+    };
+  }
+  if (serviceId === 'language_coach') {
+    return {
+      language: readString(draft.language),
+      phrase: readString(draft.phrase),
+      translation: readString(draft.translation),
+      notes: readString(draft.notes),
+      confidence: readString(draft.confidence) ? Number(draft.confidence) : null,
+    };
+  }
+  return {
+    meal: readString(draft.meal),
+    calories: readString(draft.calories) ? Number(draft.calories) : null,
+    protein_grams: readString(draft.protein_grams) ? Number(draft.protein_grams) : null,
+    occurred_on: readString(draft.occurred_on),
+    notes: readString(draft.notes),
+  };
+}
+
+function profilePayloadFromDraft(serviceId: string, draft: Record<string, string>): Record<string, unknown> {
+  if (serviceId === 'flashcards') {
+    return {
+      focus_topic: readString(draft.focus_topic),
+      active_deck: readString(draft.active_deck),
+    };
+  }
+  if (serviceId === 'language_coach') {
+    return {
+      target_language: readString(draft.target_language),
+      current_level: readString(draft.current_level),
+      focus_area: readString(draft.focus_area),
+    };
+  }
+  return {
+    daily_calorie_target: readString(draft.daily_calorie_target) ? Number(draft.daily_calorie_target) : null,
+    daily_protein_target: readString(draft.daily_protein_target) ? Number(draft.daily_protein_target) : null,
+    dietary_pattern: readString(draft.dietary_pattern),
+  };
+}
+
+function summaryTone(service: ServiceRecord): 'success' | 'accent' | 'neutral' {
+  const pinnedCount = readNumber(service.summary?.pinned_count) ?? 0;
+  const entryCount = readNumber(service.summary?.entry_count) ?? 0;
+  if (pinnedCount > 0) {
     return 'success';
   }
-  if (status === 'available' || status === 'catalog') {
+  if (entryCount > 0) {
     return 'accent';
-  }
-  if (status === 'update_available' || status === 'updatable') {
-    return 'warning';
-  }
-  if (status === 'error' || status === 'failed') {
-    return 'danger';
   }
   return 'neutral';
 }
 
-function readCombinedError(results: PromiseSettledResult<unknown>[]): string | null {
-  const messages = results.flatMap((result) => {
-    if (result.status === 'fulfilled') {
-      return [];
-    }
-    return [result.reason instanceof Error ? result.reason.message : 'Application data is unavailable.'];
-  });
-  return messages.length > 0 ? messages.join(' ') : null;
+function summaryBannerTone(service: ServiceRecord): 'success' | 'warning' | 'neutral' {
+  const tone = summaryTone(service);
+  if (tone === 'accent') {
+    return 'warning';
+  }
+  return tone;
 }
 
-function ApplicationsSkeleton() {
+function ServicesSkeleton() {
   return (
     <ListDetailColumns
       primary={(
         <div className="app-stack-4">
-          <ListDetailPanel eyebrow="Installed" title="Loading installed applications">
-            <SkeletonBlock height="2.8rem" />
-            <SkeletonBlock height="2.8rem" />
-            <SkeletonBlock height="2.8rem" />
-          </ListDetailPanel>
-          <ListDetailPanel eyebrow="Catalog" title="Loading catalog">
-            <SkeletonBlock height="2.8rem" />
-            <SkeletonBlock height="2.8rem" />
+          <ListDetailPanel eyebrow="Services" title="Loading Sage services">
+            <SkeletonBlock height="3.2rem" />
+            <SkeletonBlock height="3.2rem" />
+            <SkeletonBlock height="3.2rem" />
           </ListDetailPanel>
         </div>
       )}
       secondary={(
-        <ListDetailPanel eyebrow="Selection" title="Loading application detail">
-          <SkeletonBlock height="3.2rem" />
-          <SkeletonBlock height="3.2rem" />
-          <SkeletonBlock height="3.2rem" />
+        <ListDetailPanel eyebrow="Selection" title="Loading service detail">
+          <SkeletonBlock height="4rem" />
+          <SkeletonBlock height="7rem" />
+          <SkeletonBlock height="10rem" />
         </ListDetailPanel>
       )}
     />
@@ -96,138 +215,99 @@ function ApplicationsSkeleton() {
 
 export function WorkstationApplicationsPane() {
   const services = useWorkspaceServices();
-  const router = useRouter();
-  const [installed, setInstalled] = useState<AppRecord[]>([]);
-  const [store, setStore] = useState<AppRecord[]>([]);
-  const [updates, setUpdates] = useState<AppRecord[]>([]);
+  const [items, setItems] = useState<ServiceRecord[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [status, setStatus] = useState<string | null>(null);
-  const [selectedAppId, setSelectedAppId] = useState<string | null>(null);
-  const [isActionSheetOpen, setIsActionSheetOpen] = useState(false);
-  const [pendingUninstallId, setPendingUninstallId] = useState<string | null>(null);
-  const [mutatingAppId, setMutatingAppId] = useState<string | null>(null);
+  const [selectedServiceId, setSelectedServiceId] = useState<string | null>(null);
+  const [profileDrafts, setProfileDrafts] = useState<DraftMap>({});
+  const [entryDrafts, setEntryDrafts] = useState<DraftMap>({});
+  const [mutatingKey, setMutatingKey] = useState<string | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<PendingDelete>(null);
 
   const refresh = async (showLoading = false) => {
     if (showLoading) {
       setIsLoading(true);
     }
     setError(null);
-    const results = await Promise.allSettled([
-      services.client.listInstalledApps(),
-      services.client.listStoreApps(),
-      services.client.listAppUpdates(),
-    ]);
-
-    setInstalled(results[0].status === 'fulfilled' ? normalizeAppItems(results[0].value) : []);
-    setStore(results[1].status === 'fulfilled' ? normalizeAppItems(results[1].value) : []);
-    setUpdates(results[2].status === 'fulfilled' ? normalizeAppItems(results[2].value) : []);
-    setError(readCombinedError(results));
-    setIsLoading(false);
+    try {
+      const payload = await services.client.listSageServices();
+      setItems(normalizeServices(payload));
+    } catch (loadError) {
+      setError(loadError instanceof Error ? loadError.message : 'Sage services are unavailable.');
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   useEffect(() => {
-    let cancelled = false;
-    void refresh(true).catch((loadError) => {
-      if (!cancelled) {
-        setError(loadError instanceof Error ? loadError.message : 'Applications are unavailable.');
-        setIsLoading(false);
-      }
-    });
-    return () => {
-      cancelled = true;
-    };
+    void refresh(true);
   }, [services.client]);
 
-  const installedById = useMemo(
-    () => new Map(installed.map((item) => [String(item.id ?? ''), item])),
-    [installed],
-  );
-  const storeById = useMemo(
-    () => new Map(store.map((item) => [String(item.id ?? ''), item])),
-    [store],
-  );
-  const updatesById = useMemo(
-    () => new Map(updates.map((item) => [String(item.id ?? ''), item])),
-    [updates],
-  );
-
-  const allAppIds = useMemo(() => {
-    const ids = new Set<string>();
-    for (const item of installed) {
-      const id = String(item.id ?? '').trim();
-      if (id) {
-        ids.add(id);
-      }
+  useEffect(() => {
+    if (items.length === 0) {
+      setSelectedServiceId(null);
+      return;
     }
-    for (const item of store) {
-      const id = String(item.id ?? '').trim();
-      if (id) {
-        ids.add(id);
-      }
+    if (selectedServiceId && items.some((item) => item.id === selectedServiceId)) {
+      return;
     }
-    for (const item of updates) {
-      const id = String(item.id ?? '').trim();
-      if (id) {
-        ids.add(id);
-      }
-    }
-    return Array.from(ids);
-  }, [installed, store, updates]);
+    setSelectedServiceId(items[0].id);
+  }, [items, selectedServiceId]);
 
   useEffect(() => {
-    if (allAppIds.length === 0) {
-      setSelectedAppId(null);
+    if (items.length === 0) {
       return;
     }
-    if (selectedAppId && allAppIds.includes(selectedAppId)) {
-      return;
-    }
-    setSelectedAppId(allAppIds[0]);
-  }, [allAppIds, selectedAppId]);
+    setProfileDrafts((current) => {
+      const next = { ...current };
+      for (const item of items) {
+        if (!next[item.id]) {
+          next[item.id] = defaultProfileDraft(item.id, item.profile ?? null);
+        }
+      }
+      return next;
+    });
+    setEntryDrafts((current) => {
+      const next = { ...current };
+      for (const item of items) {
+        if (!next[item.id]) {
+          next[item.id] = defaultEntryDraft(item.id);
+        }
+      }
+      return next;
+    });
+  }, [items]);
 
-  const selectedApp = useMemo(() => {
-    if (!selectedAppId) {
-      return null;
-    }
-    return installedById.get(selectedAppId) ?? storeById.get(selectedAppId) ?? updatesById.get(selectedAppId) ?? null;
-  }, [installedById, selectedAppId, storeById, updatesById]);
+  const selectedService = useMemo(
+    () => items.find((item) => item.id === selectedServiceId) ?? null,
+    [items, selectedServiceId],
+  );
 
-  const selectedAppIdSafe = String(selectedApp?.id ?? selectedAppId ?? '').trim();
-  const selectedInstalled = selectedAppIdSafe ? installedById.get(selectedAppIdSafe) ?? null : null;
-  const selectedCatalog = selectedAppIdSafe ? storeById.get(selectedAppIdSafe) ?? null : null;
-  const selectedUpdate = selectedAppIdSafe ? updatesById.get(selectedAppIdSafe) ?? null : null;
-
-  const mutate = async ({
-    appId,
-    action,
-    successMessage,
-  }: {
-    appId: string;
-    action: () => Promise<unknown>;
-    successMessage: string;
-  }) => {
+  const mutate = async (key: string, action: () => Promise<Record<string, unknown> | null>, successMessage: string) => {
+    setMutatingKey(key);
     setError(null);
     setStatus(null);
-    setMutatingAppId(appId);
     try {
       await action();
       await refresh();
       setStatus(successMessage);
     } catch (mutationError) {
-      setError(mutationError instanceof Error ? mutationError.message : 'Application action failed.');
+      setError(mutationError instanceof Error ? mutationError.message : 'Service action failed.');
     } finally {
-      setMutatingAppId(null);
-      setPendingUninstallId(null);
-      setIsActionSheetOpen(false);
+      setMutatingKey(null);
+      setPendingDelete(null);
     }
   };
+
+  const selectedProfileDraft = selectedService ? profileDrafts[selectedService.id] ?? defaultProfileDraft(selectedService.id, selectedService.profile ?? null) : null;
+  const selectedEntryDraft = selectedService ? entryDrafts[selectedService.id] ?? defaultEntryDraft(selectedService.id) : null;
 
   return (
     <WorkstationSurfaceRoot surface="applications">
       <ListDetailShell
-        title="Applications"
-        subtitle="Installed modules, available catalog entries, and update readiness inside the workstation runtime."
+        title="Sage Services"
+        subtitle="Three structured services Sage can carry forward as memory-backed state: Flashcards, Language Coach, and Nutrition Log."
         actions={(
           <AppButton
             type="button"
@@ -241,134 +321,58 @@ export function WorkstationApplicationsPane() {
         )}
       >
         {status ? (
-          <StateBanner tone="success" title="Application state updated">
+          <StateBanner tone="success" title="Service state saved">
             {status}
           </StateBanner>
         ) : null}
         {error ? (
-          <StateBanner
-            tone="danger"
-            title="Application inventory is degraded"
-            detail="One or more catalog sources did not load cleanly. Any successfully loaded data remains available below."
-          >
+          <StateBanner tone="danger" title="Sage services are degraded">
             {error}
           </StateBanner>
         ) : null}
 
         {isLoading ? (
-          <ApplicationsSkeleton />
+          <ServicesSkeleton />
         ) : (
           <ListDetailColumns
             primary={(
               <div className="app-stack-4">
                 <ListDetailPanel
-                  eyebrow="Installed"
-                  title="Installed application registry"
-                  subtitle={`${installed.length} modules currently mounted inside the workspace runtime.`}
+                  eyebrow="Services"
+                  title="Structured state Sage can reuse"
+                  subtitle="These replace the old catalog surface. Each service stores real state, emits explicit memory updates, and stays available to Sage."
                 >
-                  {installed.length === 0 ? (
+                  {items.length === 0 ? (
                     <EmptyPanel
-                      title="No installed applications"
-                      body="Applications from the catalog can be installed here and opened directly into the workstation."
+                      title="No Sage services are available"
+                      body="The workspace did not return any structured services."
                     />
                   ) : (
-                    <DataTable>
-                      <DataTableHeader columns="minmax(0, 1.1fr) minmax(0, 0.7fr) minmax(0, 0.8fr) auto">
-                        <DataTableHeaderCell>Application</DataTableHeaderCell>
-                        <DataTableHeaderCell>Status</DataTableHeaderCell>
-                        <DataTableHeaderCell>Version</DataTableHeaderCell>
-                        <DataTableHeaderCell align="end">Focus</DataTableHeaderCell>
-                      </DataTableHeader>
-                      {installed.map((item, index) => {
-                        const appId = String(item.id ?? `installed-${index}`);
-                        const selected = appId === selectedAppId;
+                    <div className="app-stack-2">
+                      {items.map((item) => {
+                        const entryCount = readNumber(item.summary?.entry_count) ?? 0;
+                        const pinnedCount = readNumber(item.summary?.pinned_count) ?? 0;
+                        const selected = item.id === selectedServiceId;
                         return (
-                          <DataTableRow
-                            key={appId}
-                            columns="minmax(0, 1.1fr) minmax(0, 0.7fr) minmax(0, 0.8fr) auto"
-                            selected={selected}
-                            onClick={() => setSelectedAppId(appId)}
+                          <button
+                            key={item.id}
+                            type="button"
+                            onClick={() => setSelectedServiceId(item.id)}
+                            className={`app-card-button${selected ? ' app-card-button--selected' : ''}`}
                           >
-                            <DataTableCell
-                              primary={readString(item.name, appId)}
-                              secondary={readString(item.description, 'Installed application')}
-                            />
-                            <DataTableCell primary={<DataBadge tone={statusTone(item.status)}>{readString(item.status, 'installed')}</DataBadge>} />
-                            <DataTableCell primary={`v${readString(item.version, 'n/a')}`} />
-                            <DataTableCell
-                              align="end"
-                              primary={selected ? <DataBadge tone="accent">Selected</DataBadge> : <span className="app-data-table__hint">Inspect</span>}
-                            />
-                          </DataTableRow>
+                            <div className="app-inline-actions app-inline-actions--between app-inline-actions--start">
+                              <strong className="app-card-button__title">{readString(item.name, item.id)}</strong>
+                              <DataBadge tone={summaryTone(item)}>{entryCount} items</DataBadge>
+                            </div>
+                            <span className="app-card-button__subtitle">
+                              {readString(item.description, 'Structured service state')}
+                            </span>
+                            <span className="app-card-button__subtitle">
+                              {pinnedCount > 0 ? `${pinnedCount} pinned for Sage` : readString(item.suggested_prompt, 'Ready for Sage')}
+                            </span>
+                          </button>
                         );
                       })}
-                    </DataTable>
-                  )}
-                </ListDetailPanel>
-
-                <ListDetailPanel
-                  eyebrow="Catalog"
-                  title="Available applications"
-                  subtitle={`${store.length} installable catalog entries and ${updates.length} available updates.`}
-                >
-                  {store.length === 0 && updates.length === 0 ? (
-                    <EmptyPanel
-                      title="Catalog is empty"
-                      body="Additional installable applications and update notices will appear here when the registry exposes them."
-                    />
-                  ) : (
-                    <div className="app-stack-3">
-                      {updates.length > 0 ? (
-                        <div className="app-stack-2">
-                          <strong className="app-card-button__title">Update queue</strong>
-                          {updates.map((item, index) => {
-                            const appId = String(item.id ?? `update-${index}`);
-                            return (
-                              <button
-                                key={appId}
-                                type="button"
-                                onClick={() => setSelectedAppId(appId)}
-                                className={`app-card-button${appId === selectedAppId ? ' app-card-button--selected' : ''}`}
-                              >
-                                <div className="app-inline-actions app-inline-actions--between app-inline-actions--start">
-                                  <strong className="app-card-button__title">{readString(item.name, appId)}</strong>
-                                  <DataBadge tone="warning">Update</DataBadge>
-                                </div>
-                                <span className="app-card-button__subtitle">
-                                  v{readString(item.version, 'n/a')} → v{readString(item.latest_version, 'n/a')}
-                                </span>
-                              </button>
-                            );
-                          })}
-                        </div>
-                      ) : null}
-
-                      {store.length > 0 ? (
-                        <div className="app-stack-2">
-                          <strong className="app-card-button__title">Catalog</strong>
-                          {store.map((item, index) => {
-                            const appId = String(item.id ?? `store-${index}`);
-                            return (
-                              <button
-                                key={appId}
-                                type="button"
-                                onClick={() => setSelectedAppId(appId)}
-                                className={`app-card-button${appId === selectedAppId ? ' app-card-button--selected' : ''}`}
-                              >
-                                <div className="app-inline-actions app-inline-actions--between app-inline-actions--start">
-                                  <strong className="app-card-button__title">{readString(item.name, appId)}</strong>
-                                  <DataBadge tone={installedById.has(appId) ? 'success' : 'accent'}>
-                                    {installedById.has(appId) ? 'Installed' : 'Available'}
-                                  </DataBadge>
-                                </div>
-                                <span className="app-card-button__subtitle">
-                                  {readString(item.description, 'Catalog application')}
-                                </span>
-                              </button>
-                            );
-                          })}
-                        </div>
-                      ) : null}
                     </div>
                   )}
                 </ListDetailPanel>
@@ -377,41 +381,507 @@ export function WorkstationApplicationsPane() {
             secondary={(
               <ListDetailPanel
                 eyebrow="Selection"
-                title={selectedApp ? readString(selectedApp.name, selectedAppIdSafe || 'Application') : 'No application selected'}
-                subtitle={selectedApp ? readString(selectedApp.description, 'Application detail is available here.') : 'Choose an installed or catalog application to inspect its workstation module state.'}
-                actions={selectedApp ? (
-                  <AppButton type="button" onClick={() => setIsActionSheetOpen(true)}>
-                    Actions
-                  </AppButton>
-                ) : undefined}
+                title={selectedService ? readString(selectedService.name, selectedService.id) : 'No service selected'}
+                subtitle={selectedService ? readString(selectedService.description, 'Service detail is available here.') : 'Choose a Sage service to inspect and update its state.'}
               >
-                {!selectedApp ? (
+                {!selectedService || !selectedProfileDraft || !selectedEntryDraft ? (
                   <EmptyPanel
-                    title="No selected application"
-                    body="Choose an installed or catalog application to inspect its state and available actions."
+                    title="No selected Sage service"
+                    body="Choose Flashcards, Language Coach, or Nutrition Log to inspect its state."
                   />
                 ) : (
-                  <>
+                  <div className="app-stack-4">
                     <StateBanner
-                      tone={selectedUpdate ? 'warning' : selectedInstalled ? 'success' : 'neutral'}
-                      title={selectedUpdate ? 'Update available' : selectedInstalled ? 'Installed in workspace' : 'Available for install'}
-                      detail={selectedInstalled?.entry_route ? 'Launch route is available in the workstation.' : 'This module is managed inside the workspace registry.'}
+                      tone={summaryBannerTone(selectedService)}
+                      title="Memory-backed service state"
+                      detail="Changes here are explicit, stored in workspace state, and published into Sage’s structured context feed."
                     >
-                      {selectedUpdate
-                        ? `Catalog has version ${readString(selectedUpdate.latest_version, 'n/a')} ready to deploy.`
-                        : selectedCatalog
-                          ? 'Catalog metadata is loaded and ready for action.'
-                          : 'Installed module metadata is loaded and ready for action.'}
+                      {`${readNumber(selectedService.summary?.entry_count) ?? 0} ${readString(selectedService.entry_noun, 'items')} recorded · updated ${formatTimestamp(selectedService.summary?.updated_at)}`}
                     </StateBanner>
 
-                    <div className="app-stack-3">
-                      <FormReadout label="Application id" value={selectedAppIdSafe || 'No identifier recorded'} />
-                      <FormReadout label="Installed version" value={`v${readString(selectedInstalled?.version ?? selectedApp.version, 'n/a')}`} />
-                      <FormReadout label="Latest version" value={`v${readString(selectedUpdate?.latest_version ?? selectedCatalog?.latest_version ?? selectedApp.latest_version, readString(selectedApp.version, 'n/a'))}`} />
-                      <FormReadout label="Runtime status" value={readString(selectedInstalled?.status ?? selectedCatalog?.status ?? selectedApp.status, selectedInstalled ? 'installed' : 'available')} />
-                      <FormReadout label="Launch route" value={selectedInstalled?.entry_route ? readString(selectedInstalled.entry_route, 'n/a') : 'No direct launch route exposed'} />
-                    </div>
-                  </>
+                    <FormSection
+                      title="Saved preferences"
+                      description="Long-term settings Sage should carry forward for this service."
+                    >
+                      {selectedService.id === 'flashcards' ? (
+                        <FormGrid>
+                          <FormField label="Focus topic">
+                            <FormInput
+                              value={selectedProfileDraft.focus_topic ?? ''}
+                              onChange={(event) => {
+                                const value = event.currentTarget.value;
+                                setProfileDrafts((current) => ({
+                                  ...current,
+                                  [selectedService.id]: { ...selectedProfileDraft, focus_topic: value },
+                                }));
+                              }}
+                            />
+                          </FormField>
+                          <FormField label="Active deck">
+                            <FormInput
+                              value={selectedProfileDraft.active_deck ?? ''}
+                              onChange={(event) => {
+                                const value = event.currentTarget.value;
+                                setProfileDrafts((current) => ({
+                                  ...current,
+                                  [selectedService.id]: { ...selectedProfileDraft, active_deck: value },
+                                }));
+                              }}
+                            />
+                          </FormField>
+                        </FormGrid>
+                      ) : null}
+
+                      {selectedService.id === 'language_coach' ? (
+                        <FormGrid>
+                          <FormField label="Target language">
+                            <FormInput
+                              value={selectedProfileDraft.target_language ?? ''}
+                              onChange={(event) => {
+                                const value = event.currentTarget.value;
+                                setProfileDrafts((current) => ({
+                                  ...current,
+                                  [selectedService.id]: { ...selectedProfileDraft, target_language: value },
+                                }));
+                              }}
+                            />
+                          </FormField>
+                          <FormField label="Current level">
+                            <FormInput
+                              value={selectedProfileDraft.current_level ?? ''}
+                              onChange={(event) => {
+                                const value = event.currentTarget.value;
+                                setProfileDrafts((current) => ({
+                                  ...current,
+                                  [selectedService.id]: { ...selectedProfileDraft, current_level: value },
+                                }));
+                              }}
+                            />
+                          </FormField>
+                          <FormField label="Focus area">
+                            <FormInput
+                              value={selectedProfileDraft.focus_area ?? ''}
+                              onChange={(event) => {
+                                const value = event.currentTarget.value;
+                                setProfileDrafts((current) => ({
+                                  ...current,
+                                  [selectedService.id]: { ...selectedProfileDraft, focus_area: value },
+                                }));
+                              }}
+                            />
+                          </FormField>
+                        </FormGrid>
+                      ) : null}
+
+                      {selectedService.id === 'nutrition_log' ? (
+                        <FormGrid>
+                          <FormField label="Daily calorie target">
+                            <FormInput
+                              type="number"
+                              value={selectedProfileDraft.daily_calorie_target ?? ''}
+                              onChange={(event) => {
+                                const value = event.currentTarget.value;
+                                setProfileDrafts((current) => ({
+                                  ...current,
+                                  [selectedService.id]: { ...selectedProfileDraft, daily_calorie_target: value },
+                                }));
+                              }}
+                            />
+                          </FormField>
+                          <FormField label="Daily protein target (g)">
+                            <FormInput
+                              type="number"
+                              value={selectedProfileDraft.daily_protein_target ?? ''}
+                              onChange={(event) => {
+                                const value = event.currentTarget.value;
+                                setProfileDrafts((current) => ({
+                                  ...current,
+                                  [selectedService.id]: { ...selectedProfileDraft, daily_protein_target: value },
+                                }));
+                              }}
+                            />
+                          </FormField>
+                          <FormField label="Dietary pattern">
+                            <FormInput
+                              value={selectedProfileDraft.dietary_pattern ?? ''}
+                              onChange={(event) => {
+                                const value = event.currentTarget.value;
+                                setProfileDrafts((current) => ({
+                                  ...current,
+                                  [selectedService.id]: { ...selectedProfileDraft, dietary_pattern: value },
+                                }));
+                              }}
+                            />
+                          </FormField>
+                        </FormGrid>
+                      ) : null}
+
+                      <div className="app-inline-actions">
+                        <AppButton
+                          type="button"
+                          disabled={mutatingKey === `${selectedService.id}:profile`}
+                          onClick={() => {
+                            void mutate(
+                              `${selectedService.id}:profile`,
+                              () => services.client.updateSageServiceProfile({
+                                serviceId: selectedService.id,
+                                profile: profilePayloadFromDraft(selectedService.id, selectedProfileDraft),
+                              }),
+                              `Saved ${readString(selectedService.name, selectedService.id)} preferences.`,
+                            );
+                          }}
+                        >
+                          {mutatingKey === `${selectedService.id}:profile` ? 'Saving…' : 'Save preferences'}
+                        </AppButton>
+                        <FormReadout label="Suggested Sage prompt" value={readString(selectedService.suggested_prompt, 'Ready for Sage')} />
+                      </div>
+                    </FormSection>
+
+                    <FormSection
+                      title="Capture new state"
+                      description="Add structured records instead of freeform notes so Sage can reuse them cleanly."
+                    >
+                      {selectedService.id === 'flashcards' ? (
+                        <FormGrid>
+                          <FormField label="Deck">
+                            <FormInput
+                              value={selectedEntryDraft.deck ?? ''}
+                              onChange={(event) => {
+                                const value = event.currentTarget.value;
+                                setEntryDrafts((current) => ({
+                                  ...current,
+                                  [selectedService.id]: { ...selectedEntryDraft, deck: value },
+                                }));
+                              }}
+                            />
+                          </FormField>
+                          <FormField label="Topic">
+                            <FormInput
+                              value={selectedEntryDraft.topic ?? ''}
+                              onChange={(event) => {
+                                const value = event.currentTarget.value;
+                                setEntryDrafts((current) => ({
+                                  ...current,
+                                  [selectedService.id]: { ...selectedEntryDraft, topic: value },
+                                }));
+                              }}
+                            />
+                          </FormField>
+                          <FormField label="Front">
+                            <FormInput
+                              value={selectedEntryDraft.front ?? ''}
+                              onChange={(event) => {
+                                const value = event.currentTarget.value;
+                                setEntryDrafts((current) => ({
+                                  ...current,
+                                  [selectedService.id]: { ...selectedEntryDraft, front: value },
+                                }));
+                              }}
+                            />
+                          </FormField>
+                          <FormField label="Back">
+                            <FormInput
+                              value={selectedEntryDraft.back ?? ''}
+                              onChange={(event) => {
+                                const value = event.currentTarget.value;
+                                setEntryDrafts((current) => ({
+                                  ...current,
+                                  [selectedService.id]: { ...selectedEntryDraft, back: value },
+                                }));
+                              }}
+                            />
+                          </FormField>
+                        </FormGrid>
+                      ) : null}
+
+                      {selectedService.id === 'language_coach' ? (
+                        <FormGrid>
+                          <FormField label="Language">
+                            <FormInput
+                              value={selectedEntryDraft.language ?? ''}
+                              onChange={(event) => {
+                                const value = event.currentTarget.value;
+                                setEntryDrafts((current) => ({
+                                  ...current,
+                                  [selectedService.id]: { ...selectedEntryDraft, language: value },
+                                }));
+                              }}
+                            />
+                          </FormField>
+                          <FormField label="Phrase">
+                            <FormInput
+                              value={selectedEntryDraft.phrase ?? ''}
+                              onChange={(event) => {
+                                const value = event.currentTarget.value;
+                                setEntryDrafts((current) => ({
+                                  ...current,
+                                  [selectedService.id]: { ...selectedEntryDraft, phrase: value },
+                                }));
+                              }}
+                            />
+                          </FormField>
+                          <FormField label="Translation">
+                            <FormInput
+                              value={selectedEntryDraft.translation ?? ''}
+                              onChange={(event) => {
+                                const value = event.currentTarget.value;
+                                setEntryDrafts((current) => ({
+                                  ...current,
+                                  [selectedService.id]: { ...selectedEntryDraft, translation: value },
+                                }));
+                              }}
+                            />
+                          </FormField>
+                          <FormField label="Confidence (1-5)">
+                            <FormInput
+                              type="number"
+                              min={1}
+                              max={5}
+                              value={selectedEntryDraft.confidence ?? ''}
+                              onChange={(event) => {
+                                const value = event.currentTarget.value;
+                                setEntryDrafts((current) => ({
+                                  ...current,
+                                  [selectedService.id]: { ...selectedEntryDraft, confidence: value },
+                                }));
+                              }}
+                            />
+                          </FormField>
+                          <FormField label="Notes">
+                            <FormTextarea
+                              rows={3}
+                              value={selectedEntryDraft.notes ?? ''}
+                              onChange={(event) => {
+                                const value = event.currentTarget.value;
+                                setEntryDrafts((current) => ({
+                                  ...current,
+                                  [selectedService.id]: { ...selectedEntryDraft, notes: value },
+                                }));
+                              }}
+                            />
+                          </FormField>
+                        </FormGrid>
+                      ) : null}
+
+                      {selectedService.id === 'nutrition_log' ? (
+                        <FormGrid>
+                          <FormField label="Meal">
+                            <FormInput
+                              value={selectedEntryDraft.meal ?? ''}
+                              onChange={(event) => {
+                                const value = event.currentTarget.value;
+                                setEntryDrafts((current) => ({
+                                  ...current,
+                                  [selectedService.id]: { ...selectedEntryDraft, meal: value },
+                                }));
+                              }}
+                            />
+                          </FormField>
+                          <FormField label="Calories">
+                            <FormInput
+                              type="number"
+                              value={selectedEntryDraft.calories ?? ''}
+                              onChange={(event) => {
+                                const value = event.currentTarget.value;
+                                setEntryDrafts((current) => ({
+                                  ...current,
+                                  [selectedService.id]: { ...selectedEntryDraft, calories: value },
+                                }));
+                              }}
+                            />
+                          </FormField>
+                          <FormField label="Protein (g)">
+                            <FormInput
+                              type="number"
+                              value={selectedEntryDraft.protein_grams ?? ''}
+                              onChange={(event) => {
+                                const value = event.currentTarget.value;
+                                setEntryDrafts((current) => ({
+                                  ...current,
+                                  [selectedService.id]: { ...selectedEntryDraft, protein_grams: value },
+                                }));
+                              }}
+                            />
+                          </FormField>
+                          <FormField label="Occurred on">
+                            <FormInput
+                              type="date"
+                              value={selectedEntryDraft.occurred_on ?? ''}
+                              onChange={(event) => {
+                                const value = event.currentTarget.value;
+                                setEntryDrafts((current) => ({
+                                  ...current,
+                                  [selectedService.id]: { ...selectedEntryDraft, occurred_on: value },
+                                }));
+                              }}
+                            />
+                          </FormField>
+                          <FormField label="Notes">
+                            <FormTextarea
+                              rows={3}
+                              value={selectedEntryDraft.notes ?? ''}
+                              onChange={(event) => {
+                                const value = event.currentTarget.value;
+                                setEntryDrafts((current) => ({
+                                  ...current,
+                                  [selectedService.id]: { ...selectedEntryDraft, notes: value },
+                                }));
+                              }}
+                            />
+                          </FormField>
+                        </FormGrid>
+                      ) : null}
+
+                      <div className="app-inline-actions">
+                        <AppButton
+                          type="button"
+                          disabled={mutatingKey === `${selectedService.id}:entry`}
+                          onClick={() => {
+                            void mutate(
+                              `${selectedService.id}:entry`,
+                              () => services.client.createSageServiceEntry({
+                                serviceId: selectedService.id,
+                                entry: payloadFromDraft(selectedService.id, selectedEntryDraft),
+                              }),
+                              `Added a new ${readString(selectedService.entry_noun, 'item')} to ${readString(selectedService.name, selectedService.id)}.`,
+                            );
+                            setEntryDrafts((current) => ({
+                              ...current,
+                              [selectedService.id]: defaultEntryDraft(selectedService.id),
+                            }));
+                          }}
+                        >
+                          {mutatingKey === `${selectedService.id}:entry` ? 'Saving…' : `Add ${readString(selectedService.entry_noun, 'item')}`}
+                        </AppButton>
+                      </div>
+                    </FormSection>
+
+                    <FormSection
+                      title="Recent state"
+                      description="Pinned entries stay prominent for Sage. Recent entries stay available as structured app state."
+                    >
+                      {Array.isArray(selectedService.entries) && selectedService.entries.length > 0 ? (
+                        <DataTable>
+                          <DataTableHeader columns="minmax(0, 1.4fr) minmax(10rem, 0.8fr) minmax(7rem, 0.6fr) auto">
+                            <DataTableHeaderCell>Entry</DataTableHeaderCell>
+                            <DataTableHeaderCell>Updated</DataTableHeaderCell>
+                            <DataTableHeaderCell>Status</DataTableHeaderCell>
+                            <DataTableHeaderCell align="end">Actions</DataTableHeaderCell>
+                          </DataTableHeader>
+                          {selectedService.entries.map((item, index) => {
+                            const record = item && typeof item === 'object' ? item as Record<string, unknown> : {};
+                            const entryId = readString(record.id, `${selectedService.id}-${index}`);
+                            const summary = readString(record.summary, 'Structured entry');
+                            const pinned = Boolean(record.pinned);
+                            return (
+                              <DataTableRow
+                                key={entryId}
+                                columns="minmax(0, 1.4fr) minmax(10rem, 0.8fr) minmax(7rem, 0.6fr) auto"
+                              >
+                                <DataTableCell
+                                  primary={summary}
+                                  secondary={selectedService.id === 'nutrition_log'
+                                    ? readString(record.occurred_on, '')
+                                    : selectedService.id === 'flashcards'
+                                      ? readString(record.topic, '')
+                                      : readString(record.notes, '')}
+                                />
+                                <DataTableCell primary={formatTimestamp(record.updated_at ?? record.created_at)} />
+                                <DataTableCell
+                                  primary={<DataBadge tone={pinned ? 'success' : 'neutral'}>{pinned ? 'Pinned' : 'Recent'}</DataBadge>}
+                                />
+                                <DataTableCell
+                                  align="end"
+                                  primary={(
+                                    <div className="app-inline-actions">
+                                      <AppButton
+                                        type="button"
+                                        tone="secondary"
+                                        disabled={mutatingKey === `${selectedService.id}:${entryId}:pin`}
+                                        onClick={() => {
+                                          void mutate(
+                                            `${selectedService.id}:${entryId}:pin`,
+                                            () => services.client.setSageServiceEntryPinned({
+                                              serviceId: selectedService.id,
+                                              entryId,
+                                              pinned: !pinned,
+                                            }),
+                                            `${pinned ? 'Unpinned' : 'Pinned'} ${summary}.`,
+                                          );
+                                        }}
+                                      >
+                                        {pinned ? 'Unpin' : 'Pin'}
+                                      </AppButton>
+                                      <AppButton
+                                        type="button"
+                                        tone="danger"
+                                        onClick={() => {
+                                          setPendingDelete({
+                                            serviceId: selectedService.id,
+                                            entryId,
+                                            summary,
+                                          });
+                                        }}
+                                      >
+                                        Remove
+                                      </AppButton>
+                                    </div>
+                                  )}
+                                />
+                              </DataTableRow>
+                            );
+                          })}
+                        </DataTable>
+                      ) : (
+                        <EmptyPanel
+                          title="No structured entries yet"
+                          body="Add the first item above and Sage will start carrying it as reusable app state."
+                        />
+                      )}
+                    </FormSection>
+
+                    <FormSection
+                      title="Sage memory view"
+                      description="This is the compact state Sage can carry forward without reading a debug dump."
+                    >
+                      <FormGrid>
+                        <FormReadout
+                          label="Saved preferences"
+                          value={memoryLine(selectedService.memory_snapshot?.preferences)}
+                        />
+                        <FormReadout
+                          label="Active context"
+                          value={memoryLine(selectedService.memory_snapshot?.active_context)}
+                        />
+                        <FormReadout
+                          label="App state"
+                          value={memoryLine(selectedService.memory_snapshot?.app_state)}
+                        />
+                      </FormGrid>
+                      <div className="app-stack-2">
+                        <strong className="app-card-button__title">Recent memory updates</strong>
+                        {Array.isArray(selectedService.recent_activity) && selectedService.recent_activity.length > 0 ? (
+                          selectedService.recent_activity.map((item, index) => {
+                            const record = item && typeof item === 'object' ? item as Record<string, unknown> : {};
+                            return (
+                              <div key={readString(record.id, `${selectedService.id}-activity-${index}`)} className="app-card-button">
+                                <div className="app-inline-actions app-inline-actions--between app-inline-actions--start">
+                                  <strong className="app-card-button__title">{readString(record.summary, 'Memory update')}</strong>
+                                  <DataBadge tone="neutral">{readString(record.action, 'recorded')}</DataBadge>
+                                </div>
+                                <span className="app-card-button__subtitle">{formatTimestamp(record.created_at)}</span>
+                              </div>
+                            );
+                          })
+                        ) : (
+                          <EmptyPanel
+                            title="No memory updates yet"
+                            body="The activity trail will appear here as Sage services write explicit state."
+                          />
+                        )}
+                      </div>
+                    </FormSection>
+                  </div>
                 )}
               </ListDetailPanel>
             )}
@@ -419,105 +889,25 @@ export function WorkstationApplicationsPane() {
         )}
       </ListDetailShell>
 
-      <CommandSheet
-        open={isActionSheetOpen && Boolean(selectedApp)}
-        title={selectedApp ? `Application actions · ${readString(selectedApp.name, selectedAppIdSafe)}` : 'Application actions'}
-        description="Run module actions inside workstation chrome rather than jumping to generic page controls."
-        onClose={() => setIsActionSheetOpen(false)}
-        actions={(
-          <AppButton type="button" tone="secondary" onClick={() => setIsActionSheetOpen(false)}>
-            Done
-          </AppButton>
-        )}
-      >
-        {selectedApp ? (
-          <>
-            <ModalSection title="Module state" description="Current registry and catalog status for the selected application.">
-              <div className="app-stack-3">
-                <FormReadout label="Presence" value={selectedInstalled ? 'Installed in workspace' : 'Catalog only'} />
-                <FormReadout label="Version" value={`v${readString(selectedInstalled?.version ?? selectedApp.version, 'n/a')}`} />
-                <FormReadout label="Available update" value={selectedUpdate ? `v${readString(selectedUpdate.latest_version, 'n/a')}` : 'No update queued'} />
-              </div>
-            </ModalSection>
-
-            <ModalSection title="Actions" description="Install, update, launch, or remove the selected module.">
-              <div className="app-inline-actions">
-                {selectedInstalled?.entry_route ? (
-                  <AppButton
-                    type="button"
-                    tone="secondary"
-                    onClick={() => {
-                      setIsActionSheetOpen(false);
-                      router.push(readString(selectedInstalled.entry_route, '/'));
-                    }}
-                  >
-                    Open module
-                  </AppButton>
-                ) : null}
-
-                {!selectedInstalled && selectedCatalog ? (
-                  <AppButton
-                    type="button"
-                    disabled={mutatingAppId === selectedAppIdSafe}
-                    onClick={() => {
-                      void mutate({
-                        appId: selectedAppIdSafe,
-                        action: () => services.client.installApp({ appId: selectedAppIdSafe }),
-                        successMessage: `Installed ${readString(selectedApp.name, selectedAppIdSafe)}.`,
-                      });
-                    }}
-                  >
-                    {mutatingAppId === selectedAppIdSafe ? 'Installing…' : 'Install'}
-                  </AppButton>
-                ) : null}
-
-                {selectedUpdate ? (
-                  <AppButton
-                    type="button"
-                    disabled={mutatingAppId === selectedAppIdSafe}
-                    onClick={() => {
-                      void mutate({
-                        appId: selectedAppIdSafe,
-                        action: () => services.client.updateApp({ appId: selectedAppIdSafe }),
-                        successMessage: `Updated ${readString(selectedApp.name, selectedAppIdSafe)}.`,
-                      });
-                    }}
-                  >
-                    {mutatingAppId === selectedAppIdSafe ? 'Updating…' : 'Apply update'}
-                  </AppButton>
-                ) : null}
-
-                {selectedInstalled ? (
-                  <AppButton
-                    type="button"
-                    tone="danger"
-                    onClick={() => setPendingUninstallId(selectedAppIdSafe)}
-                  >
-                    Remove from workspace
-                  </AppButton>
-                ) : null}
-              </div>
-            </ModalSection>
-          </>
-        ) : null}
-      </CommandSheet>
-
       <ConfirmDialog
-        open={Boolean(pendingUninstallId)}
-        title="Remove application from workspace"
-        body={selectedApp ? `Remove ${readString(selectedApp.name, selectedAppIdSafe)} from the installed workspace registry?` : 'Remove this application from the installed workspace registry?'}
-        confirmLabel="Remove application"
-        busy={mutatingAppId === pendingUninstallId}
-        onCancel={() => setPendingUninstallId(null)}
+        open={Boolean(pendingDelete)}
+        title="Remove structured service entry"
+        body={pendingDelete ? `Remove ${pendingDelete.summary} from ${pendingDelete.serviceId.replace(/_/g, ' ')}?` : 'Remove this structured service entry?'}
+        confirmLabel="Remove entry"
+        busy={pendingDelete ? mutatingKey === `${pendingDelete.serviceId}:${pendingDelete.entryId}:delete` : false}
+        onCancel={() => setPendingDelete(null)}
         onConfirm={() => {
-          if (!pendingUninstallId) {
+          if (!pendingDelete) {
             return;
           }
-          void mutate({
-            appId: pendingUninstallId,
-            action: () => services.client.uninstallApp({ appId: pendingUninstallId }),
-            successMessage: `Uninstalled ${selectedApp ? readString(selectedApp.name, pendingUninstallId) : pendingUninstallId}.`,
-          });
+          void mutate(
+            `${pendingDelete.serviceId}:${pendingDelete.entryId}:delete`,
+            () => services.client.deleteSageServiceEntry({
+              serviceId: pendingDelete.serviceId,
+              entryId: pendingDelete.entryId,
+            }),
+            `Removed ${pendingDelete.summary}.`,
+          );
         }}
       />
     </WorkstationSurfaceRoot>

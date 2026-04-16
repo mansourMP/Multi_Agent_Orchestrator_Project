@@ -14,9 +14,9 @@ export type WorkspaceSetupFormValues = CreateWorkspaceInput;
 export type WorkspaceRouteMode = 'absolute' | 'relative';
 
 export const DEFAULT_ROUTE_BY_PROFILE: Record<WorkspaceShellProfileId, string> = {
-  personal_shell: '/chat',
-  document_workstation_shell: '/home',
-  operations_admin_shell: '/home',
+  personal_shell: '/sage',
+  document_workstation_shell: '/sage',
+  operations_admin_shell: '/sage',
 };
 
 const WORKSPACE_TYPE_OPTIONS: Array<{ value: WorkspaceSetupType; label: string }> = [
@@ -32,8 +32,9 @@ const SHELL_PROFILE_OPTIONS: Array<{ value: WorkspaceShellProfileId; label: stri
 ];
 
 const DEFAULT_ROUTE_OPTIONS = [
-  { value: '/chat', label: 'Chat' },
-  { value: '/home', label: 'Home' },
+  { value: '/sage', label: 'Sage' },
+  { value: '/studio', label: 'Studio' },
+  { value: '/settings', label: 'Settings' },
 ];
 
 function normalizeWorkspaceRoute(

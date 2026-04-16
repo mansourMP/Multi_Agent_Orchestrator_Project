@@ -30,8 +30,16 @@ KNOWN_OWNER_METADATA_KEYS = frozenset(
         "owner_notification_destination",
         "provider",
         "model",
+        "selected_tool_ids",
         "config_schema_version",
     }
+)
+
+STUDIO_TOOL_SCOPE_ALLOWED_IDS = (
+    "web_search",
+    "http_request",
+    "gmail_send",
+    "calendar_write",
 )
 
 KNOWN_OPERATIONAL_STATE_KEYS = frozenset(
@@ -106,6 +114,25 @@ def _normalize_runtime_target(value: Any) -> str:
     return token or config_defaults_service.default_deployed_agent_runtime_target()
 
 
+def _normalize_tool_ids(value: Any) -> List[str]:
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        raise ValueError("selected tools must be a list.")
+    allowed = set(STUDIO_TOOL_SCOPE_ALLOWED_IDS)
+    normalized: List[str] = []
+    seen: set[str] = set()
+    for item in value:
+        token = _text(item).lower()
+        if not token or token in seen:
+            continue
+        if token not in allowed:
+            raise ValueError(f"Unsupported Studio tool selection: {token}.")
+        seen.add(token)
+        normalized.append(token)
+    return normalized
+
+
 def _normalize_deployment_state(value: Any) -> str:
     token = _text(value).lower()
     if token in {"draft", "staging", "live", "paused"}:
@@ -172,6 +199,12 @@ class DeployedAgentCommercePolicy(BaseModel):
     monthly_cost_cap_usd: Optional[float] = None
 
 
+class DeployedAgentToolPolicy(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    enabled_tools: List[str] = Field(default_factory=list)
+
+
 class DeployedAgentConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -192,6 +225,7 @@ class DeployedAgentConfig(BaseModel):
     safety_policy: DeployedAgentSafetyPolicy = Field(default_factory=DeployedAgentSafetyPolicy)
     escalation_policy: DeployedAgentEscalationPolicy = Field(default_factory=DeployedAgentEscalationPolicy)
     commerce_policy: DeployedAgentCommercePolicy = Field(default_factory=DeployedAgentCommercePolicy)
+    tool_policy: DeployedAgentToolPolicy = Field(default_factory=DeployedAgentToolPolicy)
 
 
 class DeployedAgentOperationalState(BaseModel):
@@ -241,6 +275,7 @@ def deployed_agent_config_from_record(
     safety_policy_payload = _coerce_dict(config_payload.get("safety_policy"))
     escalation_policy_payload = _coerce_dict(config_payload.get("escalation_policy"))
     commerce_policy_payload = _coerce_dict(config_payload.get("commerce_policy"))
+    tool_policy_payload = _coerce_dict(config_payload.get("tool_policy"))
     customer_policy = {
         "paused_message": _optional_text(
             customer_policy_payload.get("paused_message")
@@ -385,6 +420,13 @@ def deployed_agent_config_from_record(
                     label="monthly_cost_cap_usd",
                 ),
             },
+            "tool_policy": {
+                "enabled_tools": _normalize_tool_ids(
+                    tool_policy_payload.get("enabled_tools")
+                    if "enabled_tools" in tool_policy_payload
+                    else metadata.get("selected_tool_ids")
+                ),
+            },
         }
     )
 
@@ -458,6 +500,8 @@ def metadata_from_deployed_agent_config(
         payload["provider"] = config.provider
     if config.model:
         payload["model"] = config.model
+    if config.tool_policy.enabled_tools:
+        payload["selected_tool_ids"] = list(config.tool_policy.enabled_tools)
     return payload
 
 

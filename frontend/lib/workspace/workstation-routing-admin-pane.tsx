@@ -288,7 +288,7 @@ export function WorkstationRoutingAdminPane() {
                     />
                     <FormReadout
                       label="Default route"
-                      value={String(shellHints.defaultRoute ?? '/w/.../chat')}
+                      value={String(shellHints.defaultRoute ?? '/w/.../sage')}
                     />
                     <FormReadout
                       label="Bootstrap mode"
@@ -401,7 +401,7 @@ export function WorkstationRoutingAdminPane() {
                     <FormGrid columns="1fr">
                       <FormReadout label="Workspace" value={String(workspace.label ?? workspace.id ?? 'Workspace')} />
                       <FormReadout label="Workspace kind" value={String(workspace.kind ?? 'personal')} />
-                      <FormReadout label="Default route" value={String(shellHints.defaultRoute ?? '/chat')} />
+                      <FormReadout label="Default route" value={String(shellHints.defaultRoute ?? '/sage')} />
                       <FormReadout label="Preferred profile" value={String(shellHints.preferredShellProfileId ?? 'Unset')} />
                     </FormGrid>
                   </div>

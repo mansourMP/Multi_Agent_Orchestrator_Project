@@ -1,10 +1,14 @@
 from fastapi import APIRouter
 
 from server_modules.app_registry_api import register_app_registry_routes
+from server_modules.sage_memory_api import register_sage_memory_routes
+from server_modules.sage_services_api import register_sage_services_routes
 from server_modules.workflow_api import register_workflow_routes
 
 
 router = APIRouter()
 
 register_app_registry_routes(router)
+register_sage_memory_routes(router)
+register_sage_services_routes(router)
 register_workflow_routes(router)

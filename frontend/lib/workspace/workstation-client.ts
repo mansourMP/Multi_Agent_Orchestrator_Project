@@ -85,6 +85,37 @@ export type WorkstationArtifactDetailPayload = Record<string, unknown> & {
   metadata?: Record<string, unknown> | null;
 };
 
+export type WorkstationSageServiceRecord = Record<string, unknown> & {
+  id?: string | null;
+  name?: string | null;
+  description?: string | null;
+  entry_noun?: string | null;
+  profile?: Record<string, unknown> | null;
+  entries?: Record<string, unknown>[] | null;
+  recent_entries?: Record<string, unknown>[] | null;
+  recent_activity?: Record<string, unknown>[] | null;
+  memory_snapshot?: Record<string, unknown> | null;
+  summary?: Record<string, unknown> | null;
+  suggested_prompt?: string | null;
+  status?: string | null;
+};
+
+export type WorkstationSageMemoryRecord = Record<string, unknown> & {
+  id?: string | null;
+  category?: string | null;
+  category_label?: string | null;
+  title?: string | null;
+  content?: string | null;
+  summary?: string | null;
+  pinned?: boolean | null;
+  source?: string | null;
+  source_label?: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+  updated_by?: string | null;
+  history?: Record<string, unknown>[] | null;
+};
+
 export type WorkstationAgentTraceRecord = Record<string, unknown> & {
   id?: string | null;
   tenant_id?: string | null;
@@ -216,6 +247,22 @@ export type DeployedAgentAnalyticsRecord = Record<string, unknown> & {
   cost_burn?: Record<string, unknown> | null;
 };
 
+export type DeployedAgentTelegramReadinessRecord = Record<string, unknown> & {
+  channel?: string | null;
+  workspace_id?: string | null;
+  deployed_agent_id?: string | null;
+  ready_for_live?: boolean | null;
+  status?: string | null;
+  blockers?: Record<string, unknown>[] | null;
+  warnings?: Record<string, unknown>[] | null;
+  next_action?: string | null;
+  configured_binding?: Record<string, unknown> | null;
+  connectors?: Record<string, unknown>[] | null;
+  webhook?: Record<string, unknown> | null;
+  autopilot?: Record<string, unknown> | null;
+  whatsapp?: Record<string, unknown> | null;
+};
+
 export type WorkstationPlatformAnalyticsDeploymentRecord = Record<string, unknown> & {
   deployed_agent_id?: string | null;
   name?: string | null;
@@ -301,6 +348,15 @@ export type WorkstationClientPaths = {
   artifactContent: (artifactId: string) => string;
   notifications: (limit?: number) => string;
   activity: (limit?: number) => string;
+  sageMemory: string;
+  sageMemoryEntries: string;
+  sageMemoryEntry: (entryId: string) => string;
+  sageMemoryPin: (entryId: string) => string;
+  sageServices: string;
+  sageServiceProfile: (serviceId: string) => string;
+  sageServiceEntries: (serviceId: string) => string;
+  sageServiceEntry: (serviceId: string, entryId: string) => string;
+  sageServicePin: (serviceId: string, entryId: string) => string;
   appsInstalled: string;
   appsStore: string;
   appsUpdates: string;
@@ -316,6 +372,7 @@ export type WorkstationClientPaths = {
   agentTraceDetail: (traceId: string) => string;
   agentTraceStream: (traceId: string) => string;
   deployedAgents: (deploymentState?: string | null) => string;
+  deployedAgentTelegramReadiness: (deployedAgentId?: string | null) => string;
   deployedAgentDetail: (deployedAgentId: string) => string;
   deployedAgentDeploy: (deployedAgentId: string) => string;
   deployedAgentPause: (deployedAgentId: string) => string;
@@ -373,6 +430,50 @@ export type WorkstationClient = {
     markAll?: boolean;
   }) => Promise<Record<string, unknown> | null>;
   listActivityTimeline: (options?: { limit?: number }) => Promise<Record<string, unknown>>;
+  listSageMemory: () => Promise<Record<string, unknown>>;
+  createSageMemoryEntry: (options: {
+    category: string;
+    title: string;
+    content: string;
+    pinned?: boolean;
+  }) => Promise<Record<string, unknown>>;
+  updateSageMemoryEntry: (options: {
+    entryId: string;
+    category: string;
+    title: string;
+    content: string;
+    pinned?: boolean;
+  }) => Promise<Record<string, unknown>>;
+  deleteSageMemoryEntry: (options: {
+    entryId: string;
+  }) => Promise<Record<string, unknown> | null>;
+  setSageMemoryEntryPinned: (options: {
+    entryId: string;
+    pinned: boolean;
+  }) => Promise<Record<string, unknown>>;
+  listSageServices: () => Promise<Record<string, unknown>>;
+  updateSageServiceProfile: (options: {
+    serviceId: string;
+    profile: Record<string, unknown>;
+  }) => Promise<Record<string, unknown>>;
+  createSageServiceEntry: (options: {
+    serviceId: string;
+    entry: Record<string, unknown>;
+  }) => Promise<Record<string, unknown>>;
+  updateSageServiceEntry: (options: {
+    serviceId: string;
+    entryId: string;
+    entry: Record<string, unknown>;
+  }) => Promise<Record<string, unknown>>;
+  deleteSageServiceEntry: (options: {
+    serviceId: string;
+    entryId: string;
+  }) => Promise<Record<string, unknown> | null>;
+  setSageServiceEntryPinned: (options: {
+    serviceId: string;
+    entryId: string;
+    pinned: boolean;
+  }) => Promise<Record<string, unknown>>;
   listInstalledApps: () => Promise<Record<string, unknown>>;
   listStoreApps: () => Promise<Record<string, unknown>>;
   listAppUpdates: () => Promise<Record<string, unknown>>;
@@ -422,6 +523,10 @@ export type WorkstationClient = {
   }) => Promise<Record<string, unknown> | null>;
   getDeployedAgent: (options: {
     deployedAgentId: string;
+    allowMissing?: boolean;
+  }) => Promise<Record<string, unknown> | null>;
+  getDeployedAgentTelegramReadiness: (options?: {
+    deployedAgentId?: string | null;
     allowMissing?: boolean;
   }) => Promise<Record<string, unknown> | null>;
   updateDeployedAgent: (options: {
@@ -499,6 +604,8 @@ export type WorkstationClient = {
     message: string;
     channel?: string;
     source?: string;
+    runtimeTarget?: string | null;
+    policyContext?: Record<string, unknown>;
   }) => Promise<WorkstationTurnResponse>;
   submitTurnStream: (options: {
     actor: WorkstationSessionActor;
@@ -507,6 +614,8 @@ export type WorkstationClient = {
     message: string;
     channel?: string;
     source?: string;
+    runtimeTarget?: string | null;
+    policyContext?: Record<string, unknown>;
     onEvent?: (event: WorkstationTurnStreamEvent) => void;
   }) => Promise<WorkstationTurnResponse>;
   submitTurnWithSessionRetry: (options: {
@@ -515,6 +624,8 @@ export type WorkstationClient = {
     message: string;
     channel?: string;
     source?: string;
+    runtimeTarget?: string | null;
+    policyContext?: Record<string, unknown>;
   }) => Promise<{
     response: WorkstationTurnResponse;
     session: WorkstationSessionRecord;
@@ -526,6 +637,8 @@ export type WorkstationClient = {
     message: string;
     channel?: string;
     source?: string;
+    runtimeTarget?: string | null;
+    policyContext?: Record<string, unknown>;
     onEvent?: (event: WorkstationTurnStreamEvent) => void;
   }) => Promise<{
     response: WorkstationTurnResponse;
@@ -607,6 +720,23 @@ export function buildWorkstationApiPaths(workspaceId: string): WorkstationClient
       `/api/notifications${buildQueryString({ workspace_id: workspaceId, limit })}`,
     activity: (limit = 80) =>
       `/api/activity/timeline${buildQueryString({ workspace_id: workspaceId, limit })}`,
+    sageMemory:
+      `/api/sage-memory${buildQueryString({ workspace_id: workspaceId })}`,
+    sageMemoryEntries: '/api/sage-memory/entries',
+    sageMemoryEntry: (entryId) =>
+      `/api/sage-memory/entries/${encodeURIComponent(entryId)}`,
+    sageMemoryPin: (entryId) =>
+      `/api/sage-memory/entries/${encodeURIComponent(entryId)}/pin`,
+    sageServices:
+      `/api/sage-services${buildQueryString({ workspace_id: workspaceId })}`,
+    sageServiceProfile: (serviceId) =>
+      `/api/sage-services/${encodeURIComponent(serviceId)}/profile`,
+    sageServiceEntries: (serviceId) =>
+      `/api/sage-services/${encodeURIComponent(serviceId)}/entries`,
+    sageServiceEntry: (serviceId, entryId) =>
+      `/api/sage-services/${encodeURIComponent(serviceId)}/entries/${encodeURIComponent(entryId)}`,
+    sageServicePin: (serviceId, entryId) =>
+      `/api/sage-services/${encodeURIComponent(serviceId)}/entries/${encodeURIComponent(entryId)}/pin`,
     appsInstalled: '/apps/installed',
     appsStore: '/apps/store',
     appsUpdates: '/apps/updates',
@@ -634,6 +764,11 @@ export function buildWorkstationApiPaths(workspaceId: string): WorkstationClient
       `/api/agent-traces/${encodeURIComponent(traceId)}/stream${buildQueryString({ workspace_id: workspaceId })}`,
     deployedAgents: (deploymentState) =>
       `/api/deployed-agents${buildQueryString({ workspace_id: workspaceId, deployment_state: deploymentState })}`,
+    deployedAgentTelegramReadiness: (deployedAgentId) =>
+      `/api/deployed-agents/telegram-readiness${buildQueryString({
+        workspace_id: workspaceId,
+        deployed_agent_id: deployedAgentId,
+      })}`,
     deployedAgentDetail: (deployedAgentId) =>
       `/api/deployed-agents/${encodeURIComponent(deployedAgentId)}${buildQueryString({ workspace_id: workspaceId })}`,
     deployedAgentDeploy: (deployedAgentId) =>
@@ -903,6 +1038,8 @@ export function createWorkstationClient(
     message,
     channel = 'web',
     source = 'workstation_client',
+    runtimeTarget = null,
+    policyContext = {},
   }: {
     actor: WorkstationSessionActor;
     sessionId: string;
@@ -910,6 +1047,8 @@ export function createWorkstationClient(
     message: string;
     channel?: string;
     source?: string;
+    runtimeTarget?: string | null;
+    policyContext?: Record<string, unknown>;
   }): Promise<WorkstationTurnResponse> {
     return (await requestJson<WorkstationTurnResponse>({
       path: paths.turnSubmit,
@@ -931,7 +1070,10 @@ export function createWorkstationClient(
           },
           execution_mode: 'sync',
           response_mode: 'artifact',
-          policy_context: {},
+          policy_context: {
+            ...(policyContext ?? {}),
+            ...(runtimeTarget ? { execution_target: runtimeTarget } : {}),
+          },
         }),
       },
     })) as WorkstationTurnResponse;
@@ -1034,6 +1176,8 @@ export function createWorkstationClient(
     message,
     channel = 'web',
     source = 'workstation_client',
+    runtimeTarget = null,
+    policyContext = {},
     onEvent,
   }: {
     actor: WorkstationSessionActor;
@@ -1042,6 +1186,8 @@ export function createWorkstationClient(
     message: string;
     channel?: string;
     source?: string;
+    runtimeTarget?: string | null;
+    policyContext?: Record<string, unknown>;
     onEvent?: (event: WorkstationTurnStreamEvent) => void;
   }): Promise<WorkstationTurnResponse> {
     let response: Response;
@@ -1066,7 +1212,10 @@ export function createWorkstationClient(
             },
             execution_mode: 'sync',
             response_mode: 'stream',
-            policy_context: {},
+            policy_context: {
+              ...(policyContext ?? {}),
+              ...(runtimeTarget ? { execution_target: runtimeTarget } : {}),
+            },
           }),
         },
         resolveRequestPolicy({ method: 'POST' }, WRITE_REQUEST_POLICY),
@@ -1246,6 +1395,131 @@ export function createWorkstationClient(
         path: paths.activity(limit),
         policy: READ_REQUEST_POLICY,
       }) as Promise<Record<string, unknown>>,
+    listSageMemory: () =>
+      requestJson<Record<string, unknown>>({
+        path: paths.sageMemory,
+        policy: READ_REQUEST_POLICY,
+      }) as Promise<Record<string, unknown>>,
+    createSageMemoryEntry: ({ category, title, content, pinned = false }) =>
+      requestJson<Record<string, unknown>>({
+        path: paths.sageMemoryEntries,
+        init: {
+          method: 'POST',
+          headers: mergeJsonHeaders(),
+          body: JSON.stringify({
+            workspace_id: scope.workspaceId,
+            category,
+            title,
+            content,
+            pinned,
+          }),
+        },
+        policy: WRITE_REQUEST_POLICY,
+      }) as Promise<Record<string, unknown>>,
+    updateSageMemoryEntry: ({ entryId, category, title, content, pinned = false }) =>
+      requestJson<Record<string, unknown>>({
+        path: paths.sageMemoryEntry(entryId),
+        init: {
+          method: 'PATCH',
+          headers: mergeJsonHeaders(),
+          body: JSON.stringify({
+            workspace_id: scope.workspaceId,
+            category,
+            title,
+            content,
+            pinned,
+          }),
+        },
+        policy: WRITE_REQUEST_POLICY,
+      }) as Promise<Record<string, unknown>>,
+    deleteSageMemoryEntry: ({ entryId }) =>
+      requestJson<Record<string, unknown>>({
+        path: `${paths.sageMemoryEntry(entryId)}${buildQueryString({ workspace_id: scope.workspaceId })}`,
+        init: {
+          method: 'DELETE',
+          headers: mergeJsonHeaders(),
+        },
+        policy: WRITE_REQUEST_POLICY,
+      }),
+    setSageMemoryEntryPinned: ({ entryId, pinned }) =>
+      requestJson<Record<string, unknown>>({
+        path: paths.sageMemoryPin(entryId),
+        init: {
+          method: 'POST',
+          headers: mergeJsonHeaders(),
+          body: JSON.stringify({
+            workspace_id: scope.workspaceId,
+            pinned,
+          }),
+        },
+        policy: WRITE_REQUEST_POLICY,
+      }) as Promise<Record<string, unknown>>,
+    listSageServices: () =>
+      requestJson<Record<string, unknown>>({
+        path: paths.sageServices,
+        policy: READ_REQUEST_POLICY,
+      }) as Promise<Record<string, unknown>>,
+    updateSageServiceProfile: ({ serviceId, profile }) =>
+      requestJson<Record<string, unknown>>({
+        path: paths.sageServiceProfile(serviceId),
+        init: {
+          method: 'PUT',
+          headers: mergeJsonHeaders(),
+          body: JSON.stringify({
+            workspace_id: scope.workspaceId,
+            profile,
+          }),
+        },
+        policy: WRITE_REQUEST_POLICY,
+      }) as Promise<Record<string, unknown>>,
+    createSageServiceEntry: ({ serviceId, entry }) =>
+      requestJson<Record<string, unknown>>({
+        path: paths.sageServiceEntries(serviceId),
+        init: {
+          method: 'POST',
+          headers: mergeJsonHeaders(),
+          body: JSON.stringify({
+            workspace_id: scope.workspaceId,
+            entry,
+          }),
+        },
+        policy: WRITE_REQUEST_POLICY,
+      }) as Promise<Record<string, unknown>>,
+    updateSageServiceEntry: ({ serviceId, entryId, entry }) =>
+      requestJson<Record<string, unknown>>({
+        path: paths.sageServiceEntry(serviceId, entryId),
+        init: {
+          method: 'PATCH',
+          headers: mergeJsonHeaders(),
+          body: JSON.stringify({
+            workspace_id: scope.workspaceId,
+            entry,
+          }),
+        },
+        policy: WRITE_REQUEST_POLICY,
+      }) as Promise<Record<string, unknown>>,
+    deleteSageServiceEntry: ({ serviceId, entryId }) =>
+      requestJson<Record<string, unknown>>({
+        path: `${paths.sageServiceEntry(serviceId, entryId)}${buildQueryString({ workspace_id: scope.workspaceId })}`,
+        init: {
+          method: 'DELETE',
+          headers: mergeJsonHeaders(),
+        },
+        policy: WRITE_REQUEST_POLICY,
+      }),
+    setSageServiceEntryPinned: ({ serviceId, entryId, pinned }) =>
+      requestJson<Record<string, unknown>>({
+        path: paths.sageServicePin(serviceId, entryId),
+        init: {
+          method: 'POST',
+          headers: mergeJsonHeaders(),
+          body: JSON.stringify({
+            workspace_id: scope.workspaceId,
+            pinned,
+          }),
+        },
+        policy: WRITE_REQUEST_POLICY,
+      }) as Promise<Record<string, unknown>>,
     listInstalledApps: () =>
       requestJson<Record<string, unknown>>({
         path: paths.appsInstalled,
@@ -1398,6 +1672,12 @@ export function createWorkstationClient(
     getDeployedAgent: ({ deployedAgentId, allowMissing = false }) =>
       requestJson<Record<string, unknown>>({
         path: paths.deployedAgentDetail(deployedAgentId),
+        allowStatuses: allowMissing ? [404] : [],
+        policy: READ_REQUEST_POLICY,
+      }),
+    getDeployedAgentTelegramReadiness: ({ deployedAgentId = null, allowMissing = false } = {}) =>
+      requestJson<Record<string, unknown>>({
+        path: paths.deployedAgentTelegramReadiness(deployedAgentId),
         allowStatuses: allowMissing ? [404] : [],
         policy: READ_REQUEST_POLICY,
       }),
@@ -1623,6 +1903,8 @@ export function createWorkstationClient(
       message,
       channel = 'web',
       source = 'workstation_client',
+      runtimeTarget = null,
+      policyContext = {},
     }) => {
       let session = await createSession({
         actor,
@@ -1640,6 +1922,8 @@ export function createWorkstationClient(
           message,
           channel,
           source,
+          runtimeTarget,
+          policyContext,
         });
         return { response, session, renewed: false };
       } catch (error) {
@@ -1661,6 +1945,8 @@ export function createWorkstationClient(
           message,
           channel,
           source,
+          runtimeTarget,
+          policyContext,
         });
         return { response, session, renewed: true };
       }
@@ -1672,6 +1958,8 @@ export function createWorkstationClient(
       message,
       channel = 'web',
       source = 'workstation_client',
+      runtimeTarget = null,
+      policyContext = {},
       onEvent,
     }) => {
       let session = await createSession({
@@ -1690,6 +1978,8 @@ export function createWorkstationClient(
           message,
           channel,
           source,
+          runtimeTarget,
+          policyContext,
           onEvent,
         });
         return { response, session, renewed: false };
@@ -1712,6 +2002,8 @@ export function createWorkstationClient(
           message,
           channel,
           source,
+          runtimeTarget,
+          policyContext,
           onEvent,
         });
         return { response, session, renewed: true };

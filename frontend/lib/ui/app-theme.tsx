@@ -36,13 +36,35 @@ function readSystemDarkPreference(): boolean {
   return window.matchMedia('(prefers-color-scheme: dark)').matches;
 }
 
+function readDocumentTheme(): AppResolvedTheme | null {
+  if (typeof document === 'undefined') {
+    return null;
+  }
+  const attributeValue =
+    document.documentElement.getAttribute(APP_THEME_ATTRIBUTE)
+    ?? document.body.getAttribute(APP_THEME_ATTRIBUTE);
+  return attributeValue === 'light' || attributeValue === 'dark' ? attributeValue : null;
+}
+
 export function AppThemeProvider({
   preference,
   children,
 }: PropsWithChildren<{
   preference: AppThemePreference;
 }>) {
-  const [prefersDark, setPrefersDark] = useState<boolean>(() => readSystemDarkPreference());
+  const [prefersDark, setPrefersDark] = useState<boolean>(() => {
+    const documentTheme = readDocumentTheme();
+    if (documentTheme) {
+      return documentTheme === 'dark';
+    }
+    if (preference === 'dark') {
+      return true;
+    }
+    if (preference === 'light') {
+      return false;
+    }
+    return readSystemDarkPreference();
+  });
 
   useEffect(() => {
     if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') {
@@ -74,6 +96,7 @@ export function AppThemeProvider({
       document.documentElement.style.setProperty(name, value);
     }
     document.body.setAttribute(APP_THEME_ATTRIBUTE, resolvedTheme);
+    document.body.style.colorScheme = resolvedTheme;
   }, [resolvedTheme]);
 
   const value = useMemo<AppThemeContextValue>(
@@ -86,7 +109,7 @@ export function AppThemeProvider({
 
   return (
     <AppThemeContext.Provider value={value}>
-      <div className="app-root" data-emp-theme-root={resolvedTheme}>
+      <div className="app-root">
         {children}
       </div>
     </AppThemeContext.Provider>

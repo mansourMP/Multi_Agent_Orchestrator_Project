@@ -23,6 +23,43 @@ export type WorkstationChatMessageRecord = {
   metadata: Record<string, unknown>;
 };
 
+const SUPERVISOR_UNREACHABLE_MESSAGE =
+  'Supervisor not running. Start empyralis-supervisor before using computer control.';
+const SUPERVISOR_INTERRUPTED_MESSAGE = 'execution interrupted by operator';
+
+function readExecutionTarget(item: Record<string, unknown>): string {
+  const direct = item.execution_target_selected ?? item.execution_target;
+  if (typeof direct === 'string' && direct.trim()) {
+    return direct.trim().toLowerCase();
+  }
+
+  const metadata = item.metadata;
+  if (metadata && typeof metadata === 'object') {
+    return readExecutionTarget(metadata as Record<string, unknown>);
+  }
+
+  return '';
+}
+
+function readRuntimeTargetLabel(item: Record<string, unknown>): string {
+  const target = readExecutionTarget(item);
+  if (target === 'local_companion') {
+    return 'Local companion';
+  }
+  if (target === 'cloud') {
+    return 'Cloud runtime';
+  }
+  if (target === 'self_host_runtime') {
+    return 'Self-host runtime';
+  }
+  return 'Execution attached';
+}
+
+function readRuntimeSelectionReason(item: Record<string, unknown>): string {
+  const reason = item.selection_reason;
+  return typeof reason === 'string' ? reason.trim() : '';
+}
+
 function readApprovalLabel(item: Record<string, unknown>, fallback: string): string {
   return String(item.prompt ?? item.title ?? item.id ?? item.approval_id ?? fallback);
 }
@@ -36,7 +73,14 @@ function readInterventionLabel(item: Record<string, unknown>, fallback: string):
 }
 
 function readInterventionMessage(item: Record<string, unknown>): string {
-  return String(item.message ?? item.detail ?? item.reason ?? 'Operator action is required.');
+  const message = String(item.message ?? item.detail ?? item.reason ?? 'Operator action is required.');
+  if (message === SUPERVISOR_UNREACHABLE_MESSAGE) {
+    return 'Local companion is unavailable. Sage cannot start device work until empyralis-supervisor is running again.';
+  }
+  if (message === SUPERVISOR_INTERRUPTED_MESSAGE) {
+    return 'Local companion execution was interrupted by the operator before Sage could finish the step.';
+  }
+  return message;
 }
 
 function formatMessageTime(value: string | null): string | null {
@@ -64,6 +108,8 @@ export function ChatMessage({
 }) {
   const isUser = message.role === 'user';
   const timeLabel = formatMessageTime(message.createdAt);
+  const messageExecutionTarget = readExecutionTarget(message.metadata);
+  const messageSelectionReason = readRuntimeSelectionReason(message.metadata);
 
   return (
     <article
@@ -73,7 +119,7 @@ export function ChatMessage({
       <div className="app-chat-message__bubble">
         <div className="app-chat-message__meta">
           <div className="app-chat-message__meta-left">
-            <span className="app-chat-message__actor">{isUser ? 'You' : 'Workspace'}</span>
+            <span className="app-chat-message__actor">{isUser ? 'You' : 'Sage'}</span>
             {message.status ? (
               <span className="app-chat-message__status">{message.status}</span>
             ) : null}
@@ -93,22 +139,39 @@ export function ChatMessage({
               tone="accent"
               eyebrow="Run"
               title={message.runId}
-              meta="Execution is attached to this turn."
+              meta={
+                messageExecutionTarget === 'local_companion'
+                  ? 'Local companion · approval-gated device work'
+                  : messageExecutionTarget === 'cloud'
+                    ? 'Cloud runtime'
+                    : readRuntimeTargetLabel(message.metadata)
+              }
             >
-              Track this run in the inspector or the runs surface for detailed state.
+              {messageExecutionTarget === 'local_companion'
+                ? (messageSelectionReason || 'Sage routed this run to the paired local companion. Sensitive device actions remain explicitly approval-gated.')
+                : messageExecutionTarget === 'cloud'
+                  ? (messageSelectionReason || 'Sage kept this run in the hosted runtime. The result stays attached to the thread for follow-up turns.')
+                  : 'Sage started execution from this message. The run stays attached to the conversation and can be reviewed in the run timeline if needed.'}
             </ChatInlineStateCard>
           ) : null}
 
           {message.approvals.map((item, index) => {
             const approvalId = String(item.approval_id ?? item.id ?? '').trim();
             const isResolving = Boolean(approvalId) && resolvingApprovalId === approvalId;
+            const approvalExecutionTarget = readExecutionTarget(item) || messageExecutionTarget;
+            const approvalBody = approvalExecutionTarget === 'local_companion'
+              ? 'Sage is paused before using the local companion. This approval explicitly gates device access for this step.'
+              : 'Sage is paused on this step and is waiting for an explicit operator decision before continuing the thread.';
             return (
               <ChatInlineStateCard
                 key={approvalId || `${message.id}:approval:${index}`}
                 tone="warning"
                 eyebrow="Approval"
                 title={readApprovalLabel(item, `Approval ${index + 1}`)}
-                meta={readApprovalStatus(item)}
+                meta={[
+                  readApprovalStatus(item),
+                  approvalExecutionTarget ? readRuntimeTargetLabel({ execution_target_selected: approvalExecutionTarget }) : null,
+                ].filter(Boolean).join(' · ')}
                 actions={
                   onResolveApproval && approvalId ? (
                     <div className="app-inline-actions app-inline-actions--tight">
@@ -131,11 +194,11 @@ export function ChatMessage({
                     </div>
                   ) : null
                 }
-              >
-                This run is waiting for operator input before it can continue.
-              </ChatInlineStateCard>
-            );
-          })}
+            >
+              {approvalBody}
+            </ChatInlineStateCard>
+          );
+        })}
 
           {message.interventions.map((item, index) => (
             <ChatInlineStateCard
@@ -159,7 +222,7 @@ export function ChatMessage({
                 artifact.mediaType || null,
               ].filter(Boolean).join(' · ')}
             >
-              Generated output is attached to this turn and available in the inspector or artifacts surface.
+              Sage attached generated output to this turn. It remains part of the conversation state for future turns.
             </ChatInlineStateCard>
           ))}
         </div>

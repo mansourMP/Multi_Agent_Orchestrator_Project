@@ -113,6 +113,37 @@ class PersonalContextEngineTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(payload["summary"]["by_type"]["calendar_conflict"], 1)
         self.assertEqual(payload["recent_changes"][0]["id"], "pctx-1")
 
+    async def test_publish_event_supports_language_and_nutrition_updates(self):
+        persisted = {
+            "id": "pctx-2",
+            "source_app": "language_coach",
+            "event_type": "language_session_logged",
+            "entity_id": "entry-1",
+            "summary": "Language practice captured for Spanish: hola.",
+            "payload": {"language": "Spanish", "phrase": "hola"},
+            "priority": 30,
+            "scope": {"audience": ["sage"], "agent_install_ids": [], "visibility": "structured_event"},
+            "seen_by_sage_at": None,
+            "created_at": "2026-04-15T00:00:00Z",
+            "status": "active",
+            "metadata": {},
+        }
+        with patch(
+            "server_modules.personal_context_engine.control_plane_repository.append_personal_context_event",
+            new=AsyncMock(return_value=persisted),
+        ) as append_mock:
+            event = await personal_context_engine.publish_event(
+                tenant_id="tenant-1",
+                workspace_id="workspace-1",
+                source_app="language_coach",
+                event_type="language_session_logged",
+                entity_id="entry-1",
+                payload={"language": "Spanish", "phrase": "hola"},
+            )
+
+        self.assertEqual(event["summary"], "Language practice captured for Spanish: hola.")
+        self.assertEqual(append_mock.await_args.kwargs["priority"], 30)
+
 
 if __name__ == "__main__":
     unittest.main()

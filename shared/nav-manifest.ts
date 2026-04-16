@@ -4,36 +4,26 @@ export type WorkspaceShellProfileId =
   | 'operations_admin_shell';
 
 export type WorkspaceNavDestinationId =
-  | 'home'
-  | 'chat'
-  | 'work'
-  | 'build'
-  | 'control';
+  | 'sage'
+  | 'studio'
+  | 'settings';
 
 export type WorkspaceRouteId =
   | 'chat'
-  | 'workstation'
   | 'runs'
   | 'approvals'
   | 'artifacts'
   | 'notifications'
   | 'activity'
-  | 'agents'
-  | 'deployed-agents'
-  | 'applications'
-  | 'integrations'
+  | 'studio'
+  | 'channels'
+  | 'inbox'
+  | 'deploy'
   | 'settings'
-  | 'admin'
-  | 'admin/platform'
-  | 'admin/billing'
-  | 'admin/routing'
-  | 'admin/members'
-  | 'admin/policies';
+;
 
 export type WorkspaceNavIconName =
-  | 'home'
   | 'message-square'
-  | 'briefcase'
   | 'boxes'
   | 'sliders-horizontal';
 
@@ -81,52 +71,28 @@ export type WorkspaceMobileBottomTab = {
 
 export const WORKSPACE_NAV_DESTINATIONS = [
   {
-    id: 'home',
-    label: 'Home',
-    iconName: 'home',
-    defaultRouteId: 'workstation',
-    childRouteIds: ['workstation'],
-    direct: true,
-  },
-  {
-    id: 'chat',
-    label: 'Chat',
+    id: 'sage',
+    label: 'Sage',
     iconName: 'message-square',
     defaultRouteId: 'chat',
-    childRouteIds: ['chat'],
+    childRouteIds: ['chat', 'runs', 'approvals', 'artifacts', 'activity', 'notifications'],
     direct: true,
   },
   {
-    id: 'work',
-    label: 'Work',
-    iconName: 'briefcase',
-    defaultRouteId: 'runs',
-    childRouteIds: ['runs', 'approvals', 'artifacts', 'notifications', 'activity'],
-    direct: false,
-  },
-  {
-    id: 'build',
-    label: 'Build',
+    id: 'studio',
+    label: 'Studio',
     iconName: 'boxes',
-    defaultRouteId: 'deployed-agents',
-    childRouteIds: ['agents', 'deployed-agents', 'applications', 'integrations'],
+    defaultRouteId: 'studio',
+    childRouteIds: ['studio', 'channels', 'inbox', 'deploy'],
     direct: false,
   },
   {
-    id: 'control',
-    label: 'Control',
+    id: 'settings',
+    label: 'Settings',
     iconName: 'sliders-horizontal',
     defaultRouteId: 'settings',
-    childRouteIds: [
-      'settings',
-      'admin',
-      'admin/platform',
-      'admin/billing',
-      'admin/routing',
-      'admin/members',
-      'admin/policies',
-    ],
-    direct: false,
+    childRouteIds: ['settings'],
+    direct: true,
   },
 ] as const satisfies readonly WorkspaceNavDestinationDefinition[];
 
@@ -148,37 +114,34 @@ export const WORKSPACE_MOBILE_NAV_GROUP_LABELS = WORKSPACE_WEB_NAV_GROUP_LABELS;
 
 export const WORKSPACE_ROUTE_DEFINITIONS: readonly WorkspaceNavRouteDefinition[] = [
   {
-    id: 'workstation',
-    label: 'Home',
-    segment: 'home',
-    legacySegments: ['workstation'],
-    destinationId: 'home',
-    web: {},
-  },
-  {
     id: 'chat',
     label: 'Chat',
-    segment: 'chat',
-    destinationId: 'chat',
+    segment: 'sage',
+    legacySegments: ['chat'],
+    destinationId: 'sage',
     web: {},
     mobile: {
       screen: '/(workspace)/chat',
       screenName: 'chat',
-      groupId: 'chat',
+      groupId: 'sage',
+      tabLabel: 'Sage',
       includeInBottomTabs: true,
     },
   },
   {
     id: 'runs',
-    label: 'Runs',
+    label: 'Tasks',
     segment: 'runs',
-    destinationId: 'work',
-    web: {},
+    legacySegments: ['work'],
+    destinationId: 'sage',
+    web: {
+      hiddenFromNavigation: true,
+    },
     mobile: {
       screen: '/(workspace)/runs',
       screenName: 'runs',
-      groupId: 'work',
-      tabLabel: 'Work',
+      groupId: 'sage',
+      tabLabel: 'Tasks',
       includeInBottomTabs: true,
     },
   },
@@ -186,140 +149,102 @@ export const WORKSPACE_ROUTE_DEFINITIONS: readonly WorkspaceNavRouteDefinition[]
     id: 'approvals',
     label: 'Approvals',
     segment: 'approvals',
-    destinationId: 'work',
+    destinationId: 'sage',
     requiredCapabilities: ['approvals_enabled'],
-    web: {},
+    web: {
+      hiddenFromNavigation: true,
+    },
     mobile: {
       screen: '/(workspace)/approvals',
       screenName: 'approvals',
-      groupId: 'work',
+      groupId: 'sage',
       includeInBottomTabs: true,
     },
   },
   {
     id: 'artifacts',
-    label: 'Artifacts',
+    label: 'Files',
     segment: 'artifacts',
-    destinationId: 'work',
+    destinationId: 'sage',
     requiredCapabilities: ['artifacts_enabled'],
-    web: {},
+    web: {
+      hiddenFromNavigation: true,
+    },
     mobile: {
       screen: '/(workspace)/artifacts',
       screenName: 'artifacts',
-      groupId: 'work',
+      groupId: 'sage',
+      tabLabel: 'Files',
       includeInBottomTabs: true,
     },
   },
   {
     id: 'notifications',
-    label: 'Notifications',
+    label: 'Inbox',
     segment: 'notifications',
-    destinationId: 'work',
-    web: {},
+    destinationId: 'sage',
+    web: {
+      hiddenFromNavigation: true,
+    },
     mobile: {
       screen: '/(workspace)/notifications',
       screenName: 'notifications',
-      groupId: 'work',
+      groupId: 'sage',
       tabLabel: 'Inbox',
       includeInBottomTabs: true,
     },
   },
   {
     id: 'activity',
-    label: 'Activity',
+    label: 'Memory',
     segment: 'activity',
-    destinationId: 'work',
-    web: {},
+    destinationId: 'sage',
+    web: {
+      hiddenFromNavigation: true,
+    },
   },
   {
-    id: 'agents',
+    id: 'studio',
     label: 'Agents',
-    segment: 'agents',
-    destinationId: 'build',
-    requiredCapabilities: ['workspace_admin_enabled'],
-    web: {
-      hiddenFromNavigation: true,
-    },
-  },
-  {
-    id: 'deployed-agents',
-    label: 'Deployed Agents',
-    segment: 'deployed-agents',
-    destinationId: 'build',
+    segment: 'studio',
+    legacySegments: ['deployed-agents'],
+    destinationId: 'studio',
     requiredCapabilities: ['workspace_admin_enabled'],
     web: {},
   },
   {
-    id: 'applications',
-    label: 'Applications',
-    segment: 'applications',
-    destinationId: 'build',
-    requiredCapabilities: ['workspace_admin_enabled'],
-    web: {
-      hiddenFromNavigation: true,
-    },
+    id: 'channels',
+    label: 'Channels',
+    segment: 'channels',
+    legacySegments: ['integrations'],
+    destinationId: 'studio',
+    requiredCapabilities: ['workspace_admin_enabled', 'channel_pairing_enabled'],
+    web: {},
   },
   {
-    id: 'integrations',
-    label: 'Integrations',
-    segment: 'integrations',
-    destinationId: 'build',
-    requiredCapabilities: ['workspace_admin_enabled', 'channel_pairing_enabled'],
+    id: 'inbox',
+    label: 'Inbox',
+    segment: 'inbox',
+    legacySegments: ['agents'],
+    destinationId: 'studio',
+    requiredCapabilities: ['workspace_admin_enabled'],
+    web: {},
+  },
+  {
+    id: 'deploy',
+    label: 'Deploy',
+    segment: 'deploy',
+    legacySegments: ['applications'],
+    destinationId: 'studio',
+    requiredCapabilities: ['workspace_admin_enabled'],
     web: {},
   },
   {
     id: 'settings',
     label: 'Settings',
     segment: 'settings',
-    destinationId: 'control',
-    web: {},
-  },
-  {
-    id: 'admin',
-    label: 'Admin',
-    segment: 'admin',
-    destinationId: 'control',
-    requiredCapabilities: ['workspace_admin_enabled'],
-    web: {},
-  },
-  {
-    id: 'admin/platform',
-    label: 'Platform',
-    segment: 'admin/platform',
-    destinationId: 'control',
-    requiredCapabilities: ['platform_admin_enabled'],
-    web: {},
-  },
-  {
-    id: 'admin/billing',
-    label: 'Billing',
-    segment: 'admin/billing',
-    destinationId: 'control',
-    requiredCapabilities: ['billing_read_enabled'],
-    web: {},
-  },
-  {
-    id: 'admin/routing',
-    label: 'Routing',
-    segment: 'admin/routing',
-    destinationId: 'control',
-    requiredCapabilities: ['routing_read_enabled'],
-    web: {},
-  },
-  {
-    id: 'admin/members',
-    label: 'Members',
-    segment: 'admin/members',
-    destinationId: 'control',
-    requiredCapabilities: ['workspace_admin_enabled'],
-    web: {},
-  },
-  {
-    id: 'admin/policies',
-    label: 'Policies',
-    segment: 'admin/policies',
-    destinationId: 'control',
-    requiredCapabilities: ['workspace_admin_enabled'],
+    legacySegments: ['control', 'admin', 'admin/platform', 'admin/billing', 'admin/routing', 'admin/members', 'admin/policies'],
+    destinationId: 'settings',
     web: {},
   },
 ];

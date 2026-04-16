@@ -119,6 +119,44 @@ def _backing_install(
     }
 
 
+def _telegram_readiness_payload(**overrides) -> dict[str, object]:
+    payload: dict[str, object] = {
+        "channel": "telegram",
+        "workspace_id": "ws-1",
+        "ready_for_live": True,
+        "status": "ready",
+        "blockers": [],
+        "warnings": [],
+        "next_action": "Telegram is ready.",
+        "configured_binding": {
+            "enabled": True,
+            "connector_id": "tg-1",
+            "endpoint_key": "store-bot",
+            "is_inbound_owner": True,
+            "webhook_path": "/channels/telegram/webhook/tg-1",
+        },
+        "connectors": [
+            {
+                "id": "tg-1",
+                "label": "Store Bot",
+                "connector_id": "tg-1",
+                "credential_id": "tg-1",
+                "endpoint_key": "store-bot",
+                "webhook_path": "/channels/telegram/webhook/tg-1",
+                "webhook_url": "https://runtime.example/channels/telegram/webhook/tg-1",
+            }
+        ],
+        "webhook": {
+            "status": "live",
+            "delivery_mode": "webhook",
+        },
+        "autopilot": {"status": "live"},
+        "whatsapp": {"available": False},
+    }
+    payload.update(overrides)
+    return payload
+
+
 def _conversation_summary_row(
     *,
     session_id: str = "sess-1",
@@ -436,6 +474,15 @@ class DeployedAgentServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(specialist_kwargs["label"], "Store Assistant")
         self.assertEqual(specialist_kwargs["metadata"]["specialist_mode"], "owner_edit")
         self.assertEqual(specialist_kwargs["manifest"].identity.name, "Store Assistant")
+        self.assertEqual(
+            specialist_kwargs["tool_toggles"],
+            {
+                "web_search": False,
+                "http_request": False,
+                "gmail_send": False,
+                "calendar_write": False,
+            },
+        )
         persisted_kwargs = create_deployed_agent_mock.await_args.kwargs
         self.assertEqual(persisted_kwargs["backing_install_id"], "ainstall_1")
         self.assertEqual(
@@ -959,6 +1006,59 @@ class DeployedAgentServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(update_manifest_mock.await_args.kwargs["metadata"]["specialist_mode"], "owner_edit")
         self.assertTrue(update_manifest_mock.await_args.kwargs["channel_bindings"]["telegram"]["is_inbound_owner"])
 
+    async def test_update_deployed_agent_enriches_telegram_binding_from_connector_selection(self) -> None:
+        updated_row = _deployed_agent_row()
+
+        with (
+            patch(
+                "server_modules.deployed_agent_service.control_plane_repository.get_workspace_by_id",
+                new=AsyncMock(return_value=_workspace_record()),
+            ),
+            patch(
+                "server_modules.deployed_agent_service.control_plane_repository.get_deployed_agent_by_id",
+                new=AsyncMock(return_value=_deployed_agent_row()),
+            ),
+            patch(
+                "server_modules.deployed_agent_service._workspace_telegram_connector_options",
+                return_value=_telegram_readiness_payload()["connectors"],
+            ),
+            patch(
+                "server_modules.deployed_agent_service._workspace_telegram_status_payload",
+                return_value=_telegram_readiness_payload(),
+            ),
+            patch(
+                "server_modules.deployed_agent_service.agent_specialist_repository.get_workspace_specialist",
+                new=AsyncMock(return_value=_backing_install()),
+            ),
+            patch(
+                "server_modules.deployed_agent_service.agent_specialist_repository.update_workspace_specialist_manifest",
+                new=AsyncMock(return_value=_backing_install()),
+            ),
+            patch(
+                "server_modules.deployed_agent_service.control_plane_repository.update_deployed_agent",
+                new=AsyncMock(return_value=updated_row),
+            ) as update_deployed_agent_mock,
+        ):
+            await deployed_agent_service.update_deployed_agent(
+                deployed_agent_id="dagent_1",
+                current_user=_owner_user(),
+                owner_workspace_id="ws-1",
+                updates={
+                    "channels": {
+                        "telegram": {
+                            "enabled": True,
+                            "connector_id": "tg-1",
+                        }
+                    },
+                },
+            )
+
+        telegram = update_deployed_agent_mock.await_args.kwargs["updates"]["channels"]["telegram"]
+        self.assertEqual(telegram["connector_id"], "tg-1")
+        self.assertEqual(telegram["credential_id"], "tg-1")
+        self.assertEqual(telegram["endpoint_key"], "store-bot")
+        self.assertTrue(telegram["is_inbound_owner"])
+
     async def test_update_deployed_agent_can_clear_paused_message_metadata(self) -> None:
         existing = _deployed_agent_row(metadata={"source": "test", "paused_message": "Temporarily offline."})
         updated_row = _deployed_agent_row(metadata={"source": "test"})
@@ -1480,6 +1580,10 @@ class DeployedAgentServiceTests(unittest.IsolatedAsyncioTestCase):
                 new=AsyncMock(return_value=draft_row),
             ),
             patch(
+                "server_modules.deployed_agent_service.get_deployed_agent_telegram_readiness",
+                new=AsyncMock(return_value=_telegram_readiness_payload()),
+            ),
+            patch(
                 "server_modules.deployed_agent_service.agent_specialist_repository.get_workspace_specialist",
                 new=AsyncMock(return_value=_backing_install(specialist_mode='owner_edit')),
             ),
@@ -1502,6 +1606,135 @@ class DeployedAgentServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(deployed["backing_install"]["specialist_mode"], "customer_live")
         self.assertEqual(update_manifest_mock.await_args.kwargs["metadata"]["specialist_mode"], "customer_live")
         self.assertTrue(set_state_mock.await_args.kwargs["last_deployed_at"])
+
+    async def test_get_deployed_agent_telegram_readiness_reports_missing_connector(self) -> None:
+        draft_row = _deployed_agent_row(deployment_state="draft")
+        draft_row["channels"] = {"telegram": {"enabled": True}}
+
+        with (
+            patch(
+                "server_modules.deployed_agent_service.control_plane_repository.get_workspace_by_id",
+                new=AsyncMock(return_value=_workspace_record()),
+            ),
+            patch(
+                "server_modules.deployed_agent_service.control_plane_repository.get_deployed_agent_by_id",
+                new=AsyncMock(return_value=draft_row),
+            ),
+            patch(
+                "server_modules.deployed_agent_service._workspace_telegram_status_payload",
+                return_value={
+                    "status": "live",
+                    "issues": [],
+                    "webhook": {"status": "live"},
+                    "autopilot": {"status": "live"},
+                },
+            ),
+            patch(
+                "server_modules.deployed_agent_service._workspace_telegram_connector_options",
+                return_value=[],
+            ),
+        ):
+            readiness = await deployed_agent_service.get_deployed_agent_telegram_readiness(
+                current_user=_owner_user(),
+                owner_workspace_id="ws-1",
+                deployed_agent_id="dagent_1",
+            )
+
+        self.assertFalse(readiness["ready_for_live"])
+        blocker_codes = {item["code"] for item in readiness["blockers"]}
+        self.assertIn("telegram_connector_required", blocker_codes)
+        self.assertIn("studio_tool_scope_required", blocker_codes)
+
+    async def test_get_deployed_agent_telegram_readiness_returns_selected_tool_scope(self) -> None:
+        draft_row = _deployed_agent_row(
+            deployment_state="draft",
+            metadata={
+                "source": "test",
+                "selected_tool_ids": ["web_search", "gmail_send"],
+            },
+        )
+        draft_row["channels"] = {
+            "telegram": {
+                "enabled": True,
+                "connector_id": "tg-1",
+                "credential_id": "tg-1",
+                "endpoint_key": "store-bot",
+                "is_inbound_owner": True,
+            }
+        }
+
+        with (
+            patch(
+                "server_modules.deployed_agent_service.control_plane_repository.get_workspace_by_id",
+                new=AsyncMock(return_value=_workspace_record()),
+            ),
+            patch(
+                "server_modules.deployed_agent_service.control_plane_repository.get_deployed_agent_by_id",
+                new=AsyncMock(return_value=draft_row),
+            ),
+            patch(
+                "server_modules.deployed_agent_service._workspace_telegram_status_payload",
+                return_value={
+                    "status": "live",
+                    "issues": [],
+                    "webhook": {"status": "live"},
+                    "autopilot": {"status": "live"},
+                },
+            ),
+            patch(
+                "server_modules.deployed_agent_service._workspace_telegram_connector_options",
+                return_value=[
+                    {
+                        "id": "tg-1",
+                        "label": "Store Bot",
+                        "connector_id": "tg-1",
+                        "credential_id": "tg-1",
+                        "endpoint_key": "store-bot",
+                        "webhook_path": "/channels/telegram/webhook/tg-1",
+                        "webhook_url": "https://runtime.example/channels/telegram/webhook/tg-1",
+                    }
+                ],
+            ),
+        ):
+            readiness = await deployed_agent_service.get_deployed_agent_telegram_readiness(
+                current_user=_owner_user(),
+                owner_workspace_id="ws-1",
+                deployed_agent_id="dagent_1",
+            )
+
+        self.assertEqual(readiness["tool_scope"]["selected_tool_ids"], ["web_search", "gmail_send"])
+
+    async def test_deploy_deployed_agent_rejects_unready_telegram_binding(self) -> None:
+        draft_row = _deployed_agent_row(deployment_state="draft")
+        draft_row["channels"] = {"telegram": {"enabled": True}}
+
+        with (
+            patch(
+                "server_modules.deployed_agent_service.control_plane_repository.get_workspace_by_id",
+                new=AsyncMock(return_value=_workspace_record()),
+            ),
+            patch(
+                "server_modules.deployed_agent_service.control_plane_repository.get_deployed_agent_by_id",
+                new=AsyncMock(return_value=draft_row),
+            ),
+            patch(
+                "server_modules.deployed_agent_service.get_deployed_agent_telegram_readiness",
+                new=AsyncMock(return_value=_telegram_readiness_payload(
+                    ready_for_live=False,
+                    blockers=[{"code": "telegram_connector_required", "message": "Select a Telegram bot connector."}],
+                    next_action="Open the Channels step and choose a Telegram connector.",
+                )),
+            ),
+        ):
+            with self.assertRaises(HTTPException) as error:
+                await deployed_agent_service.deploy_deployed_agent(
+                    deployed_agent_id="dagent_1",
+                    current_user=_owner_user(),
+                    owner_workspace_id="ws-1",
+                )
+
+        self.assertEqual(error.exception.status_code, 409)
+        self.assertIn("Select a Telegram bot connector.", str(error.exception.detail))
 
     async def test_deploy_deployed_agent_rejects_invalid_state_transition(self) -> None:
         with (
@@ -1542,6 +1775,10 @@ class DeployedAgentServiceTests(unittest.IsolatedAsyncioTestCase):
             patch(
                 "server_modules.deployed_agent_service.control_plane_repository.get_deployed_agent_by_id",
                 new=AsyncMock(return_value=draft_row),
+            ),
+            patch(
+                "server_modules.deployed_agent_service.get_deployed_agent_telegram_readiness",
+                new=AsyncMock(return_value=_telegram_readiness_payload()),
             ),
         ):
             with self.assertRaises(HTTPException) as error:

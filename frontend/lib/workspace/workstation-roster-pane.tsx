@@ -22,6 +22,7 @@ type WorkstationRosterItem = {
   label: string;
   subtitle: string;
   description: string;
+  badgeLabel: string;
   href?: string | null;
   statusLabel?: string | null;
   metadata?: Record<string, unknown>;
@@ -45,7 +46,7 @@ function normalizeRosterUiState(
   const filter = value?.filter;
   return {
     filter:
-      filter === 'agent' || filter === 'application' || filter === 'runtime_target' || filter === 'all'
+      filter === 'workspace_area' || filter === 'runtime_target' || filter === 'all'
         ? filter
         : DEFAULT_ROSTER_UI_STATE.filter,
     showOfflineRuntimeTargets:
@@ -55,54 +56,51 @@ function normalizeRosterUiState(
   };
 }
 
-function buildAgentItems({
-  role,
-  shellProfileLabel,
-  workspaceLabel,
-  workspaceTraits,
-}: {
-  role: string;
-  shellProfileLabel: string;
-  workspaceLabel: string;
-  workspaceTraits: Record<string, unknown>;
-}): WorkstationRosterItem[] {
-  const items: WorkstationRosterItem[] = [
-    {
-      id: 'agent:workspace-operator',
-      kind: 'agent',
-      label: 'Workspace Operator',
-      subtitle: `${shellProfileLabel} · ${role}`,
-      description: `${workspaceLabel} is currently operating under the ${shellProfileLabel.toLowerCase()} shell profile.`,
-      metadata: {
-        operatingMode: workspaceTraits['operatingMode'] ?? null,
-        complianceMode: workspaceTraits['complianceMode'] ?? null,
-      },
-    },
-  ];
+function buildWorkspaceAreaItems(
+  routeManifest: ReturnType<typeof useWorkspaceBoundary>['routeManifest'],
+): WorkstationRosterItem[] {
+  const items: WorkstationRosterItem[] = [];
+  const sageRoute = routeManifest.routeIndex.chat ?? null;
+  const servicesRoute = routeManifest.routeIndex.deploy ?? null;
+  const studioRoute = routeManifest.routeIndex.studio ?? null;
+  const integrationsRoute = routeManifest.routeIndex.channels ?? null;
 
-  if (workspaceTraits['documentHeavy'] === true) {
+  if (sageRoute) {
     items.push({
-      id: 'agent:document-specialist',
-      kind: 'agent',
-      label: 'Document Specialist',
-      subtitle: 'Document workstation routing',
-      description: 'Document-heavy work is enabled for this workspace.',
+      id: 'workspace_area:sage',
+      kind: 'workspace_area',
+      label: 'Sage',
+      subtitle: 'Primary personal agent',
+      description: servicesRoute
+        ? 'Chat, memory, approvals, runs, and Sage services live in one continuous workspace relationship.'
+        : 'Chat, memory, approvals, and runs live in one continuous workspace relationship.',
+      badgeLabel: 'Sage',
+      href: sageRoute.href,
       metadata: {
-        documentHeavy: true,
+        routeId: sageRoute.id,
+        areaId: 'sage',
+        supportingRoutes: ['chat', 'runs', 'approvals', 'artifacts', 'notifications', 'activity'],
+        servicesRouteId: servicesRoute?.id ?? null,
       },
     });
   }
 
-  if (workspaceTraits['adminHeavy'] === true || role === 'owner' || role === 'admin') {
+  if (studioRoute) {
     items.push({
-      id: 'agent:operations-supervisor',
-      kind: 'agent',
-      label: 'Operations Supervisor',
-      subtitle: 'Oversight and governance',
-      description: 'Administrative and operational controls are available for this workspace.',
+      id: 'workspace_area:studio',
+      kind: 'workspace_area',
+      label: 'Studio',
+      subtitle: 'Telegram specialist agents',
+      description: integrationsRoute
+        ? 'Create, deploy, and monitor specialist agents with explicit Telegram channel readiness.'
+        : 'Create, deploy, and monitor specialist agents for the current workspace.',
+      badgeLabel: 'Studio',
+      href: studioRoute.href,
       metadata: {
-        adminHeavy: Boolean(workspaceTraits['adminHeavy']),
-        role,
+        routeId: studioRoute.id,
+        areaId: 'studio',
+        supportingRoutes: ['studio', 'channels', 'inbox', 'deploy'],
+        integrationsRouteId: integrationsRoute?.id ?? null,
       },
     });
   }
@@ -110,73 +108,62 @@ function buildAgentItems({
   return items;
 }
 
-function buildApplicationItems(routeManifest: ReturnType<typeof useWorkspaceBoundary>['routeManifest']): WorkstationRosterItem[] {
-  return routeManifest.navGroups.flatMap((group) =>
-    group.routes.map((route) => ({
-      id: `application:${route.id}`,
-      kind: 'application' as const,
-      label: route.label,
-      subtitle: group.label,
-      description: `Open ${route.label.toLowerCase()} inside the current workspace surface.`,
-      href: route.href,
-      metadata: {
-        routeId: route.id,
-        groupId: group.id,
-        requiredCapabilities: route.requiredCapabilities,
-      },
-    })),
-  );
-}
-
 function buildRuntimeTargetItems(
   runtimeTargets: ReturnType<typeof useWorkspaceBoundary>['bootstrap']['runtime']['runtimeTargets'],
 ): WorkstationRosterItem[] {
-  return runtimeTargets.map((target) => ({
-    id: `runtime_target:${target.id}`,
-    kind: 'runtime_target',
-    label: target.label,
-    subtitle: `${target.kind}${target.preferred ? ' · preferred' : ''}`,
-    description: target.online
-      ? 'Available for workstation execution.'
-      : 'Currently unavailable.',
-    statusLabel: target.online ? 'online' : 'offline',
-    metadata: {
-      runtimeTargetId: target.id,
-      kind: target.kind,
-      online: target.online,
-      preferred: target.preferred,
-    },
-  }));
+  return runtimeTargets.map((target) => {
+    const statusLabel =
+      typeof target.statusLabel === 'string' && target.statusLabel.trim()
+        ? target.statusLabel
+        : target.online
+          ? 'online'
+          : 'offline';
+
+    return {
+      id: `runtime_target:${target.id}`,
+      kind: 'runtime_target',
+      label: target.label,
+      subtitle: `${target.kind}${target.preferred ? ' · preferred' : ''}`,
+      description:
+        typeof target.statusReason === 'string' && target.statusReason.trim()
+          ? target.statusReason
+          : target.online
+            ? 'Available for workstation execution.'
+            : 'Currently unavailable.',
+      badgeLabel: 'Runtime',
+      statusLabel,
+      metadata: {
+        runtimeTargetId: target.id,
+        kind: target.kind,
+        online: target.online,
+        preferred: target.preferred,
+        healthy: target.healthy,
+        status: target.status ?? null,
+        statusReason: target.statusReason ?? null,
+        trustTier: target.trustTier ?? null,
+        approvalMode: target.approvalMode ?? null,
+        executionTarget: target.executionTarget ?? null,
+      },
+    };
+  });
 }
 
 function buildRosterSections({
   bootstrap,
   routeManifest,
-  shellProfileLabel,
 }: {
   bootstrap: ReturnType<typeof useWorkspaceBoundary>['bootstrap'];
   routeManifest: ReturnType<typeof useWorkspaceBoundary>['routeManifest'];
-  shellProfileLabel: string;
 }): WorkstationRosterSection[] {
   return [
     {
-      id: 'agent',
-      label: 'Agents',
-      items: buildAgentItems({
-        role: bootstrap.membership.role,
-        shellProfileLabel,
-        workspaceLabel: bootstrap.workspace.label,
-        workspaceTraits: bootstrap.workspaceTraits,
-      }),
-    },
-    {
-      id: 'application',
-      label: 'Workspace surfaces',
-      items: buildApplicationItems(routeManifest),
+      id: 'workspace_area',
+      label: 'Products',
+      items: buildWorkspaceAreaItems(routeManifest),
     },
     {
       id: 'runtime_target',
-      label: 'Runtime targets',
+      label: 'Runtime readiness',
       items: buildRuntimeTargetItems(bootstrap.runtime.runtimeTargets),
     },
   ];
@@ -185,7 +172,7 @@ function buildRosterSections({
 export function WorkstationRosterPane() {
   const pathname = usePathname();
   const router = useRouter();
-  const { bootstrap, routeManifest, shellProfile, workspaceId } = useWorkspaceBoundary();
+  const { bootstrap, routeManifest, workspaceId } = useWorkspaceBoundary();
   const services = useWorkstationKernel();
   const streamState = useWorkstationStreamState();
   const { intent, setIntent, clearIntent } = useWorkstationStageIntentState();
@@ -203,9 +190,8 @@ export function WorkstationRosterPane() {
     () => buildRosterSections({
       bootstrap,
       routeManifest,
-      shellProfileLabel: shellProfile.label,
     }),
-    [bootstrap, routeManifest, shellProfile.label],
+    [bootstrap, routeManifest],
   );
 
   useEffect(() => {
@@ -242,9 +228,9 @@ export function WorkstationRosterPane() {
       <section className="workstation-diagnostics">
         <div className="app-inline-actions app-inline-actions--between app-inline-actions--start">
           <div className="app-stack-1">
-            <strong className="workstation-pane__title">Inventory</strong>
+            <strong className="workstation-pane__title">Workspace context</strong>
             <span className="app-meta-value app-meta-value--secondary">
-              {totalItemCount} items available · {streamState.notifications.unreadCount} unread · {streamState.activity.totalCount} recent events
+              {totalItemCount} active references · {streamState.notifications.unreadCount} unread · {streamState.activity.totalCount} recent events
             </span>
           </div>
 
@@ -264,8 +250,7 @@ export function WorkstationRosterPane() {
         <div className="app-inline-actions app-inline-actions--tight">
           {[
             ['all', 'All'],
-            ['agent', 'Agents'],
-            ['application', 'Surfaces'],
+            ['workspace_area', 'Products'],
             ['runtime_target', 'Runtime'],
           ].map(([value, label]) => {
             const active = uiState.filter === value;
@@ -313,11 +298,12 @@ export function WorkstationRosterPane() {
           <div className="app-stack-3">
             {section.items.map((item) => {
               const itemRouteId =
-                item.kind === 'application' && typeof item.metadata?.['routeId'] === 'string'
-                  ? item.metadata['routeId']
+                typeof item.metadata?.['routeId'] === 'string'
+                  ? String(item.metadata.routeId)
                   : null;
               const routeSelected = itemRouteId === activeRouteId;
               const isSelected = routeSelected || intent?.id === item.id;
+
               return (
                 <button
                   key={item.id}
@@ -348,7 +334,7 @@ export function WorkstationRosterPane() {
                       <span className="app-card-button__subtitle">{item.subtitle}</span>
                     </div>
                     <span className="app-data-badge app-data-badge--neutral">
-                      {item.kind.replace('_', ' ')}
+                      {item.badgeLabel}
                     </span>
                   </div>
 
@@ -359,7 +345,7 @@ export function WorkstationRosterPane() {
                   {(item.statusLabel || item.href) ? (
                     <div className="app-inline-actions app-inline-actions--tight">
                       {item.statusLabel ? (
-                        <span className={`app-card-button__meta${item.statusLabel === 'online' ? ' workstation-desktop-status__detail--ready' : ''}`}>
+                        <span className={`app-card-button__meta${item.statusLabel === 'online' || item.statusLabel === 'ready' ? ' workstation-desktop-status__detail--ready' : ''}`}>
                           {item.statusLabel}
                         </span>
                       ) : null}

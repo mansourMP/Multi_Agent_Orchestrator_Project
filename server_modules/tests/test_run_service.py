@@ -3326,7 +3326,7 @@ class RunServiceTests(unittest.TestCase):
         self.assertEqual(metadata["browser_immutable_plan_hash"], "hash-1")
         self.assertTrue(metadata["browser_reviewed_approval_required"])
 
-    def test_build_delegated_child_run_request_inherits_parent_execution_metadata(self):
+    def test_build_delegated_child_run_request_does_not_inherit_parent_execution_metadata(self):
         request = build_delegated_child_run_request(
             {
                 "run_id": "parent-run",
@@ -3341,7 +3341,9 @@ class RunServiceTests(unittest.TestCase):
                     "model": "gpt-test",
                     "credential_id": "cred-1",
                     "metadata": {
+                        "workspace_agent_install_id": "install-parent-workspace",
                         "active_agent_install_id": "install-1",
+                        "master_agent_install_id": "install-master",
                         "runtime_mode": "local_secure",
                         "runtime_scope": {"mode": "local_secure", "driver": "desktop_companion"},
                         "runtime_selection": {
@@ -3356,6 +3358,9 @@ class RunServiceTests(unittest.TestCase):
                         "runtime_attachment_id": "local_companion:profile-local",
                         "runtime_attachment_kind": "local_companion",
                         "machine_target": "machine-local",
+                        "root_folder_uri": "/workspace/parent",
+                        "folder_grants": ["/workspace/parent", "/workspace/shared"],
+                        "file_mount_grants": [{"mount": "parent", "mode": "write"}],
                         "execution_target_selected": "local_companion",
                         "trust_mode": "guarded",
                         "owner_user_id": "user-1",
@@ -3376,21 +3381,78 @@ class RunServiceTests(unittest.TestCase):
         )
 
         self.assertEqual(request.parent_run_id, "parent-run")
-        self.assertEqual(request.workflow_id, "workflow-1")
+        self.assertIsNone(request.workflow_id)
         self.assertEqual(request.metadata["delegation_root_run_id"], "parent-run")
         self.assertEqual(request.metadata["delegated_by_role"], "builder")
-        self.assertEqual(request.metadata["execution_target"], "local_companion")
-        self.assertEqual(request.metadata["trust_mode"], "guarded")
         self.assertEqual(request.metadata["delegation_note"], "Retry after failure.")
-        self.assertEqual(request.metadata["active_agent_install_id"], "install-1")
-        self.assertEqual(request.metadata["runtime_mode"], "local_secure")
-        self.assertEqual(request.metadata["runtime_scope"]["mode"], "local_secure")
-        self.assertEqual(request.metadata["runtime_attachment_id"], "local_companion:profile-local")
-        self.assertEqual(request.metadata["runtime_attachment_kind"], "local_companion")
-        self.assertEqual(request.metadata["machine_target"], "machine-local")
+        self.assertNotIn("active_agent_install_id", request.metadata)
+        self.assertNotIn("workspace_agent_install_id", request.metadata)
+        self.assertNotIn("runtime_mode", request.metadata)
+        self.assertNotIn("runtime_scope", request.metadata)
+        self.assertNotIn("runtime_attachment_id", request.metadata)
+        self.assertNotIn("runtime_attachment_kind", request.metadata)
+        self.assertNotIn("machine_target", request.metadata)
+        self.assertNotIn("root_folder_uri", request.metadata)
+        self.assertNotIn("folder_grants", request.metadata)
+        self.assertNotIn("file_mount_grants", request.metadata)
+        self.assertEqual(request.metadata["master_agent_install_id"], "install-master")
         self.assertEqual(request.metadata["owner_user_id"], "user-1")
-        self.assertEqual(request.metadata["owner_email"], "user@example.com")
-        self.assertEqual(request.max_iterations, 7)
+        self.assertEqual(request.metadata["user_id"], "user-1")
+        self.assertIsNone(request.provider)
+        self.assertIsNone(request.model)
+        self.assertIsNone(request.credential_id)
+        self.assertIsNone(request.max_iterations)
+
+    def test_build_delegated_child_run_request_keeps_explicit_child_runtime_and_file_grants(self):
+        request = build_delegated_child_run_request(
+            {
+                "run_id": "parent-run",
+                "engine": "orion",
+                "agent_role": "builder",
+                "context": {
+                    "workspace_id": "default",
+                    "metadata": {
+                        "workspace_agent_install_id": "install-parent-workspace",
+                        "active_agent_install_id": "install-parent-active",
+                        "master_agent_install_id": "install-master",
+                        "runtime_attachment_id": "local_companion:parent",
+                        "machine_target": "machine-parent",
+                        "root_folder_uri": "/workspace/parent",
+                        "folder_grants": ["/workspace/parent"],
+                        "file_mount_grants": [{"mount": "parent", "mode": "write"}],
+                    },
+                },
+            },
+            {
+                "user_goal": "Handle browser work",
+                "agent_role": "research",
+                "metadata": {
+                    "runtime_mode": "local_secure",
+                    "runtime_attachment_id": "local_companion:child",
+                    "machine_target": "machine-child",
+                    "root_folder_uri": "/workspace/child",
+                    "folder_grants": ["/workspace/child"],
+                    "file_mount_grants": [{"mount": "child", "mode": "read"}],
+                    "active_agent_install_id": "install-unsafe-explicit",
+                    "workspace_agent_install_id": "install-unsafe-explicit",
+                },
+            },
+            normalize_run_id_token=lambda value: str(value or "").strip() or None,
+            normalize_agent_role=lambda value: str(value or "").strip().lower(),
+            normalize_requested_max_iterations=lambda value: int(value) if value is not None else None,
+            valid_execution_targets={"local_companion", "cloud", "auto"},
+            note=None,
+        )
+
+        self.assertEqual(request.metadata["runtime_mode"], "local_secure")
+        self.assertEqual(request.metadata["runtime_attachment_id"], "local_companion:child")
+        self.assertEqual(request.metadata["machine_target"], "machine-child")
+        self.assertEqual(request.metadata["root_folder_uri"], "/workspace/child")
+        self.assertEqual(request.metadata["folder_grants"], ["/workspace/child"])
+        self.assertEqual(request.metadata["file_mount_grants"], [{"mount": "child", "mode": "read"}])
+        self.assertEqual(request.metadata["master_agent_install_id"], "install-master")
+        self.assertNotIn("active_agent_install_id", request.metadata)
+        self.assertNotIn("workspace_agent_install_id", request.metadata)
 
     def test_timeout_stale_delegated_child_runs_marks_failed_child(self):
         child_logs = queue.Queue()

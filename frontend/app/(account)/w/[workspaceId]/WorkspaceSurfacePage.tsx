@@ -3,27 +3,18 @@
 import { type ReactNode, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 
-import { WorkspaceChannelOperationsConsole } from '@/lib/workspace/workspace-channel-operations-console';
 import { WorkspaceChannelPairingSurface } from '@/lib/workspace/workspace-channel-pairing-surface';
 import { useWorkspaceBoundary } from '@/lib/workspace/workspace-boundary';
 import { WorkstationActivityPane } from '@/lib/workspace/workstation-activity-pane';
-import { WorkstationAgentsPane } from '@/lib/workspace/workstation-agents-pane';
-import { WorkstationApplicationsPane } from '@/lib/workspace/workstation-applications-pane';
 import { WorkstationApprovalsPane } from '@/lib/workspace/workstation-approvals-pane';
 import { WorkstationArtifactsPane } from '@/lib/workspace/workstation-artifacts-pane';
-import { WorkstationBillingPane } from '@/lib/workspace/workstation-billing-pane';
 import { WorkstationChatPane } from '@/lib/workspace/workstation-chat-pane';
 import { WorkstationDeployedAgentsPane } from '@/lib/workspace/workstation-deployed-agents-pane';
-import { WorkstationHomePane } from '@/lib/workspace/workstation-home-pane';
-import { WorkstationMembersAdminPane } from '@/lib/workspace/workstation-members-admin-pane';
 import { WorkstationNotificationsPane } from '@/lib/workspace/workstation-notifications-pane';
-import { WorkstationPlatformAnalyticsPane } from '@/lib/workspace/workstation-platform-analytics-pane';
-import { WorkstationPoliciesAdminPane } from '@/lib/workspace/workstation-policies-admin-pane';
-import { WorkstationRoutingAdminPane } from '@/lib/workspace/workstation-routing-admin-pane';
 import { WorkstationRunsPane } from '@/lib/workspace/workstation-runs-pane';
 import { WorkstationSettingsPane } from '@/lib/workspace/workstation-settings-pane';
 import { WorkstationSurfaceViewport } from '@/lib/workspace/workstation-shell-frame';
-import type { WorkspaceRouteId } from '@/lib/workspace/workspace-shell';
+import { resolveRouteIdFromHref, type WorkspaceRouteId } from '@/lib/workspace/workspace-shell';
 import {
   getWorkspaceNavRouteDefinition,
   type WorkspaceNavDestinationId,
@@ -37,77 +28,49 @@ type SurfaceRouteRenderer = {
 };
 
 const WORKSPACE_SURFACE_RENDERERS: Record<WorkspaceRouteId, SurfaceRouteRenderer> = {
-  workstation: {
-    destinationId: 'home',
-    render: () => <WorkstationHomePane />,
-  },
   chat: {
-    destinationId: 'chat',
+    destinationId: 'sage',
     render: () => <WorkstationChatPane />,
   },
   runs: {
-    destinationId: 'work',
+    destinationId: 'sage',
     render: () => <WorkstationRunsPane />,
   },
   approvals: {
-    destinationId: 'work',
+    destinationId: 'sage',
     render: () => <WorkstationApprovalsPane />,
   },
   artifacts: {
-    destinationId: 'work',
+    destinationId: 'sage',
     render: () => <WorkstationArtifactsPane />,
   },
   notifications: {
-    destinationId: 'work',
+    destinationId: 'sage',
     render: () => <WorkstationNotificationsPane />,
   },
   activity: {
-    destinationId: 'work',
+    destinationId: 'sage',
     render: () => <WorkstationActivityPane />,
   },
-  agents: {
-    destinationId: 'build',
-    render: () => <WorkstationAgentsPane />,
+  studio: {
+    destinationId: 'studio',
+    render: () => <WorkstationDeployedAgentsPane initialSubview="agents" />,
   },
-  'deployed-agents': {
-    destinationId: 'build',
-    render: () => <WorkstationDeployedAgentsPane />,
-  },
-  applications: {
-    destinationId: 'build',
-    render: () => <WorkstationApplicationsPane />,
-  },
-  integrations: {
-    destinationId: 'build',
+  channels: {
+    destinationId: 'studio',
     render: () => <WorkspaceChannelPairingSurface featureId="integrations" />,
   },
+  inbox: {
+    destinationId: 'studio',
+    render: () => <WorkstationDeployedAgentsPane initialSubview="inbox" />,
+  },
+  deploy: {
+    destinationId: 'studio',
+    render: () => <WorkstationDeployedAgentsPane initialSubview="deploy" />,
+  },
   settings: {
-    destinationId: 'control',
+    destinationId: 'settings',
     render: () => <WorkstationSettingsPane />,
-  },
-  admin: {
-    destinationId: 'control',
-    render: () => <WorkspaceChannelOperationsConsole />,
-  },
-  'admin/platform': {
-    destinationId: 'control',
-    render: () => <WorkstationPlatformAnalyticsPane />,
-  },
-  'admin/billing': {
-    destinationId: 'control',
-    render: () => <WorkstationBillingPane />,
-  },
-  'admin/routing': {
-    destinationId: 'control',
-    render: () => <WorkstationRoutingAdminPane />,
-  },
-  'admin/members': {
-    destinationId: 'control',
-    render: () => <WorkstationMembersAdminPane />,
-  },
-  'admin/policies': {
-    destinationId: 'control',
-    render: () => <WorkstationPoliciesAdminPane />,
   },
 };
 
@@ -121,20 +84,27 @@ export function WorkspaceSurfacePage({
   const router = useRouter();
   const { routeManifest } = useWorkspaceBoundary();
   const route = routeManifest.routeIndex[surface];
-  const redirectHref = routeManifest.defaultRoute || `/w/${encodeURIComponent(workspaceId)}/home`;
+  const redirectHref = routeManifest.defaultRoute || `/w/${encodeURIComponent(workspaceId)}/sage`;
   const routeDefinition = getWorkspaceNavRouteDefinition(surface);
   const routeRenderer = WORKSPACE_SURFACE_RENDERERS[surface];
   const renderSurface = routeRenderer?.render;
   const routeMatchesDestination = routeRenderer?.destinationId === routeDefinition.destinationId;
+  const fallbackRouteId = resolveRouteIdFromHref(workspaceId, redirectHref) ?? 'chat';
+  const fallbackRenderer = WORKSPACE_SURFACE_RENDERERS[fallbackRouteId]?.render;
+  const hasValidSurface = Boolean(route && routeMatchesDestination);
 
   useEffect(() => {
-    if (!route || !renderSurface || !routeMatchesDestination) {
+    if (!hasValidSurface) {
       router.replace(redirectHref);
     }
-  }, [redirectHref, renderSurface, route, routeMatchesDestination, router]);
+  }, [hasValidSurface, redirectHref, router]);
 
-  if (!route || !renderSurface || !routeMatchesDestination) {
-    return null;
+  if (!hasValidSurface) {
+    return (
+      <WorkstationSurfaceViewport surface={fallbackRouteId}>
+        {fallbackRenderer()}
+      </WorkstationSurfaceViewport>
+    );
   }
 
   return (

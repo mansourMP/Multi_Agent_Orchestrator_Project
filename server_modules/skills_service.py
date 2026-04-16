@@ -581,6 +581,68 @@ def _builtin_tool_descriptors() -> List[ToolDescriptor]:
                 "required": ["prompt"],
             },
         ),
+        ToolDescriptor(
+            tool_name="sage_service__list_state",
+            label="Sage service state",
+            connector_id="sage_service",
+            action_id="list_state",
+            description="Read the saved state for Flashcards, Language Coach, or Nutrition Log.",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "service_id": {
+                        "type": "string",
+                        "enum": ["flashcards", "language_coach", "nutrition_log"],
+                        "description": "Which Sage service to inspect.",
+                    },
+                },
+                "required": ["service_id"],
+            },
+        ),
+        ToolDescriptor(
+            tool_name="sage_service__update_profile",
+            label="Sage service profile",
+            connector_id="sage_service",
+            action_id="update_profile",
+            description="Update saved profile settings for a Sage service, such as study focus or nutrition targets.",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "service_id": {
+                        "type": "string",
+                        "enum": ["flashcards", "language_coach", "nutrition_log"],
+                        "description": "Which Sage service to update.",
+                    },
+                    "profile": {
+                        "type": "object",
+                        "description": "Service-specific profile fields to store.",
+                    },
+                },
+                "required": ["service_id", "profile"],
+            },
+        ),
+        ToolDescriptor(
+            tool_name="sage_service__create_entry",
+            label="Sage service entry",
+            connector_id="sage_service",
+            action_id="create_entry",
+            description="Create a new flashcard, language practice item, or nutrition log entry.",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "service_id": {
+                        "type": "string",
+                        "enum": ["flashcards", "language_coach", "nutrition_log"],
+                        "description": "Which Sage service to write to.",
+                    },
+                    "entry": {
+                        "type": "object",
+                        "description": "The service-specific entry payload to save.",
+                    },
+                },
+                "required": ["service_id", "entry"],
+            },
+        ),
         ToolDescriptor("browser__navigate", "Browser navigate", "browser", "navigate", "Open a URL in the backend browser engine.", {"type": "object", "properties": {"url": {"type": "string", "description": "The URL to open."}}, "required": ["url"]}),
         ToolDescriptor("browser__screenshot", "Browser screenshot", "browser", "screenshot", "Capture a screenshot from the backend browser engine.", {"type": "object", "properties": {"selector": {"type": "string", "description": "Optional CSS/XPath/text selector."}}}),
         ToolDescriptor("browser__observe", "Browser observe", "browser", "observe", "Return the current browser page state plus a screenshot for vision-style reasoning.", {"type": "object", "properties": {}}),
@@ -1155,9 +1217,20 @@ def execute_single_direct_tool_call(
     callbacks: Any,
 ) -> str:
     from server_modules.tools_image_gen import generate_image as run_generate_image
+    from server_modules import sage_services_service
 
     connector_id, action_id = callbacks.parse_tool_name(str(tool_call.get("name") or ""))
     argument_payload = callbacks.tool_arguments_payload(tool_call.get("arguments"))
+    session_metadata = session_ctx if isinstance(session_ctx, dict) else {}
+    tenant_id = str(
+        session_metadata.get("tenant_id")
+        or (
+            session_metadata.get("agent_turn_request", {}).get("tenant_id")
+            if isinstance(session_metadata.get("agent_turn_request"), dict)
+            else ""
+        )
+        or "default"
+    ).strip() or "default"
     if connector_id == "http" and action_id == "request":
         _raise_direct_chat_tool_execution_blocked()
     if connector_id == "image" and action_id == "generate":
@@ -1247,6 +1320,48 @@ def execute_single_direct_tool_call(
             line_count=argument_payload.get("lines"),
         )
         return json.dumps(excerpt, ensure_ascii=False)
+    if connector_id == "sage_service" and action_id == "list_state":
+        service_id = str(argument_payload.get("service_id") or "").strip()
+        if not service_id:
+            raise RuntimeError("Tool 'sage_service__list_state' requires a service_id.")
+        payload = sage_services_service.list_sage_services(workspace_id=workspace_id)
+        items = payload.get("items") if isinstance(payload, dict) else []
+        for item in items or []:
+            if str(item.get("id") or "").strip() == service_id:
+                return json.dumps(item, ensure_ascii=False)
+        raise RuntimeError(f"Unknown Sage service '{service_id}'.")
+    if connector_id == "sage_service" and action_id == "update_profile":
+        service_id = str(argument_payload.get("service_id") or "").strip()
+        profile = argument_payload.get("profile")
+        if not service_id or not isinstance(profile, dict):
+            raise RuntimeError("Tool 'sage_service__update_profile' requires service_id and profile.")
+        result = callbacks.run_async_tool_call(
+            sage_services_service.update_service_profile(
+                tenant_id=tenant_id,
+                workspace_id=workspace_id,
+                service_id=service_id,
+                profile=profile,
+                actor_user_id=None,
+            )
+        )
+        service_payload = result.get("service") if isinstance(result, dict) else result
+        return json.dumps(service_payload, ensure_ascii=False)
+    if connector_id == "sage_service" and action_id == "create_entry":
+        service_id = str(argument_payload.get("service_id") or "").strip()
+        entry = argument_payload.get("entry")
+        if not service_id or not isinstance(entry, dict):
+            raise RuntimeError("Tool 'sage_service__create_entry' requires service_id and entry.")
+        result = callbacks.run_async_tool_call(
+            sage_services_service.create_service_entry(
+                tenant_id=tenant_id,
+                workspace_id=workspace_id,
+                service_id=service_id,
+                entry=entry,
+                actor_user_id=None,
+            )
+        )
+        service_payload = result.get("service") if isinstance(result, dict) else result
+        return json.dumps(service_payload, ensure_ascii=False)
     if connector_id in {"file", "shell", "screenshot", "computer"}:
         _raise_direct_chat_tool_execution_blocked()
     _raise_direct_chat_tool_execution_blocked()

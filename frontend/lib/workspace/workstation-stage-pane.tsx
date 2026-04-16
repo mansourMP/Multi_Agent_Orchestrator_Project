@@ -58,83 +58,58 @@ const DEFAULT_STAGE_STATE: StagePaneState = {
   items: [],
 };
 
-function buildAgentCatalog({
-  workspaceLabel,
-  shellProfileLabel,
-  role,
-  workspaceTraits,
-}: {
-  workspaceLabel: string;
-  shellProfileLabel: string;
-  role: string;
-  workspaceTraits: Record<string, unknown>;
-}): StageCatalogEntry[] {
-  const items: StageCatalogEntry[] = [
-    {
-      source: 'roster',
-      kind: 'agent',
-      id: 'agent:workspace-operator',
-      label: 'Workspace Operator',
-      subtitle: `${shellProfileLabel} · ${role}`,
-      description: `${workspaceLabel} is operating under the ${shellProfileLabel.toLowerCase()} shell profile.`,
-      metadata: {
-        operatingMode: workspaceTraits['operatingMode'] ?? null,
-        complianceMode: workspaceTraits['complianceMode'] ?? null,
-        role,
-      },
-    },
-  ];
+function buildWorkspaceAreaCatalog(
+  routeManifest: ReturnType<typeof useWorkspaceBoundary>['routeManifest'],
+): StageCatalogEntry[] {
+  const items: StageCatalogEntry[] = [];
+  const sageRoute = routeManifest.routeIndex.chat ?? null;
+  const servicesRoute = routeManifest.routeIndex.deploy ?? null;
+  const studioRoute = routeManifest.routeIndex.studio ?? null;
+  const integrationsRoute = routeManifest.routeIndex.channels ?? null;
 
-  if (workspaceTraits['documentHeavy'] === true) {
+  if (sageRoute) {
     items.push({
       source: 'roster',
-      kind: 'agent',
-      id: 'agent:document-specialist',
-      label: 'Document Specialist',
-      subtitle: 'Document workstation routing',
-      description: 'Document-heavy routing is enabled for this workspace.',
+      kind: 'workspace_area',
+      id: 'workspace_area:sage',
+      label: 'Sage',
+      subtitle: 'Primary personal agent',
+      description: servicesRoute
+        ? 'Sage owns chat, memory, approvals, runs, and structured Sage services.'
+        : 'Sage owns chat, memory, approvals, and runs.',
+      href: sageRoute.href,
       metadata: {
-        documentHeavy: true,
+        areaId: 'sage',
+        routeId: sageRoute.id,
+        primarySurface: sageRoute.label,
+        supportingRoutes: ['Home', 'Chat', 'Runs', 'Approvals', 'Artifacts', 'Notifications', 'Activity'],
+        requiredCapabilities: [...new Set([...(sageRoute.requiredCapabilities ?? []), ...(servicesRoute?.requiredCapabilities ?? [])])],
       },
     });
   }
 
-  if (workspaceTraits['adminHeavy'] === true || role === 'owner' || role === 'admin') {
+  if (studioRoute) {
     items.push({
       source: 'roster',
-      kind: 'agent',
-      id: 'agent:operations-supervisor',
-      label: 'Operations Supervisor',
-      subtitle: 'Admin and operations oversight',
-      description: 'Administrative controls are available for this workspace.',
+      kind: 'workspace_area',
+      id: 'workspace_area:studio',
+      label: 'Studio',
+      subtitle: 'Telegram specialist agents',
+      description: integrationsRoute
+        ? 'Studio creates, binds, deploys, and monitors specialist agents with explicit Telegram readiness.'
+        : 'Studio creates and monitors specialist agents for this workspace.',
+      href: studioRoute.href,
       metadata: {
-        adminHeavy: Boolean(workspaceTraits['adminHeavy']),
-        role,
+        areaId: 'studio',
+        routeId: studioRoute.id,
+        primarySurface: studioRoute.label,
+        supportingRoutes: ['Agents', 'Channels', 'Inbox', 'Deploy'],
+        requiredCapabilities: [...new Set([...(studioRoute.requiredCapabilities ?? []), ...(integrationsRoute?.requiredCapabilities ?? [])])],
       },
     });
   }
 
   return items;
-}
-
-function buildApplicationCatalog(
-  routeManifest: ReturnType<typeof useWorkspaceBoundary>['routeManifest'],
-): StageCatalogEntry[] {
-  return routeManifest.navGroups.flatMap((group) =>
-    group.routes.map((route) => ({
-      source: 'roster' as const,
-        kind: 'application' as const,
-        id: `application:${route.id}`,
-        label: route.label,
-        subtitle: group.label,
-        description: `Dedicated workstation surface for ${route.label}.`,
-        href: route.href,
-        metadata: {
-          groupLabel: group.label,
-          requiredCapabilities: route.requiredCapabilities,
-        },
-      })),
-  );
 }
 
 function buildRuntimeTargetCatalog(
@@ -207,11 +182,8 @@ function viewTitle(kind: WorkstationStageViewKind | null): string {
   if (kind === 'artifact_document') {
     return 'Artifact';
   }
-  if (kind === 'agent_detail') {
-    return 'Agent';
-  }
-  if (kind === 'application_detail') {
-    return 'Surface';
+  if (kind === 'workspace_area_detail') {
+    return 'Workspace area';
   }
   if (kind === 'runtime_target_detail') {
     return 'Runtime target';
@@ -226,45 +198,34 @@ function boolLabel(value: unknown): string {
 function renderSelectionSpecificSections(selection: StageSelection) {
   const metadata = selection.metadata ?? {};
 
-  if (selection.kind === 'agent') {
-    return (
-      <StageDetailSection title="Operational context">
-        <StageDetailFieldGrid>
-          {'role' in metadata ? (
-            <StageDetailField label="Role" value={String(metadata.role ?? '—')} />
-          ) : null}
-          {'operatingMode' in metadata ? (
-            <StageDetailField label="Operating mode" value={String(metadata.operatingMode ?? '—')} />
-          ) : null}
-          {'complianceMode' in metadata ? (
-            <StageDetailField label="Compliance mode" value={String(metadata.complianceMode ?? '—')} />
-          ) : null}
-          {'documentHeavy' in metadata ? (
-            <StageDetailField label="Document-heavy" value={boolLabel(metadata.documentHeavy)} />
-          ) : null}
-          {'adminHeavy' in metadata ? (
-            <StageDetailField label="Admin-heavy" value={boolLabel(metadata.adminHeavy)} />
-          ) : null}
-        </StageDetailFieldGrid>
-      </StageDetailSection>
-    );
-  }
-
-  if (selection.kind === 'application') {
+  if (selection.kind === 'workspace_area') {
     const capabilities = Array.isArray(metadata.requiredCapabilities)
       ? metadata.requiredCapabilities as unknown[]
       : [];
     return (
       <>
-        <StageDetailSection title="Surface routing">
+        <StageDetailSection title="Area routing">
           <StageDetailFieldGrid>
-            {'groupLabel' in metadata ? (
-              <StageDetailField label="Navigation group" value={String(metadata.groupLabel ?? '—')} />
+            {'areaId' in metadata ? (
+              <StageDetailField label="Product" value={String(metadata.areaId ?? '—')} />
             ) : null}
-            <StageDetailField label="Surface" value={selection.label} />
-            <StageDetailField label="Availability" value={selection.href ? 'Ready to open in the workstation' : 'Inspector detail only'} />
+            {'primarySurface' in metadata ? (
+              <StageDetailField label="Primary surface" value={String(metadata.primarySurface ?? '—')} />
+            ) : null}
+            <StageDetailField label="Availability" value={selection.href ? 'Ready to open in the workspace' : 'Inspector detail only'} />
           </StageDetailFieldGrid>
         </StageDetailSection>
+        {Array.isArray(metadata.supportingRoutes) && metadata.supportingRoutes.length > 0 ? (
+          <StageDetailSection title="Supporting surfaces">
+            <div className="app-inline-actions app-inline-actions--tight">
+              {(metadata.supportingRoutes as unknown[]).map((route) => (
+                <span key={String(route)} className="app-data-badge app-data-badge--neutral">
+                  {String(route)}
+                </span>
+              ))}
+            </div>
+          </StageDetailSection>
+        ) : null}
         {capabilities.length > 0 ? (
           <StageDetailSection title="Required capabilities">
             <div className="app-inline-actions app-inline-actions--tight">
@@ -303,6 +264,33 @@ function renderSelectionSpecificSections(selection: StageSelection) {
   }
 
   return null;
+}
+
+function resolveWorkspaceAreaForRoute(
+  routeId: WorkspaceRouteId | null,
+  items: StageSelection[],
+): StageSelection | null {
+  if (!routeId) {
+    return null;
+  }
+
+  const routeToAreaId =
+    routeId === 'studio' || routeId === 'channels' || routeId === 'inbox' || routeId === 'deploy'
+      ? 'studio'
+      : routeId === 'chat'
+        || routeId === 'runs'
+        || routeId === 'approvals'
+        || routeId === 'artifacts'
+        || routeId === 'notifications'
+        || routeId === 'activity'
+          ? 'sage'
+          : null;
+
+  if (!routeToAreaId) {
+    return null;
+  }
+
+  return items.find((item) => item.metadata?.['areaId'] === routeToAreaId) ?? null;
 }
 
 function renderSelectionSwitcher(
@@ -347,7 +335,7 @@ function renderSelectionSwitcher(
 }
 
 export function WorkstationStagePane() {
-  const { bootstrap, routeManifest, shellProfile, workspaceId } = useWorkspaceBoundary();
+  const { bootstrap, routeManifest, workspaceId } = useWorkspaceBoundary();
   const { intent } = useWorkstationStageIntentState();
   const router = useRouter();
   const pathname = usePathname();
@@ -362,17 +350,8 @@ export function WorkstationStagePane() {
   );
   const [state, setState] = useState<StagePaneState>(DEFAULT_STAGE_STATE);
 
-  const agentCatalog = useMemo(
-    () => buildAgentCatalog({
-      workspaceLabel: bootstrap.workspace.label,
-      shellProfileLabel: shellProfile.label,
-      role: bootstrap.membership.role,
-      workspaceTraits: bootstrap.workspaceTraits,
-    }),
-    [bootstrap.membership.role, bootstrap.workspace.label, bootstrap.workspaceTraits, shellProfile.label],
-  );
-  const applicationCatalog = useMemo(
-    () => buildApplicationCatalog(routeManifest),
+  const workspaceAreaCatalog = useMemo(
+    () => buildWorkspaceAreaCatalog(routeManifest),
     [routeManifest],
   );
   const runtimeTargetCatalog = useMemo(
@@ -430,44 +409,6 @@ export function WorkstationStagePane() {
         activeView: mapStageRouteKindToViewKind(selection.kind),
         activeSelection: selection,
         items: [selection],
-      });
-      return () => {
-        cancelled = true;
-      };
-    }
-
-    if (routeId === 'agents') {
-      const { activeSelection, blockedMessage } = resolveSelectionFromCatalog(
-        agentCatalog,
-        stageRouteState?.source === 'roster' || stageRouteState?.kind === 'agent' ? stageRouteState : null,
-        'agent',
-      );
-      applyState({
-        isLoading: false,
-        statusMessage: agentCatalog.length === 0 ? 'No agent detail is available for this workspace.' : null,
-        blockedMessage,
-        activeView: activeSelection ? 'agent_detail' : null,
-        activeSelection,
-        items: agentCatalog,
-      });
-      return () => {
-        cancelled = true;
-      };
-    }
-
-    if (routeId === 'applications') {
-      const { activeSelection, blockedMessage } = resolveSelectionFromCatalog(
-        applicationCatalog,
-        stageRouteState?.source === 'roster' || stageRouteState?.kind === 'application' ? stageRouteState : null,
-        'application',
-      );
-      applyState({
-        isLoading: false,
-        statusMessage: applicationCatalog.length === 0 ? 'No workspace surface detail is available for this workspace.' : null,
-        blockedMessage,
-        activeView: activeSelection ? 'application_detail' : null,
-        activeSelection,
-        items: applicationCatalog,
       });
       return () => {
         cancelled = true;
@@ -594,9 +535,39 @@ export function WorkstationStagePane() {
       };
     }
 
+    const workspaceAreaSelection = (() => {
+      if (stageRouteState?.source === 'roster' && stageRouteState.kind === 'workspace_area') {
+        return resolveSelectionFromCatalog(
+          workspaceAreaCatalog,
+          stageRouteState,
+          'workspace_area',
+        );
+      }
+
+      const routeSelection = resolveWorkspaceAreaForRoute(routeId, workspaceAreaCatalog);
+      return {
+        activeSelection: routeSelection,
+        blockedMessage: null,
+      };
+    })();
+
+    if (workspaceAreaSelection.activeSelection || workspaceAreaCatalog.length > 0) {
+      applyState({
+        isLoading: false,
+        statusMessage: workspaceAreaCatalog.length === 0 ? 'No workspace product detail is available for this workspace.' : null,
+        blockedMessage: workspaceAreaSelection.blockedMessage,
+        activeView: workspaceAreaSelection.activeSelection ? 'workspace_area_detail' : null,
+        activeSelection: workspaceAreaSelection.activeSelection,
+        items: workspaceAreaCatalog,
+      });
+      return () => {
+        cancelled = true;
+      };
+    }
+
     applyState({
       isLoading: false,
-      statusMessage: 'Select an item from the workspace inventory or open a run, approval, or artifact to populate the inspector.',
+      statusMessage: 'Select Sage, Studio, or a runtime target to populate the inspector.',
       blockedMessage: null,
       activeView: null,
       activeSelection: null,
@@ -607,9 +578,6 @@ export function WorkstationStagePane() {
       cancelled = true;
     };
   }, [
-    agentCatalog,
-    applicationCatalog,
-    bootstrap.workspace.label,
     intent,
     pathname,
     routeId,
@@ -617,6 +585,7 @@ export function WorkstationStagePane() {
     runtimeTargetCatalog,
     searchParams,
     stageRouteState,
+    workspaceAreaCatalog,
   ]);
 
   if (state.activeSelection && state.activeView === 'run_detail') {

@@ -7,8 +7,7 @@ export type WorkstationStageRouteKind =
   | 'trace'
   | 'approval'
   | 'artifact'
-  | 'agent'
-  | 'application'
+  | 'workspace_area'
   | 'runtime_target';
 
 export type WorkstationStageViewKind =
@@ -16,8 +15,7 @@ export type WorkstationStageViewKind =
   | 'trace_detail'
   | 'approval_detail'
   | 'artifact_document'
-  | 'agent_detail'
-  | 'application_detail'
+  | 'workspace_area_detail'
   | 'runtime_target_detail';
 
 export type WorkstationStageRouteState = {
@@ -45,11 +43,13 @@ function normalizeStageKind(value: string | null | undefined): WorkstationStageR
     || value === 'trace'
     || value === 'approval'
     || value === 'artifact'
-    || value === 'agent'
-    || value === 'application'
+    || value === 'workspace_area'
     || value === 'runtime_target'
   ) {
     return value;
+  }
+  if (value === 'agent' || value === 'application') {
+    return 'workspace_area';
   }
   return null;
 }
@@ -112,11 +112,8 @@ export function mapStageRouteKindToViewKind(
   if (kind === 'artifact') {
     return 'artifact_document';
   }
-  if (kind === 'agent') {
-    return 'agent_detail';
-  }
-  if (kind === 'application') {
-    return 'application_detail';
+  if (kind === 'workspace_area') {
+    return 'workspace_area_detail';
   }
   return 'runtime_target_detail';
 }

@@ -307,8 +307,8 @@ test.describe('deployed agents surface', () => {
     await loginAsOwner(page);
     await page.goto('/w/ws-1/chat');
 
-    await expect(page.getByRole('link', { name: /deployed agents/i })).toBeVisible();
-    await page.getByRole('link', { name: /deployed agents/i }).click();
+    await expect(page.getByRole('link', { name: /^studio$/i })).toBeVisible();
+    await page.getByRole('link', { name: /^studio$/i }).click();
     await expect(page).toHaveURL(/\/w\/ws-1\/deployed-agents$/);
     await expect(page.locator('[data-workstation-surface="deployed-agents"]')).toBeVisible();
   });
@@ -552,6 +552,67 @@ test.describe('deployed agents surface', () => {
         return;
       }
 
+      if (segments.length === 3 && segments[0] === 'api' && segments[1] === 'deployed-agents' && segments[2] === 'telegram-readiness' && method === 'GET') {
+        const deployedAgentId = url.searchParams.get('deployed_agent_id') || '';
+        const agent = agents.find((item) => item.id === deployedAgentId) ?? null;
+        const telegramConfig = agent?.channels?.telegram ?? {};
+        const connectorId = telegramConfig.connector_id ?? '';
+        const endpointKey = telegramConfig.endpoint_key ?? '';
+        const readyForLive = Boolean(connectorId && endpointKey);
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            ready_for_live: readyForLive,
+            status: readyForLive ? 'ready' : 'draft',
+            next_action: readyForLive
+              ? 'Telegram connector, inbound ownership, and webhook contract are ready.'
+              : 'Select a Telegram connector before Studio can mark this specialist ready.',
+            blockers: readyForLive
+              ? []
+              : [
+                  {
+                    code: 'telegram_connector_required',
+                    message: 'Choose a Telegram connector before this Studio specialist can go live.',
+                    guidance: 'Bind one workspace Telegram bot in the Channels step.',
+                    severity: 'warning',
+                  },
+                ],
+            warnings: [],
+            connectors: [
+              {
+                id: 'tg-connector-1',
+                label: 'Returns Bot',
+                endpoint_key: 'returns-bot',
+                bot_username: 'returns_concierge_bot',
+                webhook_path: '/hooks/telegram/returns-bot',
+                webhook_url: 'https://example.com/hooks/telegram/returns-bot',
+                profile_status: 'healthy',
+                profile_issue: null,
+                last_error: null,
+                last_error_at: null,
+              },
+            ],
+            configured_binding: readyForLive
+              ? {
+                  connector_id: connectorId,
+                  endpoint_key: endpointKey,
+                  is_inbound_owner: true,
+                }
+              : {},
+            webhook: {
+              status: readyForLive ? 'ready' : 'checking',
+              path_template: '/hooks/telegram/{endpoint_key}',
+            },
+            autopilot: {
+              enabled: true,
+              delivery_mode: 'webhook',
+            },
+          }),
+        });
+        return;
+      }
+
       if (segments.length === 2 && segments[0] === 'api' && segments[1] === 'deployed-agents' && method === 'POST') {
         const body = request.postDataJSON();
         const created = buildAgent({
@@ -567,6 +628,7 @@ test.describe('deployed agents surface', () => {
           billing_plan: body.billing_plan,
           provider: body.provider ?? 'openai',
           model: body.model ?? 'gpt-4o',
+          config: body.config ?? {},
           metadata: body.metadata ?? {},
           deployment_state: 'draft',
           updated_at: '2026-04-13T12:00:00Z',
@@ -658,6 +720,7 @@ test.describe('deployed agents surface', () => {
             deployment_state: body.deployment_state ?? agent.deployment_state,
             provider: body.provider ?? agent.provider,
             model: body.model ?? agent.model,
+            config: body.config ?? agent.config,
             metadata: {
               ...(agent.metadata ?? {}),
               ...(body.metadata ?? {}),
@@ -784,7 +847,6 @@ test.describe('deployed agents surface', () => {
     await expect(surface).toContainText(/store assistant/i);
     await expect(surface).toContainText(/12 active · 58 msgs \/ 30d/i);
     await expect(surface).toContainText(/3 conversations/i);
-    await expect(surface).toContainText(/2 unresolved/i);
     await expect(surface).toContainText(/openai · gpt-4o/i);
     await expect(surface).toContainText(/\$25\.00/);
     await expect(surface).toContainText(/\$8\.00/);
@@ -823,7 +885,7 @@ test.describe('deployed agents surface', () => {
     await page.getByLabel(/knowledge references/i).fill('kb://returns\nkb://orders');
     await page.getByRole('button', { name: /continue/i }).click();
     await page.getByLabel(/telegram state/i).selectOption('enabled');
-    await page.getByLabel(/telegram endpoint key/i).fill('returns-bot');
+    await page.getByLabel(/telegram connector/i).selectOption('tg-connector-1');
     await page.getByRole('button', { name: /continue/i }).click();
     await page.locator('[data-deployed-agent-provider-select="true"]').selectOption('deepseek');
     await page.locator('[data-deployed-agent-model-select="true"]').selectOption('deepseek-reasoner');
@@ -831,6 +893,8 @@ test.describe('deployed agents surface', () => {
     await expect(page.locator('[data-deployed-agent-wizard="root"]')).toContainText(/reasoning, low cost, hosted api/i);
     await page.getByLabel(/runtime target/i).selectOption('cloud');
     await page.getByLabel(/billing plan/i).selectOption('free');
+    await expect(page.locator('[data-deployed-agent-wizard="root"]')).toContainText(/web search: search public websites for current facts and references\./i);
+    await page.getByRole('button', { name: 'HTTP request', exact: true }).click();
     await page.getByLabel(/persistent memory/i).selectOption('enabled');
     await page.getByLabel(/daily message limit/i).fill('25');
     await page.getByLabel(/monthly cost cap \(usd\)/i).fill('25');

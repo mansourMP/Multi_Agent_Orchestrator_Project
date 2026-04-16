@@ -1,9 +1,10 @@
 import json
 import importlib.util
 import sys
+import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
@@ -79,6 +80,9 @@ class OperatorChatDirectToolTests(unittest.TestCase):
         tool_names = {item["name"] for item in captured["tools"]}
         self.assertIn("memory_search", tool_names)
         self.assertIn("memory_get", tool_names)
+        self.assertIn("sage_service__list_state", tool_names)
+        self.assertIn("sage_service__update_profile", tool_names)
+        self.assertIn("sage_service__create_entry", tool_names)
         self.assertIn("## Memory Recall", str(captured["system_prompt"] or ""))
         self.assertIn("run memory_search", str(captured["system_prompt"] or ""))
 
@@ -122,6 +126,50 @@ class OperatorChatDirectToolTests(unittest.TestCase):
         self.assertEqual(parsed["path"], "MEMORY.md")
         self.assertEqual(parsed["from_line"], 2)
         self.assertIn("Asia/Shanghai", parsed["text"])
+
+    def test_sage_service_direct_tools_execute_inside_operator_chat_runtime(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir) / "workspace-1"
+            with (
+                patch(
+                    "server_modules.sage_services_service.workspace_context.workspace_scope_dir",
+                    return_value=root,
+                ),
+                patch(
+                    "server_modules.sage_services_service.personal_context_engine.publish_event",
+                    new=AsyncMock(return_value={"id": "evt-1"}),
+                ),
+            ):
+                created_raw = operator_chat._execute_single_direct_tool_call(
+                    tool_call={
+                        "name": "sage_service__create_entry",
+                        "arguments": {
+                            "service_id": "flashcards",
+                            "entry": {
+                                "deck": "Legal",
+                                "front": "SPA",
+                                "back": "Share Purchase Agreement",
+                            },
+                        },
+                    },
+                    workspace_id="workspace-1",
+                    thread_id="thread-1",
+                    session_ctx={"tenant_id": "tenant-1"},
+                )
+                listed_raw = operator_chat._execute_single_direct_tool_call(
+                    tool_call={
+                        "name": "sage_service__list_state",
+                        "arguments": {"service_id": "flashcards"},
+                    },
+                    workspace_id="workspace-1",
+                    thread_id="thread-1",
+                    session_ctx={"tenant_id": "tenant-1"},
+                )
+
+        created = json.loads(created_raw)
+        listed = json.loads(listed_raw)
+        self.assertEqual(created["entries"][0]["front"], "SPA")
+        self.assertEqual(listed["entries"][0]["deck"], "Legal")
 
     @patch(
         "operator_chat_direct_tools_under_test.resolve_workspace_tool_capabilities",

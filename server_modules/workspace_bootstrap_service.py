@@ -78,6 +78,92 @@ def _runtime_target_kind(target_id: str) -> str:
     return "cloud_default"
 
 
+def _runtime_target_trust_profile(target: Dict[str, Any]) -> Dict[str, Any]:
+    target_id = str(target.get("target_id") or "").strip()
+    supported_modes = {
+        str(mode or "").strip()
+        for mode in list(target.get("supports_runtime_modes") or [])
+        if str(mode or "").strip()
+    }
+    if target_id == "local_companion":
+        if "privileged_device" in supported_modes:
+            return dict(runtime_attachment_service.TRUST_MODEL_MAP.get("privileged_device") or {})
+        return dict(runtime_attachment_service.TRUST_MODEL_MAP.get("local_secure") or {})
+    if target_id == "self_host_runtime":
+        return dict(runtime_attachment_service.TRUST_MODEL_MAP.get("self_hosted_business_node") or {})
+    return dict(runtime_attachment_service.TRUST_MODEL_MAP.get("hosted_secure") or {})
+
+
+def _runtime_target_status_label(target: Dict[str, Any]) -> str:
+    target_id = str(target.get("target_id") or "").strip()
+    available = bool(target.get("available"))
+    online = bool(target.get("online"))
+    healthy = bool(target.get("healthy"))
+    if not available:
+        if target_id == "local_companion":
+            return "Needs pairing"
+        if target_id == "self_host_runtime":
+            return "Not configured"
+        return "Unavailable"
+    if not online:
+        return "Offline"
+    if not healthy:
+        return "Needs attention"
+    return "Ready"
+
+
+def _runtime_target_status_reason(target: Dict[str, Any]) -> str:
+    target_id = str(target.get("target_id") or "").strip()
+    label = str(target.get("label") or target_id or "Runtime").strip() or "Runtime"
+    available = bool(target.get("available"))
+    online = bool(target.get("online"))
+    healthy = bool(target.get("healthy"))
+    if target_id == "local_companion":
+        if not available:
+            return "No local companion is paired to this workspace yet, so Sage stays in cloud mode."
+        if not online:
+            return "The local companion is paired but offline, so Sage will not start device work until it reconnects."
+        if not healthy:
+            return "The local companion is connected but not healthy enough for device work yet."
+        return "The local companion is ready. Sensitive device actions still require explicit approval."
+    if target_id == "self_host_runtime":
+        if not available:
+            return "No self-hosted runtime is configured for this workspace yet."
+        if not online:
+            return "The self-hosted runtime is configured but currently offline."
+        if not healthy:
+            return "The self-hosted runtime is reachable but needs attention before Sage can trust it."
+        return "The self-hosted runtime is ready under the workspace policy boundary."
+    if not available:
+        return f"{label} is not available for this workspace right now."
+    if not online or not healthy:
+        return f"{label} is currently degraded, so Sage may not be able to start hosted execution."
+    return "Cloud execution is ready and remains the default path for ordinary turns."
+
+
+def _runtime_target_payload(item: Dict[str, Any]) -> Dict[str, Any]:
+    target_id = str(item.get("target_id") or "").strip()
+    trust_profile = _runtime_target_trust_profile(item)
+    return {
+        "id": target_id,
+        "label": str(item.get("label") or "").strip() or target_id,
+        "kind": _runtime_target_kind(target_id),
+        "online": bool(item.get("online")),
+        "preferred": bool(item.get("default_for_workspace")),
+        "available": bool(item.get("available")),
+        "healthy": bool(item.get("healthy")),
+        "status": str(item.get("status") or "").strip() or "unavailable",
+        "statusLabel": _runtime_target_status_label(item),
+        "statusReason": _runtime_target_status_reason(item),
+        "description": str(item.get("description") or "").strip() or None,
+        "connectionMode": str(item.get("connection_mode") or "").strip() or None,
+        "executionTarget": str(item.get("execution_target") or "").strip() or None,
+        "trustTier": str(trust_profile.get("trust_tier") or "").strip() or None,
+        "approvalMode": str(trust_profile.get("approval_mode") or "").strip() or None,
+        "sampleAttachmentLabel": str(item.get("sample_attachment_label") or "").strip() or None,
+    }
+
+
 def _stable_json(value: Any) -> str:
     return json.dumps(value, sort_keys=True, ensure_ascii=True, separators=(",", ":"), default=str)
 
@@ -202,13 +288,7 @@ def _build_workspace_bootstrap_payload(
         "runtime": {
             "deploymentMode": _normalized_deployment_mode(runtime_targets.get("deployment_mode")),
             "runtimeTargets": [
-                {
-                    "id": str(item.get("target_id") or "").strip(),
-                    "label": str(item.get("label") or "").strip() or str(item.get("target_id") or "").strip(),
-                    "kind": _runtime_target_kind(str(item.get("target_id") or "").strip()),
-                    "online": bool(item.get("online")),
-                    "preferred": bool(item.get("default_for_workspace")),
-                }
+                _runtime_target_payload(item)
                 for item in list(runtime_targets.get("targets") or [])
                 if str(item.get("target_id") or "").strip()
             ],

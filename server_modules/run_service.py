@@ -4975,62 +4975,42 @@ def build_delegated_child_run_request(
     child_metadata["delegated_by_role"] = delegated_by_role
     if note:
         child_metadata["delegation_note"] = note
-    for owner_key in ("owner_user_id", "owner_email", "owner_role", "owner_is_admin", "auth_type"):
-        if owner_key in child_metadata:
-            continue
-        if parent_metadata.get(owner_key) is not None:
-            child_metadata[owner_key] = parent_metadata.get(owner_key)
-    for inherited_key in (
-        "runtime_mode",
-        "runtime_scope",
-        "runtime_selection",
-        "runtime_attachment_id",
-        "runtime_attachment_kind",
-        "workspace_runtime_deployment_mode",
-        "runtime_profile_id",
-        "runtime_profile_label",
-        "runtime_id",
-        "machine_id",
-        "machine_target",
-        "root_folder_uri",
-        "folder_grants",
-        "file_mount_grants",
-        "workspace_agent_install_id",
-        "active_agent_install_id",
-        "master_agent_install_id",
-        "execution_target_selected",
-    ):
-        if inherited_key in child_metadata:
-            continue
-        if parent_metadata.get(inherited_key) is not None:
-            child_metadata[inherited_key] = parent_metadata.get(inherited_key)
-    selected_target = str(
-        parent_metadata.get("execution_target_selected") or parent_metadata.get("execution_target") or ""
-    ).strip().lower()
-    if selected_target in valid_execution_targets and "execution_target" not in child_metadata:
-        child_metadata["execution_target"] = selected_target
-    if parent_metadata.get("trust_mode") and "trust_mode" not in child_metadata:
-        child_metadata["trust_mode"] = parent_metadata.get("trust_mode")
+    if "owner_user_id" not in child_metadata:
+        owner_user_id = parent_metadata.get("owner_user_id")
+        if owner_user_id is not None:
+            child_metadata["owner_user_id"] = owner_user_id
+    if "user_id" not in child_metadata:
+        parent_user_id = parent_metadata.get("user_id")
+        if parent_user_id is not None:
+            child_metadata["user_id"] = parent_user_id
+        elif parent_metadata.get("owner_user_id") is not None:
+            child_metadata["user_id"] = parent_metadata.get("owner_user_id")
+    if "master_agent_install_id" not in child_metadata:
+        parent_master_install_id = (
+            parent_metadata.get("master_agent_install_id")
+            or parent_metadata.get("workspace_agent_install_id")
+        )
+        if parent_master_install_id is not None:
+            child_metadata["master_agent_install_id"] = parent_master_install_id
+    # Delegated specialists must resolve their own install identity; never trust
+    # caller-provided active/workspace install bindings on child requests.
+    child_metadata.pop("active_agent_install_id", None)
+    child_metadata.pop("workspace_agent_install_id", None)
 
     return RunStartRequest(
-        engine=str(parent_snapshot.get("engine") or "orion"),
-        workflow_id=parent_context.get("workflow_id"),
+        engine=str(child_payload.get("engine") or "orion"),
+        workflow_id=child_payload.get("workflow_id"),
         workspace_id=parent_context.get("workspace_id"),
         user_goal=str(child_payload.get("user_goal") or "").strip(),
-        business_plan=str(
-            child_payload.get("business_plan") or parent_context.get("business_plan") or ""
-        ).strip()
-        or None,
+        business_plan=str(child_payload.get("business_plan") or "").strip() or None,
         max_iterations=normalize_requested_max_iterations(
             child_payload.get("max_iterations")
             or child_metadata.get("max_iterations")
-            or parent_context.get("max_iterations")
-            or parent_metadata.get("max_iterations")
         ),
         agent_role=str(child_payload.get("agent_role") or "").strip(),
-        provider=parent_context.get("provider"),
-        model=parent_context.get("model"),
-        credential_id=parent_context.get("credential_id"),
+        provider=child_payload.get("provider"),
+        model=child_payload.get("model"),
+        credential_id=child_payload.get("credential_id"),
         parent_run_id=parent_run_id,
         metadata=child_metadata,
     )

@@ -510,6 +510,7 @@ async def _sync_install_projection(
     status: str,
     runtime_profile_id: Optional[str],
     runtime_mode: str,
+    tool_toggles: Dict[str, Any],
     connector_bindings: Dict[str, Any],
     channel_bindings: Dict[str, Any],
     metadata: Dict[str, Any],
@@ -532,8 +533,9 @@ async def _sync_install_projection(
             label = $4,
             status = $5,
             runtime_profile_id = $6,
-            connector_bindings = $7::jsonb,
-            metadata = $8::jsonb,
+            tool_toggles = $7::jsonb,
+            connector_bindings = $8::jsonb,
+            metadata = $9::jsonb,
             updated_at = NOW()
         WHERE id = $1 AND tenant_id = $2 AND workspace_id = $3
         """,
@@ -543,6 +545,7 @@ async def _sync_install_projection(
         manifest.identity.name,
         status,
         runtime_profile_id,
+        _to_json(tool_toggles, default={}),
         _to_json(connector_bindings, default={}),
         _to_json(next_metadata, default={}),
     )
@@ -809,6 +812,7 @@ async def _persist_specialist_state(
     manifest: AgentManifest,
     runtime_profile_id: Optional[str],
     runtime_mode: str,
+    tool_toggles: Dict[str, Any],
     connector_bindings: Dict[str, Any],
     channel_bindings: Dict[str, Any],
     created_by_user_id: Optional[str],
@@ -883,6 +887,7 @@ async def _persist_specialist_state(
         status=status,
         runtime_profile_id=runtime_profile_id,
         runtime_mode=runtime_mode,
+        tool_toggles=tool_toggles,
         connector_bindings=connector_bindings,
         channel_bindings=normalized_channel_bindings,
         metadata=metadata,
@@ -898,10 +903,12 @@ async def create_workspace_specialist(
     label: Optional[str] = None,
     runtime_profile_id: Optional[str] = None,
     runtime_mode: str = "hosted_secure",
+    tool_toggles: Optional[Dict[str, Any]] = None,
     connector_bindings: Optional[Dict[str, Any]] = None,
     channel_bindings: Optional[Dict[str, Any]] = None,
     metadata: Optional[Dict[str, Any]] = None,
 ) -> Optional[Dict[str, Any]]:
+    tool_toggles = _dict_json(tool_toggles)
     await agent_registry_repository.ensure_workspace_agent_registry_seeded(
         tenant_id=tenant_id,
         workspace_id=workspace_id,
@@ -991,8 +998,8 @@ async def create_workspace_specialist(
             ) VALUES (
                 $1, $2, $3, $4, $5, $6,
                 'workspace', $6, NULL, $7, 'draft', TRUE, $8, NULL,
-                NULL, '{}'::jsonb, '[]'::jsonb, $9::jsonb, '{}'::jsonb,
-                $10::jsonb, $11::jsonb, NOW(), NOW()
+                NULL, $9::jsonb, '[]'::jsonb, $10::jsonb, '{}'::jsonb,
+                $11::jsonb, $12::jsonb, NOW(), NOW()
             )
             """,
             install_id,
@@ -1003,6 +1010,7 @@ async def create_workspace_specialist(
             created_by_user_id,
             specialist_name,
             resolved_runtime_profile_id,
+            _to_json(tool_toggles, default={}),
             _to_json(connector_bindings, default={}),
             _to_json(_manifest_policy_payload(manifest), default={}),
             _to_json(projection_metadata, default={}),
@@ -1015,6 +1023,7 @@ async def create_workspace_specialist(
             manifest=manifest,
             runtime_profile_id=resolved_runtime_profile_id,
             runtime_mode=resolved_runtime_mode,
+            tool_toggles=tool_toggles,
             connector_bindings=connector_bindings,
             channel_bindings=channel_bindings,
             created_by_user_id=created_by_user_id,
@@ -1170,12 +1179,14 @@ async def update_workspace_specialist_manifest(
     updated_by_user_id: Optional[str] = None,
     runtime_profile_id: Optional[str] = None,
     runtime_mode: Optional[str] = None,
+    tool_toggles: Optional[Dict[str, Any]] = None,
     connector_bindings: Optional[Dict[str, Any]] = None,
     channel_bindings: Optional[Dict[str, Any]] = None,
     metadata: Optional[Dict[str, Any]] = None,
     write_bible_version: bool = True,
 ) -> Optional[Dict[str, Any]]:
     metadata = _dict_json(metadata)
+    tool_toggles = _dict_json(tool_toggles)
     connector_bindings = _dict_json(connector_bindings)
     channel_bindings = _dict_json(channel_bindings)
     async with control_plane_repository._scoped_connection(tenant_id=tenant_id, workspace_id=workspace_id) as connection:
@@ -1185,6 +1196,7 @@ async def update_workspace_specialist_manifest(
             """
             SELECT
                 wai.connector_bindings,
+                wai.tool_toggles,
                 wai.runtime_profile_id,
                 wai.metadata,
                 arp.runtime_mode
@@ -1219,6 +1231,11 @@ async def update_workspace_specialist_manifest(
             runtime_profile_id=requested_runtime_profile_id,
             runtime_mode=requested_runtime_mode,
         )
+        merged_tool_toggles = (
+            tool_toggles
+            if tool_toggles
+            else _dict_json(install_row.get("tool_toggles"))
+        )
         merged_connector_bindings = _dict_json(install_row.get("connector_bindings"))
         merged_connector_bindings.update(connector_bindings)
         existing_channel_bindings = await _load_channel_bindings(connection, install_id, tenant_id, workspace_id)
@@ -1241,6 +1258,7 @@ async def update_workspace_specialist_manifest(
             manifest=manifest,
             runtime_profile_id=resolved_runtime_profile_id,
             runtime_mode=resolved_runtime_mode,
+            tool_toggles=merged_tool_toggles,
             connector_bindings=merged_connector_bindings,
             channel_bindings=merged_channel_bindings,
             created_by_user_id=updated_by_user_id,

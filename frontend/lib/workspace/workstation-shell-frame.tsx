@@ -19,12 +19,47 @@ export function WorkstationShellFrame({
   kernelPane: ReactNode;
 }) {
   return (
-    <div data-workstation-shell="frame" className="app-shell-frame">
-      <aside data-workstation-pane="1" className="app-shell-frame__sidebar">
+    <div
+      data-workstation-shell="frame"
+      data-workstation-shell-zones="2"
+      className="app-shell-frame"
+      style={{
+        height: '100vh',
+        gridTemplateColumns: '48px minmax(0, 1fr)',
+        overflow: 'hidden',
+        overflowX: 'hidden',
+      }}
+    >
+      <aside
+        data-workstation-pane="rail"
+        data-workstation-shell-zone="rail"
+        className="app-shell-frame__sidebar"
+        style={{
+          position: 'fixed',
+          inset: '0 auto 0 0',
+          width: '48px',
+          minWidth: '48px',
+          maxWidth: '48px',
+          height: '100vh',
+        }}
+      >
         {switcherPane}
       </aside>
 
-      <div data-workstation-shell="kernel-host" className="app-shell-frame__kernel">
+      <div
+        data-workstation-shell="kernel-host"
+        data-workstation-shell-zone="content"
+        className="app-shell-frame__kernel"
+        style={{
+          minWidth: 0,
+          minHeight: '100vh',
+          height: '100vh',
+          width: '100%',
+          padding: 0,
+          overflow: 'hidden',
+          overflowX: 'hidden',
+        }}
+      >
         {kernelPane}
       </div>
     </div>
@@ -37,6 +72,18 @@ export function WorkstationSurfaceViewport({
 }: PropsWithChildren<{
   surface?: string;
 }>) {
+  if (surface === 'chat') {
+    return (
+      <div
+        data-workstation-surface="viewport"
+        data-workstation-surface-view={surface}
+        className="app-shell-viewport app-shell-viewport--locked"
+      >
+        {children}
+      </div>
+    );
+  }
+
   return (
     <ScrollRegion
       data-workstation-surface="viewport"

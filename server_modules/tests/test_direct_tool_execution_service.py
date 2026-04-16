@@ -1,5 +1,9 @@
+import asyncio
 import json
+import tempfile
 import unittest
+from pathlib import Path
+from unittest.mock import AsyncMock, patch
 
 from server_modules import direct_tool_execution_service as service
 
@@ -75,6 +79,56 @@ class DirectToolExecutionServiceTests(unittest.TestCase):
         self.assertEqual(json.loads(search_raw)["results"][0]["max_results"], 3)
         self.assertEqual(json.loads(get_raw)["path"], "MEMORY.md")
         self.assertEqual(json.loads(get_raw)["from_line"], 2)
+
+    def test_execute_single_direct_tool_call_handles_sage_service_tools(self) -> None:
+        callbacks = _callbacks()
+        callbacks = service.DirectToolExecutionCallbacks(
+            **{
+                **vars(callbacks),
+                "run_async_tool_call": lambda awaitable: asyncio.run(awaitable),
+            }
+        )
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir) / "workspace-1"
+            with (
+                patch("server_modules.sage_services_service.workspace_context.workspace_scope_dir", return_value=root),
+                patch(
+                    "server_modules.sage_services_service.personal_context_engine.publish_event",
+                    new=AsyncMock(return_value={"id": "evt-1"}),
+                ),
+            ):
+                created_raw = service.execute_single_direct_tool_call(
+                    tool_call={
+                        "name": "sage_service__create_entry",
+                        "arguments": {
+                            "service_id": "nutrition_log",
+                            "entry": {
+                                "meal": "Lunch",
+                                "calories": 650,
+                                "protein_grams": 42,
+                            },
+                        },
+                    },
+                    workspace_id="workspace-1",
+                    thread_id="thread-1",
+                    callbacks=callbacks,
+                    session_ctx={"tenant_id": "tenant-1"},
+                )
+                listed_raw = service.execute_single_direct_tool_call(
+                    tool_call={
+                        "name": "sage_service__list_state",
+                        "arguments": {"service_id": "nutrition_log"},
+                    },
+                    workspace_id="workspace-1",
+                    thread_id="thread-1",
+                    callbacks=callbacks,
+                    session_ctx={"tenant_id": "tenant-1"},
+                )
+
+        created = json.loads(created_raw)
+        listed = json.loads(listed_raw)
+        self.assertEqual(created["entries"][0]["meal"], "Lunch")
+        self.assertEqual(listed["entries"][0]["protein_grams"], 42)
 
     def test_execute_direct_tool_calls_aggregates_non_empty_results(self) -> None:
         raw = service.execute_direct_tool_calls(

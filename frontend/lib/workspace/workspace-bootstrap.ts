@@ -31,6 +31,17 @@ export type WorkspaceBootstrapRuntimeTarget = {
   kind: string;
   online: boolean;
   preferred: boolean;
+  available: boolean;
+  healthy: boolean;
+  status: string;
+  statusLabel: string | null;
+  statusReason: string | null;
+  description?: string | null;
+  connectionMode?: string | null;
+  executionTarget?: string | null;
+  trustTier?: string | null;
+  approvalMode?: string | null;
+  sampleAttachmentLabel?: string | null;
 };
 
 export type WorkspaceBootstrapRuntime = {
@@ -120,6 +131,17 @@ function parseRuntimeTargets(value: unknown): WorkspaceBootstrapRuntimeTarget[] 
         kind: requireString(entry.kind, 'runtime.runtimeTargets[].kind'),
         online: Boolean(entry.online),
         preferred: Boolean(entry.preferred),
+        available: Boolean(entry.available),
+        healthy: Boolean(entry.healthy),
+        status: typeof entry.status === 'string' && entry.status.trim() ? entry.status : 'unavailable',
+        statusLabel: typeof entry.statusLabel === 'string' ? entry.statusLabel : null,
+        statusReason: typeof entry.statusReason === 'string' ? entry.statusReason : null,
+        description: typeof entry.description === 'string' ? entry.description : null,
+        connectionMode: typeof entry.connectionMode === 'string' ? entry.connectionMode : null,
+        executionTarget: typeof entry.executionTarget === 'string' ? entry.executionTarget : null,
+        trustTier: typeof entry.trustTier === 'string' ? entry.trustTier : null,
+        approvalMode: typeof entry.approvalMode === 'string' ? entry.approvalMode : null,
+        sampleAttachmentLabel: typeof entry.sampleAttachmentLabel === 'string' ? entry.sampleAttachmentLabel : null,
       },
     ];
   });

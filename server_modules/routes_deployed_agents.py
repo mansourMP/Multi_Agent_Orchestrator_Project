@@ -139,6 +139,27 @@ async def get_deployed_agent_analytics(
     return payload
 
 
+@router.get("/deployed-agents/telegram-readiness")
+async def get_deployed_agent_telegram_readiness(
+    workspace_id: str,
+    deployed_agent_id: Optional[str] = None,
+    current_user=Depends(get_current_user),
+):
+    try:
+        payload = await deployed_agent_service.get_deployed_agent_telegram_readiness(
+            current_user=current_user,
+            owner_workspace_id=workspace_id,
+            deployed_agent_id=deployed_agent_id,
+        )
+    except HTTPException:
+        raise
+    except ValueError as error:
+        _raise_for_value_error(error)
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=404, detail="Telegram readiness is unavailable.")
+    return payload
+
+
 @router.get("/deployed-agents/{deployed_agent_id}")
 async def get_deployed_agent(
     deployed_agent_id: str,

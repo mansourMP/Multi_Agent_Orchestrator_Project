@@ -63,13 +63,13 @@ const SHELL_PROFILE_DEFINITIONS: Record<WorkspaceShellProfileId, WorkspaceShellP
     id: 'document_workstation_shell',
     label: 'Document Workstation Shell',
     description: 'Document-heavy split workstation layout.',
-    homeRouteId: 'workstation',
+    homeRouteId: 'chat',
   },
   operations_admin_shell: {
     id: 'operations_admin_shell',
     label: 'Operations Admin Shell',
     description: 'Operations-aware shell with Sage as the default landing surface.',
-    homeRouteId: 'workstation',
+    homeRouteId: 'chat',
   },
 };
 

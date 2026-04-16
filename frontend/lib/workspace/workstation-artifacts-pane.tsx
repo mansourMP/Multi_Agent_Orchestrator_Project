@@ -1,20 +1,19 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 
-import { AppButton } from '@/lib/ui/primitives';
-import { DataBadge, DataTable, DataTableCell, DataTableHeader, DataTableHeaderCell, DataTableRow } from '@/lib/ui/data-table';
+import { DataBadge } from '@/lib/ui/data-table';
 import { EmptyPanel } from '@/lib/ui/empty-panel';
-import { ListDetailColumns, ListDetailPanel, ListDetailShell } from '@/lib/ui/list-detail';
 import { SkeletonBlock } from '@/lib/ui/skeleton-block';
-import { StateBanner } from '@/lib/ui/state-banner';
 import { useWorkspaceServices, useWorkstationStreamState } from '@/lib/workspace/workspace-services';
 import {
-  readWorkstationStageRouteState,
-  writeWorkstationStageRouteState,
-} from '@/lib/workspace/workstation-stage-router';
-import { WorkstationSurfaceRoot } from '@/lib/workspace/workstation-surface-primitives';
+  WorkstationActionButton,
+  WorkstationSurfaceCard,
+  WorkstationSurfaceNotice,
+  WorkstationSurfaceRoot,
+  WorkstationSurfaceStat,
+  WorkstationSurfaceStatGrid,
+} from '@/lib/workspace/workstation-surface-primitives';
 
 type ArtifactRecord = Record<string, unknown> & {
   artifact_id?: string | null;
@@ -39,7 +38,7 @@ function normalizeArtifactItems(payload: unknown): ArtifactRecord[] {
 }
 
 function readString(value: unknown, fallback: string): string {
-  return typeof value === 'string' && value.trim() ? value : fallback;
+  return typeof value === 'string' && value.trim() ? value.trim() : fallback;
 }
 
 function formatTimestamp(value: unknown): string {
@@ -84,35 +83,15 @@ function artifactTone(mediaType: string): 'neutral' | 'success' | 'warning' | 'd
   return 'neutral';
 }
 
-function ArtifactSkeleton() {
-  return (
-    <ListDetailColumns
-      primary={(
-        <ListDetailPanel eyebrow="Catalog" title="Loading artifacts">
-          <SkeletonBlock height="2.8rem" />
-          <SkeletonBlock height="2.8rem" />
-          <SkeletonBlock height="2.8rem" />
-        </ListDetailPanel>
-      )}
-      secondary={(
-        <ListDetailPanel eyebrow="Selection" title="Loading artifact detail">
-          <SkeletonBlock height="3.2rem" />
-          <SkeletonBlock height="3.2rem" />
-          <SkeletonBlock height="3.2rem" />
-        </ListDetailPanel>
-      )}
-    />
-  );
+function toArtifactId(item: ArtifactRecord, fallbackIndex: number): string {
+  return String(item.artifact_id ?? item.id ?? '').trim() || `artifact-${fallbackIndex}`;
 }
 
 export function WorkstationArtifactsPane() {
   const services = useWorkspaceServices();
   const streamState = useWorkstationStreamState();
-  const router = useRouter();
-  const pathname = usePathname();
-  const searchParams = useSearchParams();
-  const stageRouteState = useMemo(() => readWorkstationStageRouteState(searchParams), [searchParams]);
   const [items, setItems] = useState<ArtifactRecord[]>([]);
+  const [selectedArtifactId, setSelectedArtifactId] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -128,13 +107,13 @@ export function WorkstationArtifactsPane() {
 
   useEffect(() => {
     let cancelled = false;
-    void refresh(true)
-      .catch((loadError) => {
-        if (!cancelled) {
-          setError(loadError instanceof Error ? loadError.message : 'Artifact catalog is unavailable.');
-          setIsLoading(false);
-        }
-      });
+    void refresh(true).catch((loadError) => {
+      if (cancelled) {
+        return;
+      }
+      setError(loadError instanceof Error ? loadError.message : 'Files are unavailable right now.');
+      setIsLoading(false);
+    });
     return () => {
       cancelled = true;
     };
@@ -145,44 +124,49 @@ export function WorkstationArtifactsPane() {
       return;
     }
     void refresh(false).catch((loadError) => {
-      setError(loadError instanceof Error ? loadError.message : 'Artifact catalog is unavailable.');
+      setError(loadError instanceof Error ? loadError.message : 'Files are unavailable right now.');
       setIsLoading(false);
     });
   }, [services.client, streamState.activity.version]);
 
-  const selectedArtifact = useMemo(() => {
+  useEffect(() => {
     if (items.length === 0) {
-      return null;
+      setSelectedArtifactId(null);
+      return;
     }
-    if (stageRouteState?.kind === 'artifact') {
-      return items.find((item) => String(item.artifact_id ?? item.id ?? '').trim() === stageRouteState.id) ?? items[0];
+    if (selectedArtifactId && items.some((item, index) => toArtifactId(item, index) === selectedArtifactId)) {
+      return;
     }
-    return items[0];
-  }, [items, stageRouteState]);
+    setSelectedArtifactId(toArtifactId(items[0], 0));
+  }, [items, selectedArtifactId]);
 
-  const selectedArtifactId = String(selectedArtifact?.artifact_id ?? selectedArtifact?.id ?? '').trim();
-  const inspectorFocused = stageRouteState?.kind === 'artifact' && stageRouteState.id === selectedArtifactId;
+  const selectedArtifact = useMemo(
+    () => items.find((item, index) => toArtifactId(item, index) === selectedArtifactId) ?? null,
+    [items, selectedArtifactId],
+  );
 
-  const focusArtifact = (artifactId: string) => {
-    router.replace(
-      writeWorkstationStageRouteState(pathname, searchParams, {
-        source: 'route',
-        kind: 'artifact',
-        id: artifactId,
-      }),
-      { scroll: false },
-    );
-  };
+  const totalBytes = useMemo(
+    () =>
+      items.reduce((sum, item) => (
+        typeof item.byte_size === 'number' && Number.isFinite(item.byte_size) && item.byte_size > 0
+          ? sum + item.byte_size
+          : sum
+      ), 0),
+    [items],
+  );
 
-  const selectedMediaType = readString(selectedArtifact?.mime_type ?? selectedArtifact?.content_type, 'artifact');
+  const textLikeCount = useMemo(
+    () => items.filter((item) => readString(item.mime_type ?? item.content_type, '').includes('text') || readString(item.mime_type ?? item.content_type, '').includes('json')).length,
+    [items],
+  );
 
   return (
     <WorkstationSurfaceRoot surface="artifacts">
-      <ListDetailShell
-        title="Artifacts"
-        subtitle="Generated outputs, downloadable records, and the current artifact focus."
+      <WorkstationSurfaceCard
+        title="Files"
+        description="Generated outputs, artifacts, and downloadable files from Sage work."
         actions={(
-          <AppButton
+          <WorkstationActionButton
             type="button"
             tone="secondary"
             onClick={() => {
@@ -190,135 +174,124 @@ export function WorkstationArtifactsPane() {
             }}
           >
             Refresh
-          </AppButton>
+          </WorkstationActionButton>
         )}
       >
-        {error ? (
-          <StateBanner
-            tone="danger"
-            title="Artifact catalog is degraded"
-            detail="The output catalog could not be fully refreshed from canonical artifact state."
-          >
-            {error}
-          </StateBanner>
-        ) : null}
+        {error ? <WorkstationSurfaceNotice tone="danger">{error}</WorkstationSurfaceNotice> : null}
+
+        <WorkstationSurfaceStatGrid>
+          <WorkstationSurfaceStat
+            label="Files"
+            value={String(items.length)}
+            hint="Artifacts available in this workspace"
+          />
+          <WorkstationSurfaceStat
+            label="Stored size"
+            value={formatByteSize(totalBytes)}
+            hint="Total visible file size"
+          />
+          <WorkstationSurfaceStat
+            label="Text outputs"
+            value={String(textLikeCount)}
+            hint="Markdown, JSON, and other text-like files"
+          />
+        </WorkstationSurfaceStatGrid>
 
         {isLoading ? (
-          <ArtifactSkeleton />
+          <div className="app-stack-3">
+            <SkeletonBlock height="4.8rem" />
+            <SkeletonBlock height="4.8rem" />
+            <SkeletonBlock height="4.8rem" />
+          </div>
+        ) : items.length === 0 ? (
+          <EmptyPanel
+            title="No files yet"
+            body="When Sage generates outputs, this Files view becomes the durable home for those artifacts."
+          />
         ) : (
-          <ListDetailColumns
-            primary={(
-              <ListDetailPanel
-                eyebrow="Catalog"
-                title="Output history"
-                subtitle={`${items.length} artifacts currently visible in the workspace catalog.`}
-              >
-                {items.length === 0 ? (
-                  <EmptyPanel
-                    title="No artifacts available"
-                    body="Generated outputs will appear here once runs start producing downloadable or previewable artifacts."
-                  />
-                ) : (
-                  <DataTable>
-                    <DataTableHeader columns="minmax(0, 1.2fr) minmax(0, 0.7fr) minmax(0, 0.7fr) auto">
-                      <DataTableHeaderCell>Artifact</DataTableHeaderCell>
-                      <DataTableHeaderCell>Type</DataTableHeaderCell>
-                      <DataTableHeaderCell>Size</DataTableHeaderCell>
-                      <DataTableHeaderCell align="end">Focus</DataTableHeaderCell>
-                    </DataTableHeader>
-                    {items.map((item, index) => {
-                      const artifactId = String(item.artifact_id ?? item.id ?? '').trim() || `artifact-${index}`;
-                      const mediaType = readString(item.mime_type ?? item.content_type, 'artifact');
-                      const selected = artifactId === selectedArtifactId;
-                      return (
-                        <DataTableRow
-                          key={artifactId}
-                          columns="minmax(0, 1.2fr) minmax(0, 0.7fr) minmax(0, 0.7fr) auto"
-                          selected={selected}
-                          onClick={() => {
-                            focusArtifact(artifactId);
-                          }}
-                        >
-                          <DataTableCell
-                            primary={readString(item.label ?? item.file_name, artifactId)}
-                            secondary={readString(item.run_id, 'Workspace artifact')}
-                          />
-                          <DataTableCell primary={<DataBadge tone={artifactTone(mediaType)}>{mediaType}</DataBadge>} />
-                          <DataTableCell primary={formatByteSize(item.byte_size)} meta={formatTimestamp(item.created_at)} />
-                          <DataTableCell
-                            align="end"
-                            primary={selected ? <DataBadge tone="accent">Selected</DataBadge> : <span className="app-data-table__hint">Inspect</span>}
-                          />
-                        </DataTableRow>
-                      );
-                    })}
-                  </DataTable>
-                )}
-              </ListDetailPanel>
-            )}
-            secondary={(
-              <ListDetailPanel
-                eyebrow="Selection"
-                title={selectedArtifact ? readString(selectedArtifact.label ?? selectedArtifact.file_name, selectedArtifactId || 'Artifact') : 'No artifact selected'}
-                subtitle={selectedArtifactId || 'Choose an artifact from the catalog to focus the inspector.'}
-                actions={selectedArtifactId ? (
-                  <div className="app-inline-actions">
-                    <AppButton
-                      type="button"
-                      tone={inspectorFocused ? 'secondary' : 'primary'}
-                      onClick={() => {
-                        if (selectedArtifactId) {
-                          focusArtifact(selectedArtifactId);
-                        }
-                      }}
-                    >
-                      {inspectorFocused ? 'Inspector focused' : 'Focus in inspector'}
-                    </AppButton>
-                    <AppButton
+          <div className="app-stack-3">
+            {items.map((item, index) => {
+              const artifactId = toArtifactId(item, index);
+              const mediaType = readString(item.mime_type ?? item.content_type, 'artifact');
+              const selected = artifactId === selectedArtifactId;
+              return (
+                <article key={artifactId} className={`app-card-button${selected ? ' app-card-button--selected' : ''}`}>
+                  <button
+                    type="button"
+                    className="app-card-button__title"
+                    onClick={() => setSelectedArtifactId(artifactId)}
+                  >
+                    {readString(item.label ?? item.file_name, artifactId)}
+                  </button>
+                  <span className="app-card-button__subtitle">Run: {readString(item.run_id, 'Workspace output')}</span>
+                  <span className="app-card-button__meta">
+                    {formatByteSize(item.byte_size)} · {formatTimestamp(item.created_at)}
+                  </span>
+                  <div className="app-inline-actions app-inline-actions--between app-inline-actions--start">
+                    <DataBadge tone={artifactTone(mediaType)}>{mediaType}</DataBadge>
+                    <WorkstationActionButton
                       type="button"
                       tone="secondary"
                       onClick={() => {
-                        if (selectedArtifactId) {
-                          window.location.assign(services.client.artifactDownloadUrl(selectedArtifactId));
-                        }
+                        window.location.assign(services.client.artifactDownloadUrl(artifactId));
                       }}
                     >
                       Download
-                    </AppButton>
+                    </WorkstationActionButton>
                   </div>
-                ) : undefined}
-              >
-                {!selectedArtifact ? (
-                  <EmptyPanel
-                    title="No selected artifact"
-                    body="When outputs are available, the current artifact focus will appear here with quick download context."
-                  />
-                ) : (
-                  <>
-                    <StateBanner
-                      tone={artifactTone(selectedMediaType) === 'accent' ? 'neutral' : artifactTone(selectedMediaType) as 'neutral' | 'success' | 'warning'}
-                      title={selectedMediaType}
-                      detail={formatByteSize(selectedArtifact.byte_size)}
-                    >
-                      {readString(selectedArtifact.run_id, 'Generated artifact')}
-                    </StateBanner>
-                    <div className="app-meta-list">
-                      <div className="app-meta-item">
-                        <span className="app-meta-label">Artifact id</span>
-                        <span className="app-meta-value app-meta-value--mono">{selectedArtifactId}</span>
-                      </div>
-                      <div className="app-meta-item">
-                        <span className="app-meta-label">Created</span>
-                        <span className="app-meta-value app-meta-value--secondary">{formatTimestamp(selectedArtifact.created_at)}</span>
-                      </div>
-                    </div>
-                  </>
-                )}
-              </ListDetailPanel>
-            )}
-          />
+                </article>
+              );
+            })}
+          </div>
         )}
-      </ListDetailShell>
+      </WorkstationSurfaceCard>
+
+      <WorkstationSurfaceCard
+        title={selectedArtifact ? readString(selectedArtifact.label ?? selectedArtifact.file_name, 'Selected file') : 'File detail'}
+        description={selectedArtifact ? 'Focused file metadata and download access.' : 'Select a file to inspect details.'}
+      >
+        {!selectedArtifact ? (
+          <EmptyPanel
+            title="No file selected"
+            body="Pick a file from the list to inspect metadata and download it directly."
+          />
+        ) : (
+          <div className="app-meta-list">
+            <div className="app-meta-item">
+              <span className="app-meta-label">Artifact id</span>
+              <span className="app-meta-value app-meta-value--mono">{selectedArtifactId ?? 'Unknown'}</span>
+            </div>
+            <div className="app-meta-item">
+              <span className="app-meta-label">Type</span>
+              <span className="app-meta-value app-meta-value--secondary">
+                {readString(selectedArtifact.mime_type ?? selectedArtifact.content_type, 'artifact')}
+              </span>
+            </div>
+            <div className="app-meta-item">
+              <span className="app-meta-label">Size</span>
+              <span className="app-meta-value app-meta-value--secondary">{formatByteSize(selectedArtifact.byte_size)}</span>
+            </div>
+            <div className="app-meta-item">
+              <span className="app-meta-label">Created</span>
+              <span className="app-meta-value app-meta-value--secondary">{formatTimestamp(selectedArtifact.created_at)}</span>
+            </div>
+            <div className="app-inline-actions">
+              <WorkstationActionButton
+                type="button"
+                tone="secondary"
+                onClick={() => {
+                  if (!selectedArtifactId) {
+                    return;
+                  }
+                  window.location.assign(services.client.artifactDownloadUrl(selectedArtifactId));
+                }}
+              >
+                Download selected file
+              </WorkstationActionButton>
+            </div>
+          </div>
+        )}
+      </WorkstationSurfaceCard>
     </WorkstationSurfaceRoot>
   );
 }

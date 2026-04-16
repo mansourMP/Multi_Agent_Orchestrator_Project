@@ -4,7 +4,7 @@ import { useMemo, useSyncExternalStore } from 'react';
 
 import { useWorkstationKernel } from '@/lib/workspace/workspace-services';
 
-export type WorkstationStageIntentKind = 'agent' | 'application' | 'runtime_target';
+export type WorkstationStageIntentKind = 'workspace_area' | 'runtime_target';
 
 export type WorkstationStageIntent = {
   sourcePane: 'roster';

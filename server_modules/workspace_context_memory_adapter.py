@@ -59,6 +59,30 @@ def load_workspace_context_payload(
     if memory_facts:
         sections.append(f"Runtime Memory Facts\n{memory_facts}")
 
+    if not agent_install_id:
+        try:
+            from server_modules import sage_memory_service
+
+            memory_block = sage_memory_service.build_sage_memory_context_block(
+                workspace_id=workspace_id,
+            )
+        except Exception:
+            memory_block = ""
+        if memory_block:
+            sections.append(memory_block)
+
+    if not agent_install_id:
+        try:
+            from server_modules import sage_services_service
+
+            services_block = sage_services_service.build_sage_services_memory_block(
+                workspace_id=workspace_id,
+            )
+        except Exception:
+            services_block = ""
+        if services_block:
+            sections.append(services_block)
+
     return {
         "contextual_blocks": sections,
         "semantic_hits": semantic_hits,

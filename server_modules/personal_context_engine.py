@@ -13,6 +13,9 @@ SUPPORTED_PERSONAL_CONTEXT_EVENT_TYPES = frozenset(
         "study_session_missed",
         "study_session_completed",
         "flashcards_created",
+        "language_session_logged",
+        "nutrition_entry_logged",
+        "saved_preference_updated",
         "screen_time_threshold_crossed",
         "calendar_conflict",
     }
@@ -24,6 +27,9 @@ DEFAULT_PRIORITY_BY_EVENT_TYPE: dict[str, int] = {
     "study_session_missed": 68,
     "study_session_completed": 32,
     "flashcards_created": 28,
+    "language_session_logged": 30,
+    "nutrition_entry_logged": 26,
+    "saved_preference_updated": 18,
     "screen_time_threshold_crossed": 58,
     "calendar_conflict": 82,
 }
@@ -122,6 +128,21 @@ def _default_summary(*, event_type: str, payload: Dict[str, Any], entity_id: str
         if count > 0:
             return f"{count} flashcards were created for {deck}."
         return f"New flashcards were created for {deck}."
+    if event_type == "language_session_logged":
+        language = str(payload.get("language") or payload.get("target_language") or entity_id).strip()
+        phrase = str(payload.get("phrase") or "").strip()
+        if phrase:
+            return f"Language practice captured for {language}: {phrase}."
+        return f"Language practice was logged for {language}."
+    if event_type == "nutrition_entry_logged":
+        meal = str(payload.get("meal") or entity_id).strip()
+        calories = int(payload.get("calories") or 0)
+        if calories > 0:
+            return f"Nutrition entry logged for {meal} at {calories} kcal."
+        return f"Nutrition entry logged for {meal}."
+    if event_type == "saved_preference_updated":
+        service_label = str(payload.get("service") or payload.get("service_id") or entity_id).strip()
+        return f"Saved preferences were updated for {service_label}."
     if event_type == "screen_time_threshold_crossed":
         app_name = str(payload.get("app_name") or payload.get("app") or entity_id).strip()
         minutes = int(payload.get("minutes") or 0)

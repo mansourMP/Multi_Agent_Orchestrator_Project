@@ -1,7 +1,11 @@
 'use client';
 
+import Link from 'next/link';
 import { useEffect, useMemo, useState } from 'react';
 
+import { CommandSheet } from '@/lib/ui/command-sheet';
+import { ConfirmDialog } from '@/lib/ui/confirm-dialog';
+import { FormField, FormGrid, FormInput, FormSection, FormTextarea } from '@/lib/ui/form-controls';
 import { AppButton, AppNotice } from '@/lib/ui/primitives';
 import { ScrollRegion } from '@/lib/ui/scroll-region';
 import { ChatComposer } from '@/lib/workspace/chat-composer';
@@ -12,6 +16,7 @@ import {
   type WorkstationChatMessageRecord,
 } from '@/lib/workspace/chat-message';
 import { SageTraceView } from '@/lib/workspace/sage-trace-view';
+import type { WorkspaceBootstrapRuntimeTarget } from '@/lib/workspace/workspace-bootstrap';
 import {
   resolveWorkstationApproval,
   subscribeWorkstationApprovalResolved,
@@ -22,6 +27,7 @@ import {
   WorkstationClientError,
   type WorkstationAgentTraceEvent,
   type WorkstationAgentTraceRecord,
+  type WorkstationSageMemoryRecord,
   type WorkstationSessionActor,
   type WorkstationTurnResponse,
 } from '@/lib/workspace/workstation-client';
@@ -54,10 +60,49 @@ type LiveTraceState = {
   events: WorkstationAgentTraceEvent[];
 };
 
+type SageMemoryCategoryRecord = {
+  id: string;
+  label: string;
+  description: string;
+  count: number;
+};
+
+type SageMemorySnapshot = {
+  items: WorkstationSageMemoryRecord[];
+  categories: SageMemoryCategoryRecord[];
+  summary: Record<string, unknown>;
+  updatedAt: string | null;
+};
+
+type RecentThreadSummary = {
+  threadId: string;
+  title: string;
+  updatedAt: string | null;
+};
+
+type SageMemoryDraft = {
+  entryId: string | null;
+  category: string;
+  title: string;
+  content: string;
+  pinned: boolean;
+};
+
+type RuntimeSummaryCard = {
+  tone: 'neutral' | 'accent' | 'success' | 'warning';
+  title: string;
+  meta: string;
+  body: string;
+  preferredPill: string;
+  localPill: string;
+};
+
 const PRIMARY_THREAD_ID = 'primary';
 const ACTIVE_THREAD_QUERY_KEY = 'chat:canonical:active-thread';
 const RUNS_QUERY_KEY = 'chat:canonical:runs';
 const APPROVALS_QUERY_KEY = 'chat:canonical:approvals';
+const SAGE_MEMORY_QUERY_KEY = 'chat:canonical:sage-memory';
+const RECENT_THREADS_QUERY_KEY = 'chat:canonical:recent-threads';
 
 function threadQueryKey(threadId: string): string {
   return `chat:canonical:thread:${threadId}`;
@@ -275,6 +320,66 @@ function normalizeCanonicalApprovalItems(payload: unknown): CanonicalApprovalSum
     : [];
 }
 
+function normalizeTimelineItems(payload: unknown): Record<string, unknown>[] {
+  if (!payload || typeof payload !== 'object') {
+    return [];
+  }
+  const items = (payload as Record<string, unknown>).items;
+  return Array.isArray(items)
+    ? items.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === 'object')
+    : [];
+}
+
+function deriveRecentThreads(
+  timelineItems: Record<string, unknown>[],
+  activeThreadId: string,
+): RecentThreadSummary[] {
+  const ordered = new Map<string, RecentThreadSummary>();
+
+  if (activeThreadId.trim()) {
+    ordered.set(activeThreadId, {
+      threadId: activeThreadId,
+      title: activeThreadId === PRIMARY_THREAD_ID ? 'Primary thread' : activeThreadId,
+      updatedAt: null,
+    });
+  }
+
+  for (const item of timelineItems) {
+    const threadId = readString(item.thread_id);
+    if (!threadId) {
+      continue;
+    }
+    if (ordered.has(threadId)) {
+      continue;
+    }
+    ordered.set(threadId, {
+      threadId,
+      title: readString(item.title) || readString(item.summary) || `Thread ${threadId.slice(0, 8)}`,
+      updatedAt: readString(item.created_at) || readString(item.ts) || null,
+    });
+    if (ordered.size >= 8) {
+      break;
+    }
+  }
+
+  return Array.from(ordered.values());
+}
+
+function readExecutionTarget(metadata: Record<string, unknown>): string {
+  const selected = metadata.execution_target_selected ?? metadata.execution_target;
+  return typeof selected === 'string' ? selected.trim().toLowerCase() : '';
+}
+
+function firstInterventionMessage(interventions: unknown[]): string {
+  const first = Array.isArray(interventions) ? interventions[0] : null;
+  if (!first || typeof first !== 'object') {
+    return '';
+  }
+  const record = first as Record<string, unknown>;
+  const token = record.message ?? record.detail ?? record.reason;
+  return typeof token === 'string' ? token.trim() : '';
+}
+
 function createCanonicalAssistantMessage(
   response: WorkstationTurnResponse,
   threadId: string,
@@ -287,13 +392,21 @@ function createCanonicalAssistantMessage(
     response.metadata && typeof response.metadata === 'object'
       ? response.metadata as Record<string, unknown>
       : {};
+  const executionTarget = readExecutionTarget(metadata);
+  const interventionMessage = firstInterventionMessage(interventions);
   const synthesizedReply = reply
     || (approvals.length > 0
-      ? 'Approval is required before this run can continue.'
+      ? executionTarget === 'local_companion'
+        ? 'Approval is required before Sage can use the local companion.'
+        : 'Approval is required before Sage can continue.'
       : interventions.length > 0
-        ? 'Execution needs operator intervention before it can continue.'
+        ? /supervisor not running/i.test(interventionMessage)
+          ? 'Local companion is unavailable right now, so Sage could not start device work.'
+          : 'Sage needs your help before it can continue.'
         : runId
-          ? 'Run accepted. Execution has started.'
+          ? executionTarget === 'local_companion'
+            ? 'Task accepted. Sage started work with the local companion.'
+            : 'Task accepted. Sage started working on it.'
           : `Turn ${String(response.status ?? 'completed')}.`);
 
   if (!synthesizedReply.trim()) {
@@ -367,6 +480,143 @@ function summarizeApprovals(approvals: CanonicalApprovalSummary[]): string {
   return `${approvals.length} awaiting action`;
 }
 
+function countArtifacts(messages: WorkstationChatMessageRecord[]): number {
+  return messages.reduce((count, message) => count + message.artifacts.length, 0);
+}
+
+function preferredRuntimeTarget(runtimeTargets: WorkspaceBootstrapRuntimeTarget[]): WorkspaceBootstrapRuntimeTarget | null {
+  return runtimeTargets.find((target) => target.preferred) ?? runtimeTargets[0] ?? null;
+}
+
+function localCompanionTarget(runtimeTargets: WorkspaceBootstrapRuntimeTarget[]): WorkspaceBootstrapRuntimeTarget | null {
+  return runtimeTargets.find((target) => target.id === 'local_companion') ?? null;
+}
+
+function summarizeRuntimeCard(runtimeTargets: WorkspaceBootstrapRuntimeTarget[]): RuntimeSummaryCard {
+  const preferred = preferredRuntimeTarget(runtimeTargets);
+  const local = localCompanionTarget(runtimeTargets);
+  const preferredLabel = preferred?.label ?? 'Cloud runtime';
+  const preferredStatus = preferred?.statusLabel ?? (preferred?.online ? 'Ready' : 'Unavailable');
+
+  if (!local || !local.available) {
+    return {
+      tone: 'neutral',
+      title: `${preferredLabel} is carrying Sage`,
+      meta: `${preferredStatus} · cloud-first`,
+      body: 'Sage stays in cloud mode until a local companion is paired. Device work will not start from this workspace yet.',
+      preferredPill: `${preferredLabel} · ${preferredStatus}`,
+      localPill: 'Local companion · needs pairing',
+    };
+  }
+
+  if (!local.online) {
+    return {
+      tone: 'warning',
+      title: 'Local companion is paired but offline',
+      meta: `${preferredLabel} remains active`,
+      body: local.statusReason || 'Sage will stay in cloud mode until the local companion reconnects.',
+      preferredPill: `${preferredLabel} · ${preferredStatus}`,
+      localPill: `Local companion · ${local.statusLabel ?? 'Offline'}`,
+    };
+  }
+
+  if (!local.healthy) {
+    return {
+      tone: 'warning',
+      title: 'Local companion needs attention',
+      meta: `${preferredLabel} remains active`,
+      body: local.statusReason || 'Sage will avoid device work until the local companion is healthy again.',
+      preferredPill: `${preferredLabel} · ${preferredStatus}`,
+      localPill: `Local companion · ${local.statusLabel ?? 'Needs attention'}`,
+    };
+  }
+
+  return {
+    tone: 'success',
+    title: 'Local companion is ready',
+    meta: `${local.sampleAttachmentLabel ?? local.label} · explicit approval`,
+    body: 'Sage still uses cloud execution for ordinary turns. If a step needs device work, Sage pauses for explicit approval before using the local companion.',
+    preferredPill: `${preferredLabel} · ${preferredStatus}`,
+    localPill: `Local companion · ${local.statusLabel ?? 'Ready'}`,
+  };
+}
+
+function latestRunSummary(run: CanonicalRunSummary | undefined): string {
+  if (!run) {
+    return 'No active run is attached to this thread yet.';
+  }
+  const runId = readString(run.run_id) || 'Run';
+  const status = readString(run.status) || 'unknown';
+  return `${runId} is ${status}.`;
+}
+
+function latestApprovalSummary(approval: CanonicalApprovalSummary | undefined): string {
+  if (!approval) {
+    return 'No approval is blocking Sage right now.';
+  }
+  return readString(approval.prompt) || 'A pending approval is attached to this thread.';
+}
+
+function normalizeSageMemorySnapshot(payload: unknown): SageMemorySnapshot {
+  const record = payload && typeof payload === 'object' ? payload as Record<string, unknown> : {};
+  const items = Array.isArray(record.items)
+    ? record.items.filter((item): item is WorkstationSageMemoryRecord => Boolean(item) && typeof item === 'object')
+    : [];
+  const categories = Array.isArray(record.categories)
+    ? record.categories.flatMap((item) => {
+      if (!item || typeof item !== 'object') {
+        return [];
+      }
+      const category = item as Record<string, unknown>;
+      const id = readString(category.id);
+      const label = readString(category.label);
+      if (!id || !label) {
+        return [];
+      }
+      return [{
+        id,
+        label,
+        description: readString(category.description),
+        count: readNumber(category.count, 0),
+      } satisfies SageMemoryCategoryRecord];
+    })
+    : [];
+  return {
+    items,
+    categories,
+    summary: readObject(record.summary),
+    updatedAt: readString(record.updated_at) || null,
+  };
+}
+
+function defaultSageMemoryDraft(): SageMemoryDraft {
+  return {
+    entryId: null,
+    category: 'profile_fact',
+    title: '',
+    content: '',
+    pinned: false,
+  };
+}
+
+function memoryCategoryLabel(
+  categories: SageMemoryCategoryRecord[],
+  categoryId: string,
+): string {
+  return categories.find((item) => item.id === categoryId)?.label ?? categoryId.replace(/_/g, ' ');
+}
+
+function formatTimestamp(value: string | null): string {
+  if (!value) {
+    return 'Not recorded';
+  }
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) {
+    return value;
+  }
+  return parsed.toLocaleString();
+}
+
 export function WorkstationChatPane() {
   const { bootstrap } = useWorkspaceBoundary();
   const services = useWorkspaceServices();
@@ -394,15 +644,40 @@ export function WorkstationChatPane() {
   const [approvals, setApprovals] = useState<CanonicalApprovalSummary[]>(
     () => services.queryClient.peek<CanonicalApprovalSummary[]>(APPROVALS_QUERY_KEY) ?? [],
   );
+  const [recentThreads, setRecentThreads] = useState<RecentThreadSummary[]>(
+    () => services.queryClient.peek<RecentThreadSummary[]>(RECENT_THREADS_QUERY_KEY) ?? [{
+      threadId: PRIMARY_THREAD_ID,
+      title: 'Primary thread',
+      updatedAt: null,
+    }],
+  );
+  const [memorySnapshot, setMemorySnapshot] = useState<SageMemorySnapshot>(
+    () => services.queryClient.peek<SageMemorySnapshot>(SAGE_MEMORY_QUERY_KEY) ?? normalizeSageMemorySnapshot(null),
+  );
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isSending, setIsSending] = useState(false);
+  const [hasEnteredConversationFlow, setHasEnteredConversationFlow] = useState(false);
   const [resolvingApprovalId, setResolvingApprovalId] = useState<string | null>(null);
+  const [mutatingMemory, setMutatingMemory] = useState<string | null>(null);
   const [pendingUserMessage, setPendingUserMessage] = useState<WorkstationChatMessageRecord | null>(null);
   const [streamingAssistantText, setStreamingAssistantText] = useState('');
   const [liveTrace, setLiveTrace] = useState<LiveTraceState | null>(null);
   const [isMobileViewport, setIsMobileViewport] = useState(false);
   const [isWideViewport, setIsWideViewport] = useState(false);
+  const [memoryFilter, setMemoryFilter] = useState<string>('all');
+  const [selectedExecutionPlacement, setSelectedExecutionPlacement] = useState<'local' | 'cloud'>(() => {
+    const localTarget = localCompanionTarget(bootstrap.runtime.runtimeTargets);
+    return localTarget && localTarget.available && localTarget.online && localTarget.healthy ? 'local' : 'cloud';
+  });
+  const [permissionMode, setPermissionMode] = useState<'auto' | 'approval'>(() => {
+    const localTarget = localCompanionTarget(bootstrap.runtime.runtimeTargets);
+    return localTarget && localTarget.available && localTarget.online && localTarget.healthy ? 'approval' : 'auto';
+  });
+  const [isApprovalsSheetOpen, setIsApprovalsSheetOpen] = useState(false);
+  const [isMemorySheetOpen, setIsMemorySheetOpen] = useState(false);
+  const [memoryDraft, setMemoryDraft] = useState<SageMemoryDraft>(() => defaultSageMemoryDraft());
+  const [pendingDeleteMemoryId, setPendingDeleteMemoryId] = useState<string | null>(null);
 
   const writeThreadState = (nextThread: CanonicalChatThreadState) => {
     services.queryClient.set(threadQueryKey(nextThread.threadId), nextThread);
@@ -424,6 +699,16 @@ export function WorkstationChatPane() {
     setApprovals(nextApprovals);
   };
 
+  const writeMemorySnapshot = (nextSnapshot: SageMemorySnapshot) => {
+    services.queryClient.set(SAGE_MEMORY_QUERY_KEY, nextSnapshot);
+    setMemorySnapshot(nextSnapshot);
+  };
+
+  const writeRecentThreads = (items: RecentThreadSummary[]) => {
+    services.queryClient.set(RECENT_THREADS_QUERY_KEY, items);
+    setRecentThreads(items);
+  };
+
   const loadThread = async (requestedThreadId = activeThreadId) => {
     const payload = await services.client.getThread({
       threadId: requestedThreadId,
@@ -441,15 +726,31 @@ export function WorkstationChatPane() {
     const approvalsRequest = services.client.listApprovals({
       limit: 24,
     }).then(normalizeCanonicalApprovalItems);
+    const timelineRequest = services.client.listActivityTimeline({
+      limit: 40,
+    }).then(normalizeTimelineItems);
 
-    const [nextRuns, nextApprovals] = await Promise.all([runsRequest, approvalsRequest]);
+    const [nextRuns, nextApprovals, timelineItems] = await Promise.all([
+      runsRequest,
+      approvalsRequest,
+      timelineRequest,
+    ]);
     writeOverview({ nextRuns, nextApprovals });
+    writeRecentThreads(deriveRecentThreads(timelineItems, activeThreadId));
+  };
+
+  const loadMemory = async () => {
+    const payload = await services.client.listSageMemory();
+    const nextSnapshot = normalizeSageMemorySnapshot(payload);
+    writeMemorySnapshot(nextSnapshot);
+    return nextSnapshot;
   };
 
   const refreshCanonicalState = async (requestedThreadId = activeThreadId) => {
     const [nextThread] = await Promise.all([
       loadThread(requestedThreadId),
       loadOverview(),
+      loadMemory(),
     ]);
     return nextThread;
   };
@@ -474,6 +775,153 @@ export function WorkstationChatPane() {
       );
     } finally {
       setResolvingApprovalId(null);
+    }
+  };
+
+  const openCreateMemory = (categoryId?: string) => {
+    setMemoryDraft({
+      ...defaultSageMemoryDraft(),
+      category: categoryId || 'profile_fact',
+    });
+    setIsMemorySheetOpen(true);
+  };
+
+  const openEditMemory = (entry: WorkstationSageMemoryRecord) => {
+    setMemoryDraft({
+      entryId: readString(entry.id) || null,
+      category: readString(entry.category) || 'profile_fact',
+      title: readString(entry.title),
+      content: readString(entry.content),
+      pinned: Boolean(entry.pinned),
+    });
+    setIsMemorySheetOpen(true);
+  };
+
+  const submitMemoryDraft = async () => {
+    if (mutatingMemory) {
+      return;
+    }
+    const category = readString(memoryDraft.category);
+    const title = readString(memoryDraft.title);
+    const content = readString(memoryDraft.content);
+    if (!category || !title || !content) {
+      setStatusMessage('Memory entries need a category, title, and content.');
+      return;
+    }
+    setMutatingMemory(memoryDraft.entryId || 'new');
+    setStatusMessage(null);
+    try {
+      const payload = memoryDraft.entryId
+        ? await services.client.updateSageMemoryEntry({
+          entryId: memoryDraft.entryId,
+          category,
+          title,
+          content,
+          pinned: memoryDraft.pinned,
+        })
+        : await services.client.createSageMemoryEntry({
+          category,
+          title,
+          content,
+          pinned: memoryDraft.pinned,
+        });
+      writeMemorySnapshot(normalizeSageMemorySnapshot(payload));
+      setIsMemorySheetOpen(false);
+      setMemoryDraft(defaultSageMemoryDraft());
+      setStatusMessage(memoryDraft.entryId ? 'Memory corrected.' : 'Memory saved.');
+    } catch (error) {
+      setStatusMessage(error instanceof Error ? error.message : 'Memory update failed.');
+    } finally {
+      setMutatingMemory(null);
+    }
+  };
+
+  const toggleMemoryPinned = async (entry: WorkstationSageMemoryRecord) => {
+    const entryId = readString(entry.id);
+    if (!entryId || mutatingMemory) {
+      return;
+    }
+    setMutatingMemory(entryId);
+    setStatusMessage(null);
+    try {
+      const payload = await services.client.setSageMemoryEntryPinned({
+        entryId,
+        pinned: !Boolean(entry.pinned),
+      });
+      writeMemorySnapshot(normalizeSageMemorySnapshot(payload));
+      setStatusMessage(Boolean(entry.pinned) ? 'Memory unpinned.' : 'Memory pinned.');
+    } catch (error) {
+      setStatusMessage(error instanceof Error ? error.message : 'Could not update memory pin state.');
+    } finally {
+      setMutatingMemory(null);
+    }
+  };
+
+  const confirmDeleteMemory = async () => {
+    if (!pendingDeleteMemoryId || mutatingMemory) {
+      return;
+    }
+    setMutatingMemory(pendingDeleteMemoryId);
+    setStatusMessage(null);
+    try {
+      const payload = await services.client.deleteSageMemoryEntry({
+        entryId: pendingDeleteMemoryId,
+      });
+      writeMemorySnapshot(normalizeSageMemorySnapshot(payload));
+      setPendingDeleteMemoryId(null);
+      setStatusMessage('Memory forgotten.');
+    } catch (error) {
+      setStatusMessage(error instanceof Error ? error.message : 'Could not forget memory.');
+    } finally {
+      setMutatingMemory(null);
+    }
+  };
+
+  const openRecentThread = async (threadId: string) => {
+    const nextThreadId = readString(threadId);
+    if (!nextThreadId || nextThreadId === activeThreadId || isSending) {
+      return;
+    }
+    setHasEnteredConversationFlow(true);
+    setStatusMessage(null);
+    setIsLoading(true);
+    try {
+      setActiveThreadId(nextThreadId);
+      await refreshCanonicalState(nextThreadId);
+    } catch (error) {
+      setStatusMessage(error instanceof Error ? error.message : 'Could not open this thread.');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const startNewThread = async () => {
+    if (isSending) {
+      return;
+    }
+    setHasEnteredConversationFlow(true);
+    const nextThreadId = `thread-${Date.now()}`;
+    setDraft('');
+    setStatusMessage(null);
+    setPendingUserMessage(null);
+    setStreamingAssistantText('');
+    setLiveTrace(null);
+    setIsLoading(true);
+    try {
+      setActiveThreadId(nextThreadId);
+      await refreshCanonicalState(nextThreadId);
+      writeRecentThreads([
+        {
+          threadId: nextThreadId,
+          title: 'New thread',
+          updatedAt: new Date().toISOString(),
+        },
+        ...recentThreads.filter((item) => item.threadId !== nextThreadId).slice(0, 7),
+      ]);
+    } catch (error) {
+      setStatusMessage(error instanceof Error ? error.message : 'Could not start a new thread.');
+    } finally {
+      setIsLoading(false);
     }
   };
 
@@ -572,13 +1020,88 @@ export function WorkstationChatPane() {
     [activeThreadId, liveTrace?.trace?.thread_id, liveTrace?.traceId, streamingAssistantText],
   );
 
-  const showTrace = Boolean(liveTrace) && !isMobileViewport && isWideViewport;
+  const hasConversationContent = thread.messages.length > 0
+    || Boolean(pendingUserMessage)
+    || Boolean(streamingAssistantMessage)
+    || Boolean(liveTrace);
+  const showConversationContext = hasConversationContent || hasEnteredConversationFlow;
+  const showFirstImpression = !showConversationContext;
+  const showTrace = showConversationContext && Boolean(liveTrace) && !isMobileViewport && isWideViewport;
+  const showBlankTranscript = !isLoading
+    && thread.messages.length === 0
+    && !pendingUserMessage
+    && !streamingAssistantMessage
+    && !liveTrace;
+  const latestRun = runs[0];
+  const latestApproval = approvals[0];
+  const artifactCount = useMemo(() => countArtifacts(thread.messages), [thread.messages]);
+  const assistantTurnCount = useMemo(
+    () => thread.messages.filter((message) => message.role !== 'user').length,
+    [thread.messages],
+  );
+  const runtimeCard = useMemo(
+    () => summarizeRuntimeCard(bootstrap.runtime.runtimeTargets),
+    [bootstrap.runtime.runtimeTargets],
+  );
+  const localRuntimeTarget = useMemo(
+    () => localCompanionTarget(bootstrap.runtime.runtimeTargets),
+    [bootstrap.runtime.runtimeTargets],
+  );
+  const localCompanionConnected = Boolean(
+    localRuntimeTarget
+    && localRuntimeTarget.available
+    && localRuntimeTarget.online
+    && localRuntimeTarget.healthy,
+  );
+  const structuredServicesState = artifactCount > 0
+    ? `${artifactCount} attached output${artifactCount === 1 ? '' : 's'} in this thread`
+    : 'No app updates yet';
+  const nextStepTitle = approvals.length > 0
+    ? 'Approval is waiting'
+    : latestRun
+      ? 'Task is in progress'
+      : 'Sage is ready for the next turn';
+  const nextStepMeta = approvals.length > 0
+    ? `${approvals.length} waiting`
+    : latestRun
+      ? readString(latestRun.status) || 'unknown'
+      : 'Idle';
+  const memoryMeta = assistantTurnCount > 0
+    ? `${assistantTurnCount} Sage repl${assistantTurnCount === 1 ? 'y' : 'ies'} retained`
+    : 'The first turn will establish memory';
+  const serviceTone = artifactCount > 0 ? 'success' : 'neutral';
+  const serviceTitle = artifactCount > 0 ? 'App updates are available' : 'No app updates yet';
+  const serviceBody = artifactCount > 0
+    ? 'Sage saved new output in this thread so you can keep building from it.'
+    : 'When Sage creates reusable output, it will show up here.';
+  const memoryItems = memorySnapshot.items;
+  const pinnedMemoryCount = readNumber(memorySnapshot.summary.pinned_count, 0);
+  const totalMemoryCount = readNumber(memorySnapshot.summary.total_count, 0);
+  const memoryCardTitle = totalMemoryCount > 0 ? 'What Sage will carry forward' : 'No explicit memory saved yet';
+  const memoryCardBody = totalMemoryCount > 0
+    ? memoryItems.slice(0, 2).map((item) => `${readString(item.title)}: ${readString(item.summary || item.content)}`).join(' · ')
+    : 'Save profile facts, active work, app state, or long-term preferences here when you want Sage to carry them forward explicitly.';
+  const filteredMemoryItems = useMemo(
+    () => memoryItems.filter((item) => memoryFilter === 'all' || readString(item.category) === memoryFilter),
+    [memoryFilter, memoryItems],
+  );
+  const visibleMemoryItems = filteredMemoryItems.slice(0, 6);
+  const pendingDeleteMemory = pendingDeleteMemoryId
+    ? memoryItems.find((item) => readString(item.id) === pendingDeleteMemoryId) ?? null
+    : null;
+
+  useEffect(() => {
+    if (!localCompanionConnected && selectedExecutionPlacement === 'local') {
+      setSelectedExecutionPlacement('cloud');
+    }
+  }, [localCompanionConnected, selectedExecutionPlacement]);
 
   const sendMessage = async () => {
     const message = draft.trim();
     if (!message || isSending) {
       return;
     }
+    setHasEnteredConversationFlow(true);
 
     const requestedThreadId = activeThreadId;
     const pendingMessage = createCanonicalUserMessage(message, requestedThreadId);
@@ -624,6 +1147,12 @@ export function WorkstationChatPane() {
         message,
         channel: 'web',
         source: 'workstation_chat_pane',
+        runtimeTarget: selectedExecutionPlacement === 'local' ? 'local_companion' : 'cloud',
+        policyContext: {
+          session_mode: permissionMode === 'auto' ? 'agent' : 'copilot',
+          trust_mode: permissionMode === 'auto' ? 'auto' : 'guarded',
+          approval_ui: 'sheet',
+        },
         onEvent: (event) => {
           if (event.event === 'trace') {
             const traceEvent = normalizeTraceStreamEvent(event.payload);
@@ -668,6 +1197,8 @@ export function WorkstationChatPane() {
         thread_id: String(response.thread_id ?? observedThreadId ?? requestedThreadId),
         metadata: responseMetadata,
       };
+      const responseExecutionTarget = readExecutionTarget(responseMetadata);
+      const responseInterventionMessage = firstInterventionMessage(normalizedResponse.interventions ?? []);
       const nextThreadId = String(normalizedResponse.thread_id ?? requestedThreadId);
       const optimisticUserMessage = createCanonicalUserMessage(message, nextThreadId);
       const nextMessages = [...thread.messages, optimisticUserMessage];
@@ -717,11 +1248,17 @@ export function WorkstationChatPane() {
       }
       setStatusMessage(
         Array.isArray(normalizedResponse.approvals) && normalizedResponse.approvals.length > 0
-          ? 'Turn submitted. Approval is now pending.'
+          ? responseExecutionTarget === 'local_companion'
+            ? 'Turn submitted. Sage is waiting for approval before using the local companion.'
+            : 'Turn submitted. Approval is now pending.'
           : Array.isArray(normalizedResponse.interventions) && normalizedResponse.interventions.length > 0
-            ? 'Turn submitted. Intervention is required before execution can continue.'
+            ? /supervisor not running/i.test(responseInterventionMessage)
+              ? 'Turn submitted, but the local companion is unavailable. Sage stayed paused instead of starting device work.'
+              : 'Turn submitted. Your input is needed before Sage can continue.'
+            : responseExecutionTarget === 'local_companion'
+              ? 'Turn submitted. Sage routed this work to the local companion.'
             : renewed
-              ? 'Turn submitted after renewing the scoped workstation session.'
+              ? 'Turn submitted after refreshing your session.'
               : null,
       );
     } catch (error) {
@@ -748,58 +1285,111 @@ export function WorkstationChatPane() {
     />
   ) : null;
 
+  if (showFirstImpression) {
+    return (
+      <main
+        data-workstation-surface="chat"
+        data-workstation-chat="pane"
+        className="app-chat-page app-chat-page--surface app-chat-page--first-impression"
+      >
+        <section className="app-chat-first-impression app-chat-first-impression--surface" aria-label="Sage first impression">
+          <section className="app-chat-transcript app-chat-transcript--empty" aria-hidden="true" />
+
+          <ChatComposer
+            draft={draft}
+            onDraftChange={setDraft}
+            onSubmit={() => {
+              void sendMessage();
+            }}
+            executionPlacement={selectedExecutionPlacement === 'local' ? 'Local' : 'Cloud'}
+            onToggleExecutionPlacement={() => {
+              if (!localCompanionConnected) {
+                return;
+              }
+              setSelectedExecutionPlacement((current) => (current === 'local' ? 'cloud' : 'local'));
+            }}
+            executionPlacementDisabled={!localCompanionConnected}
+            pendingApprovalsCount={approvals.length}
+            onOpenApprovals={() => {
+              setIsApprovalsSheetOpen(true);
+            }}
+            permissionMode={permissionMode === 'auto' ? 'Auto-run' : 'Requires approval'}
+            onTogglePermissionMode={() => {
+              setPermissionMode((current) => (current === 'auto' ? 'approval' : 'auto'));
+            }}
+            busy={isSending}
+          />
+        </section>
+      </main>
+    );
+  }
+
   return (
-    <main data-workstation-surface="chat" data-workstation-chat="pane" className="app-chat-page">
+    <main data-workstation-surface="chat" data-workstation-chat="pane" className="app-chat-page app-chat-page--surface">
       <header className="app-chat-header">
         <div className="app-chat-header__copy">
-          <span className="app-chat-header__kicker">Conversation</span>
-          <h1 className="app-chat-header__title">{thread.title || bootstrap.workspace.label}</h1>
+          <span className="app-chat-header__kicker">Sage</span>
+          <h1 className="app-chat-header__title">Sage</h1>
           <p className="app-chat-header__subtitle">
-            Canonical thread state, approvals, runs, and generated outputs stay attached to the same conversation.
+            Talk to Sage here. The conversation stays primary, with tasks, approvals, files, and memory attached when you need them.
           </p>
         </div>
 
-        <AppButton
-          type="button"
-          tone="secondary"
-          onClick={() => {
-            void refreshCanonicalState(activeThreadId).catch((error) => {
-              setStatusMessage(error instanceof Error ? error.message : 'Refresh failed.');
-            });
-          }}
-        >
-          Refresh
-        </AppButton>
+        <div className="app-inline-actions">
+          <AppButton
+            type="button"
+            tone="secondary"
+            onClick={() => {
+              void startNewThread();
+            }}
+          >
+            New thread
+          </AppButton>
+          <AppButton
+            type="button"
+            tone="secondary"
+            onClick={() => {
+              void refreshCanonicalState(activeThreadId).catch((error) => {
+                setStatusMessage(error instanceof Error ? error.message : 'Refresh failed.');
+              });
+            }}
+          >
+            Refresh
+          </AppButton>
+        </div>
       </header>
 
       <section className="app-chat-summary" aria-label="Conversation state">
+        <span className="app-chat-pill">{thread.title === 'Chat' ? 'Thread' : (thread.title || 'Thread')}</span>
         <span className="app-chat-pill">{thread.messages.length} messages</span>
-        <span className="app-chat-pill">{summarizeRuns(runs)}</span>
         <span className="app-chat-pill">{summarizeApprovals(approvals)}</span>
-        <span className="app-chat-pill">Activity {streamState.activity.connectionState}</span>
-        <span className="app-chat-pill">Notifications {streamState.notifications.connectionState}</span>
+        <span className="app-chat-pill">{summarizeRuns(runs)}</span>
+        <span className="app-chat-pill">{runtimeCard.localPill}</span>
       </section>
 
-      {statusMessage ? (
-        <AppNotice tone={/failed|unavailable|error/i.test(statusMessage) ? 'danger' : 'neutral'}>
-          {statusMessage}
-        </AppNotice>
-      ) : null}
+      <section className="app-chat-recent-threads" aria-label="Recent threads">
+        <span className="app-chat-recent-threads__label">Recent threads</span>
+        <div className="app-chat-recent-threads__list">
+          {recentThreads.slice(0, 6).map((item) => (
+            <button
+              key={item.threadId}
+              type="button"
+              className={`workstation-command-bar__link${item.threadId === activeThreadId ? ' workstation-command-bar__link--active' : ''}`}
+              onClick={() => {
+                void openRecentThread(item.threadId);
+              }}
+            >
+              {item.title || item.threadId}
+            </button>
+          ))}
+        </div>
+      </section>
 
-      <section className="app-chat-thread">
+      <section className={`app-chat-thread app-chat-thread--surface${showBlankTranscript ? ' app-chat-thread--blank' : ''}`}>
         <ScrollRegion className="app-chat-thread__scroll">
           <div className="app-chat-thread__body">
             {isLoading && thread.messages.length === 0 ? (
-              <AppNotice>Loading canonical conversation history.</AppNotice>
-            ) : null}
-
-            {!isLoading && thread.messages.length === 0 && !pendingUserMessage ? (
-              <section className="app-chat-empty">
-                <strong className="app-chat-empty__title">No conversation yet</strong>
-                <span className="app-chat-empty__body">
-                  The first turn will create the canonical thread history and begin populating runs, approvals, and outputs.
-                </span>
-              </section>
+              <AppNotice>Loading conversation history.</AppNotice>
             ) : null}
 
             {thread.messages.map((message) => (
@@ -850,9 +1440,346 @@ export function WorkstationChatPane() {
         onSubmit={() => {
           void sendMessage();
         }}
+        executionPlacement={selectedExecutionPlacement === 'local' ? 'Local' : 'Cloud'}
+        onToggleExecutionPlacement={() => {
+          if (!localCompanionConnected) {
+            return;
+          }
+          setSelectedExecutionPlacement((current) => (current === 'local' ? 'cloud' : 'local'));
+        }}
+        executionPlacementDisabled={!localCompanionConnected}
+        pendingApprovalsCount={approvals.length}
+        onOpenApprovals={() => {
+          setIsApprovalsSheetOpen(true);
+        }}
+        permissionMode={permissionMode === 'auto' ? 'Auto-run' : 'Requires approval'}
+        onTogglePermissionMode={() => {
+          setPermissionMode((current) => (current === 'auto' ? 'approval' : 'auto'));
+        }}
         busy={isSending}
-        disabled={isLoading}
-        statusMessage={statusMessage}
+      />
+
+      {statusMessage ? (
+        <AppNotice tone={/failed|unavailable|error/i.test(statusMessage) ? 'danger' : 'neutral'}>
+          {statusMessage}
+        </AppNotice>
+      ) : null}
+
+      <details className="app-chat-support-panel app-chat-support-panel--surface" aria-label="Sage support context">
+        <summary className="app-chat-support-panel__summary">
+          <span className="app-chat-support-panel__title">Tasks, approvals, files, and memory</span>
+          <span className="app-chat-support-panel__meta">
+            {approvals.length > 0
+              ? `${approvals.length} approval${approvals.length === 1 ? '' : 's'} waiting`
+              : latestRun
+                ? readString(latestRun.status) || 'Run status'
+                : 'No pending blockers'}
+          </span>
+        </summary>
+
+        <div className="app-chat-support-panel__body">
+          <section className="app-surface-stat-grid" aria-label="Sage context">
+            <ChatInlineStateCard
+              tone={approvals.length > 0 ? 'warning' : latestRun ? 'accent' : 'neutral'}
+              eyebrow="Next move"
+              title={nextStepTitle}
+              meta={nextStepMeta}
+              actions={approvals.length > 0 ? <Link href={`/w/${encodeURIComponent(bootstrap.workspace.id)}/approvals`} className="app-inline-link">Review approvals</Link> : latestRun ? <Link href={`/w/${encodeURIComponent(bootstrap.workspace.id)}/runs`} className="app-inline-link">Review runs</Link> : null}
+            >
+              {approvals.length > 0 ? latestApprovalSummary(latestApproval) : latestRunSummary(latestRun)}
+            </ChatInlineStateCard>
+            <ChatInlineStateCard
+              tone={runtimeCard.tone}
+              eyebrow="Where it runs"
+              title={runtimeCard.title}
+              meta={runtimeCard.meta}
+            >
+              {runtimeCard.body}
+            </ChatInlineStateCard>
+            <ChatInlineStateCard
+              tone="neutral"
+              eyebrow="Memory"
+              title={memoryCardTitle}
+              meta={totalMemoryCount > 0 ? `${totalMemoryCount} saved · ${pinnedMemoryCount} pinned` : memoryMeta}
+              actions={(
+                <AppButton
+                  type="button"
+                  tone="ghost"
+                  onClick={() => {
+                    openCreateMemory();
+                  }}
+                >
+                  Save memory
+                </AppButton>
+              )}
+            >
+              {memoryCardBody}
+            </ChatInlineStateCard>
+            <ChatInlineStateCard
+              tone={serviceTone}
+              eyebrow="Files"
+              title={serviceTitle}
+              meta={structuredServicesState}
+            >
+              {serviceBody}
+            </ChatInlineStateCard>
+          </section>
+
+          <section className="app-stack-3" aria-label="Sage memory">
+            <div className="app-inline-actions app-inline-actions--between app-inline-actions--start">
+              <div className="app-stack-1">
+                <strong className="workstation-pane__title">Sage memory</strong>
+                <span className="app-meta-value app-meta-value--secondary">
+                  {totalMemoryCount > 0
+                    ? `${totalMemoryCount} saved · updated ${formatTimestamp(memorySnapshot.updatedAt)}`
+                    : 'Save only what Sage should remember for later.'}
+                </span>
+              </div>
+              <AppButton
+                type="button"
+                tone="secondary"
+                onClick={() => {
+                  openCreateMemory(memoryFilter !== 'all' ? memoryFilter : undefined);
+                }}
+              >
+                Add memory
+              </AppButton>
+            </div>
+
+            <div className="app-inline-actions app-inline-actions--tight">
+              <button
+                type="button"
+                onClick={() => setMemoryFilter('all')}
+                className={`workstation-command-bar__link${memoryFilter === 'all' ? ' workstation-command-bar__link--active' : ''}`}
+              >
+                All
+              </button>
+              {memorySnapshot.categories.map((category) => (
+                <button
+                  key={category.id}
+                  type="button"
+                  onClick={() => setMemoryFilter(category.id)}
+                  className={`workstation-command-bar__link${memoryFilter === category.id ? ' workstation-command-bar__link--active' : ''}`}
+                >
+                  {category.label}
+                </button>
+              ))}
+            </div>
+
+            {visibleMemoryItems.length === 0 ? (
+              <AppNotice>
+                No memory is saved yet. Add profile facts, active work, app state, or preferences when you want Sage to remember them.
+              </AppNotice>
+            ) : (
+              <div className="app-stack-3">
+                {visibleMemoryItems.map((entry) => {
+                  const entryId = readString(entry.id);
+                  const isBusy = mutatingMemory === entryId;
+                  const isPinned = Boolean(entry.pinned);
+                  return (
+                    <ChatInlineStateCard
+                      key={entryId}
+                      tone={isPinned ? 'success' : 'neutral'}
+                      eyebrow={memoryCategoryLabel(memorySnapshot.categories, readString(entry.category))}
+                      title={readString(entry.title) || 'Saved memory'}
+                      meta={[
+                        isPinned ? 'Pinned' : null,
+                        readString(entry.source_label) || null,
+                        formatTimestamp(readString(entry.updated_at) || null),
+                      ].filter(Boolean).join(' · ')}
+                      actions={(
+                        <div className="app-inline-actions app-inline-actions--tight">
+                          <AppButton
+                            type="button"
+                            tone="ghost"
+                            disabled={isBusy}
+                            onClick={() => {
+                              void toggleMemoryPinned(entry);
+                            }}
+                          >
+                            {isPinned ? 'Unpin' : 'Pin'}
+                          </AppButton>
+                          <AppButton
+                            type="button"
+                            tone="ghost"
+                            disabled={isBusy}
+                            onClick={() => {
+                              openEditMemory(entry);
+                            }}
+                          >
+                            Correct
+                          </AppButton>
+                          <AppButton
+                            type="button"
+                            tone="ghost"
+                            disabled={isBusy}
+                            onClick={() => {
+                              setPendingDeleteMemoryId(entryId);
+                            }}
+                          >
+                            Forget
+                          </AppButton>
+                        </div>
+                      )}
+                    >
+                      {readString(entry.content)}
+                    </ChatInlineStateCard>
+                  );
+                })}
+              </div>
+            )}
+          </section>
+        </div>
+      </details>
+
+      <CommandSheet
+        open={isApprovalsSheetOpen}
+        title="Approvals"
+        description="Review pending approval requests attached to this conversation."
+        onClose={() => {
+          setIsApprovalsSheetOpen(false);
+        }}
+      >
+        <div className="app-stack-3">
+          {approvals.length === 0 ? (
+            <AppNotice>No pending approvals.</AppNotice>
+          ) : approvals.map((approval, index) => (
+            <section key={readString(approval.approval_id) || readString(approval.id) || `approval-${index}`} className="app-surface-notice">
+              <strong className="app-surface-title">{readString(approval.prompt) || `Approval ${index + 1}`}</strong>
+              <span className="app-surface-description">
+                {readString(approval.status) || 'pending'}
+              </span>
+            </section>
+          ))}
+          <div>
+            <Link href={`/w/${encodeURIComponent(bootstrap.workspace.id)}/approvals`} className="app-link-button app-link-button--primary">
+              Open approvals
+            </Link>
+          </div>
+        </div>
+      </CommandSheet>
+
+      <CommandSheet
+        open={isMemorySheetOpen}
+        title={memoryDraft.entryId ? 'Correct memory' : 'Save memory'}
+        description="Memory saves are explicit here. Save only facts or context Sage should carry into future turns."
+        onClose={() => {
+          setIsMemorySheetOpen(false);
+          setMemoryDraft(defaultSageMemoryDraft());
+        }}
+        actions={(
+          <>
+            <AppButton
+              type="button"
+              tone="secondary"
+              onClick={() => {
+                setIsMemorySheetOpen(false);
+                setMemoryDraft(defaultSageMemoryDraft());
+              }}
+              disabled={Boolean(mutatingMemory)}
+            >
+              Cancel
+            </AppButton>
+            <AppButton
+              type="button"
+              tone="primary"
+              onClick={() => {
+                void submitMemoryDraft();
+              }}
+              disabled={Boolean(mutatingMemory)}
+            >
+              {mutatingMemory ? 'Saving…' : memoryDraft.entryId ? 'Save correction' : 'Save memory'}
+            </AppButton>
+          </>
+        )}
+      >
+        <FormSection
+          title="Memory entry"
+          description="Choose the category carefully so Sage can use this memory the right way."
+        >
+          <FormGrid columns="repeat(2, minmax(0, 1fr))">
+            <FormField label="Category">
+              <select
+                className="app-select"
+                value={memoryDraft.category}
+                onChange={(event) => {
+                  const nextCategory = event.currentTarget.value;
+                  setMemoryDraft((current) => ({
+                    ...current,
+                    category: nextCategory,
+                  }));
+                }}
+              >
+                {memorySnapshot.categories.map((category) => (
+                  <option key={category.id} value={category.id}>
+                    {category.label}
+                  </option>
+                ))}
+              </select>
+            </FormField>
+            <FormField label="Pin now">
+              <div className="app-inline-actions app-inline-actions--tight">
+                <AppButton
+                  type="button"
+                  tone={memoryDraft.pinned ? 'primary' : 'secondary'}
+                  onClick={() => {
+                    setMemoryDraft((current) => ({
+                      ...current,
+                      pinned: !current.pinned,
+                    }));
+                  }}
+                >
+                  {memoryDraft.pinned ? 'Pinned' : 'Pin memory'}
+                </AppButton>
+              </div>
+            </FormField>
+          </FormGrid>
+          <FormGrid columns="1fr">
+            <FormField label="Title" hint="Short enough to scan quickly in future turns.">
+              <FormInput
+                value={memoryDraft.title}
+                onChange={(event) => {
+                  const nextValue = event.currentTarget.value;
+                  setMemoryDraft((current) => ({
+                    ...current,
+                    title: nextValue,
+                  }));
+                }}
+                placeholder="Example: Preferred working style"
+              />
+            </FormField>
+            <FormField label="Content" hint="Keep it factual and explicit. Avoid dumping raw notes.">
+              <FormTextarea
+                rows={5}
+                value={memoryDraft.content}
+                onChange={(event) => {
+                  const nextValue = event.currentTarget.value;
+                  setMemoryDraft((current) => ({
+                    ...current,
+                    content: nextValue,
+                  }));
+                }}
+                placeholder="Example: Prefers concise status updates and direct next steps."
+              />
+            </FormField>
+          </FormGrid>
+        </FormSection>
+      </CommandSheet>
+
+      <ConfirmDialog
+        open={Boolean(pendingDeleteMemory)}
+        title="Forget memory?"
+        body={pendingDeleteMemory
+          ? `Sage will remove "${readString(pendingDeleteMemory.title) || 'this memory'}" from explicit carry-forward memory.`
+          : 'Sage will remove this memory.'}
+        confirmLabel="Forget memory"
+        busy={Boolean(mutatingMemory)}
+        onConfirm={() => {
+          void confirmDeleteMemory();
+        }}
+        onCancel={() => {
+          setPendingDeleteMemoryId(null);
+        }}
       />
     </main>
   );

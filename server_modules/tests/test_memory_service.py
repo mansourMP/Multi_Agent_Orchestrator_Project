@@ -269,6 +269,29 @@ class MemoryServiceTests(unittest.TestCase):
         self.assertEqual(run["memory_trace"]["reads"][0]["bucket"], "profile")
         emit_log_mock.assert_called_once()
 
+    def test_memory_scope_from_context_uses_active_install_only(self) -> None:
+        with patch.object(memory_service, "_runtime_workspace_id", return_value="default"):
+            scope_without_active = memory_service._memory_scope_from_context(
+                {
+                    "workspace_id": "default",
+                    "metadata": {
+                        "workspace_agent_install_id": "install-parent",
+                    },
+                }
+            )
+            self.assertEqual(scope_without_active["agent_install_id"], "")
+
+            scope_with_active = memory_service._memory_scope_from_context(
+                {
+                    "workspace_id": "default",
+                    "metadata": {
+                        "active_agent_install_id": "install-child",
+                        "workspace_agent_install_id": "install-parent",
+                    },
+                }
+            )
+        self.assertEqual(scope_with_active["agent_install_id"], "install-child")
+
     def test_persist_run_memory_uses_canonical_memory_service_write_path(self) -> None:
         writes = []
         manager = type(

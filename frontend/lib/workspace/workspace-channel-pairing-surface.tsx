@@ -216,6 +216,7 @@ export function WorkspaceChannelPairingSurface({
   const selectedIntent = intentByProvider[selectedProvider] ?? null;
   const selectedProviderLinks = activeLinks.filter((link) => link.provider === selectedProvider);
   const providerEnabled = hasCapability(selectedDefinition.capabilityKey);
+  const visibleProviders: ChannelProvider[] = featureId === 'integrations' ? ['telegram'] : ['telegram', 'whatsapp'];
 
   async function refreshLinks(options: { silent?: boolean } = {}): Promise<ChannelLinksResponse> {
     if (!options.silent) {
@@ -341,11 +342,11 @@ export function WorkspaceChannelPairingSurface({
     }
   };
 
-  const title = featureId === 'settings' ? 'Channel pairing' : 'Integrations';
+  const title = featureId === 'settings' ? 'Channel pairing' : 'Studio · Channels';
   const intro =
     featureId === 'settings'
       ? 'Generate pairing codes, review active links, and manage channel identities from workspace-backed settings.'
-      : 'Telegram and WhatsApp pairing are managed here from backend truth under the same workspace boundary and capability model.';
+      : 'Connect customer channels, manage linked identities, and keep launch-ready coverage in one place.';
 
   return (
     <WorkstationSurfaceRoot surface={featureId}>
@@ -367,21 +368,21 @@ export function WorkspaceChannelPairingSurface({
       >
         <StateBanner
           tone={canPairChannels ? 'neutral' : 'warning'}
-          title={canPairChannels ? 'Workspace pairing is available' : 'Workspace pairing is blocked'}
+          title={canPairChannels ? 'Channel connections are available' : 'Channel connections are blocked'}
           detail={`${bootstrap.workspace.label} · shell profile ${shellProfile.label}`}
         >
           {canPairChannels
             ? `Link status ${summarizeLinkStatus(linksResponse.links)}.`
-            : 'Pairing codes require the correct workspace role and enabled channel entitlements.'}
+            : 'Pairing codes require the correct workspace role and channel access settings.'}
         </StateBanner>
 
         {statusMessage ? (
-          <StateBanner tone="success" title="Integrations updated">
+          <StateBanner tone="success" title={featureId === 'integrations' ? 'Channels updated' : 'Integrations updated'}>
             {statusMessage}
           </StateBanner>
         ) : null}
         {errorMessage ? (
-          <StateBanner tone="danger" title="Integrations are degraded">
+          <StateBanner tone="danger" title={featureId === 'integrations' ? 'Channels need attention' : 'Integrations need attention'}>
             {errorMessage}
           </StateBanner>
         ) : null}
@@ -395,10 +396,10 @@ export function WorkspaceChannelPairingSurface({
                 <ListDetailPanel
                   eyebrow="Providers"
                   title="Connected channel providers"
-                  subtitle="Select a provider to inspect pairing readiness, live links, and the most recent pairing code."
+                  subtitle="Select a provider to review readiness, active links, and the latest pairing code."
                 >
                   <div className="app-stack-3">
-                    {(Object.keys(CHANNEL_PROVIDER_DEFINITIONS) as ChannelProvider[]).map((provider) => {
+                    {visibleProviders.map((provider) => {
                       const definition = CHANNEL_PROVIDER_DEFINITIONS[provider];
                       const providerLinks = activeLinks.filter((link) => link.provider === provider);
                       const enabled = hasCapability(definition.capabilityKey);
@@ -428,12 +429,12 @@ export function WorkspaceChannelPairingSurface({
                 <ListDetailPanel
                   eyebrow="Links"
                   title="Active channel links"
-                  subtitle={`${activeLinks.length} active links currently attached to this workspace.`}
+                  subtitle={`${activeLinks.length} active links currently connected to this workspace.`}
                 >
                   {activeLinks.length === 0 ? (
                     <EmptyPanel
                       title="No active links"
-                      body="Generate a pairing code from the selected provider to connect a Telegram or WhatsApp identity to this workspace."
+                      body="Generate a pairing code from the selected provider to connect a Telegram identity to this workspace."
                     />
                   ) : (
                     <DataTable>
@@ -461,9 +462,11 @@ export function WorkspaceChannelPairingSurface({
                                 <AppButton
                                   type="button"
                                   tone="secondary"
-                                  onClick={() => setSelectedProvider(link.provider as ChannelProvider)}
+                                  onClick={() => {
+                                    setSelectedProvider('telegram');
+                                  }}
                                 >
-                                  Inspect
+                                  {link.provider === 'telegram' ? 'Inspect' : 'Telegram only'}
                                 </AppButton>
                                 <AppButton
                                   type="button"
@@ -486,7 +489,7 @@ export function WorkspaceChannelPairingSurface({
                   <ListDetailPanel
                     eyebrow="History"
                     title="Revoked link history"
-                    subtitle={`${revokedLinks.length} revoked links retained for workspace audit context.`}
+                    subtitle={`${revokedLinks.length} revoked links retained for workspace traceability.`}
                   >
                     <div className="app-stack-3">
                       {revokedLinks.map((link) => (
@@ -511,7 +514,7 @@ export function WorkspaceChannelPairingSurface({
               <ListDetailPanel
                 eyebrow="Selection"
                 title={`${selectedDefinition.label} pairing`}
-                subtitle="Current provider readiness, latest pairing code, and active workspace link state."
+                subtitle="Current provider readiness, latest pairing code, and active workspace link status."
                 actions={(
                   <div className="app-inline-actions">
                     {selectedIntent && isIntentActive(selectedIntent) ? (
@@ -555,6 +558,9 @@ export function WorkspaceChannelPairingSurface({
                   <FormReadout label="Active links" value={String(selectedProviderLinks.length)} />
                   <FormReadout label="Latest code" value={selectedIntent && isIntentActive(selectedIntent) ? selectedIntent.pairing_code : 'No active code'} />
                 </FormGrid>
+                {featureId === 'integrations' ? (
+                  <FormReadout label="Additional channels" value="More channel options are coming soon." />
+                ) : null}
 
                 {selectedProviderLinks.length === 0 ? (
                   <EmptyPanel
@@ -598,7 +604,7 @@ export function WorkspaceChannelPairingSurface({
                 <FormReadout label="Command" value={CHANNEL_PROVIDER_DEFINITIONS[codeSheetProvider].commandExample} />
               </FormGrid>
             </ModalSection>
-            <ModalSection title="Instructions" description="Operator guidance for completing the link.">
+            <ModalSection title="Instructions" description="Follow these steps to complete the link in your selected channel.">
               <div className="app-meta-value app-meta-value--body">
                 {intentByProvider[codeSheetProvider]?.instructions ?? CHANNEL_PROVIDER_DEFINITIONS[codeSheetProvider].helpText}
               </div>

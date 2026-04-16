@@ -90,6 +90,22 @@ def direct_tool_step_payload(
             detail = detail or callbacks.compact_step_detail(arguments.get("text"))
         else:
             label = "Computer control"
+    elif normalized_connector == "sage_service":
+        kind = "service"
+        service_label = callbacks.compact_step_detail(
+            arguments.get("service_id")
+            or arguments.get("service")
+            or arguments.get("name")
+        )
+        if normalized_action == "list_state":
+            label = "Reading service state"
+        elif normalized_action == "update_profile":
+            label = "Updating service profile"
+        elif normalized_action == "create_entry":
+            label = "Saving service entry"
+        else:
+            label = "Updating Sage service"
+        detail = detail or service_label
     else:
         action_label = callbacks.titleize_direct_step_token(normalized_action) or "Connector action"
         connector_label = callbacks.titleize_direct_step_token(normalized_connector) or normalized_connector

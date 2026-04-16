@@ -4,32 +4,21 @@ import { expect, test } from '@playwright/test';
 import { loginAsOwner } from './support/auth';
 
 const SURFACES = [
-  ['chat', '[data-workstation-surface="chat"]'],
-  ['agents', '[data-workstation-surface="agents"]'],
-  ['deployed-agents', '[data-workstation-surface="deployed-agents"]'],
+  ['/w/ws-1/sage', '[data-workstation-surface="chat"]'],
+  ['/w/ws-1/studio', '[data-workstation-surface="deployed-agents"]'],
+  ['/w/ws-1/settings', '[data-workstation-surface="settings"]'],
 ];
 
 test.describe('non-scaffold surface sweep', () => {
   test.describe.configure({ mode: 'serial' });
 
-  let sharedContext;
-  let sharedPage;
-
-  test.beforeAll(async ({ browser }) => {
-    sharedContext = await browser.newContext();
-    sharedPage = await sharedContext.newPage();
-    await loginAsOwner(sharedPage);
+  test('mounts real components for canonical workspace surfaces', async ({ page }) => {
+    await loginAsOwner(page);
+    for (const [href, selector] of SURFACES) {
+      await page.goto(href, { waitUntil: 'domcontentloaded' });
+      await expect(page.locator(selector)).toBeVisible();
+      await expect(page.locator('[data-workstation-surface="fallback"]')).toHaveCount(0);
+      await page.waitForTimeout(750);
+    }
   });
-
-  test.afterAll(async () => {
-    await sharedContext?.close();
-  });
-
-  for (const [surface, selector] of SURFACES) {
-    test(`mounts a real component for ${surface}`, async () => {
-      await sharedPage.goto(`/w/ws-1/${surface}`);
-      await expect(sharedPage.locator(selector)).toBeVisible();
-      await expect(sharedPage.locator('[data-workstation-surface="fallback"]')).toHaveCount(0);
-    });
-  }
 });

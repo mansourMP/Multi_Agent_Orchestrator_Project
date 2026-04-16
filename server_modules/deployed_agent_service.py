@@ -16,6 +16,8 @@ from server_modules import provider_catalog_service
 from server_modules import run_state_repository
 from server_modules import session_service
 from server_modules import workspace_config_schema
+from server_modules.connectors.autopilot_runtime_exports import _autopilot_connector_shell_service
+from server_modules.connectors.autopilot_status_service import AutopilotStatusService
 from server_modules.agent_manifest import (
     AgentManifest,
     AgentManifestBible,
@@ -59,6 +61,34 @@ _ESCALATION_PRESET_TRIGGERS = {
     "conservative": "low confidence\nexplicit human request\nhealth or safety concern\npolicy conflict",
     "high_touch": "low confidence\nexplicit human request\nrefund or billing exception\npolicy conflict",
 }
+_STUDIO_WHATSAPP_STATUS = {
+    "available": False,
+    "status": "out_of_scope",
+    "label": "Not in scope",
+    "detail": "Studio launches Telegram specialists only in this beta. WhatsApp remains intentionally unavailable.",
+}
+_STUDIO_TOOL_SCOPE_CATALOG = (
+    {
+        "id": "web_search",
+        "label": "Web search",
+        "description": "Search the web for current facts and public references.",
+    },
+    {
+        "id": "http_request",
+        "label": "HTTP request",
+        "description": "Call approved APIs and webhooks inside the deployment boundary.",
+    },
+    {
+        "id": "gmail_send",
+        "label": "Send email",
+        "description": "Draft or send Gmail replies when the workspace has a connected mailbox.",
+    },
+    {
+        "id": "calendar_write",
+        "label": "Calendar write",
+        "description": "Create or update calendar events for customer-facing scheduling flows.",
+    },
+)
 
 
 def _utc_now_iso() -> str:
@@ -208,6 +238,143 @@ def _http_conflict(detail: str) -> HTTPException:
 
 def _coerce_dict(value: Any) -> Dict[str, Any]:
     return dict(value or {}) if isinstance(value, dict) else {}
+
+
+def _coerce_list(value: Any) -> List[Any]:
+    return list(value) if isinstance(value, list) else []
+
+
+def _tool_toggles_from_config(
+    config: deployed_agent_config_schema.DeployedAgentConfig,
+) -> Dict[str, bool]:
+    enabled = {
+        str(item or "").strip().lower()
+        for item in list(config.tool_policy.enabled_tools or [])
+        if str(item or "").strip()
+    }
+    return {
+        str(item.get("id") or "").strip().lower(): str(item.get("id") or "").strip().lower() in enabled
+        for item in _STUDIO_TOOL_SCOPE_CATALOG
+        if str(item.get("id") or "").strip()
+    }
+
+
+def _studio_issue(
+    *,
+    code: str,
+    message: str,
+    guidance: Optional[str] = None,
+    severity: str = "blocker",
+) -> Dict[str, Any]:
+    payload: Dict[str, Any] = {
+        "code": _normalize_text(code, default="studio_issue"),
+        "message": _normalize_text(message, default="Studio issue"),
+        "severity": _normalize_text(severity, default="blocker").lower(),
+    }
+    guidance_text = _normalize_optional_text(guidance)
+    if guidance_text:
+        payload["guidance"] = guidance_text
+    return payload
+
+
+def _telegram_connector_endpoint_key(entry: Dict[str, Any]) -> Optional[str]:
+    metadata = _coerce_dict(entry.get("metadata"))
+    registry_bindings = _coerce_dict(metadata.get("channel_registry_bindings"))
+    telegram_binding = _coerce_dict(registry_bindings.get("telegram"))
+    return _normalize_optional_text(
+        telegram_binding.get("endpoint_key")
+        or metadata.get("telegram_endpoint_key")
+        or entry.get("id")
+    )
+
+
+def _telegram_connector_projection(
+    entry: Dict[str, Any],
+    status_item: Dict[str, Any],
+) -> Dict[str, Any]:
+    metadata = _coerce_dict(entry.get("metadata"))
+    connector_id = _normalize_text(status_item.get("id") or entry.get("id"))
+    return {
+        "id": connector_id,
+        "label": _normalize_text(status_item.get("label") or entry.get("label"), default=connector_id),
+        "workspace_id": _normalize_optional_text(status_item.get("workspace_id") or entry.get("workspace_id")),
+        "connector_id": connector_id,
+        "credential_id": connector_id,
+        "endpoint_key": _telegram_connector_endpoint_key(entry),
+        "bot_username": _normalize_optional_text(metadata.get("bot_username")),
+        "webhook_path": _normalize_optional_text(status_item.get("webhook_path")),
+        "webhook_url": _normalize_optional_text(status_item.get("webhook_url")),
+        "profile_id": _normalize_optional_text(status_item.get("profile_id")),
+        "profile_status": _normalize_optional_text(status_item.get("profile_status")) or "live",
+        "profile_issue_code": _normalize_optional_text(status_item.get("profile_issue_code")),
+        "profile_issue": _normalize_optional_text(status_item.get("profile_issue")),
+        "last_error": _normalize_optional_text(status_item.get("last_error")),
+        "last_error_category": _normalize_optional_text(status_item.get("last_error_category")),
+        "last_error_at": _normalize_optional_text(status_item.get("last_error_at")),
+    }
+
+
+def _studio_next_action(
+    *,
+    telegram_enabled: bool,
+    blockers: List[Dict[str, Any]],
+    connector_options: List[Dict[str, Any]],
+) -> str:
+    if not telegram_enabled:
+        return "Enable Telegram when the specialist is ready for live customer traffic."
+    if not connector_options:
+        return "Create or unpause a Telegram bot connector for this workspace before launching Studio."
+    if blockers:
+        first = blockers[0]
+        return _normalize_optional_text(first.get("guidance")) or _normalize_text(
+            first.get("message"),
+            default="Resolve the Telegram launch blockers before deploying.",
+        )
+    return "Telegram is ready. Review the scoped memory and tools, then deploy the specialist."
+
+
+def _workspace_telegram_status_payload(owner_workspace_id: str) -> Dict[str, Any]:
+    shell = _autopilot_connector_shell_service()
+    shell.runtime_facade_service().init_runtime()
+    state_service = shell.telegram_service_registry().telegram_autopilot_state_service()
+    status_service = AutopilotStatusService(
+        normalize_workspace_id=lambda value: str(value or "").strip(),
+        telegram_snapshot=lambda: state_service.snapshot(include_connectors=True),
+        telegram_list_entries=lambda: state_service.list_connector_entries(owner_workspace_id),
+        resolve_telegram_profile=lambda entry: shell.profile_service().resolve_telegram_profile(entry),
+        telegram_webhook_path="/channels/telegram/webhook/{connector_id}",
+        telegram_public_base_url=shell.bridge_facade_service().telegram_public_base_url_getter(),
+        telegram_webhook_secret_configured=bool(shell.bridge_facade_service().telegram_configured_webhook_secret_getter()),
+        telegram_delivery_mode=shell.bridge_facade_service().telegram_delivery_mode_getter(),
+        whatsapp_snapshot=lambda: {"enabled": False, "connectors": {}},
+        whatsapp_list_entries=lambda: [],
+        resolve_whatsapp_profile=lambda _entry: {"id": "disabled", "status": "disabled"},
+        whatsapp_webhook_path="/channels/whatsapp/twilio/webhook",
+        whatsapp_public_base_url="",
+        whatsapp_webhook_secret_configured=False,
+    )
+    return status_service.telegram_status_payload()
+
+
+def _workspace_telegram_connector_options(owner_workspace_id: str) -> List[Dict[str, Any]]:
+    shell = _autopilot_connector_shell_service()
+    shell.runtime_facade_service().init_runtime()
+    state_service = shell.telegram_service_registry().telegram_autopilot_state_service()
+    raw_entries = state_service.list_connector_entries(owner_workspace_id)
+    raw_by_id = {
+        _normalize_text(item.get("id")): item
+        for item in raw_entries
+        if _normalize_text(item.get("id"))
+    }
+    status_payload = _workspace_telegram_status_payload(owner_workspace_id)
+    options: List[Dict[str, Any]] = []
+    for item in _coerce_list(status_payload.get("connectors")):
+        status_item = _coerce_dict(item)
+        connector_id = _normalize_text(status_item.get("id"))
+        if not connector_id:
+            continue
+        options.append(_telegram_connector_projection(raw_by_id.get(connector_id, {}), status_item))
+    return options
 
 
 def _config_from_record(
@@ -1244,6 +1411,7 @@ async def mirror_deployed_agent_to_backing_specialist(
         "health_safety_assistant_name": config.safety_policy.assistant_name,
         "context_budget_preset": config.memory_policy.context_budget_preset,
         "retention_preset": config.memory_policy.retention_preset,
+        "selected_tool_ids": list(config.tool_policy.enabled_tools or []),
         "escalation_preset": config.escalation_policy.preset,
         "handoff_mode": config.escalation_policy.handoff_mode,
         "owner_notification_destination": config.escalation_policy.owner_notification_destination,
@@ -1256,6 +1424,7 @@ async def mirror_deployed_agent_to_backing_specialist(
         updated_by_user_id=updated_by_user_id,
         runtime_profile_id=str(install.get("runtime_profile_id") or "").strip() or None,
         runtime_mode=_runtime_target_to_specialist_mode(runtime_target),
+        tool_toggles=_tool_toggles_from_config(config),
         connector_bindings=dict(install.get("connector_bindings") or {}),
         channel_bindings=channels,
         metadata=metadata,
@@ -1295,6 +1464,10 @@ async def create_draft_deployed_agent(
     if not normalized_name:
         raise ValueError("name is required.")
     workspace_defaults = _workspace_admin_defaults(workspace)
+    normalized_channels = await _enrich_deployed_agent_channels(
+        owner_workspace_id=resolved_workspace_id,
+        channels=channels,
+    )
     draft_config = _apply_provider_model_selection_to_config(
         _apply_workspace_admin_defaults_to_config(
             _config_from_record(
@@ -1303,7 +1476,7 @@ async def create_draft_deployed_agent(
                     "avatar": avatar,
                     "persona": persona,
                     "system_prompt": system_prompt,
-                    "channels": channels,
+                    "channels": normalized_channels,
                     "knowledge_sources": _normalize_knowledge_sources(knowledge_sources),
                     "runtime_target": runtime_target,
                     "billing_plan": billing_plan,
@@ -1338,6 +1511,7 @@ async def create_draft_deployed_agent(
         label=draft_config.name,
         runtime_profile_id=_normalize_optional_text(runtime_profile_id),
         runtime_mode=_runtime_target_to_specialist_mode(draft_config.runtime_target),
+        tool_toggles=_tool_toggles_from_config(draft_config),
         channel_bindings=_channels_payload_from_config(draft_config),
         metadata={
             **_metadata_from_config(draft_config),
@@ -1445,6 +1619,223 @@ async def get_deployed_agent_detail(
     }
 
 
+async def get_deployed_agent_telegram_readiness(
+    *,
+    current_user: Optional[Dict[str, Any]],
+    owner_workspace_id: str,
+    deployed_agent_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    resolved_workspace_id = require_deployed_agent_admin_access(
+        current_user=current_user,
+        workspace_id=owner_workspace_id,
+    )
+    workspace = await control_plane_repository.get_workspace_by_id(resolved_workspace_id)
+    if not isinstance(workspace, dict):
+        raise _http_bad_request("Workspace is unavailable.")
+    tenant_id = _normalize_text(workspace.get("tenant_id"))
+    deployed_agent: Optional[Dict[str, Any]] = None
+    if _normalize_optional_text(deployed_agent_id):
+        deployed_agent = await control_plane_repository.get_deployed_agent_by_id(
+            _normalize_text(deployed_agent_id),
+            tenant_id=tenant_id,
+            owner_workspace_id=resolved_workspace_id,
+        )
+        if not isinstance(deployed_agent, dict):
+            raise _http_bad_request("Deployed agent is unavailable.")
+
+    status_payload = _workspace_telegram_status_payload(resolved_workspace_id)
+    connector_options = _workspace_telegram_connector_options(resolved_workspace_id)
+    connectors_by_id = {
+        _normalize_text(item.get("id")): item
+        for item in connector_options
+        if _normalize_text(item.get("id"))
+    }
+    config = _config_from_record(deployed_agent or {})
+    channels = _normalize_channels((deployed_agent or {}).get("channels") or {})
+    telegram_binding = _coerce_dict(channels.get("telegram"))
+    telegram_enabled = bool(telegram_binding.get("enabled"))
+    selected_connector_id = _normalize_optional_text(
+        telegram_binding.get("connector_id")
+        or telegram_binding.get("credential_id")
+    )
+    selected_connector = connectors_by_id.get(selected_connector_id or "") if selected_connector_id else None
+    webhook = _coerce_dict(status_payload.get("webhook"))
+
+    blockers: List[Dict[str, Any]] = []
+    warnings: List[Dict[str, Any]] = []
+
+    webhook_status = _normalize_text(webhook.get("status")).lower()
+    if webhook_status and webhook_status != "live":
+        blockers.append(
+            _studio_issue(
+                code=_normalize_text(webhook.get("issue_code"), default="telegram_webhook_not_ready"),
+                message=_normalize_text(webhook.get("issue"), default="Telegram webhook delivery is not ready."),
+                guidance=_normalize_optional_text(webhook.get("guidance")),
+            )
+        )
+
+    for issue in _coerce_list(status_payload.get("issues")):
+        payload = _coerce_dict(issue)
+        severity = _normalize_text(payload.get("severity")).lower()
+        target = blockers if severity == "setup_needed" else warnings
+        target.append(
+            _studio_issue(
+                code=_normalize_text(payload.get("code"), default="telegram_status_issue"),
+                message=_normalize_text(payload.get("message"), default="Telegram status issue"),
+                severity="blocker" if severity == "setup_needed" else "warning",
+            )
+        )
+
+    if telegram_enabled:
+        if len(config.tool_policy.enabled_tools or []) == 0:
+            blockers.append(
+                _studio_issue(
+                    code="studio_tool_scope_required",
+                    message="Select at least one allowed tool before deploying this Telegram specialist.",
+                    guidance="Open the Launch step and choose the smallest tool scope this specialist needs.",
+                )
+            )
+        if not selected_connector_id:
+            blockers.append(
+                _studio_issue(
+                    code="telegram_connector_required",
+                    message="Select a Telegram bot connector before deploying this specialist.",
+                    guidance="Open the Channels step and bind one of the workspace-visible Telegram connectors.",
+                )
+            )
+        elif not isinstance(selected_connector, dict):
+            blockers.append(
+                _studio_issue(
+                    code="telegram_connector_unavailable",
+                    message="The selected Telegram connector is not available for this workspace.",
+                    guidance="Choose a different connector or recreate the missing Telegram bot connector.",
+                )
+            )
+        if selected_connector_id and not bool(telegram_binding.get("is_inbound_owner")):
+            blockers.append(
+                _studio_issue(
+                    code="telegram_inbound_owner_missing",
+                    message="Telegram inbound ownership is not bound to this specialist yet.",
+                    guidance="Save the deployment again after choosing a Telegram connector so Studio can claim inbound ownership automatically.",
+                )
+            )
+        if selected_connector_id and not _normalize_optional_text(telegram_binding.get("endpoint_key")):
+            blockers.append(
+                _studio_issue(
+                    code="telegram_endpoint_key_missing",
+                    message="Telegram routing is missing the inbound endpoint key for this specialist.",
+                    guidance="Re-save the deployment after choosing a Telegram connector so Studio can derive the inbound endpoint key.",
+                )
+            )
+    elif deployed_agent is not None:
+        warnings.append(
+            _studio_issue(
+                code="telegram_disabled",
+                message="Telegram is disabled for this specialist, so deploy will stay unavailable.",
+                guidance="Enable Telegram in the Channels step when the specialist is ready for customer traffic.",
+                severity="warning",
+            )
+        )
+
+    if isinstance(selected_connector, dict):
+        if _normalize_text(selected_connector.get("profile_status")).lower() == "setup_needed":
+            blockers.append(
+                _studio_issue(
+                    code=_normalize_text(selected_connector.get("profile_issue_code"), default="telegram_connector_profile_setup_needed"),
+                    message=_normalize_text(selected_connector.get("profile_issue"), default="The selected Telegram connector profile needs setup."),
+                )
+            )
+        elif _normalize_optional_text(selected_connector.get("profile_issue")):
+            warnings.append(
+                _studio_issue(
+                    code=_normalize_text(selected_connector.get("profile_issue_code"), default="telegram_connector_profile_warning"),
+                    message=_normalize_text(selected_connector.get("profile_issue"), default="The selected Telegram connector profile is degraded."),
+                    severity="warning",
+                )
+            )
+        if _normalize_optional_text(selected_connector.get("last_error")):
+            warnings.append(
+                _studio_issue(
+                    code=_normalize_text(selected_connector.get("last_error_category"), default="telegram_connector_last_error"),
+                    message=_normalize_text(selected_connector.get("last_error"), default="The selected Telegram connector reported a recent runtime error."),
+                    severity="warning",
+                )
+            )
+
+    configured_binding = {
+        "enabled": telegram_enabled,
+        "connector_id": selected_connector_id,
+        "credential_id": _normalize_optional_text(telegram_binding.get("credential_id")),
+        "endpoint_key": _normalize_optional_text(telegram_binding.get("endpoint_key")),
+        "is_inbound_owner": bool(telegram_binding.get("is_inbound_owner")),
+        "bot_username": _normalize_optional_text(telegram_binding.get("bot_username"))
+        or _normalize_optional_text((selected_connector or {}).get("bot_username")),
+        "webhook_path": _normalize_optional_text(telegram_binding.get("webhook_path"))
+        or _normalize_optional_text((selected_connector or {}).get("webhook_path")),
+        "webhook_url": _normalize_optional_text((selected_connector or {}).get("webhook_url")),
+        "label": _normalize_optional_text((selected_connector or {}).get("label")),
+    }
+    ready_for_live = telegram_enabled and len(blockers) == 0 and isinstance(selected_connector, dict)
+    status = "ready" if ready_for_live else ("setup_needed" if blockers else "draft")
+    return {
+        "channel": "telegram",
+        "workspace_id": resolved_workspace_id,
+        "deployed_agent_id": _normalize_optional_text((deployed_agent or {}).get("id")),
+        "ready_for_live": ready_for_live,
+        "status": status,
+        "blockers": blockers,
+        "warnings": warnings,
+        "next_action": _studio_next_action(
+            telegram_enabled=telegram_enabled,
+            blockers=blockers,
+            connector_options=connector_options,
+        ),
+        "configured_binding": configured_binding,
+        "tool_scope": {
+            "selected_tool_ids": list(config.tool_policy.enabled_tools or []),
+            "catalog": [dict(item) for item in _STUDIO_TOOL_SCOPE_CATALOG],
+        },
+        "connectors": connector_options,
+        "webhook": webhook,
+        "autopilot": _coerce_dict(status_payload.get("autopilot")),
+        "whatsapp": dict(_STUDIO_WHATSAPP_STATUS),
+    }
+
+
+async def _enrich_deployed_agent_channels(
+    *,
+    owner_workspace_id: str,
+    channels: Any,
+) -> Dict[str, Dict[str, Any]]:
+    normalized = _normalize_channels(channels)
+    telegram_binding = _coerce_dict(normalized.get("telegram"))
+    if not bool(telegram_binding.get("enabled")):
+        return normalized
+    connector_id = _normalize_optional_text(
+        telegram_binding.get("connector_id")
+        or telegram_binding.get("credential_id")
+    )
+    if not connector_id:
+        return normalized
+    connector_options = _workspace_telegram_connector_options(owner_workspace_id)
+    selected = next((item for item in connector_options if _normalize_text(item.get("id")) == connector_id), None)
+    if not isinstance(selected, dict):
+        raise ValueError("The selected Telegram connector is not available for this workspace.")
+    webhook = _coerce_dict(_workspace_telegram_status_payload(owner_workspace_id).get("webhook"))
+    normalized["telegram"] = {
+        **telegram_binding,
+        "enabled": True,
+        "connector_id": connector_id,
+        "credential_id": _normalize_optional_text(selected.get("credential_id")) or connector_id,
+        "endpoint_key": _normalize_optional_text(selected.get("endpoint_key")),
+        "is_inbound_owner": True,
+        "webhook_path": _normalize_optional_text(selected.get("webhook_path")),
+        "bot_username": _normalize_optional_text(selected.get("bot_username")),
+        "delivery_mode": _normalize_optional_text(webhook.get("delivery_mode")),
+    }
+    return normalized
+
+
 async def list_deployed_agent_analytics(
     *,
     current_user: Optional[Dict[str, Any]],
@@ -1534,7 +1925,10 @@ async def update_deployed_agent(
         candidate_record["system_prompt"] = _normalize_text(updates.get("system_prompt"))
     if "channels" in updates:
         try:
-            candidate_record["channels"] = _normalize_channels(updates.get("channels"))
+            candidate_record["channels"] = await _enrich_deployed_agent_channels(
+                owner_workspace_id=resolved_workspace_id,
+                channels=updates.get("channels"),
+            )
         except ValueError as error:
             raise _http_bad_request(str(error)) from error
     if "knowledge_sources" in updates:
@@ -1652,6 +2046,19 @@ async def deploy_deployed_agent(
         raise _http_conflict(str(error)) from error
     channels = _normalize_channels(existing.get("channels") or {})
     allowed_live_channels = _allowed_live_channels_for_workspace(workspace)
+    readiness = await get_deployed_agent_telegram_readiness(
+        current_user=current_user,
+        owner_workspace_id=resolved_workspace_id,
+        deployed_agent_id=deployed_agent_id,
+    )
+    if readiness.get("ready_for_live") is not True:
+        blockers = _coerce_list(readiness.get("blockers"))
+        next_action = _normalize_optional_text(readiness.get("next_action"))
+        first = _coerce_dict(blockers[0]) if blockers else {}
+        detail = _normalize_optional_text(first.get("message")) or "Telegram launch readiness is incomplete."
+        if next_action:
+            detail = f"{detail} {next_action}"
+        raise _http_conflict(detail)
     try:
         _require_live_channel_configuration(
             channels,

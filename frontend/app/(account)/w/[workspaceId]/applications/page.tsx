@@ -1,4 +1,4 @@
-import { WorkspaceSurfacePage } from '@/app/(account)/w/[workspaceId]/WorkspaceSurfacePage';
+import { permanentRedirect } from 'next/navigation';
 
 export default async function WorkspaceApplicationsPage({
   params,
@@ -6,5 +6,5 @@ export default async function WorkspaceApplicationsPage({
   params: Promise<{ workspaceId: string }>;
 }) {
   const { workspaceId } = await params;
-  return <WorkspaceSurfacePage workspaceId={workspaceId} surface="applications" />;
+  permanentRedirect(`/w/${encodeURIComponent(workspaceId)}/deploy`);
 }

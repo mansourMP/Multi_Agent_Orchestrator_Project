@@ -1,4 +1,4 @@
-import { WorkspaceSurfacePage } from '@/app/(account)/w/[workspaceId]/WorkspaceSurfacePage';
+import { permanentRedirect } from 'next/navigation';
 
 export default async function WorkspaceAdminPlatformPage({
   params,
@@ -6,5 +6,5 @@ export default async function WorkspaceAdminPlatformPage({
   params: Promise<{ workspaceId: string }>;
 }) {
   const { workspaceId } = await params;
-  return <WorkspaceSurfacePage workspaceId={workspaceId} surface="admin/platform" />;
+  permanentRedirect(`/w/${encodeURIComponent(workspaceId)}/settings`);
 }

@@ -77,6 +77,38 @@ class TelegramAutopilotStateService:
         )
         state = payload.get("state") if isinstance(payload.get("state"), dict) else {}
         connectors = state.get("connectors") if isinstance(state.get("connectors"), dict) else {}
+        reconciled_connectors = dict(connectors)
+        changed = False
+        for item in self.load_vault().get("credentials", []):
+            if not isinstance(item, dict):
+                continue
+            if str(item.get("provider") or "").strip().lower() != "telegram_bot":
+                continue
+            connector_id = str(item.get("id") or "").strip()
+            if not connector_id:
+                continue
+            explicit_workspace_id = str(self.normalize_workspace_id(item.get("workspace_id")) or "").strip()
+            if not explicit_workspace_id or explicit_workspace_id == "default":
+                continue
+            current_state = reconciled_connectors.get(connector_id)
+            state_patch = dict(current_state) if isinstance(current_state, dict) else {}
+            current_workspace_id = str(self.normalize_workspace_id(state_patch.get("workspace_id")) or "").strip()
+            if current_workspace_id != explicit_workspace_id:
+                state_patch["workspace_id"] = explicit_workspace_id
+                if "not scoped to an explicit workspace" in str(state_patch.get("last_error") or ""):
+                    state_patch["last_error"] = None
+                    state_patch["last_error_category"] = None
+                    state_patch["last_error_at"] = None
+                changed = True
+            if not str(state_patch.get("label") or "").strip():
+                state_patch["label"] = str(item.get("label") or connector_id).strip() or connector_id
+                changed = True
+            reconciled_connectors[connector_id] = state_patch
+        if changed:
+            state["connectors"] = reconciled_connectors
+            payload["state"] = state
+            self.write_json(self.state_file, payload)
+        connectors = reconciled_connectors
         with self.lock:
             self.state["connectors"] = connectors
             self.state["processed_updates"] = int(state.get("processed_updates") or 0)

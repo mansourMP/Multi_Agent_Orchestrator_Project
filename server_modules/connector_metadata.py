@@ -139,6 +139,15 @@ def _provider_public_metadata(provider: str, credentials: Dict[str, Any]) -> Dic
     auth_mode = str(credentials.get("auth_mode") or credentials.get("authMode") or "").strip().lower()
     if auth_mode:
         public["auth_mode"] = auth_mode
+    for key in ("api_key", "oauth_token", "access_token", "token"):
+        raw_secret = str(credentials.get(key) or "").strip()
+        if not raw_secret:
+            continue
+        if raw_secret.lower().startswith("bearer "):
+            raw_secret = raw_secret[7:].strip()
+        if raw_secret:
+            public["credential_last4"] = raw_secret[-4:] if len(raw_secret) >= 4 else raw_secret
+            break
     if provider_id == "vertex":
         project_id = str(credentials.get("project_id") or "").strip()
         location = str(credentials.get("location") or "").strip()

@@ -145,12 +145,20 @@ def _run_sync(
 
 
 async def _require_pool(*, operation: str) -> Any:
-    pool = await runtime_db.get_pool()
-    if pool is None:
-        raise RunStatePersistenceError(
-            f"Postgres pool unavailable during {operation}; refusing to continue with non-durable run state"
-        )
-    return pool
+    try:
+        return await runtime_db.require_durable_pool(operation=operation)
+    except runtime_db.DurableRuntimeConfigurationError as exc:
+        raise RunStatePersistenceError(str(exc)) from exc
+
+
+async def _read_pool(*, operation: str) -> Any:
+    if runtime_db.durable_runtime_required():
+        return await _require_pool(operation=operation)
+    return await runtime_db.get_pool()
+
+
+def _sync_raise_on_read_failure() -> bool:
+    return runtime_db.durable_runtime_required()
 
 
 def _json_payload(value: Any) -> str:
@@ -600,7 +608,7 @@ async def get_live_run(run_id: str) -> Optional[Dict[str, Any]]:
     token = str(run_id or "").strip()
     if not token:
         return None
-    pool = await runtime_db.get_pool()
+    pool = await _read_pool(operation="get_live_run")
     if pool is not None:
         try:
             await _ensure_live_run_tables(pool)
@@ -624,7 +632,7 @@ async def get_archived_run(run_id: str) -> Optional[Dict[str, Any]]:
     token = str(run_id or "").strip()
     if not token:
         return None
-    pool = await runtime_db.get_pool()
+    pool = await _read_pool(operation="get_archived_run")
     if pool is None:
         return None
     try:
@@ -675,7 +683,7 @@ async def delete_live_run(run_id: str) -> None:
 
 
 async def list_live_runs() -> list[Dict[str, Any]]:
-    pool = await runtime_db.get_pool()
+    pool = await _read_pool(operation="list_live_runs")
     if pool is None:
         return []
     try:
@@ -703,7 +711,7 @@ async def list_live_runs_page(
     workspace_id: Optional[str] = None,
     states: Optional[list[str]] = None,
 ) -> list[Dict[str, Any]]:
-    pool = await runtime_db.get_pool()
+    pool = await _read_pool(operation="list_live_runs_page")
     if pool is None:
         return []
     workspace_filter = str(workspace_id or "").strip()
@@ -736,7 +744,7 @@ async def count_live_runs(
     workspace_id: Optional[str] = None,
     states: Optional[list[str]] = None,
 ) -> int:
-    pool = await runtime_db.get_pool()
+    pool = await _read_pool(operation="count_live_runs")
     if pool is None:
         return 0
     workspace_filter = str(workspace_id or "").strip()
@@ -769,7 +777,7 @@ async def count_hosted_live_runs(
     workspace_filter = str(workspace_id or "").strip()
     if not workspace_filter:
         return 0
-    pool = await runtime_db.get_pool()
+    pool = await _read_pool(operation="count_hosted_live_runs")
     if pool is None:
         return 0
     normalized_terminal_states = [
@@ -806,7 +814,7 @@ async def list_live_runs_by_state(states: list[str]) -> list[Dict[str, Any]]:
     normalized_states = [str(state or "").strip().lower() for state in (states or []) if str(state or "").strip()]
     if not normalized_states:
         return await list_live_runs()
-    pool = await runtime_db.get_pool()
+    pool = await _read_pool(operation="list_live_runs_by_state")
     if pool is None:
         return []
     try:
@@ -830,7 +838,7 @@ async def list_live_runs_by_state(states: list[str]) -> list[Dict[str, Any]]:
 
 
 async def list_run_archive(limit: int = 200) -> list[Dict[str, Any]]:
-    pool = await runtime_db.get_pool()
+    pool = await _read_pool(operation="list_run_archive")
     if pool is None:
         return []
     try:
@@ -866,7 +874,7 @@ async def find_live_run_by_approval_id(approval_id: str) -> Optional[Dict[str, A
     approval_token = str(approval_id or "").strip()
     if not approval_token:
         return None
-    pool = await runtime_db.get_pool()
+    pool = await _read_pool(operation="find_live_run_by_approval_id")
     if pool is None:
         return None
     try:
@@ -1154,7 +1162,7 @@ async def append_local_queue_dead_letter(
 
 
 async def get_local_queue_dead_letter_status() -> Dict[str, Any]:
-    pool = await runtime_db.get_pool()
+    pool = await _read_pool(operation="get_local_queue_dead_letter_status")
     if pool is None:
         return {
             "dead_letter_count": 0,
@@ -1312,7 +1320,7 @@ async def get_fleet_worker(worker_id: str) -> Optional[Dict[str, Any]]:
     token = str(worker_id or "").strip()
     if not token:
         return None
-    pool = await runtime_db.get_pool()
+    pool = await _read_pool(operation="get_fleet_worker")
     if pool is None:
         return None
     try:
@@ -1364,7 +1372,7 @@ async def list_fleet_workers(
     tenant_id: Optional[str] = None,
     workspace_id: Optional[str] = None,
 ) -> list[Dict[str, Any]]:
-    pool = await runtime_db.get_pool()
+    pool = await _read_pool(operation="list_fleet_workers")
     if pool is None:
         return []
     tenant_filter = str(tenant_id or "").strip()
@@ -1496,7 +1504,7 @@ async def list_fleet_queue_partitions(
     tenant_id: Optional[str] = None,
     workspace_id: Optional[str] = None,
 ) -> list[Dict[str, Any]]:
-    pool = await runtime_db.get_pool()
+    pool = await _read_pool(operation="list_fleet_queue_partitions")
     if pool is None:
         return []
     tenant_filter = str(tenant_id or "").strip()
@@ -1848,7 +1856,7 @@ async def create_or_update_approval_request(
 
 
 async def list_pending_approvals(limit: int = 100) -> list[Dict[str, Any]]:
-    pool = await runtime_db.get_pool()
+    pool = await _read_pool(operation="list_pending_approvals")
     if pool is None:
         return []
     try:
@@ -1876,7 +1884,7 @@ async def list_pending_approvals_page(
     offset: int = 0,
     workspace_id: Optional[str] = None,
 ) -> list[Dict[str, Any]]:
-    pool = await runtime_db.get_pool()
+    pool = await _read_pool(operation="list_pending_approvals_page")
     if pool is None:
         return []
     workspace_filter = str(workspace_id or "").strip()
@@ -1907,7 +1915,7 @@ async def get_approval_record(approval_id: str) -> Optional[Dict[str, Any]]:
     approval_token = str(approval_id or "").strip()
     if not approval_token:
         return None
-    pool = await runtime_db.get_pool()
+    pool = await _read_pool(operation="get_approval_record")
     if pool is None:
         return None
     try:
@@ -2317,7 +2325,7 @@ async def list_undelivered_outbox_events(
     older_than_seconds: int = 30,
     limit: int = 200,
 ) -> list[Dict[str, Any]]:
-    pool = await runtime_db.get_pool()
+    pool = await _read_pool(operation="list_undelivered_outbox_events")
     if pool is None:
         return []
     try:
@@ -2370,7 +2378,7 @@ async def claim_due_outbox_events(
     claim_ttl_seconds: int = 30,
 ) -> list[Dict[str, Any]]:
     claimed_by_token = str(claimed_by or "").strip() or "outbox-delivery"
-    pool = await runtime_db.get_pool()
+    pool = await _read_pool(operation="claim_due_outbox_events")
     if pool is None:
         return []
     try:
@@ -2555,7 +2563,7 @@ async def list_poisoned_outbox_events(
     *,
     limit: int = 200,
 ) -> list[Dict[str, Any]]:
-    pool = await runtime_db.get_pool()
+    pool = await _read_pool(operation="list_poisoned_outbox_events")
     if pool is None:
         return []
     try:
@@ -2599,7 +2607,7 @@ async def list_poisoned_outbox_events(
 
 
 async def get_outbox_delivery_status() -> Dict[str, Any]:
-    pool = await runtime_db.get_pool()
+    pool = await _read_pool(operation="get_outbox_delivery_status")
     if pool is None:
         return {
             "undelivered_count": 0,
@@ -2681,7 +2689,7 @@ async def get_outbox_delivery_status() -> Dict[str, Any]:
 
 
 async def list_expired_local_claims() -> list[Dict[str, Any]]:
-    pool = await runtime_db.get_pool()
+    pool = await _read_pool(operation="list_expired_local_claims")
     if pool is None:
         return []
     try:
@@ -2809,7 +2817,12 @@ def sync_archive_run(run_id: str, final_state: str, payload: Dict[str, Any], tra
 
 
 def sync_list_live_runs() -> list[Dict[str, Any]]:
-    return _run_sync(lambda: list_live_runs(), operation="sync_list_live_runs", fallback=[])
+    return _run_sync(
+        lambda: list_live_runs(),
+        operation="sync_list_live_runs",
+        fallback=[],
+        raise_on_error=_sync_raise_on_read_failure(),
+    )
 
 
 def sync_list_live_runs_page(
@@ -2823,6 +2836,7 @@ def sync_list_live_runs_page(
         lambda: list_live_runs_page(limit=limit, offset=offset, workspace_id=workspace_id, states=states),
         operation="sync_list_live_runs_page",
         fallback=[],
+        raise_on_error=_sync_raise_on_read_failure(),
     )
 
 
@@ -2835,6 +2849,7 @@ def sync_count_live_runs(
         lambda: count_live_runs(workspace_id=workspace_id, states=states),
         operation="sync_count_live_runs",
         fallback=0,
+        raise_on_error=_sync_raise_on_read_failure(),
     )
 
 
@@ -2847,6 +2862,7 @@ def sync_count_hosted_live_runs(
         lambda: count_hosted_live_runs(workspace_id, terminal_states=terminal_states),
         operation="sync_count_hosted_live_runs",
         fallback=0,
+        raise_on_error=_sync_raise_on_read_failure(),
     )
 
 
@@ -2855,6 +2871,7 @@ def sync_get_live_run(run_id: str) -> Optional[Dict[str, Any]]:
         lambda: get_live_run(run_id),
         operation="sync_get_live_run",
         fallback=None,
+        raise_on_error=_sync_raise_on_read_failure(),
     )
 
 
@@ -2863,6 +2880,7 @@ def sync_get_archived_run(run_id: str) -> Optional[Dict[str, Any]]:
         lambda: get_archived_run(run_id),
         operation="sync_get_archived_run",
         fallback=None,
+        raise_on_error=_sync_raise_on_read_failure(),
     )
 
 
@@ -2871,6 +2889,7 @@ def sync_list_live_runs_by_state(states: list[str]) -> list[Dict[str, Any]]:
         lambda: list_live_runs_by_state(states),
         operation="sync_list_live_runs_by_state",
         fallback=[],
+        raise_on_error=_sync_raise_on_read_failure(),
     )
 
 
@@ -2879,6 +2898,7 @@ def sync_list_run_archive(limit: int = 200) -> list[Dict[str, Any]]:
         lambda: list_run_archive(limit),
         operation="sync_list_run_archive",
         fallback=[],
+        raise_on_error=_sync_raise_on_read_failure(),
     )
 
 
@@ -2887,6 +2907,7 @@ def sync_find_live_run_by_approval_id(approval_id: str) -> Optional[Dict[str, An
         lambda: find_live_run_by_approval_id(approval_id),
         operation="sync_find_live_run_by_approval_id",
         fallback=None,
+        raise_on_error=_sync_raise_on_read_failure(),
     )
 
 
@@ -2921,6 +2942,7 @@ def sync_list_pending_approvals(limit: int = 100) -> list[Dict[str, Any]]:
         lambda: list_pending_approvals(limit),
         operation="sync_list_pending_approvals",
         fallback=[],
+        raise_on_error=_sync_raise_on_read_failure(),
     )
 
 
@@ -2934,6 +2956,7 @@ def sync_list_pending_approvals_page(
         lambda: list_pending_approvals_page(limit=limit, offset=offset, workspace_id=workspace_id),
         operation="sync_list_pending_approvals_page",
         fallback=[],
+        raise_on_error=_sync_raise_on_read_failure(),
     )
 
 
@@ -2942,6 +2965,7 @@ def sync_get_approval_record(approval_id: str) -> Optional[Dict[str, Any]]:
         lambda: get_approval_record(approval_id),
         operation="sync_get_approval_record",
         fallback=None,
+        raise_on_error=_sync_raise_on_read_failure(),
     )
 
 
@@ -2950,6 +2974,7 @@ def sync_find_run_snapshot_for_approval_id(approval_id: str) -> Optional[Dict[st
         lambda: find_run_snapshot_for_approval_id(approval_id),
         operation="sync_find_run_snapshot_for_approval_id",
         fallback=None,
+        raise_on_error=_sync_raise_on_read_failure(),
     )
 
 
@@ -3045,6 +3070,7 @@ def sync_list_undelivered_outbox_events(*, older_than_seconds: int = 30, limit: 
         lambda: list_undelivered_outbox_events(older_than_seconds=older_than_seconds, limit=limit),
         operation="sync_list_undelivered_outbox_events",
         fallback=[],
+        raise_on_error=_sync_raise_on_read_failure(),
     )
 
 
@@ -3064,6 +3090,7 @@ def sync_claim_due_outbox_events(
         ),
         operation="sync_claim_due_outbox_events",
         fallback=[],
+        raise_on_error=_sync_raise_on_read_failure(),
     )
 
 
@@ -3114,6 +3141,7 @@ def sync_list_poisoned_outbox_events(*, limit: int = 200) -> list[Dict[str, Any]
         lambda: list_poisoned_outbox_events(limit=limit),
         operation="sync_list_poisoned_outbox_events",
         fallback=[],
+        raise_on_error=_sync_raise_on_read_failure(),
     )
 
 
@@ -3131,6 +3159,7 @@ def sync_get_outbox_delivery_status() -> Dict[str, Any]:
             "max_retry_count": 0,
             "last_delivery_error": None,
         },
+        raise_on_error=_sync_raise_on_read_failure(),
     )
 
 
@@ -3139,6 +3168,7 @@ def sync_list_expired_local_claims() -> list[Dict[str, Any]]:
         lambda: list_expired_local_claims(),
         operation="sync_list_expired_local_claims",
         fallback=[],
+        raise_on_error=_sync_raise_on_read_failure(),
     )
 
 
@@ -3206,6 +3236,7 @@ def sync_get_local_queue_dead_letter_status() -> Dict[str, Any]:
             "workspace_hotspots": [],
             "specialist_hotspots": [],
         },
+        raise_on_error=_sync_raise_on_read_failure(),
     )
 
 
@@ -3223,6 +3254,7 @@ def sync_get_fleet_worker(worker_id: str) -> Optional[Dict[str, Any]]:
         lambda: get_fleet_worker(worker_id),
         operation="sync_get_fleet_worker",
         fallback=None,
+        raise_on_error=_sync_raise_on_read_failure(),
     )
 
 
@@ -3235,6 +3267,7 @@ def sync_list_fleet_workers(
         lambda: list_fleet_workers(tenant_id=tenant_id, workspace_id=workspace_id),
         operation="sync_list_fleet_workers",
         fallback=[],
+        raise_on_error=_sync_raise_on_read_failure(),
     )
 
 
@@ -3285,4 +3318,5 @@ def sync_list_fleet_queue_partitions(
         lambda: list_fleet_queue_partitions(tenant_id=tenant_id, workspace_id=workspace_id),
         operation="sync_list_fleet_queue_partitions",
         fallback=[],
+        raise_on_error=_sync_raise_on_read_failure(),
     )

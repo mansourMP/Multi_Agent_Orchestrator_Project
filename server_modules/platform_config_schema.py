@@ -40,6 +40,7 @@ class PlatformModelEntryConfig(BaseModel):
     context_window_tokens: Optional[int] = None
     supports_tools: bool = False
     supports_reasoning: bool = False
+    reasoning_levels: List[str] = Field(default_factory=list)
     local_self_hosted_compatible: bool = False
     capability_labels: List[str] = Field(default_factory=list)
 
@@ -181,6 +182,7 @@ def build_platform_provider_catalog_config(
                     "context_window_tokens": raw_entry.get("context_window_tokens"),
                     "supports_tools": bool(raw_entry.get("supports_tools")),
                     "supports_reasoning": bool(raw_entry.get("supports_reasoning")),
+                    "reasoning_levels": _token_list(raw_entry.get("reasoning_levels")),
                     "local_self_hosted_compatible": bool(raw_entry.get("local_self_hosted_compatible")),
                     "capability_labels": _token_list(raw_entry.get("capability_labels")),
                 }

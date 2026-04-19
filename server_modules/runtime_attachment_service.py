@@ -629,6 +629,24 @@ async def list_workspace_runtime_attachments(
             workspace_id=workspace_id,
         )
     )
+    if fleet_workers is None and not workers:
+        # Local dev often runs without durable fleet tables; fall back to the
+        # in-memory local queue view so the shell can still discover a healthy
+        # paired local companion.
+        try:
+            from server_modules import local_queue
+
+            local_workers_payload = local_queue.handle_get_local_workers_status()
+            local_workers = local_workers_payload.get("items") if isinstance(local_workers_payload, dict) else []
+            workers = [
+                dict(item)
+                for item in list(local_workers or [])
+                if isinstance(item, dict)
+                and str(item.get("tenant_id") or tenant_id).strip() == tenant_id
+                and str(item.get("workspace_id") or "").strip() == workspace_id
+            ]
+        except Exception:
+            workers = []
     snapshot_version = _runtime_inventory_snapshot_version(
         tenant_id=tenant_id,
         workspace_id=workspace_id,

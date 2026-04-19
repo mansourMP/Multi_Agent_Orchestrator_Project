@@ -99,6 +99,9 @@ async def db_health():
     return {
         "postgres": await runtime_db.postgres_health_status(),
         "sqlite": runtime_db.sqlite_health_status(),
+        "durable_required": runtime_db.durable_runtime_required(),
+        "durability_mode": runtime_db.durability_mode(),
+        "sqlite_fallback_allowed": runtime_db.sqlite_fallback_allowed(),
     }
 
 

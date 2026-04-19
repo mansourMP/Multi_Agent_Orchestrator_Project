@@ -157,7 +157,7 @@ class AutopilotConnectorShellService:
         return self._g("WHATSAPP_AUTOPILOT_LOCK") or threading.Lock()
 
     def _telegram_workspace_id(self) -> str:
-        return str(self._g("ORION_TELEGRAM_AUTOPILOT_WORKSPACE_ID") or "default")
+        return str(self._g("ORION_TELEGRAM_AUTOPILOT_WORKSPACE_ID") or "ws-1")
 
     def _whatsapp_workspace_id(self) -> str:
         return str(self._g("ORION_WHATSAPP_AUTOPILOT_WORKSPACE_ID") or "default")

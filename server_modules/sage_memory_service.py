@@ -12,21 +12,29 @@ from server_modules import workspace_context
 
 
 SAGE_MEMORY_CATEGORY_DEFINITIONS: dict[str, dict[str, str]] = {
-    "profile_fact": {
-        "label": "Profile facts",
-        "description": "Stable personal facts Sage should remember about you.",
+    "work_context": {
+        "label": "Work context",
+        "description": "Current projects, priorities, and work context Sage should keep in mind.",
     },
-    "active_context": {
-        "label": "Active work",
-        "description": "Current projects, priorities, or working context Sage should keep active.",
+    "personal_context": {
+        "label": "Personal context",
+        "description": "Important personal details Sage should remember about you.",
     },
-    "app_state": {
-        "label": "App state",
-        "description": "Structured service state Sage should remember across sessions.",
+    "top_of_mind": {
+        "label": "Top of mind",
+        "description": "What matters most right now.",
     },
-    "long_term_preference": {
-        "label": "Saved preferences",
-        "description": "Durable preferences Sage should carry forward by default.",
+    "brief_history": {
+        "label": "Brief history",
+        "description": "Short recent history that helps Sage keep continuity.",
+    },
+    "earlier_context": {
+        "label": "Earlier context",
+        "description": "Older context Sage may still need later.",
+    },
+    "long_term_background": {
+        "label": "Long-term background",
+        "description": "Durable background context Sage should carry forward.",
     },
 }
 

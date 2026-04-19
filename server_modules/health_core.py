@@ -150,9 +150,12 @@ def _database_runtime_snapshot() -> Dict[str, Any]:
     pools = getattr(runtime_db, "_POOLS_BY_LOOP", {}) or {}
     return {
         "dsn_configured": bool(runtime_db.configured_database_url()),
+        "durable_required": bool(runtime_db.durable_runtime_required()),
+        "durability_mode": runtime_db.durability_mode(),
         "postgres_pool_max_size": int(runtime_db.configured_postgres_pool_max_size()),
         "active_pool_count": len(pools),
         "sqlite_status": runtime_db.sqlite_health_status(),
+        "sqlite_fallback_allowed": bool(runtime_db.sqlite_fallback_allowed()),
         "measurement_scope": "live_since_process_start",
     }
 

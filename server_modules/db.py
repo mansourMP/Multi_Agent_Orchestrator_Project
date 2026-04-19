@@ -19,14 +19,68 @@ _POOL_INIT_FAILED = False
 _MISSING_DSN_LOGGED = False
 _ENV_DSN_LOADED = False
 _LOCAL_ENV_TOKENS = {"dev", "development", "local", "test", "testing"}
+_DURABLE_ENV_TOKENS = {"beta", "preview", "stage", "staging", "prod", "production"}
+
+
+class DurableRuntimeConfigurationError(RuntimeError):
+    """Raised when durable runtime state is required but Postgres is unavailable."""
 
 
 def _resolved_environment() -> str:
     return str(os.getenv("ORION_ENV") or os.getenv("ENV") or "").strip().lower()
 
 
+def _truthy_env(value: Any) -> bool:
+    return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
 def _allow_database_url_backfill() -> bool:
     return _resolved_environment() in _LOCAL_ENV_TOKENS
+
+
+def durable_runtime_required() -> bool:
+    if _truthy_env(os.getenv("ORION_REQUIRE_DURABLE_RUN_STATE")):
+        return True
+    if _truthy_env(os.getenv("ORION_MOBILE_BETA_ENABLED")):
+        return True
+    return _resolved_environment() in _DURABLE_ENV_TOKENS
+
+
+def durability_mode() -> str:
+    return "required" if durable_runtime_required() else "best_effort_local_dev"
+
+
+def sqlite_fallback_allowed() -> bool:
+    return not durable_runtime_required()
+
+
+def _required_pool_status(reason: str) -> str:
+    normalized = str(reason or "").strip().lower()
+    if normalized in {"missing_dsn", "missing_database_url"}:
+        return "required_unconfigured"
+    if normalized in {"driver_missing", "missing_driver"}:
+        return "required_driver_missing"
+    return "required_unreachable"
+
+
+def _pool_unavailable_message(*, operation: str, reason: str) -> str:
+    normalized_reason = str(reason or "").strip().lower() or "unavailable"
+    if durable_runtime_required():
+        if normalized_reason == "missing_dsn":
+            detail = "DATABASE_URL is not configured"
+        elif normalized_reason == "driver_missing":
+            detail = "asyncpg is not installed"
+        else:
+            detail = "Postgres is unreachable"
+        return (
+            f"Postgres is required for durable run state during {operation}; "
+            f"{detail}; refusing to continue with memory/SQLite fallback"
+        )
+    if normalized_reason == "missing_dsn":
+        return "DATABASE_URL not set or Postgres unavailable — local runtime remains memory/SQLite only"
+    if normalized_reason == "driver_missing":
+        return "asyncpg unavailable — local runtime remains memory/SQLite only"
+    return "Postgres unavailable — local runtime remains memory/SQLite only"
 
 
 def _load_database_url_from_backend_env() -> None:
@@ -72,6 +126,8 @@ def configured_postgres_pool_max_size() -> int:
 
 
 def sqlite_health_status() -> str:
+    if durable_runtime_required():
+        return "fallback_blocked"
     raw = str(os.getenv("ORION_RUNTIME_STATE_DB") or ".orion_runtime_state.db").strip()
     try:
         path = Path(raw).expanduser().resolve()
@@ -81,8 +137,26 @@ def sqlite_health_status() -> str:
 
 
 async def postgres_health_status() -> str:
+    database_url = configured_database_url()
+    if not database_url:
+        return _required_pool_status("missing_dsn") if durable_runtime_required() else "unavailable"
+    if asyncpg is None:
+        return _required_pool_status("driver_missing") if durable_runtime_required() else "unavailable"
     pool = await get_pool()
-    return "connected" if pool is not None else "unavailable"
+    if pool is not None:
+        return "connected"
+    return _required_pool_status("unreachable") if durable_runtime_required() else "unavailable"
+
+
+async def require_durable_pool(*, operation: str) -> Any:
+    pool = await get_pool()
+    if pool is not None:
+        return pool
+    if not configured_database_url():
+        raise DurableRuntimeConfigurationError(_pool_unavailable_message(operation=operation, reason="missing_dsn"))
+    if asyncpg is None:
+        raise DurableRuntimeConfigurationError(_pool_unavailable_message(operation=operation, reason="driver_missing"))
+    raise DurableRuntimeConfigurationError(_pool_unavailable_message(operation=operation, reason="unreachable"))
 
 
 async def get_pool() -> Any:
@@ -91,13 +165,17 @@ async def get_pool() -> Any:
     database_url = configured_database_url()
     if not database_url:
         if not _MISSING_DSN_LOGGED:
-            LOGGER.warning("WARNING: DATABASE_URL not set or Postgres unavailable — run state is memory/SQLite only")
+            LOGGER.error(_pool_unavailable_message(operation="runtime startup", reason="missing_dsn")) if durable_runtime_required() else LOGGER.warning(
+                _pool_unavailable_message(operation="runtime startup", reason="missing_dsn")
+            )
             _MISSING_DSN_LOGGED = True
         return None
 
     if asyncpg is None:
         if not _POOL_INIT_FAILED:
-            LOGGER.warning("WARNING: DATABASE_URL not set or Postgres unavailable — run state is memory/SQLite only")
+            LOGGER.error(_pool_unavailable_message(operation="runtime startup", reason="driver_missing")) if durable_runtime_required() else LOGGER.warning(
+                _pool_unavailable_message(operation="runtime startup", reason="driver_missing")
+            )
             _POOL_INIT_FAILED = True
         return None
 
@@ -143,7 +221,9 @@ async def get_pool() -> Any:
         return pool
     except Exception as exc:  # pragma: no cover - network/db dependent
         if not _POOL_INIT_FAILED:
-            LOGGER.warning("WARNING: DATABASE_URL not set or Postgres unavailable — run state is memory/SQLite only")
+            LOGGER.error(_pool_unavailable_message(operation="runtime startup", reason="unreachable")) if durable_runtime_required() else LOGGER.warning(
+                _pool_unavailable_message(operation="runtime startup", reason="unreachable")
+            )
             LOGGER.debug("Postgres pool initialization failure detail: %s", exc)
         _POOLS_BY_LOOP.pop(current_loop_key, None)
         _POOL_INIT_FAILED = True

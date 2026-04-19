@@ -28,8 +28,8 @@ MODEL_ALIASES = {
     "gpt-4.1-mini": "gpt-4.1-mini",
     "claude-sonnet": "anthropic/claude-3-5-sonnet-20241022",
     "claude-haiku": "anthropic/claude-3-haiku-20240307",
-    "gemini-flash": "gemini/gemini-1.5-flash",
-    "gemini-pro": "gemini/gemini-1.5-pro",
+    "gemini-flash": "gemini/gemini-2.5-flash",
+    "gemini-pro": "gemini/gemini-2.5-pro",
     "vertex-gemini-pro": "vertex_ai/gemini-1.5-pro",
 }
 ALLOWED_MESSAGE_ROLES = {"system", "user", "assistant", "tool"}

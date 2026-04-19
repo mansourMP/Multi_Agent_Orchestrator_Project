@@ -17,6 +17,7 @@ def load_workspace_context_payload(
 
     sections: List[str] = []
     semantic_hits: List[Dict[str, Any]] = []
+    mini_app_summary_count = 0
     try:
         context_files = read_workspace_context_files(
             workspace_id=workspace_id,
@@ -25,7 +26,7 @@ def load_workspace_context_payload(
     except Exception:
         context_files = {}
 
-    for filename in ("SOUL.md", "USER.md", "MEMORY.md"):
+    for filename in ("USER.md", "MEMORY.md"):
         content = str(context_files.get(filename) or "").strip()
         if content:
             sections.append(f"{filename}\n{content}")
@@ -71,25 +72,14 @@ def load_workspace_context_payload(
         if memory_block:
             sections.append(memory_block)
 
-    if not agent_install_id:
-        try:
-            from server_modules import sage_services_service
-
-            services_block = sage_services_service.build_sage_services_memory_block(
-                workspace_id=workspace_id,
-            )
-        except Exception:
-            services_block = ""
-        if services_block:
-            sections.append(services_block)
-
     return {
         "contextual_blocks": sections,
         "semantic_hits": semantic_hits,
         "diagnostics": {
-            "context_file_count": sum(1 for filename in ("SOUL.md", "USER.md", "MEMORY.md") if str(context_files.get(filename) or "").strip()),
+            "context_file_count": sum(1 for filename in ("USER.md", "MEMORY.md") if str(context_files.get(filename) or "").strip()),
             "recent_log_days": policy_profile.max_recent_log_days,
             "semantic_hit_count": len(semantic_hits),
+            "mini_app_summary_count": mini_app_summary_count,
         },
     }
 

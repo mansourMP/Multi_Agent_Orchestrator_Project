@@ -29,6 +29,7 @@ DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8787
 DEFAULT_RUNTIME_URL = "http://127.0.0.1:8001"
 DEFAULT_RUNTIME_KEY = "replace-with-strong-key"
+DEFAULT_TELEGRAM_WORKSPACE_ID = "ws-1"
 
 BOT_TOKEN_RE = r"^\d{6,}:[A-Za-z0-9_-]{20,}$"
 MAX_REQUEST_BYTES = 65536
@@ -344,6 +345,12 @@ def _action_telegram_rebind(runtime_key: str, payload: Dict[str, Any], runtime_u
     bot_token = str(payload.get("botToken") or "").strip()
     chat_id = str(payload.get("chatId") or "").strip()
     allow_any_chat = bool(payload.get("allowAnyChat"))
+    workspace_id = str(
+        payload.get("workspaceId")
+        or os.getenv("ORION_TELEGRAM_AUTOPILOT_WORKSPACE_ID")
+        or os.getenv("WORKSPACE_ID")
+        or DEFAULT_TELEGRAM_WORKSPACE_ID
+    ).strip() or DEFAULT_TELEGRAM_WORKSPACE_ID
 
     import re
 
@@ -359,7 +366,7 @@ def _action_telegram_rebind(runtime_key: str, payload: Dict[str, Any], runtime_u
     connector_payload: Dict[str, Any] = {
         "label": "Telegram Bot LIVE",
         "connector": "telegram_bot",
-        "workspace_id": "default",
+        "workspace_id": workspace_id,
         "credentials": {"bot_token": bot_token, "chat_id": chat_id},
         "metadata": {"allow_any_chat": True} if allow_any_chat else {},
     }
@@ -384,7 +391,7 @@ def _action_telegram_rebind(runtime_key: str, payload: Dict[str, Any], runtime_u
         method="POST",
         payload={
             "text": "[Empyralis probe] Daemon rebind complete. Reply here with: LIVE-OK",
-            "workspace_id": "default",
+            "workspace_id": workspace_id,
             "chat_id": chat_id,
         },
         runtime_url=runtime_url,

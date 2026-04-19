@@ -8,17 +8,18 @@ WORKER_ID="${WORKER_ID:-}"
 POLL_SECONDS="${ORION_LOCAL_WORKER_POLL_SECONDS:-3.0}"
 IDLE_HEARTBEAT_SECONDS="${ORION_LOCAL_WORKER_IDLE_HEARTBEAT_SECONDS:-15.0}"
 
-if [[ -z "${RUNTIME_KEY}" ]]; then
-  echo "Usage:"
-  echo "  RUNTIME_KEY='replace-with-strong-key' bash scripts/run_local_worker.sh"
-  echo "  or: bash scripts/run_local_worker.sh replace-with-strong-key"
-  exit 1
-fi
-
 cd "${ROOT_DIR}"
 if [[ -z "${WORKER_ID}" ]]; then
   HOST_ID="$(hostname | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9]+/-/g; s/^-+//; s/-+$//')"
   WORKER_ID="empyralis-local-${HOST_ID}"
+fi
+SESSION_FILE="${ROOT_DIR}/.orion-stack/runtime_sessions/${WORKER_ID}.json"
+
+if [[ -z "${RUNTIME_KEY}" && ! -f "${SESSION_FILE}" ]]; then
+  echo "Usage:"
+  echo "  RUNTIME_KEY='replace-with-strong-key' bash scripts/run_local_worker.sh"
+  echo "  or: bash scripts/run_local_worker.sh replace-with-strong-key"
+  exit 1
 fi
 
 PYTHON_BIN="${ROOT_DIR}/venv/bin/python"

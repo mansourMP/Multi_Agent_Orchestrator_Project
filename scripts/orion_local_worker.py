@@ -39,7 +39,7 @@ from orion_local_worker_utils import (
     collapse_duplicate_reply_sections,
     split_items,
 )
-from orion_local_worker_workspace import format_workspace_listing_reply
+from orion_local_worker_workspace import format_explicit_path_reply, format_workspace_listing_reply
 
 
 def utc_now_iso() -> str:
@@ -437,6 +437,10 @@ def build_pack_result(
         "yes",
         "on",
     }
+    explicit_path_reply = format_explicit_path_reply(goal)
+    if explicit_path_reply is not None:
+        return explicit_path_reply
+
     listing_reply = format_workspace_listing_reply(goal) if allow_workspace_listing_reply else None
     if listing_reply is not None:
         return listing_reply
@@ -665,9 +669,6 @@ def main() -> int:
             or os.getenv("CREW_API_KEY")
             or ""
         ).strip()
-    if not api_key and not enrollment_token:
-        print("Missing runtime API key or machine enrollment token.", file=sys.stderr)
-        return 2
 
     worker_id = (args.worker_id or "").strip()
     if not worker_id:
@@ -675,6 +676,9 @@ def main() -> int:
         worker_id = f"empyralis-local-{host}-{uuid.uuid4().hex[:6]}"
     client = RuntimeClient(base_url=args.runtime_url, api_key=api_key, enrollment_token=enrollment_token)
     client.load_runtime_session(worker_id)
+    if not api_key and not enrollment_token and not client.runtime_session_token:
+        print("Missing runtime API key, machine enrollment token, or saved runtime session.", file=sys.stderr)
+        return 2
     runtime_instance_id = client.runtime_instance_id or f"{socket.gethostname().split('.')[0]}:{os.getpid()}:{uuid.uuid4().hex[:8]}"
     verbose = not args.quiet
 
@@ -682,7 +686,10 @@ def main() -> int:
         print(f"Empyralis Local Worker v0")
         print(f"Runtime: {ensure_trailing_slashless(args.runtime_url)}")
         print(f"Worker:  {worker_id}")
-        print(f"Auth:    {'platform-relay bootstrap' if enrollment_token else 'runtime api key'}")
+        auth_mode = 'saved runtime session' if not api_key and not enrollment_token and client.runtime_session_token else (
+            'platform-relay bootstrap' if enrollment_token else 'runtime api key'
+        )
+        print(f"Auth:    {auth_mode}")
         print(f"Registered tools: {registered_local_worker_tool_names()}")
 
     try:

@@ -22,6 +22,7 @@ if runtime_is_up; then
   RUNTIME_WAS_UP=1
 fi
 ALLOW_ANY_CHAT="${ORION_TELEGRAM_AUTOPILOT_ALLOW_ANY_CHAT:-0}"
+WORKSPACE_ID_VALUE="${ORION_TELEGRAM_AUTOPILOT_WORKSPACE_ID:-${WORKSPACE_ID:-ws-1}}"
 
 BOT_TOKEN="${BOT_TOKEN:-}"
 if [[ -z "${BOT_TOKEN}" ]]; then
@@ -204,6 +205,7 @@ fi
 BODY="$(jq -nc \
   --arg token "${BOT_TOKEN}" \
   --arg chat_id "${CHAT_ID}" \
+  --arg workspace_id "${WORKSPACE_ID_VALUE}" \
   --arg allow_from "${ALLOW_FROM}" \
   '
   def allow_from_items:
@@ -214,7 +216,7 @@ BODY="$(jq -nc \
   {
     label: "Telegram Bot LIVE",
     connector: "telegram_bot",
-    workspace_id: "default",
+    workspace_id: $workspace_id,
     credentials: {bot_token: $token, chat_id: $chat_id},
     metadata: (if (allow_from_items | length) > 0 then {allow_from: allow_from_items} else {} end)
   }'

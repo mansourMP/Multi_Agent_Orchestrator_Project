@@ -110,6 +110,25 @@ control_plane_database_url() {
   default_control_plane_database_url
 }
 
+runtime_database_url() {
+  local raw="${DATABASE_URL:-}"
+  local trimmed
+  trimmed="$(printf "%s" "${raw}" | tr -d '[:space:]')"
+  if [[ -n "${trimmed}" ]]; then
+    printf "%s" "${trimmed}"
+    return
+  fi
+  if [[ -f "${ROOT_DIR}/backend/.env" ]]; then
+    local env_line
+    env_line="$(grep -E '^DATABASE_URL=' "${ROOT_DIR}/backend/.env" | tail -1 || true)"
+    if [[ -n "${env_line}" ]]; then
+      printf "%s" "${env_line#DATABASE_URL=}"
+      return
+    fi
+  fi
+  default_control_plane_database_url
+}
+
 EXISTING_RUNTIME_KEY="$(load_existing_runtime_key)"
 RUNTIME_KEY_RAW="${1:-${RUNTIME_KEY:-${EMPYRALIS_API_KEY:-${ORION_API_KEY:-${EXISTING_RUNTIME_KEY:-}}}}}"
 RUNTIME_KEY="$(printf "%s" "${RUNTIME_KEY_RAW}" | tr -d '[:space:]')"
@@ -558,6 +577,7 @@ start_runtime() {
   (
     export ORION_AUTH_REQUIRED=1
     export ORION_API_KEY="${RUNTIME_KEY}"
+    export DATABASE_URL="$(runtime_database_url)"
     export ORION_LOCAL_COMPANION_ENABLED=1
     export EMPYRALIS_TELEGRAM_AUTOPILOT_ENABLED="${TELEGRAM_AUTOPILOT_ENABLED}"
     export EMPYRALIS_TELEGRAM_AUTOPILOT_PROFILE="${TELEGRAM_AUTOPILOT_PROFILE}"

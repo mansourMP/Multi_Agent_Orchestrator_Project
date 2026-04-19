@@ -71,6 +71,7 @@ class TelegramIngressService:
         record_channel_event: Callable[..., Dict[str, Any] | None],
         guided_setup_handler: Callable[..., Dict[str, Any]],
         send_message: Callable[..., Any],
+        send_chat_action: Callable[..., Any],
         run_dispatch_service: Callable[[], Any],
         action_service: Callable[[], Any],
         run_action_service: Callable[[], Any],
@@ -98,6 +99,7 @@ class TelegramIngressService:
         self.record_channel_event = record_channel_event
         self.guided_setup_handler = guided_setup_handler
         self.send_message = send_message
+        self.send_chat_action = send_chat_action
         self.run_dispatch_service = run_dispatch_service
         self.action_service = action_service
         self.run_action_service = run_action_service
@@ -438,6 +440,9 @@ class TelegramIngressService:
             connector_id=connector_id,
             fallback=configured_chat_id,
         )
+        chat_id = str(envelope.get("chat_id") or "").strip()
+        if chat_id:
+            self.send_chat_action(bot_token, chat_id, action="typing")
         route_result = _route_inbound_channel_message(
             tenant_id=tenant_id,
             workspace_id=workspace_id,
@@ -460,6 +465,30 @@ class TelegramIngressService:
         route_status = str((route_result or {}).get("status") or "").strip().lower()
         route_run_id = str((route_result or {}).get("run_id") or "").strip()
         reply_text = str((route_result or {}).get("reply") or "").strip()
+        reply_markup = (route_result or {}).get("reply_markup") if isinstance((route_result or {}).get("reply_markup"), dict) else None
+        notices = [
+            dict(item)
+            for item in list((route_result or {}).get("notices") or [])
+            if isinstance(item, dict)
+        ]
+        for notice in notices:
+            notice_text = str(notice.get("text") or "").strip()
+            if not notice_text:
+                continue
+            self.send_message(
+                bot_token=bot_token,
+                chat_id=str(envelope.get("chat_id") or ""),
+                text=notice_text,
+                workspace_id=workspace_id,
+                action="quota_warning",
+                connector_id=connector_id,
+                parent_message_id=str(envelope.get("inbound_message_id") or "") or None,
+                profile=profile,
+                include_keyboard=False,
+                reply_markup=notice.get("reply_markup") if isinstance(notice.get("reply_markup"), dict) else None,
+                trace_id=str(envelope.get("trace_id") or "") or None,
+                source_event_id=str(envelope.get("source_event_id") or "") or None,
+            )
         if route_run_id and self._is_pending_durable_status(route_status):
             pending_message_id = self.send_message(
                 bot_token=bot_token,
@@ -472,6 +501,7 @@ class TelegramIngressService:
                 parent_message_id=str(envelope.get("inbound_message_id") or "") or None,
                 profile=profile,
                 include_keyboard=False,
+                reply_markup=reply_markup,
                 trace_id=str(envelope.get("trace_id") or "") or None,
                 source_event_id=str(envelope.get("source_event_id") or "") or None,
             )
@@ -505,6 +535,7 @@ class TelegramIngressService:
                 parent_message_id=str(envelope.get("inbound_message_id") or "") or None,
                 profile=profile,
                 include_keyboard=False,
+                reply_markup=reply_markup,
                 trace_id=str(envelope.get("trace_id") or "") or None,
                 source_event_id=str(envelope.get("source_event_id") or "") or None,
             )

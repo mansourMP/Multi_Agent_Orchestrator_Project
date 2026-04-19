@@ -441,6 +441,7 @@ class TelegramAutopilotServiceRegistry:
                 record_channel_event=self.record_channel_event,
                 guided_setup_handler=self.guided_setup_handler,
                 send_message=self.send_message,
+                send_chat_action=self.send_chat_action,
                 run_dispatch_service=lambda: self.telegram_run_dispatch_service(),
                 action_service=lambda: self.telegram_action_service(),
                 run_action_service=lambda: self.telegram_run_action_service(),

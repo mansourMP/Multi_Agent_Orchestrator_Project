@@ -76,3 +76,5 @@ dead_code_report.txt
 # Archive notes
 # backend/ is a legacy NestJS runtime era archive target. Keep tracked until final deletion.
 # desktop/ is a legacy Electron shell era archive target. Keep tracked until final deletion.
+
+.local-dev-state/

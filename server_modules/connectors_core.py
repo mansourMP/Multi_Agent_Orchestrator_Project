@@ -64,6 +64,7 @@ def _serialize_profile(profile: Dict[str, Any]) -> Dict[str, Any]:
         "failure_count": int(profile.get("failure_count", 0)),
         "created_at": profile.get("created_at"),
         "updated_at": profile.get("updated_at"),
+        "metadata": dict(profile.get("metadata") or {}) if isinstance(profile.get("metadata"), dict) else {},
     }
 
 async def list_provider_profiles(workspace_id: Optional[str] = None, provider: Optional[str] = None):
@@ -120,6 +121,7 @@ async def upsert_provider_profile(body: ProviderProfileUpsertRequest):
             "failure_count": int(existing.get("failure_count", 0)),
             "created_at": existing.get("created_at") or now,
             "updated_at": now,
+            "metadata": dict(body.metadata) if isinstance(body.metadata, dict) else dict(existing.get("metadata") or {}),
         }
         PROVIDER_PROFILES[profile_id] = profile
     _persist_provider_profiles()

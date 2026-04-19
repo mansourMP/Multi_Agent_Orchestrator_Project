@@ -253,8 +253,8 @@ PROVIDER_CATALOG = {
             {"id": "gemini_cli_oauth", "label": "Gemini CLI OAuth", "secret_required": False},
         ],
         "default_auth_mode": "api_key",
-        "default_model": "gemini-1.5-flash",
-        "models": ["gemini-1.5-flash", "gemini-1.5-pro", "gemini-2.0-flash"],
+        "default_model": "gemini-2.5-flash",
+        "models": ["gemini-2.5-flash", "gemini-2.5-pro", "gemini-2.0-flash", "gemini-1.5-flash", "gemini-1.5-pro"],
         "note": "Direct Gemini API key or Gemini CLI OAuth.",
     },
     "vertex": {
@@ -440,6 +440,7 @@ PROVIDER_MODEL_CATALOG = {
             "output_cost_per_1k_usd": 0.0,
             "supports_tools": True,
             "supports_reasoning": True,
+            "reasoning_levels": ["low", "medium", "high", "xhigh"],
             "capability_labels": ["Reasoning", "Codex", "High quality"],
         },
         "gpt-5.3-codex": {
@@ -449,6 +450,7 @@ PROVIDER_MODEL_CATALOG = {
             "output_cost_per_1k_usd": 0.0,
             "supports_tools": True,
             "supports_reasoning": True,
+            "reasoning_levels": ["low", "medium", "high", "xhigh"],
             "capability_labels": ["Reasoning", "Codex", "Engineering"],
         },
         "gpt-5.2": {
@@ -458,6 +460,7 @@ PROVIDER_MODEL_CATALOG = {
             "output_cost_per_1k_usd": 0.0,
             "supports_tools": True,
             "supports_reasoning": True,
+            "reasoning_levels": ["none", "low", "medium", "high", "xhigh"],
             "capability_labels": ["Reasoning", "Codex", "Balanced"],
         },
     },
@@ -491,6 +494,24 @@ PROVIDER_MODEL_CATALOG = {
         },
     },
     "gemini": {
+        "gemini-2.5-flash": {
+            "label": "Gemini 2.5 Flash",
+            "context_window_tokens": 1000000,
+            "input_cost_per_1k_usd": 0.0003,
+            "output_cost_per_1k_usd": 0.0025,
+            "supports_tools": True,
+            "supports_reasoning": True,
+            "capability_labels": ["Fast", "Reasoning", "Tools", "Multimodal"],
+        },
+        "gemini-2.5-pro": {
+            "label": "Gemini 2.5 Pro",
+            "context_window_tokens": 1000000,
+            "input_cost_per_1k_usd": 0.00125,
+            "output_cost_per_1k_usd": 0.01,
+            "supports_tools": True,
+            "supports_reasoning": True,
+            "capability_labels": ["Reasoning", "High quality", "Tools", "Multimodal"],
+        },
         "gemini-1.5-flash": {
             "label": "Gemini 1.5 Flash",
             "context_window_tokens": 1000000,
@@ -719,6 +740,11 @@ def provider_model_catalog(provider: Any) -> List[Dict[str, Any]]:
             for label in metadata.get("capability_labels", [])
             if str(label).strip()
         ]
+        reasoning_levels = [
+            str(level).strip().lower()
+            for level in metadata.get("reasoning_levels", [])
+            if str(level).strip()
+        ]
         if supports_tools and "Tools" not in capability_labels:
             capability_labels.append("Tools")
         if supports_reasoning and "Reasoning" not in capability_labels:
@@ -738,6 +764,7 @@ def provider_model_catalog(provider: Any) -> List[Dict[str, Any]]:
                 "pricing_registry_version": pricing_projection.get("pricing_registry_version"),
                 "supports_tools": supports_tools,
                 "supports_reasoning": supports_reasoning,
+                "reasoning_levels": reasoning_levels,
                 "local_self_hosted_compatible": bool(metadata.get("local_self_hosted_compatible") or governance.get("local_self_hosted_compatible")),
                 "capability_labels": capability_labels,
             }
@@ -2169,6 +2196,7 @@ def build_provider_runtime_truth(
             "failure_count": int(profile.get("failure_count", 0)),
             "created_at": profile.get("created_at"),
             "updated_at": profile.get("updated_at"),
+            "metadata": dict(profile.get("metadata") or {}) if isinstance(profile.get("metadata"), dict) else {},
         }
         items.append(item)
         profile_summary[health] += 1
@@ -2176,6 +2204,11 @@ def build_provider_runtime_truth(
 
         entry = _entry(provider_id)
         entry["profile_count"] += 1
+        current_priority = int(item.get("priority") or 100)
+        existing_priority = int(entry.get("selected_profile_priority") or 1000000)
+        if "selected_profile_priority" not in entry or current_priority <= existing_priority:
+            entry["profile_metadata"] = dict(item.get("metadata") or {}) if isinstance(item.get("metadata"), dict) else {}
+            entry["selected_profile_priority"] = current_priority
         if item["enabled"]:
             entry["enabled_profile_count"] += 1
         else:

@@ -1,13 +1,17 @@
 from __future__ import annotations
 
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from fastapi import HTTPException
 
 from server_modules import auth as auth_module
+from server_modules import connectors_actions
+from server_modules import connectors_core
 from server_modules import control_plane_repository
 from server_modules import platform_analytics_service
+from server_modules import provider_profiles as provider_profiles_service
 from server_modules import workspace_config_schema
+from server_modules.runtime_models import CredentialUpsertRequest, ProviderProfileUpsertRequest
 from server_modules.workspace_bootstrap_service import build_workspace_bootstrap
 from server_modules.workspace_channel_operations_service import (
     build_workspace_channel_operations,
@@ -38,6 +42,337 @@ def _enforce_owner_scope(current_user: Any, workspace_id: str) -> str:
         workspace_id,
         minimum_role="owner",
     )
+
+
+SAGE_TOOL_POLICY_DEFINITIONS: Dict[str, Dict[str, Any]] = {
+    "web_search": {
+        "label": "Web Search",
+        "capability_ids": ["web_search"],
+    },
+    "http_request": {
+        "label": "HTTP Requests",
+        "capability_ids": ["http_request"],
+    },
+    "gmail": {
+        "label": "Gmail",
+        "capability_ids": ["draft_email"],
+    },
+    "calendar": {
+        "label": "Calendar",
+        "capability_ids": ["create_calendar_event"],
+    },
+    "file_access": {
+        "label": "File Access",
+        "capability_ids": ["filesystem.read_write"],
+    },
+    "code_execution": {
+        "label": "Code Execution",
+        "capability_ids": ["shell.execute"],
+    },
+}
+
+
+def _read_string(value: Any, fallback: str = "") -> str:
+    return str(value or "").strip() or fallback
+
+
+def _normalize_provider_id(value: Any) -> str:
+    provider_id = provider_profiles_service.normalize_provider_id(value)
+    if provider_id not in provider_profiles_service.PROVIDER_CATALOG:
+        raise HTTPException(status_code=400, detail=f"Unsupported provider '{value}'.")
+    return provider_id
+
+
+def _provider_requires_secret(provider_id: str) -> bool:
+    return provider_profiles_service.provider_requires_credential(
+        provider_id,
+        provider_profiles_service.normalize_auth_mode(provider_id),
+    )
+
+
+def _provider_default_model(provider_id: str) -> Optional[str]:
+    entry = provider_profiles_service.provider_catalog_entry(provider_id)
+    model = _read_string(entry.get("default_model"))
+    return model or None
+
+
+def _sort_by_priority(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    return sorted(
+        items,
+        key=lambda item: (
+            int(item.get("priority") or 100),
+            _read_string(item.get("created_at")),
+            _read_string(item.get("id")),
+        ),
+    )
+
+
+def _sort_by_recency(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    return sorted(
+        items,
+        key=lambda item: (
+            _read_string(item.get("updated_at") or item.get("created_at")),
+            _read_string(item.get("id")),
+        ),
+        reverse=True,
+    )
+
+
+def _mask_last4(value: Any) -> Optional[str]:
+    token = _read_string(value)
+    if not token:
+        return None
+    return token[-4:] if len(token) >= 4 else token
+
+
+def _credential_metadata_last4(metadata: Any) -> Optional[str]:
+    payload = _coerce_dict(metadata)
+    return _mask_last4(payload.get("credential_last4"))
+
+
+def _filter_openai_model_ids(model_ids: List[str]) -> List[str]:
+    filtered: List[str] = []
+    seen: set[str] = set()
+    for raw in model_ids:
+        model_id = _read_string(raw)
+        if not model_id:
+            continue
+        lowered = model_id.lower()
+        if not (lowered.startswith("gpt-") or lowered.startswith("o1") or lowered.startswith("o3")):
+            continue
+        if model_id in seen:
+            continue
+        seen.add(model_id)
+        filtered.append(model_id)
+    return filtered
+
+
+def _cached_provider_model_metadata(
+    provider_id: str,
+    workspace_id: str,
+    credential_id: Optional[str],
+    api_key: str,
+) -> Dict[str, Any]:
+    if provider_id not in {"openai", "openai-codex"}:
+        return {}
+    try:
+        credentials: Dict[str, Any]
+        if credential_id:
+            credentials = provider_profiles_service.resolve_vault_credential(credential_id, workspace_id)
+        else:
+            credentials = {"api_key": api_key}
+        _, _, adapter = provider_profiles_service.resolve_provider_adapter(provider_id, credentials)
+        model_ids = adapter.list_models(credentials)
+    except Exception:
+        return {}
+    filtered = _filter_openai_model_ids(model_ids) if provider_id == "openai" else [
+        _read_string(model_id) for model_id in model_ids if _read_string(model_id)
+    ]
+    if not filtered:
+        return {}
+    return {
+        "cached_models": filtered,
+        "cached_models_source": "openai_models_api" if provider_id == "openai" else "provider_adapter",
+    }
+
+
+async def build_workspace_sage_tool_policy_payload(
+    workspace_id: str,
+    current_user: Any,
+) -> Dict[str, Any]:
+    resolved_workspace_id = _enforce_owner_scope(current_user, workspace_id)
+    policy = auth_module.load_workspace_policy(resolved_workspace_id)
+    denied = {
+        str(item or "").strip().lower()
+        for item in (policy.get("capabilities", {}).get("deny") or [])
+        if str(item or "").strip()
+    }
+    tools = []
+    for key, definition in SAGE_TOOL_POLICY_DEFINITIONS.items():
+        capability_ids = [
+            str(item or "").strip().lower()
+            for item in (definition.get("capability_ids") or [])
+            if str(item or "").strip()
+        ]
+        tools.append(
+            {
+                "key": key,
+                "label": definition.get("label"),
+                "enabled": not any(capability_id in denied for capability_id in capability_ids),
+                "capability_ids": capability_ids,
+            }
+        )
+    return {
+        "workspace_id": resolved_workspace_id,
+        "tools": tools,
+    }
+
+
+async def update_workspace_sage_tool_policy_payload(
+    workspace_id: str,
+    current_user: Any,
+    *,
+    tool_key: str,
+    enabled: bool,
+) -> Dict[str, Any]:
+    resolved_workspace_id = _enforce_owner_scope(current_user, workspace_id)
+    normalized_tool_key = _read_string(tool_key).lower()
+    definition = SAGE_TOOL_POLICY_DEFINITIONS.get(normalized_tool_key)
+    if not isinstance(definition, dict):
+        raise HTTPException(status_code=404, detail="Unknown Sage tool.")
+
+    existing_policy = auth_module.load_workspace_policy(resolved_workspace_id)
+    denied = {
+        str(item or "").strip().lower()
+        for item in (existing_policy.get("capabilities", {}).get("deny") or [])
+        if str(item or "").strip()
+    }
+    for capability_id in definition.get("capability_ids") or []:
+        normalized_capability_id = _read_string(capability_id).lower()
+        if not normalized_capability_id:
+            continue
+        if enabled:
+            denied.discard(normalized_capability_id)
+        else:
+            denied.add(normalized_capability_id)
+
+    auth_module.upsert_workspace_policy(
+        resolved_workspace_id,
+        capability_deny=sorted(denied),
+    )
+    return await build_workspace_sage_tool_policy_payload(
+        resolved_workspace_id,
+        current_user,
+    )
+
+
+async def upsert_workspace_provider_credential(
+    workspace_id: str,
+    current_user: Any,
+    *,
+    provider: str,
+    api_key: Optional[str],
+    model: Optional[str] = None,
+) -> Dict[str, Any]:
+    resolved_workspace_id = _enforce_owner_scope(current_user, workspace_id)
+    provider_id = _normalize_provider_id(provider)
+    key_value = _read_string(api_key)
+    requires_secret = _provider_requires_secret(provider_id)
+
+    credential_id: Optional[str] = None
+    credential_payload: Optional[Dict[str, Any]] = None
+    if requires_secret:
+        if not key_value:
+            raise HTTPException(status_code=400, detail="API key is required.")
+        credential_payload = await connectors_actions.create_vault_credential(
+            CredentialUpsertRequest(
+                label=f"Sage {provider_profiles_service.provider_catalog_entry(provider_id).get('label') or provider_id}",
+                provider=provider_id,
+                workspace_id=resolved_workspace_id,
+                mode="byok",
+                credentials={"api_key": key_value},
+            )
+        )
+        credential_id = _read_string((credential_payload or {}).get("id")) or None
+
+    profiles_payload = await connectors_core.list_provider_profiles(
+        workspace_id=resolved_workspace_id,
+        provider=provider_id,
+    )
+    profiles = _sort_by_priority(
+        [
+            dict(item)
+            for item in ((profiles_payload or {}).get("items") or [])
+            if isinstance(item, dict)
+        ]
+    )
+    current_profile = profiles[0] if profiles else {}
+    default_model = _read_string(model) or _read_string(current_profile.get("model")) or _provider_default_model(provider_id)
+    next_metadata = {
+        **_coerce_dict(current_profile.get("metadata")),
+        **_cached_provider_model_metadata(provider_id, resolved_workspace_id, credential_id, key_value),
+    }
+
+    profile_payload = await connectors_core.upsert_provider_profile(
+        ProviderProfileUpsertRequest(
+            id=_read_string(current_profile.get("id")) or None,
+            provider=provider_id,
+            label=_read_string(current_profile.get("label"), f"Sage {provider_profiles_service.provider_catalog_entry(provider_id).get('label') or provider_id}"),
+            credential_id=credential_id,
+            auth_mode=provider_profiles_service.normalize_auth_mode(provider_id),
+            workspace_id=resolved_workspace_id,
+            priority=int(current_profile.get("priority") or 0),
+            enabled=True,
+            model=default_model or None,
+            metadata=next_metadata,
+        )
+    )
+
+    return {
+        "workspace_id": resolved_workspace_id,
+        "provider": provider_id,
+        "credential": credential_payload,
+        "profile": (profile_payload or {}).get("item") if isinstance(profile_payload, dict) else None,
+    }
+
+
+async def delete_workspace_provider_credential(
+    workspace_id: str,
+    current_user: Any,
+    *,
+    provider: str,
+) -> Dict[str, Any]:
+    resolved_workspace_id = _enforce_owner_scope(current_user, workspace_id)
+    provider_id = _normalize_provider_id(provider)
+    credentials_payload = await connectors_core.list_credentials_vault(workspace_id=resolved_workspace_id)
+    credentials = _sort_by_recency(
+        [
+            dict(item)
+            for item in ((credentials_payload or {}).get("items") or [])
+            if isinstance(item, dict)
+            and _read_string(item.get("provider")).lower() == provider_id
+        ]
+    )
+    profiles_payload = await connectors_core.list_provider_profiles(
+        workspace_id=resolved_workspace_id,
+        provider=provider_id,
+    )
+    profiles = _sort_by_priority(
+        [
+            dict(item)
+            for item in ((profiles_payload or {}).get("items") or [])
+            if isinstance(item, dict)
+        ]
+    )
+    if not credentials and not profiles:
+        raise HTTPException(status_code=404, detail="Provider credential not found.")
+
+    deleted_credential_ids: List[str] = []
+    for credential in credentials:
+        credential_id = _read_string(credential.get("id"))
+        if not credential_id:
+            continue
+        await connectors_actions.delete_vault_credential(
+            credential_id,
+            workspace_id=resolved_workspace_id,
+        )
+        deleted_credential_ids.append(credential_id)
+
+    disabled_profile_ids: List[str] = []
+    for profile in profiles:
+        profile_id = _read_string(profile.get("id"))
+        if not profile_id:
+            continue
+        await connectors_core.disable_provider_profile(profile_id)
+        disabled_profile_ids.append(profile_id)
+
+    return {
+        "workspace_id": resolved_workspace_id,
+        "provider": provider_id,
+        "deleted": True,
+        "credential_ids": deleted_credential_ids,
+        "profile_ids": disabled_profile_ids,
+    }
 
 
 def _enforce_platform_admin(current_user: Any) -> Dict[str, Any]:

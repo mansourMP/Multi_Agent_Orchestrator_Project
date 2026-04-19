@@ -413,6 +413,7 @@ class ProviderProfileUpsertRequest(BaseModel):
     priority: int = 100
     enabled: bool = True
     model: Optional[str] = None
+    metadata: Optional[Dict[str, Any]] = None
 
     def validate_fields(self) -> None:
         provider = str(self.provider or "").strip().lower()
@@ -424,6 +425,8 @@ class ProviderProfileUpsertRequest(BaseModel):
             raise HTTPException(status_code=400, detail="credential_id is required.")
         if self.priority < 0 or self.priority > 10000:
             raise HTTPException(status_code=400, detail="priority must be between 0 and 10000.")
+        if self.metadata is not None and not isinstance(self.metadata, dict):
+            raise HTTPException(status_code=400, detail="metadata must be an object.")
 
 
 class ApprovalResolvePayload(BaseModel):

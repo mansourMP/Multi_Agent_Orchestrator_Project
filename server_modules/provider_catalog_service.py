@@ -5,6 +5,29 @@ from typing import Any, Dict, List, Optional
 from server_modules import model_router
 from server_modules import provider_profiles
 
+def _cached_model_records(provider_id: str, metadata: Dict[str, Any]) -> List[Dict[str, Any]]:
+    cached = metadata.get("cached_models")
+    if not isinstance(cached, list):
+        return []
+    known_by_id = {
+        str(item.get("id") or "").strip(): dict(item)
+        for item in provider_profiles.provider_model_catalog(provider_id)
+        if isinstance(item, dict) and str(item.get("id") or "").strip()
+    }
+    items: List[Dict[str, Any]] = []
+    seen: set[str] = set()
+    for raw in cached:
+        model_id = str(raw or "").strip()
+        if not model_id or model_id in seen:
+            continue
+        seen.add(model_id)
+        record = dict(known_by_id.get(model_id) or {})
+        record["id"] = model_id
+        record["label"] = str(record.get("label") or model_id)
+        record["provider"] = provider_id
+        items.append(record)
+    return items
+
 
 def _normalize_model_token(provider_id: str, model_id: Any) -> str:
     token = str(model_id or "").strip()
@@ -71,7 +94,8 @@ def resolve_provider_model_selection(
 def _provider_catalog_projection(item: Dict[str, Any]) -> Dict[str, Any]:
     provider_id = str(item.get("id") or "").strip()
     governance = provider_profiles.provider_governance_entry(provider_id)
-    models = provider_profiles.provider_model_catalog(provider_id)
+    profile_metadata = dict(item.get("profile_metadata") or {}) if isinstance(item.get("profile_metadata"), dict) else {}
+    models = _cached_model_records(provider_id, profile_metadata) or provider_profiles.provider_model_catalog(provider_id)
     return {
         **dict(item),
         "privacy_posture": governance.get("privacy_posture"),

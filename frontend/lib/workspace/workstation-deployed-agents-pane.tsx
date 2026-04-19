@@ -1,6 +1,8 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
+import { useSearchParams } from 'next/navigation';
+import { RefreshCw, X } from 'lucide-react';
 
 import { CommandSheet } from '@/lib/ui/command-sheet';
 import {
@@ -22,24 +24,27 @@ import {
 } from '@/lib/ui/form-controls';
 import { ListDetailColumns, ListDetailPanel, ListDetailShell } from '@/lib/ui/list-detail';
 import { ModalSection } from '@/lib/ui/modal';
-import { AppButton } from '@/lib/ui/primitives';
+import { AppButton, joinClassNames } from '@/lib/ui/primitives';
 import { SkeletonBlock } from '@/lib/ui/skeleton-block';
 import { StateBanner } from '@/lib/ui/state-banner';
 import type {
   DeployedAgentAnalyticsRecord,
   DeployedAgentConversationDetail,
   DeployedAgentConversationRecord,
+  DeployedAgentMemoryRecord,
   DeployedAgentRecord,
   DeployedAgentTelegramReadinessRecord,
   ProviderCatalogModelRecord,
   ProviderCatalogRecord,
 } from '@/lib/workspace/workstation-client';
+import { WorkspaceChannelPairingSurface } from '@/lib/workspace/workspace-channel-pairing-surface';
 import { useWorkspaceServices } from '@/lib/workspace/workspace-services';
 import { WorkstationSurfaceRoot } from '@/lib/workspace/workstation-surface-primitives';
 
 type WizardMode = 'create' | 'edit';
-type WizardStepId = 'name' | 'purpose' | 'tools' | 'memory' | 'telegram' | 'review' | 'deploy';
+type WizardStepId = 'setup' | 'connect' | 'deploy';
 type StudioSubview = 'agents' | 'inbox' | 'deploy';
+type SpecialistOverlayTabId = 'overview' | 'tools' | 'memory' | 'connectors';
 
 type WizardState = {
   name: string;
@@ -100,6 +105,11 @@ type AgentAnalyticsSnapshot = {
   percentUsed: number | null;
   usageMonth: string | null;
 };
+
+type DetailConfigDraft = Pick<
+  WizardState,
+  'selectedToolIds' | 'memoryEnabled' | 'contextBudgetPreset' | 'retentionPreset'
+>;
 
 type ProviderCatalogModelSnapshot = {
   id: string;
@@ -186,39 +196,19 @@ const DEPLOYED_AGENT_WIZARD_STEPS: Array<{
   description: string;
 }> = [
   {
-    id: 'name',
-    label: 'Name',
-    description: 'Give the specialist a clear public name and optional avatar.',
+    id: 'setup',
+    label: 'Setup',
+    description: 'Set the specialist name, persona, and core behavior in one step.',
   },
   {
-    id: 'purpose',
-    label: 'Purpose',
-    description: 'Define purpose and response behavior for this Telegram specialist.',
-  },
-  {
-    id: 'tools',
-    label: 'Tools',
-    description: 'Choose only the tools this specialist truly needs.',
-  },
-  {
-    id: 'memory',
-    label: 'Memory Scope',
-    description: 'Choose whether memory is on and how much context to retain.',
-  },
-  {
-    id: 'telegram',
-    label: 'Telegram Binding',
+    id: 'connect',
+    label: 'Connect',
     description: 'Bind to one Telegram connector and validate readiness.',
-  },
-  {
-    id: 'review',
-    label: 'Review',
-    description: 'Review the specialist setup, channel link, and launch readiness.',
   },
   {
     id: 'deploy',
     label: 'Deploy',
-    description: 'Save this specialist and launch it when ready.',
+    description: 'Choose provider and model, then save or launch when ready.',
   },
 ];
 
@@ -246,6 +236,74 @@ const STUDIO_TOOL_OPTIONS: ReadonlyArray<{
     id: 'calendar_write',
     label: 'Calendar write',
     description: 'Create or update calendar events for scheduling workflows.',
+  },
+];
+
+const CONTEXT_PRESET_OPTIONS: ReadonlyArray<{
+  id: string;
+  label: string;
+  description: string;
+}> = [
+  {
+    id: 'compact',
+    label: 'Compact',
+    description: 'Faster, lower cost',
+  },
+  {
+    id: 'balanced',
+    label: 'Balanced',
+    description: 'Recommended',
+  },
+  {
+    id: 'deep',
+    label: 'Deep',
+    description: 'More context, higher cost',
+  },
+];
+
+const SPECIALIST_OVERLAY_TABS: Array<{
+  id: SpecialistOverlayTabId;
+  label: string;
+}> = [
+  { id: 'overview', label: 'Overview' },
+  { id: 'tools', label: 'Tools' },
+  { id: 'memory', label: 'Memory' },
+  { id: 'connectors', label: 'Connectors' },
+];
+
+const SPECIALIST_CONNECTOR_CARDS: ReadonlyArray<{
+  id: string;
+  label: string;
+  image: string;
+  connectorIds?: string[];
+  capabilityTags: string[];
+}> = [
+  {
+    id: 'telegram',
+    label: 'Telegram',
+    image: '/integrations/telegram.png',
+    capabilityTags: ['Messages', 'Replies'],
+  },
+  {
+    id: 'whatsapp',
+    label: 'WhatsApp',
+    image: '/integrations/whatsapp.png',
+    connectorIds: ['whatsapp_twilio'],
+    capabilityTags: ['Messages', 'Autopilot'],
+  },
+  {
+    id: 'gmail',
+    label: 'Gmail',
+    image: '/integrations/gmail.png',
+    connectorIds: ['google_workspace'],
+    capabilityTags: ['Send email', 'Read inbox'],
+  },
+  {
+    id: 'calendar',
+    label: 'Calendar',
+    image: '/integrations/microsoft365.png',
+    connectorIds: ['google_workspace', 'microsoft_365'],
+    capabilityTags: ['Calendar', 'Events'],
   },
 ];
 
@@ -321,6 +379,37 @@ function formatTimestamp(value: unknown): string {
   }
 }
 
+function formatRelativeTime(value: unknown): string {
+  if (typeof value !== 'string' || !value.trim()) {
+    return 'No recent activity';
+  }
+  const parsed = Date.parse(value);
+  if (!Number.isFinite(parsed)) {
+    return 'No recent activity';
+  }
+  const diffMinutes = Math.round((Date.now() - parsed) / 60000);
+  if (Math.abs(diffMinutes) < 60) {
+    return `${Math.max(1, Math.abs(diffMinutes))}m ago`;
+  }
+  const diffHours = Math.round(diffMinutes / 60);
+  if (Math.abs(diffHours) < 24) {
+    return `${Math.max(1, Math.abs(diffHours))}h ago`;
+  }
+  const diffDays = Math.round(diffHours / 24);
+  if (Math.abs(diffDays) < 7) {
+    return `${Math.max(1, Math.abs(diffDays))}d ago`;
+  }
+  const diffWeeks = Math.round(diffDays / 7);
+  if (Math.abs(diffWeeks) < 5) {
+    return `${Math.max(1, Math.abs(diffWeeks))}w ago`;
+  }
+  const diffMonths = Math.round(diffDays / 30);
+  if (Math.abs(diffMonths) < 12) {
+    return `${Math.max(1, Math.abs(diffMonths))}mo ago`;
+  }
+  return `${Math.max(1, Math.round(diffDays / 365))}y ago`;
+}
+
 function formatUsd(value: unknown): string {
   const amount = readNumber(value);
   if (amount === null) {
@@ -354,21 +443,19 @@ function formatContextWindow(value: unknown): string {
   return `${new Intl.NumberFormat().format(amount)} tokens`;
 }
 
-function deploymentTone(value: unknown): 'neutral' | 'success' | 'warning' | 'danger' | 'accent' {
+function deploymentStateLabel(value: unknown): string {
+  return humanizeToken(readString(value), 'Draft');
+}
+
+function rosterStatusTone(value: unknown): 'live' | 'warning' | 'danger' {
   const token = readString(value).toLowerCase();
   if (token === 'live') {
-    return 'success';
+    return 'live';
   }
-  if (token === 'paused') {
-    return 'warning';
-  }
-  if (token === 'staging') {
-    return 'accent';
-  }
-  if (token === 'error' || token === 'failed') {
+  if (token === 'error' || token === 'failed' || token === 'blocked') {
     return 'danger';
   }
-  return 'neutral';
+  return 'warning';
 }
 
 function escalationTone(value: unknown): 'neutral' | 'success' | 'warning' | 'danger' | 'accent' {
@@ -454,6 +541,10 @@ function normalizeToolIds(value: unknown): string[] {
   return normalizeLabelList(value)
     .map((item) => item.toLowerCase())
     .filter((item, index, array) => allowed.has(item) && array.indexOf(item) === index);
+}
+
+function connectorConnected(connectorIds: string[] | undefined, availableConnectorIds: Set<string>): boolean {
+  return (connectorIds ?? []).some((connectorId) => availableConnectorIds.has(connectorId));
 }
 
 function toolLabel(toolId: string): string {
@@ -599,6 +690,20 @@ function formatDeploymentModelSummary(
   return `${providerLabel} · ${modelLabel}`;
 }
 
+function formatDeploymentModelLabel(
+  agent: DeployedAgentRecord | null | undefined,
+  catalogByProvider: Record<string, ProviderCatalogSnapshot>,
+): string {
+  const providerId = selectedProviderId(agent);
+  const modelId = selectedModelId(agent);
+  if (!providerId && !modelId) {
+    return 'Default model';
+  }
+  const provider = providerId ? catalogByProvider[providerId] ?? null : null;
+  const model = provider?.models.find((item) => item.id === modelId) ?? null;
+  return model?.label ?? modelId ?? provider?.label ?? humanizeToken(providerId, providerId || 'Model');
+}
+
 function applyProviderCatalogDefaults(
   state: WizardState,
   catalog: ProviderCatalogSnapshot[],
@@ -652,7 +757,9 @@ function buildWizardState(agent?: DeployedAgentRecord | null): WizardState {
     runtimeTarget: readString(agent?.runtime_target, 'cloud'),
     billingPlan: readString(agent?.billing_plan, 'free'),
     selectedToolIds: selectedToolIds.length > 0 ? selectedToolIds : ['web_search'],
-    memoryEnabled: memoryPolicy.memory_enabled === true || metadata.memory_enabled === true,
+    memoryEnabled: agent
+      ? memoryPolicy.memory_enabled === true || metadata.memory_enabled === true
+      : true,
     contextBudgetPreset: readString(memoryPolicy.context_budget_preset ?? metadata.context_budget_preset, 'balanced'),
     retentionPreset: readString(memoryPolicy.retention_preset ?? metadata.retention_preset, 'standard'),
     healthSafetyEnabled: safetyPolicy.health_safety_enabled === true || metadata.health_safety_enabled === true,
@@ -674,6 +781,14 @@ function buildWizardState(agent?: DeployedAgentRecord | null): WizardState {
     upgradeCtaUrl: readString(customerPolicy.upgrade_cta_url ?? metadata.upgrade_cta_url),
     upgradeCtaLabel: readString(customerPolicy.upgrade_cta_label ?? metadata.upgrade_cta_label),
   };
+}
+
+function truncateExternalUserId(value: unknown): string {
+  const token = readString(value);
+  if (!token) {
+    return 'unknown';
+  }
+  return token.length <= 8 ? token : token.slice(0, 8);
 }
 
 function buildChannelPayload(state: WizardState): Record<string, unknown> {
@@ -736,9 +851,54 @@ function buildDeploymentConfig(state: WizardState): Record<string, unknown> {
   };
 }
 
+function buildDetailConfigDraft(agent?: DeployedAgentRecord | null): DetailConfigDraft {
+  const state = buildWizardState(agent);
+  return {
+    selectedToolIds: state.selectedToolIds,
+    memoryEnabled: state.memoryEnabled,
+    contextBudgetPreset: state.contextBudgetPreset,
+    retentionPreset: state.retentionPreset,
+  };
+}
+
 function readBudgetCycle(agent?: DeployedAgentRecord | null): Record<string, unknown> {
   const metadata = readRecord(agent?.metadata);
   return readRecord(metadata.current_budget_cycle);
+}
+
+function ContextPresetControl({
+  value,
+  onSelect,
+}: {
+  value: string;
+  onSelect: (nextValue: string) => void;
+}) {
+  return (
+    <div className="deployed-agents-context-presets">
+      <div className="deployed-agents-context-presets__label">Context window</div>
+      <div className="deployed-agents-context-presets__grid" role="tablist" aria-label="Context window presets">
+        {CONTEXT_PRESET_OPTIONS.map((option) => {
+          const selected = value === option.id;
+          return (
+            <button
+              key={option.id}
+              type="button"
+              className={joinClassNames(
+                'deployed-agents-context-presets__button',
+                selected && 'deployed-agents-context-presets__button--selected',
+              )}
+              role="tab"
+              aria-selected={selected}
+              onClick={() => onSelect(option.id)}
+            >
+              <strong className="deployed-agents-context-presets__title">{option.label}</strong>
+              <span className="deployed-agents-context-presets__description">{option.description}</span>
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
 }
 
 function isEscalationOutstanding(value: unknown): boolean {
@@ -845,20 +1005,6 @@ function formatOutcomeSummary(snapshot: AgentAnalyticsSnapshot | null): string {
     .slice(0, 3)
     .map(([key, value]) => `${humanizeToken(key, key)} ${value}`)
     .join(' · ');
-}
-
-function formatAnalyticsRowPrimary(snapshot: AgentAnalyticsSnapshot | null): string {
-  if (!snapshot) {
-    return 'Syncing analytics';
-  }
-  return `${formatCompactCount(snapshot.activeUsersLast30d)} active · ${formatCompactCount(snapshot.messageVolumeMonth)} msgs / 30d`;
-}
-
-function formatAnalyticsRowSecondary(snapshot: AgentAnalyticsSnapshot | null): string {
-  if (!snapshot) {
-    return 'Computing owner metrics';
-  }
-  return `${snapshot.escalationRatePercent.toFixed(1)}% escalation · ${formatUsd(snapshot.currentBurnUsd)}`;
 }
 
 function matchesConversationFilters(
@@ -1033,15 +1179,24 @@ export function WorkstationDeployedAgentsPane({
   initialSubview?: StudioSubview;
 }) {
   const services = useWorkspaceServices();
+  const searchParams = useSearchParams();
+  const [currentStudioSubview, setCurrentStudioSubview] = useState<StudioSubview>(initialSubview);
   const [providerCatalog, setProviderCatalog] = useState<ProviderCatalogSnapshot[]>([]);
   const [agents, setAgents] = useState<DeployedAgentRecord[]>([]);
+  const [connectorVaultIds, setConnectorVaultIds] = useState<Set<string>>(() => new Set());
   const [agentMetricsById, setAgentMetricsById] = useState<Record<string, AgentOperationalMetrics>>({});
   const [agentAnalyticsById, setAgentAnalyticsById] = useState<Record<string, AgentAnalyticsSnapshot>>({});
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
+  const [overlayAgentId, setOverlayAgentId] = useState<string | null>(null);
+  const [overlayTab, setOverlayTab] = useState<SpecialistOverlayTabId>('overview');
+  const [overlayName, setOverlayName] = useState('');
+  const [overlayPersona, setOverlayPersona] = useState('');
+  const [isSavingOverlayOverview, setIsSavingOverlayOverview] = useState(false);
   const [selectedAgentDetail, setSelectedAgentDetail] = useState<DeployedAgentRecord | null>(null);
   const [selectedAgentAnalytics, setSelectedAgentAnalytics] = useState<AgentAnalyticsSnapshot | null>(null);
   const [selectedTelegramReadiness, setSelectedTelegramReadiness] = useState<TelegramReadinessSnapshot | null>(null);
   const [conversations, setConversations] = useState<DeployedAgentConversationRecord[]>([]);
+  const [agentMemoryById, setAgentMemoryById] = useState<Record<string, DeployedAgentMemoryRecord[]>>({});
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
   const [selectedTranscript, setSelectedTranscript] = useState<DeployedAgentConversationDetail | null>(null);
   const [isLoadingAgents, setIsLoadingAgents] = useState(true);
@@ -1050,12 +1205,16 @@ export function WorkstationDeployedAgentsPane({
   const [isLoadingAnalytics, setIsLoadingAnalytics] = useState(false);
   const [isLoadingTelegramReadiness, setIsLoadingTelegramReadiness] = useState(false);
   const [isLoadingConversations, setIsLoadingConversations] = useState(false);
+  const [isLoadingOverlayMemory, setIsLoadingOverlayMemory] = useState(false);
   const [isLoadingTranscript, setIsLoadingTranscript] = useState(false);
   const [isWizardOpen, setIsWizardOpen] = useState(false);
+  const [isTelegramSetupOpen, setIsTelegramSetupOpen] = useState(false);
   const [wizardMode, setWizardMode] = useState<WizardMode>('create');
   const [wizardStepIndex, setWizardStepIndex] = useState(0);
   const [wizardState, setWizardState] = useState<WizardState>(() => buildWizardState(null));
   const [isSubmittingWizard, setIsSubmittingWizard] = useState(false);
+  const [detailConfigDraft, setDetailConfigDraft] = useState<DetailConfigDraft | null>(null);
+  const [isSavingDetailConfig, setIsSavingDetailConfig] = useState(false);
   const [busyAgentId, setBusyAgentId] = useState<string | null>(null);
   const [busyExternalUserId, setBusyExternalUserId] = useState<string | null>(null);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
@@ -1069,6 +1228,12 @@ export function WorkstationDeployedAgentsPane({
   const selectedAgent = useMemo(
     () => selectedAgentDetail ?? agents.find((item) => readString(item.id) === selectedAgentId) ?? null,
     [agents, selectedAgentDetail, selectedAgentId],
+  );
+  const overlayAgent = useMemo(
+    () => overlayAgentId === selectedAgentId
+      ? selectedAgent
+      : agents.find((item) => readString(item.id) === overlayAgentId) ?? null,
+    [agents, overlayAgentId, selectedAgent, selectedAgentId],
   );
   const selectedAgentMetrics = useMemo(
     () => (selectedAgentId ? agentMetricsById[selectedAgentId] ?? null : null),
@@ -1117,6 +1282,10 @@ export function WorkstationDeployedAgentsPane({
   const outcomeFilterOptions = useMemo(
     () => Array.from(new Set(conversations.map((item) => readString(item.outcome).toLowerCase()).filter(Boolean))),
     [conversations],
+  );
+  const requestedAgentId = useMemo(
+    () => String(searchParams.get('agent') || '').trim(),
+    [searchParams],
   );
 
   async function refreshAgentMetrics(items: DeployedAgentRecord[]) {
@@ -1308,6 +1477,29 @@ export function WorkstationDeployedAgentsPane({
     }
   }
 
+  async function loadMemoryEntries(agentId: string) {
+    setIsLoadingOverlayMemory(true);
+    try {
+      const payload = await services.client.listDeployedAgentMemory({
+        deployedAgentId: agentId,
+        limit: 50,
+        offset: 0,
+      });
+      setAgentMemoryById((current) => ({
+        ...current,
+        [agentId]: readItems<DeployedAgentMemoryRecord>(payload),
+      }));
+    } catch (error) {
+      setAgentMemoryById((current) => ({
+        ...current,
+        [agentId]: [],
+      }));
+      setErrorMessage(error instanceof Error ? error.message : 'Customer memory is unavailable.');
+    } finally {
+      setIsLoadingOverlayMemory(false);
+    }
+  }
+
   async function loadTranscript(agentId: string, sessionId: string) {
     setIsLoadingTranscript(true);
     try {
@@ -1330,6 +1522,22 @@ export function WorkstationDeployedAgentsPane({
     void refreshAgents();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [services.client]);
+
+  useEffect(() => {
+    setCurrentStudioSubview(initialSubview);
+  }, [initialSubview]);
+
+  useEffect(() => {
+    if (!requestedAgentId) {
+      return;
+    }
+    if (!agents.some((item) => readString(item.id) === requestedAgentId)) {
+      return;
+    }
+    setCurrentStudioSubview('agents');
+    setSelectedAgentId(requestedAgentId);
+    setOverlayAgentId(requestedAgentId);
+  }, [agents, requestedAgentId]);
 
   useEffect(() => {
     if (!isWizardOpen) {
@@ -1396,10 +1604,99 @@ export function WorkstationDeployedAgentsPane({
     setSelectedSessionId(readString(filteredConversations[0]?.session_id) || null);
   }, [filteredConversations, selectedSessionId]);
 
+  useEffect(() => {
+    const agentId = readString(overlayAgentId);
+    if (!agentId || overlayTab !== 'memory') {
+      return;
+    }
+    void loadMemoryEntries(agentId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [overlayAgentId, overlayTab]);
+
+  useEffect(() => {
+    setDetailConfigDraft(buildDetailConfigDraft(selectedAgent));
+  }, [selectedAgent]);
+
+  useEffect(() => {
+    if (!overlayAgentId) {
+      return;
+    }
+    if (!agents.some((item) => readString(item.id) === overlayAgentId)) {
+      setOverlayAgentId(null);
+    }
+  }, [agents, overlayAgentId]);
+
+  useEffect(() => {
+    if (!overlayAgent) {
+      setOverlayName('');
+      setOverlayPersona('');
+      return;
+    }
+    setOverlayName(readString(overlayAgent.name));
+    setOverlayPersona(readString(overlayAgent.persona));
+  }, [overlayAgent]);
+
+  useEffect(() => {
+    if (!isWizardOpen || !isTelegramSetupOpen) {
+      return;
+    }
+    const connectors = selectedTelegramReadiness?.connectors ?? [];
+    if (connectors.length === 0) {
+      return;
+    }
+    const nextConnector = connectors[0];
+    setWizardState((current) => ({
+      ...current,
+      telegramEnabled: true,
+      telegramConnectorId: current.telegramConnectorId.trim() || nextConnector.id,
+      telegramEndpointKey: current.telegramEndpointKey.trim() || (nextConnector.endpointKey ?? ''),
+    }));
+    setIsTelegramSetupOpen(false);
+    setStatusMessage(`Connected Telegram bot ${nextConnector.label}.`);
+  }, [isTelegramSetupOpen, isWizardOpen, selectedTelegramReadiness]);
+
+  useEffect(() => {
+    if (!isWizardOpen || !isTelegramSetupOpen) {
+      return;
+    }
+    const agentId = readString(selectedAgent?.id) || undefined;
+    const intervalId = window.setInterval(() => {
+      void loadTelegramReadiness(agentId);
+    }, 3000);
+    return () => {
+      window.clearInterval(intervalId);
+    };
+  }, [isTelegramSetupOpen, isWizardOpen, selectedAgent]);
+
+  useEffect(() => {
+    let cancelled = false;
+    void services.client.listConnectorsVault()
+      .then((payload) => {
+        if (cancelled) {
+          return;
+        }
+        const connectorIds = new Set(
+          readItems<Record<string, unknown>>(payload)
+            .map((item) => readString(item.connector).toLowerCase())
+            .filter(Boolean),
+        );
+        setConnectorVaultIds(connectorIds);
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setConnectorVaultIds(new Set());
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [services.client]);
+
   function openCreateWizard() {
     setWizardMode('create');
     setWizardStepIndex(0);
     setWizardState(applyProviderCatalogDefaults(buildWizardState(null), providerCatalog));
+    setIsTelegramSetupOpen(false);
     setIsWizardOpen(true);
     void loadTelegramReadiness();
   }
@@ -1408,6 +1705,7 @@ export function WorkstationDeployedAgentsPane({
     setWizardMode('edit');
     setWizardStepIndex(0);
     setWizardState(applyProviderCatalogDefaults(buildWizardState(selectedAgent), providerCatalog));
+    setIsTelegramSetupOpen(false);
     setIsWizardOpen(true);
     void loadTelegramReadiness(readString(selectedAgent?.id) || undefined);
   }
@@ -1417,6 +1715,7 @@ export function WorkstationDeployedAgentsPane({
       return;
     }
     setIsWizardOpen(false);
+    setIsTelegramSetupOpen(false);
     if (selectedAgentId) {
       void loadTelegramReadiness(selectedAgentId);
     }
@@ -1450,10 +1749,6 @@ export function WorkstationDeployedAgentsPane({
     }
     if (!wizardState.modelId.trim()) {
       setErrorMessage('Choose a model before saving this specialist.');
-      return;
-    }
-    if (wizardState.selectedToolIds.length === 0) {
-      setErrorMessage('Select at least one allowed tool before saving this Studio specialist.');
       return;
     }
     if (dailyMessageLimit) {
@@ -1599,25 +1894,95 @@ export function WorkstationDeployedAgentsPane({
     }
   }
 
+  async function saveOverlayOverview() {
+    const agentId = readString(overlayAgent?.id);
+    if (!agentId) {
+      return;
+    }
+    setIsSavingOverlayOverview(true);
+    setErrorMessage(null);
+    try {
+      const updated = await services.client.updateDeployedAgent({
+        deployedAgentId: agentId,
+        name: overlayName.trim(),
+        persona: overlayPersona.trim(),
+      });
+      const record = (updated ?? {}) as DeployedAgentRecord;
+      setAgents((current) => upsertAgentRecord(current, record));
+      setSelectedAgentDetail(record);
+      setStatusMessage(`Updated ${readString(record.name, 'specialist')}.`);
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : 'Overview changes could not be saved.');
+    } finally {
+      setIsSavingOverlayOverview(false);
+    }
+  }
+
+  async function saveDetailConfig() {
+    const agentId = readString(selectedAgent?.id);
+    if (!agentId || !detailConfigDraft) {
+      return;
+    }
+
+    const currentState = buildWizardState(selectedAgent);
+    const nextState: WizardState = {
+      ...currentState,
+      selectedToolIds: detailConfigDraft.selectedToolIds,
+      memoryEnabled: detailConfigDraft.memoryEnabled,
+      contextBudgetPreset: detailConfigDraft.contextBudgetPreset,
+      retentionPreset: detailConfigDraft.retentionPreset,
+    };
+    const nextConfigPayload = buildDeploymentConfig(nextState);
+    const currentConfig = readRecord(selectedAgent?.config);
+    const mergedConfig = {
+      ...currentConfig,
+      memory_policy: {
+        ...readRecord(currentConfig.memory_policy),
+        ...readRecord(nextConfigPayload.memory_policy),
+      },
+      tool_policy: {
+        ...readRecord(currentConfig.tool_policy),
+        ...readRecord(nextConfigPayload.tool_policy),
+      },
+    };
+
+    setIsSavingDetailConfig(true);
+    setErrorMessage(null);
+    try {
+      const updated = await services.client.updateDeployedAgent({
+        deployedAgentId: agentId,
+        config: mergedConfig,
+      });
+      const record = (updated ?? {}) as DeployedAgentRecord;
+      setAgents((current) => upsertAgentRecord(current, record));
+      setSelectedAgentDetail(record);
+      setDetailConfigDraft(buildDetailConfigDraft(record));
+      setStatusMessage(`Updated ${readString(record.name, 'specialist')} tools and memory settings.`);
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : 'Tools and memory settings could not be saved.');
+    } finally {
+      setIsSavingDetailConfig(false);
+    }
+  }
+
   const activeChannels = listEnabledChannels(selectedAgent?.channels);
   const selectedKnowledgeSources = Array.isArray(selectedAgent?.knowledge_sources)
     ? selectedAgent.knowledge_sources
     : [];
   const knowledgeSourceCount = selectedKnowledgeSources.length;
-  const currentStudioSubview: StudioSubview = initialSubview;
   const studioTitle = currentStudioSubview === 'agents'
     ? 'Studio · Agents'
     : currentStudioSubview === 'inbox'
       ? 'Studio · Inbox'
       : 'Studio · Deploy';
   const studioSubtitle = currentStudioSubview === 'agents'
-    ? 'Build your specialist roster and review each selected specialist before launch.'
+    ? 'Roster and launch state.'
     : currentStudioSubview === 'inbox'
-      ? 'Review live conversations and transcript timelines from your specialist inbox.'
-      : 'Use guided launch checks to move specialists from draft to live with confidence.';
+      ? 'Customer sessions.'
+      : 'Deploy state.';
   const showAgentsIndex = currentStudioSubview === 'agents' || currentStudioSubview === 'inbox';
-  const showReadinessPanel = currentStudioSubview === 'agents' || currentStudioSubview === 'deploy';
-  const showDetailPanel = currentStudioSubview === 'agents' || currentStudioSubview === 'deploy';
+  const showReadinessPanel = currentStudioSubview === 'deploy';
+  const showDetailPanel = currentStudioSubview === 'deploy';
   const showInboxPanels = currentStudioSubview === 'inbox';
   const visibleErrorMessage = summarizeStudioErrorMessage(errorMessage);
   const wizardStep = DEPLOYED_AGENT_WIZARD_STEPS[wizardStepIndex];
@@ -1630,6 +1995,33 @@ export function WorkstationDeployedAgentsPane({
     selectedTranscriptCustomer.label || readRecord(selectedConversation?.customer).label,
     'this customer',
   );
+  const selectedAgentChannels = listEnabledChannels(selectedAgent?.channels);
+  const selectedAgentMemoryEnabled =
+    readRecord(readRecord(selectedAgent?.config).memory_policy).memory_enabled === true
+    || readRecord(selectedAgent?.metadata).memory_enabled === true;
+  const selectedAgentStatusLabel = deploymentStateLabel(selectedAgent?.deployment_state);
+  const selectedAgentChannelLabel = humanizeToken(
+    selectedAgentChannels[0] || readString(selectedConversation?.channel || selectedTranscript?.channel).toLowerCase() || 'telegram',
+    'Telegram',
+  );
+  const selectedAgentModelLabel = formatDeploymentModelLabel(selectedAgent, providerCatalogIndex);
+  const overlayAgentMetrics = overlayAgentId ? agentMetricsById[overlayAgentId] ?? null : null;
+  const overlayChannels = listEnabledChannels(overlayAgent?.channels);
+  const overlayTools = overlayAgent
+    ? normalizeToolIds(
+      readRecord(readRecord(overlayAgent.config).tool_policy).enabled_tools
+      ?? readRecord(overlayAgent.metadata).selected_tool_ids,
+    )
+    : [];
+  const overlayMemoryEnabled = overlayAgent
+    ? (
+      readRecord(readRecord(overlayAgent.config).memory_policy).memory_enabled === true
+      || readRecord(overlayAgent.metadata).memory_enabled === true
+    )
+    : false;
+  const overlayMemoryEntries = overlayAgentId
+    ? agentMemoryById[overlayAgentId] ?? []
+    : [];
 
   async function handleDeleteExternalUserData() {
     const agentId = readString(selectedAgent?.id);
@@ -1658,6 +2050,7 @@ export function WorkstationDeployedAgentsPane({
       await Promise.all([
         loadConversations(agentId),
         loadAgentAnalytics(agentId),
+        loadMemoryEntries(agentId),
       ]);
       setStatusMessage(`Deleted saved data for ${selectedExternalUserLabel} from ${readString(selectedAgent?.name, 'this specialist')}.`);
     } catch (error) {
@@ -1667,31 +2060,30 @@ export function WorkstationDeployedAgentsPane({
     }
   }
 
+  const overlayConnectorCards = overlayAgent ? SPECIALIST_CONNECTOR_CARDS.map((connector) => {
+    const telegramBinding = readRecord(selectedTelegramReadiness?.configuredBinding);
+    const telegramConnected = connector.id === 'telegram'
+      ? Boolean(readString(telegramBinding.connector_id) || readString(telegramBinding.label))
+      : false;
+    const connected = connector.id === 'telegram'
+      ? telegramConnected
+      : connectorConnected(connector.connectorIds, connectorVaultIds);
+    const statusLabel = connector.id === 'telegram'
+      ? (selectedTelegramReadiness?.readyForLive ? 'Connected' : connected ? 'Needs attention' : 'Not connected')
+      : connected ? 'Connected' : 'Not connected';
+    return {
+      ...connector,
+      connected,
+      statusLabel,
+    };
+  }) : [];
+
   return (
     <WorkstationSurfaceRoot surface="deployed-agents">
       <ListDetailShell
         className="app-studio-shell"
         title={studioTitle}
         subtitle={studioSubtitle}
-        actions={(
-          <div className="app-inline-actions">
-            <AppButton
-              type="button"
-              tone="secondary"
-              onClick={() => {
-                void Promise.all([
-                  refreshProviderCatalog(),
-                  refreshAgents({ preserveSelection: true }),
-                ]);
-              }}
-            >
-              Refresh
-            </AppButton>
-            <AppButton type="button" onClick={openCreateWizard}>
-              Create Specialist
-            </AppButton>
-          </div>
-        )}
       >
         {statusMessage ? (
           <StateBanner tone="success" title="Specialist updated">
@@ -1718,65 +2110,84 @@ export function WorkstationDeployedAgentsPane({
                   <ListDetailPanel
                     eyebrow="Agents"
                     title="Specialist roster"
-                    subtitle={`${agents.length} specialists currently configured for this workspace.`}
+                    subtitle={`${agents.length} in this workspace.`}
+                    actions={currentStudioSubview === 'agents' ? (
+                      <div className="app-inline-actions app-inline-actions--tight">
+                        <AppButton
+                          type="button"
+                          tone="secondary"
+                          className="deployed-agents-tabbar__refresh"
+                          onClick={() => {
+                            void Promise.all([
+                              refreshProviderCatalog(),
+                              refreshAgents({ preserveSelection: true }),
+                            ]);
+                          }}
+                          aria-label="Refresh studio"
+                          title="Refresh studio"
+                        >
+                          <RefreshCw size={14} strokeWidth={1.9} aria-hidden="true" />
+                        </AppButton>
+                        <AppButton type="button" onClick={openCreateWizard}>
+                          New Specialist
+                        </AppButton>
+                      </div>
+                    ) : undefined}
                   >
                     {agents.length === 0 ? (
                       <EmptyPanel
                         title="No specialists yet"
-                        body="Create your first specialist and use guided setup before launch."
+                        body="Create your first specialist — connect Telegram and deploy in 3 steps."
                         actions={(
                           <AppButton type="button" onClick={openCreateWizard}>
-                            Start guided setup
+                            New Specialist
                           </AppButton>
                         )}
                       />
                     ) : (
-                      <DataTable>
-                        <DataTableHeader columns="minmax(0, 1.1fr) auto minmax(0, 0.72fr) minmax(0, 0.9fr) auto">
-                          <DataTableHeaderCell>Specialist</DataTableHeaderCell>
-                          <DataTableHeaderCell>State</DataTableHeaderCell>
-                          <DataTableHeaderCell>Channels</DataTableHeaderCell>
-                          <DataTableHeaderCell>Operations</DataTableHeaderCell>
-                          <DataTableHeaderCell align="end">Updated</DataTableHeaderCell>
-                        </DataTableHeader>
+                      <div className="deployed-agents-card-grid">
                         {agents.map((agent, index) => {
                           const agentId = readString(agent.id, `deployed-agent-${index}`);
                           const selected = agentId === selectedAgentId;
                           const channels = listEnabledChannels(agent.channels);
-                          const metrics = agentMetricsById[agentId];
-                          const analytics = agentAnalyticsById[agentId] ?? null;
+                          const channelLabel = humanizeToken(channels[0] || 'no_channel', 'No channel');
+                          const memoryEnabled =
+                            readRecord(readRecord(agent.config).memory_policy).memory_enabled === true
+                            || readRecord(agent.metadata).memory_enabled === true;
+                          const stateLabel = deploymentStateLabel(agent.deployment_state);
+                          const modelLabel = formatDeploymentModelLabel(agent, providerCatalogIndex);
+                          const displayName = readString(agent.name, agentId);
                           return (
-                            <DataTableRow
+                            <button
                               key={agentId}
-                              columns="minmax(0, 1.1fr) auto minmax(0, 0.72fr) minmax(0, 0.9fr) auto"
-                              selected={selected}
-                              onClick={() => setSelectedAgentId(agentId)}
+                              type="button"
+                              onClick={() => {
+                                setSelectedAgentId(agentId);
+                                setOverlayAgentId(agentId);
+                                setOverlayTab('overview');
+                              }}
+                              className={`deployed-agents-card${selected ? ' deployed-agents-card--selected' : ''}`}
                             >
-                              <DataTableCell
-                                primary={readString(agent.name, agentId)}
-                                secondary={readString(agent.persona, 'Telegram specialist')}
-                                meta={`Runtime profile ${readString(agent.backing_install_id, 'pending')}`}
-                              />
-                              <DataTableCell
-                                primary={<DataBadge tone={deploymentTone(agent.deployment_state)}>{humanizeToken(agent.deployment_state, 'Draft')}</DataBadge>}
-                              />
-                              <DataTableCell
-                                primary={channels.length > 0 ? channels.join(', ') : 'No live channels'}
-                                secondary={`${readString(agent.runtime_target, 'cloud')} · ${formatDeploymentModelSummary(agent, providerCatalogIndex)}`}
-                              />
-                              <DataTableCell
-                                primary={formatAnalyticsRowPrimary(analytics)}
-                                secondary={formatAnalyticsRowSecondary(analytics)}
-                                meta={metrics?.latestActivityLabel ?? 'Fetching recent customer activity'}
-                              />
-                              <DataTableCell
-                                align="end"
-                                primary={formatTimestamp(agent.updated_at)}
-                              />
-                            </DataTableRow>
+                              <span className="deployed-agents-card__avatar" aria-hidden="true">
+                                {displayName.charAt(0).toUpperCase()}
+                              </span>
+                              <strong className="deployed-agents-card__title">{displayName}</strong>
+                              <div className="deployed-agents-card__state-row">
+                                <span
+                                  className={`deployed-agents-card__status deployed-agents-card__status--${rosterStatusTone(agent.deployment_state)}`}
+                                  aria-hidden="true"
+                                />
+                                <span className="deployed-agents-card__state">{stateLabel}</span>
+                              </div>
+                              <div className="deployed-agents-card__badges">
+                                <span className="deployed-agents-card__badge">{channelLabel}</span>
+                                <span className="deployed-agents-card__badge">{memoryEnabled ? 'Memory' : 'No memory'}</span>
+                                <span className="deployed-agents-card__badge">{modelLabel}</span>
+                              </div>
+                            </button>
                           );
                         })}
-                      </DataTable>
+                      </div>
                     )}
                   </ListDetailPanel>
                 ) : null}
@@ -1785,12 +2196,12 @@ export function WorkstationDeployedAgentsPane({
                   <ListDetailPanel
                     eyebrow="Readiness"
                     title="Launch readiness"
-                    subtitle="Confirm channel availability and operational boundaries before going live."
+                    subtitle="Channel and runtime state."
                   >
                     <FormGrid columns="repeat(auto-fit, minmax(12rem, 1fr))">
-                      <FormReadout label="Live channel" value="Telegram" />
-                      <FormReadout label="Additional channels" value="Not enabled in this workspace yet" />
-                      <FormReadout label="Runtime profile" value="Each specialist runs with one linked runtime profile." />
+                      <FormReadout label="Primary channel" value={activeChannels[0] ? humanizeToken(activeChannels[0], activeChannels[0]) : 'No live channel'} />
+                      <FormReadout label="Channels" value={activeChannels.length > 0 ? activeChannels.join(', ') : 'No active channels'} />
+                      <FormReadout label="Runtime" value={humanizeToken(selectedAgent?.runtime_target, 'Cloud')} />
                     </FormGrid>
                   </ListDetailPanel>
                 ) : null}
@@ -1802,7 +2213,7 @@ export function WorkstationDeployedAgentsPane({
                 <ListDetailPanel
                   eyebrow="Detail"
                   title={selectedAgent ? readString(selectedAgent.name, 'Specialist details') : 'Specialist details'}
-                  subtitle={selectedAgent ? readString(selectedAgent.persona, 'Selected specialist overview and launch controls') : 'Select a specialist to review readiness, channels, and launch controls.'}
+                  subtitle={selectedAgent ? readString(selectedAgent.persona, 'Selected specialist') : 'Select a specialist.'}
                   actions={selectedAgent ? (
                     <div className="app-inline-actions app-inline-actions--tight">
                       <AppButton type="button" tone="secondary" onClick={openEditWizard}>
@@ -1839,7 +2250,7 @@ export function WorkstationDeployedAgentsPane({
                   {!selectedAgent ? (
                     <EmptyPanel
                       title="No specialist selected"
-                      body="Choose a specialist from the list or start guided setup to create one."
+                      body="Choose a specialist to review readiness, tools, memory, and launch settings."
                     />
                   ) : isLoadingDetail ? (
                     <>
@@ -1852,11 +2263,11 @@ export function WorkstationDeployedAgentsPane({
                         <StateBanner
                           tone={selectedTelegramReadiness.readyForLive ? 'success' : selectedTelegramReadiness.blockers.length > 0 ? 'warning' : 'neutral'}
                           title={selectedTelegramReadiness.readyForLive ? 'Telegram launch ready' : 'Telegram launch not ready'}
-                          detail={selectedTelegramReadiness.nextAction ?? 'Studio verifies connector setup and message routing before launch.'}
+                          detail={selectedTelegramReadiness.nextAction ?? 'Connector checks are in progress.'}
                         >
                           {selectedTelegramReadiness.blockers.length > 0
                             ? selectedTelegramReadiness.blockers.map((item) => item.message).join(' · ')
-                            : selectedTelegramReadiness.warnings.map((item) => item.message).join(' · ') || 'Telegram is currently the active Studio channel for live launch.'}
+                            : selectedTelegramReadiness.warnings.map((item) => item.message).join(' · ') || `${selectedTelegramReadiness.connectors.length} connector${selectedTelegramReadiness.connectors.length === 1 ? '' : 's'} checked.`}
                         </StateBanner>
                       ) : isLoadingTelegramReadiness ? (
                         <SkeletonBlock height="5rem" />
@@ -1935,6 +2346,90 @@ export function WorkstationDeployedAgentsPane({
                           <FormReadout label="Outcomes" value={formatOutcomeSummary(selectedAnalytics)} />
                         </FormGrid>
                       </div>
+                      {detailConfigDraft ? (
+                        <>
+                          <FormField label="Tools" hint="Choose the minimum allowed tools for this specialist after creation.">
+                            <div className="app-inline-actions" style={{ flexWrap: 'wrap' }}>
+                              {STUDIO_TOOL_OPTIONS.map((tool) => {
+                                const selected = detailConfigDraft.selectedToolIds.includes(tool.id);
+                                return (
+                                  <AppButton
+                                    key={tool.id}
+                                    type="button"
+                                    tone={selected ? 'primary' : 'secondary'}
+                                    onClick={() => {
+                                      setDetailConfigDraft((current) => {
+                                        if (!current) {
+                                          return current;
+                                        }
+                                        const nextSelected = current.selectedToolIds.includes(tool.id)
+                                          ? current.selectedToolIds.filter((item) => item !== tool.id)
+                                          : [...current.selectedToolIds, tool.id];
+                                        return {
+                                          ...current,
+                                          selectedToolIds: nextSelected,
+                                        };
+                                      });
+                                    }}
+                                  >
+                                    {selected ? `Enabled · ${tool.label}` : tool.label}
+                                  </AppButton>
+                                );
+                              })}
+                            </div>
+                          </FormField>
+                          <FormGrid columns="repeat(auto-fit, minmax(14rem, 1fr))">
+                            <FormField label="Persistent memory" hint="Enable memory and adjust retention after the specialist has been created.">
+                              <FormSelect
+                                value={detailConfigDraft.memoryEnabled ? 'enabled' : 'disabled'}
+                                onChange={(event) => {
+                                  const nextValue = event.currentTarget.value === 'enabled';
+                                  setDetailConfigDraft((current) => current ? { ...current, memoryEnabled: nextValue } : current);
+                                }}
+                              >
+                                <option value="disabled">Disabled</option>
+                                <option value="enabled">Enabled</option>
+                              </FormSelect>
+                            </FormField>
+                            <ContextPresetControl
+                              value={detailConfigDraft.contextBudgetPreset}
+                              onSelect={(nextValue) => {
+                                setDetailConfigDraft((current) => current ? { ...current, contextBudgetPreset: nextValue } : current);
+                              }}
+                            />
+                            <FormField label="Retention" hint="Controls how long this specialist can retain reusable memory state.">
+                              <FormSelect
+                                value={detailConfigDraft.retentionPreset}
+                                onChange={(event) => {
+                                  const nextValue = event.currentTarget.value;
+                                  setDetailConfigDraft((current) => current ? { ...current, retentionPreset: nextValue } : current);
+                                }}
+                              >
+                                <option value="short">Short</option>
+                                <option value="standard">Standard</option>
+                                <option value="extended">Extended</option>
+                              </FormSelect>
+                            </FormField>
+                          </FormGrid>
+                          <div className="app-inline-actions">
+                            <AppButton
+                              type="button"
+                              onClick={() => {
+                                void saveDetailConfig();
+                              }}
+                              disabled={isSavingDetailConfig}
+                            >
+                              {isSavingDetailConfig ? 'Saving…' : 'Save'}
+                            </AppButton>
+                            <FormReadout
+                              label="Selected tools"
+                              value={detailConfigDraft.selectedToolIds.length > 0
+                                ? detailConfigDraft.selectedToolIds.map((toolId) => toolLabel(toolId)).join(', ')
+                                : 'No tools selected'}
+                            />
+                          </div>
+                        </>
+                      ) : null}
                       <div className="app-meta-item">
                         <div className="app-meta-label">
                           System prompt
@@ -1952,12 +2447,12 @@ export function WorkstationDeployedAgentsPane({
                 <ListDetailPanel
                   eyebrow="Conversations"
                   title="Live conversation inbox"
-                  subtitle="Review current customer sessions, filter by status, and open transcript details."
+                  subtitle="Current sessions."
                 >
                   {!selectedAgent ? (
                     <EmptyPanel
                       title="Select a specialist first"
-                      body="Conversation history appears after you select a specialist."
+                      body="Pick a specialist to open its inbox and review customer sessions."
                     />
                   ) : isLoadingConversations ? (
                     <>
@@ -1967,7 +2462,7 @@ export function WorkstationDeployedAgentsPane({
                   ) : conversations.length === 0 ? (
                     <EmptyPanel
                       title="No customer sessions yet"
-                      body="Conversations will appear here as this specialist starts receiving customer messages."
+                      body="Connect Telegram and send the first customer message to start this inbox."
                     />
                   ) : (
                     <div data-deployed-agent-conversations="list">
@@ -2039,7 +2534,7 @@ export function WorkstationDeployedAgentsPane({
                       {filteredConversations.length === 0 ? (
                         <EmptyPanel
                           title="No sessions match the active filters"
-                          body="Clear one or more filters to return to the full inbox."
+                          body="No sessions match these filters. Clear them to return to the full inbox."
                         />
                       ) : (
                       <DataTable>
@@ -2091,7 +2586,7 @@ export function WorkstationDeployedAgentsPane({
                 <ListDetailPanel
                   eyebrow="Transcript"
                   title={selectedConversation ? conversationCustomerLabel(selectedConversation) : 'Transcript detail'}
-                  subtitle="Review message, tool, and escalation events in timeline order."
+                  subtitle="Timeline."
                   actions={selectedConversation && selectedExternalUserId ? (
                     <AppButton
                       type="button"
@@ -2108,7 +2603,7 @@ export function WorkstationDeployedAgentsPane({
                   {!selectedConversation ? (
                     <EmptyPanel
                       title="Select a session"
-                      body="Choose a conversation from the inbox to review the timeline."
+                      body="Choose a customer session to inspect the full transcript and linked runs."
                     />
                   ) : isLoadingTranscript ? (
                     <>
@@ -2119,7 +2614,7 @@ export function WorkstationDeployedAgentsPane({
                   ) : !selectedTranscript ? (
                     <EmptyPanel
                       title="Transcript unavailable"
-                      body="The session exists, but the transcript detail could not be loaded right now."
+                      body="This session exists, but the transcript could not be loaded right now. Refresh and try again."
                     />
                   ) : (
                     <div data-deployed-agent-transcript="detail" className="app-stack-3">
@@ -2132,10 +2627,21 @@ export function WorkstationDeployedAgentsPane({
                         label="Run ids"
                         value={Array.isArray(selectedTranscript.run_ids) && selectedTranscript.run_ids.length > 0 ? selectedTranscript.run_ids.join(', ') : 'No run ids logged'}
                       />
+                      {selectedAgent ? (
+                        <div className="app-chat-context-strip">
+                          <span>{selectedAgentModelLabel}</span>
+                          <span aria-hidden="true">&middot;</span>
+                          <span>{`memory: ${selectedAgentMemoryEnabled ? 'on' : 'off'}`}</span>
+                          <span aria-hidden="true">&middot;</span>
+                          <span>{`channel: ${selectedAgentChannelLabel}`}</span>
+                          <span aria-hidden="true">&middot;</span>
+                          <span>{`status: ${selectedAgentStatusLabel}`}</span>
+                        </div>
+                      ) : null}
                       {transcriptEntries.length === 0 ? (
                         <EmptyPanel
                           title="Transcript has no entries"
-                          body="This session is known to the inbox, but no ordered transcript entries were returned."
+                          body="This session was created, but no ordered transcript entries were returned yet. Send another message and refresh."
                         />
                       ) : (
                         transcriptEntries.map((entry) => (
@@ -2154,10 +2660,275 @@ export function WorkstationDeployedAgentsPane({
           />
         )}
 
+        {currentStudioSubview === 'agents' && overlayAgent ? (
+          <div className="deployed-agents-overlay" role="dialog" aria-modal="true" aria-label="Specialist settings">
+            <div className="deployed-agents-overlay__shell">
+              <div className="deployed-agents-overlay__header">
+                <div className="deployed-agents-overlay__identity">
+                  <span className="deployed-agents-overlay__avatar" aria-hidden="true">
+                    {readString(overlayAgent.name, 'S').charAt(0).toUpperCase()}
+                  </span>
+                  <div className="deployed-agents-overlay__copy">
+                    <strong className="deployed-agents-overlay__title">{readString(overlayAgent.name, 'Specialist')}</strong>
+                    <div className="deployed-agents-overlay__status-row">
+                      <span className={joinClassNames(
+                        'deployed-agents-card__status',
+                        `deployed-agents-card__status--${rosterStatusTone(overlayAgent.deployment_state)}`,
+                      )}
+                      />
+                      <span className="deployed-agents-overlay__status-label">{deploymentStateLabel(overlayAgent.deployment_state)}</span>
+                    </div>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  className="deployed-agents-overlay__close"
+                  onClick={() => setOverlayAgentId(null)}
+                  aria-label="Close specialist settings"
+                >
+                  <X size={16} strokeWidth={1.9} aria-hidden="true" />
+                </button>
+              </div>
+
+              <div className="deployed-agents-overlay__tabs" role="tablist" aria-label="Specialist settings tabs">
+                {SPECIALIST_OVERLAY_TABS.map((tab) => (
+                  <button
+                    key={tab.id}
+                    type="button"
+                    role="tab"
+                    aria-selected={overlayTab === tab.id}
+                    className={joinClassNames(
+                      'deployed-agents-overlay__tab',
+                      overlayTab === tab.id && 'deployed-agents-overlay__tab--active',
+                    )}
+                    onClick={() => setOverlayTab(tab.id)}
+                  >
+                    {tab.label}
+                  </button>
+                ))}
+              </div>
+
+              <div className="deployed-agents-overlay__body">
+                {overlayTab === 'overview' ? (
+                  <div className="deployed-agents-overlay__section">
+                    <FormGrid columns="repeat(auto-fit, minmax(14rem, 1fr))">
+                      <FormField label="Agent name">
+                        <FormInput
+                          value={overlayName}
+                          onChange={(event) => setOverlayName(event.currentTarget.value)}
+                          placeholder="Specialist name"
+                        />
+                      </FormField>
+                      <FormField label="Last active">
+                        <FormReadout
+                          label="Last active"
+                          value={overlayAgentMetrics?.latestActivityLabel ?? 'No recent activity'}
+                        />
+                      </FormField>
+                    </FormGrid>
+                    <FormField label="Purpose / persona">
+                      <FormTextarea
+                        value={overlayPersona}
+                        onChange={(event) => setOverlayPersona(event.currentTarget.value)}
+                        rows={5}
+                      />
+                    </FormField>
+                    <div className="deployed-agents-overlay__overview-grid">
+                      <div className="deployed-agents-overlay__meta">
+                        <span className="deployed-agents-overlay__meta-label">Channel</span>
+                        <span className="deployed-agents-overlay__meta-value">
+                          {readString(readRecord(selectedTelegramReadiness?.configuredBinding).label, overlayChannels[0] || 'Not bound')}
+                        </span>
+                        <button type="button" className="deployed-agents-overlay__meta-link" onClick={openEditWizard}>
+                          Rebind →
+                        </button>
+                      </div>
+                      <div className="deployed-agents-overlay__meta">
+                        <span className="deployed-agents-overlay__meta-label">Deploy state</span>
+                        <span className="deployed-agents-overlay__meta-value">{deploymentStateLabel(overlayAgent.deployment_state)}</span>
+                        <div className="deployed-agents-overlay__action-row">
+                          <AppButton
+                            type="button"
+                            onClick={() => {
+                              void handleDeploymentAction('deploy');
+                            }}
+                            disabled={
+                              busyAgentId === readString(overlayAgent.id)
+                              || readString(overlayAgent.deployment_state).toLowerCase() === 'live'
+                              || isLoadingTelegramReadiness
+                              || !selectedTelegramReadiness
+                              || (selectedTelegramReadiness !== null && selectedTelegramReadiness.readyForLive !== true)
+                            }
+                          >
+                            Deploy
+                          </AppButton>
+                          <AppButton
+                            type="button"
+                            tone="secondary"
+                            onClick={() => {
+                              void handleDeploymentAction('pause');
+                            }}
+                            disabled={busyAgentId === readString(overlayAgent.id) || readString(overlayAgent.deployment_state).toLowerCase() === 'paused'}
+                          >
+                            Pause
+                          </AppButton>
+                        </div>
+                      </div>
+                    </div>
+                    <div className="deployed-agents-overlay__footer">
+                      <AppButton type="button" onClick={() => { void saveOverlayOverview(); }} disabled={isSavingOverlayOverview}>
+                        {isSavingOverlayOverview ? 'Saving…' : 'Save'}
+                      </AppButton>
+                    </div>
+                  </div>
+                ) : null}
+
+                {overlayTab === 'tools' ? (
+                  <div className="deployed-agents-overlay__section">
+                    <div className="sage-tool-list" role="list">
+                      {STUDIO_TOOL_OPTIONS.map((tool) => {
+                        const selected = detailConfigDraft?.selectedToolIds.includes(tool.id) ?? false;
+                        return (
+                          <article key={tool.id} className="sage-tool-row" role="listitem">
+                            <div className="sage-tool-row__copy">
+                              <strong className="sage-tool-row__title">{tool.label}</strong>
+                              <p className="sage-tool-row__description">{tool.description}</p>
+                            </div>
+                            <div className="sage-tool-row__actions">
+                              <button
+                                type="button"
+                                className={joinClassNames('sage-tool-toggle', selected && 'sage-tool-toggle--enabled')}
+                                role="switch"
+                                aria-checked={selected}
+                                onClick={() => {
+                                  setDetailConfigDraft((current) => {
+                                    if (!current) {
+                                      return current;
+                                    }
+                                    const nextSelected = current.selectedToolIds.includes(tool.id)
+                                      ? current.selectedToolIds.filter((item) => item !== tool.id)
+                                      : [...current.selectedToolIds, tool.id];
+                                    return { ...current, selectedToolIds: nextSelected };
+                                  });
+                                }}
+                              >
+                                <span className="sage-tool-toggle__thumb" />
+                              </button>
+                            </div>
+                          </article>
+                        );
+                      })}
+                    </div>
+                    <div className="deployed-agents-overlay__footer">
+                      <AppButton type="button" onClick={() => { void saveDetailConfig(); }} disabled={isSavingDetailConfig}>
+                        {isSavingDetailConfig ? 'Saving…' : 'Save'}
+                      </AppButton>
+                    </div>
+                  </div>
+                ) : null}
+
+                {overlayTab === 'memory' ? (
+                  <div className="deployed-agents-overlay__section">
+                    {detailConfigDraft ? (
+                      <>
+                        <div className="deployed-agents-overlay__toggle-row">
+                          <div className="sage-tool-row__copy">
+                            <strong className="sage-tool-row__title">Persistent memory</strong>
+                            <p className="sage-tool-row__description">Keep reusable specialist context across customer sessions.</p>
+                          </div>
+                          <button
+                            type="button"
+                            className={joinClassNames('sage-tool-toggle', detailConfigDraft.memoryEnabled && 'sage-tool-toggle--enabled')}
+                            role="switch"
+                            aria-checked={detailConfigDraft.memoryEnabled}
+                            onClick={() => {
+                              setDetailConfigDraft((current) => current ? { ...current, memoryEnabled: !current.memoryEnabled } : current);
+                            }}
+                          >
+                            <span className="sage-tool-toggle__thumb" />
+                          </button>
+                        </div>
+                        <FormGrid columns="repeat(auto-fit, minmax(14rem, 1fr))">
+                          <ContextPresetControl
+                            value={detailConfigDraft.contextBudgetPreset}
+                            onSelect={(nextValue) => {
+                              setDetailConfigDraft((current) => current ? { ...current, contextBudgetPreset: nextValue } : current);
+                            }}
+                          />
+                          <FormField label="Retention window">
+                            <FormSelect
+                              value={detailConfigDraft.retentionPreset}
+                              onChange={(event) => {
+                                const nextValue = event.currentTarget.value;
+                                setDetailConfigDraft((current) => current ? { ...current, retentionPreset: nextValue } : current);
+                              }}
+                            >
+                              <option value="short">Short</option>
+                              <option value="standard">Standard</option>
+                              <option value="extended">Extended</option>
+                            </FormSelect>
+                          </FormField>
+                        </FormGrid>
+                        <div className="deployed-agents-overlay__memory-list">
+                          {isLoadingOverlayMemory && overlayMemoryEntries.length === 0 ? (
+                            <>
+                              <SkeletonBlock height="4rem" />
+                              <SkeletonBlock height="4rem" />
+                            </>
+                          ) : overlayMemoryEntries.length === 0 ? (
+                            <div className="deployed-agents-overlay__empty">No customer memory yet — memory builds as customers chat with this specialist.</div>
+                          ) : overlayMemoryEntries.map((entry) => (
+                            <article key={readString(entry.id, `${readString(entry.channel)}-${readString(entry.external_user_id)}`)} className="deployed-agents-overlay__memory-entry">
+                              <strong className="deployed-agents-overlay__memory-title">{truncateExternalUserId(entry.external_user_id)}</strong>
+                              <p className="deployed-agents-overlay__memory-body deployed-agents-overlay__memory-body--summary">
+                                {readString(entry.summary_text, 'No memory summary yet.')}
+                              </p>
+                              <span className="deployed-agents-overlay__memory-meta">{formatTimestamp(entry.updated_at)}</span>
+                            </article>
+                          ))}
+                        </div>
+                        <div className="deployed-agents-overlay__footer">
+                          <AppButton type="button" onClick={() => { void saveDetailConfig(); }} disabled={isSavingDetailConfig}>
+                            {isSavingDetailConfig ? 'Saving…' : 'Save'}
+                          </AppButton>
+                        </div>
+                      </>
+                    ) : null}
+                  </div>
+                ) : null}
+
+                {overlayTab === 'connectors' ? (
+                  <div className="deployed-agents-overlay__section">
+                    <div className="sage-unified-grid sage-unified-grid--4">
+                      {overlayConnectorCards.map((connector) => (
+                        <article key={connector.id} className="sage-unified-card deployed-agents-overlay__connector-card">
+                          <span className="sage-integration-brand" aria-hidden="true">
+                            <img src={connector.image} alt="" className="sage-integration-brand__image" />
+                          </span>
+                          <strong className="sage-unified-card__title">{connector.label}</strong>
+                          <span className={joinClassNames('sage-unified-card__status', connector.connected && 'sage-unified-card__status--connected')}>
+                            {connector.connected ? <span className="sage-unified-card__dot" aria-hidden="true" /> : null}
+                            {connector.statusLabel}
+                          </span>
+                          <div className="sage-unified-expand__tag-row">
+                            {connector.capabilityTags.map((tag) => (
+                              <span key={tag} className="sage-unified-expand__tag">{tag}</span>
+                            ))}
+                          </div>
+                        </article>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
+              </div>
+            </div>
+          </div>
+        ) : null}
+
       <CommandSheet
         open={isWizardOpen}
-        title={wizardMode === 'create' ? 'Create Telegram Specialist' : 'Edit Telegram Specialist'}
-        description="Seven guided steps define name, purpose, tools, memory, Telegram link, review, and launch readiness."
+        title={wizardMode === 'create' ? 'New Specialist' : 'Edit Specialist'}
+        description="Setup, connect Telegram, and deploy."
         onClose={closeWizard}
           actions={(
             <div className="app-inline-actions">
@@ -2187,7 +2958,7 @@ export function WorkstationDeployedAgentsPane({
                   }}
                   disabled={isSubmittingWizard}
                 >
-                  {wizardMode === 'create' ? 'Create draft specialist' : 'Save changes'}
+                  {wizardMode === 'create' ? 'Create Draft' : 'Save'}
                 </AppButton>
               )}
             </div>
@@ -2211,7 +2982,7 @@ export function WorkstationDeployedAgentsPane({
             </div>
 
             <ModalSection title={wizardStep.label} description={wizardStep.description}>
-              {wizardStep.id === 'name' ? (
+              {wizardStep.id === 'setup' ? (
                 <FormGrid columns="repeat(auto-fit, minmax(14rem, 1fr))">
                   <FormField label="Specialist name" hint="The public name customers will see in Telegram.">
                     <FormInput
@@ -2227,17 +2998,31 @@ export function WorkstationDeployedAgentsPane({
                       placeholder="https://example.com/avatar.png"
                     />
                   </FormField>
-                </FormGrid>
-              ) : null}
-
-              {wizardStep.id === 'purpose' ? (
-                <FormGrid columns="repeat(auto-fit, minmax(14rem, 1fr))">
                   <FormField label="Persona" hint="Short description of the specialist’s tone and behavior.">
                     <FormTextarea
                       rows={4}
                       value={wizardState.persona}
                       onChange={(event) => setWizardField('persona', event.currentTarget.value)}
                       placeholder="Fast and calm Telegram support specialist"
+                    />
+                    <div className="deployed-agents-wizard__memory-toggle">
+                      <div className="sage-tool-row__copy">
+                        <strong className="sage-tool-row__title">Enable persistent memory</strong>
+                        <p className="sage-tool-row__description">Specialist remembers each customer across conversations.</p>
+                      </div>
+                      <button
+                        type="button"
+                        className={joinClassNames('sage-tool-toggle', wizardState.memoryEnabled && 'sage-tool-toggle--enabled')}
+                        role="switch"
+                        aria-checked={wizardState.memoryEnabled}
+                        onClick={() => setWizardField('memoryEnabled', !wizardState.memoryEnabled)}
+                      >
+                        <span className="sage-tool-toggle__thumb" />
+                      </button>
+                    </div>
+                    <ContextPresetControl
+                      value={wizardState.contextBudgetPreset}
+                      onSelect={(nextValue) => setWizardField('contextBudgetPreset', nextValue)}
                     />
                   </FormField>
                   <FormField label="Purpose and behavior" hint="Core instructions this specialist follows.">
@@ -2259,79 +3044,17 @@ export function WorkstationDeployedAgentsPane({
                 </FormGrid>
               ) : null}
 
-              {wizardStep.id === 'tools' ? (
-                <div className="app-stack-3">
-                  <FormField label="Allowed tools" hint="Select the minimum tool scope this specialist needs.">
-                    <div className="app-inline-actions" style={{ flexWrap: 'wrap' }}>
-                      {STUDIO_TOOL_OPTIONS.map((tool) => {
-                        const selected = wizardState.selectedToolIds.includes(tool.id);
-                        return (
-                          <AppButton
-                            key={tool.id}
-                            type="button"
-                            tone={selected ? 'primary' : 'secondary'}
-                            onClick={() => toggleWizardTool(tool.id)}
-                          >
-                            {selected ? `Enabled · ${tool.label}` : tool.label}
-                          </AppButton>
-                        );
-                      })}
-                    </div>
-                  </FormField>
-                  <FormGrid columns="repeat(auto-fit, minmax(12rem, 1fr))">
-                    <FormReadout label="Selected tools" value={wizardState.selectedToolIds.length ? wizardState.selectedToolIds.map((toolId) => toolLabel(toolId)).join(', ') : 'None'} />
-                    <FormReadout label="Scope policy" value="Explicit allow-list only" />
-                  </FormGrid>
-                </div>
-              ) : null}
-
-              {wizardStep.id === 'memory' ? (
-                <div className="app-stack-3">
-                  <FormGrid columns="repeat(auto-fit, minmax(14rem, 1fr))">
-                    <FormField label="Persistent memory" hint="Enable memory to retain customer context between sessions.">
-                      <FormSelect
-                        value={wizardState.memoryEnabled ? 'enabled' : 'disabled'}
-                        onChange={(event) => setWizardField('memoryEnabled', event.currentTarget.value === 'enabled')}
-                      >
-                        <option value="disabled">Disabled</option>
-                        <option value="enabled">Enabled</option>
-                      </FormSelect>
-                    </FormField>
-                    <FormField label="Context budget" hint="How much recent history to include while memory is enabled.">
-                      <FormSelect
-                        value={wizardState.contextBudgetPreset}
-                        onChange={(event) => setWizardField('contextBudgetPreset', event.currentTarget.value)}
-                      >
-                        <option value="compact">Compact</option>
-                        <option value="balanced">Balanced</option>
-                        <option value="deep">Deep</option>
-                      </FormSelect>
-                    </FormField>
-                    <FormField label="Retention" hint="How long memory remains eligible for reuse.">
-                      <FormSelect
-                        value={wizardState.retentionPreset}
-                        onChange={(event) => setWizardField('retentionPreset', event.currentTarget.value)}
-                      >
-                        <option value="short">Short</option>
-                        <option value="standard">Standard</option>
-                        <option value="extended">Extended</option>
-                      </FormSelect>
-                    </FormField>
-                  </FormGrid>
-                </div>
-              ) : null}
-
-              {wizardStep.id === 'telegram' ? (
+              {wizardStep.id === 'connect' ? (
                 <div className="app-stack-3">
                   {selectedTelegramReadiness ? (
                     <StateBanner
                       tone={selectedTelegramReadiness.readyForLive ? 'success' : selectedTelegramReadiness.blockers.length > 0 ? 'warning' : 'neutral'}
                       title={selectedTelegramReadiness.readyForLive ? 'Telegram launch path is ready' : 'Telegram launch checks'}
-                      detail={selectedTelegramReadiness.nextAction ?? 'Studio checks connector binding and message routing before live deploy.'}
+                      detail={selectedTelegramReadiness.nextAction ?? 'Connector checks are in progress.'}
                     >
                       {selectedTelegramReadiness.blockers.length > 0
                         ? selectedTelegramReadiness.blockers.map((item) => item.message).join(' · ')
-                        : selectedTelegramReadiness.warnings.map((item) => item.message).join(' · ') || 'Telegram is currently the active live channel in Studio.'}
+                        : selectedTelegramReadiness.warnings.map((item) => item.message).join(' · ') || `${selectedTelegramReadiness.connectors.length} connector${selectedTelegramReadiness.connectors.length === 1 ? '' : 's'} checked.`}
                     </StateBanner>
                   ) : isLoadingTelegramReadiness ? (
                     <SkeletonBlock height="5rem" />
@@ -2375,6 +3098,31 @@ export function WorkstationDeployedAgentsPane({
                       </FormSelect>
                     </FormField>
                   </FormGrid>
+                  {!isLoadingTelegramReadiness && (selectedTelegramReadiness?.connectors.length ?? 0) === 0 ? (
+                    <div className="app-stack-3">
+                      <StateBanner tone="neutral" title="No Telegram bot connected yet.">
+                        Studio needs one Telegram bot before this specialist can go live.
+                      </StateBanner>
+                      <div className="app-inline-actions">
+                        <AppButton
+                          type="button"
+                          tone="secondary"
+                          onClick={() => {
+                            const nextOpenState = !isTelegramSetupOpen;
+                            setIsTelegramSetupOpen(nextOpenState);
+                            if (nextOpenState) {
+                              void loadTelegramReadiness(readString(selectedAgent?.id) || undefined);
+                            }
+                          }}
+                        >
+                          {isTelegramSetupOpen ? 'Hide Telegram setup' : 'Connect Telegram bot'}
+                        </AppButton>
+                      </div>
+                      {isTelegramSetupOpen ? (
+                        <WorkspaceChannelPairingSurface featureId="settings" />
+                      ) : null}
+                    </div>
+                  ) : null}
                   <FormGrid columns="repeat(auto-fit, minmax(12rem, 1fr))">
                     <FormReadout label="Inbound binding key" value={selectedWizardConnector?.endpointKey || wizardState.telegramEndpointKey || 'Select a connector'} />
                     <FormReadout label="Bot username" value={selectedWizardConnector?.botUsername || 'Not exposed by connector'} />
@@ -2387,36 +3135,6 @@ export function WorkstationDeployedAgentsPane({
                       value={humanizeToken(readRecord(selectedTelegramReadiness?.webhook).status, 'Checking')}
                     />
                   </FormGrid>
-                  <FormReadout label="Additional channels" value="Coming soon" />
-                </div>
-              ) : null}
-
-              {wizardStep.id === 'review' ? (
-                <div className="app-stack-3">
-                  <FormGrid columns="repeat(auto-fit, minmax(14rem, 1fr))">
-                    <FormReadout label="Name" value={wizardState.name || 'Not set'} />
-                    <FormReadout label="Purpose" value={wizardState.persona || 'Not set'} />
-                    <FormReadout
-                      label="Tools"
-                      value={wizardState.selectedToolIds.length ? wizardState.selectedToolIds.map((toolId) => toolLabel(toolId)).join(', ') : 'None selected'}
-                    />
-                    <FormReadout
-                      label="Memory scope"
-                      value={wizardState.memoryEnabled ? `${humanizeToken(wizardState.contextBudgetPreset)} · ${humanizeToken(wizardState.retentionPreset)}` : 'Disabled'}
-                    />
-                    <FormReadout
-                      label="Telegram binding"
-                      value={wizardState.telegramEnabled ? (selectedWizardConnector?.label || wizardState.telegramConnectorId || 'Pending connector') : 'Disabled'}
-                    />
-                    <FormReadout
-                      label="Readiness"
-                      value={selectedTelegramReadiness?.readyForLive ? 'Ready for deploy' : selectedTelegramReadiness?.nextAction || 'Pending checks'}
-                    />
-                  </FormGrid>
-                  <FormReadout
-                    label="System behavior"
-                    value={wizardState.systemPrompt || 'No system behavior added yet.'}
-                  />
                 </div>
               ) : null}
 
@@ -2546,7 +3264,7 @@ export function WorkstationDeployedAgentsPane({
                         }}
                         disabled={busyAgentId === readString(selectedAgent.id)}
                       >
-                        Deploy live
+                        Deploy
                       </AppButton>
                       <AppButton
                         type="button"
@@ -2556,7 +3274,7 @@ export function WorkstationDeployedAgentsPane({
                         }}
                         disabled={busyAgentId === readString(selectedAgent.id)}
                       >
-                        Pause specialist
+                        Pause
                       </AppButton>
                     </div>
                   ) : (

@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { Brain, Code, FileText, Monitor, Zap } from 'lucide-react';
 
 import { DataBadge } from '@/lib/ui/data-table';
 import { Modal } from '@/lib/ui/modal';
@@ -61,6 +62,11 @@ type ToolCardView = {
     action: string;
     targetSummary: string;
     url: string | null;
+  }>;
+  computerActions: Array<{
+    action: string;
+    label: string;
+    timestamp: string | null;
   }>;
   screenshots: Array<{
     artifactId: string | null;
@@ -236,6 +242,112 @@ function formatTimestamp(value: unknown): string | null {
   });
 }
 
+function formatTraceOffset(timestamp: string | null, traceStartMs: number | null): string | null {
+  if (!timestamp || !traceStartMs) {
+    return null;
+  }
+  const eventMs = Date.parse(timestamp);
+  if (!Number.isFinite(eventMs)) {
+    return null;
+  }
+  const deltaSeconds = Math.max(0, Math.round((eventMs - traceStartMs) / 1000));
+  const minutes = Math.floor(deltaSeconds / 60);
+  const seconds = deltaSeconds % 60;
+  return `${minutes}:${String(seconds).padStart(2, '0')}`;
+}
+
+function classifyToolName(toolName: string): 'file' | 'code' | 'default' {
+  if (/file|read|write|document|pdf|excel|csv|sheet/i.test(toolName)) {
+    return 'file';
+  }
+  if (/code|execute|run|shell|bash|python|script/i.test(toolName)) {
+    return 'code';
+  }
+  return 'default';
+}
+
+function extractFileLabel(argsPreview: Record<string, unknown>): string {
+  const candidateKeys = ['path', 'file', 'file_path', 'filename', 'document', 'pdf', 'csv', 'sheet'];
+  for (const key of candidateKeys) {
+    const value = readString(argsPreview[key]);
+    if (value) {
+      return value;
+    }
+  }
+  return 'document';
+}
+
+function extractCodeSnippet(argsPreview: Record<string, unknown>): string {
+  const candidateKeys = ['code', 'script', 'command', 'bash', 'python', 'source'];
+  for (const key of candidateKeys) {
+    const value = readString(argsPreview[key]);
+    if (value) {
+      return value;
+    }
+  }
+  return '';
+}
+
+function detectCodeLanguage(toolName: string, codeSnippet: string): string | null {
+  const normalized = `${toolName} ${codeSnippet}`.toLowerCase();
+  if (normalized.includes('python')) {
+    return 'Python';
+  }
+  if (normalized.includes('bash') || normalized.includes('shell')) {
+    return 'Shell';
+  }
+  if (normalized.includes('javascript') || normalized.includes('node')) {
+    return 'JavaScript';
+  }
+  return null;
+}
+
+function buildThinkingSummary(events: TraceEvent[]): string {
+  let reasoning = '';
+  for (const event of events) {
+    if (event.event_type !== 'reasoning.summary.delta') {
+      continue;
+    }
+    const delta = readString(event.data.delta);
+    if (!delta) {
+      continue;
+    }
+    reasoning = reasoning ? `${reasoning}${delta}` : delta;
+  }
+  return reasoning.trim();
+}
+
+function computerActionLabel(eventType: string, data: Record<string, unknown>): string {
+  if (eventType === 'computer.click') {
+    return 'Clicked at screen position';
+  }
+  if (eventType === 'computer.type') {
+    const text = readString(data.text);
+    return text ? `Typed: ${text.slice(0, 40)}${text.length > 40 ? '…' : ''}` : 'Typed text';
+  }
+  if (eventType === 'computer.key') {
+    const keyName = readString(data.key) || readString(data.key_name);
+    return keyName ? `Pressed ${keyName}` : 'Pressed key';
+  }
+  if (eventType === 'computer.screenshot') {
+    return 'Screenshot captured';
+  }
+  if (eventType === 'computer.clipboard_read') {
+    return 'Read clipboard';
+  }
+  if (eventType === 'computer.clipboard_write') {
+    return 'Wrote to clipboard';
+  }
+  if (eventType === 'computer.list_windows') {
+    return 'Scanned open windows';
+  }
+  if (eventType === 'computer.launch') {
+    const appName = readString(data.app_name) || readString(data.app);
+    return appName ? `Opened ${appName}` : 'Opened app';
+  }
+  return 'Computer action';
+}
+
 function summarizeRootAgent(rootAgentId: string | null): string {
   const normalized = readString(rootAgentId);
   if (!normalized) {
@@ -338,7 +450,10 @@ function buildToolCards(events: TraceEvent[]) {
   const cards = new Map<string, ToolCardView>();
 
   for (const event of events) {
-    const toolCallId = readString(event.tool_call_id);
+    const toolCallId = readString(
+      event.tool_call_id,
+      event.event_type.startsWith('computer.') ? readString(event.item_id, event.id) : '',
+    );
     if (!toolCallId) {
       continue;
     }
@@ -355,6 +470,7 @@ function buildToolCards(events: TraceEvent[]) {
       queries: [],
       results: [],
       browserActions: [],
+      computerActions: [],
       screenshots: [],
       resultStatus: '',
       resultSummary: '',
@@ -394,6 +510,23 @@ function buildToolCards(events: TraceEvent[]) {
         width: readNumber(event.data.width),
         height: readNumber(event.data.height),
       });
+    } else if (event.event_type.startsWith('computer.')) {
+      if (!readString(existing.toolName) || existing.toolName === 'Tool') {
+        existing.toolName = 'Computer control';
+      }
+      existing.computerActions.push({
+        action: event.event_type,
+        label: computerActionLabel(event.event_type, event.data),
+        timestamp: readString(event.ts) || null,
+      });
+      if (event.event_type === 'computer.screenshot') {
+        existing.screenshots.push({
+          artifactId: readString(event.artifact_id) || null,
+          caption: readString(event.data.caption, 'Screenshot captured'),
+          width: readNumber(event.data.width),
+          height: readNumber(event.data.height),
+        });
+      }
     } else if (event.event_type === 'tool.result') {
       existing.resultStatus = readString(event.data.status, existing.resultStatus);
       existing.resultSummary = readString(event.data.summary, existing.resultSummary);
@@ -628,6 +761,27 @@ export function SageTraceView({
   const planModel = useMemo(() => buildPlanModel(visibleEvents), [visibleEvents]);
   const toolCards = useMemo(() => buildToolCards(visibleEvents), [visibleEvents]);
   const delegationCards = useMemo(() => buildDelegationCards(visibleEvents), [visibleEvents]);
+  const thinkingSummary = useMemo(() => buildThinkingSummary(visibleEvents), [visibleEvents]);
+  const traceStartMs = useMemo(() => {
+    const traceStartedAt = readString(trace?.started_at);
+    if (traceStartedAt) {
+      const parsed = Date.parse(traceStartedAt);
+      if (Number.isFinite(parsed)) {
+        return parsed;
+      }
+    }
+    for (const event of visibleEvents) {
+      const timestamp = readString(event.ts);
+      if (!timestamp) {
+        continue;
+      }
+      const parsed = Date.parse(timestamp);
+      if (Number.isFinite(parsed)) {
+        return parsed;
+      }
+    }
+    return null;
+  }, [trace?.started_at, visibleEvents]);
 
   const approvalEvents = useMemo(
     () => visibleEvents.filter((event) => event.event_type === 'approval.requested' || event.event_type === 'approval.resolved'),
@@ -734,12 +888,29 @@ export function SageTraceView({
           {!isLoading && visibleEvents.length === 0 ? (
             <AppEmptyState
               title="No trace events yet"
-              body="As execution work is recorded, the live or replay trace will populate here."
+              body="When Sage starts planning and using tools, the trace will appear here in real time."
             />
           ) : null}
 
           {isExpanded ? (
             <div className="app-stack-3">
+              {thinkingSummary ? (
+                <section className="sage-trace-thinking">
+                  <div className="sage-trace-thinking__header">
+                    <Brain size={12} strokeWidth={1.8} aria-hidden="true" />
+                    <span>Thinking</span>
+                  </div>
+                  <details>
+                    <summary className="sage-trace-disclosure">
+                      Show reasoning
+                    </summary>
+                    <div className="sage-trace-thinking__body">
+                      {thinkingSummary}
+                    </div>
+                  </details>
+                </section>
+              ) : null}
+
               {planModel.items.length > 0 ? (
                 <section data-sage-trace-plan="true" className="sage-trace-section">
                   <div className="app-stack-1">
@@ -792,137 +963,190 @@ export function SageTraceView({
               ) : null}
 
               {toolCards.map((tool) => (
-                <article
-                  key={tool.id}
-                  data-sage-trace-tool-card={tool.toolCallId}
-                  className="sage-trace-card"
-                >
-                  <div className="app-inline-actions app-inline-actions--tight">
-                    <strong className="sage-trace-title">{tool.toolName}</strong>
-                    <DataBadge tone={tool.resultStatus ? badgeToneForStatus(tool.resultStatus) : 'accent'}>
-                      {tool.resultStatus || 'running'}
-                    </DataBadge>
-                    {tool.connectorId ? <DataBadge tone="neutral">{tool.connectorId}</DataBadge> : null}
-                  </div>
-                  {Object.keys(tool.argsPreview).length > 0 ? (
-                    <details>
-                      <summary className="sage-trace-disclosure">
-                        Tool arguments
-                      </summary>
-                      <pre className="sage-trace-code">
-                        {JSON.stringify(tool.argsPreview, null, 2)}
-                      </pre>
-                    </details>
-                  ) : null}
-                  {tool.progressMessages.length > 0 ? (
-                    <div className="app-stack-1">
-                      {tool.progressMessages.map((message, index) => (
-                        <span key={`${tool.id}:progress:${index}`} className="sage-trace-copy sage-trace-copy--compact">
-                          {message}
+                (() => {
+                  const toolKind = classifyToolName(tool.toolName);
+                  const fileLabel = extractFileLabel(tool.argsPreview);
+                  const fileAction = /write/i.test(tool.toolName) ? 'Writing' : 'Reading';
+                  const codeSnippet = extractCodeSnippet(tool.argsPreview);
+                  const codeLanguage = detectCodeLanguage(tool.toolName, codeSnippet);
+                  const ToolIcon = toolKind === 'file' ? FileText : toolKind === 'code' ? Code : Zap;
+                  return (
+                    <article
+                      key={tool.id}
+                      data-sage-trace-tool-card={tool.toolCallId}
+                      className="sage-trace-card"
+                    >
+                      <div className="app-inline-actions app-inline-actions--tight">
+                        <span className="sage-trace-title-line">
+                          <ToolIcon size={14} strokeWidth={1.8} aria-hidden="true" className="sage-trace-title-icon" />
+                          <strong className="sage-trace-title">
+                            {toolKind === 'file'
+                              ? `${fileAction} ${fileLabel}`
+                              : tool.toolName}
+                          </strong>
                         </span>
-                      ))}
-                    </div>
-                  ) : null}
-                  {tool.queries.map((query, index) => (
-                    <div key={`${tool.id}:query:${index}`} className="app-stack-1">
-                      <div className="sage-trace-copy">
-                        Searching: <strong className="sage-trace-text-strong">{query.query}</strong>
+                        {toolKind === 'code' && codeLanguage ? <DataBadge tone="neutral">{codeLanguage}</DataBadge> : null}
+                        <DataBadge tone={tool.resultStatus ? badgeToneForStatus(tool.resultStatus) : 'accent'}>
+                          {toolKind === 'code'
+                            ? tool.resultStatus && badgeToneForStatus(tool.resultStatus) === 'danger'
+                              ? '✗ Failed'
+                              : tool.resultStatus
+                                ? '✓ Success'
+                                : 'running'
+                            : tool.resultStatus || 'running'}
+                        </DataBadge>
+                        {tool.connectorId ? <DataBadge tone="neutral">{tool.connectorId}</DataBadge> : null}
                       </div>
-                      {tool.results.length > 0 && index === tool.queries.length - 1 ? (
+                      {tool.computerActions.length > 0 ? (
+                        <div className="sage-trace-computer-timeline">
+                          {tool.computerActions.map((action, index) => (
+                            <div key={`${tool.id}:computer:${index}`} className="sage-trace-computer-row">
+                              <span className="sage-trace-computer-label">
+                                <Monitor size={12} strokeWidth={1.8} aria-hidden="true" />
+                                <span>{action.label}</span>
+                              </span>
+                              <span>{formatTraceOffset(action.timestamp, traceStartMs) ?? '0:00'}</span>
+                            </div>
+                          ))}
+                        </div>
+                      ) : null}
+                      {toolKind === 'code' && codeSnippet ? (
+                        <div className="sage-trace-exec-stack">
+                          <pre className="sage-trace-exec-block">
+                            {codeSnippet}
+                          </pre>
+                        </div>
+                      ) : null}
+                      {Object.keys(tool.argsPreview).length > 0 ? (
                         <details>
                           <summary className="sage-trace-disclosure">
-                            Sources ({Math.min(tool.results.length, 5)})
+                            Tool arguments
                           </summary>
-                          <div className="sage-trace-source-list">
-                            {tool.results.slice(0, 5).map((result, resultIndex) => (
-                              <article
-                                key={`${tool.id}:result:${resultIndex}`}
-                                className="sage-trace-result-card"
-                              >
-                                <strong className="sage-trace-result-title">
-                                  {readString(result.title, `Source ${resultIndex + 1}`)}
-                                </strong>
-                                {readString(result.url) ? (
-                                  <a
-                                    href={readString(result.url)}
-                                    target="_blank"
-                                    rel="noreferrer"
-                                    className="sage-trace-result-link"
-                                  >
-                                    {readString(result.url)}
-                                  </a>
-                                ) : null}
-                              </article>
-                            ))}
-                          </div>
+                          <pre className="sage-trace-code">
+                            {JSON.stringify(tool.argsPreview, null, 2)}
+                          </pre>
                         </details>
                       ) : null}
-                    </div>
-                  ))}
-                  {tool.browserActions.length > 0 ? (
-                    <div className="app-stack-1">
-                      {tool.browserActions.map((action, index) => (
-                        <div key={`${tool.id}:action:${index}`} className="sage-trace-copy sage-trace-copy--compact">
-                          {action.action}: {action.targetSummary}
-                          {action.url ? ` (${action.url})` : ''}
+                      {tool.progressMessages.length > 0 ? (
+                        <div className="app-stack-1">
+                          {tool.progressMessages.map((message, index) => (
+                            <span key={`${tool.id}:progress:${index}`} className="sage-trace-copy sage-trace-copy--compact">
+                              {message}
+                            </span>
+                          ))}
+                        </div>
+                      ) : null}
+                      {tool.queries.map((query, index) => (
+                        <div key={`${tool.id}:query:${index}`} className="app-stack-1">
+                          <div className="sage-trace-copy">
+                            Searching: <strong className="sage-trace-text-strong">{query.query}</strong>
+                          </div>
+                          {tool.results.length > 0 && index === tool.queries.length - 1 ? (
+                            <details>
+                              <summary className="sage-trace-disclosure">
+                                Sources ({Math.min(tool.results.length, 5)})
+                              </summary>
+                              <div className="sage-trace-source-list">
+                                {tool.results.slice(0, 5).map((result, resultIndex) => (
+                                  <article
+                                    key={`${tool.id}:result:${resultIndex}`}
+                                    className="sage-trace-result-card"
+                                  >
+                                    <strong className="sage-trace-result-title">
+                                      {readString(result.title, `Source ${resultIndex + 1}`)}
+                                    </strong>
+                                    {readString(result.url) ? (
+                                      <a
+                                        href={readString(result.url)}
+                                        target="_blank"
+                                        rel="noreferrer"
+                                        className="sage-trace-result-link"
+                                      >
+                                        {readString(result.url)}
+                                      </a>
+                                    ) : null}
+                                  </article>
+                                ))}
+                              </div>
+                            </details>
+                          ) : null}
                         </div>
                       ))}
-                    </div>
-                  ) : null}
-                  {tool.screenshots.length > 0 ? (
-                    <div className="sage-trace-screenshot-grid">
-                      {tool.screenshots.map((shot, index) => {
-                        const src = shot.artifactId ? services.client.artifactFileUrl(shot.artifactId) : '';
-                        return (
-                          <button
-                            key={`${tool.id}:shot:${index}`}
-                            type="button"
-                            className="sage-trace-screenshot-button"
-                            disabled={!src}
-                            onClick={() => {
-                              if (src) {
-                                setLightboxImage({ src, caption: shot.caption });
-                              }
-                            }}
-                          >
-                            <div className="sage-trace-screenshot-frame">
-                              {src ? (
-                                <img
-                                  src={src}
-                                  alt={shot.caption || 'Browser screenshot'}
-                                  className="sage-trace-screenshot-image"
-                                />
-                              ) : null}
+                      {tool.browserActions.length > 0 ? (
+                        <div className="app-stack-1">
+                          {tool.browserActions.map((action, index) => (
+                            <div key={`${tool.id}:action:${index}`} className="sage-trace-copy sage-trace-copy--compact">
+                              {action.action}: {action.targetSummary}
+                              {action.url ? ` (${action.url})` : ''}
                             </div>
-                            <span className="sage-trace-screenshot-caption">
-                              {shot.caption || 'Screenshot'}
-                            </span>
-                          </button>
-                        );
-                      })}
-                    </div>
-                  ) : null}
-                  {tool.resultSummary ? (
-                    <div className="sage-trace-copy">
-                      {tool.resultSummary}
-                    </div>
-                  ) : null}
-                  {tool.artifactIds.length > 0 ? (
-                    <div className="app-inline-actions app-inline-actions--tight">
-                      {tool.artifactIds.map((artifactId) => (
-                        <a
-                          key={artifactId}
-                          href={services.client.artifactFileUrl(artifactId)}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="sage-trace-pill-link"
-                        >
-                          Artifact {artifactId}
-                        </a>
-                      ))}
-                    </div>
-                  ) : null}
-                </article>
+                          ))}
+                        </div>
+                      ) : null}
+                      {tool.screenshots.length > 0 ? (
+                        <div className="sage-trace-screenshot-grid">
+                          {tool.screenshots.map((shot, index) => {
+                            const src = shot.artifactId ? services.client.artifactFileUrl(shot.artifactId) : '';
+                            return (
+                              <button
+                                key={`${tool.id}:shot:${index}`}
+                                type="button"
+                                className="sage-trace-screenshot-button"
+                                disabled={!src}
+                                onClick={() => {
+                                  if (src) {
+                                    setLightboxImage({ src, caption: shot.caption });
+                                  }
+                                }}
+                              >
+                                <div className="sage-trace-screenshot-frame">
+                                  {src ? (
+                                    <img
+                                      src={src}
+                                      alt={shot.caption || 'Browser screenshot'}
+                                      className="sage-trace-screenshot-image"
+                                    />
+                                  ) : null}
+                                </div>
+                                <span className="sage-trace-screenshot-caption">
+                                  {shot.caption || 'Screenshot'}
+                                </span>
+                              </button>
+                            );
+                          })}
+                        </div>
+                      ) : null}
+                      {tool.resultSummary ? (
+                        toolKind === 'code' ? (
+                          <div className="sage-trace-exec-stack">
+                            <div className="sage-trace-exec-label">Result</div>
+                            <pre className="sage-trace-exec-block">
+                              {tool.resultSummary}
+                            </pre>
+                          </div>
+                        ) : (
+                          <div className="sage-trace-copy">
+                            {tool.resultSummary}
+                          </div>
+                        )
+                      ) : null}
+                      {tool.artifactIds.length > 0 ? (
+                        <div className="app-inline-actions app-inline-actions--tight">
+                          {tool.artifactIds.map((artifactId) => (
+                            <a
+                              key={artifactId}
+                              href={services.client.artifactFileUrl(artifactId)}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="sage-trace-pill-link"
+                            >
+                              Artifact {artifactId}
+                            </a>
+                          ))}
+                        </div>
+                      ) : null}
+                    </article>
+                  );
+                })()
               ))}
 
               {delegationCards.map((delegation) => (

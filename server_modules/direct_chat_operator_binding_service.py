@@ -345,6 +345,7 @@ def build_direct_chat_routing_policy_callbacks(
         message_requests_local_file_tool=_lookup(namespace, "message_requests_local_file_tool"),
         message_requests_local_shell_tool=_lookup(namespace, "message_requests_local_shell_tool"),
         message_requests_local_screenshot_tool=_lookup(namespace, "message_requests_local_screenshot_tool"),
+        message_requests_local_computer_tool=_lookup(namespace, "message_requests_local_computer_tool"),
         complex_task_sequence_markers=complex_task_sequence_markers,
         complex_task_outcome_markers=complex_task_outcome_markers,
         execution_markers=execution_markers,

@@ -59,6 +59,58 @@ def channel_turn_owner_user(*, install: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _normalize_tool_ids(value: Any) -> list[str]:
+    items = value if isinstance(value, list) else []
+    return [
+        str(item or "").strip().lower()
+        for item in items
+        if str(item or "").strip()
+    ]
+
+
+def _merge_tool_descriptors(existing: Any, additions: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    merged: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for item in list(existing or []) + additions:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name") or "").strip()
+        parameters = item.get("parameters") if isinstance(item.get("parameters"), dict) else None
+        if not name or not parameters or name in seen:
+            continue
+        seen.add(name)
+        merged.append(
+            {
+                "name": name,
+                "description": str(item.get("description") or "").strip(),
+                "parameters": parameters,
+            }
+        )
+    return merged
+
+
+def _specialist_tool_descriptors(selected_tool_ids: list[str]) -> list[dict[str, Any]]:
+    descriptors: list[dict[str, Any]] = []
+    if "web_search" in selected_tool_ids:
+        descriptors.append(
+            {
+                "name": "web__search",
+                "description": "Search the web and return the top results with titles, URLs, and snippets.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "query": {
+                            "type": "string",
+                            "description": "The search query to run.",
+                        }
+                    },
+                    "required": ["query"],
+                },
+            }
+        )
+    return descriptors
+
+
 def build_channel_turn_request(
     *,
     tenant_id: str,
@@ -96,6 +148,15 @@ def build_channel_turn_request(
         or str(install_metadata.get("model") or "").strip()
         or None
     )
+    selected_tool_ids = _normalize_tool_ids(
+        shared_metadata.get("selected_tool_ids")
+        or deployed_agent_metadata.get("selected_tool_ids")
+        or install_metadata.get("selected_tool_ids")
+    )
+    requested_tools = _merge_tool_descriptors(
+        shared_metadata.get("tools"),
+        _specialist_tool_descriptors(selected_tool_ids),
+    )
     metadata = {
         **shared_metadata,
         "workspace_agent_install_id": str(install.get("id") or "").strip() or None,
@@ -109,6 +170,8 @@ def build_channel_turn_request(
         "agent_role": agent_role_token(install=install, manifest=manifest),
         "agent_role_source": "channel_owner_binding",
         "seed_demo_if_empty": bool(seed_demo_if_empty),
+        "selected_tool_ids": selected_tool_ids or None,
+        "tools": requested_tools or None,
     }
     return build_inbound_agent_turn_request(
         tenant_id=tenant_id,
@@ -427,6 +490,7 @@ def build_route_response(
     result: ChannelExecutionResult,
     inbound_event_id: Optional[str],
     outbound_event_id: Optional[str],
+    notices: Optional[list[Dict[str, Any]]] = None,
 ) -> Dict[str, Any]:
     payload: Dict[str, Any] = {
         "workspace_id": context.workspace_id,
@@ -460,10 +524,17 @@ def build_route_response(
         payload["error"] = result.error
     if result.metadata:
         payload["metadata"] = result.metadata
+    reply_markup = payload.get("reply_markup")
+    if not isinstance(reply_markup, dict) and isinstance(result.payload, dict):
+        candidate_markup = result.payload.get("reply_markup")
+        if isinstance(candidate_markup, dict):
+            payload["reply_markup"] = candidate_markup
     if result.degraded_operations:
         payload["degraded_operations"] = list(result.degraded_operations)
     if result.incident_scope is not None:
         payload["incident_scope"] = result.incident_scope
     if result.incident_mode is not None:
         payload["incident_mode"] = result.incident_mode
+    if notices:
+        payload["notices"] = [dict(item) for item in notices if isinstance(item, dict)]
     return payload

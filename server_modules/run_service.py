@@ -4481,6 +4481,7 @@ def build_run_preview_context(
         "model": req.model,
         "credential_id": req.credential_id,
         "agents": req.agents or [],
+        "tools": metadata.get("tools") if isinstance(metadata.get("tools"), list) else [],
         "metadata": metadata,
         "workflow_definition": workflow_snapshot.get("definition") if isinstance(workflow_snapshot, dict) else None,
         "workflow_name": workflow_snapshot.get("name") if isinstance(workflow_snapshot, dict) else None,

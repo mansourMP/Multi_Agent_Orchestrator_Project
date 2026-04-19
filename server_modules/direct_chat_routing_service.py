@@ -31,6 +31,7 @@ class DirectChatRoutingPolicyCallbacks:
     message_requests_local_file_tool: Callable[[str], bool]
     message_requests_local_shell_tool: Callable[[str], bool]
     message_requests_local_screenshot_tool: Callable[[str], bool]
+    message_requests_local_computer_tool: Callable[[str], bool]
     complex_task_sequence_markers: tuple[str, ...] | list[str]
     complex_task_outcome_markers: tuple[str, ...] | list[str]
     execution_markers: tuple[str, ...] | list[str]
@@ -117,13 +118,22 @@ def prefer_durable_run_handoff(
     local_file = callbacks.message_requests_local_file_tool(message)
     local_shell = callbacks.message_requests_local_shell_tool(message)
     local_screenshot = callbacks.message_requests_local_screenshot_tool(message)
-    local_request_count = sum(1 for flag in (local_file, local_shell, local_screenshot) if flag)
+    local_computer = callbacks.message_requests_local_computer_tool(message) or bool(
+        re.search(
+            r"\b(click|type|press|open|launch|close|clipboard|copy|paste|computer|screen|window)\b",
+            compact,
+            flags=re.IGNORECASE,
+        )
+    )
+    local_request_count = sum(1 for flag in (local_file, local_shell, local_screenshot, local_computer) if flag)
     sequence_requested = any(marker in compact for marker in callbacks.complex_task_sequence_markers)
     outcome_requested = any(marker in compact for marker in callbacks.complex_task_outcome_markers)
     path_reference_total = path_like_reference_count(message)
     marker_count = action_marker_count(compact, callbacks.execution_markers)
     if local_request_count <= 0:
         return connection_mode in {"local_companion", "byok"} and outcome_requested and marker_count >= 1 and len(compact) >= 40
+    if local_computer and connection_mode == "local_companion":
+        return True
 
     mixes_connector_work = (
         callbacks.mentions_any(compact, callbacks.google_workspace_keywords)

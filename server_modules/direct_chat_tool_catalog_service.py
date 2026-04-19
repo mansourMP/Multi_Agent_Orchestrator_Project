@@ -146,20 +146,30 @@ def message_requests_local_computer_tool(message: str, callbacks: DirectChatTool
     compact = callbacks.compact_text(message)
     if not compact or callbacks.question_like(compact):
         return False
-    return callbacks.mentions_any(compact, callbacks.local_computer_control_keywords)
+    if callbacks.mentions_any(compact, callbacks.local_computer_control_keywords):
+        return True
+    return bool(
+        re.search(
+            r"\b(click|type|press|open|launch|close|clipboard|copy|paste|computer|screen|window)\b",
+            compact,
+            flags=re.IGNORECASE,
+        )
+    )
 
 
 def message_can_use_direct_local_tools(message: str, *, provider: str, tools: List[Dict[str, Any]], callbacks: DirectChatToolPolicyCallbacks) -> bool:
-    if not callbacks.provider_supports_direct_tool_calls(provider) or not tools:
+    if not tools:
         return False
     tool_names = {str(item.get("name") or "").strip() for item in tools if isinstance(item, dict)}
+    if message_requests_local_computer_tool(message, callbacks) and any(name.startswith("computer__") for name in tool_names):
+        return True
+    if not callbacks.provider_supports_direct_tool_calls(provider):
+        return False
     if message_requests_local_file_tool(message, callbacks) and {"file__read", "file__write"} & tool_names:
         return True
     if message_requests_local_shell_tool(message, callbacks) and "shell__exec" in tool_names:
         return True
     if message_requests_local_screenshot_tool(message, callbacks) and "screenshot__capture" in tool_names:
-        return True
-    if message_requests_local_computer_tool(message, callbacks) and any(name.startswith("computer__") for name in tool_names):
         return True
     return False
 

@@ -1,22 +1,12 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import { useRouter } from 'next/navigation';
 
-import { DataBadge } from '@/lib/ui/data-table';
 import { EmptyPanel } from '@/lib/ui/empty-panel';
 import { SkeletonBlock } from '@/lib/ui/skeleton-block';
 import { subscribeWorkstationApprovalResolved } from '@/lib/workspace/workstation-approval-events';
-import { useWorkspaceBoundary } from '@/lib/workspace/workspace-boundary';
 import { useWorkspaceServices, useWorkstationStreamState } from '@/lib/workspace/workspace-services';
-import {
-  WorkstationActionButton,
-  WorkstationSurfaceCard,
-  WorkstationSurfaceNotice,
-  WorkstationSurfaceRoot,
-  WorkstationSurfaceStat,
-  WorkstationSurfaceStatGrid,
-} from '@/lib/workspace/workstation-surface-primitives';
+import { WorkstationSurfaceRoot } from '@/lib/workspace/workstation-surface-primitives';
 
 type RunRecord = Record<string, unknown> & {
   run_id?: string | null;
@@ -25,23 +15,15 @@ type RunRecord = Record<string, unknown> & {
   created_at?: string | null;
 };
 
-type ActivityRecord = Record<string, unknown> & {
-  id?: string | null;
-  title?: string | null;
-  summary?: string | null;
-  action?: string | null;
-  event_class?: string | null;
-  created_at?: string | null;
-};
-
-type SageTaskRecord = {
+type RunListItem = {
   id: string;
-  kind: 'run' | 'event';
-  title: string;
-  subtitle: string;
-  status: string;
+  preview: string;
   occurredAt: string | null;
 };
+
+function readString(value: unknown, fallback = ''): string {
+  return typeof value === 'string' && value.trim() ? value.trim() : fallback;
+}
 
 function normalizeRunItems(payload: unknown): RunRecord[] {
   if (!payload || typeof payload !== 'object') {
@@ -53,20 +35,6 @@ function normalizeRunItems(payload: unknown): RunRecord[] {
     : [];
 }
 
-function normalizeActivityItems(payload: unknown): ActivityRecord[] {
-  if (!payload || typeof payload !== 'object') {
-    return [];
-  }
-  const items = (payload as Record<string, unknown>).items;
-  return Array.isArray(items)
-    ? items.filter((item): item is ActivityRecord => Boolean(item) && typeof item === 'object')
-    : [];
-}
-
-function readString(value: unknown, fallback: string): string {
-  return typeof value === 'string' && value.trim() ? value.trim() : fallback;
-}
-
 function parseTimestamp(value: string | null): number {
   if (!value) {
     return Number.NEGATIVE_INFINITY;
@@ -75,91 +43,116 @@ function parseTimestamp(value: string | null): number {
   return Number.isFinite(parsed) ? parsed : Number.NEGATIVE_INFINITY;
 }
 
-function formatTimestamp(value: string | null): string {
-  if (!value) {
-    return 'No timestamp recorded';
+function runPreviewLabel(run: RunRecord): string {
+  const directCandidates = [
+    run.first_user_message,
+    run.message,
+    run.prompt,
+    run.input_preview,
+    run.summary,
+    run.result_summary,
+    run.title,
+  ];
+  for (const candidate of directCandidates) {
+    const value = readString(candidate, '');
+    if (value) {
+      return value;
+    }
   }
-  const parsed = new Date(value);
-  if (Number.isNaN(parsed.getTime())) {
+  const metadata = run.metadata && typeof run.metadata === 'object' ? run.metadata as Record<string, unknown> : {};
+  const metadataCandidates = [
+    metadata.first_user_message,
+    metadata.message,
+    metadata.prompt,
+    metadata.input_preview,
+    metadata.summary,
+  ];
+  for (const candidate of metadataCandidates) {
+    const value = readString(candidate, '');
+    if (value) {
+      return value;
+    }
+  }
+  return 'Sage run';
+}
+
+function toRunListItems(runs: RunRecord[]): RunListItem[] {
+  return runs
+    .map((run, index) => ({
+      id: readString(run.run_id, `run-${index}`),
+      preview: runPreviewLabel(run),
+      occurredAt: readString(run.created_at) || null,
+    }))
+    .sort((left, right) => parseTimestamp(right.occurredAt) - parseTimestamp(left.occurredAt));
+}
+
+function formatRelativeTime(value: string | null): string {
+  if (!value) {
+    return 'Just now';
+  }
+  const parsed = Date.parse(value);
+  if (!Number.isFinite(parsed)) {
     return value;
   }
-  return parsed.toLocaleString([], {
+  const diffMinutes = Math.round((parsed - Date.now()) / 60000);
+  const formatter = new Intl.RelativeTimeFormat(undefined, { numeric: 'auto' });
+  if (Math.abs(diffMinutes) < 60) {
+    return formatter.format(diffMinutes, 'minute');
+  }
+  const diffHours = Math.round(diffMinutes / 60);
+  if (Math.abs(diffHours) < 24) {
+    return formatter.format(diffHours, 'hour');
+  }
+  const diffDays = Math.round(diffHours / 24);
+  if (Math.abs(diffDays) < 7) {
+    return formatter.format(diffDays, 'day');
+  }
+  return new Date(value).toLocaleDateString([], {
     month: 'short',
     day: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
   });
 }
 
-function taskTone(task: SageTaskRecord): 'neutral' | 'success' | 'warning' | 'danger' | 'accent' {
-  const status = task.status.trim().toLowerCase();
-  if (task.kind === 'event') {
-    if (status.includes('error') || status.includes('failed')) {
-      return 'danger';
-    }
-    if (status.includes('approval')) {
-      return 'warning';
-    }
-    if (status.includes('run')) {
-      return 'accent';
-    }
-    return 'neutral';
+function formatDateSeparator(value: string | null): string {
+  if (!value) {
+    return 'Earlier';
   }
-  if (status === 'running' || status === 'queued' || status === 'queued_local') {
-    return 'accent';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return value;
   }
-  if (status === 'waiting_for_input' || status === 'pending') {
-    return 'warning';
+  const now = new Date();
+  const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const startOfDate = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+  const diffDays = Math.round((startOfToday.getTime() - startOfDate.getTime()) / 86400000);
+  if (diffDays === 0) {
+    return 'Today';
   }
-  if (status === 'completed' || status === 'success') {
-    return 'success';
+  if (diffDays === 1) {
+    return 'Yesterday';
   }
-  if (status === 'failed' || status === 'rejected' || status === 'aborted' || status === 'canceled' || status === 'cancelled') {
-    return 'danger';
-  }
-  return 'neutral';
+  return date.toLocaleDateString([], {
+    month: 'short',
+    day: 'numeric',
+  });
 }
 
-function toSageTasks(runs: RunRecord[], activity: ActivityRecord[]): SageTaskRecord[] {
-  const runTasks = runs.map((run, index): SageTaskRecord => {
-    const runId = String(run.run_id ?? '').trim() || `run-${index}`;
-    return {
-      id: `run:${runId}`,
-      kind: 'run',
-      title: runId,
-      subtitle: readString(run.result_summary, 'Sage task'),
-      status: readString(run.status, 'unknown'),
-      occurredAt: typeof run.created_at === 'string' ? run.created_at : null,
-    };
+function groupRunsByDate(items: RunListItem[]): Array<{ label: string; items: RunListItem[] }> {
+  const groups = new Map<string, RunListItem[]>();
+  items.forEach((item) => {
+    const label = formatDateSeparator(item.occurredAt);
+    const nextItems = groups.get(label) ?? [];
+    nextItems.push(item);
+    groups.set(label, nextItems);
   });
-
-  const activityTasks = activity.map((item, index): SageTaskRecord => {
-    const eventId = String(item.id ?? `event-${index}`).trim();
-    return {
-      id: `event:${eventId}`,
-      kind: 'event',
-      title: readString(item.title ?? item.action, 'Activity update'),
-      subtitle: readString(item.summary, 'No summary available yet.'),
-      status: readString(item.event_class, 'event'),
-      occurredAt: typeof item.created_at === 'string' ? item.created_at : null,
-    };
-  });
-
-  return [...runTasks, ...activityTasks].sort((left, right) => parseTimestamp(right.occurredAt) - parseTimestamp(left.occurredAt));
-}
-
-function isActiveRunStatus(status: string): boolean {
-  const normalized = status.trim().toLowerCase();
-  return normalized === 'running' || normalized === 'queued' || normalized === 'queued_local' || normalized === 'waiting_for_input';
+  return Array.from(groups.entries()).map(([label, groupedItems]) => ({ label, items: groupedItems }));
 }
 
 export function WorkstationRunsPane() {
   const services = useWorkspaceServices();
   const streamState = useWorkstationStreamState();
-  const { workspaceId } = useWorkspaceBoundary();
-  const router = useRouter();
-  const [tasks, setTasks] = useState<SageTaskRecord[]>([]);
-  const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
+  const [runs, setRuns] = useState<RunListItem[]>([]);
+  const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -168,30 +161,25 @@ export function WorkstationRunsPane() {
       setIsLoading(true);
     }
     setError(null);
-    const [runsPayload, activityPayload] = await Promise.all([
-      services.client.listRuns({ limit: 80 }),
-      services.client.listActivityTimeline({ limit: 80 }),
-    ]);
-    setTasks(toSageTasks(normalizeRunItems(runsPayload), normalizeActivityItems(activityPayload)));
+    const runsPayload = await services.client.listRuns({ limit: 80 });
+    setRuns(toRunListItems(normalizeRunItems(runsPayload)));
     setIsLoading(false);
   };
 
   useEffect(() => {
     let cancelled = false;
     void refresh(true).catch((loadError) => {
-      if (cancelled) {
-        return;
+      if (!cancelled) {
+        setError(loadError instanceof Error ? loadError.message : 'History is unavailable right now.');
+        setIsLoading(false);
       }
-      setError(loadError instanceof Error ? loadError.message : 'Tasks are unavailable right now.');
-      setIsLoading(false);
     });
     const unsubscribe = subscribeWorkstationApprovalResolved(() => {
       void refresh(false).catch((loadError) => {
-        if (cancelled) {
-          return;
+        if (!cancelled) {
+          setError(loadError instanceof Error ? loadError.message : 'History is unavailable right now.');
+          setIsLoading(false);
         }
-        setError(loadError instanceof Error ? loadError.message : 'Tasks are unavailable right now.');
-        setIsLoading(false);
       });
     });
     return () => {
@@ -205,159 +193,60 @@ export function WorkstationRunsPane() {
       return;
     }
     void refresh(false).catch((loadError) => {
-      setError(loadError instanceof Error ? loadError.message : 'Tasks are unavailable right now.');
+      setError(loadError instanceof Error ? loadError.message : 'History is unavailable right now.');
       setIsLoading(false);
     });
   }, [services.client, streamState.activity.version]);
 
   useEffect(() => {
-    if (tasks.length === 0) {
-      setSelectedTaskId(null);
+    if (runs.length === 0) {
+      setSelectedRunId(null);
       return;
     }
-    if (selectedTaskId && tasks.some((item) => item.id === selectedTaskId)) {
+    if (selectedRunId && runs.some((item) => item.id === selectedRunId)) {
       return;
     }
-    setSelectedTaskId(tasks[0].id);
-  }, [selectedTaskId, tasks]);
+    setSelectedRunId(runs[0].id);
+  }, [runs, selectedRunId]);
 
-  const selectedTask = useMemo(
-    () => tasks.find((task) => task.id === selectedTaskId) ?? null,
-    [selectedTaskId, tasks],
-  );
-
-  const runTaskCount = useMemo(
-    () => tasks.filter((task) => task.kind === 'run').length,
-    [tasks],
-  );
-  const eventTaskCount = useMemo(
-    () => tasks.filter((task) => task.kind === 'event').length,
-    [tasks],
-  );
-  const activeRunCount = useMemo(
-    () => tasks.filter((task) => task.kind === 'run' && isActiveRunStatus(task.status)).length,
-    [tasks],
-  );
+  const groupedRuns = useMemo(() => groupRunsByDate(runs), [runs]);
 
   return (
     <WorkstationSurfaceRoot surface="runs">
-      <WorkstationSurfaceCard
-        title="Tasks"
-        description="Track what Sage is doing and what needs your attention."
-        actions={(
-          <div className="app-inline-actions">
-            <WorkstationActionButton
-              type="button"
-              tone="secondary"
-              onClick={() => {
-                void refresh(false);
-              }}
-            >
-              Refresh
-            </WorkstationActionButton>
-            <WorkstationActionButton
-              type="button"
-              onClick={() => {
-                router.push(`/w/${encodeURIComponent(workspaceId)}/sage`);
-              }}
-            >
-              Open Sage
-            </WorkstationActionButton>
-          </div>
-        )}
-      >
-        {error ? <WorkstationSurfaceNotice tone="danger">{error}</WorkstationSurfaceNotice> : null}
-
-        <WorkstationSurfaceStatGrid>
-          <WorkstationSurfaceStat
-            label="Active tasks"
-            value={String(activeRunCount)}
-            hint="Running now or waiting for your input"
-          />
-          <WorkstationSurfaceStat
-            label="Task history"
-            value={String(runTaskCount)}
-            hint="Recent work Sage has handled"
-          />
-          <WorkstationSurfaceStat
-            label="Activity updates"
-            value={String(eventTaskCount)}
-            hint="Recent updates and notable changes"
-          />
-        </WorkstationSurfaceStatGrid>
-
+      <main className="app-runs-minimal-page" data-workstation-surface="runs-minimal">
+        {error ? <div className="app-surface-inline-status">{error}</div> : null}
         {isLoading ? (
           <div className="app-stack-3">
-            <SkeletonBlock height="4.8rem" />
-            <SkeletonBlock height="4.8rem" />
-            <SkeletonBlock height="4.8rem" />
+            <SkeletonBlock height="3.5rem" />
+            <SkeletonBlock height="3.5rem" />
+            <SkeletonBlock height="3.5rem" />
           </div>
-        ) : tasks.length === 0 ? (
+        ) : runs.length === 0 ? (
           <EmptyPanel
-            title="No tasks yet"
-            body="Your first message to Sage will create task history here."
+            title="No runs yet"
+            body="Send a message to Sage to start your first run."
           />
         ) : (
-          <div className="app-stack-3">
-            {tasks.map((task) => {
-              const selected = task.id === selectedTaskId;
-              return (
-                <button
-                  key={task.id}
-                  type="button"
-                  onClick={() => setSelectedTaskId(task.id)}
-                  className={`app-card-button${selected ? ' app-card-button--selected' : ''}`}
-                >
-                  <div className="app-inline-actions app-inline-actions--between app-inline-actions--start">
-                    <strong className="app-card-button__title">{task.title}</strong>
-                    <div className="app-inline-actions app-inline-actions--tight">
-                      <DataBadge tone={task.kind === 'run' ? 'accent' : 'neutral'}>
-                        {task.kind === 'run' ? 'Task' : 'Update'}
-                      </DataBadge>
-                      <DataBadge tone={taskTone(task)}>{task.status}</DataBadge>
-                    </div>
-                  </div>
-                  <span className="app-card-button__subtitle">{task.subtitle}</span>
-                  <span className="app-card-button__meta">{formatTimestamp(task.occurredAt)}</span>
-                </button>
-              );
-            })}
+          <div className="app-runs-minimal-list">
+            {groupedRuns.map((group) => (
+              <section key={group.label} className="app-runs-minimal-group">
+                <div className="app-runs-minimal-group__label">{group.label}</div>
+                {group.items.map((run) => (
+                  <button
+                    key={run.id}
+                    type="button"
+                    className={`app-runs-minimal-row${selectedRunId === run.id ? ' app-runs-minimal-row--selected' : ''}`}
+                    onClick={() => setSelectedRunId(run.id)}
+                  >
+                    <span className="app-runs-minimal-row__preview" title={run.preview}>{run.preview}</span>
+                    <span className="app-runs-minimal-row__time">{formatRelativeTime(run.occurredAt)}</span>
+                  </button>
+                ))}
+              </section>
+            ))}
           </div>
         )}
-      </WorkstationSurfaceCard>
-
-      <WorkstationSurfaceCard
-        title={selectedTask ? selectedTask.title : 'Task detail'}
-        description={selectedTask ? 'Details for the selected task.' : 'Select a task to view details.'}
-      >
-        {!selectedTask ? (
-          <EmptyPanel
-            title="No task selected"
-            body="Select a task from the list to see its details."
-          />
-        ) : (
-          <div className="app-meta-list">
-            <div className="app-meta-item">
-              <span className="app-meta-label">Type</span>
-              <span className="app-meta-value app-meta-value--secondary">
-                {selectedTask.kind === 'run' ? 'Sage task' : 'Activity update'}
-              </span>
-            </div>
-            <div className="app-meta-item">
-              <span className="app-meta-label">Status</span>
-              <span className="app-meta-value app-meta-value--secondary">{selectedTask.status}</span>
-            </div>
-            <div className="app-meta-item">
-              <span className="app-meta-label">Summary</span>
-              <span className="app-meta-value app-meta-value--body">{selectedTask.subtitle}</span>
-            </div>
-            <div className="app-meta-item">
-              <span className="app-meta-label">Recorded</span>
-              <span className="app-meta-value app-meta-value--secondary">{formatTimestamp(selectedTask.occurredAt)}</span>
-            </div>
-          </div>
-        )}
-      </WorkstationSurfaceCard>
+      </main>
     </WorkstationSurfaceRoot>
   );
 }

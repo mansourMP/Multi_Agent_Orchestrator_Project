@@ -211,7 +211,7 @@ export function WorkstationNotificationsPane() {
                 {items.length === 0 ? (
                   <EmptyPanel
                     title="No notifications visible"
-                    body="Alerts, activity summaries, and operator-facing notices will surface here as the workspace produces them."
+                    body="Notifications will appear here when Sage finishes runs, needs attention, or records activity."
                   />
                 ) : (
                   <div className="app-stack-3">
@@ -256,7 +256,7 @@ export function WorkstationNotificationsPane() {
                 {!selectedNotification ? (
                   <EmptyPanel
                     title="No selected notification"
-                    body="Select a notification from the feed to inspect the current unread state and message body."
+                    body="Select a notification from the list to read the full message and current status."
                   />
                 ) : (
                   <>

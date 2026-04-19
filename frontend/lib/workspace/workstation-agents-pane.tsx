@@ -221,7 +221,7 @@ export function WorkstationAgentsPane() {
                   {installs.length === 0 ? (
                     <EmptyPanel
                       title="No installed runtime agents"
-                      body="Runtime agents will appear here when the workspace runtime exposes runnable modules."
+                      body="Publish or expose a runtime agent to this workspace and it will appear here for testing."
                     />
                   ) : (
                     <DataTable>
@@ -264,7 +264,7 @@ export function WorkstationAgentsPane() {
                   {definitions.length === 0 ? (
                     <EmptyPanel
                       title="No definitions available"
-                      body="Agent definitions will appear here once the workspace registry exposes them."
+                      body="Create or sync an agent definition in the registry and it will appear here."
                     />
                   ) : (
                     <div className="app-stack-3">
@@ -299,7 +299,7 @@ export function WorkstationAgentsPane() {
                   {!selectedInstall ? (
                     <EmptyPanel
                       title="No selected agent"
-                      body="Choose an installed agent to inspect it and send a bounded runtime message."
+                      body="Pick an installed agent to inspect its runtime state and send a bounded test run."
                     />
                   ) : (
                     <>
@@ -328,7 +328,7 @@ export function WorkstationAgentsPane() {
                   {runtimeTargets.length === 0 ? (
                     <EmptyPanel
                       title="No runtime targets"
-                      body="Runtime execution targets will appear here once the agent registry exposes them."
+                      body="Attach a cloud or local runtime target so installed agents have somewhere to run."
                     />
                   ) : (
                     <div className="app-stack-3">

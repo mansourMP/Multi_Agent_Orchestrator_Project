@@ -186,6 +186,17 @@ export type DeployedAgentRecord = Record<string, unknown> & {
   updated_at?: string | null;
 };
 
+export type DeployedAgentMemoryRecord = Record<string, unknown> & {
+  id?: string | null;
+  channel?: string | null;
+  external_user_id?: string | null;
+  session_id?: string | null;
+  summary_text?: string | null;
+  recent_message_count?: number | null;
+  source_message_count?: number | null;
+  updated_at?: string | null;
+};
+
 export type ProviderCatalogModelRecord = Record<string, unknown> & {
   id?: string | null;
   label?: string | null;
@@ -195,6 +206,7 @@ export type ProviderCatalogModelRecord = Record<string, unknown> & {
   output_cost_per_1k_usd?: number | null;
   supports_tools?: boolean | null;
   supports_reasoning?: boolean | null;
+  reasoning_levels?: string[] | null;
   local_self_hosted_compatible?: boolean | null;
   capability_labels?: string[] | null;
 };
@@ -210,6 +222,32 @@ export type ProviderCatalogRecord = Record<string, unknown> & {
   local_self_hosted_compatible?: boolean | null;
   capability_labels?: string[] | null;
   models?: ProviderCatalogModelRecord[] | null;
+};
+
+export type ProviderProfileRecord = Record<string, unknown> & {
+  id?: string | null;
+  provider?: string | null;
+  label?: string | null;
+  credential_id?: string | null;
+  auth_mode?: string | null;
+  workspace_id?: string | null;
+  priority?: number | null;
+  enabled?: boolean | null;
+  model?: string | null;
+  health?: string | null;
+  last_error?: string | null;
+};
+
+export type VaultCredentialRecord = Record<string, unknown> & {
+  id?: string | null;
+  label?: string | null;
+  provider?: string | null;
+  connector?: string | null;
+  mode?: string | null;
+  workspace_id?: string | null;
+  metadata?: Record<string, unknown> | null;
+  created_at?: string | null;
+  updated_at?: string | null;
 };
 
 export type DeployedAgentConversationRecord = Record<string, unknown> & {
@@ -367,6 +405,14 @@ export type WorkstationClientPaths = {
   agentInstalls: string;
   runtimeTargets: string;
   providersCatalog: string;
+  providerModels: (providerId: string, profileId?: string | null) => string;
+  providerProfiles: (provider?: string | null) => string;
+  providerProfilesRoot: string;
+  credentialsVault: string;
+  connectorsVault: string;
+  connectorVaultCredential: (credentialId: string) => string;
+  workspaceProviderCredentials: string;
+  sageToolPolicy: string;
   runInstalledAgent: (installId: string) => string;
   agentTraces: (filters?: WorkstationAgentTraceListFilters) => string;
   agentTraceDetail: (traceId: string) => string;
@@ -378,6 +424,7 @@ export type WorkstationClientPaths = {
   deployedAgentPause: (deployedAgentId: string) => string;
   deployedAgentAnalyticsRoster: string;
   deployedAgentAnalyticsDetail: (deployedAgentId: string) => string;
+  deployedAgentMemory: (deployedAgentId: string, limit?: number, offset?: number) => string;
   deployedAgentConversations: (deployedAgentId: string, limit?: number, offset?: number) => string;
   deployedAgentConversationDetail: (deployedAgentId: string, sessionId: string) => string;
   deployedAgentExternalUserDelete: (deployedAgentId: string, externalUserId: string) => string;
@@ -388,6 +435,7 @@ export type WorkstationClientPaths = {
   workspaceMemberInvite: (inviteId: string) => string;
   workspaceMember: (userId: string) => string;
   workspacePolicies: string;
+  usageSummary: (period?: string) => string;
   billingSummary: string;
   billingCheckout: string;
   billingPortal: string;
@@ -518,6 +566,36 @@ export type WorkstationClient = {
   listAgentInstalls: () => Promise<Record<string, unknown>>;
   listRuntimeTargets: () => Promise<Record<string, unknown>>;
   listProviderCatalog: () => Promise<Record<string, unknown>>;
+  listProviderModels: (options: { providerId: string; profileId?: string | null }) => Promise<Record<string, unknown>>;
+  listProviderProfiles: (options?: { provider?: string | null }) => Promise<Record<string, unknown>>;
+  listVaultCredentials: () => Promise<Record<string, unknown>>;
+  listConnectorsVault: () => Promise<Record<string, unknown>>;
+  upsertProviderProfile: (options: {
+    id?: string | null;
+    provider: string;
+    label: string;
+    credentialId?: string | null;
+    authMode?: string | null;
+    priority?: number;
+    enabled?: boolean;
+    model?: string | null;
+  }) => Promise<Record<string, unknown> | null>;
+  upsertWorkspaceProviderCredential: (options: {
+    provider: string;
+    apiKey?: string | null;
+    model?: string | null;
+  }) => Promise<Record<string, unknown> | null>;
+  deleteWorkspaceProviderCredential: (options: {
+    provider: string;
+  }) => Promise<Record<string, unknown> | null>;
+  deleteConnectorVaultCredential: (options: {
+    credentialId: string;
+  }) => Promise<Record<string, unknown> | null>;
+  getSageToolPolicy: () => Promise<Record<string, unknown>>;
+  updateSageToolPolicy: (options: {
+    tool: string;
+    enabled: boolean;
+  }) => Promise<Record<string, unknown> | null>;
   runInstalledAgent: (options: {
     installId: string;
     message?: string;
@@ -576,6 +654,11 @@ export type WorkstationClient = {
     deployedAgentId: string;
     allowMissing?: boolean;
   }) => Promise<Record<string, unknown> | null>;
+  listDeployedAgentMemory: (options: {
+    deployedAgentId: string;
+    limit?: number;
+    offset?: number;
+  }) => Promise<Record<string, unknown>>;
   listDeployedAgentConversations: (options: {
     deployedAgentId: string;
     limit?: number;
@@ -605,6 +688,7 @@ export type WorkstationClient = {
   removeWorkspaceMember: (options: { userId: string }) => Promise<Record<string, unknown> | null>;
   getWorkspacePolicies: () => Promise<Record<string, unknown>>;
   updateWorkspacePolicies: (payload: Record<string, unknown>) => Promise<Record<string, unknown> | null>;
+  getUsageSummary: (options?: { period?: string }) => Promise<Record<string, unknown>>;
   getBillingSummary: () => Promise<Record<string, unknown>>;
   createBillingCheckoutSession: (options: {
     planId: string;
@@ -629,6 +713,9 @@ export type WorkstationClient = {
     channel?: string;
     source?: string;
     runtimeTarget?: string | null;
+    machineTarget?: string | null;
+    model?: string | null;
+    reasoningEffort?: string | null;
     policyContext?: Record<string, unknown>;
   }) => Promise<WorkstationTurnResponse>;
   submitTurnStream: (options: {
@@ -639,6 +726,9 @@ export type WorkstationClient = {
     channel?: string;
     source?: string;
     runtimeTarget?: string | null;
+    machineTarget?: string | null;
+    model?: string | null;
+    reasoningEffort?: string | null;
     policyContext?: Record<string, unknown>;
     onEvent?: (event: WorkstationTurnStreamEvent) => void;
   }) => Promise<WorkstationTurnResponse>;
@@ -649,6 +739,9 @@ export type WorkstationClient = {
     channel?: string;
     source?: string;
     runtimeTarget?: string | null;
+    machineTarget?: string | null;
+    model?: string | null;
+    reasoningEffort?: string | null;
     policyContext?: Record<string, unknown>;
   }) => Promise<{
     response: WorkstationTurnResponse;
@@ -662,6 +755,9 @@ export type WorkstationClient = {
     channel?: string;
     source?: string;
     runtimeTarget?: string | null;
+    machineTarget?: string | null;
+    model?: string | null;
+    reasoningEffort?: string | null;
     policyContext?: Record<string, unknown>;
     onEvent?: (event: WorkstationTurnStreamEvent) => void;
   }) => Promise<{
@@ -770,7 +866,18 @@ export function buildWorkstationApiPaths(workspaceId: string): WorkstationClient
     agentDefinitions: `/agent-registry/definitions${buildQueryString({ workspace_id: workspaceId })}`,
     agentInstalls: `/agent-registry/installs${buildQueryString({ workspace_id: workspaceId })}`,
     runtimeTargets: `/agent-registry/runtime-targets${buildQueryString({ workspace_id: workspaceId })}`,
-    providersCatalog: `/providers/catalog${buildQueryString({ workspace_id: workspaceId })}`,
+    providersCatalog: `/api/providers/catalog${buildQueryString({ workspace_id: workspaceId })}`,
+    providerModels: (providerId: string, profileId: string | null = null) =>
+      `/api/providers/${encodeURIComponent(providerId)}/models${buildQueryString({ workspace_id: workspaceId, profile_id: profileId })}`,
+    providerProfiles: (provider = null) =>
+      `/api/providers/profiles${buildQueryString({ workspace_id: workspaceId, provider })}`,
+    providerProfilesRoot: '/api/providers/profiles',
+    credentialsVault: `/api/credentials/vault${buildQueryString({ workspace_id: workspaceId })}`,
+    connectorsVault: `/api/connectors/vault${buildQueryString({ workspace_id: workspaceId })}`,
+    connectorVaultCredential: (credentialId: string) =>
+      `/api/connectors/vault/${encodeURIComponent(credentialId)}${buildQueryString({ workspace_id: workspaceId })}`,
+    workspaceProviderCredentials: `/api/workspaces/${encodeURIComponent(workspaceId)}/providers/credentials`,
+    sageToolPolicy: `/api/workspaces/${encodeURIComponent(workspaceId)}/sage/tool-policy`,
     runInstalledAgent: (installId) => `/agents/${encodeURIComponent(installId)}/run`,
     agentTraces: (filters = {}) =>
       `/api/agent-traces${buildQueryString({
@@ -803,6 +910,12 @@ export function buildWorkstationApiPaths(workspaceId: string): WorkstationClient
       `/api/deployed-agents/analytics${buildQueryString({ workspace_id: workspaceId })}`,
     deployedAgentAnalyticsDetail: (deployedAgentId) =>
       `/api/deployed-agents/${encodeURIComponent(deployedAgentId)}/analytics${buildQueryString({ workspace_id: workspaceId })}`,
+    deployedAgentMemory: (deployedAgentId, limit = 50, offset = 0) =>
+      `/api/deployed-agents/${encodeURIComponent(deployedAgentId)}/memory${buildQueryString({
+        workspace_id: workspaceId,
+        limit,
+        offset,
+      })}`,
     deployedAgentConversations: (deployedAgentId, limit = 50, offset = 0) =>
       `/api/deployed-agents/${encodeURIComponent(deployedAgentId)}/conversations${buildQueryString({
         workspace_id: workspaceId,
@@ -823,6 +936,8 @@ export function buildWorkstationApiPaths(workspaceId: string): WorkstationClient
       `/api/workspaces/${encodeURIComponent(workspaceId)}/members/invites/${encodeURIComponent(inviteId)}`,
     workspaceMember: (userId) => `/api/workspaces/${encodeURIComponent(workspaceId)}/members/${encodeURIComponent(userId)}`,
     workspacePolicies: `/api/workspaces/${encodeURIComponent(workspaceId)}/policies`,
+    usageSummary: (period = 'all') =>
+      `/api/usage/summary${buildQueryString({ workspace_id: workspaceId, period })}`,
     billingSummary: `/api/billing/summary${buildQueryString({ workspace_id: workspaceId })}`,
     billingCheckout: '/api/billing/checkout',
     billingPortal: '/api/billing/portal',
@@ -912,18 +1027,22 @@ function fallbackErrorMessage(status: number): string {
 }
 
 function extractErrorMessage(detail: unknown, platformError: Record<string, unknown> | null): string {
+  const looksLikeHtmlDocument = (value: string): boolean => /<!doctype html>|<html[\s>]/i.test(value);
   if (typeof detail === 'string' && detail.trim()) {
-    return detail.trim();
+    const normalized = detail.trim();
+    return looksLikeHtmlDocument(normalized) ? '' : normalized;
   }
   const detailRecord = asRecord(detail);
   if (detailRecord) {
     const detailMessage = detailRecord.message ?? detailRecord.detail ?? detailRecord.error;
     if (typeof detailMessage === 'string' && detailMessage.trim()) {
-      return detailMessage.trim();
+      const normalized = detailMessage.trim();
+      return looksLikeHtmlDocument(normalized) ? '' : normalized;
     }
   }
   if (platformError && typeof platformError.message === 'string' && platformError.message.trim()) {
-    return platformError.message.trim();
+    const normalized = platformError.message.trim();
+    return looksLikeHtmlDocument(normalized) ? '' : normalized;
   }
   return '';
 }
@@ -1163,6 +1282,9 @@ export function createWorkstationClient(
     channel = 'web',
     source = 'workstation_client',
     runtimeTarget = null,
+    machineTarget = null,
+    model = null,
+    reasoningEffort = null,
     policyContext = {},
   }: {
     actor: WorkstationSessionActor;
@@ -1172,6 +1294,9 @@ export function createWorkstationClient(
     channel?: string;
     source?: string;
     runtimeTarget?: string | null;
+    machineTarget?: string | null;
+    model?: string | null;
+    reasoningEffort?: string | null;
     policyContext?: Record<string, unknown>;
   }): Promise<WorkstationTurnResponse> {
     return (await requestJson<WorkstationTurnResponse>({
@@ -1187,6 +1312,9 @@ export function createWorkstationClient(
           channel,
           actor,
           message,
+          model: model ?? undefined,
+          reasoning_effort: reasoningEffort ?? undefined,
+          machine_target: machineTarget ?? undefined,
           attachments: [],
           context_hints: {
             source,
@@ -1301,6 +1429,9 @@ export function createWorkstationClient(
     channel = 'web',
     source = 'workstation_client',
     runtimeTarget = null,
+    machineTarget = null,
+    model = null,
+    reasoningEffort = null,
     policyContext = {},
     onEvent,
   }: {
@@ -1311,6 +1442,9 @@ export function createWorkstationClient(
     channel?: string;
     source?: string;
     runtimeTarget?: string | null;
+    machineTarget?: string | null;
+    model?: string | null;
+    reasoningEffort?: string | null;
     policyContext?: Record<string, unknown>;
     onEvent?: (event: WorkstationTurnStreamEvent) => void;
   }): Promise<WorkstationTurnResponse> {
@@ -1329,6 +1463,9 @@ export function createWorkstationClient(
             channel,
             actor,
             message,
+            model: model ?? undefined,
+            reasoning_effort: reasoningEffort ?? undefined,
+            machine_target: machineTarget ?? undefined,
             attachments: [],
             context_hints: {
               source,
@@ -1721,6 +1858,103 @@ export function createWorkstationClient(
         path: paths.providersCatalog,
         policy: READ_REQUEST_POLICY,
       }) as Promise<Record<string, unknown>>,
+    listProviderModels: ({ providerId, profileId = null }: { providerId: string; profileId?: string | null }) =>
+      requestJson<Record<string, unknown>>({
+        path: paths.providerModels(providerId, profileId),
+        policy: READ_REQUEST_POLICY,
+      }) as Promise<Record<string, unknown>>,
+    listProviderProfiles: ({ provider = null } = {}) =>
+      requestJson<Record<string, unknown>>({
+        path: paths.providerProfiles(provider),
+        policy: READ_REQUEST_POLICY,
+      }) as Promise<Record<string, unknown>>,
+    listVaultCredentials: () =>
+      requestJson<Record<string, unknown>>({
+        path: paths.credentialsVault,
+        policy: READ_REQUEST_POLICY,
+      }) as Promise<Record<string, unknown>>,
+    listConnectorsVault: () =>
+      requestJson<Record<string, unknown>>({
+        path: paths.connectorsVault,
+        policy: READ_REQUEST_POLICY,
+      }) as Promise<Record<string, unknown>>,
+    upsertProviderProfile: ({
+      id = null,
+      provider,
+      label,
+      credentialId = null,
+      authMode = null,
+      priority = 0,
+      enabled = true,
+      model = null,
+    }) =>
+      requestJson<Record<string, unknown>>({
+        path: paths.providerProfilesRoot,
+        init: {
+          method: 'POST',
+          headers: mergeJsonHeaders(),
+          body: JSON.stringify({
+            id: id ?? undefined,
+            provider,
+            label,
+            credential_id: credentialId ?? undefined,
+            auth_mode: authMode ?? undefined,
+            workspace_id: scope.workspaceId,
+            priority,
+            enabled,
+            model: model ?? undefined,
+          }),
+        },
+        policy: WRITE_REQUEST_POLICY,
+      }),
+    upsertWorkspaceProviderCredential: ({ provider, apiKey = null, model = null }) =>
+      requestJson<Record<string, unknown>>({
+        path: paths.workspaceProviderCredentials,
+        init: {
+          method: 'POST',
+          headers: mergeJsonHeaders(),
+          body: JSON.stringify({
+            provider,
+            api_key: apiKey ?? undefined,
+            model: model ?? undefined,
+          }),
+        },
+        policy: WRITE_REQUEST_POLICY,
+      }),
+    deleteWorkspaceProviderCredential: ({ provider }) =>
+      requestJson<Record<string, unknown>>({
+        path: paths.workspaceProviderCredentials,
+        init: {
+          method: 'DELETE',
+          headers: mergeJsonHeaders(),
+          body: JSON.stringify({ provider }),
+        },
+        policy: WRITE_REQUEST_POLICY,
+      }),
+    deleteConnectorVaultCredential: ({ credentialId }) =>
+      requestJson<Record<string, unknown>>({
+        path: paths.connectorVaultCredential(credentialId),
+        init: {
+          method: 'DELETE',
+          headers: mergeJsonHeaders(),
+        },
+        policy: WRITE_REQUEST_POLICY,
+      }),
+    getSageToolPolicy: () =>
+      requestJson<Record<string, unknown>>({
+        path: paths.sageToolPolicy,
+        policy: READ_REQUEST_POLICY,
+      }) as Promise<Record<string, unknown>>,
+    updateSageToolPolicy: ({ tool, enabled }) =>
+      requestJson<Record<string, unknown>>({
+        path: paths.sageToolPolicy,
+        init: {
+          method: 'PATCH',
+          headers: mergeJsonHeaders(),
+          body: JSON.stringify({ tool, enabled }),
+        },
+        policy: WRITE_REQUEST_POLICY,
+      }),
     runInstalledAgent: ({ installId, message, threadId, sessionId }) =>
       requestJson<Record<string, unknown>>({
         path: paths.runInstalledAgent(installId),
@@ -1880,6 +2114,11 @@ export function createWorkstationClient(
         allowStatuses: allowMissing ? [404] : [],
         policy: READ_REQUEST_POLICY,
       }),
+    listDeployedAgentMemory: ({ deployedAgentId, limit = 50, offset = 0 }) =>
+      requestJson<Record<string, unknown>>({
+        path: paths.deployedAgentMemory(deployedAgentId, limit, offset),
+        policy: READ_REQUEST_POLICY,
+      }) as Promise<Record<string, unknown>>,
     listDeployedAgentConversations: ({ deployedAgentId, limit = 50, offset = 0 }) =>
       requestJson<Record<string, unknown>>({
         path: paths.deployedAgentConversations(deployedAgentId, limit, offset),
@@ -1986,6 +2225,11 @@ export function createWorkstationClient(
         },
         policy: WRITE_REQUEST_POLICY,
       }),
+    getUsageSummary: ({ period } = {}) =>
+      requestJson<Record<string, unknown>>({
+        path: paths.usageSummary(period),
+        policy: READ_REQUEST_POLICY,
+      }) as Promise<Record<string, unknown>>,
     getBillingSummary: () =>
       requestJson<Record<string, unknown>>({
         path: paths.billingSummary,
@@ -2028,6 +2272,9 @@ export function createWorkstationClient(
       channel = 'web',
       source = 'workstation_client',
       runtimeTarget = null,
+      machineTarget = null,
+      model = null,
+      reasoningEffort = null,
       policyContext = {},
     }) => {
       let session = await createSession({
@@ -2047,6 +2294,9 @@ export function createWorkstationClient(
           channel,
           source,
           runtimeTarget,
+          machineTarget,
+          model,
+          reasoningEffort,
           policyContext,
         });
         return { response, session, renewed: false };
@@ -2070,6 +2320,9 @@ export function createWorkstationClient(
           channel,
           source,
           runtimeTarget,
+          machineTarget,
+          model,
+          reasoningEffort,
           policyContext,
         });
         return { response, session, renewed: true };
@@ -2083,6 +2336,9 @@ export function createWorkstationClient(
       channel = 'web',
       source = 'workstation_client',
       runtimeTarget = null,
+      machineTarget = null,
+      model = null,
+      reasoningEffort = null,
       policyContext = {},
       onEvent,
     }) => {
@@ -2103,6 +2359,9 @@ export function createWorkstationClient(
           channel,
           source,
           runtimeTarget,
+          machineTarget,
+          model,
+          reasoningEffort,
           policyContext,
           onEvent,
         });
@@ -2127,6 +2386,9 @@ export function createWorkstationClient(
           channel,
           source,
           runtimeTarget,
+          machineTarget,
+          model,
+          reasoningEffort,
           policyContext,
           onEvent,
         });

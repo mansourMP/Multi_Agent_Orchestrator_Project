@@ -94,6 +94,32 @@ function isIntentActive(intent: ChannelPairingIntentRecord | null | undefined): 
   return Boolean(intent && intent.expires_at * 1000 > Date.now());
 }
 
+function isTechnicalIdentifier(value: string): boolean {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return false;
+  }
+  return /^https?:\/\//i.test(trimmed)
+    || /^[0-9a-f]{8}-[0-9a-f-]{8,}$/i.test(trimmed)
+    || /^[A-Za-z0-9_-]{18,}$/.test(trimmed);
+}
+
+function truncateTechnicalIdentifier(value: string): string {
+  const trimmed = value.trim();
+  if (trimmed.length <= 12) {
+    return trimmed;
+  }
+  return `${trimmed.slice(0, 4)}…${trimmed.slice(-4)}`;
+}
+
+function channelLinkDisplayLabel(link: ChannelLinkRecord): string {
+  const hint = String(link.external_subject_hint || '').trim();
+  if (hint) {
+    return isTechnicalIdentifier(hint) ? truncateTechnicalIdentifier(hint) : hint;
+  }
+  return `Linked user ${truncateTechnicalIdentifier(link.link_id)}`;
+}
+
 function summarizeLinkStatus(links: ChannelLinkRecord[]): string {
   const activeCount = links.filter((link) => link.status === 'active').length;
   const revokedCount = links.filter((link) => link.status === 'revoked').length;
@@ -434,7 +460,7 @@ export function WorkspaceChannelPairingSurface({
                   {activeLinks.length === 0 ? (
                     <EmptyPanel
                       title="No active links"
-                      body="Generate a pairing code from the selected provider to connect a Telegram identity to this workspace."
+                      body="Generate a pairing code, paste it into Telegram, and your first linked account will appear here."
                     />
                   ) : (
                     <DataTable>
@@ -451,7 +477,7 @@ export function WorkspaceChannelPairingSurface({
                         >
                           <DataTableCell primary={CHANNEL_PROVIDER_DEFINITIONS[link.provider as ChannelProvider]?.label ?? link.provider} />
                           <DataTableCell
-                            primary={link.external_subject_hint ?? link.link_id}
+                            primary={channelLinkDisplayLabel(link)}
                             secondary={link.scopes.join(', ') || 'default scopes'}
                           />
                           <DataTableCell primary={formatTimestamp(link.linked_at)} />
@@ -498,7 +524,7 @@ export function WorkspaceChannelPairingSurface({
                           className="app-card-button"
                         >
                           <strong className="app-card-button__title">
-                            {CHANNEL_PROVIDER_DEFINITIONS[link.provider as ChannelProvider]?.label ?? link.provider} · {link.external_subject_hint ?? link.link_id}
+                            {CHANNEL_PROVIDER_DEFINITIONS[link.provider as ChannelProvider]?.label ?? link.provider} · {channelLinkDisplayLabel(link)}
                           </strong>
                           <span className="app-card-button__subtitle">
                             Revoked {formatTimestamp(link.revoked_at)} · {link.revoked_reason ?? 'No reason recorded.'}
@@ -565,7 +591,7 @@ export function WorkspaceChannelPairingSurface({
                 {selectedProviderLinks.length === 0 ? (
                   <EmptyPanel
                     title={`No active ${selectedDefinition.label} links`}
-                    body={`Generate a pairing code to link a ${selectedDefinition.label} identity to this workspace.`}
+                    body={`Generate a pairing code and link your first ${selectedDefinition.label} identity to this workspace.`}
                   />
                 ) : (
                   <div className="app-stack-3">
@@ -574,7 +600,7 @@ export function WorkspaceChannelPairingSurface({
                         key={link.link_id}
                         className="app-card-button"
                       >
-                        <strong className="app-card-button__title">{link.external_subject_hint ?? link.link_id}</strong>
+                        <strong className="app-card-button__title">{channelLinkDisplayLabel(link)}</strong>
                         <span className="app-card-button__subtitle">
                           Linked {formatTimestamp(link.linked_at)} · scopes {link.scopes.join(', ') || 'default'}
                         </span>
@@ -632,7 +658,7 @@ export function WorkspaceChannelPairingSurface({
       <ConfirmDialog
         open={Boolean(pendingRevokeLink)}
         title="Revoke linked channel"
-        body={pendingRevokeLink ? `Revoke ${CHANNEL_PROVIDER_DEFINITIONS[pendingRevokeLink.provider as ChannelProvider]?.label ?? pendingRevokeLink.provider} link ${pendingRevokeLink.external_subject_hint ?? pendingRevokeLink.link_id}?` : 'Revoke linked channel?'}
+        body={pendingRevokeLink ? `Revoke ${CHANNEL_PROVIDER_DEFINITIONS[pendingRevokeLink.provider as ChannelProvider]?.label ?? pendingRevokeLink.provider} link ${channelLinkDisplayLabel(pendingRevokeLink)}?` : 'Revoke linked channel?'}
         confirmLabel="Revoke link"
         busy={pendingRevokeLink ? revokingLinkId === pendingRevokeLink.link_id : false}
         onCancel={() => setPendingRevokeLink(null)}

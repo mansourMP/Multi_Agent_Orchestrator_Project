@@ -345,7 +345,7 @@ export function WorkstationApplicationsPane() {
                   {items.length === 0 ? (
                     <EmptyPanel
                       title="No Sage services are available"
-                      body="The workspace did not return any structured services."
+                      body="Enable Sage services for this workspace and Flashcards, Language Coach, or Nutrition Log will appear here."
                     />
                   ) : (
                     <div className="app-stack-2">
@@ -387,7 +387,7 @@ export function WorkstationApplicationsPane() {
                 {!selectedService || !selectedProfileDraft || !selectedEntryDraft ? (
                   <EmptyPanel
                     title="No selected Sage service"
-                    body="Choose Flashcards, Language Coach, or Nutrition Log to inspect its state."
+                    body="Choose Flashcards, Language Coach, or Nutrition Log to edit reusable state Sage can carry forward."
                   />
                 ) : (
                   <div className="app-stack-4">
@@ -835,7 +835,7 @@ export function WorkstationApplicationsPane() {
                       ) : (
                         <EmptyPanel
                           title="No structured entries yet"
-                          body="Add the first item above and Sage will start carrying it as reusable app state."
+                          body="Add the first card, phrase, or meal above and Sage will start reusing it from this service."
                         />
                       )}
                     </FormSection>
@@ -876,7 +876,7 @@ export function WorkstationApplicationsPane() {
                         ) : (
                           <EmptyPanel
                             title="No memory updates yet"
-                            body="The activity trail will appear here as Sage services write explicit state."
+                            body="As this service writes explicit state, the latest memory updates will appear here."
                           />
                         )}
                       </div>

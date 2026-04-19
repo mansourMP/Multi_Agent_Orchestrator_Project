@@ -107,3 +107,40 @@ export function PanelsIcon(props: AppIconProps) {
     </AppIcon>
   );
 }
+
+export function ComposeIcon(props: AppIconProps) {
+  return (
+    <AppIcon {...props}>
+      <path d="M10.5 2.5 13.5 5.5" />
+      <path d="M3 13l2.7-.45L13.5 4.75a1.5 1.5 0 0 0-2.1-2.1L3.6 10.45 3 13Z" />
+      <path d="M9.5 4.5 11.5 6.5" />
+    </AppIcon>
+  );
+}
+
+export function PaperclipIcon(props: AppIconProps) {
+  return (
+    <AppIcon {...props}>
+      <path d="M6 8.75 9.9 4.85a2 2 0 1 1 2.85 2.8L7.45 13a3.5 3.5 0 1 1-4.95-4.95l5.15-5.15" />
+    </AppIcon>
+  );
+}
+
+export function MemoryIcon(props: AppIconProps) {
+  return (
+    <AppIcon {...props}>
+      <rect x="2.5" y="3" width="11" height="10" rx="2" />
+      <path d="M5.25 6.25h5.5" />
+      <path d="M5.25 8.5h5.5" />
+      <path d="M5.25 10.75h3.25" />
+    </AppIcon>
+  );
+}
+
+export function SendIcon(props: AppIconProps) {
+  return (
+    <AppIcon {...props}>
+      <path d="M2 13.25 14 8 2 2.75l1.7 4.1L10 8 3.7 9.15 2 13.25Z" />
+    </AppIcon>
+  );
+}

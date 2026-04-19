@@ -317,7 +317,7 @@ export function WorkstationHomePane() {
                   {!latestSignal ? (
                     <EmptyPanel
                       title="Nothing new yet"
-                      body="The next notification or activity created by Sage will appear here as a lightweight briefing signal."
+                      body="When Sage creates a new alert or activity signal, the latest one will appear here."
                     />
                   ) : (
                     <div className="app-stack-3">
@@ -389,7 +389,7 @@ export function WorkstationHomePane() {
                   {!latestApproval && !latestRun && !latestNotification ? (
                     <EmptyPanel
                       title="Sage is clear to start"
-                      body="Open Chat to begin the next turn. Home does not maintain a second workflow anymore."
+                      body="Open Chat and send the first message to start working with Sage."
                     />
                   ) : null}
                 </ListDetailPanel>

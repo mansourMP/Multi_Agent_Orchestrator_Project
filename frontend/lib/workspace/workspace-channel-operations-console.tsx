@@ -161,6 +161,21 @@ function statusTone(status: string | null | undefined): 'neutral' | 'success' | 
   return 'danger';
 }
 
+function channelIssueKey(
+  provider: string,
+  issue: ChannelIssueRecord,
+  index: number,
+): string {
+  return [
+    provider,
+    issue.connector_id || 'workspace',
+    issue.code || 'issue',
+    issue.message || 'detail',
+    issue.occurred_at || 'current',
+    String(index),
+  ].join(':');
+}
+
 async function requestChannelOperationsJson<T>(
   services: ReturnType<typeof useWorkspaceServices>,
   path: string,
@@ -314,7 +329,7 @@ export function WorkspaceChannelOperationsConsole() {
                 {providers.length === 0 ? (
                   <EmptyPanel
                     title="No provider state"
-                    body="Channel operations payload is empty for this workspace."
+                    body="Connect a channel or refresh this workspace to load Telegram or WhatsApp health here."
                   />
                 ) : (
                   <DataTable>
@@ -360,7 +375,7 @@ export function WorkspaceChannelOperationsConsole() {
                 {providers.every((provider) => provider.connectors.length === 0) ? (
                   <EmptyPanel
                     title="No connector bindings"
-                    body="No Telegram or WhatsApp connectors are attached to this workspace yet."
+                    body="Connect Telegram or WhatsApp to this workspace to start seeing live connector health and delivery status."
                   />
                 ) : (
                   <DataTable>
@@ -404,7 +419,7 @@ export function WorkspaceChannelOperationsConsole() {
                 {!payload?.events.recent.length ? (
                   <EmptyPanel
                     title="No recent events"
-                    body="No recent Telegram or WhatsApp events are recorded for this workspace."
+                    body="When channel messages or deliveries start flowing, the latest events will appear here."
                   />
                 ) : (
                   <DataTable>
@@ -458,14 +473,14 @@ export function WorkspaceChannelOperationsConsole() {
                 {providers.every((provider) => provider.issues.length === 0) ? (
                   <EmptyPanel
                     title="No current issues"
-                    body="No Telegram or WhatsApp issues are currently recorded for this workspace."
+                    body="If a connector degrades, a webhook fails, or delivery stalls, the issue will appear here."
                   />
                 ) : (
                   <div className="app-stack-3">
                     {providers.flatMap((provider) =>
-                      provider.issues.map((issue) => (
+                      provider.issues.map((issue, index) => (
                         <StateBanner
-                          key={`${provider.provider}:${issue.code ?? issue.message ?? 'issue'}`}
+                          key={channelIssueKey(provider.provider, issue, index)}
                           tone={statusTone(issue.severity)}
                           title={`${titleCase(provider.provider)} · ${issue.code || 'Issue'}`}
                           detail={issue.message || 'Issue detail unavailable.'}
@@ -486,7 +501,7 @@ export function WorkspaceChannelOperationsConsole() {
                 {!(payload?.events.pairing_failures.length || payload?.delivery.dead_letters.length) ? (
                   <EmptyPanel
                     title="No recent failures"
-                    body="Pairing failures and dead-letter events will surface here when intervention is required."
+                    body="Pairing failures and dead letters will appear here only when operator action is needed."
                   />
                 ) : (
                   <div className="app-stack-3">

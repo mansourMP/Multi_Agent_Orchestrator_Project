@@ -383,6 +383,7 @@ class WorkspacePersistenceNamespace {
 
 class WorkspaceTransportAdapter {
   private readonly inFlightControllers = new Map<string, AbortController>();
+  private authRedirectInFlight = false;
 
   private static readonly RETRYABLE_STATUSES = new Set([408, 425, 429, 500, 502, 503, 504]);
 
@@ -426,6 +427,19 @@ class WorkspaceTransportAdapter {
     } catch {
       return false;
     }
+  }
+
+  private redirectToLogin(): void {
+    if (typeof window === 'undefined' || this.authRedirectInFlight) {
+      return;
+    }
+    const currentPath = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+    if (currentPath.startsWith('/login')) {
+      return;
+    }
+    this.authRedirectInFlight = true;
+    const next = encodeURIComponent(currentPath || '/');
+    window.location.assign(`/login?next=${next}`);
   }
 
   private async performRequest(
@@ -504,6 +518,7 @@ class WorkspaceTransportAdapter {
           if (refreshed) {
             continue;
           }
+          this.redirectToLogin();
         }
 
         if (attempt < retryCount && retryOnStatuses.has(response.status)) {

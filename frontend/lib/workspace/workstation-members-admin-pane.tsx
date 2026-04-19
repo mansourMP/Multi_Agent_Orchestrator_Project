@@ -196,7 +196,7 @@ export function WorkstationMembersAdminPane() {
                 ) : sortedMembers.length === 0 ? (
                   <EmptyPanel
                     title="No active members"
-                    body="This workspace does not currently have any persisted memberships."
+                    body="Invite a teammate or create the first membership to manage workspace access here."
                   />
                 ) : (
                   <DataTable>
@@ -297,7 +297,7 @@ export function WorkstationMembersAdminPane() {
                 ) : pendingInvites.length === 0 ? (
                   <EmptyPanel
                     title="No pending invites"
-                    body="There are no outstanding invites waiting for acceptance."
+                    body="Invite a teammate when you are ready to grant workspace access."
                   />
                 ) : (
                   <DataTable>
@@ -353,7 +353,7 @@ export function WorkstationMembersAdminPane() {
                 ) : inviteHistory.length === 0 ? (
                   <EmptyPanel
                     title="No invite history"
-                    body="Accepted and revoked invite activity will appear here."
+                    body="Accepted and revoked invites will appear here as your access history."
                   />
                 ) : (
                   <DataTable>

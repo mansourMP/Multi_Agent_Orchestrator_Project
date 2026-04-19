@@ -58,20 +58,26 @@ function formatProviderModel(row: Record<string, unknown>): string {
 }
 
 export function WorkstationPlatformAnalyticsPane() {
-  const { hasCapability } = useWorkspaceBoundary();
+  const { bootstrap, hasCapability } = useWorkspaceBoundary();
   const services = useWorkspaceServices();
   const [payload, setPayload] = useState<Record<string, unknown> | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [status, setStatus] = useState<string | null>(null);
 
+  const isPlatformAdmin = hasCapability('platform_admin_enabled');
+  const isWorkspaceOwner = bootstrap.membership.role === 'owner' || bootstrap.membership.role === 'admin';
+  const canViewUsage = isPlatformAdmin || isWorkspaceOwner;
+
   const loadAnalytics = async () => {
-    const response = await services.client.getPlatformAnalytics();
+    const response = isPlatformAdmin
+      ? await services.client.getPlatformAnalytics()
+      : await services.client.getUsageSummary({ period: 'month' });
     setPayload(response);
   };
 
   useEffect(() => {
-    if (!hasCapability('platform_admin_enabled')) {
+    if (!canViewUsage) {
       setPayload(null);
       setIsLoading(false);
       setError(null);
@@ -94,32 +100,37 @@ export function WorkstationPlatformAnalyticsPane() {
     return () => {
       cancelled = true;
     };
-  }, [hasCapability, services.client]);
+  }, [canViewUsage, isPlatformAdmin, services.client]);
 
   const summary = useMemo(() => readRecord(payload?.summary), [payload]);
   const deployments = useMemo(() => readItems(payload?.deployments), [payload]);
   const costBreakdown = useMemo(() => readItems(payload?.model_cost_breakdown), [payload]);
+  const providerBreakdown = useMemo(() => readItems(payload?.by_provider), [payload]);
+  const modelBreakdown = useMemo(() => readItems(payload?.by_model), [payload]);
+  const dailyBreakdown = useMemo(() => readItems(payload?.daily), [payload]);
 
   return (
     <div data-workstation-surface="admin/platform">
       <ListDetailShell
-        title="Platform analytics"
-        subtitle="Platform-scoped cross-workspace analytics for auth-admin operators. These numbers are not limited to the current workspace."
+        title={isPlatformAdmin ? 'Platform analytics' : 'Usage'}
+        subtitle={isPlatformAdmin
+          ? 'Platform-scoped cross-workspace analytics for auth-admin operators. These numbers are not limited to the current workspace.'
+          : 'Workspace-owner usage for the current account this month, including metered cost, runs, and provider/model breakdown.'}
         actions={(
           <AppButton
             type="button"
             tone="secondary"
-            disabled={isLoading || !hasCapability('platform_admin_enabled')}
+            disabled={isLoading || !canViewUsage}
             onClick={() => {
               setStatus(null);
               setError(null);
               setIsLoading(true);
               void loadAnalytics()
                 .then(() => {
-                  setStatus('Platform analytics refreshed.');
+                  setStatus(isPlatformAdmin ? 'Platform analytics refreshed.' : 'Usage refreshed.');
                 })
                 .catch((loadError) => {
-                  setError(loadError instanceof Error ? loadError.message : 'Platform analytics are unavailable.');
+                  setError(loadError instanceof Error ? loadError.message : isPlatformAdmin ? 'Platform analytics are unavailable.' : 'Usage is unavailable.');
                 })
                 .finally(() => {
                   setIsLoading(false);
@@ -130,16 +141,16 @@ export function WorkstationPlatformAnalyticsPane() {
           </AppButton>
         )}
       >
-        {!hasCapability('platform_admin_enabled') ? (
+        {!canViewUsage ? (
           <StateBanner
             tone="danger"
-            title="Platform admin required"
-            detail="This pane is reserved for auth-admin operators and is intentionally separate from workspace analytics."
+            title="Owner access required"
+            detail="Usage is limited to the workspace owner or workspace admin. Cross-workspace platform analytics remain auth-admin only."
           />
         ) : null}
         {status ? <StateBanner tone="success" title="Updated" detail={status} /> : null}
-        {error ? <StateBanner tone="danger" title="Platform analytics load failed" detail={error} /> : null}
-        {hasCapability('platform_admin_enabled') ? (
+        {error ? <StateBanner tone="danger" title={isPlatformAdmin ? 'Platform analytics load failed' : 'Usage load failed'} detail={error} /> : null}
+        {isPlatformAdmin ? (
           <ListDetailColumns
             primary={(
               <div className="app-stack-4">
@@ -179,7 +190,7 @@ export function WorkstationPlatformAnalyticsPane() {
                   ) : deployments.length === 0 ? (
                     <EmptyPanel
                       title="No deployed agents yet"
-                      body="Platform analytics will populate once deployed agents start receiving channel traffic."
+                      body="Create and deploy your first specialist to start tracking usage, activity, and cost here."
                     />
                   ) : (
                     <DataTable>
@@ -243,7 +254,7 @@ export function WorkstationPlatformAnalyticsPane() {
                   ) : costBreakdown.length === 0 ? (
                     <EmptyPanel
                       title="No metered runs yet"
-                      body="Model/provider cost breakdown appears once deployed agents record metered usage."
+                      body="Run Sage or a specialist with a metered model to populate provider and cost breakdowns."
                     />
                   ) : (
                     <DataTable>
@@ -268,6 +279,155 @@ export function WorkstationPlatformAnalyticsPane() {
                             primary={formatPercent(row.share_percent)}
                             secondary={formatUsd(row.total_cost_usd)}
                           />
+                        </DataTableRow>
+                      ))}
+                    </DataTable>
+                  )}
+                </ListDetailPanel>
+              </div>
+            )}
+          />
+        ) : canViewUsage ? (
+          <ListDetailColumns
+            primary={(
+              <div className="app-stack-4">
+                <ListDetailPanel
+                  eyebrow="This month"
+                  title="Workspace usage"
+                  subtitle="Metered usage aggregated for the current authenticated owner session."
+                >
+                  {isLoading ? (
+                    <div className="app-stack-3">
+                      <SkeletonBlock height="5rem" />
+                      <SkeletonBlock height="5rem" />
+                    </div>
+                  ) : (
+                    <FormGrid columns="repeat(2, minmax(0, 1fr))">
+                      <FormReadout label="Current month cost" value={formatUsd(payload?.total_cost_usd)} />
+                      <FormReadout label="Metered runs" value={String(readNumber(payload?.runs_count, 0))} />
+                      <FormReadout label="Total tokens" value={String(readNumber(payload?.total_tokens, 0))} />
+                      <FormReadout label="Membership role" value={bootstrap.membership.role} />
+                    </FormGrid>
+                  )}
+                </ListDetailPanel>
+
+                <ListDetailPanel
+                  eyebrow="Providers"
+                  title="Provider usage mix"
+                  subtitle="Monthly token and cost totals grouped by provider for this account."
+                >
+                  {isLoading ? (
+                    <div className="app-stack-3">
+                      <SkeletonBlock height="3.2rem" />
+                      <SkeletonBlock height="3.2rem" />
+                    </div>
+                  ) : providerBreakdown.length === 0 ? (
+                    <EmptyPanel
+                      title="No metered usage yet"
+                      body="Once this workspace records metered model usage, provider totals will appear here."
+                    />
+                  ) : (
+                    <DataTable>
+                      <DataTableHeader columns="minmax(0, 1.4fr) minmax(8rem, 0.8fr) minmax(8rem, 0.8fr) minmax(8rem, 0.8fr)">
+                        <DataTableHeaderCell>Provider</DataTableHeaderCell>
+                        <DataTableHeaderCell>Runs</DataTableHeaderCell>
+                        <DataTableHeaderCell>Tokens</DataTableHeaderCell>
+                        <DataTableHeaderCell>Cost</DataTableHeaderCell>
+                      </DataTableHeader>
+                      {providerBreakdown.map((row, index) => (
+                        <DataTableRow
+                          key={`${readText(row.provider, 'provider')}:${index}`}
+                          columns="minmax(0, 1.4fr) minmax(8rem, 0.8fr) minmax(8rem, 0.8fr) minmax(8rem, 0.8fr)"
+                        >
+                          <DataTableCell
+                            primary={readText(row.provider, 'unknown')}
+                            secondary={formatPercent(row.percentage)}
+                          />
+                          <DataTableCell primary={String(readNumber(row.runs_count, 0))} />
+                          <DataTableCell primary={String(readNumber(row.total_tokens, 0))} />
+                          <DataTableCell primary={formatUsd(row.total_cost_usd)} />
+                        </DataTableRow>
+                      ))}
+                    </DataTable>
+                  )}
+                </ListDetailPanel>
+              </div>
+            )}
+            secondary={(
+              <div className="app-stack-4">
+                <ListDetailPanel
+                  eyebrow="Models"
+                  title="Model breakdown"
+                  subtitle="Current-month cost grouped by provider and model for this account."
+                >
+                  {isLoading ? (
+                    <div className="app-stack-3">
+                      <SkeletonBlock height="3rem" />
+                      <SkeletonBlock height="3rem" />
+                    </div>
+                  ) : modelBreakdown.length === 0 ? (
+                    <EmptyPanel
+                      title="No model data yet"
+                      body="Once metered runs are recorded, this view will break usage down by model."
+                    />
+                  ) : (
+                    <DataTable>
+                      <DataTableHeader columns="minmax(0, 1.4fr) minmax(8rem, 0.8fr) minmax(8rem, 0.8fr) minmax(8rem, 0.8fr)">
+                        <DataTableHeaderCell>Provider / model</DataTableHeaderCell>
+                        <DataTableHeaderCell>Runs</DataTableHeaderCell>
+                        <DataTableHeaderCell>Tokens</DataTableHeaderCell>
+                        <DataTableHeaderCell>Cost</DataTableHeaderCell>
+                      </DataTableHeader>
+                      {modelBreakdown.map((row, index) => (
+                        <DataTableRow
+                          key={`${readText(row.provider, 'provider')}:${readText(row.model, String(index))}`}
+                          columns="minmax(0, 1.4fr) minmax(8rem, 0.8fr) minmax(8rem, 0.8fr) minmax(8rem, 0.8fr)"
+                        >
+                          <DataTableCell
+                            primary={formatProviderModel(row)}
+                            secondary={formatUsd(row.total_cost_usd)}
+                          />
+                          <DataTableCell primary={String(readNumber(row.runs_count, 0))} />
+                          <DataTableCell primary={String(readNumber(row.total_tokens, 0))} />
+                          <DataTableCell primary={formatUsd(row.total_cost_usd)} />
+                        </DataTableRow>
+                      ))}
+                    </DataTable>
+                  )}
+                </ListDetailPanel>
+
+                <ListDetailPanel
+                  eyebrow="Daily"
+                  title="Recent usage days"
+                  subtitle="Daily token and cost totals for the current month."
+                >
+                  {isLoading ? (
+                    <div className="app-stack-3">
+                      <SkeletonBlock height="3rem" />
+                      <SkeletonBlock height="3rem" />
+                    </div>
+                  ) : dailyBreakdown.length === 0 ? (
+                    <EmptyPanel
+                      title="No daily usage yet"
+                      body="As soon as metered runs are recorded, daily usage will appear here."
+                    />
+                  ) : (
+                    <DataTable>
+                      <DataTableHeader columns="minmax(0, 1fr) minmax(8rem, 0.8fr) minmax(8rem, 0.8fr) minmax(8rem, 0.8fr)">
+                        <DataTableHeaderCell>Date</DataTableHeaderCell>
+                        <DataTableHeaderCell>Runs</DataTableHeaderCell>
+                        <DataTableHeaderCell>Tokens</DataTableHeaderCell>
+                        <DataTableHeaderCell>Cost</DataTableHeaderCell>
+                      </DataTableHeader>
+                      {dailyBreakdown.map((row, index) => (
+                        <DataTableRow
+                          key={`${readText(row.date, String(index))}`}
+                          columns="minmax(0, 1fr) minmax(8rem, 0.8fr) minmax(8rem, 0.8fr) minmax(8rem, 0.8fr)"
+                        >
+                          <DataTableCell primary={readText(row.date, 'unknown')} />
+                          <DataTableCell primary={String(readNumber(row.runs_count, 0))} />
+                          <DataTableCell primary={String(readNumber(row.total_tokens, 0))} />
+                          <DataTableCell primary={formatUsd(row.total_cost_usd)} />
                         </DataTableRow>
                       ))}
                     </DataTable>

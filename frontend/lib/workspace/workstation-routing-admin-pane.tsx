@@ -229,7 +229,7 @@ export function WorkstationRoutingAdminPane() {
                 ) : runtimeTargets.length === 0 ? (
                   <EmptyPanel
                     title="No runtime targets"
-                    body="No target currently satisfies the workspace runtime contract."
+                    body="Attach a cloud or local runtime target so this workspace has somewhere to execute."
                   />
                 ) : (
                   <DataTable>

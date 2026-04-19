@@ -229,7 +229,7 @@ export function WorkstationApprovalsPane() {
         ) : items.length === 0 ? (
           <EmptyPanel
             title="No approvals waiting"
-            body="When Sage needs explicit permission, the request will appear here with one clear action."
+            body="When Sage needs your permission, the request will appear here with clear approve and reject actions."
           />
         ) : (
           <div className="app-stack-3">
@@ -290,7 +290,7 @@ export function WorkstationApprovalsPane() {
         {!selectedApproval ? (
           <EmptyPanel
             title="No approval selected"
-            body="Pick a request from the queue to review it before approving or rejecting."
+            body="Select a request from the queue to review the context before you decide."
           />
         ) : (
           <div className="app-meta-list">

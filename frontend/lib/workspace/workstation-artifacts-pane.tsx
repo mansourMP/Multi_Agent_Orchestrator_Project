@@ -206,7 +206,7 @@ export function WorkstationArtifactsPane() {
         ) : items.length === 0 ? (
           <EmptyPanel
             title="No files yet"
-            body="When Sage generates outputs, this Files view becomes the durable home for those artifacts."
+            body="Send a message that creates a document, export, or generated file and it will appear here."
           />
         ) : (
           <div className="app-stack-3">
@@ -253,7 +253,7 @@ export function WorkstationArtifactsPane() {
         {!selectedArtifact ? (
           <EmptyPanel
             title="No file selected"
-            body="Pick a file from the list to inspect metadata and download it directly."
+            body="Pick a file from the list to inspect its details and download it directly."
           />
         ) : (
           <div className="app-meta-list">

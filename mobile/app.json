@@ -1,0 +1,32 @@
+{
+  "expo": {
+    "name": "Empyralis",
+    "slug": "empyralis-mobile",
+    "scheme": "empyralis",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "automatic",
+    "assetBundlePatterns": [
+      "**/*"
+    ],
+    "ios": {
+      "supportsTablet": true,
+      "usesAppleSignIn": true,
+      "bundleIdentifier": "com.empyralis.mobile"
+    },
+    "android": {
+      "package": "com.empyralis.mobile"
+    },
+    "plugins": [
+      "expo-router",
+      "expo-apple-authentication",
+      "expo-notifications",
+      "expo-secure-store",
+      "expo-sqlite",
+      "expo-font"
+    ],
+    "experiments": {
+      "typedRoutes": true
+    }
+  }
+}

@@ -1,21 +1,13 @@
-import { Redirect } from 'expo-router';
+import { Redirect } from "expo-router";
 
-import { resolveWorkspaceHomeScreen, useMobileRuntimeState } from '../src/lib/mobile-runtime.js';
+import { useSessionState } from "@/src/lib/session-context";
 
-export default function IndexScreen() {
-  const state = useMobileRuntimeState();
+export default function HomeScreen() {
+  const { hydrated, session } = useSessionState();
 
-  if (state.bootState !== 'ready') {
+  if (!hydrated) {
     return null;
   }
 
-  if (state.authState === 'anonymous') {
-    return <Redirect href="/(auth)/login" />;
-  }
-
-  if (state.workspaceState === 'ready') {
-    return <Redirect href={resolveWorkspaceHomeScreen(state)} />;
-  }
-
-  return <Redirect href="/(workspace)/account" />;
+  return <Redirect href={session?.runtimeKey ? "/chats" : "/login"} />;
 }

@@ -15,12 +15,13 @@ export type WorkspaceRouteId =
   | 'artifacts'
   | 'notifications'
   | 'activity'
+  | 'integrations'
+  | 'studioIntegrations'
   | 'studio'
   | 'channels'
   | 'inbox'
   | 'deploy'
-  | 'settings'
-;
+  | 'settings';
 
 export type WorkspaceNavIconName =
   | 'message-square'
@@ -69,268 +70,68 @@ export type WorkspaceMobileBottomTab = {
   iconName: WorkspaceNavIconName;
 };
 
-export const WORKSPACE_NAV_DESTINATIONS = [
-  {
-    id: 'sage',
-    label: 'Sage',
-    iconName: 'message-square',
-    defaultRouteId: 'chat',
-    childRouteIds: ['chat', 'runs', 'approvals', 'artifacts', 'activity', 'notifications'],
-    direct: true,
-  },
-  {
-    id: 'studio',
-    label: 'Studio',
-    iconName: 'boxes',
-    defaultRouteId: 'studio',
-    childRouteIds: ['studio', 'channels', 'inbox', 'deploy'],
-    direct: false,
-  },
-  {
-    id: 'settings',
-    label: 'Settings',
-    iconName: 'sliders-horizontal',
-    defaultRouteId: 'settings',
-    childRouteIds: ['settings'],
-    direct: true,
-  },
-] as const satisfies readonly WorkspaceNavDestinationDefinition[];
+import {
+  WORKSPACE_MOBILE_BOTTOM_TABS as runtimeWorkspaceMobileBottomTabs,
+  WORKSPACE_MOBILE_NAV_GROUP_LABELS as runtimeWorkspaceMobileNavGroupLabels,
+  WORKSPACE_MOBILE_ROUTE_DEFINITIONS as runtimeWorkspaceMobileRouteDefinitions,
+  WORKSPACE_NAV_DESTINATIONS as runtimeWorkspaceNavDestinations,
+  WORKSPACE_NAV_DESTINATION_INDEX as runtimeWorkspaceNavDestinationIndex,
+  WORKSPACE_ROUTE_DEFINITIONS as runtimeWorkspaceRouteDefinitions,
+  WORKSPACE_ROUTE_DEFINITION_INDEX as runtimeWorkspaceRouteDefinitionIndex,
+  WORKSPACE_ROUTE_ID_SET as runtimeWorkspaceRouteIdSet,
+  WORKSPACE_WEB_NAV_GROUP_LABELS as runtimeWorkspaceWebNavGroupLabels,
+  WORKSPACE_WEB_ROUTE_DEFINITIONS as runtimeWorkspaceWebRouteDefinitions,
+  buildWorkspaceRouteHref as runtimeBuildWorkspaceRouteHref,
+  getWorkspaceNavDestinationDefinition as runtimeGetWorkspaceNavDestinationDefinition,
+  getWorkspaceDestinationRouteDefinitions as runtimeGetWorkspaceDestinationRouteDefinitions,
+  getWorkspaceNavRouteDefinition as runtimeGetWorkspaceNavRouteDefinition,
+  resolveWorkspaceRouteIdFromSegment as runtimeResolveWorkspaceRouteIdFromSegment,
+} from './nav-manifest.js';
 
-export const WORKSPACE_NAV_DESTINATION_INDEX = WORKSPACE_NAV_DESTINATIONS.reduce<
-  Record<WorkspaceNavDestinationId, WorkspaceNavDestinationDefinition>
->((accumulator, destination) => {
-  accumulator[destination.id] = destination;
-  return accumulator;
-}, {} as Record<WorkspaceNavDestinationId, WorkspaceNavDestinationDefinition>);
-
-export const WORKSPACE_WEB_NAV_GROUP_LABELS = WORKSPACE_NAV_DESTINATIONS.reduce<
-  Record<WorkspaceNavDestinationId, string>
->((accumulator, destination) => {
-  accumulator[destination.id] = destination.label;
-  return accumulator;
-}, {} as Record<WorkspaceNavDestinationId, string>);
-
-export const WORKSPACE_MOBILE_NAV_GROUP_LABELS = WORKSPACE_WEB_NAV_GROUP_LABELS;
-
-export const WORKSPACE_ROUTE_DEFINITIONS: readonly WorkspaceNavRouteDefinition[] = [
-  {
-    id: 'chat',
-    label: 'Sage',
-    segment: 'sage',
-    legacySegments: ['chat'],
-    destinationId: 'sage',
-    web: {},
-    mobile: {
-      screen: '/(workspace)/chat',
-      screenName: 'chat',
-      groupId: 'sage',
-      tabLabel: 'Sage',
-      includeInBottomTabs: true,
-    },
-  },
-  {
-    id: 'runs',
-    label: 'Tasks',
-    segment: 'runs',
-    legacySegments: ['work'],
-    destinationId: 'sage',
-    web: {
-      hiddenFromNavigation: true,
-    },
-    mobile: {
-      screen: '/(workspace)/runs',
-      screenName: 'runs',
-      groupId: 'sage',
-      tabLabel: 'Tasks',
-      includeInBottomTabs: true,
-    },
-  },
-  {
-    id: 'approvals',
-    label: 'Approvals',
-    segment: 'approvals',
-    destinationId: 'sage',
-    requiredCapabilities: ['approvals_enabled'],
-    web: {
-      hiddenFromNavigation: true,
-    },
-    mobile: {
-      screen: '/(workspace)/approvals',
-      screenName: 'approvals',
-      groupId: 'sage',
-      includeInBottomTabs: true,
-    },
-  },
-  {
-    id: 'artifacts',
-    label: 'Files',
-    segment: 'artifacts',
-    destinationId: 'sage',
-    requiredCapabilities: ['artifacts_enabled'],
-    web: {
-      hiddenFromNavigation: true,
-    },
-    mobile: {
-      screen: '/(workspace)/artifacts',
-      screenName: 'artifacts',
-      groupId: 'sage',
-      tabLabel: 'Files',
-      includeInBottomTabs: true,
-    },
-  },
-  {
-    id: 'notifications',
-    label: 'Inbox',
-    segment: 'notifications',
-    destinationId: 'sage',
-    web: {
-      hiddenFromNavigation: true,
-    },
-    mobile: {
-      screen: '/(workspace)/notifications',
-      screenName: 'notifications',
-      groupId: 'sage',
-      tabLabel: 'Inbox',
-      includeInBottomTabs: true,
-    },
-  },
-  {
-    id: 'activity',
-    label: 'Memory',
-    segment: 'activity',
-    destinationId: 'sage',
-    web: {
-      hiddenFromNavigation: true,
-    },
-  },
-  {
-    id: 'studio',
-    label: 'Agents',
-    segment: 'studio',
-    legacySegments: ['deployed-agents'],
-    destinationId: 'studio',
-    requiredCapabilities: ['workspace_admin_enabled'],
-    web: {},
-  },
-  {
-    id: 'channels',
-    label: 'Channels',
-    segment: 'channels',
-    legacySegments: ['integrations'],
-    destinationId: 'studio',
-    requiredCapabilities: ['workspace_admin_enabled', 'channel_pairing_enabled'],
-    web: {},
-  },
-  {
-    id: 'inbox',
-    label: 'Inbox',
-    segment: 'inbox',
-    legacySegments: ['agents'],
-    destinationId: 'studio',
-    requiredCapabilities: ['workspace_admin_enabled'],
-    web: {},
-  },
-  {
-    id: 'deploy',
-    label: 'Deploy',
-    segment: 'deploy',
-    legacySegments: ['applications'],
-    destinationId: 'studio',
-    requiredCapabilities: ['workspace_admin_enabled'],
-    web: {},
-  },
-  {
-    id: 'settings',
-    label: 'Settings',
-    segment: 'settings',
-    legacySegments: ['control', 'admin', 'admin/platform', 'admin/billing', 'admin/routing', 'admin/members', 'admin/policies'],
-    destinationId: 'settings',
-    web: {},
-  },
-];
-
-export const WORKSPACE_WEB_ROUTE_DEFINITIONS = [...WORKSPACE_ROUTE_DEFINITIONS];
-
-function hasMobileRouteDefinition(
-  definition: WorkspaceNavRouteDefinition,
-): definition is WorkspaceMobileRouteDefinition {
-  return definition.mobile !== undefined;
-}
-
-export const WORKSPACE_MOBILE_ROUTE_DEFINITIONS = WORKSPACE_ROUTE_DEFINITIONS.filter(
-  hasMobileRouteDefinition,
-);
-
-export const WORKSPACE_ROUTE_ID_SET = new Set<WorkspaceRouteId>(
-  WORKSPACE_ROUTE_DEFINITIONS.map((definition) => definition.id),
-);
-
-export const WORKSPACE_ROUTE_DEFINITION_INDEX = WORKSPACE_ROUTE_DEFINITIONS.reduce<
-  Record<WorkspaceRouteId, WorkspaceNavRouteDefinition>
->((accumulator, definition) => {
-  accumulator[definition.id] = definition;
-  return accumulator;
-}, {} as Record<WorkspaceRouteId, WorkspaceNavRouteDefinition>);
-
-const WORKSPACE_ROUTE_SEGMENT_INDEX = WORKSPACE_ROUTE_DEFINITIONS.reduce<
-  Record<string, WorkspaceRouteId>
->((accumulator, definition) => {
-  accumulator[definition.segment] = definition.id;
-  for (const legacySegment of definition.legacySegments ?? []) {
-    accumulator[legacySegment] = definition.id;
-  }
-  return accumulator;
-}, {});
+export const WORKSPACE_NAV_DESTINATIONS =
+  runtimeWorkspaceNavDestinations as readonly WorkspaceNavDestinationDefinition[];
+export const WORKSPACE_NAV_DESTINATION_INDEX =
+  runtimeWorkspaceNavDestinationIndex as Record<WorkspaceNavDestinationId, WorkspaceNavDestinationDefinition>;
+export const WORKSPACE_WEB_NAV_GROUP_LABELS =
+  runtimeWorkspaceWebNavGroupLabels as Record<WorkspaceNavDestinationId, string>;
+export const WORKSPACE_MOBILE_NAV_GROUP_LABELS =
+  runtimeWorkspaceMobileNavGroupLabels as Record<WorkspaceNavDestinationId, string>;
+export const WORKSPACE_ROUTE_DEFINITIONS =
+  runtimeWorkspaceRouteDefinitions as readonly WorkspaceNavRouteDefinition[];
+export const WORKSPACE_WEB_ROUTE_DEFINITIONS =
+  runtimeWorkspaceWebRouteDefinitions as WorkspaceNavRouteDefinition[];
+export const WORKSPACE_MOBILE_ROUTE_DEFINITIONS =
+  runtimeWorkspaceMobileRouteDefinitions as WorkspaceMobileRouteDefinition[];
+export const WORKSPACE_ROUTE_ID_SET =
+  runtimeWorkspaceRouteIdSet as Set<WorkspaceRouteId>;
+export const WORKSPACE_ROUTE_DEFINITION_INDEX =
+  runtimeWorkspaceRouteDefinitionIndex as Record<WorkspaceRouteId, WorkspaceNavRouteDefinition>;
 
 export function getWorkspaceNavRouteDefinition(routeId: WorkspaceRouteId): WorkspaceNavRouteDefinition {
-  return WORKSPACE_ROUTE_DEFINITION_INDEX[routeId];
+  return runtimeGetWorkspaceNavRouteDefinition(routeId) as WorkspaceNavRouteDefinition;
 }
 
 export function getWorkspaceNavDestinationDefinition(
   destinationId: WorkspaceNavDestinationId,
 ): WorkspaceNavDestinationDefinition {
-  return WORKSPACE_NAV_DESTINATION_INDEX[destinationId];
+  return runtimeGetWorkspaceNavDestinationDefinition(destinationId) as WorkspaceNavDestinationDefinition;
 }
 
 export function getWorkspaceDestinationRouteDefinitions(
   destinationId: WorkspaceNavDestinationId,
 ): WorkspaceNavRouteDefinition[] {
-  return getWorkspaceNavDestinationDefinition(destinationId).childRouteIds.map((routeId) =>
-    getWorkspaceNavRouteDefinition(routeId),
-  );
+  return runtimeGetWorkspaceDestinationRouteDefinitions(destinationId) as WorkspaceNavRouteDefinition[];
 }
 
 export function buildWorkspaceRouteHref(workspaceId: string, routeId: WorkspaceRouteId): string {
-  const definition = getWorkspaceNavRouteDefinition(routeId);
-  return `/w/${encodeURIComponent(workspaceId)}/${definition.segment}`;
+  return runtimeBuildWorkspaceRouteHref(workspaceId, routeId);
 }
 
 export function resolveWorkspaceRouteIdFromSegment(
   segment: string | null | undefined,
 ): WorkspaceRouteId | null {
-  if (!segment) {
-    return null;
-  }
-
-  const normalizedSegment = segment
-    .trim()
-    .replace(/^\/+/, '')
-    .replace(/\/+$/, '');
-
-  if (!normalizedSegment) {
-    return null;
-  }
-
-  return WORKSPACE_ROUTE_SEGMENT_INDEX[normalizedSegment] ?? null;
+  return runtimeResolveWorkspaceRouteIdFromSegment(segment) as WorkspaceRouteId | null;
 }
 
-export const WORKSPACE_MOBILE_BOTTOM_TABS = WORKSPACE_MOBILE_ROUTE_DEFINITIONS.filter(
-  (definition) => definition.mobile.includeInBottomTabs,
-).map((definition) => ({
-  routeId: definition.id,
-  label: definition.mobile.tabLabel ?? definition.label,
-  screenName: definition.mobile.screenName,
-  screen: definition.mobile.screen,
-  destinationId: definition.destinationId,
-  iconName: getWorkspaceNavDestinationDefinition(definition.destinationId).iconName,
-})) as readonly WorkspaceMobileBottomTab[];
+export const WORKSPACE_MOBILE_BOTTOM_TABS =
+  runtimeWorkspaceMobileBottomTabs as readonly WorkspaceMobileBottomTab[];

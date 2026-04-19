@@ -11,8 +11,14 @@ import {
   sanitizeWorkspaceRoute,
 } from '@/lib/shell/workspace-membership-model';
 
+const CONTINUE_INTENT_STORAGE_KEY = 'empyralis.continue-intent';
+
 function canonicalSageHref(workspaceId: string): string {
   return `/w/${encodeURIComponent(workspaceId)}/sage`;
+}
+
+function canonicalStudioHref(workspaceId: string, agentId: string): string {
+  return `/w/${encodeURIComponent(workspaceId)}/studio?agent=${encodeURIComponent(agentId)}`;
 }
 
 export function AccountHomeClient() {
@@ -52,8 +58,75 @@ export function AccountHomeClient() {
     if (state.status !== 'authenticated') {
       return;
     }
-    router.replace(suggestedHref);
-  }, [router, state.status, suggestedHref]);
+    let cancelled = false;
+
+    async function resolveContinueHref(agentId: string): Promise<string | null> {
+      const readyMemberships = state.workspaceMemberships.filter(isWorkspaceReadyForProduct);
+      for (const membership of readyMemberships) {
+        const workspaceId = membership.workspace.id;
+        const response = await fetch(
+          `/api/deployed-agents/${encodeURIComponent(agentId)}?workspace_id=${encodeURIComponent(workspaceId)}`,
+          {
+            method: 'GET',
+            credentials: 'include',
+            headers: {
+              accept: 'application/json',
+            },
+          },
+        );
+        if (response.ok) {
+          return canonicalStudioHref(workspaceId, agentId);
+        }
+        if (response.status !== 404) {
+          break;
+        }
+      }
+      return null;
+    }
+
+    async function routeToDestination() {
+      if (typeof window === 'undefined' || typeof window.sessionStorage === 'undefined') {
+        router.replace(suggestedHref);
+        return;
+      }
+
+      const rawIntent = window.sessionStorage.getItem(CONTINUE_INTENT_STORAGE_KEY);
+      if (!rawIntent) {
+        router.replace(suggestedHref);
+        return;
+      }
+
+      let agentId = '';
+      try {
+        const parsed = JSON.parse(rawIntent) as Record<string, unknown>;
+        agentId = typeof parsed.agent === 'string' ? parsed.agent.trim() : '';
+      } catch {
+        window.sessionStorage.removeItem(CONTINUE_INTENT_STORAGE_KEY);
+        router.replace(suggestedHref);
+        return;
+      }
+
+      if (!agentId) {
+        window.sessionStorage.removeItem(CONTINUE_INTENT_STORAGE_KEY);
+        router.replace(suggestedHref);
+        return;
+      }
+
+      const continueHref = await resolveContinueHref(agentId);
+      if (cancelled) {
+        return;
+      }
+
+      window.sessionStorage.removeItem(CONTINUE_INTENT_STORAGE_KEY);
+      router.replace(continueHref ?? suggestedHref);
+    }
+
+    void routeToDestination();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [router, state.status, state.workspaceMemberships, suggestedHref]);
 
   return (
     <main className="app-page-message">

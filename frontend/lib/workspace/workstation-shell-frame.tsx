@@ -23,25 +23,11 @@ export function WorkstationShellFrame({
       data-workstation-shell="frame"
       data-workstation-shell-zones="2"
       className="app-shell-frame"
-      style={{
-        height: '100dvh',
-        gridTemplateColumns: '48px minmax(0, 1fr)',
-        overflow: 'hidden',
-        overflowX: 'hidden',
-      }}
     >
       <aside
         data-workstation-pane="rail"
         data-workstation-shell-zone="rail"
         className="app-shell-frame__sidebar"
-        style={{
-          position: 'fixed',
-          inset: '0 auto 0 0',
-          width: '48px',
-          minWidth: '48px',
-          maxWidth: '48px',
-          height: '100dvh',
-        }}
       >
         {switcherPane}
       </aside>
@@ -50,17 +36,6 @@ export function WorkstationShellFrame({
         data-workstation-shell="kernel-host"
         data-workstation-shell-zone="content"
         className="app-shell-frame__kernel"
-        style={{
-          gridColumn: '2 / -1',
-          minWidth: 0,
-          minHeight: '100dvh',
-          height: '100dvh',
-          width: '100%',
-          maxWidth: '100%',
-          padding: 0,
-          overflow: 'hidden',
-          overflowX: 'hidden',
-        }}
       >
         {kernelPane}
       </div>

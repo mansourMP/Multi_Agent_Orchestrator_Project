@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { FormEvent, useState } from 'react';
 
 import { login } from '@/lib/auth/auth-client';
@@ -9,10 +9,15 @@ import { AppButton, AppInput } from '@/lib/ui/primitives';
 
 export default function LoginPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const agentParam = String(searchParams.get('agent') || '').trim();
+  const signupHref = agentParam
+    ? `/signup?agent=${encodeURIComponent(agentParam)}`
+    : '/signup';
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -64,7 +69,7 @@ export default function LoginPage() {
           {submitting ? 'Signing in…' : 'Log in'}
         </AppButton>
         <p className="app-auth-footer">
-          Need an account? <Link href="/signup">Sign up</Link>
+          Need an account? <Link href={signupHref}>Sign up</Link>
         </p>
       </form>
     </main>

@@ -1,10 +1,10 @@
-import { redirect } from 'next/navigation';
+import { notFound } from 'next/navigation';
 
 export default async function WorkspaceHomePage({
   params,
 }: {
   params: Promise<{ workspaceId: string }>;
 }) {
-  const { workspaceId } = await params;
-  redirect(`/w/${encodeURIComponent(workspaceId)}/sage`);
+  await params;
+  notFound();
 }

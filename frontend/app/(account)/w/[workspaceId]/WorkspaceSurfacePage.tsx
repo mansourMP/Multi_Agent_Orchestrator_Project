@@ -12,7 +12,9 @@ import { WorkstationChatPane } from '@/lib/workspace/workstation-chat-pane';
 import { WorkstationDeployedAgentsPane } from '@/lib/workspace/workstation-deployed-agents-pane';
 import { WorkstationNotificationsPane } from '@/lib/workspace/workstation-notifications-pane';
 import { WorkstationRunsPane } from '@/lib/workspace/workstation-runs-pane';
+import { WorkstationSageConnectorsPane } from '@/lib/workspace/workstation-sage-connectors-pane';
 import { WorkstationSettingsPane } from '@/lib/workspace/workstation-settings-pane';
+import { WorkstationStudioIntegrationsPane } from '@/lib/workspace/workstation-studio-integrations-pane';
 import { WorkstationSurfaceViewport } from '@/lib/workspace/workstation-shell-frame';
 import { resolveRouteIdFromHref, type WorkspaceRouteId } from '@/lib/workspace/workspace-shell';
 import {
@@ -51,6 +53,14 @@ const WORKSPACE_SURFACE_RENDERERS: Record<WorkspaceRouteId, SurfaceRouteRenderer
   activity: {
     destinationId: 'sage',
     render: () => <WorkstationActivityPane />,
+  },
+  integrations: {
+    destinationId: 'sage',
+    render: () => <WorkstationSageConnectorsPane />,
+  },
+  studioIntegrations: {
+    destinationId: 'studio',
+    render: () => <WorkstationStudioIntegrationsPane />,
   },
   studio: {
     destinationId: 'studio',

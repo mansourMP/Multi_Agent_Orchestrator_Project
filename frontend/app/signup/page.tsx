@@ -30,7 +30,7 @@ export default function SignupPage() {
     setError(null);
     try {
       await signup(email, password, name || undefined);
-      router.replace('/');
+      router.replace('/onboarding');
       router.refresh();
     } catch (nextError) {
       setError(nextError instanceof Error ? nextError.message : 'Signup failed.');

@@ -15,6 +15,7 @@ from server_modules.auth import (
     get_current_user,
     limit_login_requests,
     limit_public_requests,
+    login_external_user,
     login_user,
     load_tenant_enterprise_settings,
     logout_authenticated_session,
@@ -27,6 +28,7 @@ from server_modules.auth import (
     upsert_tenant_enterprise_settings,
     update_authenticated_user_profile,
     validate_csrf,
+    verify_external_identity_token,
 )
 from server_modules.account_shell_service import build_account_shell_payload
 from server_modules.channel_pairing_service import (
@@ -62,6 +64,21 @@ class AuthRefreshRequest(BaseModel):
     device_platform: Optional[str] = None
     workspace_id: Optional[str] = None
     session_ttl_seconds: Optional[int] = None
+
+
+class AuthProviderLoginRequest(BaseModel):
+    provider: str
+    identity_token: str
+    email: Optional[str] = None
+    name: Optional[str] = None
+    avatar_url: Optional[str] = None
+    channel: Optional[str] = None
+    device_id: Optional[str] = None
+    device_name: Optional[str] = None
+    device_platform: Optional[str] = None
+    workspace_id: Optional[str] = None
+    session_ttl_seconds: Optional[int] = None
+    acquisition_token: Optional[str] = None
 
 
 class ChannelPairingIntentCreateRequest(BaseModel):
@@ -147,6 +164,35 @@ async def login(body: AuthLoginRequest, request: Request, response: Response):
         body.password,
         acquisition_token=_resolved_acquisition_token(request, body.acquisition_token),
         channel=body.channel,
+        device_id=body.device_id,
+        device_name=body.device_name,
+        device_platform=body.device_platform,
+        workspace_id=body.workspace_id,
+        session_ttl_seconds=body.session_ttl_seconds,
+    )
+    if browser_auth_session_channel(body.channel):
+        set_auth_cookies(response, payload, request=request, channel=body.channel)
+        return _sanitize_browser_auth_payload(payload)
+    return payload
+
+
+@router.post("/auth/provider-login", dependencies=[Depends(limit_login_requests)])
+async def provider_login(body: AuthProviderLoginRequest, request: Request, response: Response):
+    verified = verify_external_identity_token(
+        body.provider,
+        id_token=body.identity_token,
+        fallback_email=body.email,
+        fallback_name=body.name,
+        fallback_avatar_url=body.avatar_url,
+    )
+    payload = login_external_user(
+        provider=str(verified.get("provider") or body.provider or "").strip(),
+        subject=str(verified.get("subject") or "").strip(),
+        email=str(verified.get("email") or "").strip() or None,
+        name=str(verified.get("name") or "").strip() or None,
+        avatar_url=str(verified.get("avatar_url") or "").strip() or None,
+        acquisition_token=_resolved_acquisition_token(request, body.acquisition_token),
+        channel=body.channel or "mobile",
         device_id=body.device_id,
         device_name=body.device_name,
         device_platform=body.device_platform,

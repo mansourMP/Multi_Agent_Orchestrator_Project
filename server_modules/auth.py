@@ -15,6 +15,10 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 from urllib.parse import urlparse
 
+import requests
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.asymmetric import padding as asymmetric_padding
+from cryptography.hazmat.primitives.asymmetric import rsa
 from fastapi import Header, HTTPException, Request, Response
 from server_modules import control_plane_repository
 from server_modules import entitlements_service
@@ -35,10 +39,19 @@ USER_RATE_LIMIT_BUCKETS: Dict[str, list[float]] = {}
 JWT_EXP_SECONDS = int(os.getenv("ORION_JWT_EXP_SECONDS", "3600"))
 MOBILE_JWT_EXP_SECONDS = int(os.getenv("ORION_MOBILE_JWT_EXP_SECONDS", str(60 * 60 * 24 * 30)))
 MOBILE_REFRESH_EXP_SECONDS = int(os.getenv("ORION_MOBILE_REFRESH_EXP_SECONDS", str(60 * 60 * 24 * 180)))
-ORION_PUBLIC_REGISTRATION_ENABLED = str(os.getenv("ORION_PUBLIC_REGISTRATION_ENABLED", "0")).strip().lower() in {"1", "true", "yes", "on"}
+ORION_PUBLIC_REGISTRATION_ENABLED = str(os.getenv("ORION_PUBLIC_REGISTRATION_ENABLED", "1")).strip().lower() in {"1", "true", "yes", "on"}
 ORION_ADMIN_USER_IDS = {item.strip() for item in str(os.getenv("ORION_ADMIN_USER_IDS", "")).split(",") if item.strip()}
 ORION_ADMIN_EMAILS = {item.strip().lower() for item in str(os.getenv("ORION_ADMIN_EMAILS", "")).split(",") if item.strip()}
 ORION_SERVICE_RATE_LIMIT_PER_MINUTE = int(os.getenv("ORION_SERVICE_RATE_LIMIT_PER_MINUTE", "600"))
+ORION_AUTHENTICATED_API_RATE_LIMIT_PER_MINUTE = int(
+    os.getenv("ORION_AUTHENTICATED_API_RATE_LIMIT_PER_MINUTE", "60")
+)
+ORION_MOBILE_AUTHENTICATED_API_RATE_LIMIT_PER_MINUTE = int(
+    os.getenv("ORION_MOBILE_AUTHENTICATED_API_RATE_LIMIT_PER_MINUTE", "240")
+)
+ORION_MOBILE_BETA_AUTO_SIGNIN_ENABLED = str(
+    os.getenv("ORION_MOBILE_BETA_AUTO_SIGNIN_ENABLED", "1")
+).strip().lower() in {"1", "true", "yes", "on"}
 RBAC_ROLE_ORDER = {"viewer": 0, "member": 1, "owner": 2}
 WORKSPACE_CAPABILITY_ALL = "*"
 AUTH_SESSION_CHANNELS = {"web", "desktop", "mobile", "local_runtime_companion"}
@@ -51,6 +64,10 @@ AUTH_CSRF_COOKIE_NAME = str(os.getenv("EMPYRALIS_AUTH_CSRF_COOKIE", "empyralis_c
 AUTH_CSRF_HEADER_NAME = "x-csrf-token"
 AUTH_COOKIE_PATH = "/"
 BROWSER_AUTH_SESSION_CHANNELS = {"web", "desktop"}
+PROVIDER_JWKS_CACHE_LOCK = threading.Lock()
+PROVIDER_JWKS_CACHE: Dict[str, dict[str, Any]] = {}
+PROVIDER_JWKS_CACHE_TTL_SECONDS = max(int(os.getenv("ORION_PROVIDER_JWKS_CACHE_TTL_SECONDS", "3600")), 60)
+PROVIDER_HTTP_TIMEOUT_SECONDS = max(float(os.getenv("ORION_PROVIDER_HTTP_TIMEOUT_SECONDS", "8")), 1.0)
 
 
 def _control_plane_call(coro: Any) -> Any:
@@ -186,28 +203,220 @@ def validate_csrf(request: Request) -> bool:
 
 
 def auth_provider_options() -> dict[str, dict[str, bool]]:
-    google_enabled = bool(
-        str(os.getenv("GOOGLE_CLIENT_ID", "")).strip()
-        and str(os.getenv("GOOGLE_CLIENT_SECRET", "")).strip()
-    )
-    backend_public_origin = str(os.getenv("BACKEND_PUBLIC_ORIGIN", "") or os.getenv("BACKEND_PUBLIC_HOST", "")).strip()
-    apple_enabled = False
-    if backend_public_origin:
-        try:
-            parsed = urlparse(backend_public_origin)
-            hostname = str(parsed.hostname or "").strip().lower()
-            apple_enabled = parsed.scheme == "https" and hostname not in {"localhost", "127.0.0.1", "::1"} and bool(
-                str(os.getenv("APPLE_CLIENT_ID", "")).strip()
-                and str(os.getenv("APPLE_TEAM_ID", "")).strip()
-                and str(os.getenv("APPLE_KEY_ID", "")).strip()
-                and str(os.getenv("APPLE_PRIVATE_KEY", "")).strip()
-            )
-        except Exception:
-            apple_enabled = False
+    google_enabled = bool(_configured_provider_audiences("google"))
+    apple_enabled = bool(_configured_provider_audiences("apple"))
     return {
         "email": {"enabled": True},
         "google": {"enabled": google_enabled},
         "apple": {"enabled": apple_enabled},
+    }
+
+
+def _configured_provider_audiences(provider: str) -> list[str]:
+    normalized_provider = str(provider or "").strip().lower()
+    env_keys: tuple[str, ...]
+    if normalized_provider == "google":
+        env_keys = (
+            "GOOGLE_AUDIENCES",
+            "GOOGLE_CLIENT_ID",
+            "GOOGLE_IOS_CLIENT_ID",
+            "GOOGLE_ANDROID_CLIENT_ID",
+            "GOOGLE_WEB_CLIENT_ID",
+            "EXPO_PUBLIC_GOOGLE_CLIENT_ID",
+            "EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID",
+            "EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID",
+            "EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID",
+        )
+    elif normalized_provider == "apple":
+        env_keys = (
+            "APPLE_AUDIENCES",
+            "APPLE_CLIENT_ID",
+            "APPLE_MOBILE_CLIENT_ID",
+            "EMPYRALIS_IOS_BUNDLE_ID",
+            "EXPO_PUBLIC_IOS_BUNDLE_ID",
+        )
+    else:
+        env_keys = ()
+    values: list[str] = []
+    seen: set[str] = set()
+    for key in env_keys:
+        raw_value = str(os.getenv(key, "")).strip()
+        if not raw_value:
+            continue
+        for token in raw_value.split(","):
+            audience = str(token or "").strip()
+            if not audience or audience in seen:
+                continue
+            seen.add(audience)
+            values.append(audience)
+    return values
+
+
+def _normalize_external_auth_provider(value: Any) -> str:
+    token = str(value or "").strip().lower()
+    if token in {"google", "google_oauth"}:
+        return "google"
+    if token in {"apple", "apple_oauth"}:
+        return "apple"
+    raise HTTPException(status_code=400, detail="Unsupported authentication provider.")
+
+
+def _parse_external_identity_jwt_segment(token: str, index: int, *, detail: str) -> dict[str, Any]:
+    try:
+        segment = str(token or "").split(".", 2)[index]
+    except Exception as exc:
+        raise HTTPException(status_code=401, detail=detail) from exc
+    try:
+        payload = json.loads(_b64url_decode(segment).decode("utf-8"))
+    except Exception as exc:
+        raise HTTPException(status_code=401, detail=detail) from exc
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=401, detail=detail)
+    return payload
+
+
+def _parse_external_identity_jwt_header(token: str) -> dict[str, Any]:
+    return _parse_external_identity_jwt_segment(token, 0, detail="Identity token header is invalid.")
+
+
+def _parse_external_identity_jwt_payload(token: str) -> dict[str, Any]:
+    return _parse_external_identity_jwt_segment(token, 1, detail="Identity token payload is invalid.")
+
+
+def _fetch_provider_jwks(cache_key: str, url: str) -> dict[str, Any]:
+    now = time.time()
+    with PROVIDER_JWKS_CACHE_LOCK:
+        cached = PROVIDER_JWKS_CACHE.get(cache_key)
+        if isinstance(cached, dict) and float(cached.get("expires_at") or 0) > now:
+            payload = cached.get("payload")
+            if isinstance(payload, dict):
+                return payload
+    try:
+        response = requests.get(url, timeout=PROVIDER_HTTP_TIMEOUT_SECONDS)
+        response.raise_for_status()
+        payload = response.json()
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail="Authentication provider keys are unavailable.") from exc
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=503, detail="Authentication provider keys are unavailable.")
+    with PROVIDER_JWKS_CACHE_LOCK:
+        PROVIDER_JWKS_CACHE[cache_key] = {
+            "payload": payload,
+            "expires_at": now + PROVIDER_JWKS_CACHE_TTL_SECONDS,
+        }
+    return payload
+
+
+def _verify_rs256_identity_token(token: str, *, jwks_cache_key: str, jwks_url: str) -> dict[str, Any]:
+    header = _parse_external_identity_jwt_header(token)
+    payload = _parse_external_identity_jwt_payload(token)
+    parts = str(token or "").split(".", 2)
+    if len(parts) != 3:
+        raise HTTPException(status_code=401, detail="Identity token is invalid.")
+    header_segment, payload_segment, signature_segment = parts
+    kid = str(header.get("kid") or "").strip()
+    alg = str(header.get("alg") or "").strip().upper()
+    if not kid or alg != "RS256":
+        raise HTTPException(status_code=401, detail="Identity token is invalid.")
+    jwks_payload = _fetch_provider_jwks(jwks_cache_key, jwks_url)
+    jwk_keys = jwks_payload.get("keys")
+    matching_key = next(
+        (
+            item
+            for item in list(jwk_keys or [])
+            if isinstance(item, dict) and str(item.get("kid") or "").strip() == kid
+        ),
+        None,
+    )
+    if not isinstance(matching_key, dict):
+        raise HTTPException(status_code=401, detail="Identity token could not be verified.")
+    try:
+        modulus = int.from_bytes(_b64url_decode(str(matching_key.get("n") or "").strip()), "big")
+        exponent = int.from_bytes(_b64url_decode(str(matching_key.get("e") or "").strip()), "big")
+        public_key = rsa.RSAPublicNumbers(exponent, modulus).public_key()
+        public_key.verify(
+            _b64url_decode(signature_segment),
+            f"{header_segment}.{payload_segment}".encode("utf-8"),
+            asymmetric_padding.PKCS1v15(),
+            hashes.SHA256(),
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=401, detail="Identity token could not be verified.") from exc
+    return payload
+
+
+def _validate_external_identity_claims(
+    provider: str,
+    claims: dict[str, Any],
+) -> tuple[str, Optional[str], Optional[str], Optional[str]]:
+    normalized_provider = _normalize_external_auth_provider(provider)
+    now = int(time.time())
+    issuer = str(claims.get("iss") or "").strip()
+    audience = str(claims.get("aud") or "").strip()
+    subject = str(claims.get("sub") or "").strip()
+    email = str(claims.get("email") or "").strip().lower() or None
+    name = str(claims.get("name") or "").strip() or None
+    avatar_url = str(claims.get("picture") or claims.get("avatar_url") or "").strip() or None
+    exp_value = claims.get("exp")
+    try:
+        exp = int(float(exp_value)) if exp_value is not None else 0
+    except Exception:
+        exp = 0
+    if not subject:
+        raise HTTPException(status_code=401, detail="Identity token is missing a subject.")
+    if exp and exp <= now:
+        raise HTTPException(status_code=401, detail="Identity token has expired.")
+    if normalized_provider == "apple":
+        if issuer != "https://appleid.apple.com":
+            raise HTTPException(status_code=401, detail="Apple identity token is invalid.")
+    elif normalized_provider == "google":
+        if issuer not in {"https://accounts.google.com", "accounts.google.com"}:
+            raise HTTPException(status_code=401, detail="Google identity token is invalid.")
+        email_verified = claims.get("email_verified")
+        if email and str(email_verified).strip().lower() not in {"true", "1"}:
+            raise HTTPException(status_code=401, detail="Google account email is not verified.")
+    allowed_audiences = _configured_provider_audiences(normalized_provider)
+    if allowed_audiences and audience and audience not in set(allowed_audiences):
+        raise HTTPException(status_code=401, detail="Identity token audience is invalid.")
+    return subject, email, name, avatar_url
+
+
+def verify_external_identity_token(
+    provider: str,
+    *,
+    id_token: str,
+    fallback_email: Optional[str] = None,
+    fallback_name: Optional[str] = None,
+    fallback_avatar_url: Optional[str] = None,
+) -> dict[str, Optional[str]]:
+    normalized_provider = _normalize_external_auth_provider(provider)
+    clean_token = str(id_token or "").strip()
+    if not clean_token:
+        raise HTTPException(status_code=400, detail="identity_token is required.")
+    if normalized_provider == "apple":
+        claims = _verify_rs256_identity_token(
+            clean_token,
+            jwks_cache_key="apple",
+            jwks_url="https://appleid.apple.com/auth/keys",
+        )
+    else:
+        claims = _verify_rs256_identity_token(
+            clean_token,
+            jwks_cache_key="google",
+            jwks_url="https://www.googleapis.com/oauth2/v3/certs",
+        )
+    subject, email, name, avatar_url = _validate_external_identity_claims(normalized_provider, claims)
+    resolved_email = email or (str(fallback_email or "").strip().lower() or None)
+    resolved_name = name or (str(fallback_name or "").strip() or None)
+    resolved_avatar_url = avatar_url or (str(fallback_avatar_url or "").strip() or None)
+    return {
+        "provider": normalized_provider,
+        "subject": subject,
+        "email": resolved_email,
+        "name": resolved_name,
+        "avatar_url": resolved_avatar_url,
     }
 
 
@@ -4238,6 +4447,13 @@ def _request_path(request: Request) -> str:
     return "/"
 
 
+def _authenticated_api_limit_for_channel(channel: Any) -> int:
+    normalized = _normalize_auth_session_channel(channel, default="web")
+    if normalized == "mobile":
+        return max(int(ORION_MOBILE_AUTHENTICATED_API_RATE_LIMIT_PER_MINUTE or 0), 1)
+    return max(int(ORION_AUTHENTICATED_API_RATE_LIMIT_PER_MINUTE or 0), 1)
+
+
 def limit_login_requests(request: Request) -> None:
     _enforce_window_limit(
         request=request,
@@ -4257,6 +4473,69 @@ def limit_public_requests(request: Request) -> None:
         key=f"public:{_client_ip(request)}",
         limit=60,
         profile_name=quota_policy_service.AUTH_PUBLIC_REGISTRATION_PROFILE.name,
+    )
+
+
+def mobile_beta_auto_signin_enabled() -> bool:
+    raw = os.getenv("ORION_MOBILE_BETA_AUTO_SIGNIN_ENABLED")
+    if raw is None:
+        return bool(ORION_MOBILE_BETA_AUTO_SIGNIN_ENABLED)
+    return str(raw).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _mobile_beta_bootstrap_identity(device_id: str) -> tuple[str, str]:
+    clean_device_id = str(device_id or "").strip()
+    if not clean_device_id:
+        raise HTTPException(status_code=400, detail="device_id is required.")
+    normalized_device = hashlib.sha256(clean_device_id.encode("utf-8")).hexdigest()[:24]
+    email = f"mobile-beta+{normalized_device}@empyralis.local"
+    derived_secret = hmac.new(
+        _jwt_secret().encode("utf-8"),
+        f"mobile-beta:{clean_device_id}".encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()
+    password = f"mobile-beta-{derived_secret[:32]}"
+    return email, password
+
+
+def login_mobile_beta_user(
+    *,
+    device_id: str,
+    device_name: Optional[str] = None,
+    device_platform: Optional[str] = None,
+    workspace_id: Optional[str] = None,
+    session_ttl_seconds: Optional[int] = None,
+) -> Dict[str, Any]:
+    if not mobile_beta_auto_signin_enabled():
+        raise HTTPException(status_code=403, detail="Mobile beta auto sign-in is disabled.")
+    clean_device_id = str(device_id or "").strip()
+    if not clean_device_id:
+        raise HTTPException(status_code=400, detail="device_id is required.")
+    email, password = _mobile_beta_bootstrap_identity(clean_device_id)
+    existing_user = _find_user_by_email(email)
+    if existing_user is None:
+        device_label = str(device_name or "").strip()
+        default_name = f"{device_label} owner" if device_label else "Empyralis mobile beta"
+        return register_user(
+            email,
+            password,
+            name=default_name,
+            channel="mobile",
+            device_id=clean_device_id,
+            device_name=device_name,
+            device_platform=device_platform,
+            workspace_id=workspace_id,
+            session_ttl_seconds=session_ttl_seconds,
+        )
+    return login_user(
+        email,
+        password,
+        channel="mobile",
+        device_id=clean_device_id,
+        device_name=device_name,
+        device_platform=device_platform,
+        workspace_id=workspace_id,
+        session_ttl_seconds=session_ttl_seconds,
     )
 
 
@@ -4406,9 +4685,41 @@ def register_user(
     return payload
 
 
-def login_user(
-    email: str,
-    password: str,
+def _find_user_id_by_auth_method(provider: str, subject: str) -> Optional[str]:
+    clean_provider = _normalize_external_auth_provider(provider)
+    clean_subject = str(subject or "").strip()
+    if not clean_subject:
+        return None
+    with AUTH_LOCK:
+        with _connect_auth_db() as connection:
+            row = connection.execute(
+                """
+                SELECT user_id
+                FROM user_auth_methods
+                WHERE provider = ? AND subject = ? AND status = 'active'
+                ORDER BY is_primary DESC, created_at ASC
+                LIMIT 1
+                """,
+                (clean_provider, clean_subject),
+            ).fetchone()
+            if row is not None and str(row["user_id"] or "").strip():
+                return str(row["user_id"] or "").strip()
+            row = connection.execute(
+                """
+                SELECT user_id
+                FROM user_enterprise_security
+                WHERE auth_provider = ? AND sso_subject = ?
+                LIMIT 1
+                """,
+                (clean_provider, clean_subject),
+            ).fetchone()
+    if row is not None and str(row["user_id"] or "").strip():
+        return str(row["user_id"] or "").strip()
+    return None
+
+
+def _login_payload_for_user(
+    user: Dict[str, Any],
     *,
     acquisition_token: Optional[str] = None,
     channel: Any = "web",
@@ -4418,21 +4729,6 @@ def login_user(
     workspace_id: Optional[str] = None,
     session_ttl_seconds: Optional[int] = None,
 ) -> Dict[str, Any]:
-    user = _find_user_by_email(email)
-    identity = _control_plane_call(control_plane_repository.get_local_auth_identity_by_email(email))
-    password_hash = str((user or {}).get("password_hash") or (identity or {}).get("password_hash") or "")
-    if not user and isinstance(identity, dict):
-        user = {
-            "id": str(identity.get("user_id") or "").strip(),
-            "email": str(identity.get("email") or "").strip().lower(),
-            "name": str(identity.get("display_name") or "").strip() or None,
-            "avatar_url": str(identity.get("avatar_url") or "").strip() or None,
-            "tenant_id": str(identity.get("tenant_id") or "").strip() or None,
-            "workspace_id": str(identity.get("workspace_id") or "").strip() or None,
-            "password_hash": password_hash,
-        }
-    if not user or not _verify_password(password, password_hash):
-        raise HTTPException(status_code=401, detail="Invalid email or password.")
     user_id = str(user.get("id") or "").strip()
     if not user_id:
         raise HTTPException(status_code=401, detail="Invalid user record.")
@@ -4490,6 +4786,124 @@ def login_user(
         except Exception:
             pass
     return payload
+
+
+def login_external_user(
+    *,
+    provider: str,
+    subject: str,
+    email: Optional[str] = None,
+    name: Optional[str] = None,
+    avatar_url: Optional[str] = None,
+    acquisition_token: Optional[str] = None,
+    channel: Any = "mobile",
+    device_id: Optional[str] = None,
+    device_name: Optional[str] = None,
+    device_platform: Optional[str] = None,
+    workspace_id: Optional[str] = None,
+    session_ttl_seconds: Optional[int] = None,
+) -> Dict[str, Any]:
+    clean_provider = _normalize_external_auth_provider(provider)
+    clean_subject = str(subject or "").strip()
+    if not clean_subject:
+        raise HTTPException(status_code=400, detail="subject is required.")
+    linked_user_id = _find_user_id_by_auth_method(clean_provider, clean_subject)
+    user = _find_user_by_id(linked_user_id) if linked_user_id else None
+    clean_email = str(email or "").strip().lower() or None
+    if user is None and clean_email:
+        user = _find_user_by_email(clean_email)
+    if user is None and not clean_email:
+        raise HTTPException(status_code=400, detail="An email address is required the first time you sign in with this provider.")
+
+    display_name = str(name or (user or {}).get("name") or "").strip() or (
+        (clean_email or "").split("@", 1)[0] if clean_email else clean_subject
+    )
+    membership_rows = _list_workspace_memberships(str(user.get("id") or "").strip()) if isinstance(user, dict) else []
+    primary_membership = next(
+        (
+            item
+            for item in membership_rows
+            if isinstance(item, dict)
+            and str(item.get("workspace_id") or "").strip()
+            and str(item.get("tenant_id") or "").strip()
+        ),
+        None,
+    )
+    resolved_workspace_id = (
+        _normalize_workspace_token((primary_membership or {}).get("workspace_id"), default="")
+        or f"ws_{uuid.uuid4().hex[:12]}"
+    )
+    resolved_tenant_id = (
+        _normalize_tenant_token((primary_membership or {}).get("tenant_id"), default="")
+        or f"tenant_{uuid.uuid4().hex[:12]}"
+    )
+    resolved_role = normalize_rbac_role((primary_membership or {}).get("role"), default="owner")
+    provision_user_account(
+        email=clean_email or str((user or {}).get("email") or "").strip().lower(),
+        name=display_name,
+        tenant_id=resolved_tenant_id,
+        workspace_roles={resolved_workspace_id: resolved_role},
+        provisioning_source=f"{clean_provider}_mobile_oauth",
+        external_id=clean_subject,
+        auth_provider=clean_provider,
+        sso_subject=clean_subject,
+    )
+    user = _find_user_by_id(linked_user_id or str((user or {}).get("id") or "").strip()) or _find_user_by_email(
+        clean_email or str((user or {}).get("email") or "").strip().lower()
+    )
+    if user is None:
+        raise HTTPException(status_code=500, detail="Authenticated user could not be loaded.")
+    if avatar_url and not str(user.get("avatar_url") or "").strip():
+        user["avatar_url"] = str(avatar_url or "").strip() or None
+    return _login_payload_for_user(
+        user,
+        acquisition_token=acquisition_token,
+        channel=channel,
+        device_id=device_id,
+        device_name=device_name,
+        device_platform=device_platform,
+        workspace_id=workspace_id,
+        session_ttl_seconds=session_ttl_seconds,
+    )
+
+
+def login_user(
+    email: str,
+    password: str,
+    *,
+    acquisition_token: Optional[str] = None,
+    channel: Any = "web",
+    device_id: Optional[str] = None,
+    device_name: Optional[str] = None,
+    device_platform: Optional[str] = None,
+    workspace_id: Optional[str] = None,
+    session_ttl_seconds: Optional[int] = None,
+) -> Dict[str, Any]:
+    user = _find_user_by_email(email)
+    identity = _control_plane_call(control_plane_repository.get_local_auth_identity_by_email(email))
+    password_hash = str((user or {}).get("password_hash") or (identity or {}).get("password_hash") or "")
+    if not user and isinstance(identity, dict):
+        user = {
+            "id": str(identity.get("user_id") or "").strip(),
+            "email": str(identity.get("email") or "").strip().lower(),
+            "name": str(identity.get("display_name") or "").strip() or None,
+            "avatar_url": str(identity.get("avatar_url") or "").strip() or None,
+            "tenant_id": str(identity.get("tenant_id") or "").strip() or None,
+            "workspace_id": str(identity.get("workspace_id") or "").strip() or None,
+            "password_hash": password_hash,
+        }
+    if not user or not _verify_password(password, password_hash):
+        raise HTTPException(status_code=401, detail="Invalid email or password.")
+    return _login_payload_for_user(
+        user,
+        acquisition_token=acquisition_token,
+        channel=channel,
+        device_id=device_id,
+        device_name=device_name,
+        device_platform=device_platform,
+        workspace_id=workspace_id,
+        session_ttl_seconds=session_ttl_seconds,
+    )
 
 
 def refresh_authenticated_session(
@@ -4784,7 +5198,7 @@ def get_current_user(
             buckets=USER_RATE_LIMIT_BUCKETS,
             lock=USER_RATE_LIMIT_LOCK,
             key=f"user:{str(user.get('user_id') or 'local-dev').strip() or 'local-dev'}",
-            limit=60,
+            limit=_authenticated_api_limit_for_channel(user.get("channel")),
             profile_name=quota_policy_service.AUTHENTICATED_API_PROFILE.name,
             actor_id=str(user.get("user_id") or "").strip() or None,
         )
@@ -4822,7 +5236,9 @@ def get_current_user(
             buckets=USER_RATE_LIMIT_BUCKETS,
             lock=USER_RATE_LIMIT_LOCK,
             key=f"user:{user_id}",
-            limit=60,
+            limit=_authenticated_api_limit_for_channel(
+                payload.get("channel") or (context.get("auth_session") or {}).get("channel")
+            ),
             profile_name=quota_policy_service.AUTHENTICATED_API_PROFILE.name,
             actor_id=user_id,
         )

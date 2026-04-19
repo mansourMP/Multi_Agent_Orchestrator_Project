@@ -5,44 +5,44 @@ import Link from 'next/link';
 import { useEffect, useMemo, useState } from 'react';
 import { usePathname } from 'next/navigation';
 
-import { AppButton, joinClassNames } from '@/lib/ui/primitives';
-import { CommandSheet } from '@/lib/ui/command-sheet';
-import { WorkstationDiagnostics } from '@/lib/workspace/workstation-diagnostics';
-import { WorkstationRosterPane } from '@/lib/workspace/workstation-roster-pane';
-import { WorkstationStagePane } from '@/lib/workspace/workstation-stage-pane';
+import { joinClassNames } from '@/lib/ui/primitives';
 import { WorkstationTitlebar } from '@/lib/workspace/workstation-titlebar';
 import { useWorkspaceBoundary } from '@/lib/workspace/workspace-boundary';
+import { useWorkspaceServices, useWorkstationStreamState } from '@/lib/workspace/workspace-services';
 import { resolveRouteIdFromHref } from '@/lib/workspace/workspace-shell';
-import { getWorkspaceNavRouteDefinition, type WorkspaceNavDestinationId, type WorkspaceRouteId } from '../../../shared/nav-manifest';
+import {
+  getWorkspaceNavRouteDefinition,
+  type WorkspaceNavDestinationId,
+  type WorkspaceRouteId,
+} from '../../../shared/nav-manifest';
 
 const CONTEXT_ROUTE_IDS_BY_DESTINATION: Record<WorkspaceNavDestinationId, readonly WorkspaceRouteId[]> = {
   sage: [],
-  studio: ['studio', 'channels', 'inbox', 'deploy'],
+  studio: ['studio', 'inbox', 'deploy', 'studioIntegrations'],
   settings: ['settings'],
 };
 
-function resolveRouteLabel(
-  pathname: string,
-  workspaceId: string,
-  routeIndex: ReturnType<typeof useWorkspaceBoundary>['routeManifest']['routeIndex'],
-) {
-  const routeId = resolveRouteIdFromHref(workspaceId, pathname);
-  return routeId ? routeIndex[routeId]?.label ?? 'Workspace' : 'Workspace';
+type SageTitlebarCounts = {
+  recentRuns: number;
+  memoryItems: number;
+};
+
+function readString(value: unknown): string {
+  return typeof value === 'string' && value.trim() ? value.trim() : '';
 }
 
 export function WorkstationKernelShell({
   children,
 }: PropsWithChildren) {
   const pathname = usePathname();
-  const { routeManifest, workspaceId } = useWorkspaceBoundary();
-  const [showDiagnostics, setShowDiagnostics] = useState(false);
-  const [showWorkspaceContext, setShowWorkspaceContext] = useState(false);
-  const [showInspector, setShowInspector] = useState(false);
+  const { bootstrap, routeManifest, workspaceId } = useWorkspaceBoundary();
+  const services = useWorkspaceServices();
+  const streamState = useWorkstationStreamState();
+  const [sageCounts, setSageCounts] = useState<SageTitlebarCounts>({
+    recentRuns: 0,
+    memoryItems: 0,
+  });
 
-  const currentRouteLabel = useMemo(
-    () => resolveRouteLabel(pathname, workspaceId, routeManifest.routeIndex),
-    [pathname, routeManifest.routeIndex, workspaceId],
-  );
   const activeRouteId = useMemo(
     () => resolveRouteIdFromHref(workspaceId, pathname),
     [pathname, workspaceId],
@@ -53,16 +53,29 @@ export function WorkstationKernelShell({
     }
     return getWorkspaceNavRouteDefinition(activeRouteId).destinationId;
   }, [activeRouteId]);
+  const workspaceLabel = bootstrap.workspace.label;
   const contextRoutes = useMemo(() => {
     if (activeDestinationId === 'sage') {
+      const chatRoute = routeManifest.routeIndex.chat;
+      const historyRoute = routeManifest.routeIndex.runs;
       const memoryRoute = routeManifest.routeIndex.activity;
-      const appsRoute = routeManifest.routeIndex.channels;
+      const integrationsRoute = routeManifest.routeIndex.integrations;
+      const filesRoute = routeManifest.routeIndex.artifacts;
       return [
+        chatRoute
+          ? { ...chatRoute, label: 'Chat' as const }
+          : null,
+        historyRoute
+          ? { ...historyRoute, label: 'History' as const }
+          : null,
         memoryRoute
           ? { ...memoryRoute, label: 'Memory' as const }
           : null,
-        appsRoute
-          ? { ...appsRoute, label: 'Apps' as const }
+        integrationsRoute
+          ? { ...integrationsRoute, label: 'Integrations' as const }
+          : null,
+        filesRoute
+          ? { ...filesRoute, label: 'Files' as const }
           : null,
       ].filter((route): route is NonNullable<typeof route> => Boolean(route));
     }
@@ -74,10 +87,71 @@ export function WorkstationKernelShell({
     });
   }, [activeDestinationId, routeManifest.routeIndex]);
 
+  const surfaceHomeHref = useMemo(() => {
+    if (activeDestinationId === 'sage') {
+      return routeManifest.routeIndex.chat?.href ?? `/w/${encodeURIComponent(workspaceId)}/sage`;
+    }
+    if (activeDestinationId === 'studio') {
+      return routeManifest.routeIndex.studio?.href ?? `/w/${encodeURIComponent(workspaceId)}/studio`;
+    }
+    return routeManifest.routeIndex.settings?.href ?? `/w/${encodeURIComponent(workspaceId)}/settings`;
+  }, [activeDestinationId, routeManifest.routeIndex, workspaceId]);
+
+  const isContextRouteActive = (routeId: WorkspaceRouteId): boolean => {
+    if (routeId === activeRouteId) {
+      return true;
+    }
+    if (routeId === 'chat' && activeDestinationId === 'sage') {
+      return pathname !== null && /\/(sage|chat)$/.test(pathname);
+    }
+    return false;
+  };
+
   useEffect(() => {
-    setShowWorkspaceContext(false);
-    setShowInspector(false);
-  }, [pathname]);
+    let cancelled = false;
+    const cutoff = Date.now() - (24 * 60 * 60 * 1000);
+    void Promise.all([
+      services.client.listRuns({ limit: 120 }),
+      services.client.listSageMemory(),
+    ]).then(([runsPayload, memoryPayload]) => {
+      if (cancelled) {
+        return;
+      }
+      const runItems = runsPayload && typeof runsPayload === 'object' && Array.isArray((runsPayload as Record<string, unknown>).items)
+        ? (runsPayload as Record<string, unknown>).items as Array<Record<string, unknown>>
+        : [];
+      const recentRuns = runItems.filter((item) => {
+        const createdAt = readString(item.created_at);
+        if (!createdAt) {
+          return false;
+        }
+        const parsed = Date.parse(createdAt);
+        return Number.isFinite(parsed) && parsed >= cutoff;
+      }).length;
+      const memorySummary = memoryPayload && typeof memoryPayload === 'object'
+        ? (memoryPayload as Record<string, unknown>).summary
+        : null;
+      const memoryItems = memorySummary && typeof memorySummary === 'object'
+        ? Number((memorySummary as Record<string, unknown>).total_count ?? 0)
+        : Array.isArray((memoryPayload as Record<string, unknown> | null)?.items)
+          ? (((memoryPayload as Record<string, unknown>).items as unknown[]).length)
+          : 0;
+      setSageCounts({
+        recentRuns,
+        memoryItems: Number.isFinite(memoryItems) ? memoryItems : 0,
+      });
+    }).catch(() => {
+      if (!cancelled) {
+        setSageCounts({
+          recentRuns: 0,
+          memoryItems: 0,
+        });
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [services.client, streamState.activity.version]);
 
   return (
     <div
@@ -93,51 +167,30 @@ export function WorkstationKernelShell({
     >
       <div className="workstation-shell__topbar" data-workstation-main-pane="topbar">
         <WorkstationTitlebar
-          surfaceLabel={currentRouteLabel}
-          diagnosticsVisible={showDiagnostics}
-          onToggleDiagnostics={() => {
-            setShowDiagnostics((current) => !current);
-          }}
-          navigation={contextRoutes.length > 1 ? contextRoutes.map((route) => (
+          surfaceLabel={workspaceLabel}
+          surfaceHref={surfaceHomeHref}
+          diagnosticsVisible={false}
+          onToggleDiagnostics={() => {}}
+          navigation={contextRoutes.length > 0 ? contextRoutes.map((route) => (
             <Link
               key={route.id}
               href={route.href}
               prefetch
-              aria-current={route.id === activeRouteId ? 'page' : undefined}
+              aria-current={isContextRouteActive(route.id) ? 'page' : undefined}
               className={joinClassNames(
                 'workstation-titlebar__link',
-                route.id === activeRouteId && 'workstation-titlebar__link--active',
+                isContextRouteActive(route.id) && 'workstation-titlebar__link--active',
               )}
             >
-              {route.label}
+              <span>{route.label}</span>
+              {route.id === 'runs' && sageCounts.recentRuns > 0 ? (
+                <span className="workstation-titlebar__link-meta">· {sageCounts.recentRuns}</span>
+              ) : null}
+              {route.id === 'activity' && sageCounts.memoryItems > 0 ? (
+                <span className="workstation-titlebar__link-meta">· {sageCounts.memoryItems}</span>
+              ) : null}
             </Link>
           )) : null}
-          actions={(
-            <>
-              <AppButton
-                type="button"
-                tone={showWorkspaceContext ? 'secondary' : 'ghost'}
-                className="workstation-titlebar__action"
-                onClick={() => {
-                  setShowWorkspaceContext((current) => !current);
-                  setShowInspector(false);
-                }}
-              >
-                Workspace
-              </AppButton>
-              <AppButton
-                type="button"
-                tone={showInspector ? 'secondary' : 'ghost'}
-                className="workstation-titlebar__action"
-                onClick={() => {
-                  setShowInspector((current) => !current);
-                  setShowWorkspaceContext(false);
-                }}
-              >
-                Details
-              </AppButton>
-            </>
-          )}
         />
       </div>
       <div className="workstation-shell__body" data-workstation-main-pane="content-body">
@@ -155,39 +208,6 @@ export function WorkstationKernelShell({
           </section>
         </div>
       </div>
-
-      <CommandSheet
-        open={showDiagnostics}
-        title="Diagnostics"
-        description="Internal shell and stream state for debugging only."
-        onClose={() => {
-          setShowDiagnostics(false);
-        }}
-      >
-        <WorkstationDiagnostics onClose={() => setShowDiagnostics(false)} />
-      </CommandSheet>
-
-      <CommandSheet
-        open={showWorkspaceContext}
-        title="Workspace info"
-        description="Recent activity and workspace details."
-        onClose={() => {
-          setShowWorkspaceContext(false);
-        }}
-      >
-        <WorkstationRosterPane />
-      </CommandSheet>
-
-      <CommandSheet
-        open={showInspector}
-        title={`${currentRouteLabel} details`}
-        description="More details and actions for this view."
-        onClose={() => {
-          setShowInspector(false);
-        }}
-      >
-        <WorkstationStagePane />
-      </CommandSheet>
     </div>
   );
 }

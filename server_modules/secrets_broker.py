@@ -27,6 +27,10 @@ DEFAULT_SECRET_GRANT_TTL_SECONDS = 30
 _SUPPORTED_SECRET_KINDS = {"connector_credential", "provider_credential"}
 _SUPPORTED_CONNECTOR_CLASSES = {"api_connector", "browser_connector", "media_generation_connector"}
 _LOCAL_ENV_TOKENS = {"", "dev", "development", "local", "test", "testing"}
+_INSECURE_BROKER_SECRETS = {
+    "empyralis-dev-tool-broker-secret",
+    "empyralis-dev-secrets-broker-secret",
+}
 
 
 @dataclass(frozen=True)
@@ -92,11 +96,11 @@ def _signing_secret() -> bytes:
         or os.getenv("EMPYRALIS_TOOL_BROKER_SECRET")
         or ""
     ).strip()
-    if secret:
+    if secret and secret not in _INSECURE_BROKER_SECRETS:
         return secret.encode("utf-8")
-    if _environment_requires_explicit_secret():
-        raise RuntimeError("EMPYRALIS_SECRETS_BROKER_SECRET or EMPYRALIS_TOOL_BROKER_SECRET is required.")
-    return b"empyralis-dev-secrets-broker-secret"
+    raise RuntimeError(
+        "Broker secret must be explicitly set. Refusing to start with insecure default."
+    )
 
 
 def _b64encode(raw: bytes) -> str:

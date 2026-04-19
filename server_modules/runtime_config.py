@@ -400,6 +400,11 @@ ORION_DEV_INSECURE_NO_AUTH = config_bool("ORION_DEV_INSECURE_NO_AUTH", False)
 # Fail-closed by default (OpenClaw-style): auth is on unless explicitly disabled.
 ORION_AUTH_REQUIRED = (_ORION_AUTH_REQUIRED_RAW != "0") if _ORION_AUTH_REQUIRED_RAW is not None else True
 if ORION_DEV_INSECURE_NO_AUTH:
+    resolved_env = _resolved_environment()
+    if resolved_env not in {"local", "test"}:
+        raise RuntimeError(
+            "ORION_DEV_INSECURE_NO_AUTH is allowed only when ORION_ENV is explicitly 'local' or 'test'. Refusing to start."
+        )
     ORION_AUTH_REQUIRED = False
     print("[WARN] ORION_DEV_INSECURE_NO_AUTH=1 set; runtime API auth is disabled for this process.")
 ORION_ENABLE_LEGACY_LOCAL_ROUTES = config_bool("ORION_ENABLE_LEGACY_LOCAL_ROUTES", False)

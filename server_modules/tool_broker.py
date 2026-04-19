@@ -28,6 +28,10 @@ _TOKEN_VERSION = "empyralis.tool-grant.v1"
 DEFAULT_CAPABILITY_TOKEN_TTL_SECONDS = 120
 MASTER_SCOPE_WILDCARD = "*"
 _LOCAL_ENV_TOKENS = {"", "dev", "development", "local", "test", "testing"}
+_INSECURE_BROKER_SECRETS = {
+    "empyralis-dev-tool-broker-secret",
+    "empyralis-dev-secrets-broker-secret",
+}
 
 
 @dataclass(frozen=True)
@@ -100,11 +104,11 @@ def _signing_secret() -> bytes:
         or os.getenv("EMPYRALIS_SECRETS_BROKER_SECRET")
         or ""
     ).strip()
-    if secret:
+    if secret and secret not in _INSECURE_BROKER_SECRETS:
         return secret.encode("utf-8")
-    if _environment_requires_explicit_secret():
-        raise RuntimeError("EMPYRALIS_TOOL_BROKER_SECRET or EMPYRALIS_SECRETS_BROKER_SECRET is required.")
-    return b"empyralis-dev-tool-broker-secret"
+    raise RuntimeError(
+        "Broker secret must be explicitly set. Refusing to start with insecure default."
+    )
 
 
 def _b64encode(raw: bytes) -> str:

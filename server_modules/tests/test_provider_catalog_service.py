@@ -41,10 +41,22 @@ class ProviderCatalogServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(any(model["id"] == "gpt-4o" for model in providers["openai"]["models"]))
         self.assertTrue(any(model["id"] == "deepseek-chat" for model in providers["deepseek"]["models"]))
 
+    def test_openai_codex_catalog_exposes_reasoning_levels(self) -> None:
+        models = provider_catalog_service.provider_profiles.provider_model_catalog("openai-codex")
+        gpt_54 = next((item for item in models if item.get("id") == "gpt-5.4"), None)
+
+        self.assertIsNotNone(gpt_54)
+        self.assertEqual(gpt_54["reasoning_levels"], ["low", "medium", "high", "xhigh"])
+
     def test_resolve_provider_model_selection_defaults_model_for_provider(self) -> None:
         selection = provider_catalog_service.resolve_provider_model_selection(provider="openai", model=None)
 
         self.assertEqual(selection, {"provider": "openai", "model": "gpt-4o"})
+
+    def test_resolve_provider_model_selection_defaults_to_gemini_25_flash(self) -> None:
+        selection = provider_catalog_service.resolve_provider_model_selection(provider="gemini", model=None)
+
+        self.assertEqual(selection, {"provider": "gemini", "model": "gemini-2.5-flash"})
 
     def test_resolve_provider_model_selection_normalizes_prefixed_model_ids(self) -> None:
         selection = provider_catalog_service.resolve_provider_model_selection(

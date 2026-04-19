@@ -83,6 +83,8 @@ def test_platform_config_schema_builds_provider_defaults_and_models() -> None:
                     "label": "GPT-4o",
                     "context_window_tokens": 128000,
                     "supports_tools": True,
+                    "supports_reasoning": True,
+                    "reasoning_levels": ["low", "medium", "high"],
                 }
             }
         },
@@ -95,3 +97,4 @@ def test_platform_config_schema_builds_provider_defaults_and_models() -> None:
     assert provider.default_model == "gpt-4o"
     assert provider.default_auth_mode == "api_key"
     assert models[0].id == "gpt-4o"
+    assert models[0].reasoning_levels == ["low", "medium", "high"]

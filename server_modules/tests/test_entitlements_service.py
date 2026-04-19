@@ -1,4 +1,5 @@
 import unittest
+from unittest.mock import patch
 
 from server_modules import entitlements_service
 
@@ -119,6 +120,23 @@ class EntitlementsServiceTests(unittest.TestCase):
             )
 
         self.assertEqual(ctx.exception.reason, "mobile_app_unavailable")
+
+    def test_enforce_mobile_app_access_allows_beta_override_from_workspace_metadata(self) -> None:
+        payload = entitlements_service.enforce_mobile_app_access(
+            workspace={"metadata": {"billing": {"plan": "free"}, "mobile_beta_enabled": True}},
+        )
+
+        self.assertEqual(payload["plan_id"], "free")
+        self.assertTrue(payload["capabilities"]["mobile_app_enabled"])
+
+    def test_enforce_mobile_app_access_allows_beta_override_from_env(self) -> None:
+        with patch("server_modules.entitlements_service.os.getenv", return_value="1"):
+            payload = entitlements_service.enforce_mobile_app_access(
+                workspace={"metadata": {"billing": {"plan": "free"}}},
+            )
+
+        self.assertEqual(payload["plan_id"], "free")
+        self.assertTrue(payload["capabilities"]["mobile_app_enabled"])
 
     def test_workspace_entitlement_payload_includes_capabilities(self) -> None:
         payload = entitlements_service.workspace_entitlement_payload(

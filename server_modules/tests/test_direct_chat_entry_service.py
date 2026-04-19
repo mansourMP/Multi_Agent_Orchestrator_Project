@@ -1,4 +1,5 @@
 import unittest
+from types import SimpleNamespace
 
 from server_modules import direct_chat_entry_service
 
@@ -89,6 +90,60 @@ class DirectChatEntryServiceTests(unittest.TestCase):
         self.assertEqual(prepared.normalized_message, "Keep going")
         self.assertEqual(prepared.compacted_prior_messages, [])
         self.assertEqual(prepared.base_context_used["workspace_id"], "default")
+
+    def test_prepare_direct_chat_request_marks_mobile_turns_server_first(self) -> None:
+        captured = {}
+
+        def resolve_availability(workspace_id, requested_provider, availability_override=None):
+            captured["override"] = dict(availability_override or {})
+            return {"ai_ready": True, "provider": requested_provider or "openai"}
+
+        prepared = direct_chat_entry_service.prepare_direct_chat_request(
+            resolved_turn_request=SimpleNamespace(
+                message="hello",
+                workspace_id="default",
+                session_id="thread-1",
+                channel="mobile",
+                context_hints={"source": "mobile_chat", "metadata": {"source": "mobile_chat"}},
+            ),
+            session_ctx=None,
+            message="ignored",
+            workspace_id="ignored",
+            thread_id="ignored",
+            requested_model="",
+            requested_provider="",
+            prior_messages=[],
+            reasoning_effort="medium",
+            availability={"ai_ready": True},
+            approved_action=None,
+            max_iterations=4,
+            direct_chat_session_key_fn=lambda workspace_id, thread_id: f"{workspace_id}:{thread_id}",
+            resolved_chat_iteration_limit_fn=lambda value: int(value or 30),
+            session_model_preference_fn=lambda _session_key: {},
+            normalize_reasoning_effort_fn=lambda value: value,
+            parse_slash_command_fn=lambda _message: {"command": "", "remainder": ""},
+            set_session_model_preference_fn=lambda session_key, provider=None, model=None: None,
+            mark_thread_cleared_fn=lambda _session_key: None,
+            normalize_prior_messages_fn=lambda value: list(value or []),
+            consume_thread_cleared_fn=lambda _session_key: False,
+            compact_conversation_history_fn=lambda messages, **kwargs: {"messages": list(messages), "compacted": False},
+            build_proactive_suggestions_fn=lambda _workspace_id: [],
+            direct_tool_session_key_fn=lambda workspace_id, thread_id: f"tool:{workspace_id}:{thread_id}",
+            resolve_direct_chat_availability_fn=resolve_availability,
+            connected_system_labels_fn=lambda _availability: [],
+            context_tool_capabilities_fn=lambda _availability: [],
+            build_direct_chat_tools_fn=lambda _tool_capabilities: [],
+            build_local_direct_chat_tools_fn=lambda _availability: [],
+            build_builtin_direct_chat_tools_fn=lambda: [],
+            normalize_direct_approved_action_fn=lambda _value: None,
+            build_context_used_fn=lambda **kwargs: kwargs,
+            direct_chat_compaction_token_limit=2000,
+        )
+
+        self.assertEqual(prepared.normalized_thread_id, "thread-1")
+        self.assertTrue(captured["override"]["mobile_server_first"])
+        self.assertEqual(captured["override"]["surface_channel"], "mobile")
+        self.assertEqual(captured["override"]["source"], "mobile_chat")
 
 
 if __name__ == "__main__":

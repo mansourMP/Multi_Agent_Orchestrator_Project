@@ -152,6 +152,19 @@ class RunStateRepositoryTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertIsNone(result)
 
+    async def test_get_live_run_raises_when_durable_runtime_is_required(self):
+        with (
+            patch("server_modules.run_state_repository.runtime_db.durable_runtime_required", return_value=True),
+            patch(
+                "server_modules.run_state_repository.runtime_db.require_durable_pool",
+                side_effect=run_state_repository.runtime_db.DurableRuntimeConfigurationError(
+                    "Postgres is required for durable run state during get_live_run"
+                ),
+            ),
+        ):
+            with self.assertRaises(run_state_repository.RunStatePersistenceError):
+                await run_state_repository.get_live_run("run-sqlite")
+
     async def test_create_or_update_approval_request_returns_durable_row(self):
         pool = _FakePool(
             fetchrow_result={
@@ -388,6 +401,19 @@ class RunStateRepositoryTests(unittest.IsolatedAsyncioTestCase):
                     {"run_id": "run-1", "status": "queued"},
                     "trace-1",
                 )
+
+    def test_sync_list_live_runs_raises_when_durable_runtime_is_required(self):
+        with (
+            patch("server_modules.run_state_repository.runtime_db.durable_runtime_required", return_value=True),
+            patch(
+                "server_modules.run_state_repository.runtime_db.require_durable_pool",
+                side_effect=run_state_repository.runtime_db.DurableRuntimeConfigurationError(
+                    "Postgres is required for durable run state during list_live_runs"
+                ),
+            ),
+        ):
+            with self.assertRaises(run_state_repository.RunStatePersistenceError):
+                run_state_repository.sync_list_live_runs()
 
     async def test_persist_and_claim_outbox_events_round_trip_through_postgres(self):
         pool = _FakePool(

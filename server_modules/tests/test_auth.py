@@ -86,6 +86,51 @@ def test_google_oauth_flow(monkeypatch: pytest.MonkeyPatch, tmp_path):
     assert auth.verify_token(created["token"]) == created["user"]["id"]
 
 
+def test_login_external_user_creates_mobile_session(monkeypatch: pytest.MonkeyPatch, tmp_path):
+    auth, _, _ = _reload_auth(monkeypatch, tmp_path)
+    monkeypatch.setattr(auth.entitlements_service, "enforce_mobile_app_access", lambda **kwargs: kwargs.get("workspace"))
+
+    logged_in = auth.login_external_user(
+        provider="apple",
+        subject="apple-user-123",
+        email="apple.user@example.com",
+        name="Apple User",
+        channel="mobile",
+        device_id="device-apple-1",
+        device_name="iPhone",
+        device_platform="ios",
+    )
+
+    assert logged_in["user"]["email"] == "apple.user@example.com"
+    assert auth.verify_token(logged_in["token"]) == logged_in["user"]["id"]
+    assert logged_in["auth_session"]["channel"] == "mobile"
+    assert any(
+        item["method_type"] == "sso" and item["provider"] == "apple"
+        for item in logged_in["identity_boundary"]["auth_methods"]
+    )
+
+
+def test_login_external_user_reuses_subject_without_email(monkeypatch: pytest.MonkeyPatch, tmp_path):
+    auth, _, _ = _reload_auth(monkeypatch, tmp_path)
+    monkeypatch.setattr(auth.entitlements_service, "enforce_mobile_app_access", lambda **kwargs: kwargs.get("workspace"))
+
+    first = auth.login_external_user(
+        provider="apple",
+        subject="apple-user-repeat",
+        email="repeat.apple@example.com",
+        name="Repeat Apple",
+        channel="mobile",
+    )
+    second = auth.login_external_user(
+        provider="apple",
+        subject="apple-user-repeat",
+        channel="mobile",
+    )
+
+    assert second["user"]["id"] == first["user"]["id"]
+    assert second["user"]["email"] == "repeat.apple@example.com"
+
+
 def test_register_and_login_emit_security_audit(monkeypatch: pytest.MonkeyPatch, tmp_path):
     auth, _, _ = _reload_auth(monkeypatch, tmp_path)
     emitted: list[dict[str, object]] = []

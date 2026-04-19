@@ -7,7 +7,8 @@ from server_modules import model_router
 class ModelRouterTests(unittest.TestCase):
     def test_resolve_model_aliases(self):
         self.assertEqual(model_router.resolve_model("claude-sonnet"), "anthropic/claude-3-5-sonnet-20241022")
-        self.assertEqual(model_router.resolve_model("gemini-flash"), "gemini/gemini-1.5-flash")
+        self.assertEqual(model_router.resolve_model("gemini-flash"), "gemini/gemini-2.5-flash")
+        self.assertEqual(model_router.resolve_model("gemini-pro"), "gemini/gemini-2.5-pro")
         self.assertEqual(model_router.resolve_model("gpt-4o-mini"), "gpt-4o-mini")
         self.assertEqual(model_router.resolve_model("vertex-gemini-pro"), "vertex_ai/gemini-1.5-pro")
         self.assertEqual(model_router.resolve_model("gemini-1.5-pro", provider="vertex"), "vertex_ai/gemini-1.5-pro")
@@ -58,6 +59,7 @@ class ModelRouterTests(unittest.TestCase):
         self.assertTrue(by_alias["gpt-4o"]["is_global_default"])
         self.assertFalse(by_alias["gpt-4o-mini"]["is_global_default"])
         self.assertTrue(by_alias["claude-sonnet"]["is_provider_default"])
+        self.assertTrue(by_alias["gemini-flash"]["is_provider_default"])
         self.assertTrue(by_alias["vertex-gemini-pro"]["is_provider_default"])
         self.assertFalse(by_alias["gemini-flash"]["is_global_default"])
 

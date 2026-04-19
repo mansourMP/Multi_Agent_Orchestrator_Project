@@ -84,7 +84,7 @@ class SageMemoryApiTests(unittest.TestCase):
                     route(
                         sage_memory_api.SageMemoryEntryCreateRequest(
                             workspace_id="workspace-1",
-                            category="profile_fact",
+                            category="personal_context",
                             title="Timezone",
                             content="Uses Asia/Shanghai.",
                             pinned=True,
@@ -93,7 +93,7 @@ class SageMemoryApiTests(unittest.TestCase):
                     )
                 )
             self.assertEqual(payload["workspace_id"], "workspace-1")
-            self.assertEqual(upsert_mock.call_args.kwargs["category"], "profile_fact")
+            self.assertEqual(upsert_mock.call_args.kwargs["category"], "personal_context")
             self.assertEqual(upsert_mock.call_args.kwargs["actor_user_id"], "user-1")
         finally:
             if previous_server is None:

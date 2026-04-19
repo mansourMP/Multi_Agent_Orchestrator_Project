@@ -33,7 +33,7 @@ class DirectChatPromptServiceTests(unittest.TestCase):
         )
 
         self.assertIn("Workspace: default", str(prompt))
-        self.assertIn("memory_search: Search memory", str(prompt))
+        self.assertNotIn("memory_search: Search memory", str(prompt))
         self.assertIn("## Memory Recall", str(prompt))
 
     def test_combine_workspace_context_prefers_context_then_prompt(self) -> None:

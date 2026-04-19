@@ -9,6 +9,37 @@ from server_modules import usage_reporting
 
 
 class ProviderProfilesTests(unittest.TestCase):
+    def test_gemini_provider_defaults_to_25_flash_and_keeps_25_pro_available(self) -> None:
+        gemini_entry = provider_profiles.provider_catalog_entry("gemini")
+        model_ids = [item["id"] for item in provider_profiles.provider_model_catalog("gemini")]
+
+        self.assertEqual(gemini_entry["default_model"], "gemini-2.5-flash")
+        self.assertIn("gemini-2.5-flash", model_ids)
+        self.assertIn("gemini-2.5-pro", model_ids)
+
+    def test_gemini_25_model_catalog_uses_current_pricing_and_capabilities(self) -> None:
+        models = {
+            item["id"]: item
+            for item in provider_profiles.provider_model_catalog("gemini")
+        }
+
+        self.assertAlmostEqual(models["gemini-2.5-flash"]["input_cost_per_1k_usd"], 0.0003, places=8)
+        self.assertAlmostEqual(models["gemini-2.5-flash"]["output_cost_per_1k_usd"], 0.0025, places=8)
+        self.assertTrue(models["gemini-2.5-flash"]["supports_reasoning"])
+        self.assertAlmostEqual(models["gemini-2.5-pro"]["input_cost_per_1k_usd"], 0.00125, places=8)
+        self.assertAlmostEqual(models["gemini-2.5-pro"]["output_cost_per_1k_usd"], 0.01, places=8)
+        self.assertTrue(models["gemini-2.5-pro"]["supports_reasoning"])
+
+    def test_usage_reporting_uses_current_gemini_25_flash_pricing(self) -> None:
+        pricing = usage_reporting.lookup_model_pricing("gemini", "gemini-2.5-flash")
+        cost = usage_reporting.estimate_cost_usd("gemini", "gemini-2.5-flash", 1_000_000, 1_000_000)
+
+        self.assertIsNotNone(pricing)
+        self.assertEqual(pricing["source"], "https://ai.google.dev/gemini-api/docs/pricing")
+        self.assertAlmostEqual(float(pricing["input"]), 0.30, places=6)
+        self.assertAlmostEqual(float(pricing["output"]), 2.50, places=6)
+        self.assertAlmostEqual(float(cost or 0.0), 2.80, places=6)
+
     def test_deepseek_provider_cost_table_uses_non_zero_official_rates(self) -> None:
         rates = provider_profiles.PROVIDER_COST_PER_1K["deepseek"]
 

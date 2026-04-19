@@ -97,14 +97,28 @@ class DirectChatBrokerContainmentTests(unittest.TestCase):
 
         request_mock.assert_not_called()
 
-    def test_execute_single_direct_tool_call_blocks_local_tool_execution(self):
+    def test_execute_single_direct_tool_call_allows_safe_local_shell_read(self):
         callbacks = self._callbacks()
-        callbacks.parse_tool_name = lambda _name: ("shell", "run")
+        callbacks.parse_tool_name = lambda _name: ("shell", "exec")
+
+        with patch("server_modules.runs_execution._workflow_execute_local_tool", return_value={"status": "ok"}) as local_tool_mock:
+            skills_service.execute_single_direct_tool_call(
+                tool_call={"name": "shell__exec", "arguments": {"command": "pwd"}},
+                workspace_id="workspace-1",
+                thread_id="thread-1",
+                callbacks=callbacks,
+            )
+
+        local_tool_mock.assert_called_once()
+
+    def test_execute_single_direct_tool_call_blocks_unsafe_local_shell_execution(self):
+        callbacks = self._callbacks()
+        callbacks.parse_tool_name = lambda _name: ("shell", "exec")
 
         with patch("server_modules.runs_execution._workflow_execute_local_tool", return_value={"status": "ok"}) as local_tool_mock:
             with self.assertRaisesRegex(RuntimeError, "direct_chat_tool_execution_blocked"):
                 skills_service.execute_single_direct_tool_call(
-                    tool_call={"name": "shell__run", "arguments": {"command": "pwd"}},
+                    tool_call={"name": "shell__exec", "arguments": {"command": "rm -rf /tmp/test"}},
                     workspace_id="workspace-1",
                     thread_id="thread-1",
                     callbacks=callbacks,

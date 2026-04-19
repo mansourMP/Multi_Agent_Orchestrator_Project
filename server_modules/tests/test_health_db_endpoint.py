@@ -25,7 +25,13 @@ async def test_health_db_endpoint_reports_backend_state(mock_sqlite, mock_postgr
             response = await client.get("/health/db", headers={"X-API-Key": "secret"})
 
     assert response.status_code == 200
-    assert response.json() == {"postgres": "connected", "sqlite": "active"}
+    assert response.json() == {
+        "postgres": "connected",
+        "sqlite": "active",
+        "durable_required": False,
+        "durability_mode": "best_effort_local_dev",
+        "sqlite_fallback_allowed": True,
+    }
     mock_postgres.assert_awaited_once()
     mock_sqlite.assert_called_once()
 

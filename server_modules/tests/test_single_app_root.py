@@ -38,6 +38,7 @@ class _FastAPI:
         self.routes: list[_Route] = []
         self.middleware_handlers: list[tuple[str, object]] = []
         self.middleware_stack: list[tuple[object, dict[str, object]]] = []
+        self.exception_handlers: dict[object, object] = {}
 
     def add_middleware(self, middleware_class, **kwargs) -> None:
         self.middleware_stack.append((middleware_class, kwargs))
@@ -45,6 +46,13 @@ class _FastAPI:
     def middleware(self, kind: str):
         def _decorator(func):
             self.middleware_handlers.append((kind, func))
+            return func
+
+        return _decorator
+
+    def exception_handler(self, exc_class):
+        def _decorator(func):
+            self.exception_handlers[exc_class] = func
             return func
 
         return _decorator
@@ -228,19 +236,29 @@ class SingleAppRootTests(unittest.TestCase):
 
         route_modules = {
             "routes_agents": types.ModuleType("server_modules.routes_agents"),
+            "routes_agent_traces": types.ModuleType("server_modules.routes_agent_traces"),
             "routes_auth": types.ModuleType("server_modules.routes_auth"),
+            "routes_billing": types.ModuleType("server_modules.routes_billing"),
             "routes_builder": types.ModuleType("server_modules.routes_builder"),
             "routes_connectors": types.ModuleType("server_modules.routes_connectors"),
+            "routes_deployed_agents": types.ModuleType("server_modules.routes_deployed_agents"),
             "routes_health": types.ModuleType("server_modules.routes_health"),
+            "routes_mini_apps": types.ModuleType("server_modules.routes_mini_apps"),
+            "routes_platform_analytics": types.ModuleType("server_modules.routes_platform_analytics"),
             "routes_runs": types.ModuleType("server_modules.routes_runs"),
             "routes_workspaces": types.ModuleType("server_modules.routes_workspaces"),
             "routes_workflows": types.ModuleType("server_modules.routes_workflows"),
         }
         route_modules["routes_agents"].router = _build_router("/agents-router")
+        route_modules["routes_agent_traces"].router = _build_router("/agent-traces-router")
         route_modules["routes_auth"].router = _build_router("/auth-router")
+        route_modules["routes_billing"].router = _build_router("/billing-router")
         route_modules["routes_builder"].router = _build_router("/builder-router")
         route_modules["routes_connectors"].router = _build_router("/connectors-router")
+        route_modules["routes_deployed_agents"].router = _build_router("/deployed-agents-router")
         route_modules["routes_health"].router = _build_router("/health-router")
+        route_modules["routes_mini_apps"].router = _build_router("/mini-apps-router")
+        route_modules["routes_platform_analytics"].router = _build_router("/platform-analytics-router")
         route_modules["routes_runs"].router = _build_router("/runs-router")
         route_modules["routes_workspaces"].router = _build_router("/workspaces-router")
         route_modules["routes_workflows"].router = _build_router("/workflows-router")
@@ -248,9 +266,16 @@ class SingleAppRootTests(unittest.TestCase):
         fastapi_module = types.ModuleType("fastapi")
         fastapi_module.FastAPI = _FastAPI
         fastapi_module.Request = type("Request", (), {})
+        fastapi_module.HTTPException = type("HTTPException", (Exception,), {})
+
+        fastapi_exceptions_module = types.ModuleType("fastapi.exceptions")
+        fastapi_exceptions_module.RequestValidationError = type("RequestValidationError", (Exception,), {})
 
         fastapi_cors_module = types.ModuleType("fastapi.middleware.cors")
         fastapi_cors_module.CORSMiddleware = type("CORSMiddleware", (), {})
+
+        starlette_exceptions_module = types.ModuleType("starlette.exceptions")
+        starlette_exceptions_module.HTTPException = type("HTTPException", (Exception,), {})
 
         sentry_sdk_module = types.ModuleType("sentry_sdk")
         sentry_sdk_module.init = lambda **_kwargs: None
@@ -296,12 +321,14 @@ class SingleAppRootTests(unittest.TestCase):
         injected_modules = {
             **shared_modules,
             "fastapi": fastapi_module,
+            "fastapi.exceptions": fastapi_exceptions_module,
             "fastapi.middleware": types.ModuleType("fastapi.middleware"),
             "fastapi.middleware.cors": fastapi_cors_module,
             "sentry_sdk": sentry_sdk_module,
             "sentry_sdk.integrations": sentry_integrations_module,
             "sentry_sdk.integrations.fastapi": sentry_fastapi_module,
             "sentry_sdk.integrations.sqlalchemy": sentry_sqlalchemy_module,
+            "starlette.exceptions": starlette_exceptions_module,
             "uvicorn": uvicorn_module,
         }
 
@@ -322,6 +349,11 @@ class SingleAppRootTests(unittest.TestCase):
             "/api/runs-router",
             "/api/health-router",
             "/api/workspaces-router",
+            "/api/billing-router",
+            "/api/deployed-agents-router",
+            "/api/agent-traces-router",
+            "/api/platform-analytics-router",
+            "/api/mini-apps-router",
             "/api/v1/auth-router",
         }
         for path in expected_paths:

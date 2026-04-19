@@ -67,6 +67,20 @@ class DirectChatProviderServiceTests(unittest.TestCase):
         self.assertEqual(payload["custom"], "value")
         self.assertEqual(payload["tool_capabilities"], [{"id": "gmail", "workspace_id": "workspace-a"}])
 
+    def test_resolve_direct_chat_availability_prefers_platform_mode_for_mobile(self) -> None:
+        payload = direct_chat_provider_service.resolve_direct_chat_availability(
+            "workspace-a",
+            "openai",
+            direct_chat_runtime_available_fn=lambda: True,
+            preferred_provider_fn=lambda workspace_id, requested: (requested or "openai", {"api_key": "sk-test"}),
+            supports_direct_message_native_chat_fn=lambda _provider, credentials: bool(credentials),
+            resolve_workspace_tool_capabilities_fn=lambda _workspace_id: [],
+            availability_override={"surface_channel": "mobile", "source": "mobile_chat"},
+        )
+
+        self.assertTrue(payload["runtime_ok"])
+        self.assertEqual(payload["connection_mode"], "platform")
+
     def test_connected_provider_tokens_filters_empty_credentials(self) -> None:
         connected = direct_chat_provider_service.connected_provider_tokens(
             "default",

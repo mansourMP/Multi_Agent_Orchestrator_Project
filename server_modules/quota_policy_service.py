@@ -231,6 +231,11 @@ async def evaluate_channel_quota(
             metadata={
                 "applied": bool(quota_verdict.get("applied")),
                 "deployed_agent_id": subject.deployed_agent_id,
+                "daily_message_limit": quota_verdict.get("daily_message_limit"),
+                "message_count": quota_verdict.get("message_count"),
+                "remaining": quota_verdict.get("remaining"),
+                "usage_day": quota_verdict.get("usage_day"),
+                "warning_sent": quota_verdict.get("warning_sent"),
             },
         )
     return deny_quota_decision(

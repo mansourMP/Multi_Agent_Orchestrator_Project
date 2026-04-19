@@ -79,6 +79,7 @@ async def enforce_deployed_agent_daily_message_limit(
             "usage_day": _usage_day_token(now),
             "message_count": 0,
             "remaining": None,
+            "warning_sent": False,
             "retry_after_seconds": None,
             "reset_at": _next_utc_midnight(now).isoformat().replace("+00:00", "Z"),
         }
@@ -107,6 +108,7 @@ async def enforce_deployed_agent_daily_message_limit(
         "usage_day": usage_day,
         "message_count": message_count,
         "remaining": remaining,
+        "warning_sent": bool(usage_payload.get("warning_sent")),
         "retry_after_seconds": max(int((reset_at - (now.astimezone(timezone.utc) if isinstance(now, datetime) else datetime.now(timezone.utc))).total_seconds()), 1),
         "reset_at": reset_at.isoformat().replace("+00:00", "Z"),
     }

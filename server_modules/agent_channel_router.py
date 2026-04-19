@@ -60,7 +60,7 @@ from server_modules.channel_memory_overlay_service import (
 from server_modules.channel_owner_resolution_service import resolve_public_channel_owner
 from server_modules.channel_preflight_service import assert_inbound_allowed
 from server_modules.channel_quota_policy_service import check_daily_limit
-from server_modules.channel_routing_models import ChannelRoutingContext
+from server_modules.channel_routing_models import ChannelExecutionResult, ChannelRoutingContext
 from server_modules.channel_safety_overlay_service import (
     apply_business_plan_overlay,
     apply_post_turn_overlay,
@@ -393,11 +393,13 @@ async def route_inbound_channel_message(
             outbound_event_id=outbound_id,
         )
 
-    quota_result = await check_daily_limit(
+    quota_check = await check_daily_limit(
         context=context,
         message_id=message_id,
     )
-    if quota_result is not None:
+    quota_warning_notice = quota_check.get("warning_notice") if isinstance(quota_check, dict) else None
+    quota_result = quota_check.get("blocked_result") if isinstance(quota_check, dict) else None
+    if isinstance(quota_result, ChannelExecutionResult):
         outbound_event = await record_outbound_result(
             context=context,
             result=quota_result,
@@ -467,4 +469,5 @@ async def route_inbound_channel_message(
         result=result,
         inbound_event_id=current_inbound_event_id,
         outbound_event_id=outbound_id,
+        notices=[quota_warning_notice] if isinstance(quota_warning_notice, dict) else None,
     )

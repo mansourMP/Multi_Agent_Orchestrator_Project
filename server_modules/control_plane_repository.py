@@ -490,12 +490,16 @@ CREATE TABLE IF NOT EXISTS deployed_agent_daily_message_usage (
     external_user_id TEXT NOT NULL,
     usage_day DATE NOT NULL,
     message_count INTEGER NOT NULL DEFAULT 0,
+    warning_sent BOOLEAN NOT NULL DEFAULT FALSE,
     metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
     last_message_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     UNIQUE(tenant_id, workspace_id, deployed_agent_id, channel_key, external_user_id, usage_day)
 );
+
+ALTER TABLE deployed_agent_daily_message_usage
+ADD COLUMN IF NOT EXISTS warning_sent BOOLEAN NOT NULL DEFAULT FALSE;
 
 CREATE TABLE IF NOT EXISTS deployed_agent_monthly_cost_ledger (
     id TEXT PRIMARY KEY,
@@ -1272,6 +1276,7 @@ def _row_to_deployed_agent_daily_message_usage(row: Any) -> Optional[Dict[str, A
         "external_user_id": str(payload.get("external_user_id") or "").strip() or None,
         "usage_day": usage_day.isoformat() if isinstance(usage_day, date) else str(usage_day or "").strip() or None,
         "message_count": int(payload.get("message_count") or 0),
+        "warning_sent": bool(payload.get("warning_sent")),
         "metadata": _decode_json_object(payload.get("metadata")),
         "last_message_at": _iso(payload.get("last_message_at")),
         "created_at": _iso(payload.get("created_at")),
@@ -1606,6 +1611,14 @@ def _local_workspace_record_from_row(row: Any) -> Optional[Dict[str, Any]]:
         "created_at": int(row["created_at"]) if row["created_at"] is not None else None,
         "updated_at": int(row["updated_at"]) if row["updated_at"] is not None else None,
     }
+
+
+def _workspace_record_from_row(row: Any) -> Optional[Dict[str, Any]]:
+    if row is None:
+        return None
+    payload = dict(row)
+    payload["metadata"] = _decode_json_object(payload.get("metadata"))
+    return payload
 
 
 def _ts_or_none(value: Any) -> Optional[int]:
@@ -2740,7 +2753,12 @@ async def list_workspace_memberships_for_user(user_id: str) -> List[Dict[str, An
             """,
             str(user_id or "").strip(),
         )
-    return [dict(row) for row in rows]
+    records: List[Dict[str, Any]] = []
+    for row in rows:
+        record = _workspace_record_from_row(row)
+        if isinstance(record, dict):
+            records.append(record)
+    return records
 
 
 async def list_workspaces_for_user(user_id: str) -> List[Dict[str, Any]]:
@@ -3947,7 +3965,7 @@ async def get_workspace_by_id(workspace_id: str) -> Optional[Dict[str, Any]]:
             """,
             str(workspace_id or "").strip(),
         )
-    return dict(row) if row is not None else None
+    return _workspace_record_from_row(row)
 
 
 async def create_deployed_agent(
@@ -4088,10 +4106,10 @@ async def consume_deployed_agent_daily_message_quota(
             WITH consumed AS (
                 INSERT INTO deployed_agent_daily_message_usage (
                     id, tenant_id, workspace_id, deployed_agent_id, channel_key, external_user_id,
-                    usage_day, message_count, metadata, last_message_at, created_at, updated_at
+                    usage_day, message_count, warning_sent, metadata, last_message_at, created_at, updated_at
                 ) VALUES (
                     $1, $2, $3, $4, $5, $6,
-                    $7::date, 1, $8::jsonb, $9::timestamptz, $9::timestamptz, $9::timestamptz
+                    $7::date, 1, FALSE, $8::jsonb, $9::timestamptz, $9::timestamptz, $9::timestamptz
                 )
                 ON CONFLICT (tenant_id, workspace_id, deployed_agent_id, channel_key, external_user_id, usage_day)
                 DO UPDATE SET
@@ -4126,6 +4144,51 @@ async def consume_deployed_agent_daily_message_quota(
             _to_json(metadata, default={}),
             now_ts,
             resolved_limit,
+        )
+    return _row_to_deployed_agent_daily_message_usage(row)
+
+
+async def mark_deployed_agent_daily_message_warning_sent(
+    *,
+    tenant_id: str,
+    workspace_id: str,
+    deployed_agent_id: str,
+    channel_key: str,
+    external_user_id: str,
+    usage_day: Optional[Any] = None,
+) -> Optional[Dict[str, Any]]:
+    resolved_tenant_id = _require_scope_token(tenant_id, "tenant_id")
+    resolved_workspace_id = _require_scope_token(workspace_id, "workspace_id")
+    resolved_deployed_agent_id = _require_scope_token(deployed_agent_id, "deployed_agent_id")
+    resolved_channel_key = _require_scope_token(channel_key, "channel_key").lower()
+    resolved_external_user_id = _require_scope_token(external_user_id, "external_user_id")
+    resolved_usage_day = _coerce_date(usage_day)
+    if usage_day is not None and resolved_usage_day is None:
+        raise ValueError("usage_day must be an ISO date string or date value.")
+    resolved_usage_day = resolved_usage_day or datetime.now(timezone.utc).date()
+    async with _scoped_connection(tenant_id=resolved_tenant_id, workspace_id=resolved_workspace_id) as connection:
+        if connection is None:
+            return None
+        row = await connection.fetchrow(
+            """
+            UPDATE deployed_agent_daily_message_usage
+            SET warning_sent = TRUE,
+                updated_at = NOW()
+            WHERE tenant_id = $1
+              AND workspace_id = $2
+              AND deployed_agent_id = $3
+              AND channel_key = $4
+              AND external_user_id = $5
+              AND usage_day = $6::date
+              AND warning_sent = FALSE
+            RETURNING *
+            """,
+            resolved_tenant_id,
+            resolved_workspace_id,
+            resolved_deployed_agent_id,
+            resolved_channel_key,
+            resolved_external_user_id,
+            resolved_usage_day,
         )
     return _row_to_deployed_agent_daily_message_usage(row)
 
@@ -4434,6 +4497,45 @@ async def get_deployed_agent_conversation_memory(
             resolved_external_user_id,
         )
     return _row_to_deployed_agent_conversation_memory(row)
+
+
+async def list_deployed_agent_conversation_memory(
+    *,
+    tenant_id: str,
+    workspace_id: str,
+    deployed_agent_id: str,
+    limit: int = 50,
+    offset: int = 0,
+) -> List[Dict[str, Any]]:
+    resolved_tenant_id = _require_scope_token(tenant_id, "tenant_id")
+    resolved_workspace_id = _require_scope_token(workspace_id, "workspace_id")
+    resolved_deployed_agent_id = _require_scope_token(deployed_agent_id, "deployed_agent_id")
+    safe_limit = max(1, min(int(limit or 50), 200))
+    safe_offset = max(0, int(offset or 0))
+    async with _scoped_connection(tenant_id=resolved_tenant_id, workspace_id=resolved_workspace_id) as connection:
+        if connection is None:
+            return []
+        rows = await connection.fetch(
+            """
+            SELECT *
+            FROM deployed_agent_conversation_memory
+            WHERE tenant_id = $1
+              AND workspace_id = $2
+              AND deployed_agent_id = $3
+            ORDER BY updated_at DESC, created_at DESC, id DESC
+            LIMIT $4 OFFSET $5
+            """,
+            resolved_tenant_id,
+            resolved_workspace_id,
+            resolved_deployed_agent_id,
+            safe_limit,
+            safe_offset,
+        )
+    return [
+        payload
+        for payload in (_row_to_deployed_agent_conversation_memory(row) for row in rows)
+        if isinstance(payload, dict)
+    ]
 
 
 async def upsert_deployed_agent_conversation_memory(

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 from typing import Any, Dict, Optional
 
 from fastapi import HTTPException
@@ -51,6 +53,48 @@ def http_detail_for_reason(reason: Optional[str]) -> str:
     )
 
 
+def _append_query_params(url: Optional[str], params: Dict[str, Optional[str]]) -> Optional[str]:
+    token = str(url or "").strip()
+    if not token:
+        return None
+    parsed = urlparse(token)
+    existing = dict(parse_qsl(parsed.query, keep_blank_values=True))
+    for key, value in params.items():
+        normalized_key = str(key or "").strip()
+        normalized_value = str(value or "").strip()
+        if normalized_key and normalized_value:
+            existing[normalized_key] = normalized_value
+    return urlunparse(parsed._replace(query=urlencode(existing)))
+
+
+def _daily_limit_cta_payload(
+    *,
+    deployed_agent: Optional[Dict[str, Any]],
+    metadata: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Optional[str]]:
+    details = dict(metadata or {})
+    resolved_label = str(details.get("upgrade_cta_label") or "").strip() or "Continue in app"
+    resolved_agent_id = str(
+        details.get("deployed_agent_id")
+        or (deployed_agent or {}).get("id")
+        or ""
+    ).strip() or None
+    fallback_public_url = str(os.getenv("EMPYRALIS_PUBLIC_URL") or "").strip().rstrip("/")
+    fallback_continue_url = f"{fallback_public_url}/continue" if fallback_public_url else None
+    resolved_url = _append_query_params(
+        str(details.get("upgrade_cta_url") or "").strip() or fallback_continue_url,
+        {
+            "source": "telegram_limit_hit",
+            "agent": resolved_agent_id,
+        },
+    )
+    return {
+        "label": resolved_label,
+        "url": resolved_url,
+        "agent_id": resolved_agent_id,
+    }
+
+
 def channel_reply_for_reason(
     reason: Optional[str],
     *,
@@ -60,12 +104,10 @@ def channel_reply_for_reason(
     normalized_reason = str(reason or "").strip()
     details = dict(metadata or {})
     if normalized_reason == "deployed_agent_daily_limit_exceeded":
-        from server_modules import deployed_agent_service
-
-        return deployed_agent_service.daily_limit_channel_reply(
-            deployed_agent=deployed_agent,
-            upgrade_cta_url=str(details.get("upgrade_cta_url") or "").strip() or None,
-            upgrade_cta_label=str(details.get("upgrade_cta_label") or "").strip() or None,
+        specialist_name = str((deployed_agent or {}).get("name") or "").strip() or "this specialist"
+        return (
+            f"You've reached today's free message limit with {specialist_name}. "
+            "Continue in Empyralis to keep your history and unlock more messages."
         )
     return _CHANNEL_REPLY_BY_REASON.get(normalized_reason, "The system is busy. Please try again in a moment.")
 
@@ -146,6 +188,18 @@ def channel_result_from_quota_decision(
         "response_class": decision.response_class,
         "error": error_response_service.channel_error_payload(error),
     }
+    if str(decision.reason or "").strip() == "deployed_agent_daily_limit_exceeded":
+        cta = _daily_limit_cta_payload(
+            deployed_agent=deployed_agent,
+            metadata=details,
+        )
+        if cta.get("url"):
+            payload["reply_markup"] = {
+                "inline_keyboard": [[{
+                    "text": str(cta.get("label") or "Continue in app"),
+                    "url": str(cta.get("url")),
+                }]],
+            }
     payload.update({key: value for key, value in details.items() if value is not None})
     event_metadata: Dict[str, Any] = dict(shared_metadata or {})
     event_metadata.update({key: value for key, value in details.items() if value is not None})
@@ -192,6 +246,7 @@ def channel_payload_from_quota_decision(
     return {
         "status": result.status,
         "reply": result.reply,
+        "reply_markup": result.payload.get("reply_markup") if isinstance(result.payload.get("reply_markup"), dict) else None,
         "error": result.error,
         "artifact": result.artifact,
         "steps": result.steps,

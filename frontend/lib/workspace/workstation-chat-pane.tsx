@@ -1,7 +1,23 @@
 'use client';
 
 import Link from 'next/link';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
+import {
+  Brain,
+  Camera,
+  Check,
+  FileText,
+  GitBranch,
+  Globe,
+  Monitor,
+  Plus,
+  Search,
+  Shield,
+  X,
+  Zap,
+} from 'lucide-react';
+import { useRouter } from 'next/navigation';
 
 import { CommandSheet } from '@/lib/ui/command-sheet';
 import { ConfirmDialog } from '@/lib/ui/confirm-dialog';
@@ -15,6 +31,11 @@ import {
   type WorkstationChatArtifactReference,
   type WorkstationChatMessageRecord,
 } from '@/lib/workspace/chat-message';
+import {
+  resolveModelContextWindow,
+} from '@/lib/workspace/model-capabilities';
+import { SageTraceView } from '@/lib/workspace/sage-trace-view';
+import { useWorkstationDesktopBridge } from '@/lib/workspace/workstation-desktop-bridge';
 import type { WorkspaceBootstrapRuntimeTarget } from '@/lib/workspace/workspace-bootstrap';
 import {
   resolveWorkstationApproval,
@@ -26,6 +47,8 @@ import {
   WorkstationClientError,
   type WorkstationAgentTraceEvent,
   type WorkstationAgentTraceRecord,
+  type ProviderCatalogModelRecord,
+  type ProviderCatalogRecord,
   type WorkstationSageMemoryRecord,
   type WorkstationSessionActor,
   type WorkstationTurnResponse,
@@ -59,6 +82,29 @@ type LiveTraceState = {
   events: WorkstationAgentTraceEvent[];
 };
 
+type LiveTimelineIcon =
+  | 'brain'
+  | 'camera'
+  | 'check'
+  | 'file'
+  | 'globe'
+  | 'monitor'
+  | 'search'
+  | 'shield'
+  | 'tree'
+  | 'x'
+  | 'zap';
+
+type LiveTimelineActionTone = 'default' | 'warning' | 'success' | 'danger' | 'accent';
+
+type LiveTimelineAction = {
+  id: string;
+  icon: LiveTimelineIcon;
+  label: string;
+  offsetLabel: string | null;
+  tone: LiveTimelineActionTone;
+};
+
 type SageMemoryCategoryRecord = {
   id: string;
   label: string;
@@ -78,6 +124,8 @@ type RecentThreadSummary = {
   title: string;
   updatedAt: string | null;
 };
+
+type StatusNoticeTone = 'neutral' | 'success' | 'warning';
 
 type SageMemoryDraft = {
   entryId: string | null;
@@ -101,12 +149,72 @@ type SendFailureNotice = {
   retryable: boolean;
 };
 
+type ChatMachineTrust = 'personal' | 'agent';
+
+type ChatAutonomyMode = 'approval' | 'full';
+
+type ChatReasoningEffort = 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
+
+type ChatModelOption = {
+  id: string;
+  label: string;
+  providerId: string | null;
+  providerLabel: string | null;
+  supportsReasoning: boolean;
+  reasoningLevels: ChatReasoningEffort[];
+  contextWindowTokens: number | null;
+};
+
+const VALID_REASONING_LEVELS: ChatReasoningEffort[] = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh'];
+
+const SYNTHETIC_TRANSCRIPT_MESSAGES = new Set([
+  'Approval is required before Sage can use the local companion.',
+  'Approval is required before Sage can continue.',
+  'Local companion is unavailable right now, so Sage could not start device work.',
+  'Sage needs your help before it can continue.',
+  'Task accepted. Sage started work with the local companion.',
+  'Task accepted. Sage started working on it.',
+]);
+
 const PRIMARY_THREAD_ID = 'primary';
 const ACTIVE_THREAD_QUERY_KEY = 'chat:canonical:active-thread';
+const ACTIVE_THREAD_STORAGE_PREFIX = 'empyralis.chat.active-thread.v1';
 const RUNS_QUERY_KEY = 'chat:canonical:runs';
 const APPROVALS_QUERY_KEY = 'chat:canonical:approvals';
 const SAGE_MEMORY_QUERY_KEY = 'chat:canonical:sage-memory';
 const RECENT_THREADS_QUERY_KEY = 'chat:canonical:recent-threads';
+
+function activeThreadStorageKey(workspaceId: string): string {
+  return `${ACTIVE_THREAD_STORAGE_PREFIX}:${workspaceId}`;
+}
+
+function readPersistedActiveThread(workspaceId: string): string | null {
+  if (typeof window === 'undefined' || typeof window.localStorage === 'undefined') {
+    return null;
+  }
+  try {
+    const persisted = window.localStorage.getItem(activeThreadStorageKey(workspaceId));
+    const threadId = readString(persisted);
+    return threadId || null;
+  } catch {
+    return null;
+  }
+}
+
+function persistActiveThread(workspaceId: string, threadId: string): void {
+  if (typeof window === 'undefined' || typeof window.localStorage === 'undefined') {
+    return;
+  }
+  const normalizedThreadId = readString(threadId);
+  if (!normalizedThreadId) {
+    return;
+  }
+  try {
+    window.localStorage.setItem(activeThreadStorageKey(workspaceId), normalizedThreadId);
+  } catch {
+    // Ignore storage write failures in constrained environments.
+  }
+}
 
 function threadQueryKey(threadId: string): string {
   return `chat:canonical:thread:${threadId}`;
@@ -187,6 +295,10 @@ function readObject(value: unknown): Record<string, unknown> {
     : {};
 }
 
+function readArray(value: unknown): unknown[] {
+  return Array.isArray(value) ? value : [];
+}
+
 function traceEventKey(event: WorkstationAgentTraceEvent, index: number): string {
   const explicit = readString(event.id);
   if (explicit) {
@@ -221,6 +333,427 @@ function mergeTraceEvents(
 
 function isTerminalTraceEvent(eventType: string): boolean {
   return eventType === 'trace.completed' || eventType === 'trace.failed';
+}
+
+function formatElapsedClock(totalSeconds: number): string {
+  const safe = Math.max(0, Math.floor(totalSeconds));
+  const minutes = Math.floor(safe / 60);
+  const seconds = safe % 60;
+  return `${minutes}:${String(seconds).padStart(2, '0')}`;
+}
+
+function resolveTraceStartedAtMs(liveTrace: LiveTraceState | null): number | null {
+  const traceStartedAt = readString(liveTrace?.trace?.started_at);
+  if (traceStartedAt) {
+    const parsed = Date.parse(traceStartedAt);
+    if (Number.isFinite(parsed)) {
+      return parsed;
+    }
+  }
+  for (const event of liveTrace?.events ?? []) {
+    const timestamp = readString(event.ts);
+    if (!timestamp) {
+      continue;
+    }
+    const parsed = Date.parse(timestamp);
+    if (Number.isFinite(parsed)) {
+      return parsed;
+    }
+  }
+  return null;
+}
+
+function resolveTraceDurationSeconds(liveTrace: LiveTraceState | null, traceStartedAtMs: number | null): number {
+  if (!liveTrace) {
+    return 0;
+  }
+  const orderedEvents = [...liveTrace.events].sort((left, right) => readNumber(left.seq, 0) - readNumber(right.seq, 0));
+  for (let index = orderedEvents.length - 1; index >= 0; index -= 1) {
+    const event = orderedEvents[index];
+    const eventType = readString(event.event_type);
+    if (!isTerminalTraceEvent(eventType)) {
+      continue;
+    }
+    const durationMs = readNumber(readObject(event.data).duration_ms, 0);
+    if (durationMs > 0) {
+      return Math.max(0, Math.round(durationMs / 1000));
+    }
+    const endedAt = Date.parse(readString(event.ts));
+    if (traceStartedAtMs && Number.isFinite(endedAt)) {
+      return Math.max(0, Math.round((endedAt - traceStartedAtMs) / 1000));
+    }
+  }
+  return 0;
+}
+
+function formatTraceOffset(timestamp: string, traceStartMs: number | null): string | null {
+  if (!traceStartMs) {
+    return null;
+  }
+  const eventMs = Date.parse(timestamp);
+  if (!Number.isFinite(eventMs)) {
+    return null;
+  }
+  return formatElapsedClock(Math.max(0, Math.round((eventMs - traceStartMs) / 1000)));
+}
+
+function buildLiveTimelineActions(
+  liveTrace: LiveTraceState | null,
+  traceStartedAtMs: number | null,
+  traceDurationSeconds: number,
+): LiveTimelineAction[] {
+  if (!liveTrace) {
+    return [];
+  }
+
+  const orderedEvents = [...liveTrace.events].sort((left, right) => readNumber(left.seq, 0) - readNumber(right.seq, 0));
+  const toolNames = new Map<string, string>();
+  const actions: LiveTimelineAction[] = [];
+
+  orderedEvents.forEach((event, index) => {
+    const eventType = readString(event.event_type);
+    const data = readObject(event.data);
+    const toolCallId = readString(event.tool_call_id);
+    const timestamp = readString(event.ts);
+    const offsetLabel = timestamp
+      ? formatTraceOffset(timestamp, traceStartedAtMs)
+      : null;
+    const id = traceEventKey(event, index);
+    let action: LiveTimelineAction | null = null;
+
+    if (eventType === 'tool.started') {
+      const toolName = readString(data.tool_name) || 'tool';
+      if (toolCallId) {
+        toolNames.set(toolCallId, toolName);
+      }
+      action = {
+        id,
+        icon: 'zap',
+        label: `Running ${toolName}`,
+        offsetLabel,
+        tone: 'default',
+      };
+    } else if (eventType === 'tool.result') {
+      const toolName = readString(data.tool_name) || toolNames.get(toolCallId) || 'tool';
+      const status = readString(data.status).toLowerCase();
+      action = {
+        id,
+        icon: status === 'failed' || status === 'error' ? 'x' : 'check',
+        label: `${status === 'failed' || status === 'error' ? 'Failed' : 'Completed'} ${toolName}`,
+        offsetLabel,
+        tone: status === 'failed' || status === 'error' ? 'danger' : 'success',
+      };
+    } else if (eventType === 'plan.item.created') {
+      action = {
+        id,
+        icon: 'tree',
+        label: `Planning: ${readString(data.title) || 'next step'}`,
+        offsetLabel,
+        tone: 'default',
+      };
+    } else if (eventType === 'search.query') {
+      const query = readString(data.query);
+      action = {
+        id,
+        icon: 'search',
+        label: `Searching: ${query || 'the web'}`,
+        offsetLabel,
+        tone: 'default',
+      };
+    } else if (eventType === 'search.results') {
+      action = {
+        id,
+        icon: 'search',
+        label: `Found ${readArray(data.results).length} results`,
+        offsetLabel,
+        tone: 'default',
+      };
+    } else if (eventType === 'browser.action') {
+      action = {
+        id,
+        icon: 'globe',
+        label: `Browser: ${readString(data.action) || 'action'}`,
+        offsetLabel,
+        tone: 'default',
+      };
+    } else if (eventType === 'browser.screenshot') {
+      action = {
+        id,
+        icon: 'camera',
+        label: 'Screenshot captured',
+        offsetLabel,
+        tone: 'default',
+      };
+    } else if (eventType === 'computer.click') {
+      action = {
+        id,
+        icon: 'monitor',
+        label: 'Clicked on screen',
+        offsetLabel,
+        tone: 'default',
+      };
+    } else if (eventType === 'computer.type') {
+      const text = readString(data.text);
+      action = {
+        id,
+        icon: 'monitor',
+        label: text ? `Typed: ${text.slice(0, 30)}${text.length > 30 ? '…' : ''}` : 'Typed text',
+        offsetLabel,
+        tone: 'default',
+      };
+    } else if (eventType === 'computer.key') {
+      const keyName = readString(data.key) || readString(data.key_name) || 'key';
+      action = {
+        id,
+        icon: 'monitor',
+        label: `Pressed ${keyName}`,
+        offsetLabel,
+        tone: 'default',
+      };
+    } else if (eventType === 'computer.launch') {
+      const appName = readString(data.app_name) || readString(data.app) || 'app';
+      action = {
+        id,
+        icon: 'monitor',
+        label: `Opened ${appName}`,
+        offsetLabel,
+        tone: 'default',
+      };
+    } else if (eventType === 'computer.screenshot') {
+      action = {
+        id,
+        icon: 'camera',
+        label: 'Screenshot captured',
+        offsetLabel,
+        tone: 'default',
+      };
+    } else if (eventType === 'computer.clipboard_read') {
+      action = {
+        id,
+        icon: 'monitor',
+        label: 'Read clipboard',
+        offsetLabel,
+        tone: 'default',
+      };
+    } else if (eventType === 'approval.requested') {
+      action = {
+        id,
+        icon: 'shield',
+        label: 'Waiting for approval',
+        offsetLabel,
+        tone: 'warning',
+      };
+    } else if (eventType === 'artifact.created') {
+      action = {
+        id,
+        icon: 'file',
+        label: `Created ${readString(data.label) || readString(data.file_name) || readString(event.artifact_id) || 'artifact'}`,
+        offsetLabel,
+        tone: 'accent',
+      };
+    } else if (eventType === 'reasoning.summary.delta') {
+      action = {
+        id,
+        icon: 'brain',
+        label: 'Thinking...',
+        offsetLabel,
+        tone: 'default',
+      };
+    } else if (eventType === 'delegation.started') {
+      action = {
+        id,
+        icon: 'tree',
+        label: `Delegating to ${readString(data.specialist_name) || 'specialist'}`,
+        offsetLabel,
+        tone: 'default',
+      };
+    } else if (eventType === 'trace.completed') {
+      action = {
+        id,
+        icon: 'check',
+        label: `Done · Took ${formatElapsedClock(traceDurationSeconds)}`,
+        offsetLabel,
+        tone: 'success',
+      };
+    } else if (eventType === 'trace.failed') {
+      action = {
+        id,
+        icon: 'x',
+        label: 'Failed',
+        offsetLabel,
+        tone: 'danger',
+      };
+    }
+
+    if (action) {
+      actions.push(action);
+    }
+  });
+
+  return actions;
+}
+
+function LiveTraceActionIcon({ icon }: { icon: LiveTimelineIcon }) {
+  const props = { size: 12, strokeWidth: 1.8, 'aria-hidden': true } as const;
+  if (icon === 'brain') {
+    return <Brain {...props} />;
+  }
+  if (icon === 'camera') {
+    return <Camera {...props} />;
+  }
+  if (icon === 'check') {
+    return <Check {...props} />;
+  }
+  if (icon === 'file') {
+    return <FileText {...props} />;
+  }
+  if (icon === 'globe') {
+    return <Globe {...props} />;
+  }
+  if (icon === 'monitor') {
+    return <Monitor {...props} />;
+  }
+  if (icon === 'search') {
+    return <Search {...props} />;
+  }
+  if (icon === 'shield') {
+    return <Shield {...props} />;
+  }
+  if (icon === 'tree') {
+    return <GitBranch {...props} />;
+  }
+  if (icon === 'x') {
+    return <X {...props} />;
+  }
+  return <Zap {...props} />;
+}
+
+function summarizeLiveTraceStep(liveTrace: LiveTraceState | null): {
+  label: string;
+  state: 'running' | 'complete' | 'failed';
+} {
+  const shorten = (value: string, max = 40) => {
+    const normalized = readString(value);
+    if (!normalized) {
+      return '';
+    }
+    return normalized.length > max ? `${normalized.slice(0, max).trim()}…` : normalized;
+  };
+  const fileTool = (toolName: string) => /file|read|write|document|pdf|excel|csv|sheet/i.test(toolName);
+  const codeTool = (toolName: string) => /code|execute|run|shell|bash|python|script/i.test(toolName);
+  if (!liveTrace) {
+    return {
+      label: 'Thinking...',
+      state: 'running',
+    };
+  }
+
+  const orderedEvents = [...liveTrace.events].sort((left, right) => readNumber(left.seq, 0) - readNumber(right.seq, 0));
+
+  for (let index = orderedEvents.length - 1; index >= 0; index -= 1) {
+    const event = orderedEvents[index];
+    const eventType = readString(event.event_type);
+    const data = readObject(event.data);
+
+    if (eventType === 'trace.failed') {
+      return {
+        label: readString(data.summary) || readString(data.error) || 'Run failed',
+        state: 'failed',
+      };
+    }
+    if (eventType === 'trace.completed') {
+      return {
+        label: readString(data.summary) || readString(data.outcome) || 'Run complete',
+        state: 'complete',
+      };
+    }
+    if (eventType === 'search.query') {
+      const query = shorten(readString(data.query));
+      return {
+        label: query ? `Searching the web for ${query}` : 'Searching the web',
+        state: 'running',
+      };
+    }
+    if (eventType.startsWith('computer.') || eventType === 'browser.action' || eventType === 'browser.screenshot') {
+      return {
+        label: 'Using the computer',
+        state: 'running',
+      };
+    }
+    if (eventType === 'tool.progress') {
+      const toolName = readString(data.tool_name);
+      if (fileTool(toolName)) {
+        return {
+          label: 'Reading file',
+          state: 'running',
+        };
+      }
+      if (codeTool(toolName)) {
+        return {
+          label: 'Executing code',
+          state: 'running',
+        };
+      }
+      return {
+        label: readString(data.message) || (toolName ? `Running ${toolName}` : 'Running a tool'),
+        state: 'running',
+      };
+    }
+    if (eventType === 'tool.started') {
+      const toolName = readString(data.tool_name);
+      if (fileTool(toolName)) {
+        return {
+          label: 'Reading file',
+          state: 'running',
+        };
+      }
+      if (codeTool(toolName)) {
+        return {
+          label: 'Executing code',
+          state: 'running',
+        };
+      }
+      return {
+        label: toolName ? `Running ${toolName}` : 'Running a tool',
+        state: 'running',
+      };
+    }
+    if (eventType === 'plan.item.updated' || eventType === 'plan.item.created') {
+      return {
+        label: readString(data.title) || readString(data.summary) || 'Thinking...',
+        state: 'running',
+      };
+    }
+    if (eventType === 'reasoning.summary.delta') {
+      return {
+        label: 'Thinking...',
+        state: 'running',
+      };
+    }
+    if (eventType === 'delegation.started') {
+      return {
+        label: readString(data.task_summary) || readString(data.specialist_name) || 'Delegating work',
+        state: 'running',
+      };
+    }
+    if (eventType === 'approval.requested') {
+      return {
+        label: readString(data.prompt) || 'Waiting for approval',
+        state: 'running',
+      };
+    }
+    if (eventType === 'artifact.created') {
+      return {
+        label: readString(data.label) || 'Created an output',
+        state: 'running',
+      };
+    }
+  }
+
+  return {
+    label: 'Working...',
+    state: 'running',
+  };
 }
 
 function normalizeTraceStreamEvent(payload: Record<string, unknown>): WorkstationAgentTraceEvent | null {
@@ -266,6 +799,13 @@ function buildLiveTraceRecord({
   };
 }
 
+function isSyntheticTranscriptMessage(message: WorkstationChatMessageRecord): boolean {
+  if (message.role === 'user') {
+    return false;
+  }
+  return SYNTHETIC_TRANSCRIPT_MESSAGES.has(readString(message.content));
+}
+
 function normalizeCanonicalChatThread(
   payload: unknown,
   threadId: string,
@@ -294,7 +834,7 @@ function normalizeCanonicalChatThread(
       interventions: Array.isArray(entry.interventions) ? entry.interventions as Record<string, unknown>[] : [],
       artifacts: normalizeArtifactReferences(metadata),
       metadata,
-    }];
+    }].filter((message) => !isSyntheticTranscriptMessage(message));
   });
 
   return {
@@ -321,6 +861,16 @@ function normalizeCanonicalApprovalItems(payload: unknown): CanonicalApprovalSum
   const items = (payload as Record<string, unknown>).items;
   return Array.isArray(items)
     ? items.filter((item): item is CanonicalApprovalSummary => Boolean(item) && typeof item === 'object')
+    : [];
+}
+
+function normalizeProviderCatalogRecords(payload: unknown): ProviderCatalogRecord[] {
+  if (!payload || typeof payload !== 'object') {
+    return [];
+  }
+  const providers = (payload as Record<string, unknown>).providers;
+  return Array.isArray(providers)
+    ? providers.filter((item): item is ProviderCatalogRecord => Boolean(item) && typeof item === 'object')
     : [];
 }
 
@@ -374,6 +924,170 @@ function readExecutionTarget(metadata: Record<string, unknown>): string {
   return typeof selected === 'string' ? selected.trim().toLowerCase() : '';
 }
 
+function isConnectedProviderState(state: unknown): boolean {
+  const normalized = readString(state).toLowerCase();
+  return normalized === 'active' || normalized === 'connected' || normalized === 'configured';
+}
+
+function isProviderEligibleForModelSelector(provider: ProviderCatalogRecord): boolean {
+  const providerId = readString(provider.id).toLowerCase();
+  if (!providerId || providerId === 'openai-codex') {
+    return false;
+  }
+  return isConnectedProviderState(provider.state);
+}
+
+function disconnectedModelOption(): ChatModelOption {
+  return {
+    id: '',
+    label: 'Connect a provider in Integrations',
+    providerId: null,
+    providerLabel: null,
+    supportsReasoning: false,
+    reasoningLevels: ['low', 'medium', 'high'],
+    contextWindowTokens: null,
+  };
+}
+
+function normalizeChatModelOptions(payload: unknown): ChatModelOption[] {
+  const record = payload && typeof payload === 'object' ? payload as Record<string, unknown> : {};
+  const providers = Array.isArray(record.providers)
+    ? record.providers.filter((item): item is ProviderCatalogRecord => Boolean(item) && typeof item === 'object')
+    : [];
+  const connectedProviders = providers.filter(isProviderEligibleForModelSelector);
+
+  if (connectedProviders.length === 0) {
+    return [disconnectedModelOption()];
+  }
+
+  const seen = new Set<string>();
+
+  return connectedProviders.flatMap((provider) => {
+    const models = Array.isArray(provider.models)
+      ? provider.models.filter((item): item is ProviderCatalogModelRecord => Boolean(item) && typeof item === 'object')
+      : [];
+    const providerId = readString(provider.id) || null;
+    const providerLabel = readString(provider.label) || providerId;
+
+    return models.flatMap((model) => {
+      const modelId = readString(model.id);
+      if (!modelId || seen.has(modelId)) {
+        return [];
+      }
+      seen.add(modelId);
+      const supportsReasoning = model.supports_reasoning !== false;
+      return [{
+        id: modelId,
+        label: readString(model.label) || modelId,
+        providerId: readString(model.provider) || providerId,
+        providerLabel: providerLabel || null,
+        supportsReasoning,
+        reasoningLevels: resolveReasoningLevels(model, providerId, modelId, supportsReasoning),
+        contextWindowTokens: resolveModelContextWindow(modelId, Number(model.context_window_tokens ?? 0) || null),
+      }];
+    });
+  });
+}
+
+function compactComposerLabel(label: string, fallback: string): string {
+  const source = readString(label) || readString(fallback);
+  if (!source) {
+    return 'Default';
+  }
+
+  const gptMatch = source.match(/gpt[-\s]?(\d+(?:\.\d+)?)/i);
+  if (gptMatch) {
+    return `GPT-${gptMatch[1]}`;
+  }
+
+  if (/default workspace model/i.test(source)) {
+    return 'Default';
+  }
+
+  const trimmed = source.split(/[(/]/, 1)[0]?.trim() || source;
+  return trimmed.length > 18 ? `${trimmed.slice(0, 18).trim()}…` : trimmed;
+}
+
+function inferReasoningLevels(
+  providerId: string | null,
+  modelId: string,
+  supportsReasoning: boolean,
+): ChatReasoningEffort[] {
+  if (!supportsReasoning) {
+    return ['medium'];
+  }
+
+  const normalizedProvider = readString(providerId).toLowerCase();
+  const normalizedModel = readString(modelId).toLowerCase();
+
+  if (normalizedProvider === 'ollama' || normalizedModel.includes('ollama/')) {
+    return ['low', 'medium'];
+  }
+
+  if (
+    normalizedModel.startsWith('o1')
+    || normalizedModel.startsWith('o3')
+    || normalizedModel.includes('/o1')
+    || normalizedModel.includes('/o3')
+    || normalizedModel.includes('claude')
+  ) {
+    return ['low', 'medium', 'high', 'xhigh'];
+  }
+
+  if (normalizedModel.includes('gpt-')) {
+    return ['low', 'medium', 'high'];
+  }
+
+  return ['low', 'medium', 'high'];
+}
+
+function formatContextWindowLabel(contextWindowTokens: number | null): string | null {
+  if (!contextWindowTokens || contextWindowTokens <= 0) {
+    return null;
+  }
+  const label = contextWindowTokens >= 1000
+    ? `${Math.round(contextWindowTokens / 1000)}k`
+    : String(contextWindowTokens);
+  return `${label} context`;
+}
+
+function resolveReasoningLevels(
+  model: ProviderCatalogModelRecord,
+  providerId: string | null,
+  modelId: string,
+  supportsReasoning: boolean,
+): ChatReasoningEffort[] {
+  const explicitLevels = Array.isArray(model.reasoning_levels)
+    ? model.reasoning_levels
+      .map((value) => readString(value).toLowerCase())
+      .filter((value): value is ChatReasoningEffort => VALID_REASONING_LEVELS.includes(value as ChatReasoningEffort))
+    : [];
+
+  if (explicitLevels.length > 0) {
+    return explicitLevels;
+  }
+
+  return inferReasoningLevels(providerId, modelId, supportsReasoning);
+}
+function reasoningLabel(value: ChatReasoningEffort): string {
+  switch (value) {
+    case 'none':
+      return 'None';
+    case 'minimal':
+      return 'Minimal';
+    case 'low':
+      return 'Low';
+    case 'medium':
+      return 'Medium';
+    case 'high':
+      return 'High';
+    case 'xhigh':
+      return 'Extra high';
+    default:
+      return 'Medium';
+  }
+}
+
 function firstInterventionMessage(interventions: unknown[]): string {
   const first = Array.isArray(interventions) ? interventions[0] : null;
   if (!first || typeof first !== 'object') {
@@ -382,6 +1096,24 @@ function firstInterventionMessage(interventions: unknown[]): string {
   const record = first as Record<string, unknown>;
   const token = record.message ?? record.detail ?? record.reason;
   return typeof token === 'string' ? token.trim() : '';
+}
+
+function findProviderFailureIntervention(interventions: unknown[]): Record<string, unknown> | null {
+  if (!Array.isArray(interventions)) {
+    return null;
+  }
+  for (const item of interventions) {
+    if (!item || typeof item !== 'object') {
+      continue;
+    }
+    const record = item as Record<string, unknown>;
+    const kind = String(record.kind ?? record.type ?? '').trim().toLowerCase();
+    const code = String(record.code ?? '').trim().toLowerCase();
+    if (kind === 'provider_error' || kind === 'system_error' || code.includes('provider') || code.includes('credential')) {
+      return record;
+    }
+  }
+  return null;
 }
 
 function createCanonicalAssistantMessage(
@@ -396,31 +1128,14 @@ function createCanonicalAssistantMessage(
     response.metadata && typeof response.metadata === 'object'
       ? response.metadata as Record<string, unknown>
       : {};
-  const executionTarget = readExecutionTarget(metadata);
-  const interventionMessage = firstInterventionMessage(interventions);
-  const synthesizedReply = reply
-    || (approvals.length > 0
-      ? executionTarget === 'local_companion'
-        ? 'Approval is required before Sage can use the local companion.'
-        : 'Approval is required before Sage can continue.'
-      : interventions.length > 0
-        ? /supervisor not running/i.test(interventionMessage)
-          ? 'Local companion is unavailable right now, so Sage could not start device work.'
-          : 'Sage needs your help before it can continue.'
-        : runId
-          ? executionTarget === 'local_companion'
-            ? 'Task accepted. Sage started work with the local companion.'
-            : 'Task accepted. Sage started working on it.'
-          : `Turn ${String(response.status ?? 'completed')}.`);
-
-  if (!synthesizedReply.trim()) {
+  if (!reply) {
     return null;
   }
 
   return {
     id: `${threadId}:assistant:${Date.now()}`,
     role: 'assistant',
-    content: synthesizedReply,
+    content: reply,
     status: typeof response.status === 'string' ? response.status : 'completed',
     createdAt: new Date().toISOString(),
     runId,
@@ -496,6 +1211,21 @@ function localCompanionTarget(runtimeTargets: WorkspaceBootstrapRuntimeTarget[])
   return runtimeTargets.find((target) => target.id === 'local_companion') ?? null;
 }
 
+function localDevicePlatformLabel(platform: string | null, fallbackLabel: string | null): string {
+  const normalized = String(platform || '').trim().toLowerCase();
+  if (normalized === 'macos' || normalized === 'darwin') {
+    return 'Mac';
+  }
+  if (normalized === 'windows' || normalized === 'win32') {
+    return 'Windows';
+  }
+  if (normalized === 'linux') {
+    return 'Linux';
+  }
+  const fallback = String(fallbackLabel || '').trim();
+  return fallback || 'Device';
+}
+
 function summarizeRuntimeCard(runtimeTargets: WorkspaceBootstrapRuntimeTarget[]): RuntimeSummaryCard {
   const preferred = preferredRuntimeTarget(runtimeTargets);
   const local = localCompanionTarget(runtimeTargets);
@@ -561,6 +1291,45 @@ function latestApprovalSummary(approval: CanonicalApprovalSummary | undefined): 
   return readString(approval.prompt) || 'A pending approval is attached to this thread.';
 }
 
+function classifyStatusNotice(message: string): {
+  tone: StatusNoticeTone;
+  title: string;
+  body: string;
+  requiresLocalAccess: boolean;
+} {
+  if (/^(memory|notification|policy|service|channel).*(saved|updated|pinned|unpinned|forgotten|corrected)/i.test(message)) {
+    return {
+      tone: 'success',
+      title: 'Updated',
+      body: message,
+      requiresLocalAccess: false,
+    };
+  }
+  if (/^turn submitted/i.test(message)) {
+    return {
+      tone: 'success',
+      title: 'Submitted',
+      body: message,
+      requiresLocalAccess: false,
+    };
+  }
+  return {
+    tone: 'neutral',
+    title: 'Notice',
+    body: message,
+    requiresLocalAccess: false,
+  };
+}
+
+function isLocalCompanionGateMessage(message: string): boolean {
+  const normalized = message.trim().toLowerCase();
+  return normalized.includes('local companion')
+    || normalized.includes('local worker')
+    || normalized.includes('requires local companion execution')
+    || normalized.includes('cannot run that request in this workspace right now')
+    || normalized.includes('path must stay inside local companion root');
+}
+
 function normalizeSageMemorySnapshot(payload: unknown): SageMemorySnapshot {
   const record = payload && typeof payload === 'object' ? payload as Record<string, unknown> : {};
   const items = Array.isArray(record.items)
@@ -621,19 +1390,188 @@ function formatTimestamp(value: string | null): string {
   return parsed.toLocaleString();
 }
 
+function formatRelativeTime(value: string | null): string {
+  if (!value) {
+    return 'Just now';
+  }
+  const parsed = Date.parse(value);
+  if (!Number.isFinite(parsed)) {
+    return value;
+  }
+  const diffMs = parsed - Date.now();
+  const diffMinutes = Math.round(diffMs / 60000);
+  const formatter = new Intl.RelativeTimeFormat(undefined, { numeric: 'auto' });
+
+  if (Math.abs(diffMinutes) < 60) {
+    return formatter.format(diffMinutes, 'minute');
+  }
+  const diffHours = Math.round(diffMinutes / 60);
+  if (Math.abs(diffHours) < 24) {
+    return formatter.format(diffHours, 'hour');
+  }
+  const diffDays = Math.round(diffHours / 24);
+  if (Math.abs(diffDays) < 7) {
+    return formatter.format(diffDays, 'day');
+  }
+  const diffWeeks = Math.round(diffDays / 7);
+  if (Math.abs(diffWeeks) < 5) {
+    return formatter.format(diffWeeks, 'week');
+  }
+  const diffMonths = Math.round(diffDays / 30);
+  if (Math.abs(diffMonths) < 12) {
+    return formatter.format(diffMonths, 'month');
+  }
+  const diffYears = Math.round(diffDays / 365);
+  return formatter.format(diffYears, 'year');
+}
+
+function runPreviewLabel(run: CanonicalRunSummary): string {
+  const directCandidates = [
+    run.first_user_message,
+    run.message,
+    run.prompt,
+    run.input_preview,
+    run.summary,
+    run.result_summary,
+    run.title,
+  ];
+  for (const candidate of directCandidates) {
+    const value = readString(candidate);
+    if (value) {
+      return value;
+    }
+  }
+
+  const metadata = readObject(run.metadata);
+  const metadataCandidates = [
+    metadata.first_user_message,
+    metadata.message,
+    metadata.prompt,
+    metadata.input_preview,
+    metadata.summary,
+  ];
+  for (const candidate of metadataCandidates) {
+    const value = readString(candidate);
+    if (value) {
+      return value;
+    }
+  }
+
+  return 'Continue the recent Sage thread';
+}
+
+function runContextTitle(run: CanonicalRunSummary): string {
+  const preview = runPreviewLabel(run);
+  return preview.length > 48 ? `${preview.slice(0, 48).trim()}…` : preview;
+}
+
+function resolveProviderModelContext({
+  providers,
+  selectedModelId,
+  selectedModelLabel,
+  selectedProviderId,
+}: {
+  providers: ProviderCatalogRecord[];
+  selectedModelId: string;
+  selectedModelLabel: string;
+  selectedProviderId: string | null;
+}): {
+  providerId: string | null;
+  providerLabel: string | null;
+  modelId: string | null;
+  modelLabel: string | null;
+} {
+  const availableProviders = providers.filter(isProviderEligibleForModelSelector);
+  const normalizedSelectedProviderId = readString(selectedProviderId);
+
+  const findModelInProvider = (provider: ProviderCatalogRecord, modelId: string) => {
+    const models = Array.isArray(provider.models)
+      ? provider.models.filter((item): item is ProviderCatalogModelRecord => Boolean(item) && typeof item === 'object')
+      : [];
+    return models.find((model) => readString(model.id) === modelId) ?? null;
+  };
+
+  if (selectedModelId !== 'default') {
+    for (const provider of availableProviders) {
+      const model = findModelInProvider(provider, selectedModelId);
+      if (!model) {
+        continue;
+      }
+      const providerLabel = readString(provider.label) || readString(provider.id);
+      const modelLabel = readString(model.label) || readString(model.id);
+      return {
+        providerId: readString(provider.id) || null,
+        providerLabel: providerLabel || null,
+        modelLabel: modelLabel || null,
+        modelId: readString(model.id) || null,
+      };
+    }
+    if (normalizedSelectedProviderId && selectedModelLabel) {
+      return {
+        providerId: normalizedSelectedProviderId,
+        providerLabel: normalizedSelectedProviderId,
+        modelLabel: selectedModelLabel,
+        modelId: selectedModelId,
+      };
+    }
+    return {
+      providerId: null,
+      providerLabel: null,
+      modelId: null,
+      modelLabel: null,
+    };
+  }
+
+  const orderedProviders = normalizedSelectedProviderId
+    ? [
+      ...availableProviders.filter((provider) => readString(provider.id) === normalizedSelectedProviderId),
+      ...availableProviders.filter((provider) => readString(provider.id) !== normalizedSelectedProviderId),
+    ]
+    : availableProviders;
+
+  for (const provider of orderedProviders) {
+    const defaultModelId = readString(provider.default_model);
+    if (!defaultModelId) {
+      continue;
+    }
+    const model = findModelInProvider(provider, defaultModelId);
+    const providerLabel = readString(provider.label) || readString(provider.id);
+    const modelLabel = model
+      ? readString(model.label) || readString(model.id)
+      : readString(selectedModelLabel).replace(/^Workspace default \((.*)\)$/i, '$1');
+    return {
+      providerId: readString(provider.id) || null,
+      providerLabel: providerLabel || null,
+      modelLabel: modelLabel || null,
+      modelId: model ? readString(model.id) || null : (defaultModelId || null),
+    };
+  }
+
+  return {
+    providerId: null,
+    providerLabel: null,
+    modelId: null,
+    modelLabel: null,
+  };
+}
+
 export function WorkstationChatPane() {
-  const { bootstrap } = useWorkspaceBoundary();
+  const { bootstrap, routeManifest } = useWorkspaceBoundary();
   const services = useWorkspaceServices();
   const streamState = useWorkstationStreamState();
+  const desktop = useWorkstationDesktopBridge();
+  const router = useRouter();
   const actor = useMemo<WorkstationSessionActor>(() => ({
     type: 'user',
     id: bootstrap.account.id,
     display_name: bootstrap.account.displayName ?? bootstrap.account.email,
   }), [bootstrap.account.displayName, bootstrap.account.email, bootstrap.account.id]);
 
-  const [activeThreadId, setActiveThreadId] = useState<string>(() =>
-    services.queryClient.peek<string>(ACTIVE_THREAD_QUERY_KEY) ?? PRIMARY_THREAD_ID,
-  );
+  const [activeThreadId, setActiveThreadId] = useState<string>(() => {
+    const cachedThreadId = services.queryClient.peek<string>(ACTIVE_THREAD_QUERY_KEY);
+    const persistedThreadId = readPersistedActiveThread(bootstrap.workspace.id);
+    return cachedThreadId ?? persistedThreadId ?? PRIMARY_THREAD_ID;
+  });
   const [thread, setThread] = useState<CanonicalChatThreadState>(() =>
     services.queryClient.peek<CanonicalChatThreadState>(threadQueryKey(activeThreadId)) ?? {
       threadId: activeThreadId,
@@ -660,6 +1598,7 @@ export function WorkstationChatPane() {
   );
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [sendFailureNotice, setSendFailureNotice] = useState<SendFailureNotice | null>(null);
+  const [titlebarActionsHost, setTitlebarActionsHost] = useState<HTMLElement | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isSending, setIsSending] = useState(false);
   const [hasEnteredConversationFlow, setHasEnteredConversationFlow] = useState(false);
@@ -668,25 +1607,33 @@ export function WorkstationChatPane() {
   const [pendingUserMessage, setPendingUserMessage] = useState<WorkstationChatMessageRecord | null>(null);
   const [streamingAssistantText, setStreamingAssistantText] = useState('');
   const [liveTrace, setLiveTrace] = useState<LiveTraceState | null>(null);
-  const [isMobileViewport, setIsMobileViewport] = useState(false);
-  const [isWideViewport, setIsWideViewport] = useState(false);
+  const [isLiveTraceExpanded, setIsLiveTraceExpanded] = useState(false);
+  const [showAllLiveTraceActions, setShowAllLiveTraceActions] = useState(false);
+  const [liveTraceElapsedSeconds, setLiveTraceElapsedSeconds] = useState(0);
+  const [showLiveTraceCard, setShowLiveTraceCard] = useState(false);
+  const [isLiveTraceCardFading, setIsLiveTraceCardFading] = useState(false);
+  const [showCompletedTraceTimer, setShowCompletedTraceTimer] = useState(false);
   const [memoryFilter, setMemoryFilter] = useState<string>('all');
-  const [selectedExecutionPlacement, setSelectedExecutionPlacement] = useState<'local' | 'cloud'>(() => {
-    const localTarget = localCompanionTarget(bootstrap.runtime.runtimeTargets);
-    return localTarget && localTarget.available && localTarget.online && localTarget.healthy ? 'local' : 'cloud';
-  });
-  const [permissionMode, setPermissionMode] = useState<'auto' | 'approval'>(() => {
-    const localTarget = localCompanionTarget(bootstrap.runtime.runtimeTargets);
-    return localTarget && localTarget.available && localTarget.online && localTarget.healthy ? 'approval' : 'auto';
-  });
+  const [selectedExecutionPlacement] = useState<'local'>('local');
+  const [machineTrust, setMachineTrust] = useState<ChatMachineTrust>('personal');
+  const [autonomyMode, setAutonomyMode] = useState<ChatAutonomyMode>('approval');
+  const [modelOptions, setModelOptions] = useState<ChatModelOption[]>([
+    disconnectedModelOption(),
+  ]);
+  const [selectedModel, setSelectedModel] = useState<string>('');
+  const [providerCatalog, setProviderCatalog] = useState<ProviderCatalogRecord[]>([]);
+  const [reasoningEffort, setReasoningEffort] = useState<ChatReasoningEffort>('medium');
   const [isApprovalsSheetOpen, setIsApprovalsSheetOpen] = useState(false);
+  const [isComposerMenuOpen, setIsComposerMenuOpen] = useState(false);
   const [isMemorySheetOpen, setIsMemorySheetOpen] = useState(false);
   const [memoryDraft, setMemoryDraft] = useState<SageMemoryDraft>(() => defaultSageMemoryDraft());
   const [pendingDeleteMemoryId, setPendingDeleteMemoryId] = useState<string | null>(null);
+  const liveTraceActionsRef = useRef<HTMLDivElement | null>(null);
 
   const writeThreadState = (nextThread: CanonicalChatThreadState) => {
     services.queryClient.set(threadQueryKey(nextThread.threadId), nextThread);
     services.queryClient.set(ACTIVE_THREAD_QUERY_KEY, nextThread.threadId);
+    persistActiveThread(bootstrap.workspace.id, nextThread.threadId);
     setActiveThreadId(nextThread.threadId);
     setThread(nextThread);
   };
@@ -719,6 +1666,16 @@ export function WorkstationChatPane() {
       threadId: requestedThreadId,
       allowMissing: true,
     });
+    if (payload === null) {
+      const cachedThread = services.queryClient.peek<CanonicalChatThreadState>(threadQueryKey(requestedThreadId));
+      if (cachedThread && cachedThread.messages.length > 0) {
+        setThread(cachedThread);
+        return cachedThread;
+      }
+      if (thread.threadId === requestedThreadId && thread.messages.length > 0) {
+        return thread;
+      }
+    }
     const nextThread = normalizeCanonicalChatThread(payload, requestedThreadId);
     writeThreadState(nextThread);
     return nextThread;
@@ -900,7 +1857,11 @@ export function WorkstationChatPane() {
     }
   };
 
-  const startNewThread = async () => {
+  const startNewThread = async (seed?: {
+    title?: string;
+    sourceRunId?: string | null;
+    sourceThreadId?: string | null;
+  }) => {
     if (isSending) {
       return;
     }
@@ -918,16 +1879,24 @@ export function WorkstationChatPane() {
       writeRecentThreads([
         {
           threadId: nextThreadId,
-          title: 'New thread',
+          title: readString(seed?.title) || 'New thread',
           updatedAt: new Date().toISOString(),
         },
         ...recentThreads.filter((item) => item.threadId !== nextThreadId).slice(0, 7),
       ]);
+      if (readString(seed?.sourceRunId) || readString(seed?.sourceThreadId)) {
+        setStatusMessage('Started a new thread from recent activity.');
+      }
     } catch (error) {
       setStatusMessage(error instanceof Error ? error.message : 'Could not start a new thread.');
     } finally {
       setIsLoading(false);
     }
+  };
+
+  const openFirstRunTip = () => {
+    openCreateMemory('profile_fact');
+    setStatusMessage('Tip: Sage can carry forward explicit facts, active projects, and preferences you save here.');
   };
 
   useEffect(() => {
@@ -957,6 +1926,45 @@ export function WorkstationChatPane() {
   }, [activeThreadId, streamState.activity.version]);
 
   useEffect(() => {
+    persistActiveThread(bootstrap.workspace.id, activeThreadId);
+  }, [activeThreadId, bootstrap.workspace.id]);
+
+  useEffect(() => {
+    const rememberedThreadId = readPersistedActiveThread(bootstrap.workspace.id) ?? PRIMARY_THREAD_ID;
+    if (rememberedThreadId !== activeThreadId) {
+      setActiveThreadId(rememberedThreadId);
+    }
+  }, [activeThreadId, bootstrap.workspace.id]);
+
+  useEffect(() => {
+    if (typeof document === 'undefined') {
+      return;
+    }
+    setTitlebarActionsHost(document.getElementById('workstation-titlebar-actions-slot'));
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return undefined;
+    }
+    const storageKey = activeThreadStorageKey(bootstrap.workspace.id);
+    const handleStorage = (event: StorageEvent) => {
+      if (event.key !== storageKey) {
+        return;
+      }
+      const nextThreadId = readString(event.newValue);
+      if (!nextThreadId || nextThreadId === activeThreadId) {
+        return;
+      }
+      setActiveThreadId(nextThreadId);
+    };
+    window.addEventListener('storage', handleStorage);
+    return () => {
+      window.removeEventListener('storage', handleStorage);
+    };
+  }, [activeThreadId, bootstrap.workspace.id]);
+
+  useEffect(() => {
     let cancelled = false;
 
     (async () => {
@@ -982,38 +1990,6 @@ export function WorkstationChatPane() {
     };
   }, [activeThreadId, bootstrap.workspace.id]);
 
-  useEffect(() => {
-    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') {
-      return undefined;
-    }
-
-    const mobileQuery = window.matchMedia('(max-width: 767px)');
-    const wideQuery = window.matchMedia('(min-width: 1200px)');
-
-    const updateViewport = () => {
-      setIsMobileViewport(mobileQuery.matches);
-      setIsWideViewport(wideQuery.matches);
-    };
-
-    updateViewport();
-
-    if (typeof mobileQuery.addEventListener === 'function') {
-      mobileQuery.addEventListener('change', updateViewport);
-      wideQuery.addEventListener('change', updateViewport);
-      return () => {
-        mobileQuery.removeEventListener('change', updateViewport);
-        wideQuery.removeEventListener('change', updateViewport);
-      };
-    }
-
-    mobileQuery.addListener(updateViewport);
-    wideQuery.addListener(updateViewport);
-    return () => {
-      mobileQuery.removeListener(updateViewport);
-      wideQuery.removeListener(updateViewport);
-    };
-  }, []);
-
   const streamingAssistantMessage = useMemo(
     () => createStreamingAssistantMessage(
       streamingAssistantText,
@@ -1031,7 +2007,128 @@ export function WorkstationChatPane() {
     || Boolean(liveTrace);
   const showConversationContext = hasConversationContent || hasEnteredConversationFlow;
   const showFirstImpression = !showConversationContext;
-  const showTrace = showConversationContext && Boolean(liveTrace) && !isMobileViewport && isWideViewport;
+  const showTrace = showConversationContext && Boolean(liveTrace);
+  const traceSummary = useMemo(() => summarizeLiveTraceStep(liveTrace), [liveTrace]);
+  const traceStartedAtMs = useMemo(() => resolveTraceStartedAtMs(liveTrace), [liveTrace]);
+  const traceDurationSeconds = useMemo(
+    () => resolveTraceDurationSeconds(liveTrace, traceStartedAtMs),
+    [liveTrace, traceStartedAtMs],
+  );
+  const liveTimelineActions = useMemo(
+    () => buildLiveTimelineActions(liveTrace, traceStartedAtMs, traceDurationSeconds),
+    [liveTrace, traceDurationSeconds, traceStartedAtMs],
+  );
+  const traceEarlierActionCount = Math.max(0, liveTimelineActions.length - 20);
+  const visibleLiveTimelineActions = useMemo(
+    () => (showAllLiveTraceActions ? liveTimelineActions : liveTimelineActions.slice(-20)),
+    [liveTimelineActions, showAllLiveTraceActions],
+  );
+  const liveTraceState = traceSummary.state;
+  const traceTimerLabel = useMemo(() => {
+    if (liveTraceState === 'complete') {
+      return showCompletedTraceTimer ? `Took ${formatElapsedClock(traceDurationSeconds)}` : '';
+    }
+    if (liveTraceState === 'failed') {
+      return traceDurationSeconds > 0 ? `Took ${formatElapsedClock(traceDurationSeconds)}` : '';
+    }
+    return formatElapsedClock(liveTraceElapsedSeconds);
+  }, [liveTraceElapsedSeconds, liveTraceState, showCompletedTraceTimer, traceDurationSeconds]);
+  const liveTraceFailureMessage = useMemo(() => {
+    if (liveTraceState !== 'failed') {
+      return '';
+    }
+    return traceSummary.label && traceSummary.label !== 'Run failed'
+      ? traceSummary.label
+      : 'Sage ran into a problem while working.';
+  }, [liveTraceState, traceSummary.label]);
+  const liveTraceCardClassName = useMemo(() => {
+    const classes = ['app-chat-live-trace'];
+    if (liveTraceState === 'running') {
+      classes.push('app-chat-live-trace--running');
+    } else if (liveTraceState === 'complete') {
+      classes.push('app-chat-live-trace--complete');
+    } else if (liveTraceState === 'failed') {
+      classes.push('app-chat-live-trace--failed');
+    }
+    if (isLiveTraceCardFading) {
+      classes.push('app-chat-live-trace--fading');
+    }
+    return classes.join(' ');
+  }, [isLiveTraceCardFading, liveTraceState]);
+  const traceBarClassName = useMemo(() => {
+    if (liveTraceState === 'complete') {
+      return 'sage-thinking-bar sage-thinking-bar--complete';
+    }
+    if (liveTraceState === 'failed') {
+      return 'sage-thinking-bar sage-thinking-bar--failed';
+    }
+    return 'sage-thinking-bar';
+  }, [liveTraceState]);
+
+  useEffect(() => {
+    if (!showTrace || !liveTrace) {
+      setShowLiveTraceCard(false);
+      setIsLiveTraceCardFading(false);
+      setShowCompletedTraceTimer(false);
+      setLiveTraceElapsedSeconds(0);
+      return undefined;
+    }
+
+    setShowLiveTraceCard(true);
+    setIsLiveTraceCardFading(false);
+    const initialElapsed = liveTraceState === 'running'
+      ? (traceStartedAtMs ? Math.max(0, Math.round((Date.now() - traceStartedAtMs) / 1000)) : 0)
+      : traceDurationSeconds;
+    setLiveTraceElapsedSeconds(initialElapsed);
+
+    let intervalId: number | null = null;
+    let timerHideId: number | null = null;
+    let fadeId: number | null = null;
+    let removeId: number | null = null;
+
+    if (liveTraceState === 'running') {
+      intervalId = window.setInterval(() => {
+        const nextElapsed = traceStartedAtMs
+          ? Math.max(0, Math.round((Date.now() - traceStartedAtMs) / 1000))
+          : 0;
+        setLiveTraceElapsedSeconds(nextElapsed);
+      }, 1000);
+    } else if (liveTraceState === 'complete') {
+      setShowCompletedTraceTimer(true);
+      timerHideId = window.setTimeout(() => {
+        setShowCompletedTraceTimer(false);
+      }, 3000);
+      fadeId = window.setTimeout(() => {
+        setIsLiveTraceCardFading(true);
+      }, 5000);
+      removeId = window.setTimeout(() => {
+        setShowLiveTraceCard(false);
+      }, 5350);
+    }
+
+    return () => {
+      if (intervalId) {
+        window.clearInterval(intervalId);
+      }
+      if (timerHideId) {
+        window.clearTimeout(timerHideId);
+      }
+      if (fadeId) {
+        window.clearTimeout(fadeId);
+      }
+      if (removeId) {
+        window.clearTimeout(removeId);
+      }
+    };
+  }, [liveTrace, liveTraceState, showTrace, traceDurationSeconds, traceStartedAtMs]);
+
+  useEffect(() => {
+    if (!liveTraceActionsRef.current) {
+      return;
+    }
+    liveTraceActionsRef.current.scrollTop = liveTraceActionsRef.current.scrollHeight;
+  }, [visibleLiveTimelineActions]);
+
   const showBlankTranscript = !isLoading
     && thread.messages.length === 0
     && !pendingUserMessage
@@ -1052,12 +2149,116 @@ export function WorkstationChatPane() {
     () => localCompanionTarget(bootstrap.runtime.runtimeTargets),
     [bootstrap.runtime.runtimeTargets],
   );
+  const localCompanionOnline = Boolean(
+    localRuntimeTarget
+    && localRuntimeTarget.online,
+  );
   const localCompanionConnected = Boolean(
     localRuntimeTarget
     && localRuntimeTarget.available
     && localRuntimeTarget.online
     && localRuntimeTarget.healthy,
   );
+  const selectedModelOption = useMemo(
+    () => modelOptions.find((option) => option.id === selectedModel) ?? modelOptions[0] ?? {
+      id: '',
+      label: 'Connect a provider in Integrations',
+      providerId: null,
+      providerLabel: null,
+      supportsReasoning: false,
+      reasoningLevels: ['low', 'medium', 'high'],
+      contextWindowTokens: null,
+    },
+    [modelOptions, selectedModel],
+  );
+  const selectedProviderContext = useMemo(
+    () => resolveProviderModelContext({
+      providers: providerCatalog,
+      selectedModelId: selectedModel,
+      selectedModelLabel: selectedModelOption.label,
+      selectedProviderId: selectedModelOption.providerId,
+    }),
+    [providerCatalog, selectedModel, selectedModelOption.label, selectedModelOption.providerId],
+  );
+  const integrationsHref = useMemo(
+    () => routeManifest.routeIndex.integrations?.href ?? `/w/${encodeURIComponent(bootstrap.workspace.id)}/integrations`,
+    [bootstrap.workspace.id, routeManifest.routeIndex.integrations],
+  );
+  const hasConnectedProvider = useMemo(
+    () => providerCatalog.some(isProviderEligibleForModelSelector),
+    [providerCatalog],
+  );
+  const runTargetOptions = useMemo(
+    () => [
+      {
+        value: 'local',
+        label: localCompanionOnline ? 'Local' : 'Local offline',
+      },
+    ],
+    [localCompanionOnline],
+  );
+  const autonomyOptions = useMemo(
+    () => [
+      { value: 'approval', label: 'Default' },
+      {
+        value: 'full',
+        label: 'Full access',
+      },
+    ],
+    [],
+  );
+  const composerModelOptions = useMemo(
+    () => {
+      const connectedProviders = providerCatalog.filter(isProviderEligibleForModelSelector);
+      if (connectedProviders.length <= 1) {
+        return modelOptions.map((option) => ({
+          value: option.id,
+          label: option.id ? compactComposerLabel(option.label, option.id) : option.label,
+          disabled: !option.id,
+        }));
+      }
+
+      const groupedOptions: { label: string; options: { value: string; label: string; disabled: boolean }[] }[] = [];
+      for (const provider of connectedProviders) {
+        const providerId = readString(provider.id);
+        const providerLabel = readString(provider.label) || providerId;
+        const options = modelOptions
+          .filter((option) => option.providerId === providerId)
+          .map((option) => ({
+            value: option.id,
+            label: option.id ? compactComposerLabel(option.label, option.id) : option.label,
+            disabled: !option.id,
+          }));
+        if (options.length > 0) {
+          groupedOptions.push({
+            label: providerLabel,
+            options,
+          });
+        }
+      }
+      return groupedOptions;
+    },
+    [modelOptions, providerCatalog],
+  );
+  const reasoningOptions = useMemo(
+    () => selectedModelOption.reasoningLevels.map((value) => ({
+      value,
+      label: reasoningLabel(value),
+    })),
+    [selectedModelOption.reasoningLevels],
+  );
+  const composerTargetLabel = useMemo(() => {
+    const threadTitle = readString(thread.title);
+    if (
+      activeThreadId === PRIMARY_THREAD_ID
+      || !threadTitle
+      || threadTitle.toLowerCase() === 'chat'
+      || threadTitle.toLowerCase() === 'primary thread'
+    ) {
+      return 'main';
+    }
+    return threadTitle.length > 18 ? `${threadTitle.slice(0, 18).trim()}…` : threadTitle;
+  }, [activeThreadId, thread.title]);
   const structuredServicesState = artifactCount > 0
     ? `${artifactCount} attached output${artifactCount === 1 ? '' : 's'} in this thread`
     : 'No app updates yet';
@@ -1080,6 +2281,10 @@ export function WorkstationChatPane() {
     ? 'Sage saved new output in this thread so you can keep building from it.'
     : 'When Sage creates reusable output, it will show up here.';
   const memoryItems = memorySnapshot.items;
+  const visibleTranscriptMessages = useMemo(
+    () => thread.messages.filter((message) => !isSyntheticTranscriptMessage(message)),
+    [thread.messages],
+  );
   const pinnedMemoryCount = readNumber(memorySnapshot.summary.pinned_count, 0);
   const totalMemoryCount = readNumber(memorySnapshot.summary.total_count, 0);
   const memoryCardTitle = totalMemoryCount > 0 ? 'What Sage will carry forward' : 'No explicit memory saved yet';
@@ -1090,16 +2295,98 @@ export function WorkstationChatPane() {
     () => memoryItems.filter((item) => memoryFilter === 'all' || readString(item.category) === memoryFilter),
     [memoryFilter, memoryItems],
   );
+  const recentRunRows = useMemo(
+    () => runs.slice(0, 3).map((run) => ({
+      runId: readString(run.run_id) || null,
+      threadId: readString(run.thread_id) || null,
+      createdAt: readString(run.created_at) || null,
+      preview: runPreviewLabel(run),
+      title: runContextTitle(run),
+    })),
+    [runs],
+  );
   const visibleMemoryItems = filteredMemoryItems.slice(0, 6);
   const pendingDeleteMemory = pendingDeleteMemoryId
     ? memoryItems.find((item) => readString(item.id) === pendingDeleteMemoryId) ?? null
     : null;
+  const statusNotice = useMemo(
+    () => (statusMessage ? classifyStatusNotice(statusMessage) : null),
+    [statusMessage],
+  );
+  const localRuntimeTargetId = localCompanionOnline ? readString(localRuntimeTarget?.id) : null;
+  const defaultReasoningEffort = useMemo<ChatReasoningEffort>(
+    () => (selectedModelOption.reasoningLevels.includes('medium')
+      ? 'medium'
+      : selectedModelOption.reasoningLevels[0] ?? 'medium'),
+    [selectedModelOption.reasoningLevels],
+  );
+  const contextReasoningLabel = useMemo(() => {
+    switch (reasoningEffort) {
+      case 'medium':
+        return 'Normal';
+      case 'high':
+      case 'xhigh':
+        return 'Extended thinking';
+      case 'minimal':
+        return 'Minimal';
+      case 'low':
+        return 'Low';
+      case 'none':
+        return 'None';
+      default:
+        return reasoningLabel(reasoningEffort);
+    }
+  }, [reasoningEffort]);
+  const contextWindowLabel = useMemo(
+    () => formatContextWindowLabel(selectedModelOption.contextWindowTokens),
+    [selectedModelOption.contextWindowTokens],
+  );
+  const contextDeviceLabel = useMemo(() => {
+    if (!desktop.localCompanion.present || !desktop.localCompanion.online) {
+      return null;
+    }
+    return `${localDevicePlatformLabel(desktop.platform, desktop.localCompanion.label)} connected`;
+  }, [desktop.localCompanion.label, desktop.localCompanion.online, desktop.localCompanion.present, desktop.platform]);
+  const showContextStrip = true;
 
   useEffect(() => {
-    if (!localCompanionConnected && selectedExecutionPlacement === 'local') {
-      setSelectedExecutionPlacement('cloud');
+    let cancelled = false;
+
+    (async () => {
+      try {
+        const payload = await services.client.listProviderCatalog();
+        if (cancelled) {
+          return;
+        }
+        setProviderCatalog(normalizeProviderCatalogRecords(payload));
+        const nextOptions = normalizeChatModelOptions(payload);
+        setModelOptions(nextOptions);
+      } catch {
+        if (!cancelled) {
+          setProviderCatalog([]);
+          setModelOptions([disconnectedModelOption()]);
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [services.client]);
+
+  useEffect(() => {
+    if (!modelOptions.some((option) => option.id === selectedModel)) {
+      setSelectedModel(modelOptions[0]?.id ?? '');
     }
-  }, [localCompanionConnected, selectedExecutionPlacement]);
+  }, [modelOptions, selectedModel]);
+
+  useEffect(() => {
+    if (!selectedModelOption.reasoningLevels.includes(reasoningEffort)) {
+      setReasoningEffort(selectedModelOption.reasoningLevels.includes('medium')
+        ? 'medium'
+        : selectedModelOption.reasoningLevels[0] ?? 'medium');
+    }
+  }, [reasoningEffort, selectedModelOption.reasoningLevels]);
 
   const sendMessage = async () => {
     const message = draft.trim();
@@ -1115,6 +2402,12 @@ export function WorkstationChatPane() {
     setSendFailureNotice(null);
     setPendingUserMessage(pendingMessage);
     setStreamingAssistantText('');
+    setIsLiveTraceExpanded(false);
+    setShowAllLiveTraceActions(false);
+    setShowLiveTraceCard(false);
+    setIsLiveTraceCardFading(false);
+    setShowCompletedTraceTimer(false);
+    setLiveTraceElapsedSeconds(0);
     setLiveTrace(null);
 
     try {
@@ -1153,11 +2446,15 @@ export function WorkstationChatPane() {
         message,
         channel: 'web',
         source: 'workstation_chat_pane',
-        runtimeTarget: selectedExecutionPlacement === 'local' ? 'local_companion' : 'cloud',
+        runtimeTarget: localRuntimeTargetId || 'cloud',
+        model: selectedModel === 'default' ? null : selectedModel,
+        reasoningEffort,
         policyContext: {
-          session_mode: permissionMode === 'auto' ? 'agent' : 'copilot',
-          trust_mode: permissionMode === 'auto' ? 'auto' : 'guarded',
-          approval_ui: 'sheet',
+          session_mode: autonomyMode === 'full' ? 'agent' : 'copilot',
+          trust_mode: autonomyMode === 'full' ? 'auto' : 'guarded',
+          approval_ui: 'card',
+          interactive_approvals: autonomyMode !== 'full',
+          machine_trust_declaration: machineTrust,
         },
         onEvent: (event) => {
           if (event.event === 'trace') {
@@ -1201,14 +2498,35 @@ export function WorkstationChatPane() {
       const normalizedResponse: WorkstationTurnResponse = {
         ...response,
         thread_id: String(response.thread_id ?? observedThreadId ?? requestedThreadId),
-        metadata: responseMetadata,
-      };
+      metadata: responseMetadata,
+    };
       const responseExecutionTarget = readExecutionTarget(responseMetadata);
       const responseInterventionMessage = firstInterventionMessage(normalizedResponse.interventions ?? []);
+      const providerFailureIntervention = findProviderFailureIntervention(normalizedResponse.interventions ?? []);
       const nextThreadId = String(normalizedResponse.thread_id ?? requestedThreadId);
       const optimisticUserMessage = createCanonicalUserMessage(message, nextThreadId);
-      const nextMessages = [...thread.messages, optimisticUserMessage];
+      const nextMessages = [...visibleTranscriptMessages, optimisticUserMessage];
       const assistantMessage = createCanonicalAssistantMessage(normalizedResponse, nextThreadId);
+      const inlineProviderFailureMessage = !assistantMessage && providerFailureIntervention
+        ? {
+            id: `${nextThreadId}:assistant-error:${Date.now()}`,
+            role: 'assistant',
+            content: "Sage couldn't respond — provider error. Check your API key in Integrations.",
+            status: 'failed',
+            createdAt: new Date().toISOString(),
+            runId: typeof normalizedResponse.run_id === 'string' ? normalizedResponse.run_id : null,
+            approvals: [],
+            interventions: Array.isArray(normalizedResponse.interventions) ? normalizedResponse.interventions : [],
+            artifacts: [],
+            metadata: {
+              display_kind: 'provider_error',
+              action_href: `/w/${encodeURIComponent(bootstrap.workspace.id)}/integrations`,
+              action_label: 'Open Integrations',
+              intervention_kind: String(providerFailureIntervention.kind ?? providerFailureIntervention.type ?? ''),
+              intervention_code: String(providerFailureIntervention.code ?? ''),
+            },
+          } satisfies WorkstationChatMessageRecord
+        : null;
 
       setLiveTrace((current) => {
         if (!traceId && !current) {
@@ -1251,6 +2569,12 @@ export function WorkstationChatPane() {
           threadId: nextThreadId,
           messages: [...nextMessages, assistantMessage],
         });
+      } else if (inlineProviderFailureMessage) {
+        writeThreadState({
+          ...thread,
+          threadId: nextThreadId,
+          messages: [...nextMessages, inlineProviderFailureMessage],
+        });
       }
       setStatusMessage(
         Array.isArray(normalizedResponse.approvals) && normalizedResponse.approvals.length > 0
@@ -1258,11 +2582,11 @@ export function WorkstationChatPane() {
             ? 'Turn submitted. Sage is waiting for approval before using the local companion.'
             : 'Turn submitted. Approval is now pending.'
           : Array.isArray(normalizedResponse.interventions) && normalizedResponse.interventions.length > 0
-            ? /supervisor not running/i.test(responseInterventionMessage)
-              ? 'Turn submitted, but the local companion is unavailable. Sage stayed paused instead of starting device work.'
-              : 'Turn submitted. Your input is needed before Sage can continue.'
+            ? 'Turn submitted. Your input is needed before Sage can continue.'
             : responseExecutionTarget === 'local_companion'
               ? 'Turn submitted. Sage routed this work to the local companion.'
+            : responseExecutionTarget === 'cloud'
+              ? 'Turn submitted. Sage is working in cloud mode.'
             : renewed
               ? 'Turn submitted after refreshing your session.'
               : null,
@@ -1271,9 +2595,12 @@ export function WorkstationChatPane() {
     } catch (error) {
       setPendingUserMessage(null);
       setStreamingAssistantText('');
-      const message = error instanceof WorkstationClientError || error instanceof Error
+      const rawMessage = error instanceof WorkstationClientError || error instanceof Error
         ? error.message
         : 'Could not send this message.';
+      const message = isLocalCompanionGateMessage(rawMessage)
+        ? 'Could not send this message.'
+        : rawMessage;
       setSendFailureNotice({
         message,
         retryable: error instanceof WorkstationClientError
@@ -1286,48 +2613,341 @@ export function WorkstationChatPane() {
   };
 
   return (
-    <main
-      data-workstation-surface="chat"
-      data-workstation-chat="pane"
-      className={`app-chat-page app-chat-page--surface${showFirstImpression ? ' app-chat-page--first-impression' : ''}`}
-    >
-      <section className={`app-chat-thread app-chat-thread--surface${showBlankTranscript || showFirstImpression ? ' app-chat-thread--blank' : ''}`}>
-        <ScrollRegion className="app-chat-thread__scroll">
-          <div className="app-chat-thread__body">
-            {thread.messages.map((message) => (
-              <ChatMessage
-                key={message.id}
-                message={message}
-              />
-            ))}
-
-            {pendingUserMessage ? (
-              <ChatMessage
-                key={pendingUserMessage.id}
-                message={pendingUserMessage}
-              />
-            ) : null}
-
-            {streamingAssistantMessage ? (
-              <ChatMessage
-                key={streamingAssistantMessage.id}
-                message={streamingAssistantMessage}
-              />
-            ) : null}
-          </div>
-        </ScrollRegion>
-      </section>
-
-      {sendFailureNotice ? (
-        <AppNotice
-          tone="warning"
-          role="status"
-          aria-live="polite"
+    <>
+      {titlebarActionsHost ? createPortal(
+        <AppButton
+          type="button"
+          tone="secondary"
+          aria-label="New chat"
+          className="workstation-titlebar__action"
+          onClick={() => {
+            void startNewThread();
+          }}
         >
-          <span>{sendFailureNotice.message}</span>
-          {sendFailureNotice.retryable ? <span>Draft kept. Try again when ready.</span> : null}
-        </AppNotice>
+          <Plus size={14} strokeWidth={2} aria-hidden="true" />
+        </AppButton>,
+        titlebarActionsHost,
       ) : null}
+
+      <main
+        data-workstation-surface="chat"
+        data-workstation-chat="pane"
+        className={`app-chat-page app-chat-page--surface${showFirstImpression ? ' app-chat-page--first-impression' : ''}`}
+      >
+        <section className={`app-chat-thread app-chat-thread--surface${showBlankTranscript || showFirstImpression ? ' app-chat-thread--blank' : ''}`}>
+          {showContextStrip ? (
+            <div className="app-chat-context-strip" aria-label="Sage conversation context">
+              {selectedProviderContext.providerLabel ? (
+                <span>{selectedProviderContext.providerLabel}</span>
+              ) : (
+                <span>No provider</span>
+              )}
+              {selectedProviderContext.modelLabel ? (
+                <>
+                  <span aria-hidden="true">·</span>
+                  <span>{selectedProviderContext.modelLabel}</span>
+                </>
+              ) : !selectedProviderContext.providerLabel ? (
+                <>
+                  <span aria-hidden="true">·</span>
+                  <button
+                    type="button"
+                    className="app-chat-context-strip__link"
+                    onClick={() => {
+                      router.push(integrationsHref);
+                    }}
+                  >
+                    Connect in Integrations
+                  </button>
+                </>
+              ) : null}
+              {selectedProviderContext.providerLabel === 'Ollama' && contextWindowLabel ? (
+                <>
+                  <span aria-hidden="true">·</span>
+                  <span>Local</span>
+                </>
+              ) : null}
+              {selectedProviderContext.providerLabel && reasoningEffort !== defaultReasoningEffort ? (
+                <>
+                  <span aria-hidden="true">·</span>
+                  <span>{contextReasoningLabel}</span>
+                </>
+              ) : null}
+              <span aria-hidden="true">·</span>
+              <span>{memoryItems.length} memory item{memoryItems.length === 1 ? '' : 's'}</span>
+              {contextDeviceLabel ? (
+                <>
+                  <span aria-hidden="true">·</span>
+                  <span
+                    className={`app-chat-context-strip__device${desktop.localCompanion.online ? ' app-chat-context-strip__device--online' : ' app-chat-context-strip__device--offline'}`}
+                  >
+                    <span className="app-chat-context-strip__device-dot" aria-hidden="true" />
+                    <span>{contextDeviceLabel}</span>
+                  </span>
+                </>
+              ) : null}
+            </div>
+          ) : null}
+          <ScrollRegion className="app-chat-thread__scroll">
+            <div className="app-chat-thread__body">
+              {showBlankTranscript ? (
+                <div className="app-chat-empty-state">
+                  {recentRunRows.length > 0 ? (
+                    <div className="app-chat-empty-state__recent">
+                      {recentRunRows.map((run, index) => (
+                        <button
+                          key={run.runId ?? run.threadId ?? `${run.createdAt ?? 'run'}:${index}`}
+                          type="button"
+                          className="app-chat-empty-run-row"
+                          onClick={() => {
+                            void startNewThread({
+                              title: run.title,
+                              sourceRunId: run.runId,
+                              sourceThreadId: run.threadId,
+                            });
+                          }}
+                        >
+                          <span className="app-chat-empty-run-row__time">{formatRelativeTime(run.createdAt)}</span>
+                          <span className="app-chat-empty-run-row__preview" title={run.preview}>
+                            {run.preview}
+                          </span>
+                        </button>
+                      ))}
+                    </div>
+                  ) : null}
+                  <div className="app-chat-empty-state__actions">
+                    <button
+                      type="button"
+                      className="app-chat-empty-state__link"
+                      onClick={() => {
+                        router.push(integrationsHref);
+                      }}
+                    >
+                      Connect a provider
+                    </button>
+                    <button
+                      type="button"
+                      className="app-chat-empty-state__link"
+                      onClick={() => {
+                        router.push(`/w/${encodeURIComponent(bootstrap.workspace.id)}/studio`);
+                      }}
+                    >
+                      Create a specialist
+                    </button>
+                    <button
+                      type="button"
+                      className="app-chat-empty-state__link"
+                      onClick={() => {
+                        openFirstRunTip();
+                      }}
+                    >
+                      Learn what Sage can do
+                    </button>
+                  </div>
+                </div>
+              ) : null}
+
+              {visibleTranscriptMessages.map((message) => (
+                <ChatMessage
+                  key={message.id}
+                  message={message}
+                />
+              ))}
+
+              {pendingUserMessage ? (
+                <ChatMessage
+                  key={pendingUserMessage.id}
+                  message={pendingUserMessage}
+                />
+              ) : null}
+
+              {streamingAssistantMessage ? (
+                <ChatMessage
+                  key={streamingAssistantMessage.id}
+                  message={streamingAssistantMessage}
+                />
+              ) : null}
+
+              {showTrace && liveTrace ? (
+                <>
+                  {showLiveTraceCard ? (
+                    <section className={liveTraceCardClassName} aria-label="Live run trace">
+                      <div className="app-chat-live-trace__header">
+                        <div className={traceBarClassName} aria-hidden="true" />
+                        {traceTimerLabel ? (
+                          <span className="app-chat-live-trace__timer">
+                            {traceTimerLabel}
+                          </span>
+                        ) : null}
+                      </div>
+                      {traceEarlierActionCount > 0 && !showAllLiveTraceActions ? (
+                        <button
+                          type="button"
+                          className="app-chat-live-trace__earlier"
+                          onClick={() => {
+                            setShowAllLiveTraceActions(true);
+                          }}
+                        >
+                          ↑ {traceEarlierActionCount} earlier actions
+                        </button>
+                      ) : null}
+                      <div
+                        ref={liveTraceActionsRef}
+                        className="app-chat-live-trace__feed"
+                      >
+                        {visibleLiveTimelineActions.length > 0 ? (
+                          visibleLiveTimelineActions.map((action) => (
+                            <div
+                              key={action.id}
+                              className={`app-chat-live-trace__row app-chat-live-trace__row--${action.tone}`}
+                            >
+                              <span className="app-chat-live-trace__row-main">
+                                <span className="app-chat-live-trace__icon">
+                                  <LiveTraceActionIcon icon={action.icon} />
+                                </span>
+                                <span className="app-chat-live-trace__label">{action.label}</span>
+                              </span>
+                              {action.offsetLabel ? (
+                                <span className="app-chat-live-trace__time">{action.offsetLabel}</span>
+                              ) : null}
+                            </div>
+                          ))
+                        ) : (
+                          <div className="app-chat-live-trace__row">
+                            <span className="app-chat-live-trace__row-main">
+                              <span className="app-chat-live-trace__icon">
+                                <LiveTraceActionIcon icon="brain" />
+                              </span>
+                              <span className="app-chat-live-trace__label">Thinking...</span>
+                            </span>
+                          </div>
+                        )}
+                      </div>
+                      {liveTraceFailureMessage ? (
+                        <div className="app-chat-live-trace__failure">
+                          {liveTraceFailureMessage}
+                        </div>
+                      ) : null}
+                    </section>
+                  ) : null}
+                  <div className="app-chat-live-trace__footer">
+                    <button
+                      type="button"
+                      className="app-chat-live-trace__toggle"
+                      onClick={() => {
+                        setIsLiveTraceExpanded((value) => !value);
+                      }}
+                    >
+                      {isLiveTraceExpanded ? 'Hide trace ↑' : 'View full trace ↓'}
+                    </button>
+                  </div>
+                  {isLiveTraceExpanded ? (
+                    <SageTraceView
+                      traceId={liveTrace.traceId}
+                      mode="live"
+                      liveTransport={liveTrace.transport}
+                      initialTrace={liveTrace.trace}
+                      initialEvents={liveTrace.events}
+                    />
+                  ) : null}
+                </>
+              ) : null}
+            </div>
+          </ScrollRegion>
+        </section>
+
+        <div className="app-chat-notices">
+          {sendFailureNotice ? (
+            <AppNotice
+              tone="warning"
+              role="status"
+              aria-live="polite"
+            >
+              <span>{sendFailureNotice.message}</span>
+              {sendFailureNotice.retryable ? <span>Draft kept. Try again when ready.</span> : null}
+            </AppNotice>
+          ) : null}
+
+          {approvals.length > 0 ? (
+            <div className="app-chat-inline-state-host">
+              <ChatInlineStateCard
+                tone="warning"
+                eyebrow="Action Required"
+                title={readString(latestApproval?.prompt) || 'Approval required'}
+                meta={localCompanionConnected
+                  ? 'Sage is paused until you decide whether it can continue on this machine.'
+                  : 'Sage is paused until you approve or deny the next step.'}
+                actions={(
+                  <div className="app-chat-inline-state__actions">
+                    {latestApproval && readString(latestApproval.approval_id || latestApproval.id) ? (
+                      <>
+                        <AppButton
+                          type="button"
+                          disabled={Boolean(resolvingApprovalId)}
+                          onClick={() => {
+                            void handleResolveApproval(readString(latestApproval.approval_id || latestApproval.id), 'approved');
+                          }}
+                        >
+                          {resolvingApprovalId ? 'Allowing…' : 'Allow'}
+                        </AppButton>
+                        <AppButton
+                          type="button"
+                          tone="secondary"
+                          disabled={Boolean(resolvingApprovalId)}
+                          onClick={() => {
+                            void handleResolveApproval(readString(latestApproval.approval_id || latestApproval.id), 'rejected');
+                          }}
+                        >
+                          Deny
+                        </AppButton>
+                      </>
+                    ) : null}
+                    <AppButton
+                      type="button"
+                      tone="ghost"
+                      onClick={() => {
+                        setIsApprovalsSheetOpen(true);
+                      }}
+                    >
+                      Review details
+                    </AppButton>
+                  </div>
+                )}
+              >
+                <p className="app-chat-inline-state__body-copy">
+                  {selectedExecutionPlacement === 'local'
+                    ? 'This request needs device or filesystem access. In default-permission mode, Sage stays paused until you make a decision.'
+                    : 'This request is waiting on explicit approval before Sage continues the next action.'}
+                </p>
+              </ChatInlineStateCard>
+            </div>
+          ) : null}
+
+          {statusMessage ? (
+            <AppNotice
+              tone={statusNotice?.tone ?? 'neutral'}
+              role="status"
+              aria-live="polite"
+              className="app-chat-status-notice"
+            >
+              <div className="app-chat-status-notice__copy">
+                <strong>{statusNotice?.title ?? 'Notice'}</strong>
+                <span>{statusNotice?.body ?? statusMessage}</span>
+              </div>
+              <div className="app-chat-status-notice__actions">
+                <AppButton
+                  type="button"
+                  tone="secondary"
+                  onClick={() => {
+                    setStatusMessage(null);
+                  }}
+                >
+                  {statusNotice?.requiresLocalAccess ? 'Got it' : 'Dismiss'}
+                </AppButton>
+              </div>
+            </AppNotice>
+          ) : null}
+        </div>
 
       <ChatComposer
         draft={draft}
@@ -1335,24 +2955,53 @@ export function WorkstationChatPane() {
         onSubmit={() => {
           void sendMessage();
         }}
-        executionPlacement={selectedExecutionPlacement === 'local' ? 'Local' : 'Cloud'}
-        onToggleExecutionPlacement={() => {
-          if (!localCompanionConnected) {
-            return;
+        onOpenMemory={() => {
+          openCreateMemory();
+        }}
+        onOpenIntegrations={() => {
+          router.push(integrationsHref);
+        }}
+        runTarget={selectedExecutionPlacement}
+        runTargetOptions={runTargetOptions}
+        onRunTargetChange={() => {}}
+        autonomyMode={autonomyMode}
+        autonomyOptions={autonomyOptions}
+        onAutonomyModeChange={(nextValue) => {
+          if (nextValue === 'approval' || nextValue === 'full') {
+            setAutonomyMode(nextValue);
           }
-          setSelectedExecutionPlacement((current) => (current === 'local' ? 'cloud' : 'local'));
         }}
-        executionPlacementDisabled={!localCompanionConnected}
-        pendingApprovalsCount={approvals.length}
-        onOpenApprovals={() => {
-          setIsApprovalsSheetOpen(true);
+        targetLabel={composerTargetLabel}
+        model={selectedModel}
+        modelOptions={composerModelOptions}
+        onModelChange={setSelectedModel}
+        reasoningEffort={reasoningEffort}
+        reasoningOptions={reasoningOptions}
+        onReasoningEffortChange={(nextValue) => {
+          if (selectedModelOption.reasoningLevels.includes(nextValue as ChatReasoningEffort)) {
+            setReasoningEffort(nextValue as ChatReasoningEffort);
+          }
         }}
-        permissionMode={permissionMode === 'auto' ? 'Auto-run' : 'Requires approval'}
-        onTogglePermissionMode={() => {
-          setPermissionMode((current) => (current === 'auto' ? 'approval' : 'auto'));
-        }}
+        contextWindowLabel={contextWindowLabel}
         busy={isSending}
+        controlsDisabled={false}
+        sendDisabled={!hasConnectedProvider}
+        placeholder={hasConnectedProvider ? 'Message Sage...' : 'Connect a provider in Integrations to start chatting'}
+        providerGateVisible={!hasConnectedProvider}
+        showAutonomySelector={localCompanionConnected}
+        autonomyFallbackLabel="Offline"
       />
+
+      <CommandSheet
+        open={isComposerMenuOpen}
+        title="Attachments"
+        description={undefined}
+        onClose={() => {
+          setIsComposerMenuOpen(false);
+        }}
+      >
+        <AppNotice>File attachments coming soon.</AppNotice>
+      </CommandSheet>
 
       <CommandSheet
         open={isApprovalsSheetOpen}
@@ -1371,6 +3020,29 @@ export function WorkstationChatPane() {
               <span className="app-surface-description">
                 {readString(approval.status) || 'pending'}
               </span>
+              <div className="app-inline-actions">
+                <AppButton
+                  type="button"
+                  disabled={Boolean(resolvingApprovalId)}
+                  onClick={() => {
+                    void handleResolveApproval(readString(approval.approval_id || approval.id), 'approved');
+                  }}
+                >
+                  {resolvingApprovalId && resolvingApprovalId === readString(approval.approval_id || approval.id)
+                    ? 'Allowing…'
+                    : 'Allow this time'}
+                </AppButton>
+                <AppButton
+                  type="button"
+                  tone="danger"
+                  disabled={Boolean(resolvingApprovalId)}
+                  onClick={() => {
+                    void handleResolveApproval(readString(approval.approval_id || approval.id), 'rejected');
+                  }}
+                >
+                  Deny
+                </AppButton>
+              </div>
             </section>
           ))}
           <div>
@@ -1503,6 +3175,7 @@ export function WorkstationChatPane() {
           setPendingDeleteMemoryId(null);
         }}
       />
-    </main>
+      </main>
+    </>
   );
 }

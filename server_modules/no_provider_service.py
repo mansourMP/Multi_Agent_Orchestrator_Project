@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 import json
 import re
+import shlex
 from pathlib import Path
 from typing import Any, Callable, Dict
 
@@ -150,6 +151,15 @@ def looks_like_directory_listing_request(message: str) -> bool:
             flags=re.IGNORECASE,
         )
     )
+
+
+def _path_inspection_requested(compact: str, path: str) -> bool:
+    normalized_path = str(path or "").strip().lower()
+    if not normalized_path:
+        return False
+    if compact == normalized_path:
+        return True
+    return any(token in compact for token in ("read", "open", "show", "see", "inspect", "check", "what's in", "whats in", "count", "how many"))
 
 
 def extract_shell_command(
@@ -331,9 +341,7 @@ def plan_tool_calls(
     tool_names = {str(item.get("name") or "").strip() for item in tools if isinstance(item, dict)}
     planned: list[dict[str, Any]] = []
     path = extract_first_path_reference(message)
-    file_requested = bool(
-        path and any(token in compact for token in ("read", "open", "show", "what's in", "whats in", "count", "how many"))
-    )
+    file_requested = bool(path and _path_inspection_requested(compact, path))
     if file_requested and "file__read" in tool_names:
         planned.append({"name": "file__read", "arguments": {"path": path}})
 
@@ -383,7 +391,7 @@ def has_obvious_direct_tool_intent(
     ):
         return False
     path = extract_first_path_reference(message)
-    if path and any(token in compact for token in ("read", "open", "show", "what's in", "whats in", "count", "how many")):
+    if path and _path_inspection_requested(compact, path):
         return True
     if looks_like_directory_listing_request(message):
         return True
@@ -441,8 +449,29 @@ def execute_no_provider_request(
         safe_positive_int=services.safe_positive_int,
         resolve_local_path=services.resolve_local_path,
     )
+    compact = services.compact_text(message)
+    tool_names = {str(item.get("name") or "").strip() for item in tools if isinstance(item, dict)}
+    explicit_path = services.extract_first_path_reference(message)
+    explicit_path_tool_calls: list[dict[str, Any]] = []
+    if explicit_path and _path_inspection_requested(compact, explicit_path):
+        resolved_path = services.resolve_local_path(explicit_path)
+        if resolved_path.exists():
+            if resolved_path.is_dir() and "shell__exec" in tool_names:
+                explicit_path_tool_calls.append(
+                    {
+                        "name": "shell__exec",
+                        "arguments": {"command": f"ls -la {shlex.quote(str(resolved_path))}"},
+                    }
+                )
+            elif resolved_path.is_file() and "file__read" in tool_names:
+                explicit_path_tool_calls.append(
+                    {
+                        "name": "file__read",
+                        "arguments": {"path": str(resolved_path)},
+                    }
+                )
 
-    tool_calls = plan_tool_calls(
+    tool_calls = explicit_path_tool_calls or plan_tool_calls(
         message,
         tools,
         compact_text=services.compact_text,

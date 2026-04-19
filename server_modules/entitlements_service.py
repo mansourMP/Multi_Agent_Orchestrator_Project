@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
+import os
 import time
 from typing import Any, Callable, Dict, Optional
 
@@ -232,6 +233,21 @@ def _coerce_int(value: Any, default: int) -> int:
         return int(default)
 
 
+def _coerce_bool(value: Any, default: bool = False) -> bool:
+    if value is None:
+        return bool(default)
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    token = str(value).strip().lower()
+    if token in {"1", "true", "yes", "on", "y"}:
+        return True
+    if token in {"0", "false", "no", "off", "n"}:
+        return False
+    return bool(default)
+
+
 def normalize_plan_id(value: Any) -> str:
     token = str(value or "").strip().lower()
     if token in PLAN_ALIASES:
@@ -264,6 +280,32 @@ def _merged_usage(workspace: Optional[Dict[str, Any]], install: Optional[Dict[st
         **_coerce_dict(install_meta.get("usage")),
         **_coerce_dict(install_meta.get("entitlement_usage")),
     }
+
+
+def _truthy_env(value: Any) -> bool:
+    return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _mobile_beta_override_enabled(*, workspace: Optional[Dict[str, Any]], install: Optional[Dict[str, Any]]) -> bool:
+    if _truthy_env(os.getenv("ORION_MOBILE_BETA_ENABLED")):
+        return True
+
+    workspace_meta = _workspace_entitlement_metadata(workspace)
+    install_meta = _install_entitlement_metadata(install)
+    workspace_root_meta = _coerce_dict(_coerce_dict(workspace).get("metadata"))
+    install_root_meta = _coerce_dict(_coerce_dict(install).get("metadata"))
+
+    candidates = (
+        workspace_meta.get("mobile_beta_enabled"),
+        workspace_meta.get("mobile_beta"),
+        install_meta.get("mobile_beta_enabled"),
+        install_meta.get("mobile_beta"),
+        workspace_root_meta.get("mobile_beta_enabled"),
+        workspace_root_meta.get("mobile_beta"),
+        install_root_meta.get("mobile_beta_enabled"),
+        install_root_meta.get("mobile_beta"),
+    )
+    return any(_coerce_bool(candidate, default=False) for candidate in candidates)
 
 
 def resolve_workspace_entitlement_state(
@@ -318,6 +360,8 @@ def resolve_workspace_entitlement_state(
     entitlements = dict(PLAN_DEFINITIONS[plan_id])
     entitlements.update(_coerce_dict(workspace_meta.get("overrides")))
     entitlements.update(_coerce_dict(install_meta.get("overrides")))
+    if _mobile_beta_override_enabled(workspace=workspace, install=install):
+        entitlements["mobile_app_enabled"] = True
     source = "workspace_metadata"
     if install_meta.get("plan") or install_meta.get("plan_id") or install_meta.get("plan_tier"):
         source = "install_metadata"

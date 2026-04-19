@@ -30,14 +30,9 @@ def build_system_prompt(
     build_operator_system_prompt: Callable[..., str],
     memory_tool_names: set[str],
 ) -> str | None:
-    tool_lines = [
-        f"{str(item.get('name') or '').strip()}: {str(item.get('description') or '').strip()}"
-        for item in tools
-        if isinstance(item, dict) and str(item.get("name") or "").strip()
-    ]
     base_prompt = build_operator_system_prompt(
         availability_lines(workspace_id, availability),
-        tool_lines=tool_lines,
+        tool_lines=[],
     )
     sections = [base_prompt.strip()] if str(base_prompt or "").strip() else []
     memory_section = memory_recall_section(tools, memory_tool_names=memory_tool_names)

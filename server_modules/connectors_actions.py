@@ -10,10 +10,11 @@ from server_modules.connectors.github_connector import (
     verify_request_signature as github_verify_request_signature,
 )
 from server_modules.connectors.discord_connector import (
-    dispatch_inbound_event as discord_dispatch_inbound_event,
+    build_run_goal_from_event as discord_build_run_goal_from_event,
     event_matches_connector as discord_event_matches_connector,
     interaction_signature_headers as discord_interaction_signature_headers,
     parse_inbound_event as discord_parse_inbound_event,
+    should_trigger_agent_run as discord_should_trigger_agent_run,
     verify_interaction_signature as discord_verify_interaction_signature,
 )
 from server_modules.connectors.slack_connector import (
@@ -592,6 +593,144 @@ async def whatsapp_twilio_webhook(request: Request):
 async def telegram_webhook(request: Request, connector_id: str):
     return await handle_telegram_webhook(request, connector_id)
 
+
+def _canonical_route_error_response(error: Exception, error_response):
+    from server_modules import agent_channel_router
+
+    if isinstance(error, agent_channel_router.ChannelIngressValidationError):
+        return error_response(400, str(error))
+    if isinstance(error, agent_channel_router.ChannelOwnerNotFoundError):
+        return error_response(404, str(error))
+    if isinstance(error, agent_channel_router.ChannelSecurityDeniedError):
+        return error_response(403, str(error))
+    raise error
+
+
+def _resolve_connector_tenant_id(entry: Dict[str, Any], workspace_id: str) -> str:
+    metadata = entry.get("metadata") if isinstance(entry.get("metadata"), dict) else {}
+    for candidate in (entry.get("tenant_id"), metadata.get("tenant_id")):
+        token = str(candidate or "").strip()
+        if token:
+            return token
+    tenant_id = str(_workspace_payload(workspace_id).get("tenant_id") or "").strip()
+    if tenant_id:
+        return tenant_id
+    raise RuntimeError("Connector is not scoped to a tenant.")
+
+
+def _resolve_channel_endpoint_key(
+    *,
+    entry: Dict[str, Any],
+    channel_key: str,
+    connector_id: str,
+    fallback: str = "",
+) -> str:
+    metadata = entry.get("metadata") if isinstance(entry.get("metadata"), dict) else {}
+    bindings = metadata.get("channel_registry_bindings") if isinstance(metadata.get("channel_registry_bindings"), dict) else {}
+    binding = bindings.get(channel_key) if isinstance(bindings.get(channel_key), dict) else {}
+    candidates = (
+        binding.get("endpoint_key"),
+        metadata.get(f"{channel_key}_endpoint_key"),
+        fallback,
+        connector_id,
+        channel_key,
+    )
+    for candidate in candidates:
+        token = str(candidate or "").strip()
+        if token:
+            return token
+    return channel_key
+
+
+async def telegram_webhook_canonical(request: Request, connector_id: str):
+    from server_modules import agent_channel_router
+    from server_modules.connectors.autopilot_runtime_exports import _autopilot_connector_shell_service
+
+    shell = _autopilot_connector_shell_service()
+    shell.runtime_facade_service().init_runtime()
+    bridge = shell.bridge_facade_service()
+    header_secret = str(
+        request.headers.get("x-telegram-bot-api-secret-token")
+        or request.headers.get("X-Telegram-Bot-Api-Secret-Token")
+        or ""
+    ).strip()
+    auth_result = shell.autopilot_endpoint_service().telegram_webhook_auth_result(
+        enabled=bridge.telegram_enabled_getter(),
+        delivery_mode=bridge.telegram_delivery_mode_getter(),
+        configured_secret=bridge.telegram_configured_webhook_secret_getter(),
+        header_secret=header_secret,
+    )
+    if int(auth_result.get("status_code") or 200) != 200:
+        return bridge.error_response(
+            int(auth_result.get("status_code") or 500),
+            str(auth_result.get("content") or "forbidden"),
+        )
+
+    ingress = shell.telegram_service_registry().telegram_ingress_service()
+    connector_token = str(connector_id or "").strip()
+
+    try:
+        update = ingress.parse_update(await request.body())
+        connector_entry = ingress.get_connector_entry(connector_token)
+        workspace_id = ingress.resolve_workspace_scope(
+            connector_entry,
+            ingress.default_workspace_id,
+            "Telegram connector",
+        )
+        profile = ingress.resolve_profile(connector_entry)
+        secret = ingress.resolve_secret(connector_entry)
+        bot_token = str(secret.get("bot_token") or "").strip()
+        configured_chat_id = str(secret.get("chat_id") or "").strip()
+        if not bot_token or not configured_chat_id:
+            raise RuntimeError("Connector is missing bot_token or chat_id.")
+
+        envelope = ingress.normalize_telegram_update(
+            source="webhook",
+            entry=connector_entry,
+            connector_id=connector_token,
+            workspace_id=workspace_id,
+            profile=profile,
+            bot_token=bot_token,
+            configured_chat_id=configured_chat_id,
+            update=update,
+        )
+        if not bool(envelope.get("handled")):
+            return {"ok": True, **envelope}
+
+        route_result = await agent_channel_router.route_inbound_channel_message(
+            tenant_id=_resolve_connector_tenant_id(connector_entry, workspace_id),
+            workspace_id=workspace_id,
+            channel_key="telegram",
+            endpoint_key=_resolve_channel_endpoint_key(
+                entry=connector_entry,
+                channel_key="telegram",
+                connector_id=connector_token,
+                fallback=configured_chat_id,
+            ),
+            customer_message=str(envelope.get("message_text") or ""),
+            session_key=str(envelope.get("session_key") or "") or None,
+            message_id=str(envelope.get("inbound_message_id") or "") or None,
+            actor_id=str(envelope.get("sender_id") or "") or None,
+            actor_display_name=str(envelope.get("sender_display_name") or "") or None,
+            metadata={
+                "connector_id": connector_token,
+                "delivery_source": str(envelope.get("delivery_source") or "").strip() or None,
+                "telegram_update_id": int(envelope.get("update_id") or 0) or None,
+                "telegram_chat_id": str(envelope.get("chat_id") or "").strip() or None,
+                "source_event_id": str(envelope.get("source_event_id") or "").strip() or None,
+            },
+            allow_master_fallback=False,
+        )
+        return {"ok": True, **(route_result if isinstance(route_result, dict) else {})}
+    except LookupError as exc:
+        return bridge.error_response(404, str(exc))
+    except ValueError as exc:
+        return bridge.error_response(400, str(exc))
+    except RuntimeError as exc:
+        return bridge.error_response(503, str(exc))
+    except Exception as exc:
+        return _canonical_route_error_response(exc, bridge.error_response)
+
 async def telegram_autopilot_status():
     return await handle_telegram_autopilot_status()
 
@@ -752,6 +891,14 @@ async def slack_oauth_callback(request: Request):
     except HTTPException:
         raise
     except Exception as exc:
+        from server_modules import agent_channel_router
+
+        if isinstance(exc, agent_channel_router.ChannelIngressValidationError):
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if isinstance(exc, agent_channel_router.ChannelOwnerNotFoundError):
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        if isinstance(exc, agent_channel_router.ChannelSecurityDeniedError):
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
         raise HTTPException(status_code=400, detail=str(exc))
 
 
@@ -767,6 +914,7 @@ async def slack_events_webhook(request: Request):
             return {"challenge": str(parsed.get("challenge") or "").strip()}
 
         if parsed.get("kind") == "event":
+            # Inbound event only — not yet wired to execution pipeline.
             append_fn = globals().get("_append_channel_event")
             if callable(append_fn):
                 team_id = str(parsed.get("team_id") or "").strip().lower()
@@ -881,13 +1029,12 @@ async def discord_webhook(request: Request):
             return {"type": 1}
 
         append_fn = globals().get("_append_channel_event")
-        from server_modules import turn_ingress_service
-        from server_modules.runtime_models import RunStartRequest
-        from server_modules.runtime_runs_api import _run_execution_services
+        from server_modules import agent_channel_router
 
         handled = 0
         triggered = 0
         triggered_run_id = ""
+        triggered_reply = ""
         for row in discord_rows:
             row_id = str(row.get("id") or "").strip()
             if not row_id:
@@ -900,34 +1047,73 @@ async def discord_webhook(request: Request):
             metadata = row.get("metadata") if isinstance(row.get("metadata"), dict) else {}
             if not discord_event_matches_connector(parsed, secret, metadata):
                 continue
-            outcome = discord_dispatch_inbound_event(
-                parsed,
-                connector_entry=row,
-                credentials=secret,
-                append_event_fn=append_fn if callable(append_fn) else None,
-                execute_agent_turn_request=lambda **kwargs: turn_ingress_service.start_system_turn(
-                    run_execution_services=_run_execution_services(),
-                    **kwargs,
-                ),
-                run_start_request_class=RunStartRequest,
-                start_run_request=lambda request: turn_ingress_service.start_system_run_start(
-                    request,
-                    stamp_request_owner_fn=lambda req, current_user: req,
-                    services=_run_execution_services(),
-                ),
-            )
             handled += 1
-            if outcome.get("triggered"):
+            trace_id = (
+                str(parsed.get("interaction_id") or parsed.get("message_id") or "").strip()
+                or uuid.uuid4().hex
+            )
+            session_key = (
+                str(parsed.get("channel_id") or "").strip()
+                or str(parsed.get("guild_id") or "").strip()
+                or "discord"
+            )
+            if callable(append_fn):
+                append_fn(
+                    channel="discord",
+                    direction="inbound",
+                    event_type=str(parsed.get("event_type") or parsed.get("message_type") or "event"),
+                    text=str(parsed.get("text") or parsed.get("reaction") or "").strip() or None,
+                    workspace_id=workspace_id,
+                    session_key=session_key,
+                    message_id=str(parsed.get("message_id") or parsed.get("interaction_id") or "").strip() or None,
+                    trace_id=f"discord:{trace_id}",
+                    metadata=parsed,
+                )
+            if not discord_should_trigger_agent_run(parsed, secret, metadata=metadata):
+                continue
+            goal = discord_build_run_goal_from_event(parsed)
+            if not goal:
+                continue
+            route_result = await agent_channel_router.route_inbound_channel_message(
+                tenant_id=_resolve_connector_tenant_id(row, workspace_id),
+                workspace_id=workspace_id,
+                channel_key="discord",
+                endpoint_key=_resolve_channel_endpoint_key(
+                    entry=row,
+                    channel_key="discord",
+                    connector_id=row_id,
+                    fallback=str(parsed.get("channel_id") or parsed.get("guild_id") or "").strip(),
+                ),
+                customer_message=goal,
+                session_key=session_key,
+                message_id=str(parsed.get("message_id") or parsed.get("interaction_id") or "").strip() or None,
+                actor_id=str(parsed.get("user_id") or "").strip() or None,
+                actor_display_name=str(parsed.get("username") or "").strip() or None,
+                metadata={
+                    "connector_id": row_id,
+                    "delivery_source": "webhook",
+                    "discord_channel_id": str(parsed.get("channel_id") or "").strip() or None,
+                    "discord_guild_id": str(parsed.get("guild_id") or "").strip() or None,
+                    "discord_message_id": str(parsed.get("message_id") or "").strip() or None,
+                    "discord_interaction_id": str(parsed.get("interaction_id") or "").strip() or None,
+                    "source_event_id": str(parsed.get("message_id") or parsed.get("interaction_id") or "").strip() or None,
+                },
+                allow_master_fallback=False,
+            )
+            route_payload = route_result if isinstance(route_result, dict) else {}
+            if str(route_payload.get("run_id") or "").strip():
                 triggered += 1
                 if not triggered_run_id:
-                    triggered_run_id = str(outcome.get("run_id") or "").strip()
+                    triggered_run_id = str(route_payload.get("run_id") or "").strip()
+                if not triggered_reply:
+                    triggered_reply = str(route_payload.get("reply") or "").strip()
 
         if parsed.get("kind") == "interaction":
             if triggered_run_id:
                 return {
                     "type": 4,
                     "data": {
-                        "content": f"Started run {triggered_run_id}.",
+                        "content": triggered_reply or f"Started run {triggered_run_id}.",
                         "flags": 64,
                     },
                 }
@@ -976,6 +1162,7 @@ async def github_events_webhook(request: Request):
             event_type=str(headers.get("x-github-event") or headers.get("X-GitHub-Event") or "").strip(),
             delivery_id=str(headers.get("x-github-delivery") or headers.get("X-GitHub-Delivery") or "").strip(),
         )
+        # Inbound event only — not yet wired to execution pipeline.
         append_fn = globals().get("_append_channel_event")
         if callable(append_fn):
             matched_workspaces: List[str] = []

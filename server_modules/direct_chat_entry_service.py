@@ -66,6 +66,12 @@ def prepare_direct_chat_request(
     build_context_used_fn: Callable[..., Dict[str, Any]],
     direct_chat_compaction_token_limit: int,
 ) -> PreparedDirectChatRequest:
+    resolved_turn_metadata = (
+        resolved_turn_request.context_hints.get("metadata")
+        if resolved_turn_request is not None and isinstance(getattr(resolved_turn_request, "context_hints", None), dict)
+        and isinstance(resolved_turn_request.context_hints.get("metadata"), dict)
+        else {}
+    )
     normalized_message = (
         str(resolved_turn_request.message or "").strip()
         if resolved_turn_request is not None
@@ -141,10 +147,24 @@ def prepare_direct_chat_request(
     ]
     proactive_suggestions = build_proactive_suggestions_fn(normalized_workspace_id) if not normalized_prior_messages else []
     tool_loop_session_key = direct_tool_session_key_fn(normalized_workspace_id, normalized_thread_id)
+    availability_override = dict(availability) if isinstance(availability, dict) else {}
+    if resolved_turn_request is not None:
+        source_token = str(
+            resolved_turn_metadata.get("source")
+            or resolved_turn_request.context_hints.get("source")
+            or ""
+        ).strip().lower()
+        availability_override.setdefault(
+            "surface_channel",
+            str(resolved_turn_request.channel or "").strip().lower() or None,
+        )
+        availability_override.setdefault("source", source_token or None)
+        if str(resolved_turn_request.channel or "").strip().lower() == "mobile" or source_token == "mobile_chat":
+            availability_override.setdefault("mobile_server_first", True)
     availability_payload = resolve_direct_chat_availability_fn(
         normalized_workspace_id,
         normalized_requested_provider,
-        availability if isinstance(availability, dict) else None,
+        availability_override or None,
     )
     connected_systems = connected_system_labels_fn(availability_payload)
     tool_capabilities = context_tool_capabilities_fn(availability_payload)

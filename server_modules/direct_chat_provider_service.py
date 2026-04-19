@@ -10,6 +10,7 @@ from scripts.orion_local_worker_llm import (
     get_claude_code_session_token,
     provider_has_key,
 )
+from server_modules import provider_profiles
 from server_modules.provider_profiles import _build_provider_credential_candidates, normalize_auth_mode
 from server_modules import skills_service
 
@@ -86,6 +87,27 @@ def direct_chat_credentials(
     return dict(first) if isinstance(first, dict) else {}
 
 
+def provider_runtime_usable(
+    workspace_id: str,
+    provider: str,
+    *,
+    build_provider_runtime_truth_fn: Callable[[str], Dict[str, Any]] = provider_profiles.build_provider_runtime_truth,
+) -> bool:
+    normalized_workspace_id = str(workspace_id or "default").strip() or "default"
+    normalized_provider = str(provider or "").strip().lower()
+    provider_id = "openai-codex" if normalized_provider == "codex_cli" else normalized_provider
+    truth = build_provider_runtime_truth_fn(normalized_workspace_id)
+    providers_by_id = truth.get("providers_by_id") if isinstance(truth, dict) else {}
+    entry = providers_by_id.get(provider_id) if isinstance(providers_by_id, dict) else None
+    if not isinstance(entry, dict):
+        return True
+    if bool(entry.get("backpressure")):
+        return False
+    if entry.get("usable") is False:
+        return False
+    return True
+
+
 def preferred_provider(
     workspace_id: str,
     requested_provider: str = "",
@@ -94,6 +116,7 @@ def preferred_provider(
     direct_chat_credentials_fn: Callable[[str, str], Dict[str, Any]] = direct_chat_credentials,
     supports_direct_message_native_chat_fn: Callable[[str, Optional[Dict[str, Any]]], bool] = supports_direct_message_native_chat,
     credential_auth_mode_fn: Callable[[str, Optional[Dict[str, Any]]], str] = credential_auth_mode,
+    provider_runtime_usable_fn: Callable[[str, str], bool] = provider_runtime_usable,
 ) -> tuple[str, Dict[str, Any]]:
     normalized_workspace_id = str(workspace_id or "default").strip() or "default"
     requested = str(requested_provider or "").strip().lower()
@@ -104,27 +127,27 @@ def preferred_provider(
             requested_credential_type = str(requested_credentials.get("credential_type") or "").strip().lower()
             if requested_credential_type == "codex_token" or credential_auth_mode_fn("openai", requested_credentials) == "oauth_token":
                 codex_credentials = direct_chat_credentials_fn(normalized_workspace_id, "codex_cli")
-                if supports_direct_message_native_chat_fn("codex_cli", codex_credentials):
+                if provider_runtime_usable_fn(normalized_workspace_id, "codex_cli") and supports_direct_message_native_chat_fn("codex_cli", codex_credentials):
                     return "codex_cli", codex_credentials
         if supports_direct_message_native_chat_fn(normalized_requested, requested_credentials):
             return normalized_requested, requested_credentials
         if normalized_requested == "openai":
             codex_credentials = direct_chat_credentials_fn(normalized_workspace_id, "codex_cli")
-            if supports_direct_message_native_chat_fn("codex_cli", codex_credentials):
+            if provider_runtime_usable_fn(normalized_workspace_id, "codex_cli") and supports_direct_message_native_chat_fn("codex_cli", codex_credentials):
                 return "codex_cli", codex_credentials
-    for provider in ("anthropic", "openai", "gemini"):
+    for provider in ("anthropic", "deepseek", "openai", "gemini"):
         credentials = direct_chat_credentials_fn(normalized_workspace_id, provider)
         if provider == "openai":
             credential_type = str(credentials.get("credential_type") or "").strip().lower()
             if credential_type == "codex_token" or credential_auth_mode_fn("openai", credentials) == "oauth_token":
                 codex_credentials = direct_chat_credentials_fn(normalized_workspace_id, "codex_cli")
-                if supports_direct_message_native_chat_fn("codex_cli", codex_credentials):
+                if provider_runtime_usable_fn(normalized_workspace_id, "codex_cli") and supports_direct_message_native_chat_fn("codex_cli", codex_credentials):
                     return "codex_cli", codex_credentials
                 continue
         if supports_direct_message_native_chat_fn(provider, credentials):
             return provider, credentials
     codex_credentials = direct_chat_credentials_fn(normalized_workspace_id, "codex_cli")
-    if supports_direct_message_native_chat_fn("codex_cli", codex_credentials):
+    if provider_runtime_usable_fn(normalized_workspace_id, "codex_cli") and supports_direct_message_native_chat_fn("codex_cli", codex_credentials):
         return "codex_cli", codex_credentials
     fallback_provider = requested if requested in supported_providers else "openai"
     fallback_credentials = direct_chat_credentials_fn(normalized_workspace_id, fallback_provider)
@@ -223,17 +246,31 @@ def resolve_direct_chat_availability(
         normalized_workspace_id,
         resolve_workspace_tool_capabilities_fn=resolve_workspace_tool_capabilities_fn,
     )
+    override_payload = availability_override if isinstance(availability_override, dict) else {}
+    source_channel = str(override_payload.get("surface_channel") or override_payload.get("channel") or "").strip().lower()
+    source_token = str(override_payload.get("source") or override_payload.get("source_surface") or "").strip().lower()
+    mobile_server_first = (
+        bool(override_payload.get("mobile_server_first"))
+        or source_channel == "mobile"
+        or source_token in {"mobile_chat", "mobile_workspace_chat_surface"}
+    )
+    connection_mode = ""
+    if ai_ready:
+        connection_mode = "platform" if mobile_server_first else "local_companion" if runtime_ok else "byok"
+
     resolved: Dict[str, Any] = {
         "ai_ready": ai_ready,
         "runtime_ok": runtime_ok,
-        "connection_mode": "local_companion" if runtime_ok else "byok" if ai_ready else "",
+        "connection_mode": connection_mode,
         "provider": provider,
         "tool_capabilities": tool_capabilities,
     }
-    if isinstance(availability_override, dict) and availability_override:
-        resolved.update(availability_override)
-        if "tool_capabilities" not in availability_override:
+    if override_payload:
+        resolved.update(override_payload)
+        if "tool_capabilities" not in override_payload:
             resolved["tool_capabilities"] = tool_capabilities
+        if "connection_mode" not in override_payload:
+            resolved["connection_mode"] = connection_mode
     return resolved
 
 
@@ -296,6 +333,7 @@ def resolve_provider_for_direct_chat_message(
     preferred_provider_fn: Callable[[str, str], tuple[str, Dict[str, Any]]],
     direct_chat_credentials_fn: Callable[[str, str], Dict[str, Any]],
     supports_direct_message_native_chat_fn: Callable[[str, Optional[Dict[str, Any]]], bool],
+    provider_runtime_usable_fn: Callable[[str, str], bool] = provider_runtime_usable,
     compact_text_fn: Callable[[Any], str],
     mentions_any_fn: Callable[[str, tuple[str, ...] | list[str]], bool],
     message_requests_local_file_tool_fn: Callable[[str], bool],
@@ -326,6 +364,6 @@ def resolve_provider_for_direct_chat_message(
     ):
         return provider, credentials
     codex_credentials = direct_chat_credentials_fn(workspace_id, "codex_cli")
-    if supports_direct_message_native_chat_fn("codex_cli", codex_credentials):
+    if provider_runtime_usable_fn(workspace_id, "codex_cli") and supports_direct_message_native_chat_fn("codex_cli", codex_credentials):
         return "codex_cli", codex_credentials
     return provider, credentials

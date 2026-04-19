@@ -1203,6 +1203,160 @@ def _raise_direct_chat_tool_execution_blocked() -> None:
     raise RuntimeError(DIRECT_CHAT_TOOL_EXECUTION_BLOCKED)
 
 
+def _direct_tool_session_metadata(session_ctx: Dict[str, Any] | None) -> Dict[str, Any]:
+    session_payload = session_ctx if isinstance(session_ctx, dict) else {}
+    agent_turn_request = session_payload.get("agent_turn_request") if isinstance(session_payload.get("agent_turn_request"), dict) else {}
+    metadata: Dict[str, Any] = {}
+    if isinstance(agent_turn_request.get("metadata"), dict):
+        metadata.update(agent_turn_request.get("metadata") or {})
+    if isinstance(session_payload.get("metadata"), dict):
+        metadata.update(session_payload.get("metadata") or {})
+    for source in (agent_turn_request, session_payload):
+        if not isinstance(source, dict):
+            continue
+        for key in (
+            "connection_mode",
+            "runtime_attachment_id",
+            "runtime_id",
+            "machine_target",
+            "root_folder_uri",
+            "folder_grants",
+            "file_mount_grants",
+            "execution_target",
+            "execution_target_selected",
+            "execution_target_requested",
+            "execution_target_matching_runtime_ids",
+            "execution_target_preferred_runtime_id",
+            "execution_target_preferred_runtime_label",
+        ):
+            value = source.get(key)
+            if value is not None and metadata.get(key) is None:
+                metadata[key] = value
+    metadata["source"] = "chat_direct_local_read"
+    return metadata
+
+
+def _safe_direct_shell_command(command: str) -> bool:
+    compact = re.sub(r"\s+", " ", str(command or "").strip()).lower()
+    if not compact:
+        return False
+    if any(token in compact for token in ("&&", "||", ";", "|", ">", "<", "$(", "`")):
+        return False
+    if any(
+        re.search(rf"(^|\s){re.escape(token)}(\s|$)", compact)
+        for token in (
+            "rm",
+            "mv",
+            "cp",
+            "chmod",
+            "chown",
+            "mkdir",
+            "touch",
+            "tee",
+            "echo",
+            "python",
+            "python3",
+            "node",
+            "bash",
+            "zsh",
+            "sh",
+            "kill",
+            "xargs",
+            "perl",
+            "ruby",
+            "git",
+            "curl",
+            "wget",
+            "scp",
+            "rsync",
+        )
+    ):
+        return False
+    allowed_patterns = (
+        r"^ls(\s|$)",
+        r"^pwd(\s|$)",
+        r"^find\s+",
+        r"^head(\s|$)",
+        r"^tail(\s|$)",
+        r"^cat\s+",
+        r"^wc(\s|$)",
+        r"^stat(\s|$)",
+        r"^file(\s|$)",
+        r"^du(\s|$)",
+        r"^mdls(\s|$)",
+        r"^tree(\s|$)",
+        r"^rg(\s|$)",
+        r"^grep(\s|$)",
+        r"^sed\s+-n\b",
+        r"^readlink(\s|$)",
+        r"^dirname(\s|$)",
+        r"^basename(\s|$)",
+    )
+    return any(re.search(pattern, compact) for pattern in allowed_patterns)
+
+
+def _execute_safe_direct_local_tool_call(
+    *,
+    connector_id: str,
+    action_id: str,
+    argument_payload: Dict[str, Any],
+    workspace_id: str,
+    provider: Any,
+    model: Any,
+    credentials: Dict[str, Any] | None,
+    session_ctx: Dict[str, Any] | None,
+    callbacks: Any,
+) -> str:
+    from server_modules import runs_execution
+
+    normalized_connector = str(connector_id or "").strip().lower()
+    normalized_action = str(action_id or "").strip().lower()
+    if normalized_connector == "file" and normalized_action != "read":
+        _raise_direct_chat_tool_execution_blocked()
+    if normalized_connector == "shell":
+        if normalized_action != "exec" or not _safe_direct_shell_command(str(argument_payload.get("command") or "")):
+            _raise_direct_chat_tool_execution_blocked()
+    elif normalized_connector not in {"file"}:
+        _raise_direct_chat_tool_execution_blocked()
+
+    variant, config = callbacks.build_direct_local_tool_config(
+        normalized_connector,
+        normalized_action,
+        argument_payload,
+    )
+    if not isinstance(config, dict):
+        _raise_direct_chat_tool_execution_blocked()
+    config = dict(config)
+    config.setdefault("execution_target", "local_companion")
+
+    session_payload = session_ctx if isinstance(session_ctx, dict) else {}
+    agent_turn_request = session_payload.get("agent_turn_request") if isinstance(session_payload.get("agent_turn_request"), dict) else {}
+    metadata = _direct_tool_session_metadata(session_ctx)
+    tenant_id = str(
+        session_payload.get("tenant_id")
+        or agent_turn_request.get("tenant_id")
+        or metadata.get("tenant_id")
+        or "default"
+    ).strip() or "default"
+
+    result = runs_execution._workflow_execute_local_tool(
+        "direct-chat-local-tool",
+        {
+            "workspace_id": workspace_id,
+            "tenant_id": tenant_id,
+            "provider": provider,
+            "model": model,
+            "credentials": credentials if isinstance(credentials, dict) else None,
+            "metadata": metadata,
+        },
+        config,
+        label=f"{normalized_connector}__{normalized_action}",
+        variant=str(variant or normalized_connector),
+        current_text=str(config.get("path") or config.get("command") or "").strip(),
+    )
+    return callbacks.format_direct_local_tool_result(result)
+
+
 def execute_single_direct_tool_call(
     *,
     tool_call: Dict[str, Any],
@@ -1363,5 +1517,15 @@ def execute_single_direct_tool_call(
         service_payload = result.get("service") if isinstance(result, dict) else result
         return json.dumps(service_payload, ensure_ascii=False)
     if connector_id in {"file", "shell", "screenshot", "computer"}:
-        _raise_direct_chat_tool_execution_blocked()
+        return _execute_safe_direct_local_tool_call(
+            connector_id=connector_id,
+            action_id=action_id,
+            argument_payload=argument_payload if isinstance(argument_payload, dict) else {},
+            workspace_id=workspace_id,
+            provider=provider,
+            model=model,
+            credentials=credentials,
+            session_ctx=session_ctx,
+            callbacks=callbacks,
+        )
     _raise_direct_chat_tool_execution_blocked()

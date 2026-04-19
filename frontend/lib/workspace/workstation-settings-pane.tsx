@@ -1,209 +1,262 @@
 'use client';
 
-import { useRouter } from 'next/navigation';
+import { useEffect, useMemo, useState } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
 
-import { AppButton } from '@/lib/ui/primitives';
+import { AppButton, joinClassNames } from '@/lib/ui/primitives';
 import { FormGrid, FormReadout } from '@/lib/ui/form-controls';
-import { ListDetailPanel, ListDetailShell } from '@/lib/ui/list-detail';
-import { StateBanner } from '@/lib/ui/state-banner';
-import type { WorkspaceRouteId } from '@/lib/workspace/workspace-shell';
 import { useWorkspaceBoundary } from '@/lib/workspace/workspace-boundary';
-import { WorkstationSurfaceRoot } from '@/lib/workspace/workstation-surface-primitives';
+import { WorkstationBillingPane } from '@/lib/workspace/workstation-billing-pane';
+import { WorkstationDesktopStatus } from '@/lib/workspace/workstation-desktop-status';
+import { WorkstationPlatformAnalyticsPane } from '@/lib/workspace/workstation-platform-analytics-pane';
+import { WorkspaceChannelOperationsConsole } from '@/lib/workspace/workspace-channel-operations-console';
 
-type SettingsAction = {
-  id: string;
+type SettingsSectionId = 'account' | 'devices' | 'channels' | 'usage' | 'billing' | 'privacy';
+
+const SETTINGS_SECTIONS: Array<{
+  id: SettingsSectionId;
   label: string;
-  href: string | null;
-  unavailableLabel?: string;
-};
-
-type SettingsSection = {
-  id: string;
+  eyebrow: string;
   title: string;
   description: string;
-  summary: string;
-  actions: SettingsAction[];
-};
+}> = [
+  {
+    id: 'account',
+    label: 'Account',
+    eyebrow: 'Identity',
+    title: 'Account',
+    description: 'Profile and plan.',
+  },
+  {
+    id: 'devices',
+    label: 'Devices',
+    eyebrow: 'Runtime',
+    title: 'Devices',
+    description: 'Runtime targets and local status.',
+  },
+  {
+    id: 'channels',
+    label: 'Channels',
+    eyebrow: 'Operations',
+    title: 'Channels',
+    description: 'Channel health and delivery.',
+  },
+  {
+    id: 'usage',
+    label: 'Usage',
+    eyebrow: 'Analytics',
+    title: 'Usage',
+    description: 'Usage and spend.',
+  },
+  {
+    id: 'billing',
+    label: 'Billing',
+    eyebrow: 'Plan',
+    title: 'Billing',
+    description: 'Subscription and limits.',
+  },
+  {
+    id: 'privacy',
+    label: 'Privacy & Safety',
+    eyebrow: 'Trust',
+    title: 'Privacy & Safety',
+    description: 'Approvals, memory, device trust.',
+  },
+];
+
+function humanizeToken(value: string): string {
+  return value
+    .split(/[_\s-]+/)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(' ');
+}
+
+function isSettingsSectionId(value: string | null): value is SettingsSectionId {
+  return value === 'account'
+    || value === 'devices'
+    || value === 'channels'
+    || value === 'usage'
+    || value === 'billing'
+    || value === 'privacy';
+}
 
 export function WorkstationSettingsPane() {
-  const { bootstrap, workspaceId, routeManifest } = useWorkspaceBoundary();
   const router = useRouter();
-  const onboardingHref = `/onboarding?workspaceId=${encodeURIComponent(workspaceId)}`;
+  const searchParams = useSearchParams();
+  const { bootstrap } = useWorkspaceBoundary();
+  const [selectedSection, setSelectedSection] = useState<SettingsSectionId>(() => {
+    const requestedSection = searchParams.get('section');
+    return isSettingsSectionId(requestedSection) ? requestedSection : 'account';
+  });
 
-  const routeHref = (routeId: WorkspaceRouteId): string | null => routeManifest.routeIndex[routeId]?.href ?? null;
-  const hasRoute = (routeId: WorkspaceRouteId): boolean => Boolean(routeManifest.routeIndex[routeId]);
+  useEffect(() => {
+    const requestedSection = searchParams.get('section');
+    if (isSettingsSectionId(requestedSection) && requestedSection !== selectedSection) {
+      setSelectedSection(requestedSection);
+    }
+  }, [searchParams, selectedSection]);
 
-  const sections: SettingsSection[] = [
-    {
-      id: 'profile-identity',
-      title: 'Profile & identity',
-      description: 'Update your profile name, account details, and how your identity appears in this workspace.',
-      summary: bootstrap.account.displayName || bootstrap.account.email,
-      actions: [
-        {
-          id: 'profile-open',
-          label: 'Manage profile',
-          href: routeHref('settings'),
-        },
-      ],
-    },
-    {
-      id: 'connections',
-      title: 'Connections',
-      description: 'Connect customer channels and keep linked identities in sync with your workspace.',
-      summary: hasRoute('channels') ? 'Ready to connect channels' : 'Available to workspace admins',
-      actions: [
-        {
-          id: 'connections-open',
-          label: 'Manage channels',
-          href: routeHref('channels'),
-          unavailableLabel: 'Available to workspace admins',
-        },
-      ],
-    },
-    {
-      id: 'billing-plan',
-      title: 'Billing & plan',
-      description: 'Review subscription details, billing preferences, and plan coverage for your workspace.',
-      summary: hasRoute('deploy') ? `${bootstrap.entitlements.label} plan` : 'Available on supported plans',
-      actions: [
-        {
-          id: 'billing-open',
-          label: 'Open billing & plan',
-          href: routeHref('deploy'),
-          unavailableLabel: 'Available on supported plans',
-        },
-      ],
-    },
-    {
-      id: 'workspace-defaults',
-      title: 'Workspace defaults',
-      description: 'Set guided defaults for onboarding, workspace behavior, and day-to-day setup preferences.',
-      summary: bootstrap.shellHints.requiresOnboarding ? 'Guided setup recommended' : 'Workspace defaults are configured',
-      actions: [
-        {
-          id: 'workspace-setup',
-          label: 'Run guided setup',
-          href: onboardingHref,
-        },
-        {
-          id: 'workspace-open',
-          label: 'Workspace defaults',
-          href: routeHref('settings'),
-        },
-      ],
-    },
-    {
-      id: 'privacy-safety',
-      title: 'Privacy & safety',
-      description: 'Adjust safety controls, data handling preferences, and policy settings for trusted operation.',
-      summary: hasRoute('settings') ? 'Safety settings are available' : 'Available to workspace admins',
-      actions: [
-        {
-          id: 'privacy-open',
-          label: 'Open privacy & safety',
-          href: routeHref('settings'),
-        },
-      ],
-    },
-    {
-      id: 'team-access',
-      title: 'Team access',
-      description: 'Manage member access, responsibilities, and team controls for shared workspace management.',
-      summary: hasRoute('inbox') || hasRoute('deploy') ? 'Team controls are available' : 'Available to workspace admins',
-      actions: [
-        {
-          id: 'team-members',
-          label: 'Manage team access',
-          href: routeHref('inbox'),
-          unavailableLabel: 'Available to workspace admins',
-        },
-        {
-          id: 'team-routing',
-          label: 'Conversation routing',
-          href: routeHref('deploy'),
-          unavailableLabel: 'Available on supported plans',
-        },
-      ],
-    },
-  ];
+  const preferredRuntimeTarget = useMemo(
+    () => bootstrap.runtime.runtimeTargets.find((target) => target.preferred) ?? bootstrap.runtime.runtimeTargets[0] ?? null,
+    [bootstrap.runtime.runtimeTargets],
+  );
+  const localCompanionTarget = useMemo(
+    () => bootstrap.runtime.runtimeTargets.find((target) => target.id === 'local_companion') ?? null,
+    [bootstrap.runtime.runtimeTargets],
+  );
+  const activeSection = SETTINGS_SECTIONS.find((section) => section.id === selectedSection) ?? SETTINGS_SECTIONS[0];
+  const accountDisplayName = bootstrap.account.displayName?.trim() || 'Empyralis User';
+  const accountEmail = bootstrap.account.email;
+  const accountInitial = (accountDisplayName || accountEmail).charAt(0).toUpperCase();
 
   return (
-    <WorkstationSurfaceRoot surface="settings">
-      <ListDetailShell
-        className="app-settings-shell"
-        title="Settings"
-        subtitle="A clean hub for profile, workspace defaults, channels, billing, and safety controls."
-      >
-        <StateBanner
-          tone={bootstrap.shellHints.requiresOnboarding ? 'warning' : 'success'}
-          title={bootstrap.shellHints.requiresOnboarding ? 'Complete setup to unlock your best default experience' : 'Your workspace settings are ready'}
-        >
-          Settings are grouped by customer-facing workflows so core updates are easy to find.
-        </StateBanner>
-
-        <ListDetailPanel
-          className="app-settings-panel app-settings-panel--hub"
-          eyebrow="Configuration hub"
-          title="Choose what you want to update"
-          subtitle="Each section keeps key actions close at hand with plain-language guidance."
-        >
-          <div className="settings-hub-grid">
-            {sections.map((section) => (
-              <article key={section.id} className="settings-hub-card" aria-label={`${section.title} settings section`}>
-                <div className="settings-hub-card__header">
-                  <div className="settings-hub-card__copy">
-                    <strong className="settings-hub-card__title">{section.title}</strong>
-                    <p className="settings-hub-card__description">{section.description}</p>
-                  </div>
-                  <span className="settings-hub-card__summary">{section.summary}</span>
-                </div>
-                <div className="settings-hub-card__actions">
-                  {section.actions.map((action) => (
-                    <div key={action.id} className="settings-hub-card__action-row">
-                      <AppButton
-                        type="button"
-                        tone="secondary"
-                        disabled={!action.href}
-                        title={!action.href ? action.unavailableLabel : undefined}
-                        onClick={() => {
-                          if (!action.href) {
-                            return;
-                          }
-                          router.push(action.href);
-                        }}
-                      >
-                        {action.label}
-                      </AppButton>
-                      {!action.href && action.unavailableLabel ? (
-                        <span className="settings-hub-card__action-hint">{action.unavailableLabel}</span>
-                      ) : null}
-                    </div>
-                  ))}
-                </div>
-              </article>
-            ))}
+    <main data-workstation-surface="settings" className="app-settings-page">
+      <div className="settings-workbench">
+        <aside className="settings-nav" aria-label="Settings sections">
+          <div className="app-settings-sidebar__header">
+            <h2 className="app-settings-sidebar__title">Settings</h2>
+            <p className="app-settings-sidebar__subtitle">Workspace controls.</p>
           </div>
-        </ListDetailPanel>
+          {SETTINGS_SECTIONS.map((section) => (
+            <button
+              key={section.id}
+              type="button"
+              aria-selected={selectedSection === section.id}
+              className={joinClassNames(
+                'settings-nav__item',
+                selectedSection === section.id && 'settings-nav__item--active',
+              )}
+              onClick={() => setSelectedSection(section.id)}
+            >
+              <span className="settings-nav__eyebrow">{section.eyebrow}</span>
+              <span className="settings-nav__label">{section.label}</span>
+            </button>
+          ))}
+        </aside>
 
-        <ListDetailPanel
-          className="app-settings-panel app-settings-panel--overview"
-          eyebrow="Overview"
-          title={bootstrap.workspace.label}
-          subtitle="Personal and workspace preferences in one place."
-        >
-          <FormGrid>
-            <FormReadout label="Signed in as" value={bootstrap.account.email} />
-            <FormReadout label="Display name" value={bootstrap.account.displayName || 'Not set'} />
-            <FormReadout label="Plan" value={bootstrap.entitlements.label} />
-            <FormReadout label="Workspace type" value={bootstrap.workspace.kind} />
-            <FormReadout
-              label="Setup status"
-              value={bootstrap.shellHints.requiresOnboarding ? 'Guided setup available' : 'Setup complete'}
-            />
-          </FormGrid>
-        </ListDetailPanel>
-      </ListDetailShell>
-    </WorkstationSurfaceRoot>
+        <section className="settings-content">
+          <header className="app-settings-main__header">
+            <h1 className="app-settings-main__title">{activeSection.title}</h1>
+            <p className="app-settings-main__subtitle">{activeSection.description}</p>
+          </header>
+
+          {selectedSection === 'account' ? (
+            <div className="settings-section-stack">
+              <section className="settings-account-card" aria-label="Account profile">
+                <div className="settings-account-card__avatar" aria-hidden="true">
+                  {accountInitial}
+                </div>
+                <div className="settings-account-card__body">
+                  <p className="settings-account-card__eyebrow">Current account</p>
+                  <h2 className="settings-account-card__name">{accountDisplayName}</h2>
+                  <p className="settings-account-card__email">{accountEmail}</p>
+                </div>
+              </section>
+              <FormGrid>
+                <FormReadout label="Display name" value={bootstrap.account.displayName || 'Not set yet'} />
+                <FormReadout label="Email" value={bootstrap.account.email} />
+                <FormReadout label="Plan" value={bootstrap.entitlements.label} />
+                <FormReadout label="Default experience" value="Sage" />
+              </FormGrid>
+              <div className="settings-action-row">
+                <AppButton
+                  type="button"
+                  tone="secondary"
+                  onClick={() => {
+                    setSelectedSection('privacy');
+                  }}
+                >
+                  Trust settings
+                </AppButton>
+              </div>
+            </div>
+          ) : null}
+
+          {selectedSection === 'devices' ? (
+            <div className="settings-section-stack">
+              <WorkstationDesktopStatus />
+              <FormGrid>
+                <FormReadout label="Deployment mode" value={humanizeToken(bootstrap.runtime.deploymentMode)} />
+                <FormReadout
+                  label="Preferred runtime"
+                  value={preferredRuntimeTarget ? preferredRuntimeTarget.label : 'Cloud'}
+                />
+                <FormReadout
+                  label="Local companion"
+                  value={localCompanionTarget?.online ? 'Connected' : localCompanionTarget ? 'Available but offline' : 'Not detected'}
+                />
+                <FormReadout
+                  label="Approval mode"
+                  value={preferredRuntimeTarget?.approvalMode ? humanizeToken(preferredRuntimeTarget.approvalMode) : 'Auto-run'}
+                />
+              </FormGrid>
+              <div className="settings-device-grid">
+                {bootstrap.runtime.runtimeTargets.map((target) => (
+                  <article key={target.id} className="settings-detail-card">
+                    <div className="settings-detail-card__header">
+                      <strong className="settings-detail-card__title">{target.label}</strong>
+                      <span className={`settings-status settings-status--${target.online && target.healthy ? 'ready' : target.available ? 'warning' : 'muted'}`}>
+                        {target.statusLabel || humanizeToken(target.status)}
+                      </span>
+                    </div>
+                    <p className="settings-detail-card__body">
+                      {target.statusReason || target.description || 'Available for runs.'}
+                    </p>
+                  </article>
+                ))}
+              </div>
+            </div>
+          ) : null}
+          {selectedSection === 'usage' ? <WorkstationPlatformAnalyticsPane /> : null}
+
+          {selectedSection === 'billing' ? <WorkstationBillingPane /> : null}
+
+          {selectedSection === 'channels' ? <WorkspaceChannelOperationsConsole /> : null}
+
+          {selectedSection === 'privacy' ? (
+            <div className="settings-section-stack">
+              <div className="settings-detail-grid">
+                <article className="settings-detail-card">
+                  <div className="settings-detail-card__header">
+                    <strong className="settings-detail-card__title">Approvals</strong>
+                  </div>
+                  <p className="settings-detail-card__body">
+                    Sensitive actions pause for review.
+                  </p>
+                </article>
+                <article className="settings-detail-card">
+                  <div className="settings-detail-card__header">
+                    <strong className="settings-detail-card__title">Memory</strong>
+                  </div>
+                  <p className="settings-detail-card__body">
+                    Sage memory stays explicit and scoped.
+                  </p>
+                </article>
+                <article className="settings-detail-card">
+                  <div className="settings-detail-card__header">
+                    <strong className="settings-detail-card__title">Device trust</strong>
+                  </div>
+                  <p className="settings-detail-card__body">
+                    Local execution stays on trusted machines.
+                  </p>
+                </article>
+              </div>
+              <div className="settings-action-row">
+                <AppButton
+                  type="button"
+                  tone="secondary"
+                  onClick={() => {
+                    router.push(`/w/${encodeURIComponent(bootstrap.workspace.id)}/approvals`);
+                  }}
+                >
+                  Open approvals
+                </AppButton>
+              </div>
+            </div>
+          ) : null}
+        </section>
+      </div>
+    </main>
   );
 }

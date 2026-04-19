@@ -149,6 +149,21 @@ class WorkspacePoliciesUpdateRequest(BaseModel):
     trusted_owner_machine_ids: Optional[list[str]] = None
 
 
+class WorkspaceSageToolPolicyUpdateRequest(BaseModel):
+    tool: str
+    enabled: bool
+
+
+class WorkspaceProviderCredentialUpsertRequest(BaseModel):
+    provider: str
+    api_key: Optional[str] = None
+    model: Optional[str] = None
+
+
+class WorkspaceProviderCredentialDeleteRequest(BaseModel):
+    provider: str
+
+
 class WorkspaceRoutingUpdateRequest(BaseModel):
     admin_defaults: Optional[Dict[str, Any]] = None
 
@@ -386,4 +401,57 @@ async def workspace_policies_update(
             if hasattr(body, "model_dump")
             else body.dict(exclude_none=True)
         ),
+    )
+
+
+@router.get("/workspaces/{workspace_id}/sage/tool-policy")
+async def workspace_sage_tool_policy(
+    workspace_id: str,
+    current_user=Depends(get_current_user),
+):
+    return await workspace_admin_service.build_workspace_sage_tool_policy_payload(
+        workspace_id=workspace_id,
+        current_user=current_user,
+    )
+
+
+@router.patch("/workspaces/{workspace_id}/sage/tool-policy")
+async def workspace_sage_tool_policy_update(
+    workspace_id: str,
+    body: WorkspaceSageToolPolicyUpdateRequest,
+    current_user=Depends(get_current_user),
+):
+    return await workspace_admin_service.update_workspace_sage_tool_policy_payload(
+        workspace_id=workspace_id,
+        current_user=current_user,
+        tool_key=body.tool,
+        enabled=bool(body.enabled),
+    )
+
+
+@router.post("/workspaces/{workspace_id}/providers/credentials")
+async def workspace_provider_credential_create(
+    workspace_id: str,
+    body: WorkspaceProviderCredentialUpsertRequest,
+    current_user=Depends(get_current_user),
+):
+    return await workspace_admin_service.upsert_workspace_provider_credential(
+        workspace_id=workspace_id,
+        current_user=current_user,
+        provider=body.provider,
+        api_key=body.api_key,
+        model=body.model,
+    )
+
+
+@router.delete("/workspaces/{workspace_id}/providers/credentials")
+async def workspace_provider_credential_delete(
+    workspace_id: str,
+    body: WorkspaceProviderCredentialDeleteRequest,
+    current_user=Depends(get_current_user),
+):
+    return await workspace_admin_service.delete_workspace_provider_credential(
+        workspace_id=workspace_id,
+        current_user=current_user,
+        provider=body.provider,
     )

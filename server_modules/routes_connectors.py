@@ -137,7 +137,7 @@ async def whatsapp_twilio_webhook(request: Request):
 
 async def telegram_webhook(request: Request, connector_id: str):
     # This route stays public because Telegram authenticates through the webhook secret boundary.
-    return await actions.telegram_webhook(request, connector_id)
+    return await actions.telegram_webhook_canonical(request, connector_id)
 
 
 async def discord_webhook(request: Request):

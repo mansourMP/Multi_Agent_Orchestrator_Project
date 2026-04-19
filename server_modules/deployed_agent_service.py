@@ -2228,6 +2228,62 @@ async def list_deployed_agent_conversations(
     }
 
 
+async def list_deployed_agent_memory_entries(
+    *,
+    deployed_agent_id: str,
+    current_user: Optional[Dict[str, Any]],
+    owner_workspace_id: str,
+    limit: int = 50,
+    offset: int = 0,
+) -> Optional[Dict[str, Any]]:
+    resolved_workspace_id = require_deployed_agent_admin_access(
+        current_user=current_user,
+        workspace_id=owner_workspace_id,
+    )
+    workspace = await control_plane_repository.get_workspace_by_id(resolved_workspace_id)
+    if not isinstance(workspace, dict):
+        raise _http_bad_request("Workspace is unavailable.")
+    tenant_id = _normalize_text(workspace.get("tenant_id"))
+    deployed_agent = await control_plane_repository.get_deployed_agent_by_id(
+        deployed_agent_id,
+        tenant_id=tenant_id,
+        owner_workspace_id=resolved_workspace_id,
+    )
+    if not isinstance(deployed_agent, dict):
+        return None
+    safe_limit, safe_offset = _normalize_pagination(limit, offset)
+    memory_rows = await control_plane_repository.list_deployed_agent_conversation_memory(
+        tenant_id=tenant_id,
+        workspace_id=resolved_workspace_id,
+        deployed_agent_id=_normalize_text(deployed_agent.get("id")),
+        limit=safe_limit + 1,
+        offset=safe_offset,
+    )
+    has_more = len(memory_rows) > safe_limit
+    trimmed_rows = memory_rows[:safe_limit]
+    items = [
+        {
+            "id": row.get("id"),
+            "channel": row.get("channel_key"),
+            "external_user_id": row.get("external_user_id"),
+            "session_id": row.get("session_key"),
+            "summary_text": _compact_text(row.get("summary_text"), limit=280) or "",
+            "recent_message_count": row.get("recent_message_count"),
+            "source_message_count": row.get("source_message_count"),
+            "updated_at": row.get("updated_at"),
+        }
+        for row in trimmed_rows
+        if isinstance(row, dict)
+    ]
+    return {
+        "deployed_agent_id": _normalize_text(deployed_agent.get("id")),
+        "items": items,
+        "offset": safe_offset,
+        "limit": safe_limit,
+        "has_more": has_more,
+    }
+
+
 async def get_deployed_agent_conversation_detail(
     *,
     deployed_agent_id: str,

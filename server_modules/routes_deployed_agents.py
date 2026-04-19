@@ -139,6 +139,26 @@ async def get_deployed_agent_analytics(
     return payload
 
 
+@router.get("/deployed-agents/{deployed_agent_id}/memory")
+async def list_deployed_agent_memory_entries(
+    deployed_agent_id: str,
+    workspace_id: str,
+    limit: int = 50,
+    offset: int = 0,
+    current_user=Depends(get_current_user),
+):
+    payload = await deployed_agent_service.list_deployed_agent_memory_entries(
+        deployed_agent_id=deployed_agent_id,
+        current_user=current_user,
+        owner_workspace_id=workspace_id,
+        limit=limit,
+        offset=offset,
+    )
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=404, detail="Deployed agent not found.")
+    return payload
+
+
 @router.get("/deployed-agents/telegram-readiness")
 async def get_deployed_agent_telegram_readiness(
     workspace_id: str,

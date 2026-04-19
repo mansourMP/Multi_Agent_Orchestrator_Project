@@ -1,36 +1,25 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
+import { Pencil, Pin, Plus, Trash2 } from 'lucide-react';
 
 import { CommandSheet } from '@/lib/ui/command-sheet';
 import { ConfirmDialog } from '@/lib/ui/confirm-dialog';
-import { DataBadge } from '@/lib/ui/data-table';
 import { EmptyPanel } from '@/lib/ui/empty-panel';
 import { FormField, FormGrid, FormInput, FormSection, FormTextarea } from '@/lib/ui/form-controls';
 import { SkeletonBlock } from '@/lib/ui/skeleton-block';
 import type { WorkstationSageMemoryRecord } from '@/lib/workspace/workstation-client';
 import { useWorkspaceServices, useWorkstationStreamState } from '@/lib/workspace/workspace-services';
-import {
-  WorkstationActionButton,
-  WorkstationSurfaceCard,
-  WorkstationSurfaceNotice,
-  WorkstationSurfaceRoot,
-  WorkstationSurfaceStat,
-  WorkstationSurfaceStatGrid,
-} from '@/lib/workspace/workstation-surface-primitives';
+import { WorkstationSurfaceRoot } from '@/lib/workspace/workstation-surface-primitives';
 
 type SageMemoryCategoryRecord = {
   id: string;
   label: string;
-  description: string;
-  count: number;
 };
 
 type SageMemorySnapshot = {
   items: WorkstationSageMemoryRecord[];
   categories: SageMemoryCategoryRecord[];
-  summary: Record<string, unknown>;
-  updatedAt: string | null;
 };
 
 type SageMemoryDraft = {
@@ -42,56 +31,14 @@ type SageMemoryDraft = {
 };
 
 const DEFAULT_MEMORY_CATEGORIES: readonly SageMemoryCategoryRecord[] = [
-  {
-    id: 'profile_fact',
-    label: 'Profile facts',
-    description: 'Personal baseline facts about the user.',
-    count: 0,
-  },
-  {
-    id: 'project_context',
-    label: 'Active work',
-    description: 'Current projects and in-flight context.',
-    count: 0,
-  },
-  {
-    id: 'app_state',
-    label: 'App state',
-    description: 'State that keeps services and workflows in sync.',
-    count: 0,
-  },
-  {
-    id: 'saved_preference',
-    label: 'Saved preferences',
-    description: 'Long-term preferences and recurring defaults.',
-    count: 0,
-  },
-];
+  { id: 'profile_fact', label: 'Profile facts' },
+  { id: 'project_context', label: 'Active work' },
+  { id: 'app_state', label: 'App state' },
+  { id: 'saved_preference', label: 'Saved preferences' },
+] as const;
 
 function readString(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
-}
-
-function readNumber(value: unknown, fallback = 0): number {
-  const parsed = typeof value === 'number' ? value : Number(value);
-  return Number.isFinite(parsed) ? parsed : fallback;
-}
-
-function readObject(value: unknown): Record<string, unknown> {
-  return value && typeof value === 'object' && !Array.isArray(value)
-    ? value as Record<string, unknown>
-    : {};
-}
-
-function formatTimestamp(value: string | null): string {
-  if (!value) {
-    return 'Not recorded';
-  }
-  const parsed = new Date(value);
-  if (Number.isNaN(parsed.getTime())) {
-    return value;
-  }
-  return parsed.toLocaleString();
 }
 
 function normalizeMemorySnapshot(payload: unknown): SageMemorySnapshot {
@@ -110,20 +57,12 @@ function normalizeMemorySnapshot(payload: unknown): SageMemorySnapshot {
       if (!id || !label) {
         return [];
       }
-      return [{
-        id,
-        label,
-        description: readString(category.description),
-        count: readNumber(category.count, 0),
-      } satisfies SageMemoryCategoryRecord];
+      return [{ id, label }];
     })
     : [];
-  const categories = parsedCategories.length > 0 ? parsedCategories : [...DEFAULT_MEMORY_CATEGORIES];
   return {
     items,
-    categories,
-    summary: readObject(record.summary),
-    updatedAt: readString(record.updated_at) || null,
+    categories: parsedCategories.length > 0 ? parsedCategories : [...DEFAULT_MEMORY_CATEGORIES],
   };
 }
 
@@ -135,10 +74,6 @@ function defaultMemoryDraft(category = 'profile_fact'): SageMemoryDraft {
     content: '',
     pinned: false,
   };
-}
-
-function categoryLabel(categories: SageMemoryCategoryRecord[], categoryId: string): string {
-  return categories.find((item) => item.id === categoryId)?.label ?? categoryId.replace(/_/g, ' ');
 }
 
 function sortMemoryEntries(items: WorkstationSageMemoryRecord[]): WorkstationSageMemoryRecord[] {
@@ -161,7 +96,6 @@ export function WorkstationActivityPane() {
   const services = useWorkspaceServices();
   const streamState = useWorkstationStreamState();
   const [snapshot, setSnapshot] = useState<SageMemorySnapshot>(() => normalizeMemorySnapshot(null));
-  const [memoryFilter, setMemoryFilter] = useState<string>('all');
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
@@ -187,11 +121,10 @@ export function WorkstationActivityPane() {
   useEffect(() => {
     let cancelled = false;
     void refresh(true).catch((loadError) => {
-      if (cancelled) {
-        return;
+      if (!cancelled) {
+        setError(loadError instanceof Error ? loadError.message : 'Memory is unavailable right now.');
+        setIsLoading(false);
       }
-      setError(loadError instanceof Error ? loadError.message : 'Memory is unavailable right now.');
-      setIsLoading(false);
     });
     return () => {
       cancelled = true;
@@ -208,20 +141,13 @@ export function WorkstationActivityPane() {
     });
   }, [services.client, streamState.activity.version]);
 
-  const filteredMemoryItems = useMemo(
-    () => snapshot.items.filter((item) => memoryFilter === 'all' || readString(item.category) === memoryFilter),
-    [memoryFilter, snapshot.items],
-  );
   const pendingDeleteMemory = useMemo(
     () => snapshot.items.find((item) => readString(item.id) === pendingDeleteMemoryId) ?? null,
     [pendingDeleteMemoryId, snapshot.items],
   );
-  const pinnedCount = readNumber(snapshot.summary.pinned_count, snapshot.items.filter((item) => Boolean(item.pinned)).length);
-  const totalCount = readNumber(snapshot.summary.total_count, snapshot.items.length);
-  const categoryCount = snapshot.categories.length;
 
-  const openCreateMemory = (categoryId?: string) => {
-    setMemoryDraft(defaultMemoryDraft(categoryId || (memoryFilter !== 'all' ? memoryFilter : 'profile_fact')));
+  const openCreateMemory = () => {
+    setMemoryDraft(defaultMemoryDraft());
     setIsMemorySheetOpen(true);
   };
 
@@ -296,7 +222,6 @@ export function WorkstationActivityPane() {
         ...nextSnapshot,
         items: sortMemoryEntries(nextSnapshot.items),
       });
-      setStatusMessage(Boolean(entry.pinned) ? 'Memory unpinned.' : 'Memory pinned.');
     } catch (pinError) {
       setError(pinError instanceof Error ? pinError.message : 'Could not update memory pin state.');
     } finally {
@@ -320,7 +245,6 @@ export function WorkstationActivityPane() {
         items: sortMemoryEntries(nextSnapshot.items),
       });
       setPendingDeleteMemoryId(null);
-      setStatusMessage('Memory forgotten.');
     } catch (deleteError) {
       setError(deleteError instanceof Error ? deleteError.message : 'Could not forget memory.');
     } finally {
@@ -330,189 +254,129 @@ export function WorkstationActivityPane() {
 
   return (
     <WorkstationSurfaceRoot surface="activity">
-      <WorkstationSurfaceCard
-        title="Memory"
-        description="Explicit memory that Sage carries between turns."
-        actions={(
-          <div className="app-inline-actions">
-            <WorkstationActionButton
-              type="button"
-              tone="secondary"
-              onClick={() => {
-                void refresh(false);
-              }}
-            >
-              Refresh
-            </WorkstationActionButton>
-            <WorkstationActionButton
-              type="button"
-              onClick={() => {
-                openCreateMemory();
-              }}
-            >
-              Add memory
-            </WorkstationActionButton>
-          </div>
-        )}
-      >
-        {statusMessage ? <WorkstationSurfaceNotice tone="success">{statusMessage}</WorkstationSurfaceNotice> : null}
-        {error ? <WorkstationSurfaceNotice tone="danger">{error}</WorkstationSurfaceNotice> : null}
-
-        <WorkstationSurfaceStatGrid>
-          <WorkstationSurfaceStat
-            label="Saved memories"
-            value={String(totalCount)}
-            hint="Explicitly persisted memory entries"
-          />
-          <WorkstationSurfaceStat
-            label="Pinned"
-            value={String(pinnedCount)}
-            hint="High-priority context Sage should keep prominent"
-          />
-          <WorkstationSurfaceStat
-            label="Categories"
-            value={String(categoryCount)}
-            hint={`Last updated ${formatTimestamp(snapshot.updatedAt)}`}
-          />
-        </WorkstationSurfaceStatGrid>
-
-        <div className="app-inline-actions app-inline-actions--tight">
+      <main className="app-memory-minimal-page" data-workstation-surface="memory-minimal">
+        <div className="app-memory-minimal-page__header">
+          <div />
           <button
             type="button"
-            className={`workstation-command-bar__link${memoryFilter === 'all' ? ' workstation-command-bar__link--active' : ''}`}
-            onClick={() => setMemoryFilter('all')}
+            className="app-memory-minimal-page__add"
+            onClick={openCreateMemory}
+            aria-label="Add memory"
+            title="Add memory"
           >
-            All
+            <Plus size={16} strokeWidth={1.9} aria-hidden="true" />
           </button>
-          {snapshot.categories.map((category) => (
-            <button
-              key={category.id}
-              type="button"
-              className={`workstation-command-bar__link${memoryFilter === category.id ? ' workstation-command-bar__link--active' : ''}`}
-              onClick={() => setMemoryFilter(category.id)}
-            >
-              {category.label}
-            </button>
-          ))}
         </div>
+
+        {statusMessage ? <div className="app-surface-inline-status">{statusMessage}</div> : null}
+        {error ? <div className="app-surface-inline-status">{error}</div> : null}
 
         {isLoading ? (
           <div className="app-stack-3">
-            <SkeletonBlock height="4.8rem" />
-            <SkeletonBlock height="4.8rem" />
-            <SkeletonBlock height="4.8rem" />
+            <SkeletonBlock height="4.25rem" />
+            <SkeletonBlock height="4.25rem" />
+            <SkeletonBlock height="4.25rem" />
           </div>
-        ) : filteredMemoryItems.length === 0 ? (
+        ) : snapshot.items.length === 0 ? (
           <EmptyPanel
-            title="No memory in this view"
-            body="Save profile facts, active work, app state, or long-term preferences when you want Sage to retain them explicitly."
-            actions={(
-              <WorkstationActionButton
-                type="button"
-                onClick={() => {
-                  openCreateMemory(memoryFilter !== 'all' ? memoryFilter : undefined);
-                }}
-              >
-                Add first memory
-              </WorkstationActionButton>
-            )}
+            title="No memory yet"
+            body="Sage will remember things as you work together."
           />
         ) : (
-          <div className="app-stack-3">
-            {filteredMemoryItems.map((entry) => {
+          <div className="app-memory-minimal-list">
+            {snapshot.items.map((entry) => {
               const entryId = readString(entry.id);
               const busy = mutatingMemory === entryId;
               return (
-                <article key={entryId || `memory-${readString(entry.title)}`} className="app-surface-list-item">
-                  <div className="app-surface-list-item__row">
-                    <div className="app-surface-list-item__copy">
-                      <div className="app-surface-list-item__title">{readString(entry.title) || 'Saved memory'}</div>
-                      <div className="app-surface-list-item__subtitle">
-                        {categoryLabel(snapshot.categories, readString(entry.category))}
-                        {readString(entry.source_label) ? ` · ${readString(entry.source_label)}` : ''}
-                        {` · ${formatTimestamp(readString(entry.updated_at) || readString(entry.created_at) || null)}`}
-                      </div>
+                <article key={entryId || `memory-${readString(entry.title)}`} className="app-memory-minimal-entry">
+                  <div className="app-memory-minimal-entry__row">
+                    <div className="app-memory-minimal-entry__copy">
+                      <div className="app-memory-minimal-entry__title">{readString(entry.title) || 'Saved memory'}</div>
+                      <p className="app-memory-minimal-entry__content">{readString(entry.content) || 'No memory content recorded.'}</p>
                     </div>
-                    <div className="app-inline-actions app-inline-actions--tight">
-                      <DataBadge tone={Boolean(entry.pinned) ? 'success' : 'neutral'}>
-                        {Boolean(entry.pinned) ? 'Pinned' : 'Standard'}
-                      </DataBadge>
-                      <WorkstationActionButton
+                    <div className="app-memory-minimal-entry__actions">
+                      <button
                         type="button"
-                        tone="secondary"
+                        className="app-memory-minimal-entry__action"
                         disabled={busy}
                         onClick={() => {
                           void togglePinned(entry);
                         }}
+                        aria-label={Boolean(entry.pinned) ? 'Unpin memory' : 'Pin memory'}
+                        title={Boolean(entry.pinned) ? 'Unpin memory' : 'Pin memory'}
                       >
-                        {Boolean(entry.pinned) ? 'Unpin' : 'Pin'}
-                      </WorkstationActionButton>
-                      <WorkstationActionButton
+                        <Pin size={16} strokeWidth={1.9} aria-hidden="true" />
+                      </button>
+                      <button
                         type="button"
-                        tone="secondary"
+                        className="app-memory-minimal-entry__action"
                         disabled={busy}
                         onClick={() => {
                           openEditMemory(entry);
                         }}
+                        aria-label="Edit memory"
+                        title="Edit memory"
                       >
-                        Correct
-                      </WorkstationActionButton>
-                      <WorkstationActionButton
+                        <Pencil size={16} strokeWidth={1.9} aria-hidden="true" />
+                      </button>
+                      <button
                         type="button"
-                        tone="danger"
+                        className="app-memory-minimal-entry__action app-memory-minimal-entry__action--danger"
                         disabled={busy}
                         onClick={() => {
                           setPendingDeleteMemoryId(entryId);
                         }}
+                        aria-label="Delete memory"
+                        title="Delete memory"
                       >
-                        Forget
-                      </WorkstationActionButton>
+                        <Trash2 size={16} strokeWidth={1.9} aria-hidden="true" />
+                      </button>
                     </div>
                   </div>
-                  <p className="app-surface-list-item__description">{readString(entry.content) || 'No memory content recorded.'}</p>
                 </article>
               );
             })}
           </div>
         )}
-      </WorkstationSurfaceCard>
+      </main>
 
       <CommandSheet
         open={isMemorySheetOpen}
-        title={memoryDraft.entryId ? 'Correct memory' : 'Save memory'}
-        description="Memory writes are explicit. Save only what Sage should carry into future turns."
+        title={memoryDraft.entryId ? 'Edit memory' : 'Add memory'}
+        description="Save only what Sage should carry into future turns."
         onClose={() => {
           setIsMemorySheetOpen(false);
-          setMemoryDraft(defaultMemoryDraft(memoryFilter !== 'all' ? memoryFilter : 'profile_fact'));
+          setMemoryDraft(defaultMemoryDraft('profile_fact'));
         }}
         actions={(
           <>
-            <WorkstationActionButton
+            <button
               type="button"
-              tone="secondary"
+              className="app-memory-sheet__link"
               disabled={Boolean(mutatingMemory)}
               onClick={() => {
                 setIsMemorySheetOpen(false);
-                setMemoryDraft(defaultMemoryDraft(memoryFilter !== 'all' ? memoryFilter : 'profile_fact'));
+                setMemoryDraft(defaultMemoryDraft('profile_fact'));
               }}
             >
               Cancel
-            </WorkstationActionButton>
-            <WorkstationActionButton
+            </button>
+            <button
               type="button"
+              className="app-button"
               disabled={Boolean(mutatingMemory)}
               onClick={() => {
                 void submitMemoryDraft();
               }}
             >
-              {mutatingMemory ? 'Saving…' : memoryDraft.entryId ? 'Save correction' : 'Save memory'}
-            </WorkstationActionButton>
+              {mutatingMemory ? 'Saving…' : 'Save'}
+            </button>
           </>
         )}
       >
         <FormSection
           title="Memory entry"
-          description="Set category intentionally so Sage can treat this memory with the right priority."
+          description="Choose the right category so Sage treats it with the right weight."
         >
           <FormGrid columns="repeat(2, minmax(0, 1fr))">
             <FormField label="Category">
@@ -520,8 +384,7 @@ export function WorkstationActivityPane() {
                 className="app-select"
                 value={memoryDraft.category}
                 onChange={(event) => {
-                  const nextCategory = event.currentTarget.value;
-                  setMemoryDraft((current) => ({ ...current, category: nextCategory }));
+                  setMemoryDraft((current) => ({ ...current, category: event.currentTarget.value }));
                 }}
               >
                 {snapshot.categories.map((category) => (
@@ -531,36 +394,34 @@ export function WorkstationActivityPane() {
                 ))}
               </select>
             </FormField>
-            <FormField label="Pin now">
-              <WorkstationActionButton
+            <FormField label="Pinned">
+              <button
                 type="button"
-                tone={memoryDraft.pinned ? 'primary' : 'secondary'}
+                className="app-button app-button--secondary"
                 onClick={() => {
                   setMemoryDraft((current) => ({ ...current, pinned: !current.pinned }));
                 }}
               >
                 {memoryDraft.pinned ? 'Pinned' : 'Pin memory'}
-              </WorkstationActionButton>
+              </button>
             </FormField>
           </FormGrid>
           <FormGrid columns="1fr">
-            <FormField label="Title" hint="Keep it short and scannable.">
+            <FormField label="Title">
               <FormInput
                 value={memoryDraft.title}
                 onChange={(event) => {
-                  const nextValue = event.currentTarget.value;
-                  setMemoryDraft((current) => ({ ...current, title: nextValue }));
+                  setMemoryDraft((current) => ({ ...current, title: event.currentTarget.value }));
                 }}
                 placeholder="Example: Preferred working style"
               />
             </FormField>
-            <FormField label="Content" hint="Use explicit factual wording.">
+            <FormField label="Content">
               <FormTextarea
                 rows={5}
                 value={memoryDraft.content}
                 onChange={(event) => {
-                  const nextValue = event.currentTarget.value;
-                  setMemoryDraft((current) => ({ ...current, content: nextValue }));
+                  setMemoryDraft((current) => ({ ...current, content: event.currentTarget.value }));
                 }}
                 placeholder="Example: Prefers concise updates with clear next actions."
               />
@@ -571,11 +432,11 @@ export function WorkstationActivityPane() {
 
       <ConfirmDialog
         open={Boolean(pendingDeleteMemory)}
-        title="Forget memory?"
+        title="Delete memory?"
         body={pendingDeleteMemory
-          ? `Sage will remove "${readString(pendingDeleteMemory.title) || 'this memory'}" from explicit carry-forward memory.`
+          ? `Sage will remove "${readString(pendingDeleteMemory.title) || 'this memory'}" from carry-forward memory.`
           : 'Sage will remove this memory.'}
-        confirmLabel="Forget memory"
+        confirmLabel="Delete"
         busy={Boolean(mutatingMemory)}
         onConfirm={() => {
           void confirmDeleteMemory();

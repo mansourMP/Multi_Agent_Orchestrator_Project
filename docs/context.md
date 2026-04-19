@@ -7,7 +7,9 @@ Latest verified green commit: `b3eca81`
 
 Empyralis is an AI operating system for authorized digital work.
 
-It is one platform with one Sage identity, one workspace model, one runtime policy model, one memory model, and one audit trail across mobile, desktop, web, local, cloud, and hybrid operation.
+It is one platform with shared auth, billing, and channel infrastructure across mobile, desktop, web, local, cloud, and hybrid operation.
+
+Sage is an independent personal AI. Studio agents are independent deployable workers. They do not share memory, context, or execution. The only shared layer is auth, billing, and channel infrastructure.
 
 The platform is not a pile of separate bots, not a workflow toy, and not a mobile app plus a different desktop brain.
 
@@ -34,8 +36,8 @@ Shell classes are explicit:
   - web chat
 
 Shell truth:
-- every shell shares the same captain identity
-- every shell shares the same run engine truth
+- every shell shares the same auth and billing identity
+- every shell shares the same infrastructure guardrails
 - channel shells are lightweight conversation surfaces, not separate product brains
 - channel shells may expose conversation, summaries, notifications, and lightweight approvals where supported
 - channel shells must not become deep admin surfaces
@@ -43,31 +45,29 @@ Shell truth:
 
 ## The 4-Layer OS Model
 
-### 1. Sage / Personal Captain
+### 1. Sage / Personal AI
 
 Sage is the user's main agent and the only primary intelligence the user should feel.
 
 Sage owns:
 - the main relationship with the user
-- a stable captain install identity with editable display metadata
 - personal memory facade
-- orchestration of specialists
-- summary-level visibility into specialist and app activity
-- approvals, delegation, and review flow
+- the user's own provider selection and tools
+- direct chat and personal work sessions
 
 Sage does not get to bypass runtime, tool, secret, or policy brokers.
 
-Captain identity contract:
-- stable internal id stays bound to the captain install
-- visible display name is editable metadata only
-- captain stays a private main agent
-- captain does not support owner_edit, owner_test, or customer_live mode switching
+Sage isolation contract:
+- Sage is standalone and independent
+- Sage does not control Studio agents
+- Sage does not inherit Studio memory or execution state
+- Sage does not support external customer-live mode switching
 
-### 2. Specialist Workers
+### 2. Studio Workers
 
-Specialists are real agents, not wrappers.
+Studio agents are real deployable workers, not wrappers.
 
-Each specialist has:
+Each Studio agent has:
 - install-scoped short-term and long-term memory
 - an explicit operating mode:
   - `owner_edit`
@@ -78,36 +78,18 @@ Each specialist has:
 - its own artifact history
 - its own runtime policy
 - its own activity stream
+- its own model selection
 
-Specialists are powerful, but scoped. They do not inherit Sage memory by default, and they do not automatically inherit each other's memory.
+Studio agents are powerful, but scoped. They do not inherit Sage memory, and they do not automatically inherit each other's memory.
 
 Mode truth:
 - `owner_edit` is the authoring mode and allows prompt/config edits
 - `owner_test` is the owner preview mode and does not allow prompt/config edits
 - `customer_live` is the external-audience mode and does not allow prompt/config edits
 
-### Shared Operational Board
+### Separation Contract
 
-The platform has one explicit shared operational board for workspace-visible:
-- shared instructions
-- SOP and playbook entries
-- handoff notes
-- approved artifact and link references
-
-The shared board is:
-- backend-managed
-- append-only and version-aware
-- readable as published operational state
-- writable only through permission tiers:
-  - `read`
-  - `propose_update`
-  - `publish_update`
-
-The shared board is not:
-- raw shared memory
-- a mirror of captain private memory
-- a mirror of specialist private memory
-- a transcript dump
+Sage is an independent personal AI. Studio agents are independent deployable workers. They do not share memory, context, or execution. The only shared layer is auth, billing, and channel infrastructure.
 
 ### 3. Applications
 
@@ -141,7 +123,7 @@ It owns:
 
 ## Hybrid Cluster Model
 
-One Sage identity must survive across all deployment modes:
+Sage and Studio runtimes must preserve their own isolated identities across all deployment modes:
 - cloud-only
 - local-only
 - hybrid
@@ -184,30 +166,27 @@ The system must fail closed if a placement or sync rule cannot be satisfied.
 ## Strict Sandbox And Memory Boundaries
 
 Allowed state layers are frozen as:
-- captain private memory
-- specialist private memory
-- shared operational board
+- Sage private memory
+- Studio-agent private memory
 - artifacts/history
 
 ### Memory Boundaries
 
 Sage can read:
-- personal captain memory
-- workspace-level summary context
-- specialist summaries, status, and artifacts
-- app and connector history summaries
+- its own private memory
+- user-selected inputs and artifacts
+- its own approved connector history
 
 Sage does not automatically read:
-- raw unrestricted specialist internals
-- raw app-private state
+- Studio-agent memory
+- Studio-agent execution state
 - local-private memory that policy marks as local-only
 
-Specialists can read:
+Studio agents can read:
 - their own scoped memory
-- published shared operational board entries
 - explicitly shared inputs and artifacts
 
-Specialists cannot read by default:
+Studio agents cannot read by default:
 - Sage private memory
 - other specialists' scoped memory
 - local-private memory outside their own allowed runtime boundary
@@ -220,7 +199,7 @@ Artifact/history boundary:
 Sandbox and broker truth:
 - sandbox runtime scope carries the same state-layer policy the broker sees
 - cross-install private memory is denied by default
-- specialist-to-captain private memory access is denied by default
+- specialist-to-Sage private memory access is denied by default
 - app-private context not explicitly shared
 
 Applications can read:
@@ -345,7 +324,7 @@ Verified backend slices now proven in this workspace:
 These proofs do not yet mean:
 - the current rendered first-send path is the canonical durable run path
 - rendered local or hybrid UI proof exists
-- live hosted-captain degraded summary consumption is proven
+- live hosted Sage degraded summary consumption is proven
 - full cloud-only, local-only, and hybrid rendered demo coverage exists
 - fully distributed remote summary replication is complete
 
@@ -363,7 +342,7 @@ Exact demo state right now:
   - placement and summary policy are real, but rendered proof is not complete
 - degraded safe mode: partial
   - safe fallback policy is proven
-  - live hosted-captain degraded consumption is not yet proven
+- live hosted Sage degraded consumption is not yet proven
 
 ## Implemented Core Through Phase 44
 
@@ -371,7 +350,7 @@ Verified backend and architecture work already landed:
 - entitlements and quota service
 - open-core boundary definition
 - mobile-first / desktop-power product surface contract
-- captain / specialist / application boundary
+- Sage / Studio-agent / application boundary
 - application runtime and app-agent separation contract
 - durable activity ledger
 - local runtime cluster control APIs

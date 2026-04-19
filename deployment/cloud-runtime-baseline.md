@@ -25,6 +25,7 @@ Runtime contract:
 - privileged diagnostics require `X-API-Key`
 - production mode is explicit with `ORION_ENV=production`
 - auth is explicit with `ORION_AUTH_REQUIRED=1`
+- durable run state is explicit with `ORION_REQUIRE_DURABLE_RUN_STATE=1`
 - runtime secrets are explicit with generated values for:
   - `ORION_API_KEY`
   - `ORION_JWT_SECRET`
@@ -42,6 +43,7 @@ Persistent disk is still required because the runtime keeps explicit non-Postgre
 Manual values after blueprint creation:
 
 - runtime:
+  - `CONTROL_PLANE_ORIGINS=https://<your-web-service>.onrender.com`
   - `OPENAI_API_KEY`
   - `ANTHROPIC_API_KEY` if used
   - `GEMINI_API_KEY` if used
@@ -68,6 +70,68 @@ Passing smoke means:
 - `/health` returns the public redacted contract
 - `/health/internal/db` returns with `X-API-Key`
 - `/doctor` returns with `X-API-Key`
+
+## Public beta provider expectation
+
+For the first public mobile beta, choose one primary hosted model provider and
+configure it on the runtime. Do not treat provider selection as a client-side
+or per-device concern.
+
+Recommended beta posture:
+
+- set exactly one of `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, or `GEMINI_API_KEY`
+- leave the others unset unless they are intentionally part of a tested failover
+  path
+- keep provider credentials on the server only
+
+## Render deploy checklist
+
+1. Create the Render blueprint from [render.yaml](/Users/mansur/Multi_Agent_Orchestrator_Project/render.yaml).
+2. Confirm the runtime service has:
+   - `ORION_ENV=production`
+   - `ORION_AUTH_REQUIRED=1`
+   - `ORION_REQUIRE_DURABLE_RUN_STATE=1`
+   - persistent disk mounted at `/var/data/empyralis`
+   - Postgres attached through `DATABASE_URL`
+3. Fill the runtime manual env values:
+   - `FRONTEND_ORIGINS`
+   - `CONTROL_PLANE_ORIGINS`
+   - `ORION_WHATSAPP_AUTOPILOT_PUBLIC_BASE_URL` if WhatsApp is used
+   - one chosen provider key
+4. Fill the web manual env values:
+   - `NEXT_PUBLIC_API_URL`
+   - `NEXT_PUBLIC_ORION_API_URL`
+   - `NEXT_PUBLIC_WS_URL`
+5. Run the cloud smoke:
+
+```bash
+chmod +x scripts/phase70_cloud_smoke.sh
+EMPYRALIS_PUBLIC_URL="https://<your-runtime-service>.onrender.com" \
+EMPYRALIS_RUNTIME_API_KEY="<runtime-api-key>" \
+bash scripts/phase70_cloud_smoke.sh
+```
+
+6. Verify the deploy is fail-closed:
+   - if `DATABASE_URL` is missing or Postgres is unreachable, runtime startup
+     must not silently degrade to memory/SQLite
+   - if browser write surfaces are used, `CONTROL_PLANE_ORIGINS` must be set
+
+## Remaining blockers outside phase 1
+
+These are not cloud-runtime blueprint problems anymore, but they still block a
+true cloud-only mobile product and must be handled in phase 2:
+
+- [mobile/app.json](/Users/mansur/Multi_Agent_Orchestrator_Project/mobile/app.json)
+  still encodes `runtimeUrl=http://127.0.0.1:8001`
+- [mobile/app.json](/Users/mansur/Multi_Agent_Orchestrator_Project/mobile/app.json)
+  still requests local-network access to a Mac-hosted runtime
+- [mobile/src/lib/api.ts](/Users/mansur/Multi_Agent_Orchestrator_Project/mobile/src/lib/api.ts)
+  still remaps loopback URLs for Expo/local device testing
+- [mobile/src/lib/session-context.tsx](/Users/mansur/Multi_Agent_Orchestrator_Project/mobile/src/lib/session-context.tsx)
+  still uses hidden beta bootstrap behavior
+
+Those belong to the mobile cloud-only cutover, not the Render runtime
+blueprint.
 
 ## Repo-local Tauri desktop shell
 

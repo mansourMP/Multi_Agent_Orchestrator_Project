@@ -23,6 +23,8 @@ services:
         value: production
       - key: ORION_AUTH_REQUIRED
         value: "1"
+      - key: ORION_REQUIRE_DURABLE_RUN_STATE
+        value: "1"
       - key: ORION_LOG_FORMAT
         value: json
       - key: ORION_PUBLIC_REGISTRATION_ENABLED
@@ -50,6 +52,8 @@ services:
       - key: SENTRY_DSN
         sync: false
       - key: FRONTEND_ORIGINS
+        sync: false
+      - key: CONTROL_PLANE_ORIGINS
         sync: false
       - key: ORION_WHATSAPP_AUTOPILOT_PUBLIC_BASE_URL
         sync: false

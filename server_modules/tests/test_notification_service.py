@@ -70,6 +70,10 @@ class NotificationServiceTests(unittest.TestCase):
                     "prompt": "Approve deleting the selected file?",
                     "approval_id": "approval-1",
                     "metadata": {"path": "/approvals"},
+                    "browser": {
+                        "session_profile": "qa-browser",
+                        "immutable_plan_hash": "hash-1",
+                    },
                 },
                 created_at="2026-04-08T00:00:00Z",
             )
@@ -81,23 +85,28 @@ class NotificationServiceTests(unittest.TestCase):
             )
 
             self.assertIsNotNone(notification)
-            payload = notification_service.list_notification_payload(
-                current_user={
-                    "auth_type": "bearer",
-                    "user_id": "user-1",
-                    "role": "owner",
-                    "workspace_access": {
-                        "workspace-1": {"tenant_id": "tenant-1", "role": "owner"},
+            with patch(
+                "server_modules.notification_service.entitlements_service.workspace_entitlement_payload_for_workspace_id",
+                return_value={"capabilities": {"history_window_days": 30}},
+            ):
+                payload = notification_service.list_notification_payload(
+                    current_user={
+                        "auth_type": "bearer",
+                        "user_id": "user-1",
+                        "role": "owner",
+                        "workspace_access": {
+                            "workspace-1": {"tenant_id": "tenant-1", "role": "owner"},
+                        },
                     },
-                },
-                limit=10,
-                tenant_id="tenant-1",
-                workspace_id="workspace-1",
-                db_path=db_path,
-            )
+                    limit=10,
+                    tenant_id="tenant-1",
+                    workspace_id="workspace-1",
+                    db_path=db_path,
+                )
             self.assertEqual(payload["count"], 1)
             self.assertEqual(payload["items"][0]["action"], "approval_requested")
             self.assertEqual(payload["items"][0]["title"], "Approval required")
+            self.assertEqual(payload["items"][0]["metadata"]["browser"]["session_profile"], "qa-browser")
             deliveries = runtime_state_store.list_notification_delivery_statuses(
                 db_path,
                 notification_id="approval-evt-1",
@@ -138,13 +147,17 @@ class NotificationServiceTests(unittest.TestCase):
                 },
             }
 
-            before = notification_service.list_notification_payload(
-                current_user=current_user,
-                limit=10,
-                tenant_id=tenant_id,
-                workspace_id=workspace_id,
-                db_path=db_path,
-            )
+            with patch(
+                "server_modules.notification_service.entitlements_service.workspace_entitlement_payload_for_workspace_id",
+                return_value={"capabilities": {"history_window_days": 30}},
+            ):
+                before = notification_service.list_notification_payload(
+                    current_user=current_user,
+                    limit=10,
+                    tenant_id=tenant_id,
+                    workspace_id=workspace_id,
+                    db_path=db_path,
+                )
             before_item = next(
                 item for item in before["items"] if str(item.get("id") or "").strip() == "notif-1"
             )
@@ -159,13 +172,17 @@ class NotificationServiceTests(unittest.TestCase):
             )
             self.assertEqual(marked["marked_count"], 1)
 
-            after = notification_service.list_notification_payload(
-                current_user=current_user,
-                limit=10,
-                tenant_id=tenant_id,
-                workspace_id=workspace_id,
-                db_path=db_path,
-            )
+            with patch(
+                "server_modules.notification_service.entitlements_service.workspace_entitlement_payload_for_workspace_id",
+                return_value={"capabilities": {"history_window_days": 30}},
+            ):
+                after = notification_service.list_notification_payload(
+                    current_user=current_user,
+                    limit=10,
+                    tenant_id=tenant_id,
+                    workspace_id=workspace_id,
+                    db_path=db_path,
+                )
             after_item = next(
                 item for item in after["items"] if str(item.get("id") or "").strip() == "notif-1"
             )
@@ -287,6 +304,9 @@ class NotificationServiceTests(unittest.TestCase):
                         "metadata": {"path": "/approvals", "detail_level": "feed_summary"},
                     }
                 ],
+            ), patch(
+                "server_modules.notification_service.entitlements_service.workspace_entitlement_payload_for_workspace_id",
+                return_value={"capabilities": {"history_window_days": 30}},
             ):
                 payload = notification_service.list_notification_payload(
                     current_user=current_user,
@@ -338,6 +358,11 @@ class NotificationServiceTests(unittest.TestCase):
                 "approval_id": "approval-1",
                 "resolution": "approved",
                 "reason": "Looks good.",
+                "browser": {
+                    "session_profile": "qa-browser",
+                    "immutable_plan_hash": "hash-1",
+                    "reviewed_approval_required": True,
+                },
             },
             created_at="2026-04-08T00:00:00Z",
         )
@@ -350,6 +375,7 @@ class NotificationServiceTests(unittest.TestCase):
         self.assertEqual(notification["metadata"]["activity_event_class"], "approval")
         self.assertEqual(notification["metadata"]["status"], "approved")
         self.assertEqual(notification["metadata"]["path"], "/runs/run-1")
+        self.assertEqual(notification["metadata"]["browser"]["session_profile"], "qa-browser")
 
     def test_deliver_notification_from_outbox_event_records_activity_ledger(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:

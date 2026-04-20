@@ -10,6 +10,38 @@ from server_modules import runtime_events
 
 
 class OutboxServiceTests(unittest.TestCase):
+    def test_emit_approval_requested_event_persists_browser_payload(self) -> None:
+        persisted = []
+
+        event = outbox_service.emit_approval_requested_event(
+            approval_id="approval-1",
+            run_id="run-1",
+            tenant_id="tenant-1",
+            workspace_id="ws-1",
+            prompt="Review browser run",
+            ttl_seconds=60,
+            expires_at="2026-04-20T00:01:00Z",
+            correlation_id="corr-1",
+            metadata={
+                "browser_session_profile": "qa-browser",
+                "browser_immutable_plan_hash": "hash-1",
+                "browser_reviewed_approval_required": True,
+                "browser_interactive_actions": ["click"],
+            },
+            persist_outbox_event_fn=lambda **kwargs: persisted.append(kwargs),
+        )
+
+        self.assertEqual(event.event_type, "approval_requested")
+        self.assertEqual(
+            persisted[0]["payload"]["browser"]["session_profile"],
+            "qa-browser",
+        )
+        self.assertEqual(
+            persisted[0]["payload"]["browser"]["immutable_plan_hash"],
+            "hash-1",
+        )
+        self.assertTrue(persisted[0]["payload"]["browser"]["reviewed_approval_required"])
+
     def test_emit_approval_resolved_event_persists_outbox_payload(self) -> None:
         persisted = []
 
@@ -21,6 +53,11 @@ class OutboxServiceTests(unittest.TestCase):
             resolution="approved",
             actor="user-1",
             reason="ok",
+            metadata={
+                "browser_session_profile": "qa-browser",
+                "browser_immutable_plan_hash": "hash-1",
+                "browser_reviewed_approval_required": True,
+            },
             trace_id="trace-1",
             persist_outbox_event_fn=lambda **kwargs: persisted.append(kwargs),
         )
@@ -28,6 +65,10 @@ class OutboxServiceTests(unittest.TestCase):
         self.assertEqual(event.event_type, "approval_resolved")
         self.assertEqual(persisted[0]["event_id"], event.event_id)
         self.assertEqual(persisted[0]["payload"]["approval_id"], "approval-1")
+        self.assertEqual(
+            persisted[0]["payload"]["browser"]["session_profile"],
+            "qa-browser",
+        )
 
     def test_emit_artifact_created_event_persists_outbox_payload(self) -> None:
         persisted = []

@@ -1259,6 +1259,7 @@ def resolve_standalone_approval(
             resolution=resolution,
             actor=actor,
             reason=reason,
+            metadata=metadata,
             trace_id=trace_id,
         )
         response = dict(result or {})

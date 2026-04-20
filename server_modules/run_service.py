@@ -1076,6 +1076,7 @@ def begin_run_pending_confirmation(
             ),
             operation=f"approval.requested:{run_id}:{approval_id}",
         )
+    browser_summary = browser_approval_service.browser_approval_summary(safe_metadata)
     emit_log_fn(
         run["logs"],
         "warn",
@@ -1088,6 +1089,7 @@ def begin_run_pending_confirmation(
             "expires_at": expires_at,
             "scope": APPROVAL_SCOPE_ONCE,
             "reusable": False,
+            "browser": browser_summary,
             **safe_metadata,
         },
     )
@@ -1324,6 +1326,11 @@ def wait_for_human_response(
                     "scope": "once",
                     "reusable": False,
                     "resumed_after_restart": True,
+                    "browser": browser_approval_service.browser_approval_summary(
+                        get_pending_confirmation_fn(run).get("metadata")
+                        if isinstance(get_pending_confirmation_fn(run), dict)
+                        else {}
+                    ),
                 },
             )
             append_approval_audit_fn(
@@ -1528,6 +1535,9 @@ def wait_for_human_response(
                 "escalated": bool(escalated),
                 "scope": "once",
                 "reusable": False,
+                "browser": browser_approval_service.browser_approval_summary(
+                    pending.get("metadata") if isinstance(pending.get("metadata"), dict) else {}
+                ),
             },
         )
         append_approval_audit_fn(

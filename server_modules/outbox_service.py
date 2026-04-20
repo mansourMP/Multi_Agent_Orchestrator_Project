@@ -10,6 +10,7 @@ import time
 from typing import Any, Callable, Dict, Mapping, Optional, Sequence
 import uuid
 
+from server_modules import browser_approval_service
 from server_modules.runtime_state_store import replace_local_runtime_state
 
 
@@ -153,6 +154,8 @@ def emit_approval_requested_event(
 ) -> OutboxEvent:
     approval_token = str(approval_id or "").strip()
     action_items = [str(item).strip() for item in (actions or []) if str(item).strip()]
+    safe_metadata = dict(metadata or {})
+    browser_summary = browser_approval_service.browser_approval_summary(safe_metadata)
     return emit_runtime_event(
         event_type="approval_requested",
         tenant_id=tenant_id,
@@ -171,7 +174,8 @@ def emit_approval_requested_event(
             "actor": str(actor or "system").strip() or "system",
             "target": str(target or "").strip() or None,
             "actions": action_items,
-            "metadata": dict(metadata or {}),
+            "metadata": safe_metadata,
+            "browser": browser_summary,
             "emitted_at": _utc_now_iso(),
         },
         persist_outbox_event_fn=persist_outbox_event_fn,
@@ -187,11 +191,14 @@ def emit_approval_resolved_event(
     resolution: str,
     actor: str,
     reason: str = "",
+    metadata: Optional[Dict[str, Any]] = None,
     trace_id: str = "",
     persist_outbox_event_fn: Optional[Callable[..., Any]] = None,
 ) -> OutboxEvent:
     approval_token = str(approval_id or "").strip()
     resolution_token = str(resolution or "").strip() or "approved"
+    safe_metadata = dict(metadata or {})
+    browser_summary = browser_approval_service.browser_approval_summary(safe_metadata)
     return emit_runtime_event(
         event_type="approval_resolved",
         tenant_id=tenant_id,
@@ -205,6 +212,8 @@ def emit_approval_resolved_event(
             "resolution": resolution_token,
             "actor": str(actor or "").strip() or "system",
             "reason": str(reason or ""),
+            "metadata": safe_metadata,
+            "browser": browser_summary,
             "emitted_at": _utc_now_iso(),
         },
         persist_outbox_event_fn=persist_outbox_event_fn,

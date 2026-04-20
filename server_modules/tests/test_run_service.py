@@ -210,6 +210,9 @@ class RunServiceTests(unittest.TestCase):
                     "approval_actions": ["browser_automation", "  ", "file_write"],
                     "target": "local_companion",
                     "policy_mode": "guarded",
+                    "browser_session_profile": "qa-browser",
+                    "browser_immutable_plan_hash": "hash-1",
+                    "browser_reviewed_approval_required": True,
                 },
                 emit_pause_required=True,
             )
@@ -223,6 +226,7 @@ class RunServiceTests(unittest.TestCase):
         self.assertEqual(status_changes, [("run-approval-1", "waiting_for_input")])
         self.assertEqual(log_queue.get_nowait(), "__PAUSE_REQUIRED__")
         self.assertEqual(emitted[0][1]["event"], "approval_requested")
+        self.assertEqual(emitted[0][1]["data"]["browser"]["session_profile"], "qa-browser")
         self.assertEqual(emitted[1][1]["event"], "approval_waiting")
         self.assertEqual(audits[0]["stage"], "requested")
         self.assertEqual(audits[1]["stage"], "waiting")
@@ -364,6 +368,9 @@ class RunServiceTests(unittest.TestCase):
                     "connector_action": "send_email",
                     "approval_node_key": "tool_1",
                     "approval_target": "ops@example.com",
+                    "browser_session_profile": "qa-browser",
+                    "browser_immutable_plan_hash": "hash-1",
+                    "browser_reviewed_approval_required": True,
                 },
             },
             "pending_approval": {
@@ -378,6 +385,9 @@ class RunServiceTests(unittest.TestCase):
                     "connector_action": "send_email",
                     "approval_node_key": "tool_1",
                     "approval_target": "ops@example.com",
+                    "browser_session_profile": "qa-browser",
+                    "browser_immutable_plan_hash": "hash-1",
+                    "browser_reviewed_approval_required": True,
                 },
             },
             "_resume_after_confirmation_scheduled": True,
@@ -418,6 +428,7 @@ class RunServiceTests(unittest.TestCase):
         self.assertEqual(run["context"]["metadata"]["resolved_approval_markers"][0]["decision"], "approved")
         self.assertEqual(emitted[0][1]["event"], "approval_received")
         self.assertEqual(emitted[1][1]["event"], "approval_resolved")
+        self.assertEqual(emitted[1][1]["data"]["browser"]["session_profile"], "qa-browser")
         self.assertEqual(audits[0]["stage"], "received")
         self.assertEqual(audits[1]["stage"], "resolved")
         self.assertTrue(audits[1]["metadata"]["resumed_after_restart"])
@@ -450,6 +461,9 @@ class RunServiceTests(unittest.TestCase):
                     "connector_action": "send_email",
                     "approval_node_key": "tool_ship",
                     "approval_target": "ship@example.com",
+                    "browser_session_profile": "qa-browser",
+                    "browser_immutable_plan_hash": "hash-1",
+                    "browser_reviewed_approval_required": True,
                 },
             }
             set_pending_confirmation(run, payload)
@@ -480,6 +494,7 @@ class RunServiceTests(unittest.TestCase):
         self.assertEqual(emitted[0][1]["event"], "approval_ignored")
         self.assertEqual(emitted[1][1]["event"], "approval_received")
         self.assertEqual(emitted[2][1]["event"], "approval_resolved")
+        self.assertEqual(emitted[2][1]["data"]["browser"]["session_profile"], "qa-browser")
         self.assertEqual(audits[0]["stage"], "ignored")
         self.assertEqual(audits[1]["stage"], "received")
         self.assertEqual(audits[2]["stage"], "resolved")

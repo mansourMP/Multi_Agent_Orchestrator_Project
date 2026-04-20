@@ -155,6 +155,7 @@ def build_notification_from_outbox_event(event: Any) -> Optional[Dict[str, Any]]
     text = ""
     priority = "normal"
     metadata: Dict[str, Any] = dict(payload.get("metadata") or {}) if isinstance(payload.get("metadata"), dict) else {}
+    browser_payload = payload.get("browser") if isinstance(payload.get("browser"), dict) else None
 
     if event_type == "approval_requested":
         action = "approval_requested"
@@ -165,6 +166,7 @@ def build_notification_from_outbox_event(event: Any) -> Optional[Dict[str, Any]]
             **metadata,
             "status": str(metadata.get("status") or "pending").strip().lower() or "pending",
             "approval_id": str(payload.get("approval_id") or "").strip() or None,
+            **({"browser": browser_payload} if browser_payload is not None else {}),
         }
     elif event_type == "approval_resolved":
         resolution = str(payload.get("resolution") or "approved").strip().lower() or "approved"
@@ -180,6 +182,7 @@ def build_notification_from_outbox_event(event: Any) -> Optional[Dict[str, Any]]
             "activity_actor_id": "runtime",
             "status": resolution,
             "approval_id": str(payload.get("approval_id") or "").strip() or None,
+            **({"browser": browser_payload} if browser_payload is not None else {}),
             "path": str(metadata.get("path") or "").strip() or _default_path_for_action("run_completed", run_id=run_id),
         }
     elif event_type == "run_transition":

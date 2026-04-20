@@ -218,7 +218,16 @@ class RuntimeRunApprovalServiceTests(unittest.TestCase):
         run_record = {
             "run_id": "run-1",
             "status": "waiting_for_input",
-            "context": {"workspace_id": "ws-1", "tenant_id": "tenant-1", "metadata": {"trace_id": "trace-1"}},
+            "context": {
+                "workspace_id": "ws-1",
+                "tenant_id": "tenant-1",
+                "metadata": {
+                    "trace_id": "trace-1",
+                    "browser_session_profile": "qa-browser",
+                    "browser_immutable_plan_hash": "hash-1",
+                    "browser_reviewed_approval_required": True,
+                },
+            },
             "pending_confirmation": {"approval_id": "approval-1", "correlation_id": "corr-1"},
         }
         live_run = dict(run_record)
@@ -259,6 +268,7 @@ class RuntimeRunApprovalServiceTests(unittest.TestCase):
         self.assertEqual(payload["resolution"], "approved")
         self.assertEqual(recorded[0][:3], ("run-1", "approval-1", "approved"))
         self.assertEqual(emitted[0]["approval_id"], "approval-1")
+        self.assertEqual(emitted[0]["metadata"]["browser_session_profile"], "qa-browser")
 
     def test_resolve_standalone_approval_falls_back_to_live_memory_when_repository_misses(self):
         recorded = []

@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { type ClipboardEvent, useEffect, useMemo, useState } from 'react';
 
 import { AppButton, AppNotice, joinClassNames } from '@/lib/ui/primitives';
 import { FormField, FormInput } from '@/lib/ui/form-controls';
@@ -327,6 +327,16 @@ export function WorkstationSageProvidersPane() {
     }
   }
 
+  function handleApiKeyPaste(event: ClipboardEvent<HTMLInputElement>) {
+    const pastedText = event.clipboardData.getData('text');
+    if (!pastedText) {
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    setDraftApiKey(pastedText);
+  }
+
   return (
     <div className="sage-settings-panel">
       {status ? <AppNotice tone="success">{status}</AppNotice> : null}
@@ -449,6 +459,7 @@ export function WorkstationSageProvidersPane() {
                           spellCheck={false}
                           data-1p-ignore="true"
                           data-lpignore="true"
+                          onPasteCapture={handleApiKeyPaste}
                           onChange={(event) => {
                             setDraftApiKey(event.currentTarget.value);
                           }}

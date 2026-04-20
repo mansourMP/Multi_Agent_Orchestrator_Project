@@ -1,6 +1,6 @@
 'use client';
 
-import { Fragment, type ReactNode, useCallback, useEffect, useMemo, useState } from 'react';
+import { Fragment, type ClipboardEvent, type ReactNode, useCallback, useEffect, useMemo, useState } from 'react';
 import { X } from 'lucide-react';
 
 import { FormField, FormInput, FormSelect } from '@/lib/ui/form-controls';
@@ -659,6 +659,16 @@ export function WorkstationSageConnectorsPane({
     }
   }
 
+  function handleProviderKeyPaste(providerId: string, event: ClipboardEvent<HTMLInputElement>) {
+    const pastedText = event.clipboardData.getData('text');
+    if (!pastedText) {
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    setProviderDraftKeys((current) => ({ ...current, [providerId]: pastedText }));
+  }
+
   function renderProviderCard(record: ProviderCardRecord) {
     const isExpanded = expandedCardId === record.id;
     return (
@@ -793,6 +803,9 @@ export function WorkstationSageConnectorsPane({
                   spellCheck={false}
                   data-1p-ignore="true"
                   data-lpignore="true"
+                  onPasteCapture={(event) => {
+                    handleProviderKeyPaste(record.id, event);
+                  }}
                   onChange={(event) => {
                     setProviderDraftKeys((current) => ({ ...current, [record.id]: event.currentTarget.value }));
                   }}

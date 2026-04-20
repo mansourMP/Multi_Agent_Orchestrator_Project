@@ -123,18 +123,9 @@ def preferred_provider(
     normalized_requested = "codex_cli" if requested == "openai-codex" else requested
     if normalized_requested in supported_providers:
         requested_credentials = direct_chat_credentials_fn(normalized_workspace_id, normalized_requested)
-        if normalized_requested == "openai":
-            requested_credential_type = str(requested_credentials.get("credential_type") or "").strip().lower()
-            if requested_credential_type == "codex_token" or credential_auth_mode_fn("openai", requested_credentials) == "oauth_token":
-                codex_credentials = direct_chat_credentials_fn(normalized_workspace_id, "codex_cli")
-                if provider_runtime_usable_fn(normalized_workspace_id, "codex_cli") and supports_direct_message_native_chat_fn("codex_cli", codex_credentials):
-                    return "codex_cli", codex_credentials
         if supports_direct_message_native_chat_fn(normalized_requested, requested_credentials):
             return normalized_requested, requested_credentials
-        if normalized_requested == "openai":
-            codex_credentials = direct_chat_credentials_fn(normalized_workspace_id, "codex_cli")
-            if provider_runtime_usable_fn(normalized_workspace_id, "codex_cli") and supports_direct_message_native_chat_fn("codex_cli", codex_credentials):
-                return "codex_cli", codex_credentials
+        return normalized_requested, requested_credentials
     for provider in ("anthropic", "deepseek", "openai", "gemini"):
         credentials = direct_chat_credentials_fn(normalized_workspace_id, provider)
         if provider == "openai":
@@ -347,6 +338,7 @@ def resolve_provider_for_direct_chat_message(
     s3_keywords: tuple[str, ...] | list[str],
 ) -> tuple[str, Dict[str, Any]]:
     provider, credentials = preferred_provider_fn(workspace_id, requested_provider)
+    explicit_provider = bool(str(requested_provider or "").strip())
     if not message_prefers_codex_for_direct_chat(
         message,
         tools_present=tools_present,
@@ -362,6 +354,8 @@ def resolve_provider_for_direct_chat_message(
         dropbox_keywords=dropbox_keywords,
         s3_keywords=s3_keywords,
     ):
+        return provider, credentials
+    if explicit_provider:
         return provider, credentials
     codex_credentials = direct_chat_credentials_fn(workspace_id, "codex_cli")
     if provider_runtime_usable_fn(workspace_id, "codex_cli") and supports_direct_message_native_chat_fn("codex_cli", codex_credentials):

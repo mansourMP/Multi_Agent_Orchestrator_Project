@@ -2,7 +2,7 @@
 
 import type { KeyboardEvent } from 'react';
 import { useEffect, useRef } from 'react';
-import { ArrowUp, Brain, ChevronDown, Paperclip } from 'lucide-react';
+import { ArrowUp, Brain, ChevronDown } from 'lucide-react';
 
 import { AppButton, AppSelect } from '@/lib/ui/primitives';
 
@@ -133,15 +133,6 @@ export function ChatComposer({
 
         <div className="app-chat-composer__footer">
           <div className="app-chat-composer__footer-group">
-            <button
-              type="button"
-              aria-label="Add files or more actions"
-              disabled
-              className="app-chat-composer__icon-button"
-            >
-              <Paperclip size={15} strokeWidth={1.85} aria-hidden="true" />
-            </button>
-
             <button
               type="button"
               aria-label="Open memory"

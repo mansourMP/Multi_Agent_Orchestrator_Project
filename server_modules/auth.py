@@ -4447,6 +4447,20 @@ def _request_path(request: Request) -> str:
     return "/"
 
 
+def _should_rate_limit_authenticated_api_path(request_path: Any) -> bool:
+    normalized = str(request_path or "").strip()
+    if not normalized:
+        return True
+    path = normalized.rstrip("/") or "/"
+    if path in {
+        "/auth/account-shell",
+        "/api/auth/account-shell",
+        "/api/v1/auth/account-shell",
+    }:
+        return False
+    return True
+
+
 def _authenticated_api_limit_for_channel(channel: Any) -> int:
     normalized = _normalize_auth_session_channel(channel, default="web")
     if normalized == "mobile":
@@ -5189,19 +5203,21 @@ def get_current_user(
     authorization: Optional[str] = Header(default=None, alias="Authorization"),
     x_api_key: Optional[str] = Header(default=None, alias="X-API-Key"),
 ) -> Dict[str, Any]:
+    request_path = _request_path(request)
     if not _orion_auth_required():
         if _environment_is_production():
             raise HTTPException(status_code=503, detail="Auth cannot be disabled in production.")
         user = _build_local_dev_user()
-        _enforce_window_limit(
-            request=request,
-            buckets=USER_RATE_LIMIT_BUCKETS,
-            lock=USER_RATE_LIMIT_LOCK,
-            key=f"user:{str(user.get('user_id') or 'local-dev').strip() or 'local-dev'}",
-            limit=_authenticated_api_limit_for_channel(user.get("channel")),
-            profile_name=quota_policy_service.AUTHENTICATED_API_PROFILE.name,
-            actor_id=str(user.get("user_id") or "").strip() or None,
-        )
+        if _should_rate_limit_authenticated_api_path(request_path):
+            _enforce_window_limit(
+                request=request,
+                buckets=USER_RATE_LIMIT_BUCKETS,
+                lock=USER_RATE_LIMIT_LOCK,
+                key=f"user:{str(user.get('user_id') or 'local-dev').strip() or 'local-dev'}",
+                limit=_authenticated_api_limit_for_channel(user.get("channel")),
+                profile_name=quota_policy_service.AUTHENTICATED_API_PROFILE.name,
+                actor_id=str(user.get("user_id") or "").strip() or None,
+            )
         return user
 
     auth_header = str(authorization or "").strip()
@@ -5231,17 +5247,18 @@ def get_current_user(
             workspace_dangerous_claim=payload.get("workspace_dangerous_classes"),
             workspace_trusted_machines_claim=payload.get("workspace_trusted_machines"),
         )
-        _enforce_window_limit(
-            request=request,
-            buckets=USER_RATE_LIMIT_BUCKETS,
-            lock=USER_RATE_LIMIT_LOCK,
-            key=f"user:{user_id}",
-            limit=_authenticated_api_limit_for_channel(
-                payload.get("channel") or (context.get("auth_session") or {}).get("channel")
-            ),
-            profile_name=quota_policy_service.AUTHENTICATED_API_PROFILE.name,
-            actor_id=user_id,
-        )
+        if _should_rate_limit_authenticated_api_path(request_path):
+            _enforce_window_limit(
+                request=request,
+                buckets=USER_RATE_LIMIT_BUCKETS,
+                lock=USER_RATE_LIMIT_LOCK,
+                key=f"user:{user_id}",
+                limit=_authenticated_api_limit_for_channel(
+                    payload.get("channel") or (context.get("auth_session") or {}).get("channel")
+                ),
+                profile_name=quota_policy_service.AUTHENTICATED_API_PROFILE.name,
+                actor_id=user_id,
+            )
         return {
             "user_id": user_id,
             "auth_type": "bearer",

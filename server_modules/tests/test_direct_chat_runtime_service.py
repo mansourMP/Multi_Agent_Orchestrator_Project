@@ -301,6 +301,92 @@ class DirectChatRuntimeServiceTests(unittest.TestCase):
 
         self.assertIs(captured["trace_context"], trace_context)
 
+    def test_build_direct_operator_reply_returns_explicit_provider_unavailable_when_provider_changes(self) -> None:
+        prepared = SimpleNamespace(
+            normalized_message="hello",
+            normalized_workspace_id="default",
+            normalized_thread_id="thread-1",
+            normalized_requested_provider="anthropic",
+            normalized_requested_model="claude-3-7-sonnet",
+            normalized_reasoning_effort="medium",
+            compaction={},
+            compacted_prior_messages=[],
+            proactive_suggestions=["Connect Anthropic"],
+            tool_loop_session_key="loop",
+            availability_payload={"ai_ready": True},
+            connected_systems=[],
+            tool_capabilities=[],
+            tools=[],
+            approved_action_payload=None,
+            base_context_used={"workspace_id": "default"},
+            slash_command_name="",
+            slash_remainder="",
+            resolved_chat_max_iterations=3,
+        )
+        services = self._runtime_services(prepared)
+        services.resolve_provider_for_direct_chat_message = lambda workspace_id, requested_provider, message, tools_present=False: ("openai", {"api_key": "sk-test"})
+
+        events = list(
+            direct_chat_runtime_service.build_direct_operator_reply(
+                services=services,
+                message="hello",
+                workspace_id="default",
+                requested_model="claude-3-7-sonnet",
+                requested_provider="anthropic",
+            )
+        )
+
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0]["type"], "final")
+        payload = events[0]["payload"]
+        self.assertEqual(payload["mode"], "connect")
+        self.assertEqual(payload["interventions"][0]["title"], "Anthropic is not available")
+        self.assertEqual(payload["suggestions"], ["Connect Anthropic"])
+
+    def test_build_direct_operator_reply_returns_explicit_provider_unavailable_when_not_ready(self) -> None:
+        prepared = SimpleNamespace(
+            normalized_message="hello",
+            normalized_workspace_id="default",
+            normalized_thread_id="thread-1",
+            normalized_requested_provider="anthropic",
+            normalized_requested_model="claude-3-7-sonnet",
+            normalized_reasoning_effort="medium",
+            compaction={},
+            compacted_prior_messages=[],
+            proactive_suggestions=["Connect Anthropic"],
+            tool_loop_session_key="loop",
+            availability_payload={"ai_ready": True},
+            connected_systems=[],
+            tool_capabilities=[],
+            tools=[],
+            approved_action_payload=None,
+            base_context_used={"workspace_id": "default"},
+            slash_command_name="",
+            slash_remainder="",
+            resolved_chat_max_iterations=3,
+        )
+        services = self._runtime_services(prepared)
+        services.resolve_provider_for_direct_chat_message = lambda workspace_id, requested_provider, message, tools_present=False: ("anthropic", {})
+        services.supports_direct_message_native_chat = lambda provider, credentials: provider == "openai" and bool(credentials)
+        services.supported_providers = ["openai", "anthropic"]
+
+        events = list(
+            direct_chat_runtime_service.build_direct_operator_reply(
+                services=services,
+                message="hello",
+                workspace_id="default",
+                requested_model="claude-3-7-sonnet",
+                requested_provider="anthropic",
+            )
+        )
+
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0]["type"], "final")
+        payload = events[0]["payload"]
+        self.assertEqual(payload["mode"], "connect")
+        self.assertEqual(payload["interventions"][0]["title"], "Anthropic is not available")
+        self.assertEqual(payload["suggestions"], ["Connect Anthropic"])
+
 
 if __name__ == "__main__":
     unittest.main()

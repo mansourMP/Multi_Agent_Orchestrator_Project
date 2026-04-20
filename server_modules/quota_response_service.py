@@ -8,6 +8,7 @@ from fastapi import HTTPException
 from fastapi.responses import JSONResponse
 
 from server_modules.channel_routing_models import ChannelExecutionResult
+from server_modules.channel_user_acquisition_service import CHANNEL_ATTRIBUTION_QUERY_PARAM
 from server_modules import error_response_service
 from server_modules.error_contracts import EXECUTION_TIMEOUT, RATE_LIMIT
 from server_modules.quota_policy_service import QuotaDecision
@@ -86,6 +87,7 @@ def _daily_limit_cta_payload(
         {
             "source": "telegram_limit_hit",
             "agent": resolved_agent_id,
+            CHANNEL_ATTRIBUTION_QUERY_PARAM: str(details.get("channel_attribution") or "").strip() or None,
         },
     )
     return {

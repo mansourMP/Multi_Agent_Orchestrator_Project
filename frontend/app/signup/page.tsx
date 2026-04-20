@@ -15,13 +15,22 @@ export default function SignupPage() {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [channelAttribution, setChannelAttribution] = useState('');
-  const loginHref = channelAttribution
-    ? `/login?channel_attribution=${encodeURIComponent(channelAttribution)}`
+  const [agent, setAgent] = useState('');
+  const loginSearchParams = new URLSearchParams();
+  if (channelAttribution) {
+    loginSearchParams.set('channel_attribution', channelAttribution);
+  }
+  if (agent) {
+    loginSearchParams.set('agent', agent);
+  }
+  const loginHref = loginSearchParams.size > 0
+    ? `/login?${loginSearchParams.toString()}`
     : '/login';
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     setChannelAttribution(String(params.get('channel_attribution') || '').trim());
+    setAgent(String(params.get('agent') || '').trim());
   }, []);
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {

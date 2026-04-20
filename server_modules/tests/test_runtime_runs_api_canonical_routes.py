@@ -456,6 +456,103 @@ class RuntimeRunsApiCanonicalRouteTests(unittest.TestCase):
             else:
                 sys.modules["server"] = previous_server
 
+    def test_create_runtime_session_canonicalizes_web_direct_chat_thread(self):
+        fake_server = types.ModuleType("server")
+        fake_server.require_api_key = object()
+        fake_server.require_admin_api_key = object()
+        fake_server.ORION_SINGLE_AGENT_MODE = False
+        fake_server.runs = {}
+        fake_server.iter_logs_for_run = lambda run_id: []
+        fake_server._get_replay_payload = lambda run_id: {}
+
+        previous_server = sys.modules.get("server")
+        sys.modules["server"] = fake_server
+        original_register = runtime_runs_api.runtime_route_registration_service.register_runtime_run_routes_from_api
+        original_refresh = runtime_runs_api._refresh_server_exports
+        original_turn = runtime_runs_api.turn_ingress_service.start_turn
+        original_run_services = runtime_runs_api._run_execution_services
+        original_direct_chat_services = runtime_runs_api._direct_chat_execution_services
+        original_stream_response = runtime_runs_api.build_agent_turn_stream_response
+        original_stream_services = runtime_runs_api._direct_chat_stream_response_services
+        original_late_export = runtime_runs_api._late_server_export
+        original_privileged = runtime_runs_api._current_user_is_privileged
+        original_extract_owner = runtime_runs_api._extract_run_owner_user_id
+        original_resolve_run_start_turn_request = runtime_runs_api.resolve_run_start_turn_request
+        original_list_threads = runtime_runs_api.thread_service.list_threads
+        original_get_thread = runtime_runs_api.thread_service.get_thread
+        original_list_live_runs = runtime_runs_api.run_state_repository.sync_list_live_runs
+        original_list_live_runs_page = runtime_runs_api.run_state_repository.sync_list_live_runs_page
+        original_create_session = runtime_runs_api.session_service.create_session
+        original_get_session = runtime_runs_api.session_service.get_session
+        try:
+            runtime_runs_api.runtime_route_registration_service.register_runtime_run_routes_from_api = lambda *args, **kwargs: None
+            runtime_runs_api._refresh_server_exports = lambda: fake_server
+            runtime_runs_api.turn_ingress_service.start_turn = self._fake_start_turn
+            runtime_runs_api._run_execution_services = lambda: "run-services"
+            runtime_runs_api._direct_chat_execution_services = lambda: "chat-services"
+            runtime_runs_api.build_agent_turn_stream_response = self._fake_stream_response
+            runtime_runs_api._direct_chat_stream_response_services = lambda: "stream-services"
+            runtime_runs_api._late_server_export = lambda name: lambda *args, **kwargs: None
+            runtime_runs_api._current_user_is_privileged = lambda current_user, owner_user_id: True
+            runtime_runs_api._extract_run_owner_user_id = lambda item: "user-1"
+            runtime_runs_api.resolve_run_start_turn_request = self._fake_resolve_run_start_turn_request
+            runtime_runs_api.thread_service.list_threads = self._fake_list_threads
+            runtime_runs_api.thread_service.get_thread = self._fake_get_thread
+            runtime_runs_api.run_state_repository.sync_list_live_runs = lambda *args, **kwargs: []
+            runtime_runs_api.run_state_repository.sync_list_live_runs_page = lambda *args, **kwargs: ([], None)
+            runtime_runs_api.session_service.create_session = self._fake_create_session
+            runtime_runs_api.session_service.get_session = self._fake_get_session
+
+            self._last_create_session_kwargs = None
+            app = _FakeApp()
+            runtime_runs_api.register_run_routes(app)
+
+            session_payload = self._run_async(
+                app.routes[("POST", "/sessions")](
+                    runtime_runs_api.ApiSessionRequest(
+                        workspace_id="default",
+                        tenant_id="default",
+                        channel="web",
+                        actor={"type": "user", "id": "user-1"},
+                        metadata={"source": "direct_chat", "thread_id": "client-thread-1"},
+                    ),
+                    current_user=self._current_user(),
+                )
+            )
+
+            self.assertEqual(session_payload.session_id, "session-created")
+            self.assertIsNotNone(self._last_create_session_kwargs)
+            self.assertEqual(
+                self._last_create_session_kwargs["metadata"]["thread_id"],
+                "thread_sage_default_user-1",
+            )
+            self.assertEqual(
+                self._last_create_session_kwargs["metadata"]["client_thread_id"],
+                "client-thread-1",
+            )
+        finally:
+            runtime_runs_api.session_service.get_session = original_get_session
+            runtime_runs_api.session_service.create_session = original_create_session
+            runtime_runs_api.run_state_repository.sync_list_live_runs_page = original_list_live_runs_page
+            runtime_runs_api.run_state_repository.sync_list_live_runs = original_list_live_runs
+            runtime_runs_api.thread_service.get_thread = original_get_thread
+            runtime_runs_api.thread_service.list_threads = original_list_threads
+            runtime_runs_api.resolve_run_start_turn_request = original_resolve_run_start_turn_request
+            runtime_runs_api._extract_run_owner_user_id = original_extract_owner
+            runtime_runs_api._current_user_is_privileged = original_privileged
+            runtime_runs_api._late_server_export = original_late_export
+            runtime_runs_api._direct_chat_stream_response_services = original_stream_services
+            runtime_runs_api.build_agent_turn_stream_response = original_stream_response
+            runtime_runs_api._direct_chat_execution_services = original_direct_chat_services
+            runtime_runs_api._run_execution_services = original_run_services
+            runtime_runs_api.turn_ingress_service.start_turn = original_turn
+            runtime_runs_api._refresh_server_exports = original_refresh
+            runtime_runs_api.runtime_route_registration_service.register_runtime_run_routes_from_api = original_register
+            if previous_server is None:
+                sys.modules.pop("server", None)
+            else:
+                sys.modules["server"] = previous_server
+
     def test_list_approvals_filters_resolved_items_and_projects_visibility_fields(self):
         fake_server = types.ModuleType("server")
         fake_server.require_api_key = object()
@@ -1003,6 +1100,7 @@ class RuntimeRunsApiCanonicalRouteTests(unittest.TestCase):
         return types.SimpleNamespace(request=request, turn_request=turn_request)
 
     async def _fake_create_session(self, *args, **kwargs):
+        self._last_create_session_kwargs = kwargs
         return "session-created"
 
     async def _fake_get_session(self, session_id):

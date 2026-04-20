@@ -123,6 +123,8 @@ class ChannelUserAcquisitionService:
                 converted_email TEXT,
                 converted_auth_flow TEXT,
                 converted_at INTEGER,
+                limit_hit_click_at INTEGER,
+                limit_hit_click_source TEXT,
                 first_started_at INTEGER NOT NULL,
                 last_started_at INTEGER NOT NULL,
                 created_at INTEGER NOT NULL,
@@ -261,6 +263,94 @@ class ChannelUserAcquisitionService:
         if isinstance(touch, dict):
             return touch
         return self._get_touch_fallback(touch_id=touch_id)
+
+    def decode_attribution_token_payload(self, attribution_token: str) -> Dict[str, Any]:
+        return self._decode_attribution_token(attribution_token)
+
+    def resolve_or_create_touch_from_attribution_token(self, attribution_token: str) -> Optional[Dict[str, Any]]:
+        payload = self._decode_attribution_token(attribution_token)
+        existing = self.touch_from_attribution_token(attribution_token)
+        if isinstance(existing, dict):
+            return existing
+        return self._upsert_touch(
+            tenant_id=str(payload.get("tenant_id") or "").strip(),
+            workspace_id=str(payload.get("workspace_id") or "").strip(),
+            deployed_agent_id=str(payload.get("deployed_agent_id") or "").strip(),
+            channel_key=str(payload.get("channel_key") or "telegram").strip().lower() or "telegram",
+            endpoint_key="",
+            external_user_id=str(payload.get("external_user_id") or "").strip(),
+            source=str(payload.get("source") or "").strip().lower() or None,
+            campaign_token=str(payload.get("campaign_token") or "").strip() or None,
+            metadata={
+                "restored_from_attribution": True,
+            },
+        )
+
+    def ensure_touch_attribution_token(
+        self,
+        *,
+        tenant_id: str,
+        workspace_id: str,
+        deployed_agent_id: str,
+        channel_key: str,
+        external_user_id: str,
+        endpoint_key: Optional[str] = None,
+        source: Optional[str] = None,
+        campaign_token: Optional[str] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        resolved_tenant_id = str(tenant_id or "").strip()
+        resolved_workspace_id = str(workspace_id or "").strip()
+        resolved_deployed_agent_id = str(deployed_agent_id or "").strip()
+        resolved_channel_key = str(channel_key or "").strip().lower() or "telegram"
+        resolved_external_user_id = str(external_user_id or "").strip()
+        if not resolved_tenant_id or not resolved_workspace_id or not resolved_deployed_agent_id or not resolved_external_user_id:
+            raise ValueError("tenant_id, workspace_id, deployed_agent_id, channel_key, and external_user_id are required.")
+        touch = self.control_plane_runner(
+            control_plane_repository.get_channel_user_acquisition_touch(
+                tenant_id=resolved_tenant_id,
+                workspace_id=resolved_workspace_id,
+                deployed_agent_id=resolved_deployed_agent_id,
+                channel_key=resolved_channel_key,
+                external_user_id=resolved_external_user_id,
+            )
+        )
+        if not isinstance(touch, dict):
+            touch = self._get_touch_fallback_by_scope(
+                tenant_id=resolved_tenant_id,
+                workspace_id=resolved_workspace_id,
+                deployed_agent_id=resolved_deployed_agent_id,
+                channel_key=resolved_channel_key,
+                external_user_id=resolved_external_user_id,
+            )
+        if not isinstance(touch, dict):
+            touch = self._upsert_touch(
+                tenant_id=resolved_tenant_id,
+                workspace_id=resolved_workspace_id,
+                deployed_agent_id=resolved_deployed_agent_id,
+                channel_key=resolved_channel_key,
+                endpoint_key=str(endpoint_key or "").strip().lower(),
+                external_user_id=resolved_external_user_id,
+                source=str(source or "").strip().lower() or None,
+                campaign_token=str(campaign_token or "").strip() or None,
+                metadata=metadata,
+            )
+        if not isinstance(touch, dict):
+            raise RuntimeError("Failed to persist channel acquisition touch.")
+        attribution_token = self._issue_attribution_token(
+            touch_id=str(touch.get("id") or "").strip(),
+            tenant_id=str(touch.get("tenant_id") or resolved_tenant_id).strip(),
+            workspace_id=str(touch.get("workspace_id") or resolved_workspace_id).strip(),
+            deployed_agent_id=str(touch.get("deployed_agent_id") or resolved_deployed_agent_id).strip(),
+            channel_key=str(touch.get("channel_key") or resolved_channel_key).strip().lower() or resolved_channel_key,
+            external_user_id=str(touch.get("external_user_id") or resolved_external_user_id).strip(),
+            source=str(touch.get("source") or source or "").strip().lower(),
+            campaign_token=str(touch.get("campaign_token") or campaign_token or "").strip() or None,
+        )
+        return {
+            "touch": touch,
+            "attribution_token": attribution_token,
+        }
 
     def _public_start_config(self, profile: Dict[str, Any]) -> Dict[str, Any]:
         payload = _coerce_dict(profile)
@@ -529,6 +619,32 @@ class ChannelUserAcquisitionService:
         ).fetchone()
         return self._fallback_row_to_touch(row)
 
+    def _get_touch_fallback_by_scope(
+        self,
+        *,
+        tenant_id: str,
+        workspace_id: str,
+        deployed_agent_id: str,
+        channel_key: str,
+        external_user_id: str,
+    ) -> Optional[Dict[str, Any]]:
+        connection = self.fallback_connection_factory()
+        self._ensure_fallback_tables(connection)
+        row = connection.execute(
+            """
+            SELECT *
+            FROM channel_user_acquisition_touches
+            WHERE tenant_id = ?
+              AND workspace_id = ?
+              AND deployed_agent_id = ?
+              AND channel_key = ?
+              AND external_user_id = ?
+            LIMIT 1
+            """,
+            (tenant_id, workspace_id, deployed_agent_id, channel_key, external_user_id),
+        ).fetchone()
+        return self._fallback_row_to_touch(row)
+
     def _mark_touch_converted_fallback(
         self,
         *,
@@ -603,6 +719,8 @@ class ChannelUserAcquisitionService:
             "converted_email": str(payload.get("converted_email") or "").strip().lower() or None,
             "converted_auth_flow": str(payload.get("converted_auth_flow") or "").strip().lower() or None,
             "converted_at": int(payload.get("converted_at") or 0) or None,
+            "limit_hit_click_at": int(payload.get("limit_hit_click_at") or 0) or None,
+            "limit_hit_click_source": str(payload.get("limit_hit_click_source") or "").strip().lower() or None,
             "first_started_at": int(payload.get("first_started_at") or 0) or None,
             "last_started_at": int(payload.get("last_started_at") or 0) or None,
             "created_at": int(payload.get("created_at") or 0) or None,

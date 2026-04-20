@@ -8,6 +8,7 @@ import { WorkstationSageConnectorsPane } from '@/lib/workspace/workstation-sage-
 import { WorkstationSageProvidersPane } from '@/lib/workspace/workstation-sage-providers-pane';
 import { WorkstationSageToolsPane } from '@/lib/workspace/workstation-sage-tools-pane';
 import { useWorkspaceBoundary } from '@/lib/workspace/workspace-boundary';
+import { requestWorkspaceJson } from '@/lib/workspace/workspace-json-request';
 import { useWorkspaceServices } from '@/lib/workspace/workspace-services';
 import type {
   ProviderCatalogRecord,
@@ -154,15 +155,10 @@ export function WorkstationSageSettingsPane() {
       services.client.listVaultCredentials(),
       services.client.getSageToolPolicy(),
       services.client.listConnectorsVault(),
-      fetch(`/api/channel-pairing/links?workspace_id=${encodeURIComponent(bootstrap.workspace.id)}&include_revoked=true`, {
-        credentials: 'same-origin',
-      }).then(async (response) => {
-        const payload = await response.json().catch(() => ({}));
-        if (!response.ok) {
-          return {};
-        }
-        return payload;
-      }),
+      requestWorkspaceJson<Record<string, unknown>>(
+        services,
+        `/api/channel-pairing/links?workspace_id=${encodeURIComponent(bootstrap.workspace.id)}&include_revoked=true`,
+      ).catch(() => ({})),
     ]).then(([catalogPayload, profilesPayload, credentialsPayload, toolsPayload, connectorsPayload, channelLinksPayload]) => {
       if (cancelled) {
         return;

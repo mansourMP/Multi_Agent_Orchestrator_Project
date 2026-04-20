@@ -506,6 +506,8 @@ class MemoryServiceTests(unittest.TestCase):
 
     def test_parse_no_provider_memory_read_normalizes_name_and_lookup_patterns(self) -> None:
         self.assertEqual(memory_service.parse_no_provider_memory_read("What is my name"), "name")
+        self.assertEqual(memory_service.parse_no_provider_memory_read("What's my timezone?"), "my timezone")
+        self.assertEqual(memory_service.parse_no_provider_memory_read("What is my timezone?"), "my timezone")
         self.assertEqual(memory_service.parse_no_provider_memory_read("Recall favorite editor"), "favorite editor")
         self.assertEqual(
             memory_service.parse_no_provider_memory_read("What did I say about timezone"),
@@ -520,6 +522,13 @@ class MemoryServiceTests(unittest.TestCase):
         self.assertEqual(write_reply, "Stored memory: timezone = Asia/Shanghai")
         self.assertEqual(read_reply, "timezone = Asia/Shanghai")
         self.assertEqual(missing_reply, "I don't have favorite color saved in memory yet.")
+
+    def test_handle_no_provider_memory_request_reads_common_question_with_punctuation(self) -> None:
+        write_reply = memory_service.handle_no_provider_memory_request("default", "Remember that my timezone is Asia/Shanghai.")
+        read_reply = memory_service.handle_no_provider_memory_request("default", "What is my timezone?")
+
+        self.assertEqual(write_reply, "Stored memory: my timezone = Asia/Shanghai")
+        self.assertEqual(read_reply, "my_timezone = Asia/Shanghai")
 
 
 if __name__ == "__main__":

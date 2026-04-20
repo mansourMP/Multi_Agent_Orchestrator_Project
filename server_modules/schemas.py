@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from server_modules.runtime_models import ConnectorUpsertRequest, RunStartRequest
 
@@ -167,3 +167,64 @@ class GenericObjectBody(BaseModel):
         if hasattr(self, "model_dump"):
             return dict(self.model_dump())
         return dict(self.dict())
+
+
+class DeployedAgentAdminDashboardMessage(BaseModel):
+    id: Optional[str] = None
+    role: str
+    content: str = ""
+    created_at: Optional[str] = None
+    channel: Optional[str] = None
+
+
+class DeployedAgentAdminDashboardUserRow(BaseModel):
+    external_user_id: Optional[str] = None
+    last_message_at: Optional[str] = None
+    total_message_count: int = 0
+    memory_entry_count: int = 0
+    last_5_messages: list[DeployedAgentAdminDashboardMessage] = Field(default_factory=list)
+
+
+class DeployedAgentAdminDashboardResponse(BaseModel):
+    deployed_agent_id: str
+    total_users: int = 0
+    messages_this_calendar_month: int = 0
+    users_at_limit_today: int = 0
+    upgrade_clicks_this_month: int = 0
+    user_rows: list[DeployedAgentAdminDashboardUserRow] = Field(default_factory=list)
+    limit: int = 50
+    offset: int = 0
+    has_more: bool = False
+    next_cursor_last_message_at: Optional[str] = None
+    next_cursor_external_user_id: Optional[str] = None
+
+
+class MarketplaceAgentCard(BaseModel):
+    id: str
+    name: str
+    description: str = ""
+    category: Optional[str] = None
+    quality_stars: Optional[int] = None
+    cost_tier: Optional[str] = None
+    telegram_bot_username: Optional[str] = None
+
+
+class MarketplaceAgentListResponse(BaseModel):
+    items: list[MarketplaceAgentCard] = Field(default_factory=list)
+    limit: int = 100
+    offset: int = 0
+    has_more: bool = False
+
+
+class MarketplaceUpgradeClickRequest(BaseModel):
+    channel_attribution: str
+    source: str
+    agent_id: Optional[str] = None
+
+
+class MarketplaceUpgradeClickResponse(BaseModel):
+    ok: bool = True
+    recorded: bool = False
+    duplicate: bool = False
+    deployed_agent_id: Optional[str] = None
+    clicked_at: Optional[str] = None

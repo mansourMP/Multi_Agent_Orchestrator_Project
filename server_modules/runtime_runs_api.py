@@ -15,6 +15,7 @@ from server_modules.auth import (
 )
 
 from server_modules.agent_turn import (
+    normalize_direct_chat_session_metadata,
     resolve_direct_chat_turn_request,
     resolve_run_start_turn_request,
 )
@@ -810,12 +811,18 @@ def register_run_routes(app) -> None:
             actor["id"] = str((current_user or {}).get("user_id") or (current_user or {}).get("email") or "anonymous").strip()
         if not str(actor.get("display_name") or "").strip():
             actor["display_name"] = str((current_user or {}).get("email") or actor.get("id") or "").strip()
+        metadata = normalize_direct_chat_session_metadata(
+            current_user=current_user,
+            workspace_id=workspace_id,
+            channel=str(payload.get("channel") or "web").strip() or "web",
+            metadata=_coerce_dict(payload.get("metadata")),
+        )
         session_id = await session_service.create_session(
             workspace_id=workspace_id,
             tenant_id=tenant_id,
             actor=actor,
             channel=str(payload.get("channel") or "web").strip() or "web",
-            metadata=_coerce_dict(payload.get("metadata")),
+            metadata=metadata,
             session_id=str(payload.get("session_id") or "").strip() or None,
         )
         record = await session_service.get_session(session_id) or {
@@ -824,7 +831,7 @@ def register_run_routes(app) -> None:
             "tenant_id": tenant_id,
             "channel": str(payload.get("channel") or "web").strip() or "web",
             "actor": actor,
-            "metadata": _coerce_dict(payload.get("metadata")),
+            "metadata": metadata,
             "status": "active",
         }
         return normalize_session_record(record)

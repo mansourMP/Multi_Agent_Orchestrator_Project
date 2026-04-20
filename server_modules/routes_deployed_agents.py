@@ -7,6 +7,7 @@ from pydantic import BaseModel, Field
 
 from server_modules import auth as auth_module
 from server_modules import deployed_agent_service
+from server_modules.deployed_agent_admin_dashboard_service import get_deployed_agent_admin_dashboard_service
 
 
 router = APIRouter()
@@ -45,6 +46,10 @@ class DeployedAgentUpdateRequest(BaseModel):
     config: Optional[Dict[str, Any]] = None
     provider: Optional[str] = None
     model: Optional[str] = None
+    is_public: Optional[bool] = None
+    category: Optional[str] = None
+    quality_stars: Optional[int] = Field(default=None, ge=1, le=5)
+    cost_tier: Optional[str] = None
 
 
 class DeployedAgentWorkspaceRequest(BaseModel):
@@ -137,6 +142,27 @@ async def get_deployed_agent_analytics(
     if not isinstance(payload, dict):
         raise HTTPException(status_code=404, detail="Deployed agent not found.")
     return payload
+
+
+@router.get("/deployed-agents/{deployed_agent_id}/admin-dashboard")
+async def get_deployed_agent_admin_dashboard(
+    deployed_agent_id: str,
+    workspace_id: str,
+    limit: int = 50,
+    offset: int = 0,
+    cursor_last_message_at: Optional[str] = None,
+    cursor_external_user_id: Optional[str] = None,
+    current_user=Depends(get_current_user),
+):
+    return await get_deployed_agent_admin_dashboard_service().get_dashboard(
+        agent_id=deployed_agent_id,
+        workspace_id=workspace_id,
+        current_user=current_user,
+        limit=limit,
+        offset=offset,
+        cursor_last_message_at=cursor_last_message_at,
+        cursor_external_user_id=cursor_external_user_id,
+    )
 
 
 @router.get("/deployed-agents/{deployed_agent_id}/memory")

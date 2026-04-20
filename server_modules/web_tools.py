@@ -52,17 +52,20 @@ def web_fetch(url: str) -> str:
 
 def _clean_result_url(url: str) -> str:
     normalized = str(url or "").strip()
+    if not normalized:
+        return ""
     if normalized.startswith("//"):
-        return f"https:{normalized}"
+        normalized = f"https:{normalized}"
+    parsed = urlparse.urlsplit(normalized)
+    if parsed.netloc.endswith("duckduckgo.com") and parsed.path.startswith("/l/"):
+        target = urlparse.parse_qs(parsed.query).get("uddg", [""])
+        resolved = str(target[0] or "").strip()
+        if resolved:
+            return urlparse.unquote(resolved)
     return normalized
 
 
-def web_search(query: str) -> List[Dict[str, str]]:
-    normalized_query = str(query or "").strip()
-    if not normalized_query:
-        return []
-    encoded_query = urlparse.quote_plus(normalized_query)
-    html_text = _fetch_url(f"https://html.duckduckgo.com/html/?q={encoded_query}")
+def _parse_html_results(html_text: str) -> List[Dict[str, str]]:
     pattern = re.compile(
         r'(?is)<a[^>]*class="[^"]*result__a[^"]*"[^>]*href="(?P<url>[^"]+)"[^>]*>(?P<title>.*?)</a>.*?'
         r'<a[^>]*class="[^"]*result__snippet[^"]*"[^>]*>(?P<snippet>.*?)</a>'
@@ -80,3 +83,35 @@ def web_search(query: str) -> List[Dict[str, str]]:
         if len(results) >= 5:
             break
     return results
+
+
+def _parse_lite_results(html_text: str) -> List[Dict[str, str]]:
+    pattern = re.compile(
+        r'(?is)<a[^>]*class="[^"]*result-link[^"]*"[^>]*href="(?P<url>[^"]+)"[^>]*>(?P<title>.*?)</a>.*?'
+        r'<td[^>]*class="[^"]*result-snippet[^"]*"[^>]*>(?P<snippet>.*?)</td>'
+    )
+    results: List[Dict[str, str]] = []
+    seen: set[str] = set()
+    for match in pattern.finditer(html_text):
+        url = _clean_result_url(html.unescape(match.group("url") or ""))
+        title = _strip_html(match.group("title") or "")
+        snippet = _strip_html(match.group("snippet") or "")
+        if not url or url in seen:
+            continue
+        seen.add(url)
+        results.append({"title": title[:240], "url": url[:1200], "snippet": snippet[:600]})
+        if len(results) >= 5:
+            break
+    return results
+
+
+def web_search(query: str) -> List[Dict[str, str]]:
+    normalized_query = str(query or "").strip()
+    if not normalized_query:
+        return []
+    encoded_query = urlparse.quote_plus(normalized_query)
+    html_text = _fetch_url(f"https://html.duckduckgo.com/html/?q={encoded_query}")
+    results = _parse_html_results(html_text)
+    if results:
+        return results
+    return _parse_lite_results(html_text)

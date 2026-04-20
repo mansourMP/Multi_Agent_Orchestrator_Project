@@ -13,6 +13,7 @@ import { ModalSection } from '@/lib/ui/modal';
 import { SkeletonBlock } from '@/lib/ui/skeleton-block';
 import { StateBanner } from '@/lib/ui/state-banner';
 import { useWorkspaceBoundary } from '@/lib/workspace/workspace-boundary';
+import { requestWorkspaceJson } from '@/lib/workspace/workspace-json-request';
 import { useWorkspaceServices } from '@/lib/workspace/workspace-services';
 import { WorkstationSurfaceRoot } from '@/lib/workspace/workstation-surface-primitives';
 
@@ -126,40 +127,6 @@ function summarizeLinkStatus(links: ChannelLinkRecord[]): string {
   return `${activeCount} active · ${revokedCount} revoked`;
 }
 
-async function requestChannelPairingJson<T>(
-  services: ReturnType<typeof useWorkspaceServices>,
-  path: string,
-  init: RequestInit = {},
-): Promise<T> {
-  const controller = services.disposables.trackAbortController(new AbortController());
-  const headers = new Headers(init.headers ?? {});
-  headers.set('accept', 'application/json');
-  if (init.body && !headers.has('content-type')) {
-    headers.set('content-type', 'application/json');
-  }
-
-  const response = await fetch(path, {
-    ...init,
-    headers,
-    credentials: 'same-origin',
-    signal: init.signal ?? controller.signal,
-  });
-
-  const text = await response.text();
-  const payload = text ? JSON.parse(text) as T & { detail?: string; error?: string } : {} as T;
-  if (!response.ok) {
-    const detail =
-      typeof (payload as { detail?: string }).detail === 'string'
-        ? (payload as { detail?: string }).detail
-        : typeof (payload as { error?: string }).error === 'string'
-          ? (payload as { error?: string }).error
-          : `Channel pairing request failed with status ${response.status}.`;
-    throw new Error(detail);
-  }
-
-  return payload;
-}
-
 function IntegrationsSkeleton() {
   return (
     <ListDetailColumns
@@ -251,7 +218,7 @@ export function WorkspaceChannelPairingSurface({
     setErrorMessage(null);
 
     try {
-      const payload = await requestChannelPairingJson<ChannelLinksResponse>(
+      const payload = await requestWorkspaceJson<ChannelLinksResponse>(
         services,
         `/api/channel-pairing/links?workspace_id=${encodeURIComponent(workspaceId)}&include_revoked=true`,
       );
@@ -298,7 +265,7 @@ export function WorkspaceChannelPairingSurface({
     setActionProvider(provider);
     setErrorMessage(null);
     try {
-      const payload = await requestChannelPairingJson<ChannelPairingIntentResponse>(
+      const payload = await requestWorkspaceJson<ChannelPairingIntentResponse>(
         services,
         '/api/channel-pairing/intents',
         {
@@ -345,7 +312,7 @@ export function WorkspaceChannelPairingSurface({
     setRevokingLinkId(link.link_id);
     setErrorMessage(null);
     try {
-      await requestChannelPairingJson<{ ok: boolean; link: ChannelLinkRecord }>(
+      await requestWorkspaceJson<{ ok: boolean; link: ChannelLinkRecord }>(
         services,
         `/api/channel-pairing/links/${encodeURIComponent(link.link_id)}/revoke`,
         {
@@ -584,10 +551,6 @@ export function WorkspaceChannelPairingSurface({
                   <FormReadout label="Active links" value={String(selectedProviderLinks.length)} />
                   <FormReadout label="Latest code" value={selectedIntent && isIntentActive(selectedIntent) ? selectedIntent.pairing_code : 'No active code'} />
                 </FormGrid>
-                {featureId === 'integrations' ? (
-                  <FormReadout label="Additional channels" value="More channel options are coming soon." />
-                ) : null}
-
                 {selectedProviderLinks.length === 0 ? (
                   <EmptyPanel
                     title={`No active ${selectedDefinition.label} links`}

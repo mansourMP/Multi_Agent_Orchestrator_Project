@@ -16,6 +16,14 @@ export const WORKSPACE_NAV_DESTINATIONS = [
     direct: false,
   },
   {
+    id: 'marketplace',
+    label: 'Marketplace',
+    iconName: 'compass',
+    defaultRouteId: 'marketplace',
+    childRouteIds: ['marketplace'],
+    direct: true,
+  },
+  {
     id: 'settings',
     label: 'Settings',
     iconName: 'sliders-horizontal',
@@ -189,6 +197,13 @@ export const WORKSPACE_ROUTE_DEFINITIONS = [
     segment: 'settings',
     legacySegments: ['control', 'admin', 'admin/platform', 'admin/billing', 'admin/routing', 'admin/members', 'admin/policies'],
     destinationId: 'settings',
+    web: {},
+  },
+  {
+    id: 'marketplace',
+    label: 'Marketplace',
+    segment: 'marketplace',
+    destinationId: 'marketplace',
     web: {},
   },
 ];

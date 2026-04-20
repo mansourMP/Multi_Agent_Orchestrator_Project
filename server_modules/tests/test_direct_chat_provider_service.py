@@ -4,7 +4,7 @@ from server_modules import direct_chat_provider_service
 
 
 class DirectChatProviderServiceTests(unittest.TestCase):
-    def test_preferred_provider_maps_openai_oauth_to_codex_cli(self) -> None:
+    def test_preferred_provider_maps_openai_oauth_to_codex_cli_without_explicit_selection(self) -> None:
         def fake_credentials(_workspace_id: str, provider: str) -> dict[str, str]:
             if provider == "openai":
                 return {"auth_mode": "oauth_token", "oauth_token": "token"}
@@ -17,7 +17,7 @@ class DirectChatProviderServiceTests(unittest.TestCase):
 
         provider, credentials = direct_chat_provider_service.preferred_provider(
             "default",
-            "openai",
+            "",
             supported_providers=["openai", "codex_cli", "anthropic", "gemini"],
             direct_chat_credentials_fn=fake_credentials,
             supports_direct_message_native_chat_fn=fake_support,
@@ -27,7 +27,7 @@ class DirectChatProviderServiceTests(unittest.TestCase):
         self.assertEqual(provider, "codex_cli")
         self.assertEqual(credentials.get("auth_mode"), "oauth_token")
 
-    def test_preferred_provider_maps_openai_codex_token_to_codex_cli(self) -> None:
+    def test_preferred_provider_maps_openai_codex_token_to_codex_cli_without_explicit_selection(self) -> None:
         def fake_credentials(_workspace_id: str, provider: str) -> dict[str, str]:
             if provider == "openai":
                 return {"credential_type": "codex_token", "access_token": "token"}
@@ -40,7 +40,7 @@ class DirectChatProviderServiceTests(unittest.TestCase):
 
         provider, credentials = direct_chat_provider_service.preferred_provider(
             "default",
-            "openai",
+            "",
             supported_providers=["openai", "codex_cli", "anthropic", "gemini"],
             direct_chat_credentials_fn=fake_credentials,
             supports_direct_message_native_chat_fn=fake_support,
@@ -48,6 +48,39 @@ class DirectChatProviderServiceTests(unittest.TestCase):
         )
 
         self.assertEqual(provider, "codex_cli")
+        self.assertEqual(credentials.get("auth_mode"), "oauth_token")
+
+    def test_preferred_provider_keeps_explicit_selection_when_unavailable(self) -> None:
+        provider, credentials = direct_chat_provider_service.preferred_provider(
+            "default",
+            "anthropic",
+            supported_providers=["openai", "codex_cli", "anthropic", "gemini"],
+            direct_chat_credentials_fn=lambda _workspace_id, provider: {"api_key": "sk-openai"} if provider == "openai" else {},
+            supports_direct_message_native_chat_fn=lambda provider, credentials: provider == "openai" and bool(credentials),
+            credential_auth_mode_fn=lambda _provider, credentials: str((credentials or {}).get("auth_mode") or ""),
+        )
+
+        self.assertEqual(provider, "anthropic")
+        self.assertEqual(credentials, {})
+
+    def test_preferred_provider_does_not_override_explicit_openai_to_codex_cli(self) -> None:
+        def fake_credentials(_workspace_id: str, provider: str) -> dict[str, str]:
+            if provider == "openai":
+                return {"auth_mode": "oauth_token", "oauth_token": "token"}
+            if provider == "codex_cli":
+                return {"auth_mode": "oauth_token", "oauth_token": "token"}
+            return {}
+
+        provider, credentials = direct_chat_provider_service.preferred_provider(
+            "default",
+            "openai",
+            supported_providers=["openai", "codex_cli", "anthropic", "gemini"],
+            direct_chat_credentials_fn=fake_credentials,
+            supports_direct_message_native_chat_fn=lambda _provider, _credentials: False,
+            credential_auth_mode_fn=lambda _provider, creds: str((creds or {}).get("auth_mode") or ""),
+        )
+
+        self.assertEqual(provider, "openai")
         self.assertEqual(credentials.get("auth_mode"), "oauth_token")
 
     def test_resolve_direct_chat_availability_uses_override_and_default_tools(self) -> None:
@@ -102,7 +135,32 @@ class DirectChatProviderServiceTests(unittest.TestCase):
         self.assertEqual(payload["interventions"][0]["title"], "Workspace AI account is not ready")
         self.assertEqual(payload["actions"], [{"label": "Connect", "href": "/connect-ai"}])
 
-    def test_resolve_provider_for_direct_chat_message_forces_codex_for_connector_heavy_requests(self) -> None:
+    def test_resolve_provider_for_direct_chat_message_forces_codex_for_connector_heavy_requests_without_explicit_selection(self) -> None:
+        provider, credentials = direct_chat_provider_service.resolve_provider_for_direct_chat_message(
+            "default",
+            "",
+            "Send a Slack message to the team",
+            tools_present=True,
+            preferred_provider_fn=lambda _workspace_id, _requested_provider: ("openai", {"api_key": "sk-test"}),
+            direct_chat_credentials_fn=lambda _workspace_id, provider: {"oauth_token": "token"} if provider == "codex_cli" else {},
+            supports_direct_message_native_chat_fn=lambda provider, credentials: provider == "codex_cli" and bool(credentials),
+            compact_text_fn=lambda value: str(value or "").strip().lower(),
+            mentions_any_fn=lambda text, keywords: any(keyword in text for keyword in keywords),
+            message_requests_local_file_tool_fn=lambda _message: False,
+            message_requests_local_shell_tool_fn=lambda _message: False,
+            message_requests_local_screenshot_tool_fn=lambda _message: False,
+            message_requests_local_computer_tool_fn=lambda _message: False,
+            google_workspace_keywords=("gmail",),
+            telegram_keywords=("telegram",),
+            slack_keywords=("slack",),
+            dropbox_keywords=("dropbox",),
+            s3_keywords=("s3",),
+        )
+
+        self.assertEqual(provider, "codex_cli")
+        self.assertEqual(credentials, {"oauth_token": "token"})
+
+    def test_resolve_provider_for_direct_chat_message_keeps_explicit_provider_for_connector_heavy_requests(self) -> None:
         provider, credentials = direct_chat_provider_service.resolve_provider_for_direct_chat_message(
             "default",
             "openai",
@@ -124,8 +182,8 @@ class DirectChatProviderServiceTests(unittest.TestCase):
             s3_keywords=("s3",),
         )
 
-        self.assertEqual(provider, "codex_cli")
-        self.assertEqual(credentials, {"oauth_token": "token"})
+        self.assertEqual(provider, "openai")
+        self.assertEqual(credentials, {"api_key": "sk-test"})
 
     def test_resolve_provider_for_direct_chat_message_keeps_preferred_provider_when_codex_unavailable(self) -> None:
         provider, credentials = direct_chat_provider_service.resolve_provider_for_direct_chat_message(

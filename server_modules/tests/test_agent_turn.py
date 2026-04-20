@@ -835,6 +835,37 @@ class AgentTurnTests(unittest.TestCase):
         self.assertEqual(normalized.context_hints["metadata"]["client_thread_id"], "client-thread")
         self.assertTrue(normalized.context_hints["metadata"]["server_owned_thread"])
 
+    def test_normalize_server_owned_turn_request_rebinds_artifact_mode_web_thread_from_context_source(self):
+        request = AgentTurnRequest(
+            tenant_id="tenant-1",
+            workspace_id="workspace-1",
+            thread_id="client-thread",
+            session_id="session-1",
+            channel="web",
+            actor=TurnActor(type="user", id="user-1", display_name="Alice"),
+            message="hello",
+            execution_mode="sync",
+            response_mode="artifact",
+            context_hints={
+                "source": "direct_chat",
+            },
+        )
+
+        with patch(
+            "server_modules.agent_turn.agent_registry_repository.build_master_thread_id",
+            return_value="thread-sage",
+        ):
+            normalized = normalize_server_owned_turn_request(
+                current_user={"user_id": "user-1"},
+                turn_request=request,
+            )
+
+        self.assertEqual(normalized.thread_id, "thread-sage")
+        self.assertEqual(normalized.context_hints["thread_id"], "thread-sage")
+        self.assertEqual(normalized.context_hints["metadata"]["source"], "direct_chat")
+        self.assertEqual(normalized.context_hints["metadata"]["client_thread_id"], "client-thread")
+        self.assertTrue(normalized.context_hints["metadata"]["server_owned_thread"])
+
     def test_normalize_server_owned_turn_request_preserves_specialist_mobile_thread(self):
         request = AgentTurnRequest(
             tenant_id="tenant-1",

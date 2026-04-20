@@ -19,6 +19,7 @@ import {
 const CONTEXT_ROUTE_IDS_BY_DESTINATION: Record<WorkspaceNavDestinationId, readonly WorkspaceRouteId[]> = {
   sage: [],
   studio: ['studio', 'inbox', 'deploy', 'studioIntegrations'],
+  marketplace: [],
   settings: ['settings'],
 };
 
@@ -93,6 +94,9 @@ export function WorkstationKernelShell({
     }
     if (activeDestinationId === 'studio') {
       return routeManifest.routeIndex.studio?.href ?? `/w/${encodeURIComponent(workspaceId)}/studio`;
+    }
+    if (activeDestinationId === 'marketplace') {
+      return routeManifest.routeIndex.marketplace?.href ?? `/w/${encodeURIComponent(workspaceId)}/marketplace`;
     }
     return routeManifest.routeIndex.settings?.href ?? `/w/${encodeURIComponent(workspaceId)}/settings`;
   }, [activeDestinationId, routeManifest.routeIndex, workspaceId]);

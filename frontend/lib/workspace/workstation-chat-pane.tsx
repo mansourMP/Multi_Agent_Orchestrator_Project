@@ -924,17 +924,12 @@ function readExecutionTarget(metadata: Record<string, unknown>): string {
   return typeof selected === 'string' ? selected.trim().toLowerCase() : '';
 }
 
-function isConnectedProviderState(state: unknown): boolean {
-  const normalized = readString(state).toLowerCase();
-  return normalized === 'active' || normalized === 'connected' || normalized === 'configured';
-}
-
 function isProviderEligibleForModelSelector(provider: ProviderCatalogRecord): boolean {
   const providerId = readString(provider.id).toLowerCase();
   if (!providerId || providerId === 'openai-codex') {
     return false;
   }
-  return isConnectedProviderState(provider.state);
+  return provider.usable === true || provider.active === true;
 }
 
 function disconnectedModelOption(): ChatModelOption {
@@ -1624,7 +1619,6 @@ export function WorkstationChatPane() {
   const [providerCatalog, setProviderCatalog] = useState<ProviderCatalogRecord[]>([]);
   const [reasoningEffort, setReasoningEffort] = useState<ChatReasoningEffort>('medium');
   const [isApprovalsSheetOpen, setIsApprovalsSheetOpen] = useState(false);
-  const [isComposerMenuOpen, setIsComposerMenuOpen] = useState(false);
   const [isMemorySheetOpen, setIsMemorySheetOpen] = useState(false);
   const [memoryDraft, setMemoryDraft] = useState<SageMemoryDraft>(() => defaultSageMemoryDraft());
   const [pendingDeleteMemoryId, setPendingDeleteMemoryId] = useState<string | null>(null);
@@ -2991,17 +2985,6 @@ export function WorkstationChatPane() {
         showAutonomySelector={localCompanionConnected}
         autonomyFallbackLabel="Offline"
       />
-
-      <CommandSheet
-        open={isComposerMenuOpen}
-        title="Attachments"
-        description={undefined}
-        onClose={() => {
-          setIsComposerMenuOpen(false);
-        }}
-      >
-        <AppNotice>File attachments coming soon.</AppNotice>
-      </CommandSheet>
 
       <CommandSheet
         open={isApprovalsSheetOpen}

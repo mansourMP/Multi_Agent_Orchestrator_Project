@@ -177,6 +177,10 @@ export type DeployedAgentRecord = Record<string, unknown> & {
   knowledge_sources?: Record<string, unknown>[] | null;
   runtime_target?: string | null;
   billing_plan?: string | null;
+  is_public?: boolean | null;
+  quality_stars?: number | null;
+  cost_tier?: string | null;
+  category?: string | null;
   provider?: string | null;
   model?: string | null;
   config?: Record<string, unknown> | null;
@@ -215,6 +219,9 @@ export type ProviderCatalogRecord = Record<string, unknown> & {
   id?: string | null;
   label?: string | null;
   state?: string | null;
+  usable?: boolean | null;
+  active?: boolean | null;
+  configured?: boolean | null;
   default_model?: string | null;
   privacy_posture?: string | null;
   jurisdiction?: string | null;
@@ -283,6 +290,44 @@ export type DeployedAgentAnalyticsRecord = Record<string, unknown> & {
   escalation?: Record<string, unknown> | null;
   outcomes?: Record<string, unknown> | null;
   cost_burn?: Record<string, unknown> | null;
+};
+
+export type DeployedAgentAdminDashboardMessage = Record<string, unknown> & {
+  id?: string | null;
+  role?: string | null;
+  content?: string | null;
+  created_at?: string | null;
+  channel?: string | null;
+};
+
+export type DeployedAgentAdminDashboardUserRow = Record<string, unknown> & {
+  external_user_id?: string | null;
+  last_message_at?: string | null;
+  total_message_count?: number | null;
+  memory_entry_count?: number | null;
+  last_5_messages?: DeployedAgentAdminDashboardMessage[] | null;
+};
+
+export type DeployedAgentAdminDashboardRecord = Record<string, unknown> & {
+  deployed_agent_id?: string | null;
+  total_users?: number | null;
+  messages_this_calendar_month?: number | null;
+  users_at_limit_today?: number | null;
+  upgrade_clicks_this_month?: number | null;
+  user_rows?: DeployedAgentAdminDashboardUserRow[] | null;
+  limit?: number | null;
+  offset?: number | null;
+  has_more?: boolean | null;
+};
+
+export type MarketplaceAgentCardRecord = Record<string, unknown> & {
+  id?: string | null;
+  name?: string | null;
+  description?: string | null;
+  category?: string | null;
+  quality_stars?: number | null;
+  cost_tier?: string | null;
+  telegram_bot_username?: string | null;
 };
 
 export type DeployedAgentTelegramReadinessRecord = Record<string, unknown> & {
@@ -424,10 +469,12 @@ export type WorkstationClientPaths = {
   deployedAgentPause: (deployedAgentId: string) => string;
   deployedAgentAnalyticsRoster: string;
   deployedAgentAnalyticsDetail: (deployedAgentId: string) => string;
+  deployedAgentAdminDashboard: (deployedAgentId: string, limit?: number, offset?: number) => string;
   deployedAgentMemory: (deployedAgentId: string, limit?: number, offset?: number) => string;
   deployedAgentConversations: (deployedAgentId: string, limit?: number, offset?: number) => string;
   deployedAgentConversationDetail: (deployedAgentId: string, sessionId: string) => string;
   deployedAgentExternalUserDelete: (deployedAgentId: string, externalUserId: string) => string;
+  marketplaceAgents: (filters?: { category?: string | null; costTier?: string | null; limit?: number; offset?: number }) => string;
   platformAnalytics: string;
   workspaceRouting: string;
   workspaceMembers: string;
@@ -646,12 +693,22 @@ export type WorkstationClient = {
     metadata?: Record<string, unknown>;
     provider?: string | null;
     model?: string | null;
+    isPublic?: boolean | null;
+    category?: string | null;
+    qualityStars?: number | null;
+    costTier?: string | null;
   }) => Promise<Record<string, unknown> | null>;
   deployDeployedAgent: (options: { deployedAgentId: string }) => Promise<Record<string, unknown> | null>;
   pauseDeployedAgent: (options: { deployedAgentId: string }) => Promise<Record<string, unknown> | null>;
   listDeployedAgentAnalytics: () => Promise<Record<string, unknown>>;
   getDeployedAgentAnalytics: (options: {
     deployedAgentId: string;
+    allowMissing?: boolean;
+  }) => Promise<Record<string, unknown> | null>;
+  getDeployedAgentAdminDashboard: (options: {
+    deployedAgentId: string;
+    limit?: number;
+    offset?: number;
     allowMissing?: boolean;
   }) => Promise<Record<string, unknown> | null>;
   listDeployedAgentMemory: (options: {
@@ -676,6 +733,12 @@ export type WorkstationClient = {
     sessionId?: string | null;
     note?: string | null;
   }) => Promise<Record<string, unknown> | null>;
+  listMarketplaceAgents: (options?: {
+    category?: string | null;
+    costTier?: string | null;
+    limit?: number;
+    offset?: number;
+  }) => Promise<Record<string, unknown>>;
   getPlatformAnalytics: () => Promise<Record<string, unknown>>;
   getWorkspaceRouting: () => Promise<Record<string, unknown>>;
   updateWorkspaceRouting: (options: {
@@ -910,6 +973,12 @@ export function buildWorkstationApiPaths(workspaceId: string): WorkstationClient
       `/api/deployed-agents/analytics${buildQueryString({ workspace_id: workspaceId })}`,
     deployedAgentAnalyticsDetail: (deployedAgentId) =>
       `/api/deployed-agents/${encodeURIComponent(deployedAgentId)}/analytics${buildQueryString({ workspace_id: workspaceId })}`,
+    deployedAgentAdminDashboard: (deployedAgentId, limit = 50, offset = 0) =>
+      `/api/deployed-agents/${encodeURIComponent(deployedAgentId)}/admin-dashboard${buildQueryString({
+        workspace_id: workspaceId,
+        limit,
+        offset,
+      })}`,
     deployedAgentMemory: (deployedAgentId, limit = 50, offset = 0) =>
       `/api/deployed-agents/${encodeURIComponent(deployedAgentId)}/memory${buildQueryString({
         workspace_id: workspaceId,
@@ -928,6 +997,13 @@ export function buildWorkstationApiPaths(workspaceId: string): WorkstationClient
       })}`,
     deployedAgentExternalUserDelete: (deployedAgentId, externalUserId) =>
       `/api/deployed-agents/${encodeURIComponent(deployedAgentId)}/external-users/${encodeURIComponent(externalUserId)}/delete`,
+    marketplaceAgents: (filters = {}) =>
+      `/api/marketplace/agents${buildQueryString({
+        category: filters.category,
+        cost_tier: filters.costTier,
+        limit: filters.limit,
+        offset: filters.offset,
+      })}`,
     platformAnalytics: `/api/platform-analytics${buildQueryString({ workspace_id: workspaceId })}`,
     workspaceRouting: `/api/workspaces/${encodeURIComponent(workspaceId)}/routing`,
     workspaceMembers: `/api/workspaces/${encodeURIComponent(workspaceId)}/members`,
@@ -2054,6 +2130,10 @@ export function createWorkstationClient(
       metadata,
       provider,
       model,
+      isPublic,
+      category,
+      qualityStars,
+      costTier,
     }) =>
       requestJson<Record<string, unknown>>({
         path: paths.deployedAgentDetail(deployedAgentId),
@@ -2075,6 +2155,10 @@ export function createWorkstationClient(
             metadata: metadata ?? undefined,
             provider: provider ?? undefined,
             model: model ?? undefined,
+            is_public: isPublic ?? undefined,
+            category: category ?? undefined,
+            quality_stars: qualityStars ?? undefined,
+            cost_tier: costTier ?? undefined,
           }),
         },
         policy: WRITE_REQUEST_POLICY,
@@ -2114,6 +2198,12 @@ export function createWorkstationClient(
         allowStatuses: allowMissing ? [404] : [],
         policy: READ_REQUEST_POLICY,
       }),
+    getDeployedAgentAdminDashboard: ({ deployedAgentId, limit = 50, offset = 0, allowMissing = false }) =>
+      requestJson<Record<string, unknown>>({
+        path: paths.deployedAgentAdminDashboard(deployedAgentId, limit, offset),
+        allowStatuses: allowMissing ? [404] : [],
+        policy: READ_REQUEST_POLICY,
+      }),
     listDeployedAgentMemory: ({ deployedAgentId, limit = 50, offset = 0 }) =>
       requestJson<Record<string, unknown>>({
         path: paths.deployedAgentMemory(deployedAgentId, limit, offset),
@@ -2145,6 +2235,16 @@ export function createWorkstationClient(
         },
         policy: WRITE_REQUEST_POLICY,
       }),
+    listMarketplaceAgents: ({ category = null, costTier = null, limit = 100, offset = 0 } = {}) =>
+      requestJson<Record<string, unknown>>({
+        path: paths.marketplaceAgents({
+          category,
+          costTier,
+          limit,
+          offset,
+        }),
+        policy: READ_REQUEST_POLICY,
+      }) as Promise<Record<string, unknown>>,
     getPlatformAnalytics: () =>
       requestJson<Record<string, unknown>>({
         path: paths.platformAnalytics,

@@ -189,6 +189,15 @@ class AuthHardeningTests(unittest.TestCase):
         self.assertEqual(user["role"], "member")
         self.assertTrue(user["is_admin"])
 
+    def test_account_shell_path_does_not_consume_authenticated_api_window(self):
+        request = _request(path="/api/v1/auth/account-shell")
+        token = auth.issue_token("user-1", email="user@example.com", role="member")
+        with patch.object(auth, "ORION_AUTHENTICATED_API_RATE_LIMIT_PER_MINUTE", 1):
+            first = auth.get_current_user(request=request, authorization=f"Bearer {token}")
+            second = auth.get_current_user(request=request, authorization=f"Bearer {token}")
+        self.assertEqual(first["user_id"], "user-1")
+        self.assertEqual(second["user_id"], "user-1")
+
 
 class ConnectorRouteAuthHardeningTests(unittest.IsolatedAsyncioTestCase):
     async def test_credentials_vault_route_blocks_default_local_dev_member(self):

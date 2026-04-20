@@ -404,7 +404,7 @@ def _should_server_own_direct_chat_thread(
         return False
     if str(execution_mode or "").strip().lower() != "sync":
         return False
-    if str(response_mode or "").strip().lower() != "stream":
+    if str(response_mode or "").strip().lower() not in {"stream", "artifact"}:
         return False
     payload = _metadata_dict(metadata)
     agent_id = str(payload.get("agent_id") or "").strip().lower()
@@ -435,6 +435,33 @@ def _canonical_direct_chat_thread_id(
             owner_user_id=owner_user_id,
         )
     return str(fallback_thread_id or "direct-chat").strip() or "direct-chat"
+
+
+def normalize_direct_chat_session_metadata(
+    *,
+    current_user: Any,
+    workspace_id: str,
+    channel: Any,
+    metadata: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    payload = _metadata_dict(metadata)
+    requested_thread_id = str(payload.get("thread_id") or "").strip()
+    if not _should_server_own_direct_chat_thread(
+        channel=channel,
+        metadata=payload,
+    ):
+        return payload
+    canonical_thread_id = _canonical_direct_chat_thread_id(
+        current_user=current_user,
+        workspace_id=workspace_id,
+        fallback_thread_id=requested_thread_id,
+        fallback_actor_id=_request_actor_id(current_user, payload),
+    )
+    if canonical_thread_id:
+        if requested_thread_id and requested_thread_id != canonical_thread_id:
+            payload.setdefault("client_thread_id", requested_thread_id)
+        payload["thread_id"] = canonical_thread_id
+    return payload
 
 
 def serialize_turn_actor(actor: TurnActor) -> Dict[str, Any]:
@@ -709,6 +736,9 @@ def normalize_server_owned_turn_request(
     turn_request: AgentTurnRequest,
 ) -> AgentTurnRequest:
     metadata = _metadata_dict(turn_request.context_hints.get("metadata"))
+    source = str(turn_request.context_hints.get("source") or "").strip()
+    if source and not str(metadata.get("source") or "").strip():
+        metadata["source"] = source
     if not _should_server_own_direct_chat_thread(
         channel=turn_request.channel,
         execution_mode=turn_request.execution_mode,

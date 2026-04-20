@@ -6,6 +6,7 @@ export type WorkspaceShellProfileId =
 export type WorkspaceNavDestinationId =
   | 'sage'
   | 'studio'
+  | 'marketplace'
   | 'settings';
 
 export type WorkspaceRouteId =
@@ -21,11 +22,13 @@ export type WorkspaceRouteId =
   | 'channels'
   | 'inbox'
   | 'deploy'
+  | 'marketplace'
   | 'settings';
 
 export type WorkspaceNavIconName =
   | 'message-square'
   | 'boxes'
+  | 'compass'
   | 'sliders-horizontal';
 
 export type WorkspaceNavDestinationDefinition = {

@@ -1,7 +1,10 @@
 import { redirect } from 'next/navigation';
 
 import { OnboardingClient } from '@/app/onboarding/OnboardingClient';
-import { loadAccountShellSession } from '@/lib/server/load-account-shell-session';
+import {
+  isDegradedAccountShellSession,
+  loadAccountShellSession,
+} from '@/lib/server/load-account-shell-session';
 import {
   resolvePrimaryReadyWorkspaceId,
   type WorkspaceMembershipRecord,
@@ -39,6 +42,23 @@ export default async function OnboardingPage({
   const session = await loadAccountShellSession();
   if (!session) {
     redirect('/login');
+  }
+
+  if (isDegradedAccountShellSession(session)) {
+    return (
+      <main className="app-page-message">
+        <div className="app-page-message__content">
+          <h1 className="app-page-message__title">Onboarding is temporarily unavailable</h1>
+          <p className="app-page-message__body">
+            Empyralis could not load the account shell required to finish workspace setup.
+            {session.errorStatus ? ` Bootstrap returned ${session.errorStatus}.` : ''}
+          </p>
+          <p className="app-page-message__meta">
+            Reload this page and try again once the workspace shell is back.
+          </p>
+        </div>
+      </main>
+    );
   }
 
   const { workspaceId } = await searchParams;

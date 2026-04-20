@@ -250,6 +250,7 @@ async def evaluate_channel_quota(
             "usage_day": quota_verdict.get("usage_day"),
             "upgrade_cta_url": quota_verdict.get("upgrade_cta_url"),
             "upgrade_cta_label": quota_verdict.get("upgrade_cta_label"),
+            "channel_attribution": quota_verdict.get("channel_attribution"),
         },
     )
 

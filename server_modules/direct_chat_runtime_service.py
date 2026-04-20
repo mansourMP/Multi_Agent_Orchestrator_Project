@@ -10,6 +10,7 @@ from server_modules.agent_turn import (
 )
 from server_modules import agent_trace_service
 from server_modules import direct_chat_generation_service
+from server_modules import direct_chat_provider_service
 from server_modules import direct_chat_prompt_service
 from server_modules import direct_chat_response_service
 from server_modules import no_provider_service
@@ -118,6 +119,25 @@ def _finalize_direct_tool_payload(
             fallback_reason=fallback_reason,
         )
     return services.with_context_used({**direct_payload, "suggestions": proactive_suggestions}, context_used)
+
+
+def _provider_unavailable_payload(
+    *,
+    provider: str,
+    proactive_suggestions: List[str],
+    base_context_used: Dict[str, Any],
+    services: DirectChatRuntimeServices,
+) -> Dict[str, Any]:
+    return services.with_context_used(
+        {
+            **direct_chat_provider_service.provider_unavailable_response(
+                provider,
+                connect_action=lambda label, href: {"label": label, "href": href},
+            ),
+            "suggestions": proactive_suggestions,
+        },
+        base_context_used,
+    )
 
 
 def _fallback_tool_payload(
@@ -482,6 +502,17 @@ def build_direct_operator_reply(
         normalized_message,
         tools_present=bool(tools),
     )
+    if normalized_requested_provider and provider != normalized_requested_provider:
+        yield {
+            "type": "final",
+            "payload": _provider_unavailable_payload(
+                provider=normalized_requested_provider,
+                proactive_suggestions=proactive_suggestions,
+                base_context_used=base_context_used,
+                services=services,
+            ),
+        }
+        return
     route_decision = services.plan_direct_chat_route(
         message=normalized_message,
         availability=availability_payload,
@@ -555,6 +586,17 @@ def build_direct_operator_reply(
         provider,
         direct_chat_credentials,
     )
+    if normalized_requested_provider and not provider_ready:
+        yield {
+            "type": "final",
+            "payload": _provider_unavailable_payload(
+                provider=normalized_requested_provider,
+                proactive_suggestions=proactive_suggestions,
+                base_context_used=base_context_used,
+                services=services,
+            ),
+        }
+        return
     if not provider_ready:
         yield {
             "type": "step",

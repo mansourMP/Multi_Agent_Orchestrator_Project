@@ -83,7 +83,18 @@ def _normalized_runtime_state_db_path() -> Path:
 
 
 def _coerce_dict(value: Any) -> Dict[str, Any]:
-    return dict(value or {}) if isinstance(value, dict) else {}
+    if isinstance(value, dict):
+        return dict(value)
+    if isinstance(value, str):
+        token = value.strip()
+        if not token:
+            return {}
+        try:
+            parsed = json.loads(token)
+        except ValueError:
+            return {}
+        return dict(parsed) if isinstance(parsed, dict) else {}
+    return {}
 
 
 def _coerce_actor(value: Any) -> Dict[str, Any]:

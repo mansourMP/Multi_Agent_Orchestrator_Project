@@ -9,6 +9,7 @@ import { SkeletonBlock } from '@/lib/ui/skeleton-block';
 import { WorkstationSageToolsPane } from '@/lib/workspace/workstation-sage-tools-pane';
 import { WorkspaceChannelPairingSurface } from '@/lib/workspace/workspace-channel-pairing-surface';
 import { useWorkspaceBoundary } from '@/lib/workspace/workspace-boundary';
+import { requestWorkspaceJson } from '@/lib/workspace/workspace-json-request';
 import { useWorkspaceServices } from '@/lib/workspace/workspace-services';
 import type {
   ProviderCatalogModelRecord,
@@ -373,25 +374,14 @@ export function WorkstationSageConnectorsPane({
       services.client.listProviderProfiles(),
       services.client.listVaultCredentials(),
       services.client.listConnectorsVault(),
-      fetch(`/api/channel-pairing/links?workspace_id=${encodeURIComponent(bootstrap.workspace.id)}&include_revoked=true`, {
-        credentials: 'same-origin',
-      }).then(async (response) => {
-        const payload = await response.json().catch(() => ({}));
-        if (!response.ok) {
-          throw new Error(readString((payload as Record<string, unknown>).detail, 'Channel pairing state is unavailable.'));
-        }
-        return payload;
-      }),
+      requestWorkspaceJson<Record<string, unknown>>(
+        services,
+        `/api/channel-pairing/links?workspace_id=${encodeURIComponent(bootstrap.workspace.id)}&include_revoked=true`,
+      ),
     ]);
 
     const catalogPayload = catalogResult.status === 'fulfilled' ? catalogResult.value : null;
     const normalizedProviders = normalizeProviderCatalog(catalogPayload);
-    console.log('[WorkstationSageConnectorsPane] providerCatalog', {
-      payload: catalogPayload,
-      isEmpty: normalizedProviders.length === 0,
-      count: normalizedProviders.length,
-      error: catalogResult.status === 'rejected' ? String(catalogResult.reason) : null,
-    });
     setProviders(normalizedProviders.length > 0 ? normalizedProviders : fallbackProviderCatalog());
     setProfiles(profileResult.status === 'fulfilled' ? normalizeProviderProfiles(profileResult.value) : []);
     setCredentials(credentialResult.status === 'fulfilled' ? normalizeVaultCredentials(credentialResult.value) : []);
@@ -906,9 +896,7 @@ export function WorkstationSageConnectorsPane({
               </AppButton>
             </div>
           </>
-        ) : (
-          <div className="sage-unified-expand__text">Coming soon</div>
-        )}
+        ) : null}
       </div>
     );
   }

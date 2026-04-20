@@ -37,6 +37,7 @@ import type {
   ProviderCatalogModelRecord,
   ProviderCatalogRecord,
 } from '@/lib/workspace/workstation-client';
+import { WorkstationDeployedAgentAnalyticsPane } from '@/lib/workspace/workstation-deployed-agent-analytics-pane';
 import { WorkspaceChannelPairingSurface } from '@/lib/workspace/workspace-channel-pairing-surface';
 import { useWorkspaceServices } from '@/lib/workspace/workspace-services';
 import { WorkstationSurfaceRoot } from '@/lib/workspace/workstation-surface-primitives';
@@ -44,7 +45,7 @@ import { WorkstationSurfaceRoot } from '@/lib/workspace/workstation-surface-prim
 type WizardMode = 'create' | 'edit';
 type WizardStepId = 'setup' | 'connect' | 'deploy';
 type StudioSubview = 'agents' | 'inbox' | 'deploy';
-type SpecialistOverlayTabId = 'overview' | 'tools' | 'memory' | 'connectors';
+type SpecialistOverlayTabId = 'overview' | 'tools' | 'memory' | 'connectors' | 'analytics';
 
 type WizardState = {
   name: string;
@@ -269,6 +270,7 @@ const SPECIALIST_OVERLAY_TABS: Array<{
   { id: 'tools', label: 'Tools' },
   { id: 'memory', label: 'Memory' },
   { id: 'connectors', label: 'Connectors' },
+  { id: 'analytics', label: 'Analytics' },
 ];
 
 const SPECIALIST_CONNECTOR_CARDS: ReadonlyArray<{
@@ -1191,6 +1193,8 @@ export function WorkstationDeployedAgentsPane({
   const [overlayTab, setOverlayTab] = useState<SpecialistOverlayTabId>('overview');
   const [overlayName, setOverlayName] = useState('');
   const [overlayPersona, setOverlayPersona] = useState('');
+  const [overlayMarketplaceListed, setOverlayMarketplaceListed] = useState(false);
+  const [overlayMarketplaceCategory, setOverlayMarketplaceCategory] = useState('');
   const [isSavingOverlayOverview, setIsSavingOverlayOverview] = useState(false);
   const [selectedAgentDetail, setSelectedAgentDetail] = useState<DeployedAgentRecord | null>(null);
   const [selectedAgentAnalytics, setSelectedAgentAnalytics] = useState<AgentAnalyticsSnapshot | null>(null);
@@ -1630,10 +1634,14 @@ export function WorkstationDeployedAgentsPane({
     if (!overlayAgent) {
       setOverlayName('');
       setOverlayPersona('');
+      setOverlayMarketplaceListed(false);
+      setOverlayMarketplaceCategory('');
       return;
     }
     setOverlayName(readString(overlayAgent.name));
     setOverlayPersona(readString(overlayAgent.persona));
+    setOverlayMarketplaceListed(overlayAgent.is_public === true);
+    setOverlayMarketplaceCategory(readString(overlayAgent.category));
   }, [overlayAgent]);
 
   useEffect(() => {
@@ -1906,6 +1914,8 @@ export function WorkstationDeployedAgentsPane({
         deployedAgentId: agentId,
         name: overlayName.trim(),
         persona: overlayPersona.trim(),
+        isPublic: overlayMarketplaceListed,
+        category: overlayMarketplaceCategory.trim() || null,
       });
       const record = (updated ?? {}) as DeployedAgentRecord;
       setAgents((current) => upsertAgentRecord(current, record));
@@ -2022,6 +2032,8 @@ export function WorkstationDeployedAgentsPane({
   const overlayMemoryEntries = overlayAgentId
     ? agentMemoryById[overlayAgentId] ?? []
     : [];
+  const overlayQualityStars = readNumber(overlayAgent?.quality_stars);
+  const overlayCostTier = readString(overlayAgent?.cost_tier);
 
   async function handleDeleteExternalUserData() {
     const agentId = readString(selectedAgent?.id);
@@ -2733,6 +2745,81 @@ export function WorkstationDeployedAgentsPane({
                         rows={5}
                       />
                     </FormField>
+                    <div className="deployed-agents-overlay__marketplace">
+                      <div className="deployed-agents-overlay__marketplace-header">
+                        <div>
+                          <strong className="deployed-agents-overlay__marketplace-title">Marketplace</strong>
+                          <p className="deployed-agents-overlay__marketplace-hint">
+                            Control whether this specialist appears in the public Marketplace catalog.
+                          </p>
+                        </div>
+                        <button
+                          type="button"
+                          className={joinClassNames(
+                            'sage-tool-toggle',
+                            overlayMarketplaceListed && 'sage-tool-toggle--enabled',
+                          )}
+                          role="switch"
+                          aria-checked={overlayMarketplaceListed}
+                          onClick={() => setOverlayMarketplaceListed((current) => !current)}
+                        >
+                          <span className="sage-tool-toggle__thumb" />
+                        </button>
+                      </div>
+                      <FormGrid columns="repeat(auto-fit, minmax(14rem, 1fr))">
+                        <FormField
+                          label="List in Marketplace"
+                          hint="Owners control public listing. The Telegram button disables automatically when no Telegram username is configured."
+                        >
+                          <FormReadout
+                            label="List in Marketplace"
+                            value={overlayMarketplaceListed ? 'Enabled' : 'Disabled'}
+                          />
+                        </FormField>
+                        <FormField label="Category" hint="Examples: Medical, Legal, Finance.">
+                          <FormInput
+                            value={overlayMarketplaceCategory}
+                            onChange={(event) => setOverlayMarketplaceCategory(event.currentTarget.value)}
+                            placeholder="e.g. Medical, Legal, Finance"
+                          />
+                        </FormField>
+                      </FormGrid>
+                      <div className="deployed-agents-overlay__platform-rating">
+                        <div className="deployed-agents-overlay__platform-rating-copy">
+                          <strong>Set by platform operator</strong>
+                          <span>
+                            {overlayQualityStars !== null && overlayQualityStars > 0
+                              ? 'Quality rating and cost tier are managed centrally.'
+                              : 'Not yet rated by platform.'}
+                          </span>
+                        </div>
+                        <div className="deployed-agents-overlay__platform-rating-values">
+                          {overlayQualityStars !== null && overlayQualityStars > 0 ? (
+                            <div className="deployed-agents-overlay__stars" aria-label={`Quality ${overlayQualityStars} out of 5`}>
+                              {Array.from({ length: 5 }).map((_, starIndex) => (
+                                <span
+                                  key={`overlay-star-${starIndex}`}
+                                  className={joinClassNames(
+                                    'deployed-agents-overlay__star',
+                                    starIndex < overlayQualityStars
+                                      && 'deployed-agents-overlay__star--filled',
+                                  )}
+                                >
+                                  ★
+                                </span>
+                              ))}
+                            </div>
+                          ) : (
+                            <span className="deployed-agents-overlay__unrated">Not yet rated</span>
+                          )}
+                          {overlayCostTier ? (
+                            <span className="deployed-agents-overlay__tier-badge">
+                              {humanizeToken(overlayCostTier, 'Unrated')}
+                            </span>
+                          ) : null}
+                        </div>
+                      </div>
+                    </div>
                     <div className="deployed-agents-overlay__overview-grid">
                       <div className="deployed-agents-overlay__meta">
                         <span className="deployed-agents-overlay__meta-label">Channel</span>
@@ -2918,6 +3005,15 @@ export function WorkstationDeployedAgentsPane({
                         </article>
                       ))}
                     </div>
+                  </div>
+                ) : null}
+
+                {overlayTab === 'analytics' ? (
+                  <div className="deployed-agents-overlay__section">
+                    <WorkstationDeployedAgentAnalyticsPane
+                      agentId={readString(overlayAgent.id)}
+                      workspaceId={services.scope.workspaceId}
+                    />
                   </div>
                 ) : null}
               </div>

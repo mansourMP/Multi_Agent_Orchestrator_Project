@@ -481,6 +481,18 @@ CREATE TABLE IF NOT EXISTS deployed_agents (
 ALTER TABLE deployed_agents
 ADD COLUMN IF NOT EXISTS operational_state JSONB NOT NULL DEFAULT '{}'::jsonb;
 
+ALTER TABLE deployed_agents
+ADD COLUMN IF NOT EXISTS is_public BOOLEAN NOT NULL DEFAULT FALSE;
+
+ALTER TABLE deployed_agents
+ADD COLUMN IF NOT EXISTS quality_stars INTEGER NULL;
+
+ALTER TABLE deployed_agents
+ADD COLUMN IF NOT EXISTS cost_tier TEXT NULL;
+
+ALTER TABLE deployed_agents
+ADD COLUMN IF NOT EXISTS category TEXT NULL;
+
 CREATE TABLE IF NOT EXISTS deployed_agent_daily_message_usage (
     id TEXT PRIMARY KEY,
     tenant_id TEXT NOT NULL,
@@ -543,6 +555,27 @@ CREATE TABLE IF NOT EXISTS channel_user_acquisition_touches (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     UNIQUE(tenant_id, workspace_id, deployed_agent_id, channel_key, external_user_id)
+);
+
+ALTER TABLE channel_user_acquisition_touches
+ADD COLUMN IF NOT EXISTS limit_hit_click_at TIMESTAMPTZ NULL;
+
+ALTER TABLE channel_user_acquisition_touches
+ADD COLUMN IF NOT EXISTS limit_hit_click_source TEXT NULL;
+
+CREATE TABLE IF NOT EXISTS deployed_agent_upgrade_click_events (
+    id TEXT PRIMARY KEY,
+    tenant_id TEXT NOT NULL,
+    workspace_id TEXT NOT NULL,
+    deployed_agent_id TEXT NOT NULL REFERENCES deployed_agents(id) ON DELETE CASCADE,
+    acquisition_touch_id TEXT NULL REFERENCES channel_user_acquisition_touches(id) ON DELETE SET NULL,
+    channel_key TEXT NOT NULL DEFAULT '',
+    external_user_id TEXT NOT NULL DEFAULT '',
+    source TEXT NOT NULL DEFAULT '',
+    attribution_token_hash TEXT NOT NULL,
+    clicked_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 CREATE TABLE IF NOT EXISTS deployed_agent_conversation_memory (
@@ -880,6 +913,8 @@ CREATE INDEX IF NOT EXISTS idx_agent_runtime_profiles_install ON agent_runtime_p
 CREATE INDEX IF NOT EXISTS idx_deployed_agents_workspace_created ON deployed_agents(tenant_id, owner_workspace_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_deployed_agents_backing_install ON deployed_agents(tenant_id, backing_install_id);
 CREATE INDEX IF NOT EXISTS idx_deployed_agents_workspace_state ON deployed_agents(tenant_id, owner_workspace_id, deployment_state);
+CREATE INDEX IF NOT EXISTS idx_deployed_agents_public_live
+    ON deployed_agents(tenant_id, deployment_state, is_public, category, cost_tier, updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_deployed_agent_daily_message_usage_scope_day
     ON deployed_agent_daily_message_usage(tenant_id, workspace_id, deployed_agent_id, usage_day DESC);
 CREATE INDEX IF NOT EXISTS idx_deployed_agent_daily_message_usage_external_user
@@ -892,6 +927,10 @@ CREATE INDEX IF NOT EXISTS idx_channel_user_acquisition_touches_deployment
     ON channel_user_acquisition_touches(tenant_id, workspace_id, deployed_agent_id, last_started_at DESC);
 CREATE INDEX IF NOT EXISTS idx_channel_user_acquisition_touches_conversion
     ON channel_user_acquisition_touches(tenant_id, workspace_id, converted_user_id, converted_at DESC);
+CREATE INDEX IF NOT EXISTS idx_deployed_agent_upgrade_click_events_scope_clicked
+    ON deployed_agent_upgrade_click_events(tenant_id, workspace_id, deployed_agent_id, clicked_at DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_deployed_agent_upgrade_click_events_token_hash
+    ON deployed_agent_upgrade_click_events(attribution_token_hash);
 CREATE INDEX IF NOT EXISTS idx_deployed_agent_conversation_memory_scope
     ON deployed_agent_conversation_memory(tenant_id, workspace_id, deployed_agent_id, channel_key, updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_deployed_agent_conversation_memory_external_user
@@ -1194,6 +1233,16 @@ def _coerce_month_start_date(value: Any) -> Optional[date]:
     return resolved.replace(day=1)
 
 
+def _current_utc_month_bounds(now: Optional[datetime] = None) -> tuple[datetime, datetime]:
+    current = now.astimezone(timezone.utc) if isinstance(now, datetime) else _utc_now_ts()
+    month_start = current.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    if month_start.month == 12:
+        month_end = month_start.replace(year=month_start.year + 1, month=1)
+    else:
+        month_end = month_start.replace(month=month_start.month + 1)
+    return month_start, month_end
+
+
 def _slugify(value: str, fallback: str) -> str:
     token = re.sub(r"[^a-z0-9]+", "-", str(value or "").strip().lower()).strip("-")
     return token or fallback
@@ -1253,6 +1302,10 @@ def _row_to_deployed_agent(row: Any) -> Optional[Dict[str, Any]]:
         "knowledge_sources": _decode_json_array(payload.get("knowledge_sources")),
         "runtime_target": str(payload.get("runtime_target") or "").strip() or "cloud",
         "billing_plan": str(payload.get("billing_plan") or "").strip() or "free",
+        "is_public": bool(payload.get("is_public")),
+        "quality_stars": int(payload.get("quality_stars")) if payload.get("quality_stars") is not None else None,
+        "cost_tier": str(payload.get("cost_tier") or "").strip().lower() or None,
+        "category": str(payload.get("category") or "").strip() or None,
         "metadata": _decode_json_object(payload.get("metadata")),
         "operational_state": _decode_json_object(payload.get("operational_state")),
         "last_deployed_at": _iso(payload.get("last_deployed_at")),
@@ -1359,6 +1412,8 @@ def _row_to_channel_user_acquisition_touch(row: Any) -> Optional[Dict[str, Any]]
         "converted_email": str(payload.get("converted_email") or "").strip().lower() or None,
         "converted_auth_flow": str(payload.get("converted_auth_flow") or "").strip().lower() or None,
         "converted_at": _iso(payload.get("converted_at")),
+        "limit_hit_click_at": _iso(payload.get("limit_hit_click_at")),
+        "limit_hit_click_source": str(payload.get("limit_hit_click_source") or "").strip().lower() or None,
         "first_started_at": _iso(payload.get("first_started_at")),
         "last_started_at": _iso(payload.get("last_started_at")),
         "created_at": _iso(payload.get("created_at")),
@@ -4406,6 +4461,42 @@ async def get_channel_user_acquisition_touch_by_id(
     return _row_to_channel_user_acquisition_touch(row)
 
 
+async def get_channel_user_acquisition_touch(
+    *,
+    tenant_id: str,
+    workspace_id: str,
+    deployed_agent_id: str,
+    channel_key: str,
+    external_user_id: str,
+) -> Optional[Dict[str, Any]]:
+    resolved_tenant_id = _require_scope_token(tenant_id, "tenant_id")
+    resolved_workspace_id = _require_scope_token(workspace_id, "workspace_id")
+    resolved_deployed_agent_id = _require_scope_token(deployed_agent_id, "deployed_agent_id")
+    resolved_channel_key = _require_scope_token(channel_key, "channel_key").lower()
+    resolved_external_user_id = _require_scope_token(external_user_id, "external_user_id")
+    async with _scoped_connection(tenant_id=resolved_tenant_id, workspace_id=resolved_workspace_id) as connection:
+        if connection is None:
+            return None
+        row = await connection.fetchrow(
+            """
+            SELECT *
+            FROM channel_user_acquisition_touches
+            WHERE tenant_id = $1
+              AND workspace_id = $2
+              AND deployed_agent_id = $3
+              AND channel_key = $4
+              AND external_user_id = $5
+            LIMIT 1
+            """,
+            resolved_tenant_id,
+            resolved_workspace_id,
+            resolved_deployed_agent_id,
+            resolved_channel_key,
+            resolved_external_user_id,
+        )
+    return _row_to_channel_user_acquisition_touch(row)
+
+
 async def mark_channel_user_acquisition_touch_converted(
     *,
     touch_id: str,
@@ -5015,6 +5106,443 @@ async def summarize_deployed_agent_activity_rollup(
     }
 
 
+async def get_deployed_agent_admin_dashboard(
+    *,
+    tenant_id: str,
+    workspace_id: str,
+    deployed_agent_id: str,
+    limit: int = 50,
+    offset: int = 0,
+    cursor_last_message_at: Optional[str] = None,
+    cursor_external_user_id: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    resolved_tenant_id = _require_scope_token(tenant_id, "tenant_id")
+    resolved_workspace_id = _require_scope_token(workspace_id, "workspace_id")
+    resolved_deployed_agent_id = _require_scope_token(deployed_agent_id, "deployed_agent_id")
+    safe_limit = max(1, min(int(limit or 50), 100))
+    resolved_cursor_last_message_at = _coerce_timestamptz(cursor_last_message_at)
+    resolved_cursor_external_user_id = str(cursor_external_user_id or "").strip()
+    month_start, month_end = _current_utc_month_bounds()
+    today = _utc_now_ts().date()
+    async with _scoped_connection(tenant_id=resolved_tenant_id, workspace_id=resolved_workspace_id) as connection:
+        if connection is None:
+            return None
+        deployed_agent_row = await connection.fetchrow(
+            """
+            SELECT *
+            FROM deployed_agents
+            WHERE id = $1
+              AND tenant_id = $2
+              AND owner_workspace_id = $3
+            LIMIT 1
+            """,
+            resolved_deployed_agent_id,
+            resolved_tenant_id,
+            resolved_workspace_id,
+        )
+        deployed_agent = _row_to_deployed_agent(deployed_agent_row)
+        if not isinstance(deployed_agent, dict):
+            return None
+        backing_install_id = str(deployed_agent.get("backing_install_id") or "").strip()
+        metadata = _decode_json_object(deployed_agent.get("metadata"))
+        daily_message_limit = int(metadata.get("daily_message_limit") or 0) if metadata.get("daily_message_limit") is not None else 0
+        stats_row = await connection.fetchrow(
+            """
+            WITH filtered_inbound_events AS (
+                SELECT
+                    created_at,
+                    COALESCE(
+                        NULLIF(BTRIM(actor->>'id'), ''),
+                        NULLIF(BTRIM(payload->>'external_user_id'), ''),
+                        NULLIF(BTRIM(metadata->>'external_user_id'), ''),
+                        NULLIF(BTRIM(session_key), '')
+                    ) AS external_user_key
+                FROM agent_channel_events
+                WHERE tenant_id = $1
+                  AND workspace_id = $2
+                  AND direction = 'inbound'
+                  AND event_type = 'message'
+                  AND (
+                    COALESCE(metadata->>'deployed_agent_id', '') = $3
+                    OR responder_install_id = $4
+                  )
+            )
+            SELECT
+                COUNT(DISTINCT external_user_key) FILTER (
+                    WHERE COALESCE(external_user_key, '') <> ''
+                )::int AS total_users,
+                COUNT(*) FILTER (
+                    WHERE created_at >= $5::timestamptz
+                      AND created_at < $6::timestamptz
+                )::int AS messages_this_calendar_month,
+                CASE
+                    WHEN $7::int <= 0 THEN 0
+                    ELSE COALESCE((
+                        SELECT COUNT(DISTINCT external_user_id)::int
+                        FROM deployed_agent_daily_message_usage
+                        WHERE tenant_id = $1
+                          AND workspace_id = $2
+                          AND deployed_agent_id = $3
+                          AND usage_day = $8::date
+                          AND message_count >= $7::int
+                    ), 0)
+                END AS users_at_limit_today,
+                COALESCE((
+                    SELECT COUNT(*)::int
+                    FROM deployed_agent_upgrade_click_events
+                    WHERE tenant_id = $1
+                      AND workspace_id = $2
+                      AND deployed_agent_id = $3
+                      AND clicked_at >= $5::timestamptz
+                      AND clicked_at < $6::timestamptz
+                ), 0) AS upgrade_clicks_this_month
+            FROM filtered_inbound_events
+            """,
+            resolved_tenant_id,
+            resolved_workspace_id,
+            resolved_deployed_agent_id,
+            backing_install_id,
+            month_start,
+            month_end,
+            daily_message_limit,
+            today,
+        )
+        summary_rows = await connection.fetch(
+            """
+            WITH filtered_inbound_events AS (
+                SELECT
+                    created_at,
+                    COALESCE(
+                        NULLIF(BTRIM(actor->>'id'), ''),
+                        NULLIF(BTRIM(payload->>'external_user_id'), ''),
+                        NULLIF(BTRIM(metadata->>'external_user_id'), ''),
+                        NULLIF(BTRIM(session_key), '')
+                    ) AS external_user_key
+                FROM agent_channel_events
+                WHERE tenant_id = $1
+                  AND workspace_id = $2
+                  AND direction = 'inbound'
+                  AND event_type = 'message'
+                  AND (
+                    COALESCE(metadata->>'deployed_agent_id', '') = $3
+                    OR responder_install_id = $4
+                  )
+            ),
+            grouped_users AS (
+                SELECT
+                    external_user_key AS external_user_id,
+                    MAX(created_at) AS last_message_at,
+                    COUNT(*)::int AS total_message_count
+                FROM filtered_inbound_events
+                WHERE COALESCE(external_user_key, '') <> ''
+                GROUP BY external_user_key
+            )
+            SELECT
+                external_user_id,
+                last_message_at,
+                total_message_count
+            FROM grouped_users
+            WHERE (
+                $5::timestamptz IS NULL
+                OR last_message_at < $5::timestamptz
+                OR (
+                    last_message_at = $5::timestamptz
+                    AND external_user_id < COALESCE(NULLIF($6, ''), external_user_id)
+                )
+            )
+            ORDER BY last_message_at DESC NULLS LAST, external_user_id DESC
+            LIMIT $7
+            """,
+            resolved_tenant_id,
+            resolved_workspace_id,
+            resolved_deployed_agent_id,
+            backing_install_id,
+            resolved_cursor_last_message_at,
+            resolved_cursor_external_user_id,
+            safe_limit + 1,
+        )
+        has_more = len(summary_rows) > safe_limit
+        trimmed_summary_rows = summary_rows[:safe_limit]
+        external_user_ids = []
+        for row in trimmed_summary_rows:
+            payload = dict(row)
+            external_user_id = str(payload.get("external_user_id") or "").strip()
+            if external_user_id:
+                external_user_ids.append(external_user_id)
+        memory_counts: Dict[str, int] = {}
+        if external_user_ids:
+            memory_rows = await connection.fetch(
+                """
+                SELECT external_user_id, COUNT(*)::int AS memory_entry_count
+                FROM deployed_agent_conversation_memory
+                WHERE tenant_id = $1
+                  AND workspace_id = $2
+                  AND deployed_agent_id = $3
+                  AND external_user_id = ANY($4::text[])
+                GROUP BY external_user_id
+                """,
+                resolved_tenant_id,
+                resolved_workspace_id,
+                resolved_deployed_agent_id,
+                external_user_ids,
+            )
+            for row in memory_rows:
+                payload = dict(row)
+                external_user_id = str(payload.get("external_user_id") or "").strip()
+                if not external_user_id:
+                    continue
+                memory_counts[external_user_id] = int(payload.get("memory_entry_count") or 0)
+        message_rows = []
+        if external_user_ids:
+            message_rows = await connection.fetch(
+                """
+                WITH ranked_messages AS (
+                    SELECT
+                        id,
+                        channel_key,
+                        created_at,
+                        direction,
+                        COALESCE(
+                            NULLIF(BTRIM(actor->>'id'), ''),
+                            NULLIF(BTRIM(payload->>'external_user_id'), ''),
+                            NULLIF(BTRIM(metadata->>'external_user_id'), ''),
+                            NULLIF(BTRIM(session_key), '')
+                        ) AS external_user_key,
+                        COALESCE(
+                            NULLIF(BTRIM(text), ''),
+                            NULLIF(BTRIM(payload->>'text'), ''),
+                            NULLIF(BTRIM(payload->>'summary'), ''),
+                            NULLIF(BTRIM(payload->>'message'), '')
+                        ) AS content_text,
+                        ROW_NUMBER() OVER (
+                            PARTITION BY COALESCE(
+                                NULLIF(BTRIM(actor->>'id'), ''),
+                                NULLIF(BTRIM(payload->>'external_user_id'), ''),
+                                NULLIF(BTRIM(metadata->>'external_user_id'), ''),
+                                NULLIF(BTRIM(session_key), '')
+                            )
+                            ORDER BY created_at DESC, id DESC
+                        ) AS row_number
+                    FROM agent_channel_events
+                    WHERE tenant_id = $1
+                      AND workspace_id = $2
+                      AND event_type = 'message'
+                      AND (
+                        COALESCE(metadata->>'deployed_agent_id', '') = $3
+                        OR responder_install_id = $4
+                      )
+                      AND COALESCE(
+                            NULLIF(BTRIM(actor->>'id'), ''),
+                            NULLIF(BTRIM(payload->>'external_user_id'), ''),
+                            NULLIF(BTRIM(metadata->>'external_user_id'), ''),
+                            NULLIF(BTRIM(session_key), '')
+                          ) = ANY($5::text[])
+                )
+                SELECT *
+                FROM ranked_messages
+                WHERE row_number <= 5
+                ORDER BY external_user_key ASC, created_at DESC, id DESC
+                """,
+                resolved_tenant_id,
+                resolved_workspace_id,
+                resolved_deployed_agent_id,
+                backing_install_id,
+                external_user_ids,
+            )
+        messages_by_user: Dict[str, List[Dict[str, Any]]] = {}
+        for row in message_rows:
+            payload = dict(row)
+            external_user_id = str(payload.get("external_user_key") or "").strip()
+            if not external_user_id:
+                continue
+            messages_by_user.setdefault(external_user_id, []).append(
+                {
+                    "id": str(payload.get("id") or "").strip() or None,
+                    "role": "user" if str(payload.get("direction") or "").strip().lower() == "inbound" else "agent",
+                    "content": str(payload.get("content_text") or "").strip(),
+                    "created_at": _iso(payload.get("created_at")),
+                    "channel": str(payload.get("channel_key") or "").strip().lower() or None,
+                }
+            )
+        user_rows = []
+        for row in trimmed_summary_rows:
+            payload = dict(row)
+            external_user_id = str(payload.get("external_user_id") or "").strip()
+            user_rows.append(
+                {
+                    "external_user_id": external_user_id or None,
+                    "last_message_at": _iso(payload.get("last_message_at")),
+                    "total_message_count": int(payload.get("total_message_count") or 0),
+                    "memory_entry_count": memory_counts.get(external_user_id, 0),
+                    "last_5_messages": messages_by_user.get(external_user_id, []),
+                }
+            )
+    next_cursor_last_message_at: Optional[str] = None
+    next_cursor_external_user_id: Optional[str] = None
+    if has_more and trimmed_summary_rows:
+        final_row = dict(trimmed_summary_rows[-1])
+        next_cursor_last_message_at = _iso(final_row.get("last_message_at"))
+        token = str(final_row.get("external_user_id") or "").strip()
+        next_cursor_external_user_id = token or None
+    stats_payload = dict(stats_row) if stats_row is not None else {}
+    total_users = int(stats_payload.get("total_users") or 0)
+    return {
+        "deployed_agent_id": resolved_deployed_agent_id,
+        "total_users": total_users,
+        "messages_this_calendar_month": int(stats_payload.get("messages_this_calendar_month") or 0),
+        "users_at_limit_today": int(stats_payload.get("users_at_limit_today") or 0),
+        "upgrade_clicks_this_month": int(stats_payload.get("upgrade_clicks_this_month") or 0),
+        "user_rows": user_rows,
+        "limit": safe_limit,
+        "offset": max(0, int(offset or 0)),
+        "has_more": has_more if total_users > 0 else False,
+        "next_cursor_last_message_at": next_cursor_last_message_at,
+        "next_cursor_external_user_id": next_cursor_external_user_id,
+    }
+
+
+async def list_public_deployed_agents(
+    *,
+    category: Optional[str] = None,
+    cost_tier: Optional[str] = None,
+    limit: int = 100,
+    offset: int = 0,
+) -> List[Dict[str, Any]]:
+    safe_limit = max(1, min(int(limit or 100), 200))
+    safe_offset = max(0, int(offset or 0))
+    resolved_category = str(category or "").strip().lower()
+    resolved_cost_tier = str(cost_tier or "").strip().lower()
+    async with _scoped_connection(bypass_rls=True) as connection:
+        if connection is None:
+            return []
+        rows = await connection.fetch(
+            """
+            SELECT *
+            FROM deployed_agents
+            WHERE is_public = TRUE
+              AND deployment_state = 'live'
+              AND ($1 = '' OR LOWER(COALESCE(category, '')) = $1)
+              AND ($2 = '' OR cost_tier = $2)
+            ORDER BY
+              quality_stars DESC NULLS LAST,
+              updated_at DESC,
+              id DESC
+            LIMIT $3 OFFSET $4
+            """,
+            resolved_category,
+            resolved_cost_tier,
+            safe_limit,
+            safe_offset,
+        )
+    items: List[Dict[str, Any]] = []
+    for row in rows:
+        deployed_agent = _row_to_deployed_agent(row)
+        if not isinstance(deployed_agent, dict):
+            continue
+        telegram_binding = _decode_json_object(_decode_json_object(deployed_agent.get("channels")).get("telegram"))
+        metadata = _decode_json_object(deployed_agent.get("metadata"))
+        bot_username = (
+            str(telegram_binding.get("bot_username") or "").strip()
+            or str(metadata.get("telegram_bot_username") or "").strip()
+            or None
+        )
+        items.append(
+            {
+                "id": deployed_agent.get("id"),
+                "name": deployed_agent.get("name"),
+                "description": deployed_agent.get("persona"),
+                "category": deployed_agent.get("category"),
+                "quality_stars": deployed_agent.get("quality_stars"),
+                "cost_tier": deployed_agent.get("cost_tier"),
+                "telegram_bot_username": bot_username,
+            }
+        )
+    return items
+
+
+async def record_deployed_agent_upgrade_click(
+    *,
+    tenant_id: str,
+    workspace_id: str,
+    deployed_agent_id: str,
+    acquisition_touch_id: Optional[str],
+    channel_key: str,
+    external_user_id: str,
+    source: Optional[str],
+    attribution_token_hash: str,
+    metadata: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    resolved_tenant_id = _require_scope_token(tenant_id, "tenant_id")
+    resolved_workspace_id = _require_scope_token(workspace_id, "workspace_id")
+    resolved_deployed_agent_id = _require_scope_token(deployed_agent_id, "deployed_agent_id")
+    resolved_channel_key = _require_scope_token(channel_key, "channel_key").lower()
+    resolved_external_user_id = _require_scope_token(external_user_id, "external_user_id")
+    resolved_token_hash = _require_scope_token(attribution_token_hash, "attribution_token_hash")
+    resolved_touch_id = str(acquisition_touch_id or "").strip() or None
+    resolved_source = str(source or "").strip().lower()
+    event_id = f"dagent_click_{uuid.uuid4().hex[:16]}"
+    now_ts = _utc_now_ts()
+    duplicate = False
+    async with _scoped_connection(tenant_id=resolved_tenant_id, workspace_id=resolved_workspace_id) as connection:
+        if connection is None:
+            return {
+                "recorded": False,
+                "duplicate": False,
+            }
+        inserted = await connection.fetchrow(
+            """
+            INSERT INTO deployed_agent_upgrade_click_events (
+                id, tenant_id, workspace_id, deployed_agent_id, acquisition_touch_id,
+                channel_key, external_user_id, source, attribution_token_hash, clicked_at,
+                metadata, created_at
+            ) VALUES (
+                $1, $2, $3, $4, $5,
+                $6, $7, $8, $9, $10::timestamptz,
+                $11::jsonb, $10::timestamptz
+            )
+            ON CONFLICT (attribution_token_hash)
+            DO NOTHING
+            RETURNING id
+            """,
+            event_id,
+            resolved_tenant_id,
+            resolved_workspace_id,
+            resolved_deployed_agent_id,
+            resolved_touch_id,
+            resolved_channel_key,
+            resolved_external_user_id,
+            resolved_source,
+            resolved_token_hash,
+            now_ts,
+            _to_json(metadata, default={}),
+        )
+        duplicate = inserted is None
+        if inserted is not None and resolved_touch_id:
+            await connection.execute(
+                """
+                UPDATE channel_user_acquisition_touches
+                SET
+                    limit_hit_click_at = $4::timestamptz,
+                    limit_hit_click_source = COALESCE(NULLIF($5, ''), limit_hit_click_source),
+                    updated_at = $4::timestamptz
+                WHERE id = $1
+                  AND tenant_id = $2
+                  AND workspace_id = $3
+                """,
+                resolved_touch_id,
+                resolved_tenant_id,
+                resolved_workspace_id,
+                now_ts,
+                resolved_source,
+            )
+    return {
+        "recorded": True,
+        "duplicate": duplicate,
+        "clicked_at": now_ts.isoformat().replace("+00:00", "Z"),
+        "deployed_agent_id": resolved_deployed_agent_id,
+    }
+
+
 async def list_deployed_agents_for_workspace(
     owner_workspace_id: str,
     *,
@@ -5122,6 +5650,10 @@ async def update_deployed_agent(
         "knowledge_sources": "knowledge_sources",
         "runtime_target": "runtime_target",
         "billing_plan": "billing_plan",
+        "is_public": "is_public",
+        "quality_stars": "quality_stars",
+        "cost_tier": "cost_tier",
+        "category": "category",
         "metadata": "metadata",
         "operational_state": "operational_state",
         "last_deployed_at": "last_deployed_at",

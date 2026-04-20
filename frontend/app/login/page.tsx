@@ -15,8 +15,16 @@ export default function LoginPage() {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const agentParam = String(searchParams.get('agent') || '').trim();
-  const signupHref = agentParam
-    ? `/signup?agent=${encodeURIComponent(agentParam)}`
+  const channelAttribution = String(searchParams.get('channel_attribution') || '').trim();
+  const signupSearchParams = new URLSearchParams();
+  if (agentParam) {
+    signupSearchParams.set('agent', agentParam);
+  }
+  if (channelAttribution) {
+    signupSearchParams.set('channel_attribution', channelAttribution);
+  }
+  const signupHref = signupSearchParams.size > 0
+    ? `/signup?${signupSearchParams.toString()}`
     : '/signup';
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {

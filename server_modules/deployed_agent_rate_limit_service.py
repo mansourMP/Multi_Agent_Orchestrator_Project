@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional
 
+from server_modules import channel_user_acquisition_service
 from server_modules import control_plane_repository
 from server_modules import deployed_agent_config_schema
 
@@ -101,6 +102,30 @@ async def enforce_deployed_agent_daily_message_limit(
     allowed = bool(usage_payload.get("quota_consumed"))
     remaining = max(int(limit) - message_count, 0)
     reset_at = _next_utc_midnight(now)
+    channel_attribution: Optional[str] = None
+    normalized_channel_key = str(channel_key or "").strip().lower() or "telegram"
+    if not allowed and resolved_external_user_id:
+        deployed_agent_payload = dict(deployed_agent or {})
+        channel_bindings = _coerce_dict(deployed_agent_payload.get("channels"))
+        selected_binding = _coerce_dict(channel_bindings.get(normalized_channel_key))
+        acquisition = channel_user_acquisition_service.get_channel_user_acquisition_service()
+        try:
+            attribution_payload = acquisition.ensure_touch_attribution_token(
+                tenant_id=str(tenant_id or "").strip(),
+                workspace_id=str(workspace_id or "").strip(),
+                deployed_agent_id=str(deployed_agent_id or "").strip(),
+                channel_key=normalized_channel_key,
+                external_user_id=resolved_external_user_id,
+                endpoint_key=_normalize_optional_text(selected_binding.get("endpoint_key")),
+                source=f"{normalized_channel_key}_limit_hit",
+                metadata={
+                    "daily_limit_triggered": True,
+                    "message_id": _normalize_optional_text(message_id),
+                },
+            )
+            channel_attribution = _normalize_optional_text(attribution_payload.get("attribution_token"))
+        except Exception:
+            channel_attribution = None
     return {
         **settings,
         "applied": True,
@@ -111,4 +136,5 @@ async def enforce_deployed_agent_daily_message_limit(
         "warning_sent": bool(usage_payload.get("warning_sent")),
         "retry_after_seconds": max(int((reset_at - (now.astimezone(timezone.utc) if isinstance(now, datetime) else datetime.now(timezone.utc))).total_seconds()), 1),
         "reset_at": reset_at.isoformat().replace("+00:00", "Z"),
+        "channel_attribution": channel_attribution,
     }

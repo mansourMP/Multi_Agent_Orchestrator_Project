@@ -42,6 +42,10 @@ DEPLOYED_AGENT_PUBLIC_FIELDS = (
     "knowledge_sources",
     "runtime_target",
     "billing_plan",
+    "is_public",
+    "quality_stars",
+    "cost_tier",
+    "category",
     "created_at",
     "updated_at",
 )
@@ -1943,6 +1947,41 @@ async def update_deployed_agent(
             updates.get("billing_plan"),
             default=config_defaults_service.default_deployed_agent_billing_plan(),
         )
+    if "is_public" in updates:
+        candidate_record["is_public"] = bool(updates.get("is_public"))
+    if "category" in updates:
+        normalized_category = _normalize_optional_text(updates.get("category"))
+        candidate_record["category"] = normalized_category.lower() if normalized_category else None
+    operator_fields_requested = {
+        key for key in ("quality_stars", "cost_tier")
+        if key in updates
+    }
+    if operator_fields_requested and not auth_module.current_user_has_auth_admin_access(current_user):
+        raise HTTPException(
+            status_code=403,
+            detail="Only platform operators may update marketplace ratings and cost tiers.",
+        )
+    if "quality_stars" in updates:
+        raw_quality_stars = updates.get("quality_stars")
+        if raw_quality_stars is None:
+            candidate_record["quality_stars"] = None
+        else:
+            try:
+                parsed_quality_stars = int(raw_quality_stars)
+            except (TypeError, ValueError) as error:
+                raise _http_bad_request("quality_stars must be an integer between 1 and 5.") from error
+            if parsed_quality_stars < 1 or parsed_quality_stars > 5:
+                raise _http_bad_request("quality_stars must be between 1 and 5.")
+            candidate_record["quality_stars"] = parsed_quality_stars
+    if "cost_tier" in updates:
+        raw_cost_tier = _normalize_optional_text(updates.get("cost_tier"))
+        if raw_cost_tier is None:
+            candidate_record["cost_tier"] = None
+        else:
+            normalized_cost_tier = raw_cost_tier.lower()
+            if normalized_cost_tier not in {"free", "standard", "premium"}:
+                raise _http_bad_request("cost_tier must be one of free, standard, or premium.")
+            candidate_record["cost_tier"] = normalized_cost_tier
     if "metadata" in updates:
         try:
             candidate_record["metadata"] = _normalize_deployed_agent_metadata(
@@ -1992,6 +2031,10 @@ async def update_deployed_agent(
         "knowledge_sources": next_config.knowledge_sources,
         "runtime_target": next_config.runtime_target,
         "billing_plan": next_config.billing_plan,
+        "is_public": bool(candidate_record.get("is_public")),
+        "quality_stars": candidate_record.get("quality_stars"),
+        "cost_tier": candidate_record.get("cost_tier"),
+        "category": _normalize_optional_text(candidate_record.get("category")),
         "metadata": _metadata_from_config(
             next_config,
             existing_metadata=_coerce_dict(existing.get("metadata")),

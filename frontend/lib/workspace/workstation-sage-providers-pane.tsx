@@ -33,20 +33,12 @@ const SUPPORTED_PROVIDER_IDS = [
   'openai',
   'anthropic',
   'gemini',
-  'mistral',
-  'deepseek',
-  'qwen',
-  'ollama',
 ] as const;
 
 const FALLBACK_PROVIDER_LABELS: Record<string, string> = {
   openai: 'OpenAI',
   anthropic: 'Anthropic',
   gemini: 'Gemini',
-  mistral: 'Mistral',
-  deepseek: 'DeepSeek',
-  qwen: 'Qwen',
-  ollama: 'Ollama',
 };
 
 function readString(value: unknown, fallback = ''): string {
@@ -169,11 +161,14 @@ export function WorkstationSageProvidersPane() {
   const [providerModelOverrides, setProviderModelOverrides] = useState<Record<string, ProviderCatalogModelRecord[]>>({});
 
   async function loadProviders(): Promise<void> {
-    const [catalogPayload, profilePayload, credentialPayload] = await Promise.all([
+    const [catalogResult, profileResult, credentialResult] = await Promise.allSettled([
       services.client.listProviderCatalog(),
       services.client.listProviderProfiles(),
       services.client.listVaultCredentials(),
     ]);
+    const catalogPayload = catalogResult.status === 'fulfilled' ? catalogResult.value : null;
+    const profilePayload = profileResult.status === 'fulfilled' ? profileResult.value : { items: [] };
+    const credentialPayload = credentialResult.status === 'fulfilled' ? credentialResult.value : { items: [] };
     const normalizedProviders = normalizeProviderCatalog(catalogPayload);
     setProviders(normalizedProviders.length > 0 ? normalizedProviders : fallbackProviderCatalog());
     setProfiles(normalizeProviderProfiles(profilePayload));

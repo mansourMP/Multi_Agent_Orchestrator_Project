@@ -838,16 +838,19 @@ def parse_no_provider_memory_write(message: str) -> Dict[str, str] | None:
 def parse_no_provider_memory_read(message: str) -> str | None:
     text = str(message or "").strip()
     compact = re.sub(r"\s+", " ", text.lower()).strip()
+    compact = compact.rstrip("?.! ")
     if not text:
         return None
-    if compact == "what is my name" or compact == "recall my name":
+    if compact in {"what is my name", "what's my name", "recall my name"}:
         return "name"
+    question_text = text.rstrip("?.! ").strip()
     for pattern in (
         r"what\s+is\s+([a-z0-9_. -]+)$",
+        r"what'?s\s+([a-z0-9_. -]+)$",
         r"recall\s+([a-z0-9_. -]+)$",
         r"what\s+did\s+i\s+say\s+about\s+([a-z0-9_. -]+)$",
     ):
-        match = re.search(pattern, text, flags=re.IGNORECASE)
+        match = re.search(pattern, question_text, flags=re.IGNORECASE)
         if match:
             return str(match.group(1) or "").strip()
     return None

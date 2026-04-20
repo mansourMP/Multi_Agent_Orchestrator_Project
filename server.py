@@ -140,6 +140,7 @@ from server_modules.routes_builder import router as builder_router
 from server_modules.routes_connectors import router as connectors_router
 from server_modules.routes_deployed_agents import router as deployed_agents_router
 from server_modules.routes_health import router as health_router
+from server_modules.routes_marketplace import router as marketplace_router
 from server_modules.routes_mini_apps import router as mini_apps_router
 from server_modules.routes_platform_analytics import router as platform_analytics_router
 from server_modules.routes_runs import router as runs_router
@@ -222,6 +223,7 @@ app.include_router(billing_router, prefix="/api")
 app.include_router(deployed_agents_router, prefix="/api")
 app.include_router(agent_traces_router, prefix="/api")
 app.include_router(platform_analytics_router, prefix="/api")
+app.include_router(marketplace_router, prefix="/api")
 app.include_router(auth_router, prefix="/api/v1")
 
 

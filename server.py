@@ -252,7 +252,7 @@ def _runtime_cli_args() -> argparse.Namespace:
 def main() -> None:
     args = _runtime_cli_args()
     uvicorn.run(
-        "server:app",
+        app,
         host=args.host,
         port=args.port,
         reload=args.reload,

@@ -65,8 +65,33 @@ class ConnectorRouteSecurityBoundaryTests(unittest.TestCase):
         enforce_mock.assert_called_once_with(
             current_user,
             "finance",
-            minimum_role="owner",
-            capability_id="connectors.manage",
+            minimum_role="member",
+        )
+        list_mock.assert_awaited_once_with(workspace_id="finance")
+        self.assertEqual(result, {"providers": []})
+
+    def test_provider_model_catalog_route_enforces_member_workspace_access(self) -> None:
+        request = Request(
+            {
+                "type": "http",
+                "method": "GET",
+                "path": "/providers/catalog",
+                "query_string": b"workspace_id=finance",
+                "headers": [],
+            }
+        )
+        current_user = {"workspace_ids": {"finance"}, "workspace_roles": {"finance": "member"}}
+        with patch.object(routes_connectors, "enforce_workspace_access", return_value="finance") as enforce_mock, patch.object(
+            routes_connectors.provider_catalog_service,
+            "list_workspace_provider_catalog",
+            new=AsyncMock(return_value={"providers": []}),
+        ) as list_mock:
+            result = asyncio.run(routes_connectors.providers_model_catalog(request, current_user=current_user))
+
+        enforce_mock.assert_called_once_with(
+            current_user,
+            "finance",
+            minimum_role="member",
         )
         list_mock.assert_awaited_once_with(workspace_id="finance")
         self.assertEqual(result, {"providers": []})

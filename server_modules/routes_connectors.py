@@ -80,8 +80,7 @@ async def providers_catalog(
     workspace_id = enforce_workspace_access(
         current_user,
         request.query_params.get("workspace_id"),
-        minimum_role="owner",
-        capability_id="connectors.manage",
+        minimum_role="member",
     )
     return await core.list_providers(workspace_id=workspace_id)
 
@@ -93,8 +92,7 @@ async def providers_model_catalog(
     workspace_id = enforce_workspace_access(
         current_user,
         request.query_params.get("workspace_id"),
-        minimum_role="owner",
-        capability_id="connectors.manage",
+        minimum_role="member",
     )
     return await provider_catalog_service.list_workspace_provider_catalog(workspace_id=workspace_id)
 

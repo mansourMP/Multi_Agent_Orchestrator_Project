@@ -656,6 +656,18 @@ function isProviderEligibleForModelSelector(provider: ProviderCatalogRecord): bo
   return provider.usable === true || provider.active === true;
 }
 
+function isProviderEligibleForWorkspaceDefault(provider: ProviderCatalogRecord): boolean {
+  const providerId = readString(provider.id).toLowerCase();
+  if (!providerId || providerId === 'openai-codex') {
+    return false;
+  }
+  const state = readString(provider.state).toLowerCase();
+  if (provider.usable === true || provider.active === true) {
+    return true;
+  }
+  return state === 'configured';
+}
+
 function disconnectedModelOption(): ChatModelOption {
   return {
     id: 'default',
@@ -1201,6 +1213,7 @@ function resolveProviderModelContext({
   modelLabel: string | null;
 } {
   const availableProviders = providers.filter(isProviderEligibleForModelSelector);
+  const workspaceDefaultProviders = providers.filter(isProviderEligibleForWorkspaceDefault);
   const normalizedSelectedProviderId = readString(selectedProviderId);
 
   const findModelInProvider = (provider: ProviderCatalogRecord, modelId: string) => {
@@ -1243,10 +1256,10 @@ function resolveProviderModelContext({
 
   const orderedProviders = normalizedSelectedProviderId
     ? [
-      ...availableProviders.filter((provider) => readString(provider.id) === normalizedSelectedProviderId),
-      ...availableProviders.filter((provider) => readString(provider.id) !== normalizedSelectedProviderId),
+      ...workspaceDefaultProviders.filter((provider) => readString(provider.id) === normalizedSelectedProviderId),
+      ...workspaceDefaultProviders.filter((provider) => readString(provider.id) !== normalizedSelectedProviderId),
     ]
-    : availableProviders;
+    : workspaceDefaultProviders;
 
   for (const provider of orderedProviders) {
     const defaultModelId = readString(provider.default_model);

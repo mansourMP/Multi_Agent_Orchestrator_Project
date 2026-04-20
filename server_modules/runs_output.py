@@ -1,6 +1,6 @@
 from server_modules import runtime_config as config
 from server_modules import shared as shared
-from server_modules.capability_registry import resolve_capability
+from server_modules import browser_checkpoint_service
 from server_modules import runtime_common as common
 from server_modules import run_state_repository
 from server_modules import usage_accounting_service
@@ -77,28 +77,7 @@ def _active_profile_snapshot(run: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _browser_introspection_snapshot(run: Dict[str, Any], result_data: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
-    browser_action: Optional[Dict[str, Any]] = None
-    outputs = result_data.get("outputs") if isinstance(result_data, dict) and isinstance(result_data.get("outputs"), dict) else {}
-    actions = outputs.get("actions") if isinstance(outputs.get("actions"), list) else []
-    for item in reversed(actions):
-        if not isinstance(item, dict):
-            continue
-        raw_tool = str(item.get("tool") or "").strip().lower()
-        contract = resolve_capability(raw_tool)
-        tool_id = str(contract.capability_id).strip().lower() if contract is not None else raw_tool
-        if tool_id == "browser_automation.interactive":
-            browser_action = item
-            break
-    checkpoint = run.get("browser_checkpoint") if isinstance(run.get("browser_checkpoint"), dict) else {}
-    if not browser_action and not checkpoint:
-        return None
-    return {
-        "tabs": browser_action.get("tabs") if isinstance(browser_action, dict) and isinstance(browser_action.get("tabs"), list) else checkpoint.get("tabs") if isinstance(checkpoint.get("tabs"), list) else [],
-        "console_entries": browser_action.get("console_entries") if isinstance(browser_action, dict) and isinstance(browser_action.get("console_entries"), list) else [],
-        "network_failures": browser_action.get("network_failures") if isinstance(browser_action, dict) and isinstance(browser_action.get("network_failures"), list) else [],
-        "role_snapshot": browser_action.get("role_snapshot") if isinstance(browser_action, dict) and isinstance(browser_action.get("role_snapshot"), list) else checkpoint.get("role_snapshot") if isinstance(checkpoint.get("role_snapshot"), list) else [],
-        "accessibility_snapshot": browser_action.get("accessibility_snapshot") if isinstance(browser_action, dict) and isinstance(browser_action.get("accessibility_snapshot"), dict) else checkpoint.get("accessibility_snapshot") if isinstance(checkpoint.get("accessibility_snapshot"), dict) else {},
-    }
+    return browser_checkpoint_service.browser_introspection_snapshot(run, result_data)
 
 
 def _serialize_provider_model_truth(
@@ -469,10 +448,10 @@ def _serialize_run_snapshot(run_id: str, run: Dict[str, Any]) -> Dict[str, Any]:
         "pending_approval": run.get("pending_confirmation") if isinstance(run.get("pending_confirmation"), dict)
         else run.get("pending_approval") if isinstance(run.get("pending_approval"), dict)
         else None,
-        "browser_checkpoint": run.get("browser_checkpoint") if isinstance(run.get("browser_checkpoint"), dict) else None,
+        "browser_checkpoint": browser_checkpoint_service.browser_checkpoint_from_run(run) or None,
         "browser_introspection": browser_introspection,
         "browser_execution_binding": metadata.get("browser_execution_binding") if isinstance(metadata.get("browser_execution_binding"), dict) else None,
-        "browser_resume_supported": metadata.get("browser_resume_supported"),
+        "browser_resume_supported": browser_checkpoint_service.browser_resume_supported(run, metadata),
         "local_claimed_at": run.get("local_claimed_at"),
         "local_last_heartbeat_at": run.get("local_last_heartbeat_at"),
         "resume_after_confirmation_scheduled": bool(run.get("_resume_after_confirmation_scheduled")),

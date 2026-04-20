@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any, Callable
 
+from server_modules import browser_checkpoint_service
+
 
 def run_thread_is_alive(
     run: dict,
@@ -55,8 +57,11 @@ def schedule_restored_run_resume(
         run["_resume_after_confirmation_scheduled"] = True
         run["thread_id"] = None
         run["updated_at"] = utc_now_iso()
-        checkpoint = run.get("browser_checkpoint") if isinstance(run.get("browser_checkpoint"), dict) else {}
-        metadata["browser_resume_supported"] = bool(checkpoint)
+        checkpoint = browser_checkpoint_service.browser_checkpoint_from_run(run)
+        metadata["browser_resume_supported"] = browser_checkpoint_service.browser_resume_supported(
+            run,
+            metadata,
+        )
         context["metadata"] = metadata
         run["context"] = context
         late_server_export("_enqueue_local_companion_run")(

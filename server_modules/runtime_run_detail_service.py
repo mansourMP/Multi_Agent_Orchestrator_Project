@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any, Callable, Optional
 
+from server_modules import browser_checkpoint_service
+
 
 FAILURE_STATUSES = {"failed", "error", "stopped", "timeout", "cancelled"}
 TERMINAL_STATUSES = FAILURE_STATUSES | {"completed", "success"}
@@ -74,10 +76,7 @@ def build_run_diagnostics(
     route_fallback = _text(source.get("execution_target_fallback") or metadata.get("execution_target_fallback")) or None
     local_last_heartbeat_at = source.get("local_last_heartbeat_at")
     result_data = source.get("result_data") if isinstance(source.get("result_data"), dict) else {}
-    browser_resume_supported = bool(
-        source.get("browser_resume_supported")
-        or metadata.get("browser_resume_supported")
-    )
+    browser_resume_supported = browser_checkpoint_service.browser_resume_supported(source, metadata)
     local_execution_resume_supported = bool(
         source.get("local_execution_checkpoint")
         or result_data.get("local_execution_checkpoint")

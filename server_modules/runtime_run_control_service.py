@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any, Callable
 
 from fastapi import HTTPException
+from server_modules import browser_checkpoint_service
 
 
 def local_worker_recovery_confirmation_required(run: dict[str, Any]) -> bool:
@@ -12,13 +13,14 @@ def local_worker_recovery_confirmation_required(run: dict[str, Any]) -> bool:
 
 
 def local_worker_recovery_confirmation_prompt(run: dict[str, Any]) -> str:
-    checkpoint = run.get("browser_checkpoint") if isinstance(run.get("browser_checkpoint"), dict) else {}
+    checkpoint = browser_checkpoint_service.browser_checkpoint_from_run(run)
     context = run.get("context") if isinstance(run.get("context"), dict) else {}
     metadata = context.get("metadata") if isinstance(context.get("metadata"), dict) else {}
     attempt_count = int(metadata.get("local_worker_recovery_attempt_count") or 0)
     max_auto_retries = int(metadata.get("local_worker_recovery_max_auto_retries") or attempt_count or 1)
-    next_action_index = checkpoint.get("next_action_index")
-    session_profile = str(checkpoint.get("session_profile") or "").strip()
+    checkpoint_details = browser_checkpoint_service.checkpoint_summary(checkpoint)
+    next_action_index = checkpoint_details.get("next_action_index")
+    session_profile = str(checkpoint_details.get("session_profile") or "").strip()
     details = [
         "Local companion recovery exhausted its automatic retry budget after repeated worker loss.",
         "Approve only if you want to try resuming this unstable local checkpoint again.",
@@ -59,7 +61,7 @@ def _local_execution_checkpoint(run: dict[str, Any]) -> dict[str, Any]:
 
 
 def _resume_capability(snapshot_run: dict[str, Any]) -> tuple[str, dict[str, Any]]:
-    browser_checkpoint = snapshot_run.get("browser_checkpoint") if isinstance(snapshot_run.get("browser_checkpoint"), dict) else {}
+    browser_checkpoint = browser_checkpoint_service.browser_checkpoint_from_run(snapshot_run)
     if browser_checkpoint:
         return "browser_checkpoint", dict(browser_checkpoint)
     local_execution_checkpoint = _local_execution_checkpoint(snapshot_run)
@@ -221,7 +223,7 @@ def resolve_local_worker_recovery_approval(
     run["context"] = context
     clear_pending_confirmation(run)
 
-    checkpoint = run.get("browser_checkpoint") if isinstance(run.get("browser_checkpoint"), dict) else {}
+    checkpoint = browser_checkpoint_service.browser_checkpoint_from_run(run)
 
     if approved:
         emit_log(
@@ -234,8 +236,7 @@ def resolve_local_worker_recovery_approval(
                 "approval_id": approval_id,
                 "correlation_id": correlation_id,
                 "attempt_count": int(metadata.get("local_worker_recovery_attempt_count") or 0),
-                "next_action_index": checkpoint.get("next_action_index"),
-                "session_profile": checkpoint.get("session_profile"),
+                **browser_checkpoint_service.checkpoint_summary(checkpoint),
             },
         )
         append_approval_audit(
@@ -277,8 +278,7 @@ def resolve_local_worker_recovery_approval(
         "manual_confirmation_required": True,
         "decision": "escalated" if escalated else "rejected",
         "attempt_count": int(metadata.get("local_worker_recovery_attempt_count") or 0),
-        "next_action_index": checkpoint.get("next_action_index"),
-        "session_profile": checkpoint.get("session_profile"),
+        **browser_checkpoint_service.checkpoint_summary(checkpoint),
     }
     metadata["local_worker_recovery_manual_confirmation_required"] = True
     context["metadata"] = metadata
@@ -354,8 +354,7 @@ def resume_waiting_run(
             metadata={
                 "kind": "local_worker_recovery_resume",
                 "reason": "local_worker_recovery_exhausted",
-                "next_action_index": checkpoint.get("next_action_index"),
-                "session_profile": checkpoint.get("session_profile"),
+                **browser_checkpoint_service.checkpoint_summary(checkpoint),
             },
         )
         return {
@@ -392,8 +391,7 @@ def resume_waiting_run(
         event=("browser_resume_requested" if resume_kind == "browser_checkpoint" else "local_execution_resume_requested"),
         data={
             "run_id": run_id,
-            "next_action_index": checkpoint.get("next_action_index"),
-            "session_profile": checkpoint.get("session_profile"),
+            **browser_checkpoint_service.checkpoint_summary(checkpoint),
         },
     )
     emit_log(
@@ -425,6 +423,6 @@ def resume_waiting_run(
         "status": "ok",
         "run_id": run_id,
         "resume_kind": resume_kind,
-        "next_action_index": checkpoint.get("next_action_index"),
+        "next_action_index": browser_checkpoint_service.checkpoint_next_action_index(checkpoint),
         "next_operation_index": checkpoint.get("next_operation_index"),
     }

@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Mapping, Optional
 
 from fastapi import HTTPException
+from server_modules import browser_checkpoint_service
 from server_modules import machine_lease_service, usage_accounting_service
 
 
@@ -313,10 +314,12 @@ def pause_local_run(
         pause_data.setdefault("resume_available", True)
         metadata["local_execution_checkpoint"] = dict(local_execution_checkpoint)
         metadata["local_execution_resume_supported"] = True
-    if isinstance(browser_checkpoint, dict):
-        run["browser_checkpoint"] = browser_checkpoint
-        metadata["browser_checkpoint"] = browser_checkpoint
-        metadata["browser_resume_supported"] = True
+    checkpoint = browser_checkpoint_service.attach_browser_checkpoint(
+        run,
+        browser_checkpoint,
+        metadata=metadata,
+    )
+    if checkpoint:
         pause_data.setdefault("resume_available", True)
 
     resolved_text = str(result_text or "").strip()
@@ -348,8 +351,7 @@ def pause_local_run(
         data={
             "run_id": run_id,
             "wait_reason": resolved_wait_reason,
-            "session_profile": browser_checkpoint.get("session_profile") if isinstance(browser_checkpoint, dict) else None,
-            "next_action_index": browser_checkpoint.get("next_action_index") if isinstance(browser_checkpoint, dict) else None,
+            **browser_checkpoint_service.checkpoint_summary(checkpoint),
         },
     )
     if manual_takeover:

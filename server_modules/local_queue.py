@@ -16,6 +16,7 @@ from typing import Any, Dict, List, Optional
 from fastapi import HTTPException
 from pydantic import BaseModel, Field
 from server_modules import machine_lease_service, outbox_service, run_state_repository, safe_mode_service, worker_dispatch_service
+from server_modules import browser_checkpoint_service
 from server_modules.telemetry import mark_machine_revocation_requested, observe_machine_revocation_propagated
 
 _server = None
@@ -1664,7 +1665,7 @@ def _resume_due_checkpoint_recoveries() -> List[str]:
             continue
         if bool(run.get("_resume_after_confirmation_scheduled")):
             continue
-        checkpoint = run.get("browser_checkpoint") if isinstance(run.get("browser_checkpoint"), dict) else {}
+        checkpoint = browser_checkpoint_service.browser_checkpoint_from_run(run)
         if not checkpoint:
             continue
         context = run.get("context") if isinstance(run.get("context"), dict) else {}
@@ -1711,16 +1712,16 @@ def _resume_due_checkpoint_recoveries() -> List[str]:
                 data={
                     "run_id": run_id,
                     "attempt_count": int(metadata.get("local_worker_recovery_attempt_count") or 0),
-                    "next_action_index": checkpoint.get("next_action_index"),
-                    "session_profile": checkpoint.get("session_profile"),
+                    **browser_checkpoint_service.checkpoint_summary(checkpoint),
                 },
             )
     return resumed_run_ids
 
 
 def _apply_cold_boot_checkpoint_recovery_state(run_id: str, run: Dict[str, Any], checkpoint: Dict[str, Any], metadata: Dict[str, Any]) -> str:
-    checkpoint_next_action_index = checkpoint.get("next_action_index")
-    checkpoint_session_profile = checkpoint.get("session_profile")
+    checkpoint_summary = browser_checkpoint_service.checkpoint_summary(checkpoint)
+    checkpoint_next_action_index = checkpoint_summary.get("next_action_index")
+    checkpoint_session_profile = checkpoint_summary.get("session_profile")
     recovery_reason = str(metadata.get("local_worker_recovery_reason") or "").strip().lower()
     attempt_count = int(metadata.get("local_worker_recovery_attempt_count") or 0)
     max_auto_retries = int(
@@ -1735,7 +1736,10 @@ def _apply_cold_boot_checkpoint_recovery_state(run_id: str, run: Dict[str, Any],
 
     run["status"] = "waiting_for_input"
     machine_lease_service.clear_active_machine_lease_binding(run)
-    metadata["browser_resume_supported"] = True
+    metadata["browser_resume_supported"] = browser_checkpoint_service.browser_resume_supported(
+        {"browser_checkpoint": checkpoint},
+        metadata,
+    )
     metadata["resume_ready"] = True
     metadata["cold_boot_recovered"] = True
 

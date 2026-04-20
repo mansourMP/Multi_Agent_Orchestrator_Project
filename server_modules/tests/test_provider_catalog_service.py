@@ -58,6 +58,11 @@ class ProviderCatalogServiceTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(selection, {"provider": "gemini", "model": "gemini-2.5-flash"})
 
+    def test_resolve_provider_model_selection_defaults_to_live_anthropic_model(self) -> None:
+        selection = provider_catalog_service.resolve_provider_model_selection(provider="anthropic", model=None)
+
+        self.assertEqual(selection, {"provider": "anthropic", "model": "claude-3-7-sonnet-latest"})
+
     def test_resolve_provider_model_selection_normalizes_prefixed_model_ids(self) -> None:
         selection = provider_catalog_service.resolve_provider_model_selection(
             provider="anthropic",

@@ -91,6 +91,20 @@ class ProviderValidationMessageTests(unittest.TestCase):
         self.assertEqual(models, ["gpt-4o", "gpt-4o-mini"])
         http_json_request_mock.assert_called_once()
 
+    @patch("server_modules.provider_profiles.http_json_request")
+    def test_anthropic_validate_uses_current_live_model(self, http_json_request_mock):
+        http_json_request_mock.return_value = {
+            "status": 200,
+            "json": {"id": "msg_test"},
+            "text": "",
+        }
+
+        result = provider_profiles.AnthropicAdapter().validate({"api_key": "test-key"})
+
+        self.assertTrue(result["ok"])
+        _, kwargs = http_json_request_mock.call_args
+        self.assertEqual(kwargs["payload"]["model"], "claude-3-7-sonnet-latest")
+
     @patch("server_modules.provider_profiles._openai_bearer_from_credentials", return_value="token-123")
     @patch("server_modules.provider_profiles.http_json_request")
     def test_openai_validate_returns_real_error_message_on_non_200_for_standard_api_tokens(

@@ -230,8 +230,8 @@ PROVIDER_CATALOG = {
             {"id": "local_cli", "label": "Claude Subscription", "secret_required": False},
         ],
         "default_auth_mode": "api_key",
-        "default_model": "claude-3-5-sonnet-20241022",
-        "models": ["claude-3-5-sonnet-20241022", "claude-3-5-haiku-20241022", "claude-3-7-sonnet-latest"],
+        "default_model": "claude-3-7-sonnet-latest",
+        "models": ["claude-3-7-sonnet-latest", "claude-3-5-haiku-20241022", "claude-3-5-sonnet-20241022"],
         "note": "Use a direct Anthropic API key or the local Claude subscription already signed into the Claude CLI on this machine.",
     },
     "claude_code_cli": {
@@ -1280,7 +1280,7 @@ class OpenAICodexAdapter(ProviderAdapter):
 
 class AnthropicAdapter(ProviderAdapter):
     provider_id = "anthropic"
-    _validate_model = "claude-3-5-sonnet-20241022"
+    _validate_model = "claude-3-7-sonnet-latest"
 
     def _headers(self, credentials: Dict[str, Any]) -> Dict[str, str]:
         key = credentials.get("api_key") or ""

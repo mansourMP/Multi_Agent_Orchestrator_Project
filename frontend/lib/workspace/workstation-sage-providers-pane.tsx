@@ -30,7 +30,6 @@ type ProviderConnectionSnapshot = {
   credential: VaultCredentialRecord | null;
   profile: ProviderProfileRecord | null;
   connected: boolean;
-  connectedViaRuntime: boolean;
   keyTail: string | null;
 };
 
@@ -138,10 +137,6 @@ function isSecretlessConnection(providerId: string, profile: ProviderProfileReco
 
 function providerRequiresKey(providerId: string): boolean {
   return providerId !== 'ollama';
-}
-
-function isRuntimeConnected(provider: ProviderSnapshot): boolean {
-  return provider.usable || provider.active;
 }
 
 function maskKeyTail(credential: VaultCredentialRecord | null): string | null {
@@ -270,20 +265,17 @@ export function WorkstationSageProvidersPane() {
     const profile = providerProfiles[0] ?? null;
     const credential = providerCredentials[0] ?? null;
     const secretlessConnected = isSecretlessConnection(resolvedProvider.id, profile);
-    const runtimeConnected = isRuntimeConnected(resolvedProvider);
-    const connectedViaRuntime = runtimeConnected && !credential && !secretlessConnected;
-    const connected = Boolean(credential) || secretlessConnected || runtimeConnected;
+    const connected = Boolean(credential) || secretlessConnected;
     return {
       provider: resolvedProvider,
       credential,
       profile,
       connected,
-      connectedViaRuntime,
       keyTail: maskKeyTail(credential),
     };
   }), [credentials, profiles, providerModelOverrides, providers]);
 
-  async function handleSave(providerId: string, model: string | null): Promise<void> {
+  async function handleSave(providerId: string): Promise<void> {
     const trimmedKey = draftApiKey.trim();
     if (providerRequiresKey(providerId) && !trimmedKey) {
       setError('API key is required before Sage can connect this provider.');
@@ -296,7 +288,7 @@ export function WorkstationSageProvidersPane() {
       await services.client.upsertWorkspaceProviderCredential({
         provider: providerId,
         apiKey: trimmedKey || null,
-        model,
+        model: null,
       });
       await loadProviders();
       setStatus(`${providerRows.find((item) => item.provider.id === providerId)?.provider.label ?? 'Provider'} is now connected to Sage.`);
@@ -344,10 +336,9 @@ export function WorkstationSageProvidersPane() {
 
       <div className="sage-provider-list" role="list">
         {providerRows.map((item) => {
-          const { provider, credential, profile, connected, connectedViaRuntime, keyTail } = item;
+          const { provider, credential, profile, connected, keyTail } = item;
           const isExpanded = expandedProviderId === provider.id;
           const isSaving = savingProviderId === provider.id;
-          const defaultModel = readOptionalString(profile?.model) ?? provider.defaultModel;
           return (
             <article key={provider.id} className="sage-provider-row" role="listitem">
               <div className="sage-provider-row__summary">
@@ -363,11 +354,8 @@ export function WorkstationSageProvidersPane() {
                         connected && 'sage-provider-row__status--connected',
                       )}
                       >
-                        {connectedViaRuntime ? 'Connected via runtime' : connected ? 'Connected' : 'Not connected'}
+                        {connected ? 'Connected' : 'Not connected'}
                       </span>
-                      {connected && defaultModel ? (
-                        <span className="sage-provider-row__model">{defaultModel}</span>
-                      ) : null}
                     </div>
                   </div>
                 </div>
@@ -407,39 +395,35 @@ export function WorkstationSageProvidersPane() {
                       <div className="sage-provider-row__manage-copy">
                         <p className="sage-provider-row__manage-label">Current key</p>
                         <p className="sage-provider-row__manage-value">
-                          {connectedViaRuntime
-                            ? (provider.stateDetail ?? 'Managed by the runtime environment.')
-                            : keyTail
-                              ? `••••${keyTail}`
-                              : providerRequiresKey(provider.id)
-                                ? 'Saved key hidden'
-                                : 'No API key required'}
+                          {keyTail
+                            ? `••••${keyTail}`
+                            : providerRequiresKey(provider.id)
+                              ? 'Saved key hidden'
+                              : 'No API key required'}
                         </p>
                       </div>
-                      {connectedViaRuntime ? null : (
-                        <div className="sage-provider-row__manage-actions">
-                          <AppButton
-                            type="button"
-                            tone="secondary"
-                            onClick={() => {
-                              setEditorMode('rotate');
-                              setDraftApiKey('');
-                            }}
-                          >
-                            Rotate key
-                          </AppButton>
-                          <AppButton
-                            type="button"
-                            tone="ghost"
-                            disabled={isSaving}
-                            onClick={() => {
-                              void handleDisconnect(provider.id);
-                            }}
-                          >
-                            Disconnect
-                          </AppButton>
-                        </div>
-                      )}
+                      <div className="sage-provider-row__manage-actions">
+                        <AppButton
+                          type="button"
+                          tone="secondary"
+                          onClick={() => {
+                            setEditorMode('rotate');
+                            setDraftApiKey('');
+                          }}
+                        >
+                          Rotate key
+                        </AppButton>
+                        <AppButton
+                          type="button"
+                          tone="ghost"
+                          disabled={isSaving}
+                          onClick={() => {
+                            void handleDisconnect(provider.id);
+                          }}
+                        >
+                          Disconnect
+                        </AppButton>
+                      </div>
                     </div>
                   ) : (
                     <div className="sage-provider-row__form">
@@ -470,7 +454,7 @@ export function WorkstationSageProvidersPane() {
                           type="button"
                           disabled={isSaving}
                           onClick={() => {
-                            void handleSave(provider.id, defaultModel);
+                            void handleSave(provider.id);
                           }}
                         >
                           {isSaving ? 'Saving…' : 'Save'}

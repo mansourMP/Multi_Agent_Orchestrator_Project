@@ -42,7 +42,6 @@ type ProviderCardRecord = {
   credential: VaultCredentialRecord | null;
   profile: ProviderProfileRecord | null;
   connected: boolean;
-  connectedViaRuntime: boolean;
   keyTail: string | null;
 };
 
@@ -303,10 +302,6 @@ function providerRequiresKey(providerId: string): boolean {
   return providerId !== 'ollama';
 }
 
-function isRuntimeConnected(provider: ProviderSnapshot): boolean {
-  return provider.usable || provider.active;
-}
-
 function maskKeyTail(credential: VaultCredentialRecord | null): string | null {
   if (!credential || typeof credential.metadata !== 'object' || !credential.metadata) {
     return null;
@@ -372,7 +367,6 @@ export function WorkstationSageConnectorsPane({
   const [status, setStatus] = useState<string | null>(null);
   const [expandedCardId, setExpandedCardId] = useState<string | null>(null);
   const [providerDraftKeys, setProviderDraftKeys] = useState<Record<string, string>>({});
-  const [providerDraftModels, setProviderDraftModels] = useState<Record<string, string>>({});
   const [connectorMemoryEnabled, setConnectorMemoryEnabled] = useState<Record<string, boolean>>({});
   const [providerModelOverrides, setProviderModelOverrides] = useState<Record<string, ProviderCatalogModelRecord[]>>({});
   const [failedLogos, setFailedLogos] = useState<Set<string>>(() => new Set());
@@ -473,9 +467,7 @@ export function WorkstationSageConnectorsPane({
     const profile = providerProfiles[0] ?? null;
     const credential = providerCredentials[0] ?? null;
     const secretlessConnected = isSecretlessConnection(resolvedProvider.id, profile);
-    const runtimeConnected = isRuntimeConnected(resolvedProvider);
-    const connectedViaRuntime = runtimeConnected && !credential && !secretlessConnected;
-    const connected = Boolean(credential) || secretlessConnected || runtimeConnected;
+    const connected = Boolean(credential) || secretlessConnected;
     return {
       kind: 'provider',
       id: resolvedProvider.id,
@@ -486,7 +478,6 @@ export function WorkstationSageConnectorsPane({
       credential,
       profile,
       connected,
-      connectedViaRuntime,
       keyTail: maskKeyTail(credential),
     };
   }), [credentials, profiles, providerModelOverrides, providers]);
@@ -529,19 +520,6 @@ export function WorkstationSageConnectorsPane({
   }, [channelLinks, connectorIds, connectorVault]);
 
   useEffect(() => {
-    setProviderDraftModels((current) => {
-      const next = { ...current };
-      providerCards.forEach((card) => {
-        const defaultModel = readOptionalString(card.profile?.model) ?? card.provider.defaultModel;
-        if (!next[card.id] && defaultModel) {
-          next[card.id] = defaultModel;
-        }
-      });
-      return next;
-    });
-  }, [providerCards]);
-
-  useEffect(() => {
     setConnectorMemoryEnabled((current) => {
       const next = { ...current };
       connectorCards.forEach((card) => {
@@ -580,36 +558,12 @@ export function WorkstationSageConnectorsPane({
       await services.client.upsertWorkspaceProviderCredential({
         provider: record.provider.id,
         apiKey: draftApiKey || null,
-        model: readOptionalString(providerDraftModels[record.id]) ?? record.provider.defaultModel,
+        model: null,
       });
       await refreshAfterMutation(`${record.label} is now connected.`);
       setProviderDraftKeys((current) => ({ ...current, [record.id]: '' }));
     } catch (saveError) {
       setError(saveError instanceof Error ? saveError.message : 'Provider connection failed.');
-    } finally {
-      setBusyCardId(null);
-    }
-  }
-
-  async function handleProviderModelChange(record: ProviderCardRecord, model: string) {
-    setProviderDraftModels((current) => ({ ...current, [record.id]: model }));
-    setBusyCardId(record.id);
-    setError(null);
-    setStatus(null);
-    try {
-      await services.client.upsertProviderProfile({
-        id: readOptionalString(record.profile?.id),
-        provider: record.provider.id,
-        label: readString(record.profile?.label, `Sage ${record.label}`),
-        credentialId: readOptionalString(record.profile?.credential_id) ?? readOptionalString(record.credential?.id),
-        authMode: readOptionalString(record.profile?.auth_mode),
-        priority: Number(record.profile?.priority ?? 0),
-        enabled: record.profile?.enabled !== false,
-        model,
-      });
-      await refreshAfterMutation(`${record.label} model updated.`);
-    } catch (saveError) {
-      setError(saveError instanceof Error ? saveError.message : 'Provider model update failed.');
     } finally {
       setBusyCardId(null);
     }
@@ -725,14 +679,6 @@ export function WorkstationSageConnectorsPane({
 
   function renderProviderExpand(record: ProviderCardRecord) {
     const busy = busyCardId === record.id;
-    const currentModel = providerDraftModels[record.id] ?? readOptionalString(record.profile?.model) ?? record.provider.defaultModel ?? '';
-    const modelOptions = record.provider.models
-      .map((model) => ({
-        value: readString(model.id),
-        label: readString(model.label, readString(model.id)),
-      }))
-      .filter((option) => option.value);
-
     return (
       <div className="sage-unified-expand">
         <div className="sage-unified-expand__header">
@@ -749,45 +695,25 @@ export function WorkstationSageConnectorsPane({
         {record.status === 'connected' ? (
           <>
             <div className="sage-unified-expand__text">
-              {record.connectedViaRuntime
-                ? `Connected via runtime · ${record.provider.stateDetail ?? 'Managed by the runtime environment.'}`
-                : `Connected · ${record.keyTail ? `••••${record.keyTail}` : providerRequiresKey(record.provider.id) ? 'Saved key hidden' : 'No API key required'}`}
+              {`Connected · ${record.keyTail ? `••••${record.keyTail}` : providerRequiresKey(record.provider.id) ? 'Saved key hidden' : 'No API key required'}`}
             </div>
             {record.provider.id === 'ollama' && !localCompanionOnline ? (
               <div className="sage-unified-expand__text">
                 Connect local device to use Ollama
               </div>
             ) : null}
-            {modelOptions.length > 0 ? (
-              <FormField label="Default model">
-                <FormSelect
-                  value={currentModel}
-                  onChange={(event) => {
-                    void handleProviderModelChange(record, event.currentTarget.value);
-                  }}
-                >
-                  {modelOptions.map((option) => (
-                    <option key={option.value} value={option.value}>
-                      {option.label}
-                    </option>
-                  ))}
-                </FormSelect>
-              </FormField>
-            ) : null}
-            {record.connectedViaRuntime ? null : (
-              <div className="sage-unified-expand__actions">
-                <AppButton
-                  type="button"
-                  tone="ghost"
-                  disabled={busy}
-                  onClick={() => {
-                    void handleProviderDisconnect(record);
-                  }}
-                >
-                  Disconnect
-                </AppButton>
-              </div>
-            )}
+            <div className="sage-unified-expand__actions">
+              <AppButton
+                type="button"
+                tone="ghost"
+                disabled={busy}
+                onClick={() => {
+                  void handleProviderDisconnect(record);
+                }}
+              >
+                Disconnect
+              </AppButton>
+            </div>
           </>
         ) : (
           <>
@@ -985,7 +911,6 @@ export function WorkstationSageConnectorsPane({
                 credential: null,
                 profile: null,
                 connected: false,
-                connectedViaRuntime: false,
                 keyTail: null,
               })),
               renderProviderCard,

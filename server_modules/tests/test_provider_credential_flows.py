@@ -92,18 +92,19 @@ class ProviderValidationMessageTests(unittest.TestCase):
         http_json_request_mock.assert_called_once()
 
     @patch("server_modules.provider_profiles.http_json_request")
-    def test_anthropic_validate_uses_current_live_model(self, http_json_request_mock):
+    def test_anthropic_validate_uses_models_endpoint(self, http_json_request_mock):
         http_json_request_mock.return_value = {
             "status": 200,
-            "json": {"id": "msg_test"},
+            "json": {"data": [{"id": "claude-3-7-sonnet-latest"}]},
             "text": "",
         }
 
         result = provider_profiles.AnthropicAdapter().validate({"api_key": "test-key"})
 
         self.assertTrue(result["ok"])
-        _, kwargs = http_json_request_mock.call_args
-        self.assertEqual(kwargs["payload"]["model"], "claude-3-7-sonnet-latest")
+        args, kwargs = http_json_request_mock.call_args
+        self.assertEqual(args[0], "https://api.anthropic.com/v1/models")
+        self.assertNotIn("payload", kwargs)
 
     @patch("server_modules.provider_profiles._openai_bearer_from_credentials", return_value="token-123")
     @patch("server_modules.provider_profiles.http_json_request")

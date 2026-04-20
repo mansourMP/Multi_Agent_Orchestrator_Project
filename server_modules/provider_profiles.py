@@ -1280,7 +1280,6 @@ class OpenAICodexAdapter(ProviderAdapter):
 
 class AnthropicAdapter(ProviderAdapter):
     provider_id = "anthropic"
-    _validate_model = "claude-3-7-sonnet-latest"
 
     def _headers(self, credentials: Dict[str, Any]) -> Dict[str, str]:
         key = credentials.get("api_key") or ""
@@ -1293,18 +1292,9 @@ class AnthropicAdapter(ProviderAdapter):
         }
 
     def validate(self, credentials: Dict[str, Any]) -> Dict[str, Any]:
-        res = http_json_request(
-            "https://api.anthropic.com/v1/messages",
-            method="POST",
-            headers=self._headers(credentials),
-            payload={
-                "model": self._validate_model,
-                "max_tokens": 1,
-                "messages": [{"role": "user", "content": "hi"}],
-            },
-        )
+        res = http_json_request("https://api.anthropic.com/v1/models", headers=self._headers(credentials))
         status = int(res.get("status") or 500)
-        if status in {200, 400}:
+        if status == 200:
             return {
                 "ok": True,
                 "status": status,

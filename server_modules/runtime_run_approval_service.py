@@ -8,6 +8,7 @@ from typing import Any, Callable, Optional
 
 from fastapi import HTTPException
 from server_modules import agent_trace_service
+from server_modules import browser_approval_service
 from server_modules.direct_tool_config_service import run_async_tool_call
 from server_modules import run_state_repository
 
@@ -199,7 +200,7 @@ def _approval_request_payload_from_run(run_id: str, run: dict[str, Any], pending
     actions = pending.get("actions") if isinstance(pending.get("actions"), list) else pending_metadata.get("approval_actions")
     labels = pending_metadata.get("approval_labels")
     capabilities = pending_metadata.get("approval_capabilities")
-    return {
+    payload = {
         "approval_id": str(pending.get("approval_id") or "").strip() or None,
         "run_id": run_id,
         "workspace_id": _run_workspace_id(run),
@@ -226,6 +227,10 @@ def _approval_request_payload_from_run(run_id: str, run: dict[str, Any], pending
         "metadata": pending_metadata,
         "email_preview": pending_metadata.get("email_preview") if isinstance(pending_metadata.get("email_preview"), dict) else None,
     }
+    browser_summary = browser_approval_service.browser_approval_summary(pending_metadata)
+    if browser_summary is not None:
+        payload["browser"] = browser_summary
+    return payload
 
 
 def _ensure_durable_approval_request(run_id: str, snapshot_run: dict[str, Any], pending: dict[str, Any]) -> dict[str, Any]:
@@ -381,6 +386,7 @@ def list_pending_approvals_payload(
         metadata = approval.get("metadata") if isinstance(approval.get("metadata"), dict) else {}
         email_preview = approval.get("email_preview") if isinstance(approval.get("email_preview"), dict) else None
         prompt = str(approval.get("prompt") or "Approval required.").strip()
+        browser_summary = browser_approval_service.browser_approval_summary(metadata)
         items.append(
             {
                 "approval_id": approval_id,
@@ -420,6 +426,7 @@ def list_pending_approvals_payload(
                 "agent_role": str(approval.get("agent_role") or "").strip() or None,
                 "metadata": metadata,
                 "email_preview": email_preview,
+                "browser": browser_summary,
             }
         )
         seen_approval_ids.add(approval_id)
@@ -454,6 +461,7 @@ def list_pending_approvals_payload(
         metadata = approval.get("metadata") if isinstance(approval.get("metadata"), dict) else {}
         email_preview = approval.get("email_preview") if isinstance(approval.get("email_preview"), dict) else None
         prompt = str(approval.get("prompt") or "Approval required.").strip()
+        browser_summary = browser_approval_service.browser_approval_summary(metadata)
         items.append(
             {
                 "approval_id": approval_id,
@@ -486,6 +494,7 @@ def list_pending_approvals_payload(
                 "agent_role": str(approval.get("agent_role") or "").strip() or None,
                 "metadata": metadata,
                 "email_preview": email_preview,
+                "browser": browser_summary,
             }
         )
         seen_approval_ids.add(approval_id)
@@ -598,6 +607,8 @@ def build_approval_detail_response(
     response = dict(approval_record)
     response["workspace_id"] = workspace_id
     response["run"] = run_summary
+    metadata = approval_record.get("metadata") if isinstance(approval_record.get("metadata"), dict) else {}
+    response["browser"] = browser_approval_service.browser_approval_summary(metadata, include_sensitive=True)
     return response
 
 

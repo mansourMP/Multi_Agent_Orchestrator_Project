@@ -920,7 +920,7 @@ def _durable_approval_request_payload(
 ) -> Dict[str, Any]:
     context = run.get("context") if isinstance(run.get("context"), dict) else {}
     context_metadata = context.get("metadata") if isinstance(context.get("metadata"), dict) else {}
-    return {
+    payload = {
         "approval_id": approval_id,
         "run_id": run_id,
         "workspace_id": _run_workspace_id(run),
@@ -952,6 +952,10 @@ def _durable_approval_request_payload(
             if str(item or "").strip()
         ],
     }
+    browser_summary = browser_approval_service.browser_approval_summary(safe_metadata)
+    if browser_summary is not None:
+        payload["browser"] = browser_summary
+    return payload
 
 
 def begin_run_pending_confirmation(

@@ -281,6 +281,46 @@ class RunServiceTests(unittest.TestCase):
         self.assertTrue(payload["approval_id"])
         emit_approval_mock.assert_awaited_once()
 
+    def test_begin_run_pending_confirmation_persists_browser_contract_on_durable_request(self):
+        log_queue = queue.Queue()
+        run = {
+            "run_id": "run-approval-browser",
+            "logs": log_queue,
+            "context": {"metadata": {"approval_ttl_seconds": 60}},
+        }
+        captured = {}
+
+        with (
+            patch("server_modules.run_service.outbox_service.emit_approval_requested_event"),
+            patch(
+                "server_modules.run_service.run_state_repository.sync_create_or_update_approval_request",
+                side_effect=lambda *args, **kwargs: captured.setdefault("payload", args[2]) or {"version": 0},
+            ),
+        ):
+            begin_run_pending_confirmation(
+                "run-approval-browser",
+                "Review the browser run",
+                runs_by_id={"run-approval-browser": run},
+                default_approval_ttl_seconds=600,
+                approval_correlation_id_fn=lambda approval_id, run_id=None: f"corr:{run_id}:{approval_id}",
+                append_approval_audit_fn=lambda **kwargs: None,
+                json_safe_fn=lambda value: value,
+                emit_log_fn=lambda *args, **kwargs: None,
+                set_run_status_fn=lambda run_id, status: None,
+                utc_now_fn=lambda: datetime(2026, 4, 6, 0, 0, 0, tzinfo=timezone.utc),
+                utc_now_iso_fn=lambda: "2026-04-06T00:00:00Z",
+                metadata={
+                    "browser_session_profile": "qa-browser",
+                    "browser_immutable_plan_hash": "hash-1",
+                    "browser_reviewed_approval_required": True,
+                    "browser_interactive_actions": ["click"],
+                },
+            )
+
+        self.assertEqual(captured["payload"]["browser"]["session_profile"], "qa-browser")
+        self.assertEqual(captured["payload"]["browser"]["immutable_plan_hash"], "hash-1")
+        self.assertTrue(captured["payload"]["browser"]["reviewed_approval_required"])
+
     def test_begin_run_pending_approval_delegates_to_confirmation_entrypoint(self):
         calls = []
 

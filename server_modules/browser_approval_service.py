@@ -60,6 +60,53 @@ def apply_browser_policy_metadata(metadata: Dict[str, Any], browser_policy: Any)
         metadata.pop("browser_reviewed_approval_required", None)
 
 
+def browser_approval_summary(
+    metadata: Any,
+    *,
+    include_sensitive: bool = False,
+) -> Optional[Dict[str, Any]]:
+    if not isinstance(metadata, dict):
+        return None
+    session_profile = str(metadata.get("browser_session_profile") or "").strip() or None
+    immutable_plan_hash = str(metadata.get("browser_immutable_plan_hash") or "").strip() or None
+    reviewed_required = bool(metadata.get("browser_reviewed_approval_required"))
+    reviewed_approved = bool(metadata.get("browser_reviewed_approved"))
+    reviewed_approved_at = str(metadata.get("browser_reviewed_approved_at") or "").strip() or None
+    interactive_actions = [
+        str(item or "").strip().lower()
+        for item in (metadata.get("browser_interactive_actions") if isinstance(metadata.get("browser_interactive_actions"), list) else [])
+        if str(item or "").strip()
+    ]
+    execution_binding = (
+        metadata.get("browser_execution_binding")
+        if include_sensitive and isinstance(metadata.get("browser_execution_binding"), dict)
+        else None
+    )
+    if not any(
+        (
+            session_profile,
+            immutable_plan_hash,
+            reviewed_required,
+            reviewed_approved,
+            reviewed_approved_at,
+            interactive_actions,
+            execution_binding,
+        )
+    ):
+        return None
+    payload: Dict[str, Any] = {
+        "session_profile": session_profile,
+        "interactive_actions": interactive_actions,
+        "reviewed_approval_required": reviewed_required,
+        "reviewed_approved": reviewed_approved,
+        "reviewed_approved_at": reviewed_approved_at,
+        "immutable_plan_hash": immutable_plan_hash,
+    }
+    if execution_binding is not None:
+        payload["execution_binding"] = execution_binding
+    return payload
+
+
 def prepare_browser_local_tool_context(
     config: Dict[str, Any],
     permissions: Dict[str, Any],

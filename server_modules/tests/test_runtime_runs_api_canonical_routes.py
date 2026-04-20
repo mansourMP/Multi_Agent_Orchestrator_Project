@@ -602,6 +602,10 @@ class RuntimeRunsApiCanonicalRouteTests(unittest.TestCase):
                         "approval_actions": ["send_email"],
                         "approval_labels": ["email"],
                         "approval_capabilities": ["smtp.send"],
+                        "browser_session_profile": "qa-browser",
+                        "browser_immutable_plan_hash": "hash-1",
+                        "browser_reviewed_approval_required": True,
+                        "browser_interactive_actions": ["click"],
                         "email_preview": {
                             "recipient": "demo@example.com",
                             "subject": "AI summary",
@@ -666,6 +670,9 @@ class RuntimeRunsApiCanonicalRouteTests(unittest.TestCase):
         self.assertEqual(item["email_preview"]["recipient"], "demo@example.com")
         self.assertEqual(item["email_preview"]["subject"], "AI summary")
         self.assertEqual(item["target"], "email")
+        self.assertEqual(item["browser"]["session_profile"], "qa-browser")
+        self.assertEqual(item["browser"]["immutable_plan_hash"], "hash-1")
+        self.assertTrue(item["browser"]["reviewed_approval_required"])
 
     def test_list_approvals_rejects_free_workspace_plan(self):
         fake_server = types.ModuleType("server")

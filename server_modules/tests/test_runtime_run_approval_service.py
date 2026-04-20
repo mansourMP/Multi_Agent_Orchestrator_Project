@@ -458,7 +458,13 @@ class RuntimeRunApprovalServiceTests(unittest.TestCase):
                 "status": "requested",
                 "prompt": "Approve email",
                 "requested_at": "2026-04-12T10:00:00Z",
-                "metadata": {"approval_labels": ["email"]},
+                "metadata": {
+                    "approval_labels": ["email"],
+                    "browser_session_profile": "qa-browser",
+                    "browser_immutable_plan_hash": "hash-1",
+                    "browser_reviewed_approval_required": True,
+                    "browser_interactive_actions": ["click"],
+                },
                 "labels": ["email"],
             },
             {
@@ -502,6 +508,44 @@ class RuntimeRunApprovalServiceTests(unittest.TestCase):
         self.assertEqual(payload["items"][0]["approval_id"], "approval-1")
         self.assertEqual(payload["items"][0]["workspace_id"], "ws-1")
         self.assertEqual(payload["items"][0]["labels"], ["email"])
+        self.assertEqual(payload["items"][0]["browser"]["session_profile"], "qa-browser")
+        self.assertEqual(payload["items"][0]["browser"]["immutable_plan_hash"], "hash-1")
+        self.assertTrue(payload["items"][0]["browser"]["reviewed_approval_required"])
+
+    def test_build_approval_detail_response_projects_browser_contract(self):
+        with (
+            patch.object(
+                runtime_run_approval_service.run_state_repository,
+                "sync_get_approval_record",
+                return_value={
+                    "approval_id": "approval-1",
+                    "run_id": "run-1",
+                    "workspace_id": "ws-1",
+                    "owner_user_id": "user-1",
+                    "status": "requested",
+                    "metadata": {
+                        "browser_session_profile": "qa-browser",
+                        "browser_immutable_plan_hash": "hash-1",
+                        "browser_reviewed_approval_required": True,
+                        "browser_execution_binding": {"cwd": "/tmp/project"},
+                    },
+                },
+            ),
+            patch.object(
+                runtime_run_approval_service.run_state_repository,
+                "sync_find_run_snapshot_for_approval_id",
+                return_value=None,
+            ),
+        ):
+            payload = runtime_run_approval_service.build_approval_detail_response(
+                "approval-1",
+                current_user={"user_id": "user-1"},
+            )
+
+        self.assertEqual(payload["browser"]["session_profile"], "qa-browser")
+        self.assertEqual(payload["browser"]["immutable_plan_hash"], "hash-1")
+        self.assertTrue(payload["browser"]["reviewed_approval_required"])
+        self.assertEqual(payload["browser"]["execution_binding"]["cwd"], "/tmp/project")
 
     def test_submit_run_decision_durably_resolves_pending_approval_before_queueing(self):
         run = {

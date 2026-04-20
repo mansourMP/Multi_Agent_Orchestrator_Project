@@ -57,6 +57,33 @@ class BrowserApprovalServiceTests(unittest.TestCase):
         self.assertEqual(metadata["browser_immutable_plan_hash"], "hash-2")
         self.assertNotIn("browser_reviewed_approval_required", metadata)
 
+    def test_browser_approval_summary_projects_browser_fields(self):
+        payload = browser_approval_service.browser_approval_summary(
+            {
+                "browser_session_profile": "qa-browser",
+                "browser_immutable_plan_hash": "hash-1",
+                "browser_reviewed_approval_required": True,
+                "browser_interactive_actions": ["click", "type"],
+            }
+        )
+
+        self.assertEqual(payload["session_profile"], "qa-browser")
+        self.assertEqual(payload["immutable_plan_hash"], "hash-1")
+        self.assertEqual(payload["interactive_actions"], ["click", "type"])
+        self.assertTrue(payload["reviewed_approval_required"])
+
+    def test_browser_approval_summary_omits_binding_unless_sensitive(self):
+        metadata = {
+            "browser_execution_binding": {"cwd": "/tmp/project"},
+            "browser_session_profile": "default",
+        }
+
+        public_payload = browser_approval_service.browser_approval_summary(metadata)
+        sensitive_payload = browser_approval_service.browser_approval_summary(metadata, include_sensitive=True)
+
+        self.assertNotIn("execution_binding", public_payload)
+        self.assertEqual(sensitive_payload["execution_binding"]["cwd"], "/tmp/project")
+
 
 if __name__ == "__main__":
     unittest.main()

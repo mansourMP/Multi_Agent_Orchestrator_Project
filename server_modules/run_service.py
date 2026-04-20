@@ -18,6 +18,7 @@ from fastapi import HTTPException
 from server_modules.agent_turn import AgentTurnRequest, bind_agent_turn_metadata, resolve_run_start_turn_request
 from server_modules import agent_trace_service
 from server_modules import app_bridge_service
+from server_modules import browser_approval_service
 from server_modules import deployed_agent_cost_cap_service
 from server_modules.doctor_gate import build_doctor_run_gate_live
 from server_modules.direct_tool_config_service import run_async_tool_call
@@ -3313,28 +3314,16 @@ def execute_workflow_local_tool(
                 file_mount_grants,
                 execution_target,
             )
-        browser_permissions = permissions.get("browser_permissions") if isinstance(permissions.get("browser_permissions"), dict) else {}
-        browser_actions = config.get("browser_actions") if isinstance(config.get("browser_actions"), list) else None
-        session_profile = str(config.get("session_profile") or "").strip()
-        if (session_profile or browser_actions) and not bool(browser_permissions.get("allow")):
-            raise RuntimeError("Browser tool nodes with session_profile or browser_actions require browser_permissions.allow = true.")
-        normalized_browser_actions = [
-            normalize_action_id_fn(item.get("action"))
-            for item in (browser_actions or [])
-            if isinstance(item, dict) and normalize_action_id_fn(item.get("action"))
-        ]
-        interactive_actions = [action for action in normalized_browser_actions if action in browser_auth_actions]
-        browser_policy = browser_automation_policy_from_operations_fn(
-            [
-                {
-                    "tool": "browser_automation.interactive",
-                    "mode": str(config.get("mode") or "extract_text").strip() or "extract_text",
-                    "url": str(config.get("url") or "").strip(),
-                    "session_profile": session_profile,
-                    "browser_actions": browser_actions or [],
-                }
-            ]
+        browser_context = browser_approval_service.prepare_browser_local_tool_context(
+            config,
+            permissions,
+            normalize_action_id_fn=normalize_action_id_fn,
+            browser_auth_actions=browser_auth_actions,
+            browser_automation_policy_from_operations_fn=browser_automation_policy_from_operations_fn,
         )
+        browser_permissions = browser_context["browser_permissions"]
+        browser_actions = browser_context["browser_actions"]
+        session_profile = browser_context["session_profile"]
         operation = {
             "tool": "browser_automation.interactive",
             "mode": str(config.get("mode") or "extract_text").strip() or "extract_text",
@@ -3386,12 +3375,7 @@ def execute_workflow_local_tool(
         execution_target_local_companion=execution_target_local_companion,
         trust_mode_auto=trust_mode_auto,
         metadata_overrides=(
-            {
-                "browser_session_profile": session_profile or None,
-                "browser_interactive_actions": interactive_actions or None,
-                "browser_immutable_plan_hash": browser_policy.get("immutable_plan_hash") if variant == "browser" else None,
-                "browser_reviewed_approval_required": bool(browser_policy.get("reviewed_approval_required")) if variant == "browser" else False,
-            }
+            dict(browser_context["metadata_overrides"])
             if variant == "browser"
             else None
         ),
@@ -4723,16 +4707,7 @@ def mark_local_execution_tools_approved(metadata: Dict[str, Any]) -> None:
 def apply_browser_execution_metadata(metadata: Dict[str, Any]) -> None:
     precheck = metadata.get("tool_policy_precheck") if isinstance(metadata.get("tool_policy_precheck"), dict) else {}
     browser_policy = precheck.get("browser_automation_policy") if isinstance(precheck.get("browser_automation_policy"), dict) else {}
-    session_profiles = list(browser_policy.get("session_profiles") or []) if isinstance(browser_policy, dict) else []
-    immutable_plan_hash = str(browser_policy.get("immutable_plan_hash") or "").strip() if isinstance(browser_policy, dict) else ""
-    if session_profiles:
-        metadata["browser_session_profile"] = session_profiles[0]
-    if immutable_plan_hash:
-        metadata["browser_immutable_plan_hash"] = immutable_plan_hash
-    if bool(browser_policy.get("reviewed_approval_required")):
-        metadata["browser_reviewed_approval_required"] = True
-    elif "browser_reviewed_approval_required" in metadata:
-        metadata.pop("browser_reviewed_approval_required", None)
+    browser_approval_service.apply_browser_policy_metadata(metadata, browser_policy)
 
 
 def build_run_start_request_from_turn(

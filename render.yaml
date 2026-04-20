@@ -68,7 +68,7 @@ services:
   - type: web
     name: empyralis-web
     runtime: docker
-    dockerContext: ./frontend
+    dockerContext: .
     dockerfilePath: ./frontend/Dockerfile
     plan: starter
     autoDeploy: true

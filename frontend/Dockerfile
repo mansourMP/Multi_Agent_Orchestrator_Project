@@ -1,21 +1,23 @@
 FROM node:20-alpine AS deps
-WORKDIR /app
-COPY package*.json ./
+WORKDIR /app/frontend
+COPY frontend/package*.json ./
 RUN npm ci
 
 FROM node:20-alpine AS build
 WORKDIR /app
-COPY --from=deps /app/node_modules ./node_modules
-COPY . .
+COPY --from=deps /app/frontend/node_modules ./frontend/node_modules
+COPY frontend ./frontend
+COPY shared ./shared
 ENV NODE_ENV=production
+WORKDIR /app/frontend
 RUN npm run build
 
 FROM node:20-alpine AS runtime
-WORKDIR /app
+WORKDIR /app/frontend
 ENV NODE_ENV=production
-COPY --from=build /app/.next ./.next
-COPY --from=build /app/public ./public
-COPY --from=build /app/node_modules ./node_modules
-COPY --from=build /app/package*.json ./
+COPY --from=build /app/frontend/.next ./.next
+COPY --from=build /app/frontend/public ./public
+COPY --from=build /app/frontend/node_modules ./node_modules
+COPY --from=build /app/frontend/package*.json ./
 EXPOSE 3000
 CMD ["sh", "-c", "npm run start -- -H 0.0.0.0 -p ${PORT:-3000}"]

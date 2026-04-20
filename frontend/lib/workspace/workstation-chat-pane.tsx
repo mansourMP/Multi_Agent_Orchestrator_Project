@@ -4,18 +4,7 @@ import Link from 'next/link';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import {
-  Brain,
-  Camera,
-  Check,
-  FileText,
-  GitBranch,
-  Globe,
-  Monitor,
   Plus,
-  Search,
-  Shield,
-  X,
-  Zap,
 } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 
@@ -80,29 +69,6 @@ type LiveTraceState = {
   transport: LiveTraceTransport;
   trace: WorkstationAgentTraceRecord | null;
   events: WorkstationAgentTraceEvent[];
-};
-
-type LiveTimelineIcon =
-  | 'brain'
-  | 'camera'
-  | 'check'
-  | 'file'
-  | 'globe'
-  | 'monitor'
-  | 'search'
-  | 'shield'
-  | 'tree'
-  | 'x'
-  | 'zap';
-
-type LiveTimelineActionTone = 'default' | 'warning' | 'success' | 'danger' | 'accent';
-
-type LiveTimelineAction = {
-  id: string;
-  icon: LiveTimelineIcon;
-  label: string;
-  offsetLabel: string | null;
-  tone: LiveTimelineActionTone;
 };
 
 type SageMemoryCategoryRecord = {
@@ -384,248 +350,6 @@ function resolveTraceDurationSeconds(liveTrace: LiveTraceState | null, traceStar
     }
   }
   return 0;
-}
-
-function formatTraceOffset(timestamp: string, traceStartMs: number | null): string | null {
-  if (!traceStartMs) {
-    return null;
-  }
-  const eventMs = Date.parse(timestamp);
-  if (!Number.isFinite(eventMs)) {
-    return null;
-  }
-  return formatElapsedClock(Math.max(0, Math.round((eventMs - traceStartMs) / 1000)));
-}
-
-function buildLiveTimelineActions(
-  liveTrace: LiveTraceState | null,
-  traceStartedAtMs: number | null,
-  traceDurationSeconds: number,
-): LiveTimelineAction[] {
-  if (!liveTrace) {
-    return [];
-  }
-
-  const orderedEvents = [...liveTrace.events].sort((left, right) => readNumber(left.seq, 0) - readNumber(right.seq, 0));
-  const toolNames = new Map<string, string>();
-  const actions: LiveTimelineAction[] = [];
-
-  orderedEvents.forEach((event, index) => {
-    const eventType = readString(event.event_type);
-    const data = readObject(event.data);
-    const toolCallId = readString(event.tool_call_id);
-    const timestamp = readString(event.ts);
-    const offsetLabel = timestamp
-      ? formatTraceOffset(timestamp, traceStartedAtMs)
-      : null;
-    const id = traceEventKey(event, index);
-    let action: LiveTimelineAction | null = null;
-
-    if (eventType === 'tool.started') {
-      const toolName = readString(data.tool_name) || 'tool';
-      if (toolCallId) {
-        toolNames.set(toolCallId, toolName);
-      }
-      action = {
-        id,
-        icon: 'zap',
-        label: `Running ${toolName}`,
-        offsetLabel,
-        tone: 'default',
-      };
-    } else if (eventType === 'tool.result') {
-      const toolName = readString(data.tool_name) || toolNames.get(toolCallId) || 'tool';
-      const status = readString(data.status).toLowerCase();
-      action = {
-        id,
-        icon: status === 'failed' || status === 'error' ? 'x' : 'check',
-        label: `${status === 'failed' || status === 'error' ? 'Failed' : 'Completed'} ${toolName}`,
-        offsetLabel,
-        tone: status === 'failed' || status === 'error' ? 'danger' : 'success',
-      };
-    } else if (eventType === 'plan.item.created') {
-      action = {
-        id,
-        icon: 'tree',
-        label: `Planning: ${readString(data.title) || 'next step'}`,
-        offsetLabel,
-        tone: 'default',
-      };
-    } else if (eventType === 'search.query') {
-      const query = readString(data.query);
-      action = {
-        id,
-        icon: 'search',
-        label: `Searching: ${query || 'the web'}`,
-        offsetLabel,
-        tone: 'default',
-      };
-    } else if (eventType === 'search.results') {
-      action = {
-        id,
-        icon: 'search',
-        label: `Found ${readArray(data.results).length} results`,
-        offsetLabel,
-        tone: 'default',
-      };
-    } else if (eventType === 'browser.action') {
-      action = {
-        id,
-        icon: 'globe',
-        label: `Browser: ${readString(data.action) || 'action'}`,
-        offsetLabel,
-        tone: 'default',
-      };
-    } else if (eventType === 'browser.screenshot') {
-      action = {
-        id,
-        icon: 'camera',
-        label: 'Screenshot captured',
-        offsetLabel,
-        tone: 'default',
-      };
-    } else if (eventType === 'computer.click') {
-      action = {
-        id,
-        icon: 'monitor',
-        label: 'Clicked on screen',
-        offsetLabel,
-        tone: 'default',
-      };
-    } else if (eventType === 'computer.type') {
-      const text = readString(data.text);
-      action = {
-        id,
-        icon: 'monitor',
-        label: text ? `Typed: ${text.slice(0, 30)}${text.length > 30 ? '…' : ''}` : 'Typed text',
-        offsetLabel,
-        tone: 'default',
-      };
-    } else if (eventType === 'computer.key') {
-      const keyName = readString(data.key) || readString(data.key_name) || 'key';
-      action = {
-        id,
-        icon: 'monitor',
-        label: `Pressed ${keyName}`,
-        offsetLabel,
-        tone: 'default',
-      };
-    } else if (eventType === 'computer.launch') {
-      const appName = readString(data.app_name) || readString(data.app) || 'app';
-      action = {
-        id,
-        icon: 'monitor',
-        label: `Opened ${appName}`,
-        offsetLabel,
-        tone: 'default',
-      };
-    } else if (eventType === 'computer.screenshot') {
-      action = {
-        id,
-        icon: 'camera',
-        label: 'Screenshot captured',
-        offsetLabel,
-        tone: 'default',
-      };
-    } else if (eventType === 'computer.clipboard_read') {
-      action = {
-        id,
-        icon: 'monitor',
-        label: 'Read clipboard',
-        offsetLabel,
-        tone: 'default',
-      };
-    } else if (eventType === 'approval.requested') {
-      action = {
-        id,
-        icon: 'shield',
-        label: 'Waiting for approval',
-        offsetLabel,
-        tone: 'warning',
-      };
-    } else if (eventType === 'artifact.created') {
-      action = {
-        id,
-        icon: 'file',
-        label: `Created ${readString(data.label) || readString(data.file_name) || readString(event.artifact_id) || 'artifact'}`,
-        offsetLabel,
-        tone: 'accent',
-      };
-    } else if (eventType === 'reasoning.summary.delta') {
-      action = {
-        id,
-        icon: 'brain',
-        label: 'Thinking...',
-        offsetLabel,
-        tone: 'default',
-      };
-    } else if (eventType === 'delegation.started') {
-      action = {
-        id,
-        icon: 'tree',
-        label: `Delegating to ${readString(data.specialist_name) || 'specialist'}`,
-        offsetLabel,
-        tone: 'default',
-      };
-    } else if (eventType === 'trace.completed') {
-      action = {
-        id,
-        icon: 'check',
-        label: `Done · Took ${formatElapsedClock(traceDurationSeconds)}`,
-        offsetLabel,
-        tone: 'success',
-      };
-    } else if (eventType === 'trace.failed') {
-      action = {
-        id,
-        icon: 'x',
-        label: 'Failed',
-        offsetLabel,
-        tone: 'danger',
-      };
-    }
-
-    if (action) {
-      actions.push(action);
-    }
-  });
-
-  return actions;
-}
-
-function LiveTraceActionIcon({ icon }: { icon: LiveTimelineIcon }) {
-  const props = { size: 12, strokeWidth: 1.8, 'aria-hidden': true } as const;
-  if (icon === 'brain') {
-    return <Brain {...props} />;
-  }
-  if (icon === 'camera') {
-    return <Camera {...props} />;
-  }
-  if (icon === 'check') {
-    return <Check {...props} />;
-  }
-  if (icon === 'file') {
-    return <FileText {...props} />;
-  }
-  if (icon === 'globe') {
-    return <Globe {...props} />;
-  }
-  if (icon === 'monitor') {
-    return <Monitor {...props} />;
-  }
-  if (icon === 'search') {
-    return <Search {...props} />;
-  }
-  if (icon === 'shield') {
-    return <Shield {...props} />;
-  }
-  if (icon === 'tree') {
-    return <GitBranch {...props} />;
-  }
-  if (icon === 'x') {
-    return <X {...props} />;
-  }
-  return <Zap {...props} />;
 }
 
 function summarizeLiveTraceStep(liveTrace: LiveTraceState | null): {
@@ -1603,7 +1327,6 @@ export function WorkstationChatPane() {
   const [streamingAssistantText, setStreamingAssistantText] = useState('');
   const [liveTrace, setLiveTrace] = useState<LiveTraceState | null>(null);
   const [isLiveTraceExpanded, setIsLiveTraceExpanded] = useState(false);
-  const [showAllLiveTraceActions, setShowAllLiveTraceActions] = useState(false);
   const [liveTraceElapsedSeconds, setLiveTraceElapsedSeconds] = useState(0);
   const [showLiveTraceCard, setShowLiveTraceCard] = useState(false);
   const [isLiveTraceCardFading, setIsLiveTraceCardFading] = useState(false);
@@ -1622,7 +1345,6 @@ export function WorkstationChatPane() {
   const [isMemorySheetOpen, setIsMemorySheetOpen] = useState(false);
   const [memoryDraft, setMemoryDraft] = useState<SageMemoryDraft>(() => defaultSageMemoryDraft());
   const [pendingDeleteMemoryId, setPendingDeleteMemoryId] = useState<string | null>(null);
-  const liveTraceActionsRef = useRef<HTMLDivElement | null>(null);
 
   const writeThreadState = (nextThread: CanonicalChatThreadState) => {
     services.queryClient.set(threadQueryKey(nextThread.threadId), nextThread);
@@ -2008,15 +1730,6 @@ export function WorkstationChatPane() {
     () => resolveTraceDurationSeconds(liveTrace, traceStartedAtMs),
     [liveTrace, traceStartedAtMs],
   );
-  const liveTimelineActions = useMemo(
-    () => buildLiveTimelineActions(liveTrace, traceStartedAtMs, traceDurationSeconds),
-    [liveTrace, traceDurationSeconds, traceStartedAtMs],
-  );
-  const traceEarlierActionCount = Math.max(0, liveTimelineActions.length - 20);
-  const visibleLiveTimelineActions = useMemo(
-    () => (showAllLiveTraceActions ? liveTimelineActions : liveTimelineActions.slice(-20)),
-    [liveTimelineActions, showAllLiveTraceActions],
-  );
   const liveTraceState = traceSummary.state;
   const traceTimerLabel = useMemo(() => {
     if (liveTraceState === 'complete') {
@@ -2035,6 +1748,27 @@ export function WorkstationChatPane() {
       ? traceSummary.label
       : 'Sage ran into a problem while working.';
   }, [liveTraceState, traceSummary.label]);
+  const liveTraceTitle = useMemo(() => {
+    if (liveTraceState === 'failed') {
+      return liveTraceFailureMessage;
+    }
+    if (traceSummary.label) {
+      return traceSummary.label;
+    }
+    if (liveTraceState === 'complete') {
+      return 'Run complete';
+    }
+    return 'Thinking...';
+  }, [liveTraceFailureMessage, liveTraceState, traceSummary.label]);
+  const liveTraceStatusLabel = useMemo(() => {
+    if (liveTraceState === 'complete') {
+      return 'Complete';
+    }
+    if (liveTraceState === 'failed') {
+      return 'Stopped';
+    }
+    return 'Thinking';
+  }, [liveTraceState]);
   const liveTraceCardClassName = useMemo(() => {
     const classes = ['app-chat-live-trace'];
     if (liveTraceState === 'running') {
@@ -2049,15 +1783,6 @@ export function WorkstationChatPane() {
     }
     return classes.join(' ');
   }, [isLiveTraceCardFading, liveTraceState]);
-  const traceBarClassName = useMemo(() => {
-    if (liveTraceState === 'complete') {
-      return 'sage-thinking-bar sage-thinking-bar--complete';
-    }
-    if (liveTraceState === 'failed') {
-      return 'sage-thinking-bar sage-thinking-bar--failed';
-    }
-    return 'sage-thinking-bar';
-  }, [liveTraceState]);
 
   useEffect(() => {
     if (!showTrace || !liveTrace) {
@@ -2115,13 +1840,6 @@ export function WorkstationChatPane() {
       }
     };
   }, [liveTrace, liveTraceState, showTrace, traceDurationSeconds, traceStartedAtMs]);
-
-  useEffect(() => {
-    if (!liveTraceActionsRef.current) {
-      return;
-    }
-    liveTraceActionsRef.current.scrollTop = liveTraceActionsRef.current.scrollHeight;
-  }, [visibleLiveTimelineActions]);
 
   const showBlankTranscript = !isLoading
     && thread.messages.length === 0
@@ -2393,7 +2111,6 @@ export function WorkstationChatPane() {
     setPendingUserMessage(pendingMessage);
     setStreamingAssistantText('');
     setIsLiveTraceExpanded(false);
-    setShowAllLiveTraceActions(false);
     setShowLiveTraceCard(false);
     setIsLiveTraceCardFading(false);
     setShowCompletedTraceTimer(false);
@@ -2762,62 +2479,24 @@ export function WorkstationChatPane() {
                 <>
                   {showLiveTraceCard ? (
                     <section className={liveTraceCardClassName} aria-label="Live run trace">
-                      <div className="app-chat-live-trace__header">
-                        <div className={traceBarClassName} aria-hidden="true" />
-                        {traceTimerLabel ? (
-                          <span className="app-chat-live-trace__timer">
-                            {traceTimerLabel}
-                          </span>
-                        ) : null}
-                      </div>
-                      {traceEarlierActionCount > 0 && !showAllLiveTraceActions ? (
-                        <button
-                          type="button"
-                          className="app-chat-live-trace__earlier"
-                          onClick={() => {
-                            setShowAllLiveTraceActions(true);
-                          }}
-                        >
-                          ↑ {traceEarlierActionCount} earlier actions
-                        </button>
-                      ) : null}
-                      <div
-                        ref={liveTraceActionsRef}
-                        className="app-chat-live-trace__feed"
-                      >
-                        {visibleLiveTimelineActions.length > 0 ? (
-                          visibleLiveTimelineActions.map((action) => (
-                            <div
-                              key={action.id}
-                              className={`app-chat-live-trace__row app-chat-live-trace__row--${action.tone}`}
-                            >
-                              <span className="app-chat-live-trace__row-main">
-                                <span className="app-chat-live-trace__icon">
-                                  <LiveTraceActionIcon icon={action.icon} />
-                                </span>
-                                <span className="app-chat-live-trace__label">{action.label}</span>
+                      <div className="app-chat-live-trace__summary">
+                        <div className="app-chat-live-trace__presence">
+                          <span className="app-chat-live-trace__orb" aria-hidden="true" />
+                          <div className="app-chat-live-trace__copy">
+                            <strong className="app-chat-live-trace__title">{liveTraceTitle}</strong>
+                            <div className="app-chat-live-trace__meta">
+                              <span className="app-chat-live-trace__status" data-state={liveTraceState}>
+                                {liveTraceStatusLabel}
                               </span>
-                              {action.offsetLabel ? (
-                                <span className="app-chat-live-trace__time">{action.offsetLabel}</span>
+                              {traceTimerLabel ? (
+                                <span className="app-chat-live-trace__timer">
+                                  {traceTimerLabel}
+                                </span>
                               ) : null}
                             </div>
-                          ))
-                        ) : (
-                          <div className="app-chat-live-trace__row">
-                            <span className="app-chat-live-trace__row-main">
-                              <span className="app-chat-live-trace__icon">
-                                <LiveTraceActionIcon icon="brain" />
-                              </span>
-                              <span className="app-chat-live-trace__label">Thinking...</span>
-                            </span>
                           </div>
-                        )}
-                      </div>
-                      {liveTraceFailureMessage ? (
-                        <div className="app-chat-live-trace__failure">
-                          {liveTraceFailureMessage}
                         </div>
-                      ) : null}
+                      </div>
                     </section>
                   ) : null}
                   <div className="app-chat-live-trace__footer">

@@ -1693,7 +1693,6 @@ async def create_vault_credential(body: CredentialUpsertRequest):
             check = adapter.validate(credentials)
             if not check.get("ok"):
                 raise RuntimeError(check.get("message", "Credential validation failed."))
-            models = adapter.list_models(credentials)
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc))
 

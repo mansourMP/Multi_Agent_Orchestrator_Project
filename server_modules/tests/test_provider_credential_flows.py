@@ -210,6 +210,45 @@ class CredentialVaultFlowTests(unittest.IsolatedAsyncioTestCase):
         adapter.list_models.assert_not_called()
 
     @patch("server_modules.connectors_actions.save_vault")
+    @patch("server_modules.connectors_actions.load_vault", return_value={})
+    @patch("server_modules.connectors_actions._openssl_encrypt", return_value="encrypted-payload")
+    @patch("server_modules.connectors_actions._provider_public_metadata", return_value={"auth_mode": "api_key"})
+    @patch("server_modules.connectors_actions.resolve_provider_adapter")
+    async def test_create_vault_credential_does_not_list_models_on_successful_validation(
+        self,
+        resolve_provider_adapter_mock,
+        _provider_public_metadata_mock,
+        _openssl_encrypt_mock,
+        load_vault_mock,
+        save_vault_mock,
+    ):
+        adapter = MagicMock()
+        adapter.validate.return_value = {
+            "ok": True,
+            "status": 200,
+            "message": "Anthropic credential is valid.",
+        }
+        adapter.list_models.side_effect = AssertionError("model listing should not run during credential save")
+        resolve_provider_adapter_mock.return_value = ("anthropic", {}, adapter)
+
+        body = CredentialUpsertRequest(
+            label="Sage Anthropic",
+            provider="anthropic",
+            workspace_id="default",
+            mode="byok",
+            credentials={"api_key": "sk-ant-test", "auth_mode": "api_key"},
+        )
+
+        result = await connectors_actions.create_vault_credential(body)
+
+        self.assertEqual(result["provider"], "anthropic")
+        self.assertEqual(result["models_preview"], [])
+        adapter.validate.assert_called_once()
+        adapter.list_models.assert_not_called()
+        load_vault_mock.assert_called_once()
+        save_vault_mock.assert_called_once()
+
+    @patch("server_modules.connectors_actions.save_vault")
     @patch(
         "server_modules.connectors_actions.load_vault",
         return_value={

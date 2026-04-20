@@ -440,9 +440,15 @@ export function WorkstationSageProvidersPane() {
                           : 'Ollama runs locally and does not require a key. You can leave this blank.'}
                       >
                         <FormInput
-                          type="password"
+                          type="text"
                           value={draftApiKey}
                           placeholder={providerRequiresKey(provider.id) ? 'sk-...' : 'Optional token'}
+                          autoComplete="off"
+                          autoCapitalize="none"
+                          autoCorrect="off"
+                          spellCheck={false}
+                          data-1p-ignore="true"
+                          data-lpignore="true"
                           onChange={(event) => {
                             setDraftApiKey(event.currentTarget.value);
                           }}

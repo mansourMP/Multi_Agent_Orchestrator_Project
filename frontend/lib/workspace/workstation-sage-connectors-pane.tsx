@@ -24,7 +24,11 @@ type ProviderSnapshot = {
   id: string;
   label: string;
   state: string;
+  usable: boolean;
+  active: boolean;
   defaultModel: string | null;
+  activeSource: string | null;
+  stateDetail: string | null;
   models: ProviderCatalogModelRecord[];
 };
 
@@ -37,6 +41,8 @@ type ProviderCardRecord = {
   provider: ProviderSnapshot;
   credential: VaultCredentialRecord | null;
   profile: ProviderProfileRecord | null;
+  connected: boolean;
+  connectedViaRuntime: boolean;
   keyTail: string | null;
 };
 
@@ -69,20 +75,12 @@ const SUPPORTED_PROVIDER_IDS = [
   'openai',
   'anthropic',
   'gemini',
-  'mistral',
-  'deepseek',
-  'qwen',
-  'ollama',
 ] as const;
 
 const FALLBACK_PROVIDER_LABELS: Record<string, string> = {
   openai: 'OpenAI',
   anthropic: 'Anthropic',
   gemini: 'Gemini',
-  mistral: 'Mistral',
-  deepseek: 'DeepSeek',
-  qwen: 'Qwen',
-  ollama: 'Ollama',
 };
 
 const PROVIDER_IMAGE_BY_ID: Record<string, string> = {
@@ -215,7 +213,11 @@ function normalizeProviderCatalog(payload: unknown): ProviderSnapshot[] {
       id,
       label: readString(provider.label, id),
       state: readString(provider.state, 'unknown'),
+      usable: provider.usable === true,
+      active: provider.active === true,
       defaultModel: readOptionalString(provider.default_model),
+      activeSource: readOptionalString(provider.active_source),
+      stateDetail: readOptionalString(provider.state_detail),
       models: Array.isArray(provider.models)
         ? provider.models.filter((item): item is ProviderCatalogModelRecord => Boolean(item) && typeof item === 'object')
         : [],
@@ -228,7 +230,11 @@ function fallbackProviderCatalog(): ProviderSnapshot[] {
     id,
     label: FALLBACK_PROVIDER_LABELS[id] ?? id,
     state: 'unknown',
+    usable: false,
+    active: false,
     defaultModel: null,
+    activeSource: null,
+    stateDetail: null,
     models: [],
   }));
 }
@@ -295,6 +301,10 @@ function isSecretlessConnection(providerId: string, profile: ProviderProfileReco
 
 function providerRequiresKey(providerId: string): boolean {
   return providerId !== 'ollama';
+}
+
+function isRuntimeConnected(provider: ProviderSnapshot): boolean {
+  return provider.usable || provider.active;
 }
 
 function maskKeyTail(credential: VaultCredentialRecord | null): string | null {
@@ -462,7 +472,10 @@ export function WorkstationSageConnectorsPane({
     );
     const profile = providerProfiles[0] ?? null;
     const credential = providerCredentials[0] ?? null;
-    const connected = Boolean(credential) || isSecretlessConnection(resolvedProvider.id, profile);
+    const secretlessConnected = isSecretlessConnection(resolvedProvider.id, profile);
+    const runtimeConnected = isRuntimeConnected(resolvedProvider);
+    const connectedViaRuntime = runtimeConnected && !credential && !secretlessConnected;
+    const connected = Boolean(credential) || secretlessConnected || runtimeConnected;
     return {
       kind: 'provider',
       id: resolvedProvider.id,
@@ -472,6 +485,8 @@ export function WorkstationSageConnectorsPane({
       provider: resolvedProvider,
       credential,
       profile,
+      connected,
+      connectedViaRuntime,
       keyTail: maskKeyTail(credential),
     };
   }), [credentials, profiles, providerModelOverrides, providers]);
@@ -724,7 +739,9 @@ export function WorkstationSageConnectorsPane({
         {record.status === 'connected' ? (
           <>
             <div className="sage-unified-expand__text">
-              Connected · {record.keyTail ? `••••${record.keyTail}` : providerRequiresKey(record.provider.id) ? 'Saved key hidden' : 'No API key required'}
+              {record.connectedViaRuntime
+                ? `Connected via runtime · ${record.provider.stateDetail ?? 'Managed by the runtime environment.'}`
+                : `Connected · ${record.keyTail ? `••••${record.keyTail}` : providerRequiresKey(record.provider.id) ? 'Saved key hidden' : 'No API key required'}`}
             </div>
             {record.provider.id === 'ollama' && !localCompanionOnline ? (
               <div className="sage-unified-expand__text">
@@ -747,27 +764,35 @@ export function WorkstationSageConnectorsPane({
                 </FormSelect>
               </FormField>
             ) : null}
-            <div className="sage-unified-expand__actions">
-              <AppButton
-                type="button"
-                tone="ghost"
-                disabled={busy}
-                onClick={() => {
-                  void handleProviderDisconnect(record);
-                }}
-              >
-                Disconnect
-              </AppButton>
-            </div>
+            {record.connectedViaRuntime ? null : (
+              <div className="sage-unified-expand__actions">
+                <AppButton
+                  type="button"
+                  tone="ghost"
+                  disabled={busy}
+                  onClick={() => {
+                    void handleProviderDisconnect(record);
+                  }}
+                >
+                  Disconnect
+                </AppButton>
+              </div>
+            )}
           </>
         ) : (
           <>
             {providerRequiresKey(record.provider.id) ? (
               <FormField label="API key">
                 <FormInput
-                  type="password"
+                  type="text"
                   value={providerDraftKeys[record.id] ?? ''}
                   placeholder="sk-..."
+                  autoComplete="off"
+                  autoCapitalize="none"
+                  autoCorrect="off"
+                  spellCheck={false}
+                  data-1p-ignore="true"
+                  data-lpignore="true"
                   onChange={(event) => {
                     setProviderDraftKeys((current) => ({ ...current, [record.id]: event.currentTarget.value }));
                   }}
@@ -946,6 +971,8 @@ export function WorkstationSageConnectorsPane({
                 provider,
                 credential: null,
                 profile: null,
+                connected: false,
+                connectedViaRuntime: false,
                 keyTail: null,
               })),
               renderProviderCard,

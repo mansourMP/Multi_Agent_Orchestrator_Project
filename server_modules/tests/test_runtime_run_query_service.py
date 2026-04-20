@@ -47,6 +47,8 @@ class RuntimeRunQueryServiceTests(unittest.TestCase):
             get_pending_confirmation_fn=lambda run: None,
             build_archived_run_detail_response=lambda **kwargs: {},
             build_live_run_detail_response=lambda **kwargs: {},
+            build_run_browser_checkpoint_payload=lambda **kwargs: {},
+            build_run_browser_session_payload=lambda **kwargs: {},
         )
 
         self.assertIn("get_replay_payload", callbacks)
@@ -71,6 +73,8 @@ class RuntimeRunQueryServiceTests(unittest.TestCase):
             get_pending_confirmation_fn=lambda run: None,
             build_archived_run_detail_response=lambda **kwargs: {},
             build_live_run_detail_response=lambda **kwargs: {},
+            build_run_browser_checkpoint_payload=lambda **kwargs: {},
+            build_run_browser_session_payload=lambda **kwargs: {},
         )
 
         self.assertIs(callbacks["get_replay_payload"], get_replay_payload)
@@ -147,6 +151,61 @@ class RuntimeRunQueryServiceTests(unittest.TestCase):
         self.assertFalse(payload["archived"])
         self.assertEqual(payload["safe_context"], {"redacted": True})
         self.assertEqual(payload["pending_confirmation"], {"approval_id": "approval-1"})
+
+    def test_build_run_browser_checkpoint_response_uses_archived_payload_builder(self):
+        payload = runtime_run_query_service.build_run_browser_checkpoint_response(
+            "run-1",
+            current_user={"auth_type": "session"},
+            runs={},
+            get_replay_payload=lambda run_id: {
+                "run_id": run_id,
+                "context": {"metadata": {"browser_session_profile": "qa-browser"}},
+                "browser_checkpoint": {"next_action_index": 3},
+            },
+            serialize_run_snapshot=lambda run_id, run: {},
+            enforce_run_owner_access=lambda current_user, snapshot: None,
+            can_view_sensitive_run_payload=lambda current_user: False,
+            build_run_browser_checkpoint_payload=lambda **kwargs: {
+                "archived": kwargs["archived"],
+                "include_sensitive": kwargs["include_sensitive"],
+                "session_profile": kwargs["metadata"].get("browser_session_profile"),
+                "next_action_index": kwargs["source"]["browser_checkpoint"]["next_action_index"],
+            },
+        )
+
+        self.assertTrue(payload["archived"])
+        self.assertFalse(payload["include_sensitive"])
+        self.assertEqual(payload["session_profile"], "qa-browser")
+        self.assertEqual(payload["next_action_index"], 3)
+
+    def test_build_run_browser_session_response_uses_live_run_when_available(self):
+        payload = runtime_run_query_service.build_run_browser_session_response(
+            "run-1",
+            current_user={"auth_type": "api_key"},
+            runs={
+                "run-1": {
+                    "context": {"metadata": {"browser_session_profile": "qa-browser"}},
+                    "browser_checkpoint": {"next_action_index": 4},
+                    "result_data": {"outputs": {"actions": []}},
+                }
+            },
+            get_live_run_fn=lambda run_id: None,
+            get_replay_payload=lambda run_id: {"archived": True},
+            serialize_run_snapshot=lambda run_id, run: {"run_id": run_id},
+            enforce_run_owner_access=lambda current_user, snapshot: None,
+            can_view_sensitive_run_payload=lambda current_user: True,
+            build_run_browser_session_payload=lambda **kwargs: {
+                "archived": kwargs["archived"],
+                "include_sensitive": kwargs["include_sensitive"],
+                "has_checkpoint": bool(kwargs["source"].get("browser_checkpoint")),
+                "session_profile": kwargs["metadata"].get("browser_session_profile"),
+            },
+        )
+
+        self.assertFalse(payload["archived"])
+        self.assertTrue(payload["include_sensitive"])
+        self.assertTrue(payload["has_checkpoint"])
+        self.assertEqual(payload["session_profile"], "qa-browser")
 
     def test_build_run_detail_response_prefers_explicit_runs_map_over_repository_lookup(self):
         payload = runtime_run_query_service.build_run_detail_response(

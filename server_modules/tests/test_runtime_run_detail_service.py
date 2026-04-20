@@ -195,6 +195,63 @@ class RuntimeRunDetailServiceTests(unittest.TestCase):
         self.assertEqual(payload["interrupt_reason"], "Machine kill")
         self.assertEqual(payload["interrupt_scope"], "machine")
 
+    def test_build_run_browser_checkpoint_payload_hides_raw_checkpoint_for_non_sensitive_view(self):
+        payload = runtime_run_detail_service.build_run_browser_checkpoint_payload(
+            run_id="run-browser-1",
+            source={
+                "browser_checkpoint": {
+                    "next_action_index": 5,
+                    "session_profile": "qa-browser",
+                    "tabs": [{"id": 1}],
+                }
+            },
+            metadata={
+                "browser_reviewed_approval_required": True,
+                "browser_immutable_plan_hash": "hash-1",
+            },
+            include_sensitive=False,
+            archived=False,
+        )
+
+        self.assertTrue(payload["available"])
+        self.assertTrue(payload["browser_resume_supported"])
+        self.assertEqual(payload["checkpoint_summary"]["next_action_index"], 5)
+        self.assertEqual(payload["session_profile"], "qa-browser")
+        self.assertIsNone(payload["checkpoint"])
+        self.assertTrue(payload["browser_reviewed_approval_required"])
+        self.assertEqual(payload["browser_immutable_plan_hash"], "hash-1")
+
+    def test_build_run_browser_session_payload_prefers_introspection_snapshot(self):
+        payload = runtime_run_detail_service.build_run_browser_session_payload(
+            run_id="run-browser-2",
+            source={
+                "browser_checkpoint": {
+                    "next_action_index": 2,
+                    "session_profile": "qa-browser",
+                },
+                "browser_introspection": {
+                    "tabs": [{"id": 7}],
+                    "console_entries": [{"message": "warn"}],
+                },
+                "runtime_id": "runtime-2",
+                "machine_id": "machine-2",
+            },
+            metadata={
+                "browser_execution_binding": {"cwd": "/tmp/project"},
+                "browser_reviewed_approval_required": True,
+            },
+            include_sensitive=True,
+            archived=True,
+        )
+
+        self.assertTrue(payload["available"])
+        self.assertEqual(payload["checkpoint_summary"]["next_action_index"], 2)
+        self.assertEqual(payload["session_profile"], "qa-browser")
+        self.assertEqual(payload["browser_introspection"]["tabs"][0]["id"], 7)
+        self.assertEqual(payload["browser_execution_binding"]["cwd"], "/tmp/project")
+        self.assertEqual(payload["machine_id"], "machine-2")
+        self.assertEqual(payload["runtime_id"], "runtime-2")
+
 
 if __name__ == "__main__":
     unittest.main()

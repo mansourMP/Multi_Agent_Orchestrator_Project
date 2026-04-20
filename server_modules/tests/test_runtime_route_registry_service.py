@@ -66,6 +66,8 @@ class RuntimeRouteRegistryServiceTests(unittest.TestCase):
         self.assertIn(("POST", "/admin/kill-switch"), app.routes)
         self.assertIn(("POST", "/admin/safe-mode"), app.routes)
         self.assertIn(("POST", "/approvals/{approval_id}/resolve"), app.routes)
+        self.assertIn(("GET", "/runs/{run_id}/browser-checkpoint"), app.routes)
+        self.assertIn(("GET", "/runs/{run_id}/browser-session"), app.routes)
         self.assertIn(("POST", "/runs/{run_id}/resume"), app.routes)
         self.assertIn(("POST", "/runs/{run_id}/pause"), app.routes)
 

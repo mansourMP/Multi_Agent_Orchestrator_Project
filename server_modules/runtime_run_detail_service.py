@@ -339,6 +339,99 @@ def _machine_interrupt_payload(source: dict[str, Any], metadata: dict[str, Any])
     }
 
 
+def _browser_session_profile(source: dict[str, Any], metadata: dict[str, Any]) -> Optional[str]:
+    checkpoint = browser_checkpoint_service.browser_checkpoint_from_run(source)
+    summary = browser_checkpoint_service.checkpoint_summary(checkpoint)
+    return (
+        _text(summary.get("session_profile") or metadata.get("browser_session_profile"))
+        or None
+    )
+
+
+def _browser_introspection_payload(
+    source: dict[str, Any],
+    result_data: Any,
+) -> Optional[dict[str, Any]]:
+    payload = source.get("browser_introspection") if isinstance(source.get("browser_introspection"), dict) else None
+    if isinstance(payload, dict) and payload:
+        return dict(payload)
+    return browser_checkpoint_service.browser_introspection_snapshot(source, result_data)
+
+
+def build_run_browser_checkpoint_payload(
+    *,
+    run_id: str,
+    source: dict[str, Any],
+    metadata: dict[str, Any],
+    include_sensitive: bool,
+    archived: bool,
+) -> dict[str, Any]:
+    checkpoint = browser_checkpoint_service.browser_checkpoint_from_run(source)
+    checkpoint_summary = browser_checkpoint_service.checkpoint_summary(checkpoint)
+    session_profile = _browser_session_profile(source, metadata)
+    if session_profile and not checkpoint_summary.get("session_profile"):
+        checkpoint_summary = {
+            **checkpoint_summary,
+            "session_profile": session_profile,
+        }
+    browser_resume_supported = browser_checkpoint_service.browser_resume_supported(source, metadata)
+    return {
+        "run_id": run_id,
+        "archived": bool(archived),
+        "available": bool(checkpoint or browser_resume_supported or session_profile),
+        "browser_resume_supported": browser_resume_supported,
+        "session_profile": session_profile,
+        "checkpoint_summary": checkpoint_summary,
+        "checkpoint": checkpoint if include_sensitive and checkpoint else None,
+        "browser_reviewed_approval_required": bool(metadata.get("browser_reviewed_approval_required")),
+        "browser_immutable_plan_hash": _text(metadata.get("browser_immutable_plan_hash")) or None,
+        "browser_execution_binding": (
+            metadata.get("browser_execution_binding")
+            if include_sensitive and isinstance(metadata.get("browser_execution_binding"), dict)
+            else None
+        ),
+    }
+
+
+def build_run_browser_session_payload(
+    *,
+    run_id: str,
+    source: dict[str, Any],
+    metadata: dict[str, Any],
+    include_sensitive: bool,
+    archived: bool,
+) -> dict[str, Any]:
+    checkpoint = browser_checkpoint_service.browser_checkpoint_from_run(source)
+    checkpoint_summary = browser_checkpoint_service.checkpoint_summary(checkpoint)
+    session_profile = _browser_session_profile(source, metadata)
+    if session_profile and not checkpoint_summary.get("session_profile"):
+        checkpoint_summary = {
+            **checkpoint_summary,
+            "session_profile": session_profile,
+        }
+    browser_introspection = _browser_introspection_payload(source, source.get("result_data"))
+    browser_resume_supported = browser_checkpoint_service.browser_resume_supported(source, metadata)
+    machine_interrupt = _machine_interrupt_payload(source, metadata)
+    return {
+        "run_id": run_id,
+        "archived": bool(archived),
+        "available": bool(checkpoint or browser_introspection or session_profile or browser_resume_supported),
+        "browser_resume_supported": browser_resume_supported,
+        "session_profile": session_profile,
+        "checkpoint_summary": checkpoint_summary,
+        "browser_introspection": browser_introspection if include_sensitive and isinstance(browser_introspection, dict) else None,
+        "browser_reviewed_approval_required": bool(metadata.get("browser_reviewed_approval_required")),
+        "browser_immutable_plan_hash": _text(metadata.get("browser_immutable_plan_hash")) or None,
+        "browser_execution_binding": (
+            metadata.get("browser_execution_binding")
+            if include_sensitive and isinstance(metadata.get("browser_execution_binding"), dict)
+            else None
+        ),
+        "machine_id": machine_interrupt.get("machine_id"),
+        "runtime_id": machine_interrupt.get("runtime_id"),
+    }
+
+
 def build_archived_run_detail_response(
     *,
     run_id: str,

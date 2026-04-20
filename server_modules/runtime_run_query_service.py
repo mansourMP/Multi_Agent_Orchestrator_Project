@@ -24,6 +24,8 @@ def build_run_detail_response_callbacks(
     get_pending_confirmation_fn: Callable[[dict[str, Any]], Any],
     build_archived_run_detail_response: Callable[..., dict[str, Any]],
     build_live_run_detail_response: Callable[..., dict[str, Any]],
+    build_run_browser_checkpoint_payload: Callable[..., dict[str, Any]],
+    build_run_browser_session_payload: Callable[..., dict[str, Any]],
 ) -> dict[str, Any]:
     return {
         "get_replay_payload": get_replay_payload,
@@ -41,6 +43,8 @@ def build_run_detail_response_callbacks(
         "get_pending_confirmation_fn": get_pending_confirmation_fn,
         "build_archived_run_detail_response": build_archived_run_detail_response,
         "build_live_run_detail_response": build_live_run_detail_response,
+        "build_run_browser_checkpoint_payload": build_run_browser_checkpoint_payload,
+        "build_run_browser_session_payload": build_run_browser_session_payload,
     }
 
 
@@ -54,6 +58,8 @@ def build_default_run_detail_response_callbacks(
     get_pending_confirmation_fn: Callable[[dict[str, Any]], Any],
     build_archived_run_detail_response: Callable[..., dict[str, Any]],
     build_live_run_detail_response: Callable[..., dict[str, Any]],
+    build_run_browser_checkpoint_payload: Callable[..., dict[str, Any]],
+    build_run_browser_session_payload: Callable[..., dict[str, Any]],
 ) -> dict[str, Any]:
     runs_delegation = import_module(
         "server_modules.runs_delegation",
@@ -89,7 +95,56 @@ def build_default_run_detail_response_callbacks(
         get_pending_confirmation_fn=get_pending_confirmation_fn,
         build_archived_run_detail_response=build_archived_run_detail_response,
         build_live_run_detail_response=build_live_run_detail_response,
+        build_run_browser_checkpoint_payload=build_run_browser_checkpoint_payload,
+        build_run_browser_session_payload=build_run_browser_session_payload,
     )
+
+
+def _resolve_run_detail_source(
+    run_id: str,
+    *,
+    current_user: Any,
+    runs: dict[str, dict[str, Any]],
+    get_live_run_fn: Callable[[str], dict[str, Any] | None] | None,
+    get_replay_payload: Callable[[str], dict[str, Any]],
+    serialize_run_snapshot: Callable[[str, dict[str, Any]], dict[str, Any]],
+    enforce_run_owner_access: Callable[[Any, Any], None],
+    can_view_sensitive_run_payload: Callable[[Any], bool],
+) -> dict[str, Any]:
+    include_sensitive = can_view_sensitive_run_payload(current_user)
+    run = runs.get(run_id) if isinstance(runs, dict) else None
+    if not isinstance(run, dict) and callable(get_live_run_fn):
+        run = get_live_run_fn(run_id)
+
+    if run is None:
+        try:
+            snapshot = get_replay_payload(run_id)
+        except HTTPException:
+            raise HTTPException(404, "Run ID not found")
+        enforce_run_owner_access(current_user, snapshot)
+        context = snapshot.get("context") if isinstance(snapshot.get("context"), dict) else {}
+        metadata = context.get("metadata") if isinstance(context.get("metadata"), dict) else {}
+        return {
+            "archived": True,
+            "include_sensitive": include_sensitive,
+            "run": None,
+            "snapshot": snapshot,
+            "context": context,
+            "metadata": metadata,
+        }
+
+    context = run.get("context") if isinstance(run.get("context"), dict) else {}
+    metadata = context.get("metadata") if isinstance(context.get("metadata"), dict) else {}
+    snapshot = serialize_run_snapshot(run_id, run)
+    enforce_run_owner_access(current_user, snapshot)
+    return {
+        "archived": False,
+        "include_sensitive": include_sensitive,
+        "run": run,
+        "snapshot": snapshot,
+        "context": context,
+        "metadata": metadata,
+    }
 
 
 def build_run_detail_response(
@@ -114,19 +169,22 @@ def build_run_detail_response(
     build_archived_run_detail_response: Callable[..., dict[str, Any]],
     build_live_run_detail_response: Callable[..., dict[str, Any]],
 ) -> dict[str, Any]:
-    include_sensitive = can_view_sensitive_run_payload(current_user)
-    run = runs.get(run_id) if isinstance(runs, dict) else None
-    if not isinstance(run, dict) and callable(get_live_run_fn):
-        run = get_live_run_fn(run_id)
+    resolved = _resolve_run_detail_source(
+        run_id,
+        current_user=current_user,
+        runs=runs,
+        get_live_run_fn=get_live_run_fn,
+        get_replay_payload=get_replay_payload,
+        serialize_run_snapshot=serialize_run_snapshot,
+        enforce_run_owner_access=enforce_run_owner_access,
+        can_view_sensitive_run_payload=can_view_sensitive_run_payload,
+    )
+    include_sensitive = bool(resolved.get("include_sensitive"))
 
-    if run is None:
-        try:
-            snapshot = get_replay_payload(run_id)
-        except HTTPException:
-            raise HTTPException(404, "Run ID not found")
-        enforce_run_owner_access(current_user, snapshot)
-        context = snapshot.get("context") if isinstance(snapshot.get("context"), dict) else {}
-        metadata = context.get("metadata") if isinstance(context.get("metadata"), dict) else {}
+    if bool(resolved.get("archived")):
+        snapshot = resolved["snapshot"]
+        context = resolved["context"]
+        metadata = resolved["metadata"]
         parent_run, child_runs = find_run_relationships(run_id, snapshot)
         delegation_summary = build_delegation_summary(snapshot, child_runs)
         safe_context = redact_sensitive(context) if include_sensitive else limited_run_context_view(context)
@@ -144,10 +202,10 @@ def build_run_detail_response(
             limited_node_states_view_fn=limited_node_states_view_fn,
         )
 
-    context = run.get("context", {})
-    metadata = context.get("metadata") if isinstance(context, dict) and isinstance(context.get("metadata"), dict) else {}
-    snapshot = serialize_run_snapshot(run_id, run)
-    enforce_run_owner_access(current_user, snapshot)
+    run = resolved["run"]
+    snapshot = resolved["snapshot"]
+    context = resolved["context"]
+    metadata = resolved["metadata"]
     parent_run, child_runs = find_run_relationships(run_id, snapshot)
     delegation_summary = build_delegation_summary(snapshot, child_runs)
     safe_context = redact_sensitive(context) if include_sensitive else limited_run_context_view(context)
@@ -166,6 +224,70 @@ def build_run_detail_response(
         limited_node_states_view_fn=limited_node_states_view_fn,
         trim_memory_trace_fn=trim_memory_trace_fn,
         get_pending_confirmation_fn=get_pending_confirmation_fn,
+    )
+
+
+def build_run_browser_checkpoint_response(
+    run_id: str,
+    *,
+    current_user: Any,
+    runs: dict[str, dict[str, Any]],
+    get_live_run_fn: Callable[[str], dict[str, Any] | None] | None = None,
+    get_replay_payload: Callable[[str], dict[str, Any]],
+    serialize_run_snapshot: Callable[[str, dict[str, Any]], dict[str, Any]],
+    enforce_run_owner_access: Callable[[Any, Any], None],
+    can_view_sensitive_run_payload: Callable[[Any], bool],
+    build_run_browser_checkpoint_payload: Callable[..., dict[str, Any]],
+) -> dict[str, Any]:
+    resolved = _resolve_run_detail_source(
+        run_id,
+        current_user=current_user,
+        runs=runs,
+        get_live_run_fn=get_live_run_fn,
+        get_replay_payload=get_replay_payload,
+        serialize_run_snapshot=serialize_run_snapshot,
+        enforce_run_owner_access=enforce_run_owner_access,
+        can_view_sensitive_run_payload=can_view_sensitive_run_payload,
+    )
+    source = resolved["snapshot"] if bool(resolved.get("archived")) else resolved["run"]
+    return build_run_browser_checkpoint_payload(
+        run_id=run_id,
+        source=source,
+        metadata=resolved["metadata"],
+        include_sensitive=bool(resolved.get("include_sensitive")),
+        archived=bool(resolved.get("archived")),
+    )
+
+
+def build_run_browser_session_response(
+    run_id: str,
+    *,
+    current_user: Any,
+    runs: dict[str, dict[str, Any]],
+    get_live_run_fn: Callable[[str], dict[str, Any] | None] | None = None,
+    get_replay_payload: Callable[[str], dict[str, Any]],
+    serialize_run_snapshot: Callable[[str, dict[str, Any]], dict[str, Any]],
+    enforce_run_owner_access: Callable[[Any, Any], None],
+    can_view_sensitive_run_payload: Callable[[Any], bool],
+    build_run_browser_session_payload: Callable[..., dict[str, Any]],
+) -> dict[str, Any]:
+    resolved = _resolve_run_detail_source(
+        run_id,
+        current_user=current_user,
+        runs=runs,
+        get_live_run_fn=get_live_run_fn,
+        get_replay_payload=get_replay_payload,
+        serialize_run_snapshot=serialize_run_snapshot,
+        enforce_run_owner_access=enforce_run_owner_access,
+        can_view_sensitive_run_payload=can_view_sensitive_run_payload,
+    )
+    source = resolved["snapshot"] if bool(resolved.get("archived")) else resolved["run"]
+    return build_run_browser_session_payload(
+        run_id=run_id,
+        source=source,
+        metadata=resolved["metadata"],
+        include_sensitive=bool(resolved.get("include_sensitive")),
+        archived=bool(resolved.get("archived")),
     )
 
 

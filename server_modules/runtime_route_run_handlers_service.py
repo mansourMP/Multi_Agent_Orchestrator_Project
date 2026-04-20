@@ -171,6 +171,42 @@ def stream_run_route_response(
     )
 
 
+def get_run_browser_checkpoint_route_response(
+    run_id: Any,
+    *,
+    current_user: Any,
+    build_run_browser_checkpoint_response_fn: Callable[..., Any],
+    runs: dict[str, Any],
+    get_live_run_fn: Callable[[str], dict[str, Any] | None],
+    callbacks: dict[str, Any],
+) -> Any:
+    return build_run_browser_checkpoint_response_fn(
+        str(run_id),
+        current_user=current_user,
+        runs=runs,
+        get_live_run_fn=get_live_run_fn,
+        **callbacks,
+    )
+
+
+def get_run_browser_session_route_response(
+    run_id: Any,
+    *,
+    current_user: Any,
+    build_run_browser_session_response_fn: Callable[..., Any],
+    runs: dict[str, Any],
+    get_live_run_fn: Callable[[str], dict[str, Any] | None],
+    callbacks: dict[str, Any],
+) -> Any:
+    return build_run_browser_session_response_fn(
+        str(run_id),
+        current_user=current_user,
+        runs=runs,
+        get_live_run_fn=get_live_run_fn,
+        **callbacks,
+    )
+
+
 def submit_run_decision_route_response(
     run_id: Any,
     *,

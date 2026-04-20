@@ -363,6 +363,30 @@ def register_runtime_run_routes(
             **run_detail_callbacks,
         )
 
+    @app.get("/runs/{run_id}/browser-checkpoint", dependencies=[depends(viewer_dependency)])
+    async def get_run_browser_checkpoint(run_id: uuid.UUID, current_user=depends(viewer_dependency)):
+        refresh_server_exports()
+        return runtime_route_run_handlers_service.get_run_browser_checkpoint_route_response(
+            run_id,
+            current_user=current_user,
+            build_run_browser_checkpoint_response_fn=runtime_run_query_service.build_run_browser_checkpoint_response,
+            runs=runs,
+            get_live_run_fn=run_state_repository.sync_get_live_run,
+            callbacks=run_detail_callbacks,
+        )
+
+    @app.get("/runs/{run_id}/browser-session", dependencies=[depends(viewer_dependency)])
+    async def get_run_browser_session(run_id: uuid.UUID, current_user=depends(viewer_dependency)):
+        refresh_server_exports()
+        return runtime_route_run_handlers_service.get_run_browser_session_route_response(
+            run_id,
+            current_user=current_user,
+            build_run_browser_session_response_fn=runtime_run_query_service.build_run_browser_session_response,
+            runs=runs,
+            get_live_run_fn=run_state_repository.sync_get_live_run,
+            callbacks=run_detail_callbacks,
+        )
+
     @app.get("/history/runs", dependencies=[depends(viewer_dependency)])
     async def get_runs_history(
         limit: int = 30,

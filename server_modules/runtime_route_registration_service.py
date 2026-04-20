@@ -160,6 +160,8 @@ def build_runtime_route_bindings(
         get_pending_confirmation_fn=get_pending_confirmation_fn,
         build_archived_run_detail_response=build_archived_run_detail_response,
         build_live_run_detail_response=build_live_run_detail_response,
+        build_run_browser_checkpoint_payload=_runtime_run_detail_service.build_run_browser_checkpoint_payload,
+        build_run_browser_session_payload=_runtime_run_detail_service.build_run_browser_session_payload,
     )
     runs_history_callbacks = runtime_history_service.build_runs_history_callbacks(
         refresh_server_exports=refresh_server_exports,

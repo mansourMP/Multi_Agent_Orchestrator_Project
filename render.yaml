@@ -1,6 +1,6 @@
 databases:
   - name: empyralis-postgres
-    plan: starter
+    plan: basic-256mb
 
 services:
   - type: web

@@ -189,6 +189,22 @@ def _workspace_record_version(workspace: Optional[Dict[str, Any]]) -> str:
     )
 
 
+def _resolve_bootstrap_tenant_id(
+    *,
+    current_user: Optional[Dict[str, Any]],
+    membership_row: Optional[Dict[str, Any]],
+    workspace_id: str,
+    workspace_record: Optional[Dict[str, Any]],
+) -> str:
+    membership_tenant_id = str((membership_row or {}).get("tenant_id") or "").strip()
+    workspace_tenant_id = str(_coerce_dict(workspace_record).get("tenant_id") or "").strip()
+    if membership_tenant_id:
+        return membership_tenant_id
+    if workspace_tenant_id:
+        return workspace_tenant_id
+    return auth_module.workspace_tenant_id(current_user, workspace_id)
+
+
 def _entitlement_state_version(entitlement_state: Any) -> str:
     return _stable_json(
         {
@@ -536,9 +552,14 @@ async def build_workspace_bootstrap(
         (item for item in memberships if str(item.get("workspace_id") or "").strip() == resolved_workspace_id),
         None,
     )
-    tenant_id = auth_module.workspace_tenant_id(current_user, resolved_workspace_id)
-    role = auth_module.workspace_role(current_user, resolved_workspace_id) or "viewer"
     workspace_record = await control_plane_repository.get_workspace_by_id(resolved_workspace_id)
+    tenant_id = _resolve_bootstrap_tenant_id(
+        current_user=current_user,
+        membership_row=membership_row,
+        workspace_id=resolved_workspace_id,
+        workspace_record=workspace_record,
+    )
+    role = auth_module.workspace_role(current_user, resolved_workspace_id) or "viewer"
 
     entitlement_state = entitlements_service.resolve_workspace_entitlement_state_for_workspace_id(
         workspace_id=resolved_workspace_id,

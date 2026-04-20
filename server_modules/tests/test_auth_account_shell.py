@@ -282,3 +282,103 @@ async def test_build_account_shell_payload_handles_datetime_membership_versions_
 
     assert payload["workspaceMemberships"][0]["workspace"]["tenantId"] == "tenant-1"
     assert payload["workspaceMemberships"][0]["membershipVersion"] == f"9:{int(updated_at.timestamp())}"
+
+
+@pytest.mark.anyio
+async def test_build_account_shell_payload_skips_invalid_memberships_without_failing_shell(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    current_user = {
+        "auth_type": "bearer",
+        "user_id": "user-1",
+        "identity_versions": {"membership_version": 11},
+    }
+    membership_rows = [
+        {
+            "workspace_id": "",
+            "tenant_id": "tenant-missing-id",
+            "role": "member",
+            "workspace_name": "Broken Membership",
+            "updated_at": 10,
+        },
+        {
+            "workspace_id": "ws-bad-tenant",
+            "role": "member",
+            "workspace_name": "Broken Tenant Membership",
+            "updated_at": 11,
+        },
+        {
+            "workspace_id": "ws-good",
+            "tenant_id": "tenant-1",
+            "role": "owner",
+            "workspace_name": "Healthy Workspace",
+            "updated_at": 12,
+        },
+    ]
+    workspaces = {
+        "ws-bad-tenant": {
+            "workspace_id": "ws-bad-tenant",
+            "name": "Broken Tenant Membership",
+            "workspace_type": "personal",
+        },
+        "ws-good": {
+            "workspace_id": "ws-good",
+            "tenant_id": "tenant-1",
+            "name": "Healthy Workspace",
+            "workspace_type": "personal",
+            "metadata": {
+                "workspace_traits": {
+                    "operatingMode": "personal",
+                    "defaultSurface": "chat",
+                }
+            },
+        },
+    }
+
+    monkeypatch.setattr(
+        account_shell_service.auth_module,
+        "get_authenticated_user_record",
+        lambda current_user: {
+            "id": "user-1",
+            "email": "user@example.com",
+        },
+    )
+    monkeypatch.setattr(
+        account_shell_service.auth_module,
+        "list_authenticated_workspace_memberships",
+        lambda current_user: membership_rows,
+    )
+    monkeypatch.setattr(
+        account_shell_service.auth_module,
+        "get_authenticated_identity_versions",
+        lambda current_user: {"membership_version": 11},
+    )
+
+    async def fake_get_workspace_by_id(workspace_id: str):
+        return workspaces.get(workspace_id)
+
+    monkeypatch.setattr(
+        account_shell_service.control_plane_repository,
+        "get_workspace_by_id",
+        fake_get_workspace_by_id,
+    )
+    monkeypatch.setattr(
+        account_shell_service.entitlements_service,
+        "resolve_workspace_entitlement_state_for_workspace_id",
+        lambda workspace_id, workspace=None: SimpleNamespace(
+            plan_id="personal",
+            plan_label="Personal",
+            source="workspace_metadata",
+            entitlements={
+                "artifacts_enabled": False,
+                "approvals_enabled": False,
+                "mobile_app_enabled": True,
+            },
+        ),
+    )
+
+    payload = await account_shell_service.build_account_shell_payload(current_user)
+
+    assert payload["account"]["id"] == "user-1"
+    assert [item["workspace"]["id"] for item in payload["workspaceMemberships"]] == ["ws-good"]
+    assert payload["workspaceMemberships"][0]["membershipVersion"] == "11:12"

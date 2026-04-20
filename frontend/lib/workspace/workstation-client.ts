@@ -449,6 +449,7 @@ export type WorkstationClientPaths = {
   agentDefinitions: string;
   agentInstalls: string;
   runtimeTargets: string;
+  providers: string;
   providersCatalog: string;
   providerModels: (providerId: string, profileId?: string | null) => string;
   providerProfiles: (provider?: string | null) => string;
@@ -612,6 +613,7 @@ export type WorkstationClient = {
   listAgentDefinitions: () => Promise<Record<string, unknown>>;
   listAgentInstalls: () => Promise<Record<string, unknown>>;
   listRuntimeTargets: () => Promise<Record<string, unknown>>;
+  listProviders: () => Promise<Record<string, unknown>>;
   listProviderCatalog: () => Promise<Record<string, unknown>>;
   listProviderModels: (options: { providerId: string; profileId?: string | null }) => Promise<Record<string, unknown>>;
   listProviderProfiles: (options?: { provider?: string | null }) => Promise<Record<string, unknown>>;
@@ -929,6 +931,7 @@ export function buildWorkstationApiPaths(workspaceId: string): WorkstationClient
     agentDefinitions: `/agent-registry/definitions${buildQueryString({ workspace_id: workspaceId })}`,
     agentInstalls: `/agent-registry/installs${buildQueryString({ workspace_id: workspaceId })}`,
     runtimeTargets: `/agent-registry/runtime-targets${buildQueryString({ workspace_id: workspaceId })}`,
+    providers: `/api/providers${buildQueryString({ workspace_id: workspaceId })}`,
     providersCatalog: `/api/providers/catalog${buildQueryString({ workspace_id: workspaceId })}`,
     providerModels: (providerId: string, profileId: string | null = null) =>
       `/api/providers/${encodeURIComponent(providerId)}/models${buildQueryString({ workspace_id: workspaceId, profile_id: profileId })}`,
@@ -1927,6 +1930,11 @@ export function createWorkstationClient(
     listRuntimeTargets: () =>
       requestJson<Record<string, unknown>>({
         path: paths.runtimeTargets,
+        policy: READ_REQUEST_POLICY,
+      }) as Promise<Record<string, unknown>>,
+    listProviders: () =>
+      requestJson<Record<string, unknown>>({
+        path: paths.providers,
         policy: READ_REQUEST_POLICY,
       }) as Promise<Record<string, unknown>>,
     listProviderCatalog: () =>

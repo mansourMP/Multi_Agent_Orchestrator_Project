@@ -355,6 +355,29 @@ def test_tenant_binding_and_policy_precedence(monkeypatch: pytest.MonkeyPatch, t
     assert exc.value.status_code == 403
 
 
+def test_workspace_tenant_resolution_prefers_authoritative_binding_over_stale_token_claim(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+):
+    auth, _, _ = _reload_auth(monkeypatch, tmp_path)
+    created = auth.register_user("tenant.stale@example.com", "password-123", name="Tenant Stale")
+    workspace_entry = created["workspace_access"][0]
+    workspace_id = workspace_entry["workspace_id"]
+    authoritative_tenant_id = workspace_entry["tenant_id"]
+    current_user = auth.get_current_user(_Request(), authorization=f"Bearer {created['token']}")
+
+    current_user["workspace_access"][workspace_id]["tenant_id"] = "tenant-stale"
+
+    assert auth.workspace_tenant_id(current_user, workspace_id) == authoritative_tenant_id
+    assert auth.allowed_tenant_ids(current_user) == {authoritative_tenant_id}
+    assert auth.enforce_workspace_access(
+        current_user,
+        workspace_id,
+        tenant_id=authoritative_tenant_id,
+        minimum_role="viewer",
+    ) == workspace_id
+
+
 def test_enterprise_settings_and_admin_provisioning_hooks(monkeypatch: pytest.MonkeyPatch, tmp_path):
     auth, _, _ = _reload_auth(monkeypatch, tmp_path)
     finance_workspace_id = f"finance-{tmp_path.name}"

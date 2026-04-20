@@ -4072,6 +4072,19 @@ def allowed_tenant_ids(user: Optional[Dict[str, Any]]) -> Optional[set[str]]:
         return None
     access = tenant_access_map(user)
     if access:
+        resolved: set[str] = set()
+        for workspace_id, entry in workspace_access_map(user).items():
+            try:
+                resolved.add(workspace_tenant_id(user, workspace_id))
+            except HTTPException:
+                tenant_id = _normalize_tenant_token(
+                    entry.get("tenant_id") if isinstance(entry, dict) else None,
+                    default="",
+                )
+                if tenant_id:
+                    resolved.add(tenant_id)
+        if resolved:
+            return resolved
         return set(access.keys())
     return {
         tenant_id_for_workspace(workspace_id)
@@ -4190,6 +4203,15 @@ def workspace_role(current_user: Optional[Dict[str, Any]], workspace_id: Optiona
 def workspace_tenant_id(current_user: Optional[Dict[str, Any]], workspace_id: Optional[str]) -> str:
     token = _require_workspace_token(_resolve_workspace_token_for_current_user(current_user, workspace_id))
     entry = workspace_access_map(current_user).get(token)
+    try:
+        authoritative_tenant_id = tenant_id_for_workspace(token)
+    except HTTPException:
+        authoritative_tenant_id = ""
+    if authoritative_tenant_id:
+        return _require_tenant_token(
+            authoritative_tenant_id,
+            detail=f"Workspace '{token}' is not bound to a valid tenant.",
+        )
     if isinstance(entry, dict):
         return _require_tenant_token(entry.get("tenant_id"), detail=f"Workspace '{token}' is not bound to a valid tenant.")
     return tenant_id_for_workspace(token)

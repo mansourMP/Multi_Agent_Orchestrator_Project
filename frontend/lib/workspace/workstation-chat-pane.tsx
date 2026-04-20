@@ -668,16 +668,25 @@ function isProviderEligibleForWorkspaceDefault(provider: ProviderCatalogRecord):
   return state === 'configured';
 }
 
-function disconnectedModelOption(): ChatModelOption {
+function workspaceDefaultModelOption(
+  providers: ProviderCatalogRecord[] = [],
+): ChatModelOption {
+  const workspaceDefaultProvider = providers.find(isProviderEligibleForWorkspaceDefault) ?? null;
   return {
     id: 'default',
     label: 'Workspace default',
-    providerId: null,
-    providerLabel: null,
+    providerId: workspaceDefaultProvider ? readString(workspaceDefaultProvider.id) || null : null,
+    providerLabel: workspaceDefaultProvider
+      ? readString(workspaceDefaultProvider.label) || readString(workspaceDefaultProvider.id) || null
+      : null,
     supportsReasoning: false,
     reasoningLevels: ['low', 'medium', 'high'],
     contextWindowTokens: null,
   };
+}
+
+function disconnectedModelOption(): ChatModelOption {
+  return workspaceDefaultModelOption();
 }
 
 function normalizeChatModelOptions(payload: unknown): ChatModelOption[] {
@@ -693,7 +702,7 @@ function normalizeChatModelOptions(payload: unknown): ChatModelOption[] {
 
   const seen = new Set<string>();
 
-  return connectedProviders.flatMap((provider) => {
+  const options = connectedProviders.flatMap((provider) => {
     const models = Array.isArray(provider.models)
       ? provider.models.filter((item): item is ProviderCatalogModelRecord => Boolean(item) && typeof item === 'object')
       : [];
@@ -718,6 +727,8 @@ function normalizeChatModelOptions(payload: unknown): ChatModelOption[] {
       }];
     });
   });
+
+  return options.length > 0 ? options : [workspaceDefaultModelOption(connectedProviders)];
 }
 
 function compactComposerLabel(label: string, fallback: string): string {
@@ -2074,18 +2085,31 @@ export function WorkstationChatPane() {
     let cancelled = false;
 
     (async () => {
+      const applyProviderPayload = (payload: Record<string, unknown>) => {
+        const normalizedProviders = normalizeProviderCatalogRecords(payload);
+        setProviderCatalog(normalizedProviders);
+        const nextOptions = normalizeChatModelOptions(payload);
+        setModelOptions(nextOptions.length > 0 ? nextOptions : [workspaceDefaultModelOption(normalizedProviders)]);
+      };
+
       try {
         const payload = await services.client.listProviderCatalog();
         if (cancelled) {
           return;
         }
-        setProviderCatalog(normalizeProviderCatalogRecords(payload));
-        const nextOptions = normalizeChatModelOptions(payload);
-        setModelOptions(nextOptions);
+        applyProviderPayload(payload);
       } catch {
-        if (!cancelled) {
-          setProviderCatalog([]);
-          setModelOptions([disconnectedModelOption()]);
+        try {
+          const fallbackPayload = await services.client.listProviders();
+          if (cancelled) {
+            return;
+          }
+          applyProviderPayload(fallbackPayload);
+        } catch {
+          if (!cancelled) {
+            setProviderCatalog((current) => current);
+            setModelOptions((current) => (current.length > 0 ? current : [disconnectedModelOption()]));
+          }
         }
       }
     })();

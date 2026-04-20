@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+import logging
 from typing import Any, Dict, List, Optional
 
 from fastapi import HTTPException
@@ -9,6 +10,9 @@ from server_modules import auth as auth_module
 from server_modules import control_plane_repository
 from server_modules import entitlements_service
 from server_modules import workspace_bootstrap_service
+
+
+logger = logging.getLogger(__name__)
 
 
 def _coerce_dict(value: Any) -> Dict[str, Any]:
@@ -76,57 +80,80 @@ async def build_account_shell_payload(current_user: Optional[Dict[str, Any]]) ->
 
     workspace_memberships: List[Dict[str, Any]] = []
     for membership_row in memberships:
-        workspace_id = _require_string(membership_row.get("workspace_id"), field="workspace_id")
-        workspace_record = await control_plane_repository.get_workspace_by_id(workspace_id)
-        tenant_id = _require_string(
-            membership_row.get("tenant_id") or _coerce_dict(workspace_record).get("tenant_id"),
-            field=f"workspaceMemberships[{workspace_id}].tenant_id",
-        )
-        workspace = workspace_bootstrap_service._workspace_payload(
-            workspace_id=workspace_id,
-            tenant_id=tenant_id,
-            workspace=workspace_record,
-            workspace_name=str(membership_row.get("workspace_name") or "").strip() or None,
-        )
-        role = auth_module.normalize_rbac_role(
-            membership_row.get("role"),
-            default=auth_module.workspace_role(current_user, workspace_id) or "viewer",
-        )
-        workspace_traits, capabilities, _ = _workspace_capabilities(
-            role=role,
-            workspace_record=workspace_record,
-            workspace_id=workspace_id,
-            current_user=current_user,
-        )
-        shell_hints = workspace_bootstrap_service._shell_hints(
-            workspace_id=workspace_id,
-            role=role,
-            workspace=workspace_record,
-            traits=workspace_traits,
-        )
-        permissions = workspace_bootstrap_service._membership_permissions(
-            role=role,
-            capabilities=capabilities,
-            traits=workspace_traits,
-        )
-        membership_version = f"{membership_version_prefix}:{_version_component(membership_row.get('updated_at'))}"
-        workspace_memberships.append(
-            {
-                "workspace": {
-                    "id": workspace["id"],
-                    "tenantId": workspace["tenantId"],
-                    "label": workspace["label"],
-                    "kind": workspace["kind"],
-                },
-                "role": role,
-                "permissions": permissions,
-                "membershipVersion": membership_version,
-                "defaultRoute": shell_hints["defaultRoute"],
-                "preferredShellProfileId": shell_hints["preferredProfile"],
-                "setupCompleted": bool(shell_hints["setupCompleted"]),
-                "requiresOnboarding": bool(shell_hints["requiresOnboarding"]),
-            }
-        )
+        raw_workspace_id = str(membership_row.get("workspace_id") or "").strip()
+        if not raw_workspace_id:
+            logger.warning("Skipping account-shell membership with missing workspace_id.")
+            continue
+        try:
+            workspace_record = await control_plane_repository.get_workspace_by_id(raw_workspace_id)
+            tenant_id = str(
+                membership_row.get("tenant_id") or _coerce_dict(workspace_record).get("tenant_id") or ""
+            ).strip()
+            if not tenant_id:
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"Account shell is missing required field: workspaceMemberships[{raw_workspace_id}].tenant_id.",
+                )
+            workspace = workspace_bootstrap_service._workspace_payload(
+                workspace_id=raw_workspace_id,
+                tenant_id=tenant_id,
+                workspace=workspace_record,
+                workspace_name=str(membership_row.get("workspace_name") or "").strip() or None,
+            )
+            role = auth_module.normalize_rbac_role(
+                membership_row.get("role"),
+                default=auth_module.workspace_role(current_user, raw_workspace_id) or "viewer",
+            )
+            workspace_traits, capabilities, _ = _workspace_capabilities(
+                role=role,
+                workspace_record=workspace_record,
+                workspace_id=raw_workspace_id,
+                current_user=current_user,
+            )
+            shell_hints = workspace_bootstrap_service._shell_hints(
+                workspace_id=raw_workspace_id,
+                role=role,
+                workspace=workspace_record,
+                traits=workspace_traits,
+            )
+            permissions = workspace_bootstrap_service._membership_permissions(
+                role=role,
+                capabilities=capabilities,
+                traits=workspace_traits,
+            )
+            membership_version = (
+                f"{membership_version_prefix}:{_version_component(membership_row.get('updated_at'))}"
+            )
+            workspace_memberships.append(
+                {
+                    "workspace": {
+                        "id": workspace["id"],
+                        "tenantId": workspace["tenantId"],
+                        "label": workspace["label"],
+                        "kind": workspace["kind"],
+                    },
+                    "role": role,
+                    "permissions": permissions,
+                    "membershipVersion": membership_version,
+                    "defaultRoute": shell_hints["defaultRoute"],
+                    "preferredShellProfileId": shell_hints["preferredProfile"],
+                    "setupCompleted": bool(shell_hints["setupCompleted"]),
+                    "requiresOnboarding": bool(shell_hints["requiresOnboarding"]),
+                }
+            )
+        except HTTPException as exc:
+            logger.warning(
+                "Skipping account-shell membership for workspace %s because payload derivation failed: %s",
+                raw_workspace_id,
+                exc.detail,
+            )
+            continue
+        except Exception:
+            logger.exception(
+                "Skipping account-shell membership for workspace %s because workspace lookup failed.",
+                raw_workspace_id,
+            )
+            continue
 
     return {
         "account": {

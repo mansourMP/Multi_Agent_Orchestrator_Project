@@ -263,3 +263,87 @@ async def test_build_workspace_bootstrap_reuses_cached_payload_for_identical_ver
 
     assert first == second
     assert assemble_calls["count"] == 1
+
+
+@pytest.mark.anyio
+async def test_build_workspace_bootstrap_prefers_membership_tenant_over_stale_auth_workspace_access(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    current_user = _current_user(tenant_id="tenant-stale")
+
+    async def fake_get_user_bundle_by_id(user_id: str):
+        assert user_id == "user-1"
+        return {
+            "user": {
+                "id": "user-1",
+                "email": "user@example.com",
+                "name": "Mansur",
+            },
+            "memberships": [
+                {
+                    "workspace_id": "ws-1",
+                    "tenant_id": "tenant-1",
+                    "role": "member",
+                    "updated_at": 1712000000,
+                    "workspace_name": "Personal Workspace",
+                }
+            ],
+        }
+
+    async def fake_get_workspace_by_id(workspace_id: str):
+        assert workspace_id == "ws-1"
+        return {
+            "workspace_id": "ws-1",
+            "tenant_id": "tenant-1",
+            "name": "Personal Workspace",
+            "workspace_type": "personal",
+            "metadata": {
+                "billing": {
+                    "plan_id": "personal",
+                }
+            },
+        }
+
+    async def fake_list_runtime_targets(*, tenant_id: str, workspace_id: str, include_snapshot_version: bool = False):
+        assert tenant_id == "tenant-1"
+        assert workspace_id == "ws-1"
+        payload = {
+            "deployment_mode": "cloud_default",
+            "targets": [
+                {
+                    "target_id": "cloud_default",
+                    "label": "Cloud Default",
+                    "available": True,
+                    "online": True,
+                    "healthy": True,
+                    "status": "ready",
+                    "default_for_workspace": True,
+                }
+            ],
+        }
+        if include_snapshot_version:
+            payload["_snapshot_version"] = "runtime-targets:v1"
+        return payload
+
+    monkeypatch.setattr(
+        workspace_bootstrap_service.control_plane_repository,
+        "get_user_bundle_by_id",
+        fake_get_user_bundle_by_id,
+    )
+    monkeypatch.setattr(
+        workspace_bootstrap_service.control_plane_repository,
+        "get_workspace_by_id",
+        fake_get_workspace_by_id,
+    )
+    monkeypatch.setattr(
+        workspace_bootstrap_service.runtime_attachment_service,
+        "list_workspace_runtime_targets",
+        fake_list_runtime_targets,
+    )
+
+    payload = await workspace_bootstrap_service.build_workspace_bootstrap(
+        current_user=current_user,
+        workspace_id="ws-1",
+    )
+
+    assert payload["workspace"]["tenantId"] == "tenant-1"

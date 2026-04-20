@@ -129,6 +129,13 @@ function isSecretlessConnection(providerId: string, profile: ProviderProfileReco
   return false;
 }
 
+function isRuntimeConnected(provider: ProviderCatalogRecord | null): boolean {
+  if (!provider || typeof provider !== 'object') {
+    return false;
+  }
+  return provider.usable === true || provider.active === true;
+}
+
 export function WorkstationSageSettingsPane() {
   const searchParams = useSearchParams();
   const { bootstrap } = useWorkspaceBoundary();
@@ -171,7 +178,9 @@ export function WorkstationSageSettingsPane() {
         const providerId = readString(provider.id).toLowerCase();
         const profile = sortProfiles(profiles.filter((item) => readString(item.provider).toLowerCase() === providerId))[0] ?? null;
         const credential = sortCredentials(credentials.filter((item) => readString(item.provider).toLowerCase() === providerId))[0] ?? null;
-        return credential || isSecretlessConnection(providerId, profile) ? count + 1 : count;
+        return credential || isSecretlessConnection(providerId, profile) || isRuntimeConnected(provider)
+          ? count + 1
+          : count;
       }, 0);
 
       const connectorVault = normalizeVaultCredentials(connectorsPayload);

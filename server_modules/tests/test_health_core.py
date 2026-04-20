@@ -226,6 +226,141 @@ class HealthCoreRuntimeTests(unittest.TestCase):
         self.assertEqual(payload["healthguide_safety_policy"]["policy_version"], 1)
         self.assertGreaterEqual(payload["healthguide_safety_policy"]["red_flag_rule_count"], 1)
 
+    def test_health_accepts_active_anthropic_runtime_provider_when_openai_probe_is_unhealthy(self) -> None:
+        direct_chat_snapshot = {
+            "enabled": False,
+            "runtime_cache": {"active_sessions": 0, "idle_ttl_ms": 0, "evicted_total": 0},
+            "turns": {"active": 0, "queue_depth": 0},
+            "interrupted_stale_sessions": 0,
+            "errors_by_code": {},
+        }
+
+        with patch.object(
+            health_core,
+            "_runtime_contract_payload",
+            return_value={"contract_schema_version": "2026.2.0"},
+        ), patch.object(
+            health_core,
+            "_openai_env_bearer_with_source",
+            return_value=("", "none"),
+        ), patch.object(
+            health_core,
+            "probe_openai_credential",
+            return_value={
+                "openai_key_present": False,
+                "openai_vault_present": False,
+                "openai_key_valid": False,
+                "openai_credential_source": "none",
+                "openai_status": None,
+                "openai_error": None,
+            },
+        ), patch.object(
+            health_core.provider_profiles_service,
+            "build_provider_runtime_truth",
+            return_value={
+                "providers_by_id": {
+                    "anthropic": {
+                        "state": "active",
+                        "usable": True,
+                        "active": True,
+                    },
+                },
+                "providers": [
+                    {
+                        "id": "anthropic",
+                        "state": "active",
+                        "usable": True,
+                        "active": True,
+                    },
+                ],
+            },
+        ), patch.object(
+            health_core,
+            "collect_runtime_counts",
+            return_value={
+                "weekly_schedules": 0,
+                "setup_sessions_total": 0,
+                "setup_sessions_active": 0,
+                "provider_profiles_total": 0,
+                "idempotency_records": 0,
+            },
+        ), patch.object(
+            health_core,
+            "_telegram_autopilot_snapshot",
+            return_value={},
+        ), patch.object(
+            health_core,
+            "_whatsapp_autopilot_snapshot",
+            return_value={},
+        ), patch.object(
+            health_core,
+            "tool_policy_snapshot",
+            return_value={
+                "blocked_actions": [],
+                "approval_actions": [],
+                "allow_actions": [],
+                "sensitive_tools": [],
+                "critical_tools": [],
+                "block_cloud_critical": True,
+                "connector_cloud_readonly": True,
+                "policy_mode": "local_default",
+            },
+        ), patch.object(
+            health_core,
+            "_memory_health_snapshot",
+            return_value={
+                "enabled": True,
+                "manager_ready": True,
+                "manager_error": None,
+                "db_path": "db",
+                "db_exists": True,
+                "db_size_bytes": 1,
+                "sqlite_rows": 0,
+                "sqlite_error": None,
+                "lancedb_uri": "uri",
+                "lancedb_initialized": True,
+            },
+        ), patch.object(
+            health_core,
+            "_runtime_skills_snapshot",
+            return_value={"version": 1},
+        ), patch.object(
+            health_core,
+            "_direct_chat_session_manager_snapshot",
+            return_value=direct_chat_snapshot,
+        ), patch.object(
+            health_core,
+            "_process_runtime_snapshot",
+            return_value={
+                "pid": 123,
+                "uptime_seconds": 12.5,
+                "thread_count": 4,
+                "open_fd_count": 20,
+                "max_rss_bytes": 8192,
+                "measurement_scope": "live_since_process_start",
+            },
+        ), patch.object(
+            health_core,
+            "_database_runtime_snapshot",
+            return_value={
+                "dsn_configured": True,
+                "postgres_pool_max_size": 50,
+                "active_pool_count": 1,
+                "sqlite_status": "active",
+                "measurement_scope": "live_since_process_start",
+            },
+        ), patch.object(
+            health_core,
+            "ORION_ENGINE_VALIDATION_ERRORS",
+            [],
+        ):
+            payload = asyncio.run(health_core.health())
+
+        self.assertTrue(payload["ok"])
+        self.assertFalse(payload["openai_key_valid"])
+        self.assertTrue(payload["cloud_provider_ready"])
+        self.assertEqual(payload["cloud_provider_source"], "provider_profile:anthropic")
+
     def test_health_exposes_scale_safety_baseline_with_provider_backpressure_and_queueing(self) -> None:
         rate_limited_profile = {
             "id": "profile-openai",

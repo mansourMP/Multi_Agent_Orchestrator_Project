@@ -258,6 +258,30 @@ def _scale_safety_baseline_payload(
     }
 
 
+def _runtime_cloud_provider_readiness(
+    provider_profile_health: Dict[str, Any],
+    *,
+    auth_mode: str = "",
+) -> tuple[bool, str]:
+    providers_by_id = provider_profile_health.get("providers_by_id")
+    if not isinstance(providers_by_id, dict):
+        return False, "none"
+    normalized_auth_mode = str(auth_mode or "").strip().lower()
+    preferred_order = {
+        "codex": ("openai-codex", "openai", "anthropic", "gemini"),
+        "openai": ("openai", "openai-codex", "anthropic", "gemini"),
+        "anthropic": ("anthropic", "openai", "openai-codex", "gemini"),
+        "gemini": ("gemini", "openai", "openai-codex", "anthropic"),
+    }.get(normalized_auth_mode, ("openai", "anthropic", "gemini", "openai-codex"))
+    for provider_id in preferred_order:
+        entry = providers_by_id.get(provider_id)
+        if not isinstance(entry, dict):
+            continue
+        if bool(entry.get("usable")) or bool(entry.get("active")):
+            return True, f"provider_profile:{provider_id}"
+    return False, "none"
+
+
 async def health():
     runtime_contract = _runtime_contract_payload()
     openai_key, openai_env_source = _openai_env_bearer_with_source()
@@ -299,12 +323,14 @@ async def health():
     auth_mode = str(ORION_AUTH_MODE or "").strip().lower()
     cloud_provider_ready = bool(openai_probe["openai_key_valid"])
     cloud_provider_source = "openai_probe" if cloud_provider_ready else "none"
-    if not cloud_provider_ready and auth_mode == "codex" and bool(provider_profile_health.get("codex_profile_ready")):
-        cloud_provider_ready = True
-        cloud_provider_source = "provider_profile:openai-codex"
-    elif not cloud_provider_ready and auth_mode == "openai" and bool(provider_profile_health.get("openai_profile_ready")):
-        cloud_provider_ready = True
-        cloud_provider_source = "provider_profile:openai"
+    if not cloud_provider_ready:
+        provider_ready, provider_source = _runtime_cloud_provider_readiness(
+            provider_profile_health,
+            auth_mode=auth_mode,
+        )
+        if provider_ready:
+            cloud_provider_ready = True
+            cloud_provider_source = provider_source
     ok = bool(cloud_provider_ready) and runtime_valid
     scale_safety_baseline = _scale_safety_baseline_payload(
         provider_profile_health=provider_profile_health,

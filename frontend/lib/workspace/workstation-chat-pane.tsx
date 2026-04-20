@@ -934,8 +934,8 @@ function isProviderEligibleForModelSelector(provider: ProviderCatalogRecord): bo
 
 function disconnectedModelOption(): ChatModelOption {
   return {
-    id: '',
-    label: 'Connect a provider in Integrations',
+    id: 'default',
+    label: 'Workspace default',
     providerId: null,
     providerLabel: null,
     supportsReasoning: false,
@@ -2155,8 +2155,8 @@ export function WorkstationChatPane() {
   );
   const selectedModelOption = useMemo(
     () => modelOptions.find((option) => option.id === selectedModel) ?? modelOptions[0] ?? {
-      id: '',
-      label: 'Connect a provider in Integrations',
+      id: 'default',
+      label: 'Workspace default',
       providerId: null,
       providerLabel: null,
       supportsReasoning: false,
@@ -2177,10 +2177,6 @@ export function WorkstationChatPane() {
   const integrationsHref = useMemo(
     () => routeManifest.routeIndex.integrations?.href ?? `/w/${encodeURIComponent(bootstrap.workspace.id)}/integrations`,
     [bootstrap.workspace.id, routeManifest.routeIndex.integrations],
-  );
-  const hasConnectedProvider = useMemo(
-    () => providerCatalog.some(isProviderEligibleForModelSelector),
-    [providerCatalog],
   );
   const runTargetOptions = useMemo(
     () => [
@@ -2979,9 +2975,9 @@ export function WorkstationChatPane() {
         contextWindowLabel={contextWindowLabel}
         busy={isSending}
         controlsDisabled={false}
-        sendDisabled={!hasConnectedProvider}
-        placeholder={hasConnectedProvider ? 'Message Sage...' : 'Connect a provider in Integrations to start chatting'}
-        providerGateVisible={!hasConnectedProvider}
+        sendDisabled={false}
+        placeholder="Message Sage..."
+        providerGateVisible={false}
         showAutonomySelector={localCompanionConnected}
         autonomyFallbackLabel="Offline"
       />

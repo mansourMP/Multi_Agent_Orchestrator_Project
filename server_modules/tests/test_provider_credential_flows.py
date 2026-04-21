@@ -95,7 +95,7 @@ class ProviderValidationMessageTests(unittest.TestCase):
     def test_anthropic_validate_uses_models_endpoint(self, http_json_request_mock):
         http_json_request_mock.return_value = {
             "status": 200,
-            "json": {"data": [{"id": "claude-3-7-sonnet-latest"}]},
+            "json": {"data": [{"id": "claude-3-7-sonnet-20250219"}]},
             "text": "",
         }
 

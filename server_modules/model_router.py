@@ -26,7 +26,7 @@ MODEL_ALIASES = {
     "gpt-4o-mini": "gpt-4o-mini",
     "gpt-4.1": "gpt-4.1",
     "gpt-4.1-mini": "gpt-4.1-mini",
-    "claude-sonnet": "anthropic/claude-3-7-sonnet-latest",
+    "claude-sonnet": "anthropic/claude-3-7-sonnet-20250219",
     "claude-haiku": "anthropic/claude-3-haiku-20240307",
     "gemini-flash": "gemini/gemini-2.5-flash",
     "gemini-pro": "gemini/gemini-2.5-pro",

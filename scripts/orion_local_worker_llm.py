@@ -43,8 +43,9 @@ OPENAI_CODEX_DIRECT_AUTH_ERROR = (
 CLAUDE_CODE_CREDENTIALS_PATH = Path.home() / ".claude" / ".credentials.json"
 CLAUDE_CODE_KEYCHAIN_SERVICE = "Claude Code-credentials"
 LOGGER = logging.getLogger(__name__)
-ANTHROPIC_DEFAULT_MODEL_FALLBACK = "claude-3-7-sonnet-latest"
+ANTHROPIC_DEFAULT_MODEL_FALLBACK = "claude-3-7-sonnet-20250219"
 ANTHROPIC_RETIRED_MODEL_ALIASES = {
+    "claude-3-7-sonnet-latest",
     "claude-3-5-sonnet-20241022",
 }
 

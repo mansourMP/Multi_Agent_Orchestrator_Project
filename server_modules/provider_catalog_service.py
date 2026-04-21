@@ -5,6 +5,11 @@ from typing import Any, Dict, List, Optional
 from server_modules import model_router
 from server_modules import provider_profiles
 
+ANTHROPIC_MODEL_ALIASES = {
+    "claude-3-7-sonnet-latest": "claude-3-7-sonnet-20250219",
+    "claude-3-5-sonnet-20241022": "claude-3-7-sonnet-20250219",
+}
+
 def _cached_model_records(provider_id: str, metadata: Dict[str, Any]) -> List[Dict[str, Any]]:
     cached = metadata.get("cached_models")
     if not isinstance(cached, list):
@@ -34,7 +39,9 @@ def _normalize_model_token(provider_id: str, model_id: Any) -> str:
     if not token:
         return ""
     if provider_id == "anthropic" and token.startswith("anthropic/"):
-        return token.split("/", 1)[1]
+        token = token.split("/", 1)[1]
+    if provider_id == "anthropic":
+        return ANTHROPIC_MODEL_ALIASES.get(token, token)
     if provider_id == "gemini" and token.startswith("gemini/"):
         return token.split("/", 1)[1]
     if provider_id == "vertex" and token.startswith("vertex_ai/"):

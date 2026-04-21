@@ -230,8 +230,8 @@ PROVIDER_CATALOG = {
             {"id": "local_cli", "label": "Claude Subscription", "secret_required": False},
         ],
         "default_auth_mode": "api_key",
-        "default_model": "claude-3-7-sonnet-latest",
-        "models": ["claude-3-7-sonnet-latest", "claude-3-5-haiku-20241022", "claude-3-5-sonnet-20241022"],
+        "default_model": "claude-3-7-sonnet-20250219",
+        "models": ["claude-3-7-sonnet-20250219", "claude-3-5-haiku-20241022", "claude-3-5-sonnet-20241022"],
         "note": "Use a direct Anthropic API key or the local Claude subscription already signed into the Claude CLI on this machine.",
     },
     "claude_code_cli": {
@@ -483,7 +483,7 @@ PROVIDER_MODEL_CATALOG = {
             "supports_reasoning": False,
             "capability_labels": ["Low cost", "Fast", "Tools"],
         },
-        "claude-3-7-sonnet-latest": {
+        "claude-3-7-sonnet-20250219": {
             "label": "Claude 3.7 Sonnet",
             "context_window_tokens": 200000,
             "input_cost_per_1k_usd": 0.003,

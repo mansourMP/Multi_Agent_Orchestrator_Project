@@ -1179,6 +1179,13 @@ const READ_REQUEST_POLICY: WorkstationRequestPolicy = {
   refreshSessionOn401: true,
 };
 
+const PROVIDER_READ_REQUEST_POLICY: WorkstationRequestPolicy = {
+  timeoutMs: 25_000,
+  retryCount: 1,
+  retryOnStatuses: [408, 425, 429, 500, 502, 503, 504],
+  refreshSessionOn401: true,
+};
+
 const WRITE_REQUEST_POLICY: WorkstationRequestPolicy = {
   timeoutMs: 15_000,
   retryCount: 0,
@@ -1935,17 +1942,17 @@ export function createWorkstationClient(
     listProviders: () =>
       requestJson<Record<string, unknown>>({
         path: paths.providers,
-        policy: READ_REQUEST_POLICY,
+        policy: PROVIDER_READ_REQUEST_POLICY,
       }) as Promise<Record<string, unknown>>,
     listProviderCatalog: () =>
       requestJson<Record<string, unknown>>({
         path: paths.providersCatalog,
-        policy: READ_REQUEST_POLICY,
+        policy: PROVIDER_READ_REQUEST_POLICY,
       }) as Promise<Record<string, unknown>>,
     listProviderModels: ({ providerId, profileId = null }: { providerId: string; profileId?: string | null }) =>
       requestJson<Record<string, unknown>>({
         path: paths.providerModels(providerId, profileId),
-        policy: READ_REQUEST_POLICY,
+        policy: PROVIDER_READ_REQUEST_POLICY,
       }) as Promise<Record<string, unknown>>,
     listProviderProfiles: ({ provider = null } = {}) =>
       requestJson<Record<string, unknown>>({

@@ -1,14 +1,13 @@
 'use client';
 
 import Link from 'next/link';
-import { useRouter, useSearchParams } from 'next/navigation';
+import { useSearchParams } from 'next/navigation';
 import { FormEvent, Suspense, useState } from 'react';
 
-import { login } from '@/lib/auth/auth-client';
+import { awaitBrowserAuthReady, login } from '@/lib/auth/auth-client';
 import { AppButton, AppInput } from '@/lib/ui/primitives';
 
 function LoginPageContent() {
-  const router = useRouter();
   const searchParams = useSearchParams();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -33,8 +32,8 @@ function LoginPageContent() {
     setError(null);
     try {
       await login(email, password);
-      router.replace('/');
-      router.refresh();
+      await awaitBrowserAuthReady();
+      window.location.replace('/');
     } catch (nextError) {
       setError(nextError instanceof Error ? nextError.message : 'Login failed.');
     } finally {

@@ -1,14 +1,12 @@
 'use client';
 
 import Link from 'next/link';
-import { useRouter } from 'next/navigation';
 import { FormEvent, useEffect, useState } from 'react';
 
-import { signup } from '@/lib/auth/auth-client';
+import { awaitBrowserAuthReady, signup } from '@/lib/auth/auth-client';
 import { AppButton, AppInput } from '@/lib/ui/primitives';
 
 export default function SignupPage() {
-  const router = useRouter();
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -39,8 +37,8 @@ export default function SignupPage() {
     setError(null);
     try {
       await signup(email, password, name || undefined);
-      router.replace('/onboarding');
-      router.refresh();
+      await awaitBrowserAuthReady();
+      window.location.replace('/onboarding');
     } catch (nextError) {
       setError(nextError instanceof Error ? nextError.message : 'Signup failed.');
     } finally {

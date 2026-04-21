@@ -5,6 +5,12 @@ type AuthRequestOptions = {
   body?: Record<string, unknown>;
 };
 
+type AwaitBrowserAuthReadyOptions = {
+  path?: string;
+  attempts?: number;
+  delayMs?: number;
+};
+
 function channelAttributionToken(): string | undefined {
   if (typeof window === 'undefined') {
     return undefined;
@@ -45,6 +51,49 @@ async function requestAuth<T>(path: string, options: AuthRequestOptions): Promis
     throw new Error(detail || `Auth request failed with status ${response.status}.`);
   }
   return payload as T;
+}
+
+function sleep(delayMs: number): Promise<void> {
+  return new Promise((resolve) => {
+    window.setTimeout(resolve, delayMs);
+  });
+}
+
+export async function awaitBrowserAuthReady({
+  path = '/api/auth/account-shell',
+  attempts = 8,
+  delayMs = 250,
+}: AwaitBrowserAuthReadyOptions = {}): Promise<void> {
+  let lastStatus: number | null = null;
+
+  for (let index = 0; index < attempts; index += 1) {
+    const response = await fetch(path, {
+      method: 'GET',
+      credentials: 'include',
+      cache: 'no-store',
+      headers: buildCookieAuthHeaders('GET', {
+        accept: 'application/json',
+      }),
+    });
+
+    if (response.ok) {
+      return;
+    }
+
+    lastStatus = response.status;
+    if (response.status === 401 || response.status >= 500 || response.status === 403) {
+      await sleep(delayMs);
+      continue;
+    }
+
+    throw new Error(`Auth readiness check failed with status ${response.status}.`);
+  }
+
+  throw new Error(
+    lastStatus === null
+      ? 'Auth readiness check did not complete.'
+      : `Auth readiness check did not recover from status ${lastStatus}.`,
+  );
 }
 
 export async function login(email: string, password: string): Promise<Record<string, unknown> | null> {

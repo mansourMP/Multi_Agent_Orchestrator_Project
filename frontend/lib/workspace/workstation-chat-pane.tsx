@@ -1125,6 +1125,16 @@ function isTransientBackgroundReadError(error: unknown): boolean {
   return error.status === 0 || error.status >= 500;
 }
 
+function shouldSuppressBackgroundRefreshNotice(error: unknown): boolean {
+  if (isTransientBackgroundReadError(error)) {
+    return true;
+  }
+  if (!(error instanceof Error)) {
+    return false;
+  }
+  return /took too long to respond|could not reach the service|temporary service issue/i.test(error.message);
+}
+
 function memoryCategoryLabel(
   categories: SageMemoryCategoryRecord[],
   categoryId: string,
@@ -1747,6 +1757,9 @@ export function WorkstationChatPane() {
       return;
     }
     void refreshCanonicalState(activeThreadId).catch((error) => {
+      if (shouldSuppressBackgroundRefreshNotice(error)) {
+        return;
+      }
       setStatusMessage(error instanceof Error ? error.message : 'Chat refresh failed.');
     });
   }, [activeThreadId, streamState.activity.version]);
@@ -1802,6 +1815,10 @@ export function WorkstationChatPane() {
         }
       } catch (error) {
         if (!cancelled) {
+          if (shouldSuppressBackgroundRefreshNotice(error)) {
+            setStatusMessage(null);
+            return;
+          }
           setStatusMessage(error instanceof Error ? error.message : 'Chat is unavailable right now.');
         }
       } finally {

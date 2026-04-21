@@ -54,6 +54,7 @@ __pycache__/
 .orion_credentials_vault.json.bak.*
 .orion_idempotency_log.json
 .orion-media/
+.orion-object-store/
 .orion_run_history.json
 .orion_runtime_skills.json
 .orion_runtime_state.db
@@ -78,3 +79,8 @@ dead_code_report.txt
 # desktop/ is a legacy Electron shell era archive target. Keep tracked until final deletion.
 
 .local-dev-state/
+_archive/
+config/cache/
+config/codex.sqlite3
+config/codex.toml
+config/secret_key

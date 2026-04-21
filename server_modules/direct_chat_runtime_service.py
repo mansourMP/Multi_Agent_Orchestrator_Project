@@ -14,6 +14,7 @@ from server_modules import direct_chat_provider_service
 from server_modules import direct_chat_prompt_service
 from server_modules import direct_chat_response_service
 from server_modules import no_provider_service
+from server_modules import thread_service
 from server_modules.direct_tool_config_service import run_async_tool_call
 
 
@@ -83,6 +84,52 @@ def _resume_trace_context(
         return resumed
     except Exception:
         return None
+
+
+def _hydrate_prior_messages_from_thread_store(
+    *,
+    workspace_id: str,
+    tenant_id: str,
+    thread_id: str,
+    current_message: str,
+) -> List[Dict[str, str]]:
+    normalized_workspace_id = str(workspace_id or "").strip()
+    normalized_tenant_id = str(tenant_id or "").strip()
+    normalized_thread_id = str(thread_id or "").strip()
+    normalized_current_message = str(current_message or "").strip()
+    if not normalized_workspace_id or not normalized_tenant_id or not normalized_thread_id:
+        return []
+    try:
+        record = run_async_tool_call(
+            thread_service.get_thread(
+                normalized_thread_id,
+                tenant_id=normalized_tenant_id,
+                workspace_id=normalized_workspace_id,
+                include_turns=True,
+            )
+        )
+    except Exception:
+        return []
+    if not isinstance(record, dict):
+        return []
+    hydrated: List[Dict[str, str]] = []
+    for turn in list(record.get("turns") or []):
+        if not isinstance(turn, dict):
+            continue
+        role = str(turn.get("role") or "").strip().lower()
+        if role not in {"user", "assistant"}:
+            continue
+        content = str(turn.get("content") or "").strip()
+        if not content:
+            continue
+        hydrated.append({"role": role, "content": content})
+    if (
+        hydrated
+        and hydrated[-1].get("role") == "user"
+        and str(hydrated[-1].get("content") or "").strip() == normalized_current_message
+    ):
+        hydrated.pop()
+    return hydrated
 
 
 def _finalize_direct_tool_payload(
@@ -359,6 +406,28 @@ def build_direct_operator_reply(
         agent_turn_request,
         (session_ctx.get("agent_turn_request") if isinstance(session_ctx, dict) else None),
     )
+    effective_prior_messages = list(prior_messages or [])
+    if not effective_prior_messages:
+        effective_prior_messages = _hydrate_prior_messages_from_thread_store(
+            workspace_id=(
+                str(getattr(resolved_turn_request, "workspace_id", "") or "").strip()
+                or str((session_ctx or {}).get("workspace_id") or "").strip()
+                or str(workspace_id or "").strip()
+            ),
+            tenant_id=(
+                str(getattr(resolved_turn_request, "tenant_id", "") or "").strip()
+                or str((session_ctx or {}).get("tenant_id") or "").strip()
+            ),
+            thread_id=(
+                str(getattr(resolved_turn_request, "thread_id", "") or "").strip()
+                or str((session_ctx or {}).get("thread_id") or "").strip()
+                or str(thread_id or "").strip()
+            ),
+            current_message=(
+                str(getattr(resolved_turn_request, "message", "") or "").strip()
+                or str(message or "").strip()
+            ),
+        )
     prepared = services.prepare_direct_chat_request(
         resolved_turn_request=resolved_turn_request,
         session_ctx=session_ctx,
@@ -367,7 +436,7 @@ def build_direct_operator_reply(
         thread_id=thread_id,
         requested_model=requested_model,
         requested_provider=requested_provider,
-        prior_messages=prior_messages,
+        prior_messages=effective_prior_messages,
         reasoning_effort=reasoning_effort,
         availability=availability,
         approved_action=approved_action,

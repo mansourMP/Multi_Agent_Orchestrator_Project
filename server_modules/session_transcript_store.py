@@ -160,6 +160,68 @@ def list_session_transcript_summaries(
     return out
 
 
+def load_latest_session_transcript_messages(
+    *,
+    workspace_id: str,
+    thread_id: str,
+    agent_install_id: str | None = None,
+    limit: int = 12,
+) -> List[Dict[str, Any]]:
+    normalized_thread_id = str(thread_id or "").strip()
+    if not normalized_thread_id:
+        return []
+    safe_limit = max(1, min(int(limit or 12), 40))
+    transcript_dir = _transcript_dir(workspace_id, agent_install_id=agent_install_id)
+    transcript_files = sorted(transcript_dir.glob("*.jsonl"), reverse=True)
+    for transcript_path in transcript_files:
+        try:
+            lines = transcript_path.read_text(encoding="utf-8").splitlines()
+        except Exception as exc:
+            failure_policy_service.log_degraded_operation(
+                logger=logger,
+                code="transcript_read_failed",
+                message="Failed to read transcript file.",
+                error_class=STORAGE_READ_FAILURE,
+                degraded_component="session_transcript_store",
+                severity=SEVERITY_WARNING,
+                retryable=False,
+                status_code=500,
+                metadata={
+                    "workspace_id": workspace_id,
+                    "agent_install_id": agent_install_id,
+                    "path": str(transcript_path),
+                },
+                exc=exc,
+            )
+            continue
+        for raw_line in reversed(lines):
+            try:
+                payload = json.loads(raw_line)
+            except Exception as exc:
+                failure_policy_service.log_degraded_operation(
+                    logger=logger,
+                    code="transcript_parse_failed",
+                    message="Failed to parse transcript record.",
+                    error_class=STORAGE_READ_FAILURE,
+                    degraded_component="session_transcript_store",
+                    severity=SEVERITY_WARNING,
+                    retryable=False,
+                    status_code=500,
+                    metadata={
+                        "workspace_id": workspace_id,
+                        "agent_install_id": agent_install_id,
+                        "path": str(transcript_path),
+                    },
+                    exc=exc,
+                )
+                continue
+            if str(payload.get("thread_id") or "").strip() != normalized_thread_id:
+                continue
+            messages = [dict(item) for item in list(payload.get("messages") or []) if isinstance(item, dict)]
+            return messages[-safe_limit:]
+    return []
+
+
 def save_session_transcript(
     *,
     workspace_id: str,

@@ -40,6 +40,24 @@ def _final_executor(*, session_ctx, message, request_meta):
     }
 
 
+def _history_echo_executor(*, session_ctx, message, request_meta):
+    prior_messages = request_meta.get("prior_messages") if isinstance(request_meta, dict) else []
+    last_content = ""
+    if isinstance(prior_messages, list) and prior_messages:
+        last_item = prior_messages[-1]
+        if isinstance(last_item, dict):
+            last_content = str(last_item.get("content") or "")
+    yield {
+        "type": "final",
+        "payload": {
+            "reply": f"prior_count={len(prior_messages or [])};last={last_content}",
+            "actions": [],
+            "mode": "answer",
+            "error": "",
+        },
+    }
+
+
 class SessionManagerTests(unittest.TestCase):
     def setUp(self) -> None:
         _DummyBrowser.instances = []
@@ -89,6 +107,30 @@ class SessionManagerTests(unittest.TestCase):
         self.assertEqual(turns[0]["request_id"], "req-1")
         self.assertEqual(turns[0]["status"], "completed")
         self.assertEqual(turns[0]["final_payload"]["reply"], "Done: count functions")
+
+    def test_run_turn_hydrates_prior_messages_from_session_history(self):
+        first = self.manager.run_turn(
+            session_id="session-1",
+            actor_key="actor-1",
+            workspace_id="workspace-a",
+            user_id="user-1",
+            message="first question",
+            request_meta={"request_id": "req-1"},
+            turn_executor=_final_executor,
+        )
+        self.assertEqual(first["reply"], "Done: first question")
+
+        second = self.manager.run_turn(
+            session_id="session-1",
+            actor_key="actor-1",
+            workspace_id="workspace-a",
+            user_id="user-1",
+            message="second question",
+            request_meta={"request_id": "req-2"},
+            turn_executor=_history_echo_executor,
+        )
+
+        self.assertEqual(second["reply"], "prior_count=2;last=Done: first question")
 
     def test_idle_runtime_handle_evicted(self):
         self.manager.ensure_session(

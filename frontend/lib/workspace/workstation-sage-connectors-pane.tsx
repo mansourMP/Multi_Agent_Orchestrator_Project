@@ -10,6 +10,7 @@ import { WorkstationSageToolsPane } from '@/lib/workspace/workstation-sage-tools
 import { WorkspaceChannelPairingSurface } from '@/lib/workspace/workspace-channel-pairing-surface';
 import { useWorkspaceBoundary } from '@/lib/workspace/workspace-boundary';
 import { requestWorkspaceJson } from '@/lib/workspace/workspace-json-request';
+import { emitWorkstationProviderChanged } from '@/lib/workspace/workstation-provider-events';
 import { useWorkspaceServices } from '@/lib/workspace/workspace-services';
 import type {
   ProviderCatalogModelRecord,
@@ -560,6 +561,11 @@ export function WorkstationSageConnectorsPane({
         apiKey: draftApiKey || null,
         model: null,
       });
+      emitWorkstationProviderChanged({
+        workspaceId: services.scope.workspaceId,
+        providerId: record.provider.id,
+        action: 'saved',
+      });
       await refreshAfterMutation(`${record.label} is now connected.`);
       setProviderDraftKeys((current) => ({ ...current, [record.id]: '' }));
     } catch (saveError) {
@@ -575,6 +581,11 @@ export function WorkstationSageConnectorsPane({
     setStatus(null);
     try {
       await services.client.deleteWorkspaceProviderCredential({ provider: record.provider.id });
+      emitWorkstationProviderChanged({
+        workspaceId: services.scope.workspaceId,
+        providerId: record.provider.id,
+        action: 'deleted',
+      });
       await refreshAfterMutation(`${record.label} disconnected.`);
       setExpandedCardId(null);
     } catch (disconnectError) {

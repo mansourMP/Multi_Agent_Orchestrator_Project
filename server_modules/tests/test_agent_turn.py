@@ -130,7 +130,7 @@ class AgentTurnTests(unittest.TestCase):
                 "expires_at": "2099-01-01T00:00:00Z",
                 "metadata": {"thread_id": "thread-1"},
                 "status": "active",
-            })), patch("server_modules.agent_turn.session_service.extend_session", new=AsyncMock(return_value=None)), patch("server_modules.agent_turn.thread_service.ensure_master_thread", new=AsyncMock(return_value={"id": "thread-1"})), patch("server_modules.agent_turn.thread_service.record_user_turn", new=AsyncMock(return_value={"thread": {"id": "thread-1"}, "turn": {"id": "turn-user"}})), patch("server_modules.agent_turn.thread_service.record_assistant_turn", new=AsyncMock(return_value={"thread": {"id": "thread-1"}, "turn": {"id": "turn-assistant"}})), patch("server_modules.turn_runtime.build_turn_execution_services", return_value={"services": "ok"}), patch("server_modules.turn_runtime.execute_agent_turn_request", new=AsyncMock(return_value={
+            })), patch("server_modules.agent_turn.session_service.extend_session", new=AsyncMock(return_value=None)), patch("server_modules.agent_turn.thread_service.ensure_master_thread", new=AsyncMock(return_value={"id": "thread-1"})), patch("server_modules.agent_turn.thread_service.record_user_turn", new=AsyncMock(return_value={"thread": {"id": "thread-1"}, "turn": {"id": "turn-user"}})), patch("server_modules.agent_turn.thread_service.record_assistant_turn", new=AsyncMock(return_value={"thread": {"id": "thread-1"}, "turn": {"id": "turn-assistant"}})) as record_assistant_turn, patch("server_modules.turn_runtime.build_turn_execution_services", return_value={"services": "ok"}), patch("server_modules.turn_runtime.execute_agent_turn_request", new=AsyncMock(return_value={
                 "kind": "direct_chat_stream",
                 "workspace_id": "workspace-1",
                 "session_key": "session-1",
@@ -142,11 +142,12 @@ class AgentTurnTests(unittest.TestCase):
                     current_user={"user_id": "user-1", "role": "owner", "is_admin": True},
                     run_execution_services={"run": "services"},
                     direct_chat_services={"direct_chat": "services"},
-                )
+                ), record_assistant_turn
 
-        result = asyncio.run(_run())
+        result, record_assistant_turn = asyncio.run(_run())
         self.assertEqual(result["metadata"]["trace_id"], "trace-stream-1")
         self.assertEqual(result["trace_id"], "trace-stream-1")
+        self.assertEqual(record_assistant_turn.await_args.kwargs["metadata"]["request_id"], "req-1")
 
     def test_agent_turn_completes_when_trace_service_throws(self):
         turn_request = AgentTurnRequest(
@@ -396,6 +397,23 @@ class AgentTurnTests(unittest.TestCase):
         )
 
         self.assertEqual(request.context_hints["request_id"], "req-123")
+
+    def test_build_agent_turn_request_preserves_top_level_client_request_id(self):
+        request = build_agent_turn_request(
+            {
+                "tenant_id": "tenant-1",
+                "workspace_id": "workspace-1",
+                "thread_id": "thread-1",
+                "session_id": "thread-1",
+                "channel": "web",
+                "actor": {"type": "user", "id": "user-1", "display_name": "Alice"},
+                "message": "hello world",
+                "client_request_id": "req-canonical-1",
+                "response_mode": "stream",
+            }
+        )
+
+        self.assertEqual(request.context_hints["request_id"], "req-canonical-1")
 
     def test_build_direct_chat_turn_request_promotes_serious_task_to_durable_run(self):
         request = build_direct_chat_turn_request(

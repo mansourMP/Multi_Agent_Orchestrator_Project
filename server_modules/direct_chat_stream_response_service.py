@@ -28,8 +28,53 @@ class DirectChatStreamResponseServices:
 
 
 def _turn_request_request_id(turn_request: AgentTurnRequest) -> str:
-    context_hints = turn_request.context_hints if isinstance(turn_request.context_hints, dict) else {}
+    context_hints = _turn_request_context_hints(turn_request)
     return str(context_hints.get("request_id") or "").strip()
+
+
+def _metadata_dict(value: Any) -> dict[str, Any]:
+    return dict(value or {}) if isinstance(value, dict) else {}
+
+
+def _turn_request_context_hints(turn_request: Any) -> dict[str, Any]:
+    if isinstance(turn_request, AgentTurnRequest):
+        return turn_request.context_hints if isinstance(turn_request.context_hints, dict) else {}
+    if isinstance(turn_request, dict):
+        return turn_request.get("context_hints") if isinstance(turn_request.get("context_hints"), dict) else {}
+    context_hints = getattr(turn_request, "context_hints", None)
+    return context_hints if isinstance(context_hints, dict) else {}
+
+
+def _turn_request_field(turn_request: Any, field_name: str) -> str:
+    if isinstance(turn_request, dict):
+        return str(turn_request.get(field_name) or "").strip()
+    return str(getattr(turn_request, field_name, "") or "").strip()
+
+
+def _assistant_turn_session_metadata(
+    *,
+    turn_request: Any,
+    workspace_id: str,
+    thread_id: str,
+    request_id: str,
+) -> dict[str, Any]:
+    context_hints = _turn_request_context_hints(turn_request)
+    binding_metadata = _metadata_dict(context_hints.get("metadata"))
+    active_agent_install_id = (
+        str(binding_metadata.get("active_agent_install_id") or binding_metadata.get("workspace_agent_install_id") or "").strip()
+        or None
+    )
+    runtime_profile_id = str(binding_metadata.get("runtime_profile_id") or "").strip() or None
+    session_id = _turn_request_field(turn_request, "session_id") or thread_id
+    return {
+        "tenant_id": _turn_request_field(turn_request, "tenant_id") or "default",
+        "workspace_id": str(workspace_id or "").strip() or "default",
+        "thread_id": str(thread_id or "").strip() or "direct-chat",
+        "session_id": session_id,
+        "request_id": str(request_id or "").strip() or None,
+        "active_agent_install_id": active_agent_install_id,
+        "runtime_profile_id": runtime_profile_id,
+    }
 
 
 async def build_agent_turn_stream_response(
@@ -92,6 +137,14 @@ async def build_agent_turn_stream_response(
         request_id=client_request_id,
         workspace_id=workspace_id,
     )
+    session_metadata = session.get("metadata") if isinstance(session.get("metadata"), dict) else {}
+    session_metadata["assistant_turn"] = _assistant_turn_session_metadata(
+        turn_request=turn_request,
+        workspace_id=workspace_id,
+        thread_id=thread_id,
+        request_id=client_request_id,
+    )
+    session["metadata"] = session_metadata
     if not bool(session.get("producer_started")) and not isinstance(existing_state, dict):
         producer_iter = producer()
         try:

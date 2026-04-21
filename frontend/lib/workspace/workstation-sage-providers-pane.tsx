@@ -5,6 +5,7 @@ import { type ClipboardEvent, useEffect, useMemo, useState } from 'react';
 import { AppButton, AppNotice, joinClassNames } from '@/lib/ui/primitives';
 import { FormField, FormInput } from '@/lib/ui/form-controls';
 import { SkeletonBlock } from '@/lib/ui/skeleton-block';
+import { emitWorkstationProviderChanged } from '@/lib/workspace/workstation-provider-events';
 import {
   type ProviderCatalogModelRecord,
   type ProviderCatalogRecord,
@@ -290,6 +291,11 @@ export function WorkstationSageProvidersPane() {
         apiKey: trimmedKey || null,
         model: null,
       });
+      emitWorkstationProviderChanged({
+        workspaceId: services.scope.workspaceId,
+        providerId,
+        action: 'saved',
+      });
       await loadProviders();
       setStatus(`${providerRows.find((item) => item.provider.id === providerId)?.provider.label ?? 'Provider'} is now connected to Sage.`);
       setExpandedProviderId(providerId);
@@ -308,6 +314,11 @@ export function WorkstationSageProvidersPane() {
     setStatus(null);
     try {
       await services.client.deleteWorkspaceProviderCredential({ provider: providerId });
+      emitWorkstationProviderChanged({
+        workspaceId: services.scope.workspaceId,
+        providerId,
+        action: 'deleted',
+      });
       await loadProviders();
       setExpandedProviderId(null);
       setEditorMode('connect');

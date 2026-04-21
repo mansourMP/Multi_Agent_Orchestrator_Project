@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import {
   Plus,
@@ -31,6 +31,7 @@ import {
   subscribeWorkstationApprovalResolved,
 } from '@/lib/workspace/workstation-approval-events';
 import { useWorkspaceBoundary } from '@/lib/workspace/workspace-boundary';
+import { subscribeWorkstationProviderChanged } from '@/lib/workspace/workstation-provider-events';
 import { useWorkspaceServices, useWorkstationStreamState } from '@/lib/workspace/workspace-services';
 import {
   WorkstationClientError,
@@ -1370,6 +1371,30 @@ export function WorkstationChatPane() {
   const [memoryDraft, setMemoryDraft] = useState<SageMemoryDraft>(() => defaultSageMemoryDraft());
   const [pendingDeleteMemoryId, setPendingDeleteMemoryId] = useState<string | null>(null);
 
+  const refreshProviderCatalog = useCallback(async () => {
+    const applyProviderPayload = (payload: Record<string, unknown>) => {
+      const normalizedProviders = normalizeProviderCatalogRecords(payload);
+      setProviderCatalog(normalizedProviders);
+      const nextOptions = normalizeChatModelOptions(payload);
+      setModelOptions(nextOptions.length > 0 ? nextOptions : [workspaceDefaultModelOption(normalizedProviders)]);
+    };
+
+    try {
+      applyProviderPayload(await services.client.listProviderCatalog());
+      return;
+    } catch {
+      // Fall through to the older provider endpoint if the richer catalog is unavailable.
+    }
+
+    try {
+      applyProviderPayload(await services.client.listProviders());
+      return;
+    } catch {
+      setProviderCatalog((current) => current);
+      setModelOptions((current) => (current.length > 0 ? current : [disconnectedModelOption()]));
+    }
+  }, [services.client]);
+
   const writeThreadState = (nextThread: CanonicalChatThreadState) => {
     services.queryClient.set(threadQueryKey(nextThread.threadId), nextThread);
     services.queryClient.set(ACTIVE_THREAD_QUERY_KEY, nextThread.threadId);
@@ -1427,7 +1452,25 @@ export function WorkstationChatPane() {
     }).then(normalizeCanonicalRunItems);
     const approvalsRequest = services.client.listApprovals({
       limit: 24,
-    }).then(normalizeCanonicalApprovalItems);
+    }).then(normalizeCanonicalApprovalItems).catch((error) => {
+      if (
+        error instanceof WorkstationClientError
+        && error.status === 403
+        && (
+          (typeof error.detail === 'string'
+            && error.detail.includes('Approvals are not included in this workspace plan.'))
+          || (
+            typeof error.detail === 'object'
+            && error.detail
+            && typeof (error.detail as { message?: unknown }).message === 'string'
+            && String((error.detail as { message?: unknown }).message).includes('Approvals are not included in this workspace plan.')
+          )
+        )
+      ) {
+        return [] satisfies CanonicalApprovalSummary[];
+      }
+      throw error;
+    });
     const timelineRequest = services.client.listActivityTimeline({
       limit: 40,
     }).then(normalizeTimelineItems);
@@ -2083,41 +2126,44 @@ export function WorkstationChatPane() {
 
   useEffect(() => {
     let cancelled = false;
-
-    (async () => {
-      const applyProviderPayload = (payload: Record<string, unknown>) => {
-        const normalizedProviders = normalizeProviderCatalogRecords(payload);
-        setProviderCatalog(normalizedProviders);
-        const nextOptions = normalizeChatModelOptions(payload);
-        setModelOptions(nextOptions.length > 0 ? nextOptions : [workspaceDefaultModelOption(normalizedProviders)]);
-      };
-
-      try {
-        const payload = await services.client.listProviderCatalog();
+    void refreshProviderCatalog()
+      .catch(() => undefined)
+      .finally(() => {
         if (cancelled) {
           return;
         }
-        applyProviderPayload(payload);
-      } catch {
-        try {
-          const fallbackPayload = await services.client.listProviders();
-          if (cancelled) {
-            return;
-          }
-          applyProviderPayload(fallbackPayload);
-        } catch {
-          if (!cancelled) {
-            setProviderCatalog((current) => current);
-            setModelOptions((current) => (current.length > 0 ? current : [disconnectedModelOption()]));
-          }
-        }
-      }
-    })();
-
+      });
     return () => {
       cancelled = true;
     };
-  }, [services.client]);
+  }, [refreshProviderCatalog]);
+
+  useEffect(() => subscribeWorkstationProviderChanged((detail) => {
+    if (detail.workspaceId !== bootstrap.workspace.id) {
+      return;
+    }
+    void refreshProviderCatalog();
+  }), [bootstrap.workspace.id, refreshProviderCatalog]);
+
+  useEffect(() => {
+    if (typeof document === 'undefined') {
+      return () => {};
+    }
+    const handleFocus = () => {
+      void refreshProviderCatalog();
+    };
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        void refreshProviderCatalog();
+      }
+    };
+    window.addEventListener('focus', handleFocus);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => {
+      window.removeEventListener('focus', handleFocus);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, [refreshProviderCatalog]);
 
   useEffect(() => {
     if (!modelOptions.some((option) => option.id === selectedModel)) {
@@ -2460,15 +2506,17 @@ export function WorkstationChatPane() {
                     </div>
                   ) : null}
                   <div className="app-chat-empty-state__actions">
-                    <button
-                      type="button"
-                      className="app-chat-empty-state__link"
-                      onClick={() => {
-                        router.push(integrationsHref);
-                      }}
-                    >
-                      Connect a provider
-                    </button>
+                    {!selectedProviderContext.providerLabel ? (
+                      <button
+                        type="button"
+                        className="app-chat-empty-state__link"
+                        onClick={() => {
+                          router.push(integrationsHref);
+                        }}
+                      >
+                        Connect a provider
+                      </button>
+                    ) : null}
                     <button
                       type="button"
                       className="app-chat-empty-state__link"

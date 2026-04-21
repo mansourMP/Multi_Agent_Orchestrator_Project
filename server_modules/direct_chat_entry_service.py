@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional
 
+from server_modules import session_transcript_store
 from server_modules.conversation_memory_policy import DIRECT_CHAT_PROFILE, get_memory_policy_profile
 
 
@@ -133,6 +134,13 @@ def prepare_direct_chat_request(
         slash_remainder = ""
 
     normalized_prior_messages = normalize_prior_messages_fn(prior_messages)
+    if not normalized_prior_messages and normalized_thread_id:
+        transcript_prior_messages = session_transcript_store.load_latest_session_transcript_messages(
+            workspace_id=normalized_workspace_id,
+            thread_id=normalized_thread_id,
+            limit=get_memory_policy_profile(DIRECT_CHAT_PROFILE).max_transcript_items,
+        )
+        normalized_prior_messages = normalize_prior_messages_fn(transcript_prior_messages)
     if consume_thread_cleared_fn(session_key):
         normalized_prior_messages = []
     compaction = compact_conversation_history_fn(

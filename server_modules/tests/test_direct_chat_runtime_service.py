@@ -208,6 +208,81 @@ class DirectChatRuntimeServiceTests(unittest.TestCase):
         self.assertEqual(resolved_turn_request.workspace_id, "default")
         self.assertEqual(resolved_turn_request.message, "hello from turn")
 
+    def test_build_direct_operator_reply_hydrates_prior_messages_from_thread_store(self) -> None:
+        captured: dict[str, object] = {}
+        prepared = SimpleNamespace(
+            normalized_message="hello from turn",
+            normalized_workspace_id="default",
+            normalized_thread_id="thread-1",
+            normalized_requested_provider="openai",
+            normalized_requested_model="gpt-5.4",
+            normalized_reasoning_effort="medium",
+            compaction={},
+            compacted_prior_messages=[{"role": "user", "content": "Earlier instruction"}],
+            proactive_suggestions=[],
+            tool_loop_session_key="loop",
+            availability_payload={"ai_ready": True},
+            connected_systems=[],
+            tool_capabilities=[],
+            tools=[],
+            approved_action_payload=None,
+            base_context_used={"workspace_id": "default"},
+            slash_command_name="help",
+            slash_remainder="",
+            resolved_chat_max_iterations=3,
+        )
+        services = self._runtime_services(prepared)
+
+        def _prepare_direct_chat_request(**kwargs):
+            captured["kwargs"] = kwargs
+            return prepared
+
+        services.prepare_direct_chat_request = _prepare_direct_chat_request
+        turn_request = {
+            "tenant_id": "tenant-1",
+            "workspace_id": "default",
+            "thread_id": "thread-1",
+            "session_id": "thread-1",
+            "channel": "web",
+            "actor": {"type": "user", "id": "user-1", "display_name": "user-1"},
+            "message": "hello from turn",
+        }
+
+        with mock.patch.object(
+            direct_chat_runtime_service,
+            "_hydrate_prior_messages_from_thread_store",
+            return_value=[
+                {"role": "user", "content": "Earlier instruction"},
+                {"role": "assistant", "content": "Earlier reply"},
+            ],
+        ) as hydrate_mock:
+            list(
+                direct_chat_runtime_service.build_direct_operator_reply(
+                    services=services,
+                    message="fallback",
+                    workspace_id="default",
+                    thread_id="thread-1",
+                    requested_model="gpt-5.4",
+                    requested_provider="openai",
+                    prior_messages=[],
+                    session_ctx={"agent_turn_request": turn_request},
+                )
+            )
+
+        hydrate_mock.assert_called_once_with(
+            workspace_id="default",
+            tenant_id="tenant-1",
+            thread_id="thread-1",
+            current_message="hello from turn",
+        )
+        self.assertEqual(
+            captured["kwargs"]["prior_messages"],
+            [
+                {"role": "user", "content": "Earlier instruction"},
+                {"role": "assistant", "content": "Earlier reply"},
+            ],
+        )
+
     def test_build_chat_turn_event_stream_prefers_request_meta_turn_request(self) -> None:
         captured: dict[str, object] = {}
         services = self._runtime_services(SimpleNamespace())

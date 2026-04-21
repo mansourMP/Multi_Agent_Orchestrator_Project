@@ -88,6 +88,7 @@ class DirectChatStreamResponseServiceTests(unittest.TestCase):
 
     def test_returns_streaming_response_for_live_stream(self):
         started = {}
+        session = {"producer_started": False}
 
         async def _execute_agent_turn_request(**kwargs):
             return {
@@ -100,6 +101,7 @@ class DirectChatStreamResponseServiceTests(unittest.TestCase):
 
         services = self._services(
             execute_agent_turn_request=_execute_agent_turn_request,
+            get_or_create_chat_stream_session=lambda *args, **kwargs: session,
             start_chat_stream_producer=lambda session, producer: started.setdefault("called", True),
         )
 
@@ -114,6 +116,9 @@ class DirectChatStreamResponseServiceTests(unittest.TestCase):
 
         self.assertIsInstance(payload, StreamingResponse)
         self.assertTrue(started["called"])
+        self.assertEqual(session["metadata"]["assistant_turn"]["workspace_id"], "default")
+        self.assertEqual(session["metadata"]["assistant_turn"]["thread_id"], "thread-1")
+        self.assertEqual(session["metadata"]["assistant_turn"]["request_id"], "req-1")
 
 
 if __name__ == "__main__":

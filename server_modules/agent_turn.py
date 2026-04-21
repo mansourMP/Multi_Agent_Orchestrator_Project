@@ -604,6 +604,15 @@ def _promote_turn_request_to_primary_engine_path(request: AgentTurnRequest) -> A
 
 def build_agent_turn_request(payload: Dict[str, Any]) -> AgentTurnRequest:
     actor_payload = payload.get("actor") if isinstance(payload.get("actor"), dict) else {}
+    context_hints = payload.get("context_hints") if isinstance(payload.get("context_hints"), dict) else {}
+    request_id = (
+        str(payload.get("client_request_id") or "").strip()
+        or str(payload.get("request_id") or "").strip()
+        or str(context_hints.get("request_id") or "").strip()
+    )
+    next_context_hints = dict(context_hints)
+    if request_id:
+        next_context_hints.setdefault("request_id", request_id)
     request = AgentTurnRequest(
         tenant_id=str(payload.get("tenant_id") or "").strip(),
         workspace_id=str(payload.get("workspace_id") or "").strip(),
@@ -620,7 +629,7 @@ def build_agent_turn_request(payload: Dict[str, Any]) -> AgentTurnRequest:
         ),
         message=str(payload.get("message") or ""),
         attachments=_attachments_from_payload(payload.get("attachments")),
-        context_hints=payload.get("context_hints") if isinstance(payload.get("context_hints"), dict) else {},
+        context_hints=next_context_hints,
         execution_mode="durable" if str(payload.get("execution_mode") or "").strip().lower() == "durable" else "sync",
         response_mode=(
             str(payload.get("response_mode") or "stream").strip().lower()
@@ -1402,6 +1411,11 @@ async def agent_turn(
             trace_id = trace_context.trace_id if trace_context is not None else None
             result = _bind_trace_id_to_turn_result(result, trace_id)
             if isinstance(result, dict):
+                assistant_request_id = (
+                    str(resolved_turn_request.context_hints.get("request_id") or "").strip()
+                    or str(result.get("client_request_id") or "").strip()
+                    or None
+                )
                 await thread_service.record_assistant_turn(
                     thread_id=resolved_thread_id,
                     tenant_id=resolved_turn_request.tenant_id,
@@ -1420,7 +1434,7 @@ async def agent_turn(
                     approvals=list(result.get("approvals") or []) if isinstance(result.get("approvals"), list) else [],
                     interventions=list(result.get("interventions") or []) if isinstance(result.get("interventions"), list) else [],
                     metadata={
-                        "request_id": str(resolved_turn_request.context_hints.get("request_id") or "").strip() or None,
+                        "request_id": assistant_request_id,
                         "result_metadata": _metadata_dict(result.get("metadata")),
                     },
                 )

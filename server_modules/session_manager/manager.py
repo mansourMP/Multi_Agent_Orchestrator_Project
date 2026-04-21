@@ -86,6 +86,38 @@ class EmpyralisSessionManager:
         with self._stats_lock:
             self._active_turns = max(0, int(self._active_turns) + int(delta))
 
+    def _build_prior_messages_from_turn_history(
+        self,
+        session_id: str,
+        *,
+        limit: int = 8,
+    ) -> list[dict[str, str]]:
+        token = str(session_id or "").strip()
+        if not token:
+            return []
+        turns = list_runtime_session_turns(
+            self.db_path,
+            session_id=token,
+            statuses=["completed"],
+            limit=max(1, int(limit)),
+        )
+        if not turns:
+            return []
+        ordered_turns = list(reversed(turns))
+        prior_messages: list[dict[str, str]] = []
+        for turn in ordered_turns:
+            if not isinstance(turn, dict):
+                continue
+            input_payload = dict(turn.get("input") or {})
+            final_payload = dict(turn.get("final_payload") or {})
+            user_message = str(input_payload.get("message") or "").strip()
+            assistant_reply = str(final_payload.get("reply") or "").strip()
+            if user_message:
+                prior_messages.append({"role": "user", "content": user_message})
+            if assistant_reply:
+                prior_messages.append({"role": "assistant", "content": assistant_reply})
+        return prior_messages
+
     def _build_runtime_handle(
         self,
         *,
@@ -193,6 +225,11 @@ class EmpyralisSessionManager:
         stream_sink: Optional[Callable[[Dict[str, Any]], None]] = None,
     ) -> Iterator[Dict[str, Any]]:
         meta = dict(request_meta or {})
+        existing_prior_messages = meta.get("prior_messages")
+        if not isinstance(existing_prior_messages, list) or not existing_prior_messages:
+            hydrated_prior_messages = self._build_prior_messages_from_turn_history(session_id)
+            if hydrated_prior_messages:
+                meta["prior_messages"] = hydrated_prior_messages
         request_id = str(meta.get("request_id") or meta.get("client_request_id") or uuid.uuid4().hex).strip()
         turn_id = str(meta.get("turn_id") or request_id or uuid.uuid4().hex).strip() or uuid.uuid4().hex
         runtime_options = dict(meta.get("runtime_options") or {})

@@ -38,6 +38,7 @@ from server_modules import session_service
 from server_modules import thread_service
 from server_modules import run_state_repository
 from server_modules import entitlements_service
+from server_modules.direct_tool_config_service import run_async_tool_call
 from server_modules.direct_chat_stream_response_service import (
     build_agent_turn_stream_response,
     build_direct_chat_stream_response,
@@ -128,6 +129,81 @@ def _utc_now_iso() -> str:
 
 def _coerce_dict(value: Any) -> dict[str, Any]:
     return dict(value or {}) if isinstance(value, dict) else {}
+
+
+def _chat_stream_result_metadata(payload: dict[str, Any]) -> dict[str, Any]:
+    metadata = _coerce_dict(payload.get("metadata"))
+    nested_result = payload.get("result") if isinstance(payload.get("result"), dict) else {}
+    nested_metadata = _coerce_dict(nested_result.get("metadata"))
+    if not metadata:
+        return nested_metadata
+    if nested_metadata:
+        merged = dict(nested_metadata)
+        merged.update(metadata)
+        return merged
+    return metadata
+
+
+def _chat_stream_assistant_status(payload: dict[str, Any]) -> str:
+    terminal_error = payload.get("terminal_error") if isinstance(payload.get("terminal_error"), dict) else {}
+    terminal_error_body = terminal_error.get("error") if isinstance(terminal_error.get("error"), dict) else {}
+    error_code = (
+        str(terminal_error_body.get("code") or "").strip()
+        or str(payload.get("error") or "").strip()
+    )
+    error_message = (
+        str(terminal_error_body.get("message") or "").strip()
+        or str(payload.get("message") or "").strip()
+    )
+    return "failed" if error_code or error_message else "completed"
+
+
+def _persist_final_direct_chat_assistant_turn(session: dict[str, Any], payload: dict[str, Any]) -> None:
+    session_metadata = _coerce_dict(session.get("metadata"))
+    assistant_turn = _coerce_dict(session_metadata.get("assistant_turn"))
+    tenant_id = str(assistant_turn.get("tenant_id") or "").strip()
+    workspace_id = str(assistant_turn.get("workspace_id") or "").strip()
+    thread_id = str(assistant_turn.get("thread_id") or "").strip()
+    session_id = str(assistant_turn.get("session_id") or "").strip() or None
+    request_id = str(assistant_turn.get("request_id") or "").strip() or None
+    if not tenant_id or not workspace_id or not thread_id:
+        return
+    result_metadata = _chat_stream_result_metadata(payload)
+    trace_id = str(payload.get("trace_id") or result_metadata.get("trace_id") or "").strip() or None
+    run_id = str(payload.get("run_id") or "").strip() or None
+    if not run_id:
+        nested_result = payload.get("result") if isinstance(payload.get("result"), dict) else {}
+        run_id = str(nested_result.get("run_id") or "").strip() or None
+    actor_id = str(result_metadata.get("agent_role") or "master-agent").strip() or "master-agent"
+    metadata: dict[str, Any] = {
+        "request_id": request_id,
+        "result_metadata": result_metadata,
+    }
+    if trace_id:
+        metadata["trace_id"] = trace_id
+    run_async_tool_call(
+        thread_service.record_assistant_turn(
+            thread_id=thread_id,
+            tenant_id=tenant_id,
+            workspace_id=workspace_id,
+            session_id=session_id,
+            actor={
+                "type": "assistant",
+                "id": actor_id,
+                "display_name": "Empyralis",
+            },
+            reply=str(payload.get("reply") or ""),
+            status=_chat_stream_assistant_status(payload),
+            run_id=run_id,
+            active_agent_install_id=str(assistant_turn.get("active_agent_install_id") or "").strip() or None,
+            runtime_profile_id=str(assistant_turn.get("runtime_profile_id") or "").strip() or None,
+            approvals=list(payload.get("approvals") or []) if isinstance(payload.get("approvals"), list) else [],
+            interventions=list(payload.get("interventions") or [])
+            if isinstance(payload.get("interventions"), list)
+            else [],
+            metadata=metadata,
+        )
+    )
 
 
 def _workspace_filtered_items(items: list[dict[str, Any]], current_user: Any) -> list[dict[str, Any]]:
@@ -507,13 +583,20 @@ _build_direct_chat_event_producer = lambda *, current_user, body, message, works
 _chat_stream_payload = chat_stream_transport_service.chat_stream_payload
 
 
-_append_chat_stream_event = lambda session, event_name, payload: chat_stream_runtime_service.append_chat_stream_event(
-    session,
-    event_name=event_name,
-    payload=payload,
-    buffer_limit=_CHAT_STREAM_BUFFER_LIMIT,
-    persist_session_state=_persist_chat_stream_session_state,
-)
+def _append_chat_stream_event(session: dict[str, Any], event_name: str, payload: dict[str, Any]) -> None:
+    chat_stream_runtime_service.append_chat_stream_event(
+        session,
+        event_name=event_name,
+        payload=payload,
+        buffer_limit=_CHAT_STREAM_BUFFER_LIMIT,
+        persist_session_state=_persist_chat_stream_session_state,
+    )
+    if event_name != "final" or not isinstance(payload, dict):
+        return
+    try:
+        _persist_final_direct_chat_assistant_turn(session, payload)
+    except Exception as exc:
+        sentry_sdk.capture_exception(exc)
 
 
 _complete_chat_stream_session = lambda session: chat_stream_runtime_service.complete_chat_stream_session(

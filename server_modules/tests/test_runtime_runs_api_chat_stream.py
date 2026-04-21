@@ -42,6 +42,54 @@ class RuntimeRunsApiChatStreamTests(unittest.TestCase):
         self.assertIn("id: 3\n", payload)
         self.assertIn("event: final\n", payload)
 
+    def test_final_stream_event_persists_assistant_turn_content(self):
+        captured = {}
+
+        async def _record_assistant_turn(**kwargs):
+            captured.update(kwargs)
+            return {"ok": True}
+
+        session = runtime_runs_api._get_or_create_chat_stream_session(
+            "user:thread:req",
+            thread_id="thread",
+            request_id="req",
+            workspace_id="default",
+        )
+        session["metadata"] = {
+            "assistant_turn": {
+                "tenant_id": "tenant-1",
+                "workspace_id": "default",
+                "thread_id": "thread",
+                "session_id": "thread",
+                "request_id": "req",
+                "active_agent_install_id": "agent-1",
+                "runtime_profile_id": "runtime-1",
+            }
+        }
+
+        with patch.object(runtime_runs_api.thread_service, "record_assistant_turn", _record_assistant_turn):
+            runtime_runs_api._append_chat_stream_event(
+                session,
+                "final",
+                {
+                    "reply": "Done",
+                    "actions": [],
+                    "mode": "answer",
+                    "metadata": {"agent_role": "sage", "trace_id": "trace-1"},
+                },
+            )
+
+        self.assertEqual(captured["thread_id"], "thread")
+        self.assertEqual(captured["tenant_id"], "tenant-1")
+        self.assertEqual(captured["workspace_id"], "default")
+        self.assertEqual(captured["reply"], "Done")
+        self.assertEqual(captured["status"], "completed")
+        self.assertEqual(captured["active_agent_install_id"], "agent-1")
+        self.assertEqual(captured["runtime_profile_id"], "runtime-1")
+        self.assertEqual(captured["metadata"]["request_id"], "req")
+        self.assertEqual(captured["metadata"]["trace_id"], "trace-1")
+        self.assertEqual(captured["metadata"]["result_metadata"]["agent_role"], "sage")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -107,6 +107,51 @@ class SessionTranscriptStoreTests(unittest.TestCase):
         warning_mock.assert_called_once()
         self.assertEqual(warning_mock.call_args.kwargs["extra"]["error_code"], "transcript_parse_failed")
 
+    def test_load_latest_session_transcript_messages_returns_latest_matching_thread(self) -> None:
+        session_transcript_store.save_session_transcript(
+            workspace_id="default",
+            thread_id="thread-1",
+            provider="openai",
+            model="gpt-test",
+            messages=[{"role": "user", "content": "first"}],
+            user_message="first",
+            assistant_reply="one",
+        )
+        session_transcript_store.save_session_transcript(
+            workspace_id="default",
+            thread_id="thread-2",
+            provider="openai",
+            model="gpt-test",
+            messages=[{"role": "user", "content": "other"}],
+            user_message="other",
+            assistant_reply="two",
+        )
+        session_transcript_store.save_session_transcript(
+            workspace_id="default",
+            thread_id="thread-1",
+            provider="openai",
+            model="gpt-test",
+            messages=[
+                {"role": "user", "content": "latest question"},
+                {"role": "assistant", "content": "latest answer"},
+            ],
+            user_message="latest question",
+            assistant_reply="latest answer",
+        )
+
+        messages = session_transcript_store.load_latest_session_transcript_messages(
+            workspace_id="default",
+            thread_id="thread-1",
+        )
+
+        self.assertEqual(
+            messages,
+            [
+                {"role": "user", "content": "latest question"},
+                {"role": "assistant", "content": "latest answer"},
+            ],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

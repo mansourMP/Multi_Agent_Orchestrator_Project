@@ -1115,6 +1115,16 @@ function defaultSageMemoryDraft(): SageMemoryDraft {
   };
 }
 
+function isTransientBackgroundReadError(error: unknown): boolean {
+  if (!(error instanceof WorkstationClientError)) {
+    return false;
+  }
+  if (error.retryable) {
+    return true;
+  }
+  return error.status === 0 || error.status >= 500;
+}
+
 function memoryCategoryLabel(
   categories: SageMemoryCategoryRecord[],
   categoryId: string,
@@ -1447,9 +1457,18 @@ export function WorkstationChatPane() {
   };
 
   const loadOverview = async () => {
+    const runsFallback = services.queryClient.peek<CanonicalRunSummary[]>(RUNS_QUERY_KEY) ?? runs;
+    const approvalsFallback = services.queryClient.peek<CanonicalApprovalSummary[]>(APPROVALS_QUERY_KEY) ?? approvals;
+    const recentThreadsFallback = services.queryClient.peek<RecentThreadSummary[]>(RECENT_THREADS_QUERY_KEY) ?? recentThreads;
+
     const runsRequest = services.client.listRuns({
       limit: 12,
-    }).then(normalizeCanonicalRunItems);
+    }).then(normalizeCanonicalRunItems).catch((error) => {
+      if (isTransientBackgroundReadError(error)) {
+        return runsFallback;
+      }
+      throw error;
+    });
     const approvalsRequest = services.client.listApprovals({
       limit: 24,
     }).then(normalizeCanonicalApprovalItems).catch((error) => {
@@ -1469,11 +1488,19 @@ export function WorkstationChatPane() {
       ) {
         return [] satisfies CanonicalApprovalSummary[];
       }
+      if (isTransientBackgroundReadError(error)) {
+        return approvalsFallback;
+      }
       throw error;
     });
     const timelineRequest = services.client.listActivityTimeline({
       limit: 40,
-    }).then(normalizeTimelineItems);
+    }).then(normalizeTimelineItems).catch((error) => {
+      if (isTransientBackgroundReadError(error)) {
+        return [] satisfies Record<string, unknown>[];
+      }
+      throw error;
+    });
 
     const [nextRuns, nextApprovals, timelineItems] = await Promise.all([
       runsRequest,
@@ -1481,12 +1508,28 @@ export function WorkstationChatPane() {
       timelineRequest,
     ]);
     writeOverview({ nextRuns, nextApprovals });
-    writeRecentThreads(deriveRecentThreads(timelineItems, activeThreadId));
+    if (timelineItems.length > 0) {
+      writeRecentThreads(deriveRecentThreads(timelineItems, activeThreadId));
+      return;
+    }
+    if (recentThreadsFallback.length > 0) {
+      writeRecentThreads(recentThreadsFallback);
+      return;
+    }
+    writeRecentThreads(deriveRecentThreads([], activeThreadId));
   };
 
   const loadMemory = async () => {
-    const payload = await services.client.listSageMemory();
-    const nextSnapshot = normalizeSageMemorySnapshot(payload);
+    const cachedSnapshot = services.queryClient.peek<SageMemorySnapshot>(SAGE_MEMORY_QUERY_KEY) ?? memorySnapshot;
+    const payload = await services.client.listSageMemory().catch((error) => {
+      if (isTransientBackgroundReadError(error)) {
+        return null;
+      }
+      throw error;
+    });
+    const nextSnapshot = payload === null
+      ? cachedSnapshot
+      : normalizeSageMemorySnapshot(payload);
     writeMemorySnapshot(nextSnapshot);
     return nextSnapshot;
   };

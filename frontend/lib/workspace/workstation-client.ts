@@ -1192,6 +1192,12 @@ const WRITE_REQUEST_POLICY: WorkstationRequestPolicy = {
   refreshSessionOn401: true,
 };
 
+const STREAM_REQUEST_POLICY: WorkstationRequestPolicy = {
+  timeoutMs: 120_000,
+  retryCount: 0,
+  refreshSessionOn401: true,
+};
+
 function resolveRequestPolicy(
   init: RequestInit | undefined,
   policy: WorkstationRequestPolicy | undefined,
@@ -1565,7 +1571,7 @@ export function createWorkstationClient(
             },
           }),
         },
-        resolveRequestPolicy({ method: 'POST' }, WRITE_REQUEST_POLICY),
+        resolveRequestPolicy({ method: 'POST' }, STREAM_REQUEST_POLICY),
       );
     } catch (error) {
       throw normalizeTransportFailure(error);

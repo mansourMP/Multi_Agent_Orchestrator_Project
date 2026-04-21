@@ -28,7 +28,7 @@ class ProviderCatalogServiceTests(unittest.IsolatedAsyncioTestCase):
         }
 
         with patch(
-            "server_modules.provider_catalog_service.provider_profiles.build_provider_runtime_truth",
+            "server_modules.provider_catalog_service.provider_profiles.build_workspace_provider_connection_truth",
             return_value=runtime_truth,
         ):
             payload = await provider_catalog_service.list_workspace_provider_catalog(workspace_id="ws-1")

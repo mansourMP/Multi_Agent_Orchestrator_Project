@@ -287,11 +287,15 @@ async def upsert_workspace_provider_credential(
         ]
     )
     current_profile = profiles[0] if profiles else {}
-    default_model = provider_profiles_service.normalize_provider_model_id(
-        provider_id,
-        _read_string(model) or _read_string(current_profile.get("model")),
-        fallback_to_default=True,
-    ) or _provider_default_model(provider_id)
+    default_model = (
+        provider_profiles_service.normalize_provider_model_id(
+            provider_id,
+            _read_string(model),
+            fallback_to_default=True,
+        )
+        if _read_string(model)
+        else None
+    )
     next_metadata = {
         **_coerce_dict(current_profile.get("metadata")),
         **_cached_provider_model_metadata(provider_id, resolved_workspace_id, credential_id, key_value),

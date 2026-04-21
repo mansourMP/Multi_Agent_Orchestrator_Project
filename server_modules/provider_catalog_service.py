@@ -121,7 +121,7 @@ async def list_workspace_provider_catalog(
     *,
     workspace_id: Optional[str],
 ) -> Dict[str, Any]:
-    runtime_truth = provider_profiles.build_provider_runtime_truth(workspace_id)
+    runtime_truth = provider_profiles.build_workspace_provider_connection_truth(workspace_id)
     providers = [
         _provider_catalog_projection(item)
         for item in runtime_truth.get("providers", [])

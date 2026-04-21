@@ -237,7 +237,7 @@ async def evaluate_tools_policy(body: ToolPolicyEvaluateRequest):
 
 async def list_providers(workspace_id: Optional[str] = None):
     requested_ws = _normalize_workspace_id(workspace_id) or "default"
-    projection = provider_profiles_service.build_provider_runtime_truth(requested_ws)
+    projection = provider_profiles_service.build_workspace_provider_connection_truth(requested_ws)
     return {
         "workspace_id": projection.get("workspace_id"),
         "summary": projection.get("summary"),

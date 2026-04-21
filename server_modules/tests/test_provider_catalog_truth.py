@@ -196,6 +196,65 @@ class ProviderCatalogTruthTests(unittest.TestCase):
         )
         self.assertEqual(anthropic_profile["model"], "claude-3-7-sonnet-20250219")
 
+    @patch("server_modules.provider_profiles.gemini_cli_available", return_value=False)
+    @patch(
+        "server_modules.provider_profiles.claude_code_cli_status",
+        return_value={"available": False, "logged_in": False, "message": "Claude Code CLI is not installed."},
+    )
+    @patch("server_modules.provider_profiles._openai_env_bearer_with_source", return_value=("", ""))
+    def test_workspace_provider_connection_truth_ignores_runtime_environment_credentials(
+        self,
+        _openai_env_mock,
+        _claude_status_mock,
+        _gemini_cli_mock,
+    ) -> None:
+        with patch.dict(provider_profiles._server.PROVIDER_PROFILES, {}, clear=True), patch.dict(
+            "os.environ",
+            {
+                "ANTHROPIC_API_KEY": "sk-ant-live",
+                "GEMINI_API_KEY": "gem-live",
+            },
+            clear=False,
+        ):
+            payload = provider_profiles.build_workspace_provider_connection_truth("default")
+
+        providers = payload["providers_by_id"]
+        self.assertEqual(providers["anthropic"]["state"], "setup_required")
+        self.assertFalse(providers["anthropic"]["configured"])
+        self.assertIsNone(providers["anthropic"]["active_source"])
+        self.assertEqual(providers["gemini"]["state"], "setup_required")
+        self.assertFalse(providers["gemini"]["configured"])
+
+    @patch("server_modules.provider_profiles.gemini_cli_available", return_value=False)
+    @patch(
+        "server_modules.provider_profiles.claude_code_cli_status",
+        return_value={"available": True, "logged_in": True, "message": "Claude Code CLI is available."},
+    )
+    @patch("server_modules.provider_profiles._openai_env_bearer_with_source", return_value=("", ""))
+    def test_workspace_provider_connection_truth_requires_saved_credential_even_if_secretless_profile_exists(
+        self,
+        _openai_env_mock,
+        _claude_status_mock,
+        _gemini_cli_mock,
+    ) -> None:
+        profile = {
+            "id": "profile-anthropic-local",
+            "provider": "anthropic",
+            "label": "Claude Subscription",
+            "auth_mode": "local_cli",
+            "workspace_id": "default",
+            "enabled": True,
+            "cooldown_until": None,
+            "last_error": None,
+        }
+        with patch.dict(provider_profiles._server.PROVIDER_PROFILES, {"profile-anthropic-local": profile}, clear=True):
+            payload = provider_profiles.build_workspace_provider_connection_truth("default")
+
+        anthropic = payload["providers_by_id"]["anthropic"]
+        self.assertEqual(anthropic["state"], "setup_required")
+        self.assertFalse(anthropic["configured"])
+        self.assertFalse(anthropic["active"])
+
 
 if __name__ == "__main__":
     unittest.main()

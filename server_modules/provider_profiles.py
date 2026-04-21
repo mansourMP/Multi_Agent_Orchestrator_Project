@@ -2500,3 +2500,142 @@ def build_provider_runtime_truth(
         "openai_profile_ready": str(providers_by_id.get("openai", {}).get("state") or "") == "active",
         "codex_profile_ready": str(providers_by_id.get("openai-codex", {}).get("state") or "") == "active",
     }
+
+
+def _workspace_profile_sort_key(profile: Dict[str, Any]) -> tuple[int, str, str]:
+    return (
+        int(profile.get("priority", 100)),
+        str(profile.get("created_at") or ""),
+        str(profile.get("id") or ""),
+    )
+
+
+def build_workspace_provider_connection_truth(
+    workspace_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Return user-facing provider truth based only on saved workspace connections."""
+
+    _init()
+    requested_workspace_id = str(workspace_id or "default").strip() or "default"
+    now = _utc_now()
+    with _server.PROFILES_LOCK:
+        profiles = [dict(item) for item in _server.PROVIDER_PROFILES.values() if isinstance(item, dict)]
+
+    providers: List[Dict[str, Any]] = []
+    providers_by_id: Dict[str, Dict[str, Any]] = {}
+    state_summary = {"active": 0, "configured": 0, "setup_required": 0, "unavailable": 0, "degraded": 0}
+
+    for provider_id, catalog_entry in PROVIDER_CATALOG.items():
+        if bool(catalog_entry.get("hidden")):
+            continue
+
+        workspace_profiles = [
+            profile
+            for profile in profiles
+            if normalize_provider_id(profile.get("provider")) == provider_id
+            and (str(profile.get("workspace_id") or "default").strip() or "default") == requested_workspace_id
+            and str(profile.get("credential_id") or "").strip()
+        ]
+        workspace_profiles.sort(key=_workspace_profile_sort_key)
+
+        enabled_profiles = [profile for profile in workspace_profiles if bool(profile.get("enabled", True))]
+        healthy_profiles = [
+            profile
+            for profile in enabled_profiles
+            if _profile_health_value(profile, now) == "healthy" and not _profile_has_unresolved_failure(profile)
+        ]
+        degraded_profiles = [
+            profile
+            for profile in enabled_profiles
+            if profile not in healthy_profiles
+        ]
+        selected_profile = healthy_profiles[0] if healthy_profiles else (enabled_profiles[0] if enabled_profiles else (workspace_profiles[0] if workspace_profiles else None))
+        selected_profile_metadata = (
+            dict(selected_profile.get("metadata") or {})
+            if isinstance(selected_profile, dict) and isinstance(selected_profile.get("metadata"), dict)
+            else {}
+        )
+
+        if healthy_profiles:
+            state = "active"
+            state_detail = "A provider key is connected for this workspace."
+            issue_code = None
+            issue = None
+        elif degraded_profiles:
+            state = "degraded"
+            state_detail = str(degraded_profiles[0].get("last_error") or "").strip() or "The saved provider key is not currently healthy."
+            failure = classify_profile_failure(state_detail)
+            issue_code = str(failure.get("failure_class") or "provider_degraded")
+            issue = state_detail
+        elif workspace_profiles:
+            state = "configured"
+            state_detail = "A provider key is saved for this workspace but is currently disabled."
+            issue_code = "profile_disabled"
+            issue = state_detail
+        else:
+            state = "setup_required"
+            state_detail = None
+            issue_code = "setup_required"
+            issue = "Provider setup is still required."
+
+        default_model = ""
+        if selected_profile is not None:
+            default_model = normalize_provider_model_id(
+                provider_id,
+                selected_profile.get("model"),
+                fallback_to_default=True,
+            ) or ""
+        if not default_model:
+            default_model = str(catalog_entry.get("default_model") or "").strip()
+
+        entry: Dict[str, Any] = {
+            "id": provider_id,
+            "kind": "provider",
+            "label": catalog_entry.get("label", provider_id),
+            "identity_owner": "workspace",
+            "identity_owner_label": "Workspace connection",
+            "identity_boundary_note": "This provider becomes available only after a workspace owner connects an API key.",
+            "auth": list(catalog_entry.get("auth", [])),
+            "auth_modes": list(catalog_entry.get("auth_modes", [])),
+            "default_auth_mode": catalog_entry.get("default_auth_mode"),
+            "default_model": default_model or None,
+            "note": catalog_entry.get("note"),
+            "profile_count": len(workspace_profiles),
+            "enabled_profile_count": len(enabled_profiles),
+            "disabled_profile_count": max(0, len(workspace_profiles) - len(enabled_profiles)),
+            "healthy_profile_count": len(healthy_profiles),
+            "cooldown_profile_count": len([profile for profile in workspace_profiles if _profile_health_value(profile, now) == "cooldown"]),
+            "credential_sources": ["workspace_profile"] if workspace_profiles else [],
+            "issues": ([{"code": str(issue_code), "message": str(issue)}] if issue_code and issue else []),
+            "backpressure": state == "degraded" and bool(classify_profile_failure(state_detail or "").get("backpressure")),
+            "retry_after_seconds": None,
+            "failure_class": str(classify_profile_failure(state_detail or "").get("failure_class") or "").strip() or None,
+            "state": state,
+            "usable": state == "active",
+            "configured": state in {"active", "configured", "degraded"},
+            "active": state == "active",
+            "issue_code": issue_code,
+            "issue": issue,
+            "state_detail": state_detail,
+            "active_source": "workspace_profile" if workspace_profiles else None,
+            "connection_kind": "workspace_provider_connection",
+            "connection_scope": "workspace",
+            "connection_label": "Workspace provider",
+            "machine_bound": False,
+            "profile_metadata": selected_profile_metadata,
+        }
+        state_summary[state] += 1
+        providers.append(entry)
+        providers_by_id[provider_id] = entry
+
+    providers.sort(key=lambda item: (_provider_state_rank(str(item.get("state") or "")), str(item.get("label") or "")))
+    summary = {
+        **state_summary,
+        "provider_total": len(providers),
+    }
+    return {
+        "workspace_id": requested_workspace_id,
+        "summary": summary,
+        "providers": providers,
+        "providers_by_id": providers_by_id,
+    }

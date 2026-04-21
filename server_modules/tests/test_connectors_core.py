@@ -14,12 +14,9 @@ class ConnectorsCoreTests(unittest.IsolatedAsyncioTestCase):
         openai_item = next(item for item in providers if item.get("id") == "openai")
         self.assertEqual(openai_item.get("kind"), "provider")
         self.assertIn(openai_item.get("state"), {"active", "configured", "setup_required", "unavailable", "degraded"})
-        self.assertEqual(openai_item.get("identity_owner"), "platform_account")
-        self.assertIn(
-            openai_item.get("connection_kind"),
-            {"workspace_provider_connection", "machine_local_capability", "runtime_environment"},
-        )
-        self.assertIn(openai_item.get("connection_scope"), {"workspace", "machine", "runtime"})
+        self.assertEqual(openai_item.get("identity_owner"), "workspace")
+        self.assertEqual(openai_item.get("connection_kind"), "workspace_provider_connection")
+        self.assertEqual(openai_item.get("connection_scope"), "workspace")
 
     async def test_list_connectors_includes_alias_entries(self):
         result = await connectors_core.list_connectors()

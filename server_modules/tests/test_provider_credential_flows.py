@@ -3,7 +3,7 @@ from unittest.mock import MagicMock, patch
 
 from fastapi import HTTPException
 
-from server_modules import connectors_actions, provider_profiles
+from server_modules import connectors_actions, provider_profiles, workspace_admin_service
 from server_modules.runtime_models import CredentialUpsertRequest, configure_runtime_model_context
 
 
@@ -288,6 +288,39 @@ class CredentialVaultFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(verification["authenticated"])
         self.assertFalse(verification["runtime_usable"])
         self.assertEqual(verification["write_actions"], [])
+
+
+class WorkspaceProviderCredentialFlowTests(unittest.IsolatedAsyncioTestCase):
+    @patch("server_modules.workspace_admin_service._cached_provider_model_metadata", return_value={})
+    @patch("server_modules.workspace_admin_service.connectors_core.upsert_provider_profile")
+    @patch("server_modules.workspace_admin_service.connectors_core.list_provider_profiles", return_value={"items": []})
+    @patch("server_modules.workspace_admin_service.connectors_actions.create_vault_credential")
+    @patch("server_modules.workspace_admin_service._normalize_provider_id", return_value="anthropic")
+    @patch("server_modules.workspace_admin_service._provider_requires_secret", return_value=True)
+    @patch("server_modules.workspace_admin_service._enforce_owner_scope", return_value="ws-1")
+    async def test_upsert_workspace_provider_credential_does_not_persist_model_when_not_explicitly_selected(
+        self,
+        _enforce_owner_scope_mock,
+        _provider_requires_secret_mock,
+        _normalize_provider_id_mock,
+        create_vault_credential_mock,
+        _list_provider_profiles_mock,
+        upsert_provider_profile_mock,
+        _cached_provider_model_metadata_mock,
+    ):
+        create_vault_credential_mock.return_value = {"id": "cred-1"}
+        upsert_provider_profile_mock.return_value = {"item": {"id": "profile-1", "model": None}}
+
+        await workspace_admin_service.upsert_workspace_provider_credential(
+            workspace_id="ws-1",
+            current_user={"user_id": "owner-1"},
+            provider="anthropic",
+            api_key="sk-ant-test",
+            model=None,
+        )
+
+        request = upsert_provider_profile_mock.call_args.args[0]
+        self.assertIsNone(request.model)
 
 
 if __name__ == "__main__":

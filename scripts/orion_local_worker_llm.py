@@ -43,6 +43,10 @@ OPENAI_CODEX_DIRECT_AUTH_ERROR = (
 CLAUDE_CODE_CREDENTIALS_PATH = Path.home() / ".claude" / ".credentials.json"
 CLAUDE_CODE_KEYCHAIN_SERVICE = "Claude Code-credentials"
 LOGGER = logging.getLogger(__name__)
+ANTHROPIC_DEFAULT_MODEL_FALLBACK = "claude-3-7-sonnet-latest"
+ANTHROPIC_RETIRED_MODEL_ALIASES = {
+    "claude-3-5-sonnet-20241022",
+}
 
 
 def ensure_trailing_slashless(url: str) -> str:
@@ -352,6 +356,34 @@ def get_anthropic_api_key() -> str:
     ).strip()
 
 
+def anthropic_default_model() -> str:
+    override = str(os.getenv("ORION_LOCAL_WORKER_ANTHROPIC_MODEL") or "").strip()
+    if override:
+        return override
+    try:
+        from server_modules import provider_profiles as _provider_profiles
+
+        catalog_entry = _provider_profiles.provider_catalog_entry("anthropic")
+        candidate = str((catalog_entry or {}).get("default_model") or "").strip()
+        if candidate:
+            return candidate
+    except Exception:
+        pass
+    return ANTHROPIC_DEFAULT_MODEL_FALLBACK
+
+
+def normalize_anthropic_model(model: Any) -> str:
+    token = str(model or "").strip()
+    if not token:
+        return anthropic_default_model()
+    normalized = token.lower()
+    if normalized in {"default", "sonnet", "claude", "claude-sonnet"}:
+        return anthropic_default_model()
+    if token in ANTHROPIC_RETIRED_MODEL_ALIASES:
+        return anthropic_default_model()
+    return token
+
+
 def get_gemini_api_key() -> str:
     return (
         os.getenv("ORION_LOCAL_WORKER_GEMINI_API_KEY")
@@ -485,7 +517,7 @@ def resolve_requested_model(context: Dict[str, Any], metadata: Dict[str, Any], p
     if pid == "claude_code_cli":
         return (os.getenv("ORION_LOCAL_WORKER_CLAUDE_CODE_MODEL") or "sonnet").strip() or "sonnet"
     if pid == "anthropic":
-        return (os.getenv("ORION_LOCAL_WORKER_ANTHROPIC_MODEL") or "claude-3-5-sonnet-20241022").strip() or "claude-3-5-sonnet-20241022"
+        return anthropic_default_model()
     if pid == "gemini":
         return (os.getenv("ORION_LOCAL_WORKER_GEMINI_MODEL") or "gemini-2.0-flash").strip() or "gemini-2.0-flash"
     if pid == "ollama":
@@ -520,11 +552,9 @@ def coerce_requested_model_for_provider(requested_model: Any, provider: str) -> 
     if pid == "codex_cli":
         return model if codex_cli_supports_model(model) else default_codex_model()
     if pid == "claude_code_cli":
-        if not model or model.strip().lower() in {"sonnet", "claude", "default"}:
-            return (
-                os.getenv("ORION_LOCAL_WORKER_ANTHROPIC_MODEL")
-                or "claude-3-5-sonnet-20241022"
-            ).strip() or "claude-3-5-sonnet-20241022"
+        return normalize_anthropic_model(model)
+    if pid == "anthropic":
+        return normalize_anthropic_model(model)
     return model
 
 
@@ -1360,7 +1390,7 @@ def anthropic_chat_text(
     if not api_key:
         return "", None, "", "missing_api_key"
 
-    model = (str(model_override or "").strip() or os.getenv("ORION_LOCAL_WORKER_ANTHROPIC_MODEL") or "claude-3-5-sonnet-20241022").strip() or "claude-3-5-sonnet-20241022"
+    model = normalize_anthropic_model(model_override)
     timeout_seconds = max(10, to_int(os.getenv("ORION_LOCAL_WORKER_LLM_TIMEOUT_SECONDS"), 45))
     max_tokens = max(256, to_int(os.getenv("ORION_LOCAL_WORKER_MAX_TOKENS"), 1200))
     api_url = ensure_trailing_slashless(os.getenv("ORION_LOCAL_WORKER_ANTHROPIC_URL") or "https://api.anthropic.com")
@@ -1414,7 +1444,7 @@ def anthropic_chat_json(
     if not api_key:
         return None, None, "", "missing_api_key"
 
-    model = (str(model_override or "").strip() or os.getenv("ORION_LOCAL_WORKER_ANTHROPIC_MODEL") or "claude-3-5-sonnet-20241022").strip() or "claude-3-5-sonnet-20241022"
+    model = normalize_anthropic_model(model_override)
     timeout_seconds = max(10, to_int(os.getenv("ORION_LOCAL_WORKER_LLM_TIMEOUT_SECONDS"), 45))
     max_tokens = max(256, to_int(os.getenv("ORION_LOCAL_WORKER_MAX_TOKENS"), 1200))
     api_url = ensure_trailing_slashless(os.getenv("ORION_LOCAL_WORKER_ANTHROPIC_URL") or "https://api.anthropic.com")
@@ -1719,7 +1749,7 @@ def build_usage_masked_from_provider(provider: str, usage: Optional[Dict[str, An
         prompt_tokens = to_int(source.get("input_tokens"), 0)
         completion_tokens = to_int(source.get("output_tokens"), 0)
         total_tokens = prompt_tokens + completion_tokens
-        return build_usage_masked(pid, model or "claude-3-5-sonnet-20241022", prompt_tokens, completion_tokens, total_tokens)
+        return build_usage_masked(pid, normalize_anthropic_model(model), prompt_tokens, completion_tokens, total_tokens)
     if pid == "gemini":
         prompt_tokens = to_int(source.get("promptTokenCount"), 0)
         completion_tokens = to_int(source.get("candidatesTokenCount"), 0)

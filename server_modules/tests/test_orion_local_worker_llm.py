@@ -212,6 +212,38 @@ class OrionLocalWorkerLlmTests(unittest.TestCase):
             credential_override=None,
         )
 
+    def test_resolve_requested_model_defaults_anthropic_to_current_default(self):
+        with patch.object(worker_llm, "anthropic_default_model", return_value="claude-3-7-sonnet-latest"):
+            model = worker_llm.resolve_requested_model({"provider": "anthropic"}, {})
+
+        self.assertEqual(model, "claude-3-7-sonnet-latest")
+
+    def test_generate_chat_remaps_retired_anthropic_model(self):
+        with patch.object(worker_llm, "provider_order_for_run", return_value=["anthropic"]):
+            with patch.object(
+                worker_llm,
+                "anthropic_chat_text",
+                return_value=("Anthropic reply", {"input_tokens": 5, "output_tokens": 7}, "claude-3-7-sonnet-latest", ""),
+            ) as anthropic_mock:
+                text, usage, attempted, error = worker_llm.generate_chat_reply_with_provider_fallback(
+                    context={"provider": "anthropic", "model": "claude-3-5-sonnet-20241022"},
+                    metadata={"provider": "anthropic", "disable_provider_fallback": True},
+                    user_goal="hello",
+                    system_prompt="You are concise.",
+                )
+
+        self.assertEqual(text, "Anthropic reply")
+        self.assertEqual(attempted, "anthropic")
+        self.assertEqual(error, "")
+        self.assertIsNotNone(usage)
+        anthropic_mock.assert_called_once_with(
+            "You are concise.",
+            "hello",
+            model_override="claude-3-7-sonnet-latest",
+            prior_messages=None,
+            credential_override=None,
+        )
+
     def test_generate_chat_coerces_unsupported_openai_model_for_codex_cli(self):
         with patch.object(worker_llm, "provider_order_for_run", return_value=["codex_cli"]):
             with patch.object(

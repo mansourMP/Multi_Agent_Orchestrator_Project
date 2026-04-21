@@ -30,11 +30,12 @@ class CredentialResolutionTests(unittest.TestCase):
         priority: int,
         created_at: str,
         model: str,
+        provider: str = "openai",
         workspace_id: str = "ws-1",
     ):
         return {
             "id": profile_id,
-            "provider": "openai",
+            "provider": provider,
             "workspace_id": workspace_id,
             "credential_id": credential_id,
             "priority": priority,
@@ -97,6 +98,34 @@ class CredentialResolutionTests(unittest.TestCase):
         self.assertEqual(candidates[2]["credentials"]["access_token"], "token-cred-low")
         self.assertEqual(candidates[3]["credentials"]["access_token"], "token-vault-default")
         self.assertEqual(candidates[4]["credentials"]["access_token"], "token-env")
+
+    @patch("server_modules.provider_profiles.resolve_vault_credential")
+    def test_build_candidates_normalizes_stale_anthropic_model_aliases(
+        self,
+        resolve_vault_credential_mock,
+    ):
+        resolve_vault_credential_mock.return_value = {"api_key": "sk-ant-test"}
+
+        profiles = {
+            "profile-anthropic-stale": self._profile(
+                profile_id="profile-anthropic-stale",
+                credential_id="cred-anthropic",
+                priority=1,
+                created_at="2026-03-22T00:00:00Z",
+                model="claude-3-7-sonnet-latest",
+                provider="anthropic",
+            ),
+        }
+
+        with patch.dict(provider_profiles._server.PROVIDER_PROFILES, profiles, clear=True):
+            candidates = provider_profiles._build_provider_credential_candidates(
+                {"workspace_id": "ws-1"},
+                {},
+                "anthropic",
+            )
+
+        self.assertEqual(candidates[0]["label"], "profile:profile-anthropic-stale")
+        self.assertEqual(candidates[0]["model"], "claude-3-7-sonnet-20250219")
 
     @patch("server_modules.provider_profiles._openai_env_bearer_with_source")
     @patch("server_modules.provider_profiles.resolve_default_vault_credential")

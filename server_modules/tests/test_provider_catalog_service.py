@@ -71,6 +71,15 @@ class ProviderCatalogServiceTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(selection, {"provider": "anthropic", "model": "claude-3-7-sonnet-20250219"})
 
+    def test_provider_profiles_normalize_anthropic_latest_alias_to_live_model(self) -> None:
+        normalized = provider_catalog_service.provider_profiles.normalize_provider_model_id(
+            "anthropic",
+            "claude-3-7-sonnet-latest",
+            fallback_to_default=True,
+        )
+
+        self.assertEqual(normalized, "claude-3-7-sonnet-20250219")
+
     def test_resolve_provider_model_selection_rejects_unknown_models(self) -> None:
         with self.assertRaisesRegex(ValueError, "not supported"):
             provider_catalog_service.resolve_provider_model_selection(

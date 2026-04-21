@@ -44,16 +44,17 @@ def _openai_env_credentials(token: str, source: Any) -> Dict[str, Any]:
 def _serialize_profile(profile: Dict[str, Any]) -> Dict[str, Any]:
     now = _utc_now()
     cooldown_until = _parse_utc_ts(profile.get("cooldown_until"))
+    provider_id = normalize_provider_id(profile.get("provider"))
     return {
         "id": profile.get("id"),
-        "provider": normalize_provider_id(profile.get("provider")),
+        "provider": provider_id,
         "label": profile.get("label"),
         "credential_id": profile.get("credential_id"),
-        "auth_mode": normalize_auth_mode(profile.get("provider"), profile.get("auth_mode")),
+        "auth_mode": normalize_auth_mode(provider_id, profile.get("auth_mode")),
         "workspace_id": profile.get("workspace_id"),
         "priority": profile.get("priority", 100),
         "enabled": bool(profile.get("enabled", True)),
-        "model": profile.get("model"),
+        "model": provider_profiles_service.normalize_provider_model_id(provider_id, profile.get("model"), fallback_to_default=True),
         "health": "cooldown" if cooldown_until and cooldown_until > now else ("healthy" if bool(profile.get("enabled", True)) else "disabled"),
         "cooldown_until": profile.get("cooldown_until"),
         "last_error": profile.get("last_error"),
@@ -102,6 +103,11 @@ async def upsert_provider_profile(body: ProviderProfileUpsertRequest):
         existing = PROVIDER_PROFILES.get(profile_id, {})
         if existing and not isinstance(existing, dict):
             existing = {}
+        normalized_model = provider_profiles_service.normalize_provider_model_id(
+            provider_id,
+            body.model,
+            fallback_to_default=bool(body.model),
+        ) or None
         profile = {
             "id": profile_id,
             "provider": provider_id,
@@ -111,7 +117,7 @@ async def upsert_provider_profile(body: ProviderProfileUpsertRequest):
             "workspace_id": workspace_id,
             "priority": int(body.priority),
             "enabled": bool(body.enabled),
-            "model": str(body.model).strip() if body.model else None,
+            "model": normalized_model,
             "cooldown_until": existing.get("cooldown_until"),
             "last_error": existing.get("last_error"),
             "last_used_at": existing.get("last_used_at"),

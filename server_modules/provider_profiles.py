@@ -189,6 +189,13 @@ LEGACY_PROVIDER_ALIASES = {
     "openai_codex": "openai-codex",
 }
 
+PROVIDER_MODEL_ALIASES: Dict[str, Dict[str, str]] = {
+    "anthropic": {
+        "claude-3-7-sonnet-latest": "claude-3-7-sonnet-20250219",
+        "claude-3-5-sonnet-20241022": "claude-3-7-sonnet-20250219",
+    },
+}
+
 LOCAL_CLI_AUTH_MODES = {
     "local_cli",
     "local_subscription",
@@ -770,6 +777,33 @@ def provider_model_catalog(provider: Any) -> List[Dict[str, Any]]:
             }
         )
     return items
+
+
+def normalize_provider_model_id(
+    provider: Any,
+    model_id: Any,
+    *,
+    fallback_to_default: bool = False,
+) -> str:
+    provider_id = normalize_provider_id(provider)
+    token = str(model_id or "").strip()
+    if not token:
+        return str(provider_catalog_entry(provider_id).get("default_model") or "").strip() if fallback_to_default else ""
+    if provider_id == "anthropic" and token.startswith("anthropic/"):
+        token = token.split("/", 1)[1]
+    elif provider_id == "gemini" and token.startswith("gemini/"):
+        token = token.split("/", 1)[1]
+    elif provider_id == "vertex" and token.startswith("vertex_ai/"):
+        token = token.split("/", 1)[1]
+    elif provider_id in {"qwen", "deepseek", "mistral", "ollama"} and "/" in token:
+        provider_token, model_token = token.split("/", 1)
+        if normalize_provider_id(provider_token) == provider_id:
+            token = model_token.strip()
+    token = PROVIDER_MODEL_ALIASES.get(provider_id, {}).get(token, token)
+    supported_models = set(_provider_model_identifier_list(provider_id))
+    if token and supported_models and token not in supported_models and fallback_to_default:
+        return str(provider_catalog_entry(provider_id).get("default_model") or "").strip()
+    return token
 
 
 def normalize_provider_id(provider: Any) -> str:
@@ -1746,7 +1780,7 @@ def _build_provider_credential_candidates(context: Dict[str, Any], metadata: Dic
                 "credentials": credentials,
                 "profile_id": pid,
                 "label": label,
-                "model": profile.get("model"),
+                "model": normalize_provider_model_id(canonical_provider, profile.get("model"), fallback_to_default=True),
             }
         )
         seen_labels.add(label)
@@ -2175,7 +2209,7 @@ def build_provider_runtime_truth(
             "workspace_id": workspace,
             "priority": profile.get("priority", 100),
             "enabled": bool(profile.get("enabled", True)),
-            "model": profile.get("model"),
+            "model": normalize_provider_model_id(provider_id, profile.get("model"), fallback_to_default=True),
             "health": health,
             "cooldown_until": profile.get("cooldown_until"),
             "last_error": profile.get("last_error"),

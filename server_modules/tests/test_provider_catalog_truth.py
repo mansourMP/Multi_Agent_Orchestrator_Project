@@ -1,4 +1,6 @@
 import unittest
+import tempfile
+from pathlib import Path
 from unittest.mock import patch
 
 from server_modules import provider_profiles
@@ -7,6 +9,18 @@ from server_modules import provider_profiles
 class ProviderCatalogTruthTests(unittest.TestCase):
     def setUp(self) -> None:
         provider_profiles._init()
+        self._profiles_tmpdir = tempfile.TemporaryDirectory()
+        self._temp_profiles_path = Path(self._profiles_tmpdir.name) / "profiles.json"
+        self._original_profiles_path = provider_profiles._server.ORION_PROVIDER_PROFILES_FILE
+        provider_profiles._server.ORION_PROVIDER_PROFILES_FILE = self._temp_profiles_path
+        provider_profiles._server.sync_acp_manager_paths(provider_profiles_path=self._temp_profiles_path)
+        provider_profiles._server.ACP_MANAGER.reload_secondary_state()
+
+    def tearDown(self) -> None:
+        provider_profiles._server.ORION_PROVIDER_PROFILES_FILE = self._original_profiles_path
+        provider_profiles._server.sync_acp_manager_paths(provider_profiles_path=self._original_profiles_path)
+        provider_profiles._server.ACP_MANAGER.reload_secondary_state()
+        self._profiles_tmpdir.cleanup()
 
     @patch("server_modules.provider_profiles.resolve_default_vault_credential", side_effect=RuntimeError("missing"))
     @patch("server_modules.provider_profiles.gemini_cli_available", return_value=False)
@@ -149,6 +163,38 @@ class ProviderCatalogTruthTests(unittest.TestCase):
         self.assertEqual(openai["connection_label"], "Runtime environment")
         self.assertEqual(openai["identity_owner"], "platform_account")
         self.assertEqual(openai["identity_owner_label"], "Empyralis account")
+
+    @patch("server_modules.provider_profiles.resolve_default_vault_credential", side_effect=RuntimeError("missing"))
+    @patch("server_modules.provider_profiles.gemini_cli_available", return_value=False)
+    @patch("server_modules.provider_profiles._openai_env_bearer_with_source", return_value=("", ""))
+    @patch(
+        "server_modules.provider_profiles.claude_code_cli_status",
+        return_value={"available": False, "logged_in": False, "message": "Claude Code CLI is not installed."},
+    )
+    def test_runtime_truth_normalizes_stale_anthropic_profile_model_alias(
+        self,
+        _claude_status_mock,
+        _openai_env_mock,
+        _gemini_cli_mock,
+        _resolve_default_mock,
+    ) -> None:
+        profile = {
+            "id": "profile-anthropic-stale",
+            "provider": "anthropic",
+            "label": "Anthropic",
+            "auth_mode": "api_key",
+            "workspace_id": "default",
+            "enabled": True,
+            "credential_id": "cred-anthropic",
+            "model": "claude-3-7-sonnet-latest",
+        }
+        with patch.dict(provider_profiles._server.PROVIDER_PROFILES, {"profile-anthropic-stale": profile}, clear=True):
+            payload = provider_profiles.build_provider_runtime_truth("default")
+
+        anthropic_profile = next(
+            item for item in payload["items"] if item.get("provider") == "anthropic"
+        )
+        self.assertEqual(anthropic_profile["model"], "claude-3-7-sonnet-20250219")
 
 
 if __name__ == "__main__":

@@ -203,6 +203,17 @@ LOCAL_CLI_AUTH_MODES = {
     "claude_code_cli",
 }
 
+WORKSPACE_USER_FACING_AI_PROVIDERS = {
+    "openai",
+    "openai-codex",
+    "anthropic",
+    "gemini",
+    "vertex",
+    "qwen",
+    "deepseek",
+    "mistral",
+}
+
 
 PROVIDER_CATALOG = {
     "openai": {
@@ -1710,6 +1721,7 @@ def _build_provider_credential_candidates(context: Dict[str, Any], metadata: Dic
     run_id = str(context.get("run_id") or metadata.get("run_id") or "").strip() or None
     credential_id = context.get("credential_id") or metadata.get("credential_id")
     canonical_provider = normalize_provider_id(provider)
+    workspace_only = bool(metadata.get("workspace_only"))
     candidates: List[Dict[str, Any]] = []
     seen_labels: Set[str] = set()
 
@@ -1808,17 +1820,18 @@ def _build_provider_credential_candidates(context: Dict[str, Any], metadata: Dic
                 seen_labels.add("vault-default")
         except Exception:
             pass
-        env_key, env_source = _openai_env_bearer_with_source()
-        if env_key and "env-openai" not in seen_labels:
-            candidates.append(
-                {
-                    "source": "env",
-                    "credentials": _openai_env_credentials(env_key, env_source),
-                    "profile_id": None,
-                    "label": "env-openai",
-                }
-            )
-            seen_labels.add("env-openai")
+        if not workspace_only:
+            env_key, env_source = _openai_env_bearer_with_source()
+            if env_key and "env-openai" not in seen_labels:
+                candidates.append(
+                    {
+                        "source": "env",
+                        "credentials": _openai_env_credentials(env_key, env_source),
+                        "profile_id": None,
+                        "label": "env-openai",
+                    }
+                )
+                seen_labels.add("env-openai")
 
     if canonical_provider == "openai-codex":
         try:
@@ -1844,7 +1857,7 @@ def _build_provider_credential_candidates(context: Dict[str, Any], metadata: Dic
         except Exception:
             pass
 
-    if canonical_provider == "anthropic":
+    if canonical_provider == "anthropic" and not workspace_only:
         env_key = str(os.getenv("ANTHROPIC_API_KEY") or "").strip()
         if env_key and "env-anthropic" not in seen_labels:
             candidates.append(
@@ -1859,7 +1872,7 @@ def _build_provider_credential_candidates(context: Dict[str, Any], metadata: Dic
             )
             seen_labels.add("env-anthropic")
 
-    if canonical_provider == "anthropic" and claude_code_cli_available() and "local-claude-cli" not in seen_labels:
+    if canonical_provider == "anthropic" and not workspace_only and claude_code_cli_available() and "local-claude-cli" not in seen_labels:
         candidates.append(
             {
                 "source": "local_cli",
@@ -1870,7 +1883,7 @@ def _build_provider_credential_candidates(context: Dict[str, Any], metadata: Dic
         )
         seen_labels.add("local-claude-cli")
 
-    if canonical_provider == "gemini":
+    if canonical_provider == "gemini" and not workspace_only:
         env_key = str(os.getenv("GEMINI_API_KEY") or "").strip()
         if env_key and "env-gemini" not in seen_labels:
             candidates.append(
@@ -1949,6 +1962,18 @@ def _build_provider_credential_candidates(context: Dict[str, Any], metadata: Dic
         seen_labels.add("local-ollama")
 
     return candidates
+
+
+def _workspace_user_facing_auth_modes(provider_id: str, catalog_entry: Dict[str, Any]) -> List[Dict[str, Any]]:
+    auth_modes = [
+        dict(item)
+        for item in list(catalog_entry.get("auth_modes") or [])
+        if isinstance(item, dict)
+    ]
+    if provider_id not in WORKSPACE_USER_FACING_AI_PROVIDERS:
+        return auth_modes
+    api_key_modes = [item for item in auth_modes if str(item.get("id") or "").strip() == "api_key"]
+    return api_key_modes or auth_modes
 
 
 def _profile_health_value(profile: Dict[str, Any], ref: Optional[datetime] = None) -> str:
@@ -2528,6 +2553,11 @@ def build_workspace_provider_connection_truth(
     for provider_id, catalog_entry in PROVIDER_CATALOG.items():
         if bool(catalog_entry.get("hidden")):
             continue
+        auth_modes = _workspace_user_facing_auth_modes(provider_id, catalog_entry)
+        auth_mode_ids = [str(item.get("id") or "").strip() for item in auth_modes if str(item.get("id") or "").strip()]
+        default_auth_mode = str(catalog_entry.get("default_auth_mode") or "").strip()
+        if default_auth_mode and default_auth_mode not in auth_mode_ids and auth_mode_ids:
+            default_auth_mode = auth_mode_ids[0]
 
         workspace_profiles = [
             profile
@@ -2595,9 +2625,9 @@ def build_workspace_provider_connection_truth(
             "identity_owner": "workspace",
             "identity_owner_label": "Workspace connection",
             "identity_boundary_note": "This provider becomes available only after a workspace owner connects an API key.",
-            "auth": list(catalog_entry.get("auth", [])),
-            "auth_modes": list(catalog_entry.get("auth_modes", [])),
-            "default_auth_mode": catalog_entry.get("default_auth_mode"),
+            "auth": auth_mode_ids,
+            "auth_modes": auth_modes,
+            "default_auth_mode": default_auth_mode or None,
             "default_model": default_model or None,
             "note": catalog_entry.get("note"),
             "profile_count": len(workspace_profiles),

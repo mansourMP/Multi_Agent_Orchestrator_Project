@@ -1,6 +1,37 @@
 # Pending Tasks
 
-Last verified: 2026-04-11
+Last verified: 2026-04-22
+
+## Finish Program Snapshot
+
+Already implemented platform foundations that should no longer be described as
+future architecture:
+- `empyralis-gateway` process, pairing/session bootstrap, WSS runtime, and
+  local journal/outbox/checkpoints
+- supervisor behind the gateway control path
+- personal WhatsApp lane
+- personal Telegram lane
+- gateway-governed browser runtime with approvals, doctor, checkpoints, and
+  cloud fallback
+- strict personal-vs-Studio lane enforcement
+- hosted mini-app contract, hosted manifest route, and bridge route
+- governed marketplace/distribution registration, install, and runtime-event
+  routes
+
+Current finish-program priorities:
+1. docs truth reconciliation
+2. existing-session browser attach mode
+3. operator UX for pairing, QR/login, doctor, approvals, and resume
+4. live certification for personal channels, reconnect, and browser attach
+5. Studio production hardening without contaminating the personal lane
+6. hosted mini-app product polish
+7. marketplace product polish
+
+Rules for the finish program:
+- do not reopen platform architecture
+- do not merge personal channels into Studio/business connectors
+- do not create a gateway per sub-agent
+- keep business gateway optional and premium/private-runtime oriented
 
 ## Re-Audit Snapshot
 

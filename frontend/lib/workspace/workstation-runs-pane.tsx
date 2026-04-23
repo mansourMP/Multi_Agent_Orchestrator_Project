@@ -5,6 +5,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { EmptyPanel } from '@/lib/ui/empty-panel';
 import { SkeletonBlock } from '@/lib/ui/skeleton-block';
 import { subscribeWorkstationApprovalResolved } from '@/lib/workspace/workstation-approval-events';
+import { useWorkspaceBoundary } from '@/lib/workspace/workspace-boundary';
 import { useWorkspaceServices, useWorkstationStreamState } from '@/lib/workspace/workspace-services';
 import { WorkstationSurfaceRoot } from '@/lib/workspace/workstation-surface-primitives';
 
@@ -20,6 +21,8 @@ type RunListItem = {
   preview: string;
   occurredAt: string | null;
 };
+
+const runsPaneCache = new Map<string, RunListItem[]>();
 
 function readString(value: unknown, fallback = ''): string {
   return typeof value === 'string' && value.trim() ? value.trim() : fallback;
@@ -113,47 +116,55 @@ function formatRelativeTime(value: string | null): string {
   });
 }
 
-function formatDateSeparator(value: string | null): string {
+type RunGroupKey = 'today' | 'yesterday' | 'this_week' | 'older';
+
+function resolveRunGroup(value: string | null): { key: RunGroupKey; label: string } {
   if (!value) {
-    return 'Earlier';
+    return { key: 'older', label: 'Older' };
   }
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) {
-    return value;
+    return { key: 'older', label: 'Older' };
   }
   const now = new Date();
   const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
   const startOfDate = new Date(date.getFullYear(), date.getMonth(), date.getDate());
   const diffDays = Math.round((startOfToday.getTime() - startOfDate.getTime()) / 86400000);
   if (diffDays === 0) {
-    return 'Today';
+    return { key: 'today', label: 'Today' };
   }
   if (diffDays === 1) {
-    return 'Yesterday';
+    return { key: 'yesterday', label: 'Yesterday' };
   }
-  return date.toLocaleDateString([], {
-    month: 'short',
-    day: 'numeric',
-  });
+  if (diffDays < 7) {
+    return { key: 'this_week', label: 'This Week' };
+  }
+  return { key: 'older', label: 'Older' };
 }
 
 function groupRunsByDate(items: RunListItem[]): Array<{ label: string; items: RunListItem[] }> {
-  const groups = new Map<string, RunListItem[]>();
+  const groups = new Map<RunGroupKey, { label: string; items: RunListItem[] }>();
   items.forEach((item) => {
-    const label = formatDateSeparator(item.occurredAt);
-    const nextItems = groups.get(label) ?? [];
-    nextItems.push(item);
-    groups.set(label, nextItems);
+    const group = resolveRunGroup(item.occurredAt);
+    const nextGroup = groups.get(group.key) ?? { label: group.label, items: [] };
+    nextGroup.items.push(item);
+    groups.set(group.key, nextGroup);
   });
-  return Array.from(groups.entries()).map(([label, groupedItems]) => ({ label, items: groupedItems }));
+  const order: RunGroupKey[] = ['today', 'yesterday', 'this_week', 'older'];
+  return order
+    .map((key) => groups.get(key))
+    .filter((group): group is { label: string; items: RunListItem[] } => !!group)
+    .filter((group) => group.items.length > 0);
 }
 
 export function WorkstationRunsPane() {
+  const { workspaceId } = useWorkspaceBoundary();
   const services = useWorkspaceServices();
   const streamState = useWorkstationStreamState();
-  const [runs, setRuns] = useState<RunListItem[]>([]);
+  const cachedRuns = runsPaneCache.get(workspaceId) ?? null;
+  const [runs, setRuns] = useState<RunListItem[]>(() => cachedRuns ?? []);
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
+  const [isLoading, setIsLoading] = useState(() => cachedRuns === null);
   const [error, setError] = useState<string | null>(null);
 
   const refresh = async (showLoading = false) => {
@@ -162,13 +173,15 @@ export function WorkstationRunsPane() {
     }
     setError(null);
     const runsPayload = await services.client.listRuns({ limit: 80 });
-    setRuns(toRunListItems(normalizeRunItems(runsPayload)));
+    const nextRuns = toRunListItems(normalizeRunItems(runsPayload));
+    runsPaneCache.set(workspaceId, nextRuns);
+    setRuns(nextRuns);
     setIsLoading(false);
   };
 
   useEffect(() => {
     let cancelled = false;
-    void refresh(true).catch((loadError) => {
+    void refresh(cachedRuns === null).catch((loadError) => {
       if (!cancelled) {
         setError(loadError instanceof Error ? loadError.message : 'History is unavailable right now.');
         setIsLoading(false);
@@ -186,7 +199,7 @@ export function WorkstationRunsPane() {
       cancelled = true;
       unsubscribe();
     };
-  }, [services.client]);
+  }, [cachedRuns, services.client]);
 
   useEffect(() => {
     if (streamState.activity.version === 0) {
@@ -196,7 +209,7 @@ export function WorkstationRunsPane() {
       setError(loadError instanceof Error ? loadError.message : 'History is unavailable right now.');
       setIsLoading(false);
     });
-  }, [services.client, streamState.activity.version]);
+  }, [services.client, streamState.activity.version, workspaceId]);
 
   useEffect(() => {
     if (runs.length === 0) {

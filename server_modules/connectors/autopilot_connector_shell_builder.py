@@ -137,7 +137,7 @@ def build_autopilot_connector_shell_service(
         get_updates_process_lock=_telegram_get_updates_process_lock,
         resolve_vault_credential=lambda credential_id, workspace_id=None: (
             _module_global(global_namespace, "resolve_vault_credential")
-            or _import_attr("server_modules.vault_helpers", "resolve_vault_credential")
+            or _import_attr("server_modules.runtime_common", "resolve_vault_credential")
         )(credential_id, workspace_id),
         http_json_request=lambda *args, **kwargs: (
             _module_global(global_namespace, "http_json_request")

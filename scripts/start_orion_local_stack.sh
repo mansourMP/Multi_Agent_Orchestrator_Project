@@ -6,6 +6,8 @@ STATE_DIR="${ROOT_DIR}/.orion-stack"
 LOG_DIR="${STATE_DIR}/logs"
 PID_DIR="${STATE_DIR}/pids"
 OPENAI_KEY_FILE="${STATE_DIR}/openai_api_key"
+SECRETS_BROKER_SECRET_FILE="${STATE_DIR}/secrets_broker_secret"
+TOOL_BROKER_SECRET_FILE="${STATE_DIR}/tool_broker_secret"
 START_LOCK_FILE="${STATE_DIR}/start.lock"
 START_META_FILE="${STATE_DIR}/start.meta.json"
 START_OPS_DAEMON_HELPER="scripts/start_empyralis_ops_daemon.sh"
@@ -80,9 +82,23 @@ print(secrets.token_hex(24))
 PY
 }
 
+generate_broker_secret() {
+  python3 - <<'PY'
+import secrets
+print(secrets.token_hex(32))
+PY
+}
+
 load_existing_runtime_key() {
   if [[ -f "${STATE_DIR}/runtime_key" ]]; then
     tr -d '[:space:]' < "${STATE_DIR}/runtime_key" 2>/dev/null || true
+  fi
+}
+
+load_existing_secret() {
+  local file_path="${1:-}"
+  if [[ -n "${file_path}" && -f "${file_path}" ]]; then
+    tr -d '[:space:]' < "${file_path}" 2>/dev/null || true
   fi
 }
 
@@ -130,6 +146,8 @@ runtime_database_url() {
 }
 
 EXISTING_RUNTIME_KEY="$(load_existing_runtime_key)"
+EXISTING_SECRETS_BROKER_SECRET="$(load_existing_secret "${SECRETS_BROKER_SECRET_FILE}")"
+EXISTING_TOOL_BROKER_SECRET="$(load_existing_secret "${TOOL_BROKER_SECRET_FILE}")"
 RUNTIME_KEY_RAW="${1:-${RUNTIME_KEY:-${EMPYRALIS_API_KEY:-${ORION_API_KEY:-${EXISTING_RUNTIME_KEY:-}}}}}"
 RUNTIME_KEY="$(printf "%s" "${RUNTIME_KEY_RAW}" | tr -d '[:space:]')"
 GENERATED_RUNTIME_KEY=0
@@ -140,6 +158,22 @@ if [[ -z "${RUNTIME_KEY}" ]]; then
 fi
 if [[ "${RUNTIME_KEY}" != "${RUNTIME_KEY_RAW}" ]]; then
   echo "Warning: runtime key contained whitespace and was normalized."
+fi
+SECRETS_BROKER_SECRET_RAW="${EMPYRALIS_SECRETS_BROKER_SECRET:-${EMPYRALIS_TOOL_BROKER_SECRET:-${EXISTING_SECRETS_BROKER_SECRET:-${EXISTING_TOOL_BROKER_SECRET:-}}}}"
+SECRETS_BROKER_SECRET="$(printf "%s" "${SECRETS_BROKER_SECRET_RAW}" | tr -d '[:space:]')"
+if [[ -z "${SECRETS_BROKER_SECRET}" ]]; then
+  SECRETS_BROKER_SECRET="$(generate_broker_secret)"
+fi
+if [[ "${SECRETS_BROKER_SECRET}" != "${SECRETS_BROKER_SECRET_RAW}" && -n "${SECRETS_BROKER_SECRET_RAW}" ]]; then
+  echo "Warning: secrets broker secret contained whitespace and was normalized."
+fi
+TOOL_BROKER_SECRET_RAW="${EMPYRALIS_TOOL_BROKER_SECRET:-${EMPYRALIS_SECRETS_BROKER_SECRET:-${EXISTING_TOOL_BROKER_SECRET:-${SECRETS_BROKER_SECRET:-}}}}"
+TOOL_BROKER_SECRET="$(printf "%s" "${TOOL_BROKER_SECRET_RAW}" | tr -d '[:space:]')"
+if [[ -z "${TOOL_BROKER_SECRET}" ]]; then
+  TOOL_BROKER_SECRET="${SECRETS_BROKER_SECRET}"
+fi
+if [[ "${TOOL_BROKER_SECRET}" != "${TOOL_BROKER_SECRET_RAW}" && -n "${TOOL_BROKER_SECRET_RAW}" ]]; then
+  echo "Warning: tool broker secret contained whitespace and was normalized."
 fi
 JWT_SECRET_RAW="${JWT_SECRET:-${ORION_JWT_SECRET:-}}"
 JWT_SECRET_VALUE="$(printf "%s" "${JWT_SECRET_RAW}" | tr -d '[:space:]')"
@@ -166,6 +200,10 @@ LOCK_HELD=0
 mkdir -p "${LOG_DIR}" "${PID_DIR}"
 printf "%s" "${RUNTIME_KEY}" > "${STATE_DIR}/runtime_key"
 chmod 600 "${STATE_DIR}/runtime_key" 2>/dev/null || true
+printf "%s" "${SECRETS_BROKER_SECRET}" > "${SECRETS_BROKER_SECRET_FILE}"
+chmod 600 "${SECRETS_BROKER_SECRET_FILE}" 2>/dev/null || true
+printf "%s" "${TOOL_BROKER_SECRET}" > "${TOOL_BROKER_SECRET_FILE}"
+chmod 600 "${TOOL_BROKER_SECRET_FILE}" 2>/dev/null || true
 
 # Persist API key for future auto-starts (read only if env key is missing).
 if [[ -z "${OPENAI_API_KEY:-}" && -f "${OPENAI_KEY_FILE}" ]]; then
@@ -206,6 +244,8 @@ ORION_WHATSAPP_AUTOPILOT_REQUIRE_PREFIX=${WHATSAPP_AUTOPILOT_REQUIRE_PREFIX}
 ORION_WHATSAPP_AUTOPILOT_EXECUTION_TARGET=${WHATSAPP_AUTOPILOT_EXECUTION_TARGET}
 ORION_AUTH_MODE=${ORION_AUTH_MODE_VALUE}
 ORION_DISABLE_OPENAI_API_KEY=${ORION_DISABLE_OPENAI_API_KEY_VALUE}
+EMPYRALIS_SECRETS_BROKER_SECRET=${SECRETS_BROKER_SECRET}
+EMPYRALIS_TOOL_BROKER_SECRET=${TOOL_BROKER_SECRET}
 JWT_SECRET=${JWT_SECRET_VALUE}
 ORION_JWT_SECRET=${JWT_SECRET_VALUE}
 EOF
@@ -605,6 +645,8 @@ start_runtime() {
     export ORION_WHATSAPP_AUTOPILOT_EXECUTION_TARGET="${WHATSAPP_AUTOPILOT_EXECUTION_TARGET}"
     export ORION_AUTH_MODE="${ORION_AUTH_MODE_VALUE}"
     export ORION_DISABLE_OPENAI_API_KEY="${ORION_DISABLE_OPENAI_API_KEY_VALUE}"
+    export EMPYRALIS_SECRETS_BROKER_SECRET="${SECRETS_BROKER_SECRET}"
+    export EMPYRALIS_TOOL_BROKER_SECRET="${TOOL_BROKER_SECRET}"
     export JWT_SECRET="${JWT_SECRET_VALUE}"
     export ORION_JWT_SECRET="${JWT_SECRET_VALUE}"
     export OPENAI_HEALTHCHECK="${OPENAI_HEALTHCHECK:-0}"
@@ -701,6 +743,8 @@ start_worker() {
     export ORION_API_URL="${ORION_API_URL}"
     export ORION_AUTH_MODE="${ORION_AUTH_MODE_VALUE}"
     export ORION_DISABLE_OPENAI_API_KEY="${ORION_DISABLE_OPENAI_API_KEY_VALUE}"
+    export EMPYRALIS_SECRETS_BROKER_SECRET="${SECRETS_BROKER_SECRET}"
+    export EMPYRALIS_TOOL_BROKER_SECRET="${TOOL_BROKER_SECRET}"
     export JWT_SECRET="${JWT_SECRET_VALUE}"
     export ORION_JWT_SECRET="${JWT_SECRET_VALUE}"
     spawn_detached "${PID_DIR}/worker.pid" "${LOG_DIR}/worker.log" "${ROOT_DIR}" \

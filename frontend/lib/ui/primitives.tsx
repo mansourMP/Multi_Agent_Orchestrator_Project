@@ -10,6 +10,8 @@ import type {
   TextareaHTMLAttributes,
 } from 'react';
 
+import { MotionPressButton, MotionSurfaceRow } from '@/lib/ui/motion';
+
 function joinClassNames(...values: Array<string | false | null | undefined>): string {
   return values.filter(Boolean).join(' ');
 }
@@ -100,7 +102,7 @@ export function AppSurfaceListItem({
   actions?: ReactNode;
 }) {
   return (
-    <article {...props} className={joinClassNames('app-surface-list-item', className)}>
+    <MotionSurfaceRow {...props} className={joinClassNames('app-surface-list-item', className)}>
       <div className="app-surface-list-item__row">
         <div className="app-surface-list-item__copy">
           <div className="app-surface-list-item__title">{title}</div>
@@ -109,7 +111,7 @@ export function AppSurfaceListItem({
         {actions}
       </div>
       {description ? <p className="app-surface-list-item__description">{description}</p> : null}
-    </article>
+    </MotionSurfaceRow>
   );
 }
 
@@ -154,12 +156,12 @@ export function AppButton({
   tone?: 'primary' | 'secondary' | 'danger' | 'ghost';
 }>) {
   return (
-    <button
+    <MotionPressButton
       {...props}
       className={joinClassNames('app-button', `app-button--${tone}`, className)}
     >
       {children}
-    </button>
+    </MotionPressButton>
   );
 }
 

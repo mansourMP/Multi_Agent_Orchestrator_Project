@@ -221,11 +221,11 @@ export default function LoginScreen() {
   return (
     <MobileScreen>
       <ScreenHeader
-        title="Continue"
-        subtitle="Your account, memory, and applications stay in the cloud."
+        title="Set up your personal agent"
+        subtitle="Sign in to continue on this phone."
       />
 
-      <SectionCard title="Welcome back" subtitle="Sign in to open Sage.">
+      <SectionCard title="Continue" subtitle="Use Apple or your Empyralis account.">
         <View style={{ gap: 14 }}>
           <TextInput
             value={email}

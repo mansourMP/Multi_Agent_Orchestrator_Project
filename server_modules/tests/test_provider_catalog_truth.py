@@ -220,6 +220,43 @@ class ProviderCatalogTruthTests(unittest.TestCase):
 
         providers = payload["providers_by_id"]
         self.assertEqual(providers["anthropic"]["state"], "setup_required")
+        self.assertEqual(providers["gemini"]["state"], "setup_required")
+        self.assertEqual(providers["openai"]["state"], "setup_required")
+
+    @patch("server_modules.provider_profiles.gemini_cli_available", return_value=False)
+    @patch(
+        "server_modules.provider_profiles.claude_code_cli_status",
+        return_value={"available": True, "logged_in": True, "message": "Claude Code CLI is ready."},
+    )
+    @patch("server_modules.provider_profiles._openai_env_bearer_with_source", return_value=("sk-live", "env_api_key"))
+    def test_workspace_provider_connection_truth_exposes_api_key_only_ai_auth_modes(
+        self,
+        _openai_env_mock,
+        _claude_status_mock,
+        _gemini_cli_mock,
+    ) -> None:
+        with patch.dict(provider_profiles._server.PROVIDER_PROFILES, {}, clear=True), patch.dict(
+            "os.environ",
+            {
+                "ANTHROPIC_API_KEY": "sk-ant-live",
+                "GEMINI_API_KEY": "gem-live",
+            },
+            clear=False,
+        ):
+            payload = provider_profiles.build_workspace_provider_connection_truth("default")
+
+        providers = payload["providers_by_id"]
+        self.assertEqual(providers["openai"]["auth"], ["api_key"])
+        self.assertEqual(providers["anthropic"]["auth"], ["api_key"])
+        self.assertEqual(providers["gemini"]["auth"], ["api_key"])
+        self.assertEqual(providers["anthropic"]["default_auth_mode"], "api_key")
+        self.assertEqual(
+            [item["id"] for item in providers["anthropic"]["auth_modes"]],
+            ["api_key"],
+        )
+
+        providers = payload["providers_by_id"]
+        self.assertEqual(providers["anthropic"]["state"], "setup_required")
         self.assertFalse(providers["anthropic"]["configured"])
         self.assertIsNone(providers["anthropic"]["active_source"])
         self.assertEqual(providers["gemini"]["state"], "setup_required")

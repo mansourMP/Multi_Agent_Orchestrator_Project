@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from server_modules import workspace_context
+from server_modules import mini_app_host_service, workspace_context
 
 
 MINI_APP_CONTRACT_VERSION = 1
@@ -54,6 +54,13 @@ def _default_app_entry(app_id: str) -> Dict[str, Any]:
         "id": app_id,
         "label": " ".join(part.capitalize() for part in app_id.replace("-", "_").split("_") if part) or app_id,
         "description": "",
+        "delivery_mode": "structured",
+        "hosted_url": None,
+        "embed_kind": "iframe",
+        "allowed_origins": [],
+        "bridge_contracts": {},
+        "permissions": [],
+        "context_envelope": {},
         "current_state": {},
         "recent_events": [],
         "daily_summary": {},
@@ -93,6 +100,13 @@ def _safe_read_state(workspace_id: str) -> Dict[str, Any]:
             "id": app_id,
             "label": str(entry.get("label") or base["label"]).strip() or base["label"],
             "description": str(entry.get("description") or "").strip(),
+            "delivery_mode": str(entry.get("delivery_mode") or base["delivery_mode"]).strip().lower() or base["delivery_mode"],
+            "hosted_url": str(entry.get("hosted_url") or "").strip() or None,
+            "embed_kind": str(entry.get("embed_kind") or base["embed_kind"]).strip().lower() or base["embed_kind"],
+            "allowed_origins": list(entry.get("allowed_origins") or []) if isinstance(entry.get("allowed_origins"), list) else [],
+            "bridge_contracts": dict(entry.get("bridge_contracts") or {}) if isinstance(entry.get("bridge_contracts"), dict) else {},
+            "permissions": list(entry.get("permissions") or []) if isinstance(entry.get("permissions"), list) else [],
+            "context_envelope": dict(entry.get("context_envelope") or {}) if isinstance(entry.get("context_envelope"), dict) else {},
             "current_state": dict(entry.get("current_state") or {}) if isinstance(entry.get("current_state"), dict) else {},
             "recent_events": list(entry.get("recent_events") or []) if isinstance(entry.get("recent_events"), list) else [],
             "daily_summary": dict(entry.get("daily_summary") or {}) if isinstance(entry.get("daily_summary"), dict) else {},
@@ -206,13 +220,30 @@ def _normalized_contract_payload(workspace_id: str, entry: Dict[str, Any]) -> Di
         for item in (entry.get("records") or [])
         if isinstance(item, dict)
     ]
-    return {
+    hosted_fields = mini_app_host_service.normalize_hosted_app_fields(
+        app_id=app_id,
+        delivery_mode=entry.get("delivery_mode"),
+        hosted_url=entry.get("hosted_url"),
+        embed_kind=entry.get("embed_kind"),
+        allowed_origins=entry.get("allowed_origins"),
+        bridge_contracts=entry.get("bridge_contracts"),
+        permissions=entry.get("permissions"),
+        context_envelope=entry.get("context_envelope"),
+    )
+    contract_payload = {
         "contract_version": MINI_APP_CONTRACT_VERSION,
         "app_id": app_id,
         "workspace_id": _normalize_workspace_id(workspace_id),
         "kind": "structured_mini_app",
         "label": str(entry.get("label") or app_id).strip() or app_id,
         "description": str(entry.get("description") or "").strip(),
+        "delivery_mode": hosted_fields["delivery_mode"],
+        "memory_scope": "none_by_default",
+        "permissions": list(hosted_fields.get("permissions") or []),
+        "bridge_contracts": dict(hosted_fields.get("bridge_contracts") or {}),
+        "context_envelope": dict(hosted_fields.get("context_envelope") or {}),
+        "embed_kind": hosted_fields.get("embed_kind"),
+        "allowed_origins": list(hosted_fields.get("allowed_origins") or []),
         "current_state": dict(entry.get("current_state") or {}),
         "recent_events": list(entry.get("recent_events") or []),
         "daily_summary": dict(entry.get("daily_summary") or {}),
@@ -227,6 +258,15 @@ def _normalized_contract_payload(workspace_id: str, entry: Dict[str, Any]) -> Di
             "default_limit": DEFAULT_RETRIEVE_LIMIT,
         },
     }
+    if hosted_fields.get("hosted_url"):
+        contract_payload["hosted_url"] = hosted_fields["hosted_url"]
+        manifest = mini_app_host_service.build_hosted_mini_app_manifest(
+            workspace_id=_normalize_workspace_id(workspace_id),
+            app_contract=contract_payload,
+        )
+        if manifest:
+            contract_payload.update(manifest)
+    return contract_payload
 
 
 def list_mini_app_contracts(workspace_id: str) -> Dict[str, Any]:
@@ -264,6 +304,13 @@ def upsert_mini_app_contract(
     *,
     label: Any = None,
     description: Any = None,
+    delivery_mode: Any = None,
+    hosted_url: Any = None,
+    embed_kind: Any = None,
+    allowed_origins: Any = None,
+    bridge_contracts: Any = None,
+    permissions: Any = None,
+    context_envelope: Any = None,
     current_state: Any = None,
     recent_events: Any = None,
     daily_summary: Any = None,
@@ -282,6 +329,35 @@ def upsert_mini_app_contract(
         entry["label"] = str(label or "").strip() or entry["label"]
     if description is not None:
         entry["description"] = str(description or "").strip()
+    if any(
+        value is not None
+        for value in (
+            delivery_mode,
+            hosted_url,
+            embed_kind,
+            allowed_origins,
+            bridge_contracts,
+            permissions,
+            context_envelope,
+        )
+    ):
+        hosted_fields = mini_app_host_service.normalize_hosted_app_fields(
+            app_id=normalized_app_id,
+            delivery_mode=delivery_mode if delivery_mode is not None else entry.get("delivery_mode"),
+            hosted_url=hosted_url if hosted_url is not None else entry.get("hosted_url"),
+            embed_kind=embed_kind if embed_kind is not None else entry.get("embed_kind"),
+            allowed_origins=allowed_origins if allowed_origins is not None else entry.get("allowed_origins"),
+            bridge_contracts=bridge_contracts if bridge_contracts is not None else entry.get("bridge_contracts"),
+            permissions=permissions if permissions is not None else entry.get("permissions"),
+            context_envelope=context_envelope if context_envelope is not None else entry.get("context_envelope"),
+        )
+        entry["delivery_mode"] = hosted_fields["delivery_mode"]
+        entry["hosted_url"] = hosted_fields["hosted_url"]
+        entry["embed_kind"] = hosted_fields["embed_kind"]
+        entry["allowed_origins"] = list(hosted_fields["allowed_origins"])
+        entry["bridge_contracts"] = dict(hosted_fields["bridge_contracts"])
+        entry["permissions"] = list(hosted_fields["permissions"])
+        entry["context_envelope"] = dict(hosted_fields["context_envelope"])
     if isinstance(current_state, dict):
         entry["current_state"] = dict(current_state)
     if isinstance(recent_events, list):
@@ -302,6 +378,23 @@ def upsert_mini_app_contract(
     apps[normalized_app_id] = entry
     _save_state(normalized_workspace_id, {"apps": apps})
     return _normalized_contract_payload(normalized_workspace_id, entry)
+
+
+def get_hosted_mini_app_manifest(workspace_id: str, app_id: str) -> Dict[str, Any]:
+    contract = get_mini_app_contract(workspace_id, app_id)
+    manifest = mini_app_host_service.build_hosted_mini_app_manifest(
+        workspace_id=_normalize_workspace_id(workspace_id),
+        app_contract=contract,
+    )
+    if not manifest:
+        raise KeyError(f"Mini app '{_normalize_app_id(app_id)}' does not expose a hosted manifest.")
+    return {
+        "workspace_id": _normalize_workspace_id(workspace_id),
+        "app_id": contract["app_id"],
+        "label": contract.get("label"),
+        "description": contract.get("description"),
+        **manifest,
+    }
 
 
 def retrieve_mini_app_records(

@@ -1,4 +1,5 @@
 import type { Metadata } from 'next';
+import localFont from 'next/font/local';
 import type { ReactNode } from 'react';
 
 import './globals.css';
@@ -11,6 +12,45 @@ export const metadata: Metadata = {
   title: 'Empyralis',
   description: 'Empyralis browser shell',
 };
+
+const dmSans = localFont({
+  src: [
+    {
+      path: './fonts/DMSans-Regular.ttf',
+      weight: '400',
+      style: 'normal',
+    },
+    {
+      path: './fonts/DMSans-Medium.ttf',
+      weight: '500',
+      style: 'normal',
+    },
+    {
+      path: './fonts/DMSans-Bold.ttf',
+      weight: '700',
+      style: 'normal',
+    },
+  ],
+  variable: '--font-dm-sans',
+  display: 'swap',
+});
+
+const fraunces = localFont({
+  src: [
+    {
+      path: './fonts/Fraunces-Regular.ttf',
+      weight: '400',
+      style: 'normal',
+    },
+    {
+      path: './fonts/Fraunces-Bold.ttf',
+      weight: '700',
+      style: 'normal',
+    },
+  ],
+  variable: '--font-fraunces',
+  display: 'swap',
+});
 
 function buildThemeBootstrapScript(storageKey: string): string {
   return `
@@ -52,7 +92,12 @@ export default async function RootLayout({ children }: { children: ReactNode }) 
   const themeBootstrapScript = buildThemeBootstrapScript(ACCOUNT_SHELL_STORAGE_KEY);
 
   return (
-    <html lang="en" data-emp-theme="dark" suppressHydrationWarning>
+    <html
+      lang="en"
+      data-emp-theme="dark"
+      suppressHydrationWarning
+      className={`${dmSans.variable} ${fraunces.variable}`}
+    >
       <body data-emp-theme="dark" suppressHydrationWarning>
         <script
           // Keep document theme in sync with persisted preference before hydration.

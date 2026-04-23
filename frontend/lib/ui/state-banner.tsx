@@ -2,6 +2,7 @@
 
 import type { HTMLAttributes, PropsWithChildren, ReactNode } from 'react';
 
+import { MotionInlineBanner } from '@/lib/ui/motion';
 import { joinClassNames } from '@/lib/ui/primitives';
 import {
   APP_LINE_HEIGHT,
@@ -63,7 +64,7 @@ export function StateBanner({
 }>) {
   const palette = toneStyles(tone);
   return (
-    <div
+    <MotionInlineBanner
       {...props}
       className={joinClassNames('app-state-banner', className)}
       style={{
@@ -110,6 +111,6 @@ export function StateBanner({
           {children}
         </div>
       ) : null}
-    </div>
+    </MotionInlineBanner>
   );
 }

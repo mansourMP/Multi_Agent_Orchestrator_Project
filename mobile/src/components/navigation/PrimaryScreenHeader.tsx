@@ -1,8 +1,9 @@
 import React from "react";
-import { Text, TouchableOpacity, View } from "react-native";
+import { StyleSheet, Text, View } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
+import { MotionPressable } from "@/src/components/system/MotionPressable";
 import { useAppTheme as useTheme } from "@/src/theme/useAppTheme";
 
 type HeaderAction = {
@@ -26,71 +27,122 @@ export function PrimaryScreenHeader({
   const insets = useSafeAreaInsets();
   const actionVariant = action?.variant ?? "secondary";
   const actionHasLabel = Boolean(action?.label);
+  const styles = useStyles(theme);
 
   return (
     <View
-      style={{
-        paddingTop: insets.top + 12,
-        paddingBottom: 18,
-        flexDirection: "row",
-        alignItems: "flex-start",
-        gap: 14,
-      }}
+      style={[
+        styles.container,
+        {
+          paddingTop: insets.top + 8,
+          paddingBottom: 16,
+        },
+      ]}
     >
-      <View style={{ flex: 1, paddingTop: 2, gap: 5 }}>
-        <Text style={{ fontSize: 31, fontFamily: "Fraunces_700Bold", color: theme.colors.text }}>{title}</Text>
+      <View style={styles.copy}>
+        <Text style={styles.title}>{title}</Text>
         {subtitle ? (
-          <Text style={{ fontSize: 13.5, lineHeight: 20, color: theme.colors.textSecondary }}>
+          <Text style={styles.subtitle}>
             {subtitle}
           </Text>
         ) : null}
       </View>
 
       {action ? (
-        <TouchableOpacity
-          activeOpacity={0.86}
+        <MotionPressable
           accessibilityRole="button"
           accessibilityLabel={action.accessibilityLabel}
           onPress={action.onPress}
-          style={{
-            minWidth: 40,
-            height: 42,
-            paddingHorizontal: actionHasLabel ? 16 : 0,
-            borderRadius: 999,
-            borderWidth: actionVariant === "secondary" ? 1 : 0,
-            borderColor: theme.colors.border,
-            backgroundColor:
-              actionVariant === "primary"
-                ? theme.colors.accent
-                : actionVariant === "secondary"
-                  ? theme.colors.surface
-                  : "transparent",
-            flexDirection: "row",
-            alignItems: "center",
-            justifyContent: "center",
-            gap: actionHasLabel && action?.icon ? 6 : 0,
-          }}
+          style={[
+            styles.action,
+            actionHasLabel && styles.actionWide,
+            actionVariant === "primary"
+              ? styles.actionPrimary
+              : actionVariant === "ghost"
+                ? styles.actionGhost
+                : styles.actionSecondary,
+            actionVariant === "primary" && {
+              shadowColor: theme.colors.text,
+              shadowOffset: { width: 0, height: 8 },
+              shadowOpacity: 0.08,
+              shadowRadius: 18,
+              elevation: 3,
+            },
+          ]}
         >
           {action.icon ? (
             <Ionicons
               name={action.icon}
-              size={actionHasLabel ? 16 : 20}
+              size={actionHasLabel ? 16 : 19}
               color={actionVariant === "primary" ? "#FFFFFF" : theme.colors.text}
             />
           ) : null}
           {action.label ? (
-            <Text
-              style={{
-                fontSize: 13,
-                fontFamily: "DMSans_700Bold",
-                color: actionVariant === "primary" ? "#FFFFFF" : theme.colors.text,
-              }}
-            >
+            <Text style={[styles.actionLabel, { color: actionVariant === "primary" ? "#FFFFFF" : theme.colors.text }]}>
               {action.label}
             </Text>
           ) : null}
-        </TouchableOpacity>
+        </MotionPressable>
       ) : null}
     </View>
   );
 }
+
+const useStyles = (theme: ReturnType<typeof useTheme>) =>
+  StyleSheet.create({
+    container: {
+      flexDirection: "row",
+      alignItems: "flex-start",
+      gap: theme.spacing.md,
+    },
+    copy: {
+      flex: 1,
+      paddingTop: 2,
+      gap: 5,
+    },
+    title: {
+      fontSize: 31,
+      lineHeight: 35,
+      letterSpacing: -0.7,
+      fontFamily: "Fraunces_700Bold",
+      color: theme.colors.text,
+    },
+    subtitle: {
+      maxWidth: "92%",
+      fontSize: 13.5,
+      lineHeight: 20,
+      color: theme.colors.textSecondary,
+    },
+    action: {
+      minWidth: 44,
+      height: 44,
+      paddingHorizontal: 0,
+      borderRadius: theme.radii.pill,
+      borderWidth: 1,
+      borderColor: theme.colors.border,
+      backgroundColor: theme.colors.card,
+      flexDirection: "row",
+      alignItems: "center",
+      justifyContent: "center",
+      gap: 6,
+    },
+    actionWide: {
+      paddingHorizontal: 16,
+    },
+    actionPrimary: {
+      borderColor: "transparent",
+      backgroundColor: theme.colors.accent,
+    },
+    actionSecondary: {
+      backgroundColor: theme.colors.card,
+      borderColor: theme.colors.border,
+    },
+    actionGhost: {
+      backgroundColor: "transparent",
+      borderColor: "transparent",
+    },
+    actionLabel: {
+      fontSize: 13,
+      fontFamily: "DMSans_700Bold",
+    },
+  });

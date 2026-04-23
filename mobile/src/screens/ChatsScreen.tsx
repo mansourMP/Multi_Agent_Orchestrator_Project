@@ -1,9 +1,11 @@
 import React, { useMemo } from "react";
-import { ScrollView, Text, TouchableOpacity, View } from "react-native";
+import { ScrollView, Text, View } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
 
 import { PrimaryScreenHeader } from "@/src/components/navigation/PrimaryScreenHeader";
+import { ActionButton } from "@/src/components/system/ActionButton";
+import { MotionPressable } from "@/src/components/system/MotionPressable";
 import {
   buildAgentThreadFromInstall,
   getFallbackSpecialists,
@@ -86,8 +88,7 @@ function AgentRow({
   onPress: () => void;
 }) {
   return (
-    <TouchableOpacity
-      activeOpacity={0.84}
+    <MotionPressable
       onPress={onPress}
       style={{
         minHeight: 84,
@@ -95,10 +96,10 @@ function AgentRow({
         alignItems: "center",
         paddingHorizontal: 16,
         paddingVertical: 14,
-        borderRadius: 18,
+        borderRadius: 20,
         borderWidth: 1,
         borderColor: theme.colors.border,
-        backgroundColor: theme.colors.surface,
+        backgroundColor: theme.colors.card,
         gap: 12,
       }}
     >
@@ -139,7 +140,7 @@ function AgentRow({
       </View>
 
       <Ionicons name="chevron-forward" size={18} color={theme.colors.textSecondary} />
-    </TouchableOpacity>
+    </MotionPressable>
   );
 }
 
@@ -238,21 +239,12 @@ export default function ChatsScreen() {
           <Text style={{ fontSize: 13, lineHeight: 20, color: theme.colors.textSecondary }}>
             QR pairing opens the session setup with runtime values prefilled. The fallback pairing code does the same if scanning is not available.
           </Text>
-          <TouchableOpacity
-            activeOpacity={0.86}
+          <ActionButton
+            label="Open pairing"
+            variant="primary"
             onPress={() => router.push("/session")}
-            style={{
-              height: 42,
-              alignSelf: "flex-start",
-              paddingHorizontal: 16,
-              borderRadius: 999,
-              backgroundColor: theme.colors.accent,
-              alignItems: "center",
-              justifyContent: "center",
-            }}
-          >
-            <Text style={{ color: "#FFFFFF", fontSize: 13, fontWeight: "700" }}>Open pairing</Text>
-          </TouchableOpacity>
+            style={{ alignSelf: "flex-start", marginTop: 2 }}
+          />
         </View>
       ) : null}
 

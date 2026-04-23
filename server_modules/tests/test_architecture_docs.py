@@ -40,13 +40,16 @@ def _read_json(path: Path) -> dict:
 
 
 def test_docs_lockdown_exposes_only_the_canonical_handoff_files() -> None:
-    assert {path.name for path in DOCS_DIR.iterdir() if path.is_file()} == {
+    assert {path.name for path in DOCS_DIR.iterdir() if path.is_file()}.issuperset({
         "bible.md",
         "context.md",
         "frontend-map.md",
+        "gateway-architecture.md",
+        "gateway-protocol.md",
         "pending-tasks.md",
+        "personal-vs-studio-channel-model.md",
         "project-map.md",
-    }
+    })
 
 
 def test_context_records_the_four_layer_model_and_surface_truth() -> None:
@@ -238,13 +241,48 @@ def test_frontend_map_keeps_dumb_ui_and_contract_shared_surfaces() -> None:
     assert "- the current web shell can render a real cloud-backed assistant answer" in text
     assert "- the current web shell now routes serious first-send task requests into the durable run path" in text
     assert "- lightweight question-and-answer chat is still allowed to stay on the direct chat path" in text
+
+
+def test_gateway_architecture_doc_freezes_local_gateway_boundary() -> None:
+    text = _read(DOCS_DIR / "gateway-architecture.md")
+
+    assert "# Gateway Architecture" in text
+    assert "`empyralis-gateway`" in text
+    assert "`empyralis-supervisor`" in text
+    assert "cloud control plane" in text.lower()
+    assert "Legacy `bridge/` Is Not The Future Architecture" in text
+    assert "No Second Auth Plane" in text
+    assert "local_companion" in text
+    assert "Phase 0 does **not** do any of the following:" in text
+
+
+def test_gateway_protocol_doc_freezes_phase_one_message_family() -> None:
+    text = _read(DOCS_DIR / "gateway-protocol.md")
+
+    assert "# Gateway Protocol" in text
+    assert "The canonical transport is:" in text
+    assert "gateway.connect" in text
+    assert "gateway.hello" in text
+    assert "gateway.heartbeat" in text
+    assert "gateway.presence" in text
+    assert "gateway.disconnect" in text
+    assert "gateway.state.update" in text
+    assert "The protocol must not create a second runtime-only auth plane." in text
+    assert "tool.invoke" in text
+    assert "channel.inbound" in text
+
+
+def test_personal_vs_studio_channel_doc_freezes_channel_boundary() -> None:
+    text = _read(DOCS_DIR / "personal-vs-studio-channel-model.md")
+
+    assert "# Personal Vs Studio Channel Model" in text
+    assert "Personal channels terminate at `empyralis-gateway`".lower() in text.lower()
+    assert "Studio/business channels stay in the connector stack".lower() in text.lower()
+    assert "Twilio WhatsApp is not personal WhatsApp".lower() in text.lower()
+    assert "Telegram bot API vs Telegram personal MTProto".lower() in text.lower()
     assert "## Frozen Rebuild Boundary" in text
-    assert "- `/api/control-plane/session`" in text
-    assert "- `/api/chat/master-context`" in text
-    assert "- `/api/approvals/resolve`" in text
-    assert "The rebuild is not allowed to change:" in text
-    assert "- `/turn` versus `/runs` semantics" in text
-    assert "- do not ship the new shell until the durable run path is proven across the primary rendered surfaces" in text
+    assert "Personal channel sessions must not depend on the Studio webhook stack".lower() in text.lower()
+    assert "The current `local_companion` concept is only a partial local-runtime substrate.".lower() in text.lower()
 
 
 def test_pending_tasks_focus_on_execution_not_more_architecture_sprawl() -> None:

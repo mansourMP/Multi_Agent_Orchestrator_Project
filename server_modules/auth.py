@@ -2068,6 +2068,95 @@ def get_user_device_link(device_id: str) -> dict[str, Any]:
     return _device_link_from_row(row)
 
 
+def ensure_local_gateway_device_link(
+    *,
+    user_id: str,
+    tenant_id: str,
+    workspace_id: str,
+    device_id: str,
+    gateway_id: str,
+    display_name: Optional[str] = None,
+    platform: Optional[str] = None,
+    metadata: Optional[dict[str, Any]] = None,
+) -> dict[str, Any]:
+    clean_gateway_id = str(gateway_id or "").strip()
+    clean_workspace_id = _normalize_workspace_token(workspace_id, default="")
+    clean_tenant_id = _normalize_tenant_token(tenant_id, default="")
+    if not clean_gateway_id:
+        raise HTTPException(status_code=400, detail="gateway_id is required.")
+    if not clean_workspace_id:
+        raise HTTPException(status_code=400, detail="workspace_id is required.")
+    if not clean_tenant_id:
+        raise HTTPException(status_code=400, detail="tenant_id is required.")
+    payload = dict(metadata or {})
+    payload.update(
+        {
+            "tenant_id": clean_tenant_id,
+            "workspace_id": clean_workspace_id,
+            "gateway_id": clean_gateway_id,
+            "device_id": str(device_id or "").strip(),
+        }
+    )
+    return upsert_user_device_link(
+        user_id,
+        device_id=device_id,
+        workspace_id=clean_workspace_id,
+        channel="local_runtime_companion",
+        display_name=display_name,
+        platform=platform,
+        trust_state="verified",
+        status="active",
+        session_binding_required=True,
+        metadata=payload,
+    )
+
+
+def validate_local_gateway_device_link(
+    *,
+    user_id: str,
+    workspace_id: str,
+    device_id: str,
+    gateway_id: Optional[str] = None,
+) -> dict[str, Any]:
+    clean_user_id = str(user_id or "").strip()
+    clean_workspace_id = _normalize_workspace_token(workspace_id, default="")
+    clean_device_id = str(device_id or "").strip()
+    clean_gateway_id = str(gateway_id or "").strip() or None
+    if not clean_user_id or not clean_workspace_id or not clean_device_id:
+        raise HTTPException(status_code=401, detail="Gateway device identity is incomplete.")
+    device_record = get_user_device_link(clean_device_id)
+    if not device_record:
+        raise HTTPException(status_code=401, detail="Gateway device is not linked.")
+    if str(device_record.get("user_id") or "").strip() != clean_user_id:
+        raise HTTPException(status_code=401, detail="Gateway device owner mismatch.")
+    if _normalize_workspace_token(device_record.get("workspace_id"), default="") != clean_workspace_id:
+        raise HTTPException(status_code=401, detail="Gateway device workspace mismatch.")
+    if _normalize_auth_session_channel(device_record.get("channel"), default="local_runtime_companion") != "local_runtime_companion":
+        raise HTTPException(status_code=401, detail="Gateway device channel is invalid.")
+    if _normalize_device_link_status(device_record.get("status"), default="active") != "active":
+        raise HTTPException(status_code=401, detail="Gateway device is not active.")
+    if _normalize_device_trust_state(device_record.get("trust_state"), default="verified") == "revoked":
+        raise HTTPException(status_code=401, detail="Gateway device trust was revoked.")
+    metadata = dict(device_record.get("metadata") or {})
+    linked_gateway_id = str(metadata.get("gateway_id") or "").strip() or None
+    if clean_gateway_id and linked_gateway_id and linked_gateway_id != clean_gateway_id:
+        raise HTTPException(status_code=401, detail="Gateway device binding mismatch.")
+    return device_record
+
+
+def revoke_local_gateway_device_link(
+    *,
+    user_id: str,
+    device_id: str,
+    reason: Optional[str] = None,
+) -> dict[str, Any]:
+    return revoke_user_device_link(
+        user_id,
+        device_id,
+        reason=reason or "Gateway device trust revoked.",
+    )
+
+
 def list_user_device_links(user_id: str, *, include_inactive: bool = True) -> list[dict[str, Any]]:
     clean_user_id = str(user_id or "").strip()
     if not clean_user_id:

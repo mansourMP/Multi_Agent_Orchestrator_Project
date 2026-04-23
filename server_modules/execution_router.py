@@ -12,6 +12,7 @@ from typing import Any, Dict, Optional
 
 
 _ALLOWED_BROWSER_METHODS = {
+    "configure_session",
     "navigate",
     "screenshot",
     "observe",
@@ -92,6 +93,13 @@ class BrowserExecutionAdapter:
 
     async def navigate(self, url: str) -> Dict[str, Any]:
         return await self.call("navigate", url)
+
+    async def configure_session(
+        self,
+        session_mode: Optional[str] = None,
+        attach_endpoint_url: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        return await self.call("configure_session", session_mode, attach_endpoint_url)
 
     async def screenshot(self, selector: Optional[str] = None) -> str:
         return await self.call("screenshot", selector)

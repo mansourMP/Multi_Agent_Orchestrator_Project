@@ -71,6 +71,16 @@ def load_workspace_context_payload(
             memory_block = ""
         if memory_block:
             sections.append(memory_block)
+        try:
+            from server_modules import sage_services_service
+
+            services_memory_block = sage_services_service.build_sage_services_memory_block(
+                workspace_id=workspace_id,
+            )
+        except Exception:
+            services_memory_block = ""
+        if services_memory_block:
+            sections.append(services_memory_block)
 
     return {
         "contextual_blocks": sections,

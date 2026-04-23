@@ -1,0 +1,307 @@
+.shell {
+  min-height: 100vh;
+  padding: 32px;
+  background: var(--app-bg-page);
+  color: var(--app-text-primary);
+}
+
+.header {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 24px;
+}
+
+.eyebrow {
+  margin: 0;
+  font-size: var(--app-font-11);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--app-text-tertiary);
+}
+
+.title {
+  margin: 0;
+  font-size: var(--app-font-24);
+  line-height: 1.1;
+}
+
+.copy {
+  margin: 0;
+  max-width: 680px;
+  color: var(--app-text-secondary);
+}
+
+.grid {
+  display: grid;
+  gap: 16px;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+}
+
+.card {
+  display: grid;
+  gap: 12px;
+  padding: 18px;
+  border: 1px solid var(--app-border-subtle);
+  border-radius: 20px;
+  background: var(--app-surface-panel);
+  box-shadow: var(--app-shadow-soft);
+}
+
+.cardTitle {
+  margin: 0;
+  font-size: var(--app-font-18);
+}
+
+.factStack {
+  display: grid;
+  gap: 10px;
+}
+
+.factBlock {
+  display: grid;
+  gap: 4px;
+}
+
+.factLabel {
+  margin: 0;
+  font-size: var(--app-font-11);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--app-text-tertiary);
+}
+
+.factValue {
+  margin: 0;
+  color: var(--app-text-secondary);
+  font-size: var(--app-font-13);
+  line-height: 1.45;
+}
+
+.cardMeta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  padding: 0 10px;
+  border-radius: 999px;
+  background: var(--app-surface-subtle);
+  color: var(--app-text-secondary);
+  font-size: var(--app-font-11);
+}
+
+.chipMuted {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  padding: 0 10px;
+  border-radius: 999px;
+  border: 1px solid var(--app-border-subtle);
+  color: var(--app-text-tertiary);
+  font-size: var(--app-font-11);
+}
+
+.linkRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.linkButton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 40px;
+  padding: 0 16px;
+  border-radius: 999px;
+  background: var(--app-accent-solid);
+  color: var(--app-accent-contrast);
+  font-weight: 600;
+}
+
+.linkSecondary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 40px;
+  padding: 0 16px;
+  border-radius: 999px;
+  border: 1px solid var(--app-border-subtle);
+  color: var(--app-text-primary);
+}
+
+.empty {
+  display: grid;
+  place-items: center;
+  min-height: 240px;
+  padding: 32px;
+  border: 1px dashed var(--app-border-subtle);
+  border-radius: 24px;
+  background: var(--app-surface-panel);
+  text-align: center;
+}
+
+.frameShell {
+  display: grid;
+  gap: 16px;
+}
+
+.policyGrid {
+  display: grid;
+  gap: 16px;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+}
+
+.policyCard {
+  display: grid;
+  gap: 12px;
+  padding: 18px;
+  border: 1px solid var(--app-border-subtle);
+  border-radius: 20px;
+  background: var(--app-surface-panel);
+  box-shadow: var(--app-shadow-soft);
+}
+
+.policyLabel {
+  margin: 0;
+  font-size: var(--app-font-11);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--app-text-tertiary);
+}
+
+.policyTitle {
+  margin: 0;
+  font-size: var(--app-font-18);
+  line-height: 1.2;
+}
+
+.policyCopy {
+  margin: 0;
+  color: var(--app-text-secondary);
+  font-size: var(--app-font-13);
+  line-height: 1.5;
+}
+
+.inlineList {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.contractList {
+  display: grid;
+  gap: 8px;
+}
+
+.contractRow {
+  display: grid;
+  gap: 4px;
+  padding: 10px 12px;
+  border-radius: 14px;
+  background: var(--app-surface-subtle);
+}
+
+.contractKind {
+  font-size: var(--app-font-12);
+  color: var(--app-text-primary);
+  font-weight: 600;
+}
+
+.contractTypes {
+  font-size: var(--app-font-12);
+  color: var(--app-text-secondary);
+}
+
+.frameHeader {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.frameCard {
+  overflow: hidden;
+  border: 1px solid var(--app-border-subtle);
+  border-radius: 24px;
+  background: var(--app-surface-panel);
+  box-shadow: var(--app-shadow-soft);
+}
+
+.frame {
+  width: 100%;
+  min-height: 76vh;
+  border: 0;
+  background: var(--app-bg-page);
+}
+
+.status {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--app-text-secondary);
+  font-size: var(--app-font-12);
+}
+
+.activityCard {
+  display: grid;
+  gap: 6px;
+  padding: 12px;
+  border-radius: 16px;
+  background: var(--app-surface-subtle);
+}
+
+.activityLabel {
+  margin: 0;
+  font-size: var(--app-font-11);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--app-text-tertiary);
+}
+
+.activityValue {
+  margin: 0;
+  font-size: var(--app-font-13);
+  color: var(--app-text-primary);
+  font-weight: 600;
+}
+
+.activityMeta {
+  margin: 0;
+  font-size: var(--app-font-12);
+  color: var(--app-text-secondary);
+  line-height: 1.45;
+}
+
+.activityError {
+  margin: 0;
+  font-size: var(--app-font-12);
+  color: var(--app-status-danger-text, #b42318);
+  line-height: 1.45;
+}
+
+.dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--app-accent-solid);
+}
+
+.error {
+  color: var(--app-status-danger-text, #b42318);
+}
+
+@media (max-width: 720px) {
+  .shell {
+    padding: 20px;
+  }
+
+  .frame {
+    min-height: 64vh;
+  }
+}

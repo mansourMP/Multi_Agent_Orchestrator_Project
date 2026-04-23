@@ -57,6 +57,25 @@ def _truncate_text(value: Any, limit: int) -> str:
     return text[: max(0, limit - 21)].rstrip() + "\n\n[truncated]"
 
 
+BROWSER_SESSION_MODE_MANAGED_PROFILE = "managed_profile"
+BROWSER_SESSION_MODE_EXISTING_SESSION_ATTACH = "existing_session_attach"
+
+
+def _normalize_browser_session_mode(value: Any) -> str:
+    token = str(value or "").strip().lower()
+    if token == BROWSER_SESSION_MODE_EXISTING_SESSION_ATTACH:
+        return BROWSER_SESSION_MODE_EXISTING_SESSION_ATTACH
+    return BROWSER_SESSION_MODE_MANAGED_PROFILE
+
+
+def _resolve_attach_endpoint_url(value: Any) -> Optional[str]:
+    token = str(value or "").strip()
+    if token:
+        return token
+    env_token = str(os.environ.get("ORION_BROWSER_ATTACH_CDP_URL") or "").strip()
+    return env_token or None
+
+
 class BrowserEngine:
     _instance: Optional["BrowserEngine"] = None
     _runner_loop: Any = None
@@ -84,6 +103,7 @@ class BrowserEngine:
         self.downloads_dir.mkdir(parents=True, exist_ok=True)
         self.pdf_dir.mkdir(parents=True, exist_ok=True)
         self._playwright: Any = None
+        self._browser: Any = None
         self._context: Any = None
         self._tabs: Dict[int, Any] = {}
         self._page_to_tab_id: Dict[int, int] = {}
@@ -93,6 +113,10 @@ class BrowserEngine:
         self._active_intercept_pattern: Optional[str] = None
         self._response_listener_registered = False
         self._credential_injections: List[Dict[str, str]] = []
+        self._session_mode = BROWSER_SESSION_MODE_MANAGED_PROFILE
+        self._attach_endpoint_url: Optional[str] = None
+        self._attach_state = "not_attached"
+        self._attach_failure: Optional[str] = None
         self._initialized = True
 
     def _load_playwright(self):
@@ -161,17 +185,158 @@ class BrowserEngine:
             self.__class__._runner_loop = None
             self.__class__._runner_thread = None
 
+    async def _reset_runtime(self, *, reset_session_mode: bool = False) -> None:
+        session_mode = self._session_mode
+        context = self._context
+        browser = self._browser
+        playwright = self._playwright
+        self._context = None
+        self._browser = None
+        self._playwright = None
+        self._tabs = {}
+        self._page_to_tab_id = {}
+        self._active_tab_id = None
+        self._intercepts = {}
+        self._active_intercept_pattern = None
+        self._response_listener_registered = False
+        if context is not None and session_mode == BROWSER_SESSION_MODE_MANAGED_PROFILE:
+            try:
+                await context.close()
+            except Exception:
+                pass
+        if browser is not None:
+            try:
+                await browser.close()
+            except Exception:
+                pass
+        if playwright is not None:
+            try:
+                await playwright.stop()
+            except Exception:
+                pass
+        if reset_session_mode:
+            self._session_mode = BROWSER_SESSION_MODE_MANAGED_PROFILE
+            self._attach_endpoint_url = None
+            self._attach_state = "not_attached"
+            self._attach_failure = None
+
+    async def configure_session(
+        self,
+        session_mode: Optional[str] = None,
+        attach_endpoint_url: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        resolved_mode = _normalize_browser_session_mode(session_mode)
+        resolved_attach_endpoint = (
+            _resolve_attach_endpoint_url(attach_endpoint_url)
+            if resolved_mode == BROWSER_SESSION_MODE_EXISTING_SESSION_ATTACH
+            else None
+        )
+        mode_changed = resolved_mode != self._session_mode
+        endpoint_changed = resolved_attach_endpoint != self._attach_endpoint_url
+        if mode_changed or endpoint_changed:
+            await self._reset_runtime(reset_session_mode=False)
+        self._session_mode = resolved_mode
+        self._attach_endpoint_url = resolved_attach_endpoint
+        self._attach_failure = None
+        self._attach_state = "not_attached" if resolved_mode == BROWSER_SESSION_MODE_EXISTING_SESSION_ATTACH else "not_attached"
+        if resolved_mode == BROWSER_SESSION_MODE_EXISTING_SESSION_ATTACH and not resolved_attach_endpoint:
+            self._attach_state = "attach_required"
+            return await self.session_state()
+        try:
+            await self._ensure_started()
+        except Exception as exc:
+            if resolved_mode == BROWSER_SESSION_MODE_EXISTING_SESSION_ATTACH and self._attach_state not in {
+                "attach_required",
+                "not_attached",
+            }:
+                self._attach_state = "attach_failed"
+            self._attach_failure = str(exc)
+            return await self.session_state()
+        if resolved_mode == BROWSER_SESSION_MODE_EXISTING_SESSION_ATTACH:
+            self._attach_state = "attached"
+            self._attach_failure = None
+        return await self.session_state()
+
+    async def session_state(self) -> Dict[str, Any]:
+        current_url: Optional[str] = None
+        if self._context is not None:
+            try:
+                page = await self._active_page()
+                current_url = str(getattr(page, "url", "") or "").strip() or None
+            except Exception:
+                current_url = None
+        if self._session_mode == BROWSER_SESSION_MODE_EXISTING_SESSION_ATTACH:
+            status = self._attach_state
+        else:
+            status = "active"
+        return {
+            "session_mode": self._session_mode,
+            "attach_endpoint_url": self._attach_endpoint_url,
+            "attach_state": self._attach_state,
+            "attach_failure": self._attach_failure,
+            "status": status,
+            "current_url": current_url,
+        }
+
     async def _ensure_started(self) -> None:
         if self._context is not None:
-            return
+            if self._session_mode == BROWSER_SESSION_MODE_EXISTING_SESSION_ATTACH and self._browser is not None:
+                try:
+                    if not self._browser.is_connected():
+                        self._attach_state = "not_attached"
+                        self._attach_failure = "Attached browser session is no longer connected."
+                        await self._reset_runtime(reset_session_mode=False)
+                    else:
+                        return
+                except Exception:
+                    self._attach_state = "not_attached"
+                    self._attach_failure = "Attached browser session is no longer connected."
+                    await self._reset_runtime(reset_session_mode=False)
+            else:
+                return
         async_playwright = self._load_playwright()
         self._playwright = await async_playwright().start()
-        self._context = await self._playwright.chromium.launch_persistent_context(
-            user_data_dir=str(self.profile_dir),
-            headless=self.headless,
-            accept_downloads=True,
-            viewport={"width": 1440, "height": 960},
-        )
+        try:
+            if self._session_mode == BROWSER_SESSION_MODE_EXISTING_SESSION_ATTACH:
+                endpoint_url = str(self._attach_endpoint_url or "").strip()
+                if not endpoint_url:
+                    self._attach_state = "attach_required"
+                    raise RuntimeError(
+                        "Existing-session browser attach requires a Chrome DevTools endpoint. "
+                        "Provide attach_endpoint_url or ORION_BROWSER_ATTACH_CDP_URL."
+                    )
+                try:
+                    self._browser = await self._playwright.chromium.connect_over_cdp(
+                        endpoint_url,
+                        timeout=5_000,
+                    )
+                except Exception as exc:
+                    self._attach_state = "attach_failed"
+                    raise RuntimeError(
+                        f"Failed to attach to existing browser session at {endpoint_url}."
+                    ) from exc
+                if self._browser is None or not self._browser.is_connected():
+                    self._attach_state = "not_attached"
+                    raise RuntimeError("Existing browser session is not currently attachable.")
+                contexts = list(getattr(self._browser, "contexts", []) or [])
+                if not contexts:
+                    self._attach_state = "not_attached"
+                    raise RuntimeError("Attached browser did not expose a default context.")
+                self._context = contexts[0]
+                self._attach_state = "attached"
+                self._attach_failure = None
+            else:
+                self._context = await self._playwright.chromium.launch_persistent_context(
+                    user_data_dir=str(self.profile_dir),
+                    headless=self.headless,
+                    accept_downloads=True,
+                    viewport={"width": 1440, "height": 960},
+                )
+                self._attach_state = "not_attached"
+                self._attach_failure = None
+        except Exception:
+            await self._reset_runtime(reset_session_mode=False)
+            raise
         for page in list(getattr(self._context, "pages", []) or []):
             self._register_page(page)
         if self._active_tab_id is None:
@@ -545,17 +710,4 @@ class BrowserEngine:
         )
 
     async def close(self) -> None:
-        context = self._context
-        playwright = self._playwright
-        self._context = None
-        self._playwright = None
-        self._tabs = {}
-        self._page_to_tab_id = {}
-        self._active_tab_id = None
-        self._intercepts = {}
-        self._active_intercept_pattern = None
-        self._response_listener_registered = False
-        if context is not None:
-            await context.close()
-        if playwright is not None:
-            await playwright.stop()
+        await self._reset_runtime(reset_session_mode=True)

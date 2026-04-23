@@ -92,6 +92,33 @@ class MiniAppsServiceTests(unittest.TestCase):
         self.assertIn("Retrieval hook", block)
         self.assertNotIn("very long raw transcript", block)
 
+    def test_hosted_contract_exposes_embed_and_bridge_manifest_without_sage_memory(self) -> None:
+        contract = mini_apps_service.upsert_mini_app_contract(
+            "ws-1",
+            "travel_partner",
+            label="Travel Partner",
+            description="Hosted itinerary planner",
+            delivery_mode="hosted",
+            hosted_url="https://miniapps.example.com/travel",
+            allowed_origins=["https://miniapps.example.com"],
+            bridge_contracts={"app_to_sage": ["summary_request"]},
+            context_envelope={"default_classes": ["user_selected_inputs"]},
+            permissions=["bridge.app_to_sage.summary_request"],
+        )
+
+        self.assertEqual(contract["delivery_mode"], "hosted")
+        self.assertEqual(contract["memory_scope"], "none_by_default")
+        self.assertEqual(contract["hosted_url"], "https://miniapps.example.com/travel")
+        self.assertEqual(contract["hosted_app"]["embed"]["kind"], "iframe")
+        self.assertEqual(contract["hosted_app"]["allowed_origins"], ["https://miniapps.example.com"])
+        self.assertEqual(contract["hosted_app"]["bridge"]["allowed_contracts"]["app_to_sage"], ["summary_request"])
+        self.assertFalse(contract["context_envelope"]["inherits_sage_memory_by_default"])
+
+        manifest = mini_apps_service.get_hosted_mini_app_manifest("ws-1", "travel_partner")
+        self.assertEqual(manifest["delivery_mode"], "hosted")
+        self.assertEqual(manifest["hosted_app"]["bridge"]["request_type"], "empyralis.hosted_app.bridge.request")
+        self.assertIn("read_sage_memory", manifest["hosted_app"]["bridge"]["denied_by_default"])
+
 
 if __name__ == "__main__":
     unittest.main()

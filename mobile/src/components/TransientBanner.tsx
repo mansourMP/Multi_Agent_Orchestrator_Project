@@ -1,5 +1,6 @@
-import { Text, View } from "react-native";
+import { Text } from "react-native";
 
+import { MotionBanner } from "@/src/components/system/MotionBanner";
 import { useTheme } from "@/src/theme";
 import type { BannerTone } from "@/src/lib/useTransientBanner";
 
@@ -7,25 +8,25 @@ export function TransientBanner({ message, tone = "neutral" }: { message: string
   const theme = useTheme();
   const palette =
     tone === "success"
-      ? { bg: "#DCFCE7", border: "#22C55E", text: "#166534" }
+      ? { bg: theme.colors.successMuted, border: theme.colors.success, text: theme.colors.success }
       : tone === "error"
-      ? { bg: "#FEE2E2", border: "#EF4444", text: "#991B1B" }
+      ? { bg: theme.colors.errorMuted, border: theme.colors.error, text: theme.colors.error }
       : { bg: theme.colors.panelMuted, border: theme.colors.border, text: theme.colors.textMuted };
 
   return (
-    <View
+    <MotionBanner
       style={{
         marginHorizontal: 20,
         marginTop: 12,
-        borderRadius: 12,
+        borderRadius: 14,
         borderWidth: 1,
         borderColor: palette.border,
         backgroundColor: palette.bg,
-        paddingVertical: 8,
-        paddingHorizontal: 12,
+        paddingVertical: 10,
+        paddingHorizontal: 14,
       }}
     >
-      <Text style={{ fontSize: 12, color: palette.text }}>{message}</Text>
-    </View>
+      <Text style={{ fontSize: 12.5, lineHeight: 18, color: palette.text }}>{message}</Text>
+    </MotionBanner>
   );
 }

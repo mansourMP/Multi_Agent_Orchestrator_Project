@@ -254,6 +254,38 @@ async def test_build_workspace_channel_operations_filters_runtime_state_by_works
         "ORION_CHANNEL_DEAD_LETTER_FILE",
         dead_letter_file,
     )
+    monkeypatch.setattr(
+        workspace_channel_operations_service.gateway_state_repository,
+        "list_workspace_gateway_registrations",
+        lambda workspace_id, include_revoked=False: [
+            {
+                "gateway_id": "gateway-ws-1",
+                "workspace_id": workspace_id,
+                "status": "active",
+                "updated_at": "2026-04-12T09:05:00Z",
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        workspace_channel_operations_service.personal_channels_repository,
+        "get_telegram_state",
+        lambda gateway_id, *, channel_key: {
+            "gateway_id": gateway_id,
+            "channel_key": channel_key,
+            "status": "connected",
+            "linked_name": "Mansur",
+        },
+    )
+    monkeypatch.setattr(
+        workspace_channel_operations_service.personal_channels_repository,
+        "get_whatsapp_state",
+        lambda gateway_id, *, channel_key: {
+            "gateway_id": gateway_id,
+            "channel_key": channel_key,
+            "status": "connecting",
+            "metadata": {},
+        },
+    )
 
     payload = await workspace_channel_operations_service.build_workspace_channel_operations(
         current_user=_current_user(role="admin"),
@@ -275,6 +307,10 @@ async def test_build_workspace_channel_operations_filters_runtime_state_by_works
     assert payload["delivery"]["dead_letters"][0]["id"] == "dead-1"
     assert [item["id"] for item in payload["events"]["recent"]] == ["ev-1", "ev-2"]
     assert [item["id"] for item in payload["events"]["pairing_failures"]] == ["ev-1"]
+    assert payload["channel_families"]["telegram"]["modes"][0]["current_status"] == "connected"
+    assert payload["channel_families"]["telegram"]["modes"][1]["current_status"] == "degraded"
+    assert payload["channel_families"]["telegram"]["active_mode"] == "personal"
+    assert payload["channel_families"]["whatsapp"]["modes"][1]["provider"] == "twilio_whatsapp"
 
 
 @pytest.mark.anyio
@@ -287,3 +323,173 @@ async def test_build_workspace_channel_operations_requires_admin_workspace_acces
 
     assert exc_info.value.status_code == 403
     assert exc_info.value.detail == "Admin or owner role required for workspace 'ws-1'."
+
+
+@pytest.mark.anyio
+async def test_build_workspace_channel_operations_reports_gateway_required_personal_mode(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    async def fake_telegram_status():
+        return {"status": "setup_needed", "issues": [], "webhook": {}, "autopilot": {}, "connectors": []}
+
+    async def fake_whatsapp_status():
+        return {"status": "setup_needed", "issues": [], "webhook": {}, "autopilot": {}, "connectors": []}
+
+    async def fake_delivery_status():
+        return {"undelivered_count": 0, "poisoned_count": 0, "total_retry_count": 0, "max_retry_count": 0}
+
+    async def fake_undelivered_outbox_events(**_: Any):
+        return []
+
+    async def fake_poisoned_outbox_events(**_: Any):
+        return []
+
+    monkeypatch.setattr(
+        workspace_channel_operations_service,
+        "handle_telegram_autopilot_status",
+        fake_telegram_status,
+    )
+    monkeypatch.setattr(
+        workspace_channel_operations_service,
+        "handle_whatsapp_autopilot_status",
+        fake_whatsapp_status,
+    )
+    monkeypatch.setattr(
+        workspace_channel_operations_service.run_state_repository,
+        "get_outbox_delivery_status",
+        fake_delivery_status,
+    )
+    monkeypatch.setattr(
+        workspace_channel_operations_service.run_state_repository,
+        "list_undelivered_outbox_events",
+        fake_undelivered_outbox_events,
+    )
+    monkeypatch.setattr(
+        workspace_channel_operations_service.run_state_repository,
+        "list_poisoned_outbox_events",
+        fake_poisoned_outbox_events,
+    )
+    monkeypatch.setattr(
+        workspace_channel_operations_service.shared_module,
+        "CHANNEL_EVENTS_LOCK",
+        threading.Lock(),
+    )
+    monkeypatch.setattr(workspace_channel_operations_service.shared_module, "CHANNEL_EVENTS", [])
+    monkeypatch.setattr(
+        workspace_channel_operations_service.gateway_state_repository,
+        "list_workspace_gateway_registrations",
+        lambda workspace_id, include_revoked=False: [],
+    )
+
+    payload = await workspace_channel_operations_service.build_workspace_channel_operations(
+        current_user=_current_user(role="admin"),
+        workspace_id="ws-1",
+    )
+
+    assert payload["channel_families"]["telegram"]["modes"][0]["current_status"] == "gateway_required"
+    assert payload["channel_families"]["telegram"]["modes"][0]["configured"] is False
+    assert payload["channel_families"]["telegram"]["modes"][0]["setup_hint"] == "Pair a gateway to use your real Telegram account."
+
+
+@pytest.mark.anyio
+async def test_build_workspace_channel_operations_uses_workspace_vault_connectors_when_status_payload_is_default_scoped(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    async def fake_telegram_status():
+        return {
+            "status": "disabled",
+            "issues": [
+                {
+                    "code": "telegram_autopilot_disabled",
+                    "severity": "setup_needed",
+                    "message": "Telegram autopilot is disabled.",
+                },
+                {
+                    "code": "unknown",
+                    "severity": "degraded",
+                    "message": "Telegram connector 'Telegram Quick Mode' is not scoped to an explicit workspace.",
+                },
+            ],
+            "webhook": {"status": "disabled"},
+            "autopilot": {"status": "disabled"},
+            "connectors": [],
+        }
+
+    async def fake_whatsapp_status():
+        return {"status": "setup_needed", "issues": [], "webhook": {}, "autopilot": {}, "connectors": []}
+
+    async def fake_delivery_status():
+        return {"undelivered_count": 0, "poisoned_count": 0, "total_retry_count": 0, "max_retry_count": 0}
+
+    async def fake_undelivered_outbox_events(**_: Any):
+        return []
+
+    async def fake_poisoned_outbox_events(**_: Any):
+        return []
+
+    monkeypatch.setattr(
+        workspace_channel_operations_service,
+        "handle_telegram_autopilot_status",
+        fake_telegram_status,
+    )
+    monkeypatch.setattr(
+        workspace_channel_operations_service,
+        "handle_whatsapp_autopilot_status",
+        fake_whatsapp_status,
+    )
+    monkeypatch.setattr(
+        workspace_channel_operations_service.run_state_repository,
+        "get_outbox_delivery_status",
+        fake_delivery_status,
+    )
+    monkeypatch.setattr(
+        workspace_channel_operations_service.run_state_repository,
+        "list_undelivered_outbox_events",
+        fake_undelivered_outbox_events,
+    )
+    monkeypatch.setattr(
+        workspace_channel_operations_service.run_state_repository,
+        "list_poisoned_outbox_events",
+        fake_poisoned_outbox_events,
+    )
+    monkeypatch.setattr(
+        workspace_channel_operations_service.shared_module,
+        "CHANNEL_EVENTS_LOCK",
+        threading.Lock(),
+    )
+    monkeypatch.setattr(workspace_channel_operations_service.shared_module, "CHANNEL_EVENTS", [])
+    monkeypatch.setattr(
+        workspace_channel_operations_service.gateway_state_repository,
+        "list_workspace_gateway_registrations",
+        lambda workspace_id, include_revoked=False: [],
+    )
+    monkeypatch.setattr(
+        workspace_channel_operations_service.runtime_common,
+        "list_vault_connectors",
+        lambda workspace_id=None: [
+            {
+                "id": "tg-quick-ws-1",
+                "label": "Telegram Quick",
+                "connector": "telegram_bot",
+                "workspace_id": "ws-1",
+                "created_at": "2026-04-22T16:30:00Z",
+                "updated_at": "2026-04-22T16:39:00Z",
+                "metadata": {"chat_id": "1932934047"},
+            }
+        ],
+    )
+
+    payload = await workspace_channel_operations_service.build_workspace_channel_operations(
+        current_user=_current_user(role="admin"),
+        workspace_id="ws-1",
+    )
+
+    assert payload["channels"]["telegram"]["workspace_configured"] is True
+    assert [item["id"] for item in payload["channels"]["telegram"]["connectors"]] == ["tg-quick-ws-1"]
+    assert payload["channels"]["telegram"]["workspace_status"] == "setup_needed"
+    assert "not scoped to an explicit workspace" not in " ".join(
+        str(item.get("message") or "") for item in payload["channels"]["telegram"]["issues"]
+    ).lower()
+    assert payload["channel_families"]["telegram"]["modes"][1]["configured"] is True
+    assert payload["channel_families"]["telegram"]["modes"][1]["connector_count"] == 1
+    assert payload["channel_families"]["telegram"]["modes"][1]["setup_hint"] == "Telegram autopilot is disabled."

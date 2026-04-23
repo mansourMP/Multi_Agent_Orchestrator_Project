@@ -1,8 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
-  Animated,
+  Animated as LegacyAnimated,
   Dimensions,
-  Easing,
   View,
   Text,
   FlatList,
@@ -12,15 +11,23 @@ import {
   PanResponder,
   Pressable,
   StyleSheet,
-  TouchableOpacity,
 } from "react-native";
 import * as Haptics from "expo-haptics";
 import { Ionicons } from "@expo/vector-icons";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import Animated, {
+  interpolate,
+  useAnimatedStyle,
+  useSharedValue,
+  withRepeat,
+  withTiming,
+} from "react-native-reanimated";
 
 import { TransientBanner } from "@/src/components/TransientBanner";
 import { InputBar } from "@/src/components/InputBar";
 import { AgentPayload } from "@/src/components/Renderer";
+import { ActionButton } from "@/src/components/system/ActionButton";
+import { MotionPressable } from "@/src/components/system/MotionPressable";
 import { buildAgentThreadFromInstall, getPrimaryAgent } from "@/src/lib/agents";
 import { MobileAuthExpiredError, mobileApi } from "@/src/lib/api";
 import { useMobileChatContext } from "@/src/lib/mobile-data";
@@ -28,6 +35,11 @@ import { useSessionState } from "@/src/lib/session-context";
 import { useChatStore } from "@/src/stores/chatStore";
 import { useAppTheme as useTheme } from "@/src/theme/useAppTheme";
 import { useTransientBanner } from "@/src/lib/useTransientBanner";
+import {
+  MOBILE_MOTION_EASING,
+  MOBILE_MOTION_TIMINGS,
+  MOBILE_SPRING_PRESETS,
+} from "@/src/ui/motion";
 
 type ApprovalCard = {
   kind?: "run" | "direct";
@@ -54,51 +66,29 @@ type ChatScreenProps = {
 
 type KinThinkingIndicatorProps = {
   theme: ReturnType<typeof useTheme>;
-  loadingDotOpacities: Animated.Value[];
 };
 
-function KinThinkingIndicator({ theme, loadingDotOpacities }: KinThinkingIndicatorProps) {
-  const orbPulse = useRef(new Animated.Value(0)).current;
+function KinThinkingIndicator({ theme }: KinThinkingIndicatorProps) {
+  const orbPulse = useSharedValue(0);
 
   useEffect(() => {
-    const animation = Animated.loop(
-      Animated.sequence([
-        Animated.timing(orbPulse, {
-          toValue: 1,
-          duration: 600,
-          easing: Easing.inOut(Easing.ease),
-          useNativeDriver: false,
-        }),
-        Animated.timing(orbPulse, {
-          toValue: 0,
-          duration: 600,
-          easing: Easing.inOut(Easing.ease),
-          useNativeDriver: false,
-        }),
-      ]),
+    orbPulse.value = withRepeat(
+      withTiming(1, {
+        duration: MOBILE_MOTION_TIMINGS.slow,
+        easing: MOBILE_MOTION_EASING.standard,
+      }),
+      -1,
+      true,
     );
-
-    animation.start();
-
     return () => {
-      animation.stop();
-      orbPulse.stopAnimation();
-      orbPulse.setValue(0);
+      orbPulse.value = 0;
     };
   }, [orbPulse]);
 
-  const orbOpacity = orbPulse.interpolate({
-    inputRange: [0, 1],
-    outputRange: [0.4, 1],
-  });
-  const orbShadowRadius = orbPulse.interpolate({
-    inputRange: [0, 1],
-    outputRange: [0, 6],
-  });
-  const orbShadowOpacity = orbPulse.interpolate({
-    inputRange: [0, 1],
-    outputRange: [0.2, 0.6],
-  });
+  const orbStyle = useAnimatedStyle(() => ({
+    opacity: interpolate(orbPulse.value, [0, 1], [0.38, 1]),
+    transform: [{ scale: interpolate(orbPulse.value, [0, 1], [0.92, 1.12]) }],
+  }));
 
   return (
     <View
@@ -108,19 +98,17 @@ function KinThinkingIndicator({ theme, loadingDotOpacities }: KinThinkingIndicat
         gap: 8,
         alignSelf: "flex-start",
       }}
-    >
+      >
       <Animated.View
-        style={{
-          width: 6,
-          height: 6,
-          borderRadius: 3,
-          backgroundColor: theme.colors.textSecondary,
-          opacity: orbOpacity,
-          shadowColor: theme.colors.textSecondary,
-          shadowRadius: Platform.OS === "ios" ? orbShadowRadius : 0,
-          shadowOpacity: Platform.OS === "ios" ? orbShadowOpacity : 0,
-          shadowOffset: { width: 0, height: 0 },
-        }}
+        style={[
+          {
+            width: 6,
+            height: 6,
+            borderRadius: 3,
+            backgroundColor: theme.colors.textSecondary,
+          },
+          orbStyle,
+        ]}
       />
       <Text
         style={{
@@ -132,20 +120,6 @@ function KinThinkingIndicator({ theme, loadingDotOpacities }: KinThinkingIndicat
       >
         Thinking
       </Text>
-      <View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
-        {loadingDotOpacities.map((opacity, dot) => (
-          <Animated.View
-            key={dot}
-            style={{
-              width: 5,
-              height: 5,
-              borderRadius: 2.5,
-              backgroundColor: theme.colors.textSecondary,
-              opacity,
-            }}
-          />
-        ))}
-      </View>
     </View>
   );
 }
@@ -183,10 +157,7 @@ export default function ChatScreen({ sessionId, agentId, specialistId }: ChatScr
   const { banner, showBanner } = useTransientBanner();
   const sage = getPrimaryAgent();
   const messagesListRef = useRef<FlatList<AgentPayload>>(null);
-  const historyProgress = useRef(new Animated.Value(0)).current;
-  const newChatScale = useRef(new Animated.Value(1)).current;
-  const loadingDotOpacities = useRef([0, 1, 2].map(() => new Animated.Value(0.3))).current;
-  const loadingDotAnimationsRef = useRef<Animated.CompositeAnimation[]>([]);
+  const historyProgress = useRef(new LegacyAnimated.Value(0)).current;
   const embeddedMode = !sessionId;
   const requestedAgentId = String(specialistId || agentId || "").trim();
   const sortedSessions = useMemo(
@@ -286,44 +257,6 @@ export default function ChatScreen({ sessionId, agentId, specialistId }: ChatScr
     scrollToBottom(false);
   }, [isLoading, lastMessageSpeech, messages.length, scrollToBottom]);
 
-  useEffect(() => {
-    loadingDotAnimationsRef.current.forEach((animation) => animation.stop());
-    loadingDotAnimationsRef.current = [];
-
-    if (!isLoading) {
-      loadingDotOpacities.forEach((opacity) => {
-        opacity.stopAnimation();
-        opacity.setValue(0.3);
-      });
-      return;
-    }
-
-    const animations = loadingDotOpacities.map((opacity, index) =>
-      Animated.loop(
-        Animated.sequence([
-          Animated.delay(index * 150),
-          Animated.timing(opacity, {
-            toValue: 1,
-            duration: 300,
-            useNativeDriver: true,
-          }),
-          Animated.timing(opacity, {
-            toValue: 0.3,
-            duration: 300,
-            useNativeDriver: true,
-          }),
-        ]),
-      ),
-    );
-
-    loadingDotAnimationsRef.current = animations;
-    animations.forEach((animation) => animation.start());
-
-    return () => {
-      animations.forEach((animation) => animation.stop());
-    };
-  }, [isLoading, loadingDotOpacities]);
-
   const appendRunActivity = (label: string) => {
     const next = label.trim();
     if (!next) return;
@@ -342,34 +275,11 @@ export default function ChatScreen({ sessionId, agentId, specialistId }: ChatScr
     void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => {});
   }, []);
 
-  const animateNewChatScale = React.useCallback(
-    (toValue: number) => {
-      Animated.spring(newChatScale, {
-        toValue,
-        stiffness: 320,
-        damping: 24,
-        mass: 0.75,
-        useNativeDriver: true,
-      }).start();
-    },
-    [newChatScale],
-  );
-
-  const triggerNewChatPress = React.useCallback(() => {
-    animateNewChatScale(0.88);
-  }, [animateNewChatScale]);
-
-  const releaseNewChatPress = React.useCallback(() => {
-    animateNewChatScale(1);
-  }, [animateNewChatScale]);
-
   const animateHistory = React.useCallback(
     (toValue: number, onComplete?: () => void) => {
-      Animated.spring(historyProgress, {
+      LegacyAnimated.spring(historyProgress, {
         toValue,
-        stiffness: 240,
-        damping: 28,
-        mass: 0.9,
+        ...MOBILE_SPRING_PRESETS.sheet,
         useNativeDriver: true,
       }).start(({ finished }) => {
         if (finished) {
@@ -676,34 +586,18 @@ export default function ChatScreen({ sessionId, agentId, specialistId }: ChatScr
             </Text>
           ) : null}
           <View style={{ flexDirection: "row", gap: SPACING.sm, marginTop: SPACING.md }}>
-            <TouchableOpacity
-              style={{
-                flex: 1,
-                height: 42,
-                borderRadius: 14,
-                backgroundColor: theme.colors.accent,
-                alignItems: "center",
-                justifyContent: "center",
-              }}
+            <ActionButton
+              label="Allow"
+              variant="primary"
               onPress={() => handleApprovalDecision(item.approval!, "approved")}
-            >
-              <Text style={{ color: "#fff", fontWeight: "700" }}>Allow</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={{
-                flex: 1,
-                height: 42,
-                borderRadius: 14,
-                borderWidth: 1,
-                borderColor: theme.colors.border,
-                backgroundColor: theme.colors.surface,
-                alignItems: "center",
-                justifyContent: "center",
-              }}
+              style={{ flex: 1 }}
+            />
+            <ActionButton
+              label="Not now"
+              variant="secondary"
               onPress={() => handleApprovalDecision(item.approval!, "rejected")}
-            >
-              <Text style={{ color: theme.colors.text, fontWeight: "600" }}>Not now</Text>
-            </TouchableOpacity>
+              style={{ flex: 1 }}
+            />
           </View>
         </View>
       );
@@ -813,21 +707,24 @@ export default function ChatScreen({ sessionId, agentId, specialistId }: ChatScr
         }}
       >
         {embeddedMode ? (
-          <TouchableOpacity
-            activeOpacity={0.86}
+          <MotionPressable
             accessibilityRole="button"
             accessibilityLabel="Open recent chats"
             onPress={() => openHistory()}
             style={{
-              width: 32,
-              height: 32,
+              width: 36,
+              height: 36,
+              borderRadius: 18,
               alignItems: "center",
               justifyContent: "center",
               marginRight: 10,
+              borderWidth: 1,
+              borderColor: theme.colors.border,
+              backgroundColor: theme.colors.card,
             }}
           >
             <Ionicons name="menu-outline" size={20} color={theme.colors.text} />
-          </TouchableOpacity>
+          </MotionPressable>
         ) : null}
         <View style={{ flex: 1, minWidth: 0 }}>
           <Text
@@ -857,25 +754,24 @@ export default function ChatScreen({ sessionId, agentId, specialistId }: ChatScr
           ) : null}
         </View>
         {!historyVisible ? (
-          <TouchableOpacity
-            activeOpacity={0.86}
+          <MotionPressable
             accessibilityRole="button"
             accessibilityLabel="Start a new chat"
             onPress={createNewThread}
-            onPressIn={triggerNewChatPress}
-            onPressOut={releaseNewChatPress}
             style={{
               width: 44,
               height: 44,
+              borderRadius: 22,
               alignItems: "center",
               justifyContent: "center",
               marginLeft: 10,
+              borderWidth: 1,
+              borderColor: theme.colors.border,
+              backgroundColor: theme.colors.card,
             }}
           >
-            <Animated.View style={{ transform: [{ scale: newChatScale }] }}>
-              <Ionicons name="chatbubble-ellipses-outline" size={28} color={theme.colors.text} />
-            </Animated.View>
-          </TouchableOpacity>
+            <Ionicons name="chatbubble-ellipses-outline" size={24} color={theme.colors.text} />
+          </MotionPressable>
         ) : null}
       </View>
       <View style={{ flex: 1 }}>
@@ -897,7 +793,7 @@ export default function ChatScreen({ sessionId, agentId, specialistId }: ChatScr
 
         {isLoading ? (
           <View style={{ paddingHorizontal: SPACING.md, paddingTop: 8 }}>
-            <KinThinkingIndicator theme={theme} loadingDotOpacities={loadingDotOpacities} />
+            <KinThinkingIndicator theme={theme} />
           </View>
         ) : null}
 
@@ -949,7 +845,7 @@ export default function ChatScreen({ sessionId, agentId, specialistId }: ChatScr
           >
             <View style={StyleSheet.absoluteFillObject}>
               <Pressable style={{ flex: 1 }} onPress={() => closeHistory()}>
-                <Animated.View
+                <LegacyAnimated.View
                   style={{
                     flex: 1,
                     backgroundColor: "rgba(17, 24, 39, 0.16)",
@@ -957,7 +853,7 @@ export default function ChatScreen({ sessionId, agentId, specialistId }: ChatScr
                   }}
                 />
               </Pressable>
-              <Animated.View
+              <LegacyAnimated.View
                 {...drawerSwipeResponder.panHandlers}
                 style={{
                   position: "absolute",
@@ -990,22 +886,21 @@ export default function ChatScreen({ sessionId, agentId, specialistId }: ChatScr
                   <Text style={{ fontSize: 17, fontFamily: "DMSans_700Bold", color: theme.colors.text }}>
                     Chats
                   </Text>
-                  <TouchableOpacity
-                    activeOpacity={0.86}
+                  <MotionPressable
                     onPress={createNewThread}
-                    onPressIn={triggerNewChatPress}
-                    onPressOut={releaseNewChatPress}
                     style={{
                       width: 44,
                       height: 44,
+                      borderRadius: 22,
                       alignItems: "center",
                       justifyContent: "center",
+                      borderWidth: 1,
+                      borderColor: theme.colors.border,
+                      backgroundColor: theme.colors.card,
                     }}
                   >
-                    <Animated.View style={{ transform: [{ scale: newChatScale }] }}>
-                      <Ionicons name="chatbubble-ellipses-outline" size={28} color={theme.colors.text} />
-                    </Animated.View>
-                  </TouchableOpacity>
+                    <Ionicons name="chatbubble-ellipses-outline" size={24} color={theme.colors.text} />
+                  </MotionPressable>
                 </View>
 
                 {agentSessions.length ? (
@@ -1017,8 +912,7 @@ export default function ChatScreen({ sessionId, agentId, specialistId }: ChatScr
                       const lastMessage = item.messages[item.messages.length - 1];
                       const selected = item.id === activeSession.id;
                       return (
-                        <TouchableOpacity
-                          activeOpacity={0.84}
+                        <MotionPressable
                           onPress={() => {
                             triggerDrawerHaptic();
                             setActiveSession(item.id);
@@ -1048,16 +942,16 @@ export default function ChatScreen({ sessionId, agentId, specialistId }: ChatScr
                           >
                             {lastMessage?.speech?.trim() || "No messages yet"}
                           </Text>
-                        </TouchableOpacity>
+                        </MotionPressable>
                       );
                     }}
                   />
                 ) : (
                   <Text style={{ marginTop: 6, fontSize: 13, lineHeight: 19, color: theme.colors.textSecondary }}>
-                    No chats yet.
+                    Start a new chat and it will appear here.
                   </Text>
                 )}
-              </Animated.View>
+              </LegacyAnimated.View>
             </View>
           </Modal>
         </>

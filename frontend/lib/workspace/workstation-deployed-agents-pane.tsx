@@ -39,6 +39,7 @@ import type {
 } from '@/lib/workspace/workstation-client';
 import { WorkstationDeployedAgentAnalyticsPane } from '@/lib/workspace/workstation-deployed-agent-analytics-pane';
 import { WorkspaceChannelPairingSurface } from '@/lib/workspace/workspace-channel-pairing-surface';
+import { useWorkspaceBoundary } from '@/lib/workspace/workspace-boundary';
 import { useWorkspaceServices } from '@/lib/workspace/workspace-services';
 import { WorkstationSurfaceRoot } from '@/lib/workspace/workstation-surface-primitives';
 
@@ -107,10 +108,32 @@ type AgentAnalyticsSnapshot = {
   usageMonth: string | null;
 };
 
+type StudioPaneCache = {
+  providerCatalog: ProviderCatalogSnapshot[];
+  agents: DeployedAgentRecord[];
+  connectorVaultIds: string[];
+  agentMetricsById: Record<string, AgentOperationalMetrics>;
+  agentAnalyticsById: Record<string, AgentAnalyticsSnapshot>;
+};
+
 type DetailConfigDraft = Pick<
   WizardState,
   'selectedToolIds' | 'memoryEnabled' | 'contextBudgetPreset' | 'retentionPreset'
 >;
+
+const studioPaneCache = new Map<string, StudioPaneCache>();
+
+function updateStudioPaneCache(workspaceId: string, partial: Partial<StudioPaneCache>) {
+  const current = studioPaneCache.get(workspaceId);
+  studioPaneCache.set(workspaceId, {
+    providerCatalog: current?.providerCatalog ?? [],
+    agents: current?.agents ?? [],
+    connectorVaultIds: current?.connectorVaultIds ?? [],
+    agentMetricsById: current?.agentMetricsById ?? {},
+    agentAnalyticsById: current?.agentAnalyticsById ?? {},
+    ...partial,
+  });
+}
 
 type ProviderCatalogModelSnapshot = {
   id: string;
@@ -1180,14 +1203,16 @@ export function WorkstationDeployedAgentsPane({
 }: {
   initialSubview?: StudioSubview;
 }) {
+  const { workspaceId } = useWorkspaceBoundary();
   const services = useWorkspaceServices();
   const searchParams = useSearchParams();
+  const cachedStudioPane = studioPaneCache.get(workspaceId) ?? null;
   const [currentStudioSubview, setCurrentStudioSubview] = useState<StudioSubview>(initialSubview);
-  const [providerCatalog, setProviderCatalog] = useState<ProviderCatalogSnapshot[]>([]);
-  const [agents, setAgents] = useState<DeployedAgentRecord[]>([]);
-  const [connectorVaultIds, setConnectorVaultIds] = useState<Set<string>>(() => new Set());
-  const [agentMetricsById, setAgentMetricsById] = useState<Record<string, AgentOperationalMetrics>>({});
-  const [agentAnalyticsById, setAgentAnalyticsById] = useState<Record<string, AgentAnalyticsSnapshot>>({});
+  const [providerCatalog, setProviderCatalog] = useState<ProviderCatalogSnapshot[]>(() => cachedStudioPane?.providerCatalog ?? []);
+  const [agents, setAgents] = useState<DeployedAgentRecord[]>(() => cachedStudioPane?.agents ?? []);
+  const [connectorVaultIds, setConnectorVaultIds] = useState<Set<string>>(() => new Set(cachedStudioPane?.connectorVaultIds ?? []));
+  const [agentMetricsById, setAgentMetricsById] = useState<Record<string, AgentOperationalMetrics>>(() => cachedStudioPane?.agentMetricsById ?? {});
+  const [agentAnalyticsById, setAgentAnalyticsById] = useState<Record<string, AgentAnalyticsSnapshot>>(() => cachedStudioPane?.agentAnalyticsById ?? {});
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
   const [overlayAgentId, setOverlayAgentId] = useState<string | null>(null);
   const [overlayTab, setOverlayTab] = useState<SpecialistOverlayTabId>('overview');
@@ -1203,7 +1228,7 @@ export function WorkstationDeployedAgentsPane({
   const [agentMemoryById, setAgentMemoryById] = useState<Record<string, DeployedAgentMemoryRecord[]>>({});
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
   const [selectedTranscript, setSelectedTranscript] = useState<DeployedAgentConversationDetail | null>(null);
-  const [isLoadingAgents, setIsLoadingAgents] = useState(true);
+  const [isLoadingAgents, setIsLoadingAgents] = useState(() => (cachedStudioPane?.agents?.length ?? 0) === 0);
   const [isLoadingProviderCatalog, setIsLoadingProviderCatalog] = useState(false);
   const [isLoadingDetail, setIsLoadingDetail] = useState(false);
   const [isLoadingAnalytics, setIsLoadingAnalytics] = useState(false);
@@ -1292,48 +1317,10 @@ export function WorkstationDeployedAgentsPane({
     [searchParams],
   );
 
-  async function refreshAgentMetrics(items: DeployedAgentRecord[]) {
-    if (items.length === 0) {
-      setAgentMetricsById({});
-      return;
-    }
-    setAgentMetricsById((current) => ({
-      ...current,
-      ...Object.fromEntries(
-        items
-          .map((item) => readString(item.id))
-          .filter(Boolean)
-          .map((agentId) => [agentId, current[agentId] ?? buildMetricsPlaceholder()]),
-      ),
-    }));
-    const metricsEntries = await Promise.all(
-      items.map(async (agent) => {
-        const agentId = readString(agent.id);
-        if (!agentId) {
-          return null;
-        }
-        try {
-          const payload = await services.client.listDeployedAgentConversations({
-            deployedAgentId: agentId,
-            limit: 100,
-            offset: 0,
-          });
-          const itemsForAgent = readItems<DeployedAgentConversationRecord>(payload);
-          const hasMore = readRecord(payload).has_more === true;
-          return [agentId, summarizeConversationMetrics(itemsForAgent, { hasMore })] as const;
-        } catch {
-          return [agentId, buildMetricsPlaceholder()] as const;
-        }
-      }),
-    );
-    setAgentMetricsById(
-      Object.fromEntries(metricsEntries.filter((entry): entry is readonly [string, AgentOperationalMetrics] => Boolean(entry))),
-    );
-  }
-
   async function refreshAgentAnalytics(items: DeployedAgentRecord[]) {
     if (items.length === 0) {
       setAgentAnalyticsById({});
+      updateStudioPaneCache(workspaceId, { agentAnalyticsById: {} });
       return;
     }
     try {
@@ -1349,10 +1336,14 @@ export function WorkstationDeployedAgentsPane({
           return [deployedAgentId, analytics] as const;
         })
         .filter((entry): entry is readonly [string, AgentAnalyticsSnapshot] => Boolean(entry));
-      setAgentAnalyticsById((current) => ({
-        ...current,
-        ...Object.fromEntries(nextEntries),
-      }));
+      setAgentAnalyticsById((current) => {
+        const nextValue = {
+          ...current,
+          ...Object.fromEntries(nextEntries),
+        };
+        updateStudioPaneCache(workspaceId, { agentAnalyticsById: nextValue });
+        return nextValue;
+      });
     } catch {
       setAgentAnalyticsById((current) => current);
     }
@@ -1362,7 +1353,9 @@ export function WorkstationDeployedAgentsPane({
     setIsLoadingProviderCatalog(true);
     try {
       const payload = await services.client.listProviderCatalog();
-      setProviderCatalog(normalizeProviderCatalog(payload));
+      const nextCatalog = normalizeProviderCatalog(payload);
+      updateStudioPaneCache(workspaceId, { providerCatalog: nextCatalog });
+      setProviderCatalog(nextCatalog);
     } catch (error) {
       setProviderCatalog([]);
       setErrorMessage(error instanceof Error ? error.message : 'Provider catalog is unavailable.');
@@ -1378,8 +1371,20 @@ export function WorkstationDeployedAgentsPane({
       const payload = await services.client.listDeployedAgents();
       const items = readItems<DeployedAgentRecord>(payload);
       setAgents(items);
-      void refreshAgentMetrics(items);
       void refreshAgentAnalytics(items);
+      setAgentMetricsById((current) => {
+        const nextValue = {
+          ...current,
+          ...Object.fromEntries(
+            items
+              .map((item) => readString(item.id))
+              .filter(Boolean)
+              .map((agentId) => [agentId, current[agentId] ?? buildMetricsPlaceholder()]),
+          ),
+        };
+        updateStudioPaneCache(workspaceId, { agents: items, agentMetricsById: nextValue });
+        return nextValue;
+      });
       const explicitSelection = readString(options.selectAgentId);
       if (explicitSelection) {
         setSelectedAgentId(explicitSelection);
@@ -1460,12 +1465,16 @@ export function WorkstationDeployedAgentsPane({
       });
       const items = readItems<DeployedAgentConversationRecord>(payload);
       setConversations(items);
-      setAgentMetricsById((current) => ({
-        ...current,
-        [agentId]: summarizeConversationMetrics(items, {
-          hasMore: readRecord(payload).has_more === true,
-        }),
-      }));
+      setAgentMetricsById((current) => {
+        const nextValue = {
+          ...current,
+          [agentId]: summarizeConversationMetrics(items, {
+            hasMore: readRecord(payload).has_more === true,
+          }),
+        };
+        updateStudioPaneCache(workspaceId, { agentMetricsById: nextValue });
+        return nextValue;
+      });
       setSelectedSessionId((current) => {
         if (current && items.some((item) => readString(item.session_id) === current)) {
           return current;
@@ -1689,10 +1698,12 @@ export function WorkstationDeployedAgentsPane({
             .filter(Boolean),
         );
         setConnectorVaultIds(connectorIds);
+        updateStudioPaneCache(workspaceId, { connectorVaultIds: Array.from(connectorIds) });
       })
       .catch(() => {
         if (!cancelled) {
           setConnectorVaultIds(new Set());
+          updateStudioPaneCache(workspaceId, { connectorVaultIds: [] });
         }
       });
     return () => {
@@ -1986,10 +1997,10 @@ export function WorkstationDeployedAgentsPane({
       ? 'Studio · Inbox'
       : 'Studio · Deploy';
   const studioSubtitle = currentStudioSubview === 'agents'
-    ? 'Roster and launch state.'
+    ? 'Specialist roster, readiness, and operational posture.'
     : currentStudioSubview === 'inbox'
-      ? 'Customer sessions.'
-      : 'Deploy state.';
+      ? 'Customer sessions, escalation pressure, and transcript flow.'
+      : 'Launch checks, provider choice, and go-live controls.';
   const showAgentsIndex = currentStudioSubview === 'agents' || currentStudioSubview === 'inbox';
   const showReadinessPanel = currentStudioSubview === 'deploy';
   const showDetailPanel = currentStudioSubview === 'deploy';
@@ -2120,9 +2131,10 @@ export function WorkstationDeployedAgentsPane({
               <div className="app-stack-4">
                 {showAgentsIndex ? (
                   <ListDetailPanel
+                    className="studio-panel studio-panel--roster"
                     eyebrow="Agents"
                     title="Specialist roster"
-                    subtitle={`${agents.length} in this workspace.`}
+                    subtitle={`${agents.length} in this workspace, ready to compare by channel, memory, and recent activity.`}
                     actions={currentStudioSubview === 'agents' ? (
                       <div className="app-inline-actions app-inline-actions--tight">
                         <AppButton
@@ -2149,7 +2161,7 @@ export function WorkstationDeployedAgentsPane({
                     {agents.length === 0 ? (
                       <EmptyPanel
                         title="No specialists yet"
-                        body="Create your first specialist — connect Telegram and deploy in 3 steps."
+                        body="Create your first specialist, connect the right channel, and take it live from the same Studio flow."
                         actions={(
                           <AppButton type="button" onClick={openCreateWizard}>
                             New Specialist
@@ -2161,6 +2173,7 @@ export function WorkstationDeployedAgentsPane({
                         {agents.map((agent, index) => {
                           const agentId = readString(agent.id, `deployed-agent-${index}`);
                           const selected = agentId === selectedAgentId;
+                          const agentMetrics = agentMetricsById[agentId] ?? null;
                           const channels = listEnabledChannels(agent.channels);
                           const channelLabel = humanizeToken(channels[0] || 'no_channel', 'No channel');
                           const memoryEnabled =
@@ -2169,6 +2182,9 @@ export function WorkstationDeployedAgentsPane({
                           const stateLabel = deploymentStateLabel(agent.deployment_state);
                           const modelLabel = formatDeploymentModelLabel(agent, providerCatalogIndex);
                           const displayName = readString(agent.name, agentId);
+                          const latestActivityLabel = agentMetrics?.latestActivityLabel ?? 'Syncing recent activity';
+                          const conversationLabel = agentMetrics?.conversationCountLabel ?? 'Syncing inbox';
+                          const escalationLabel = agentMetrics?.unresolvedEscalationsLabel ?? 'Checking escalations';
                           return (
                             <button
                               key={agentId}
@@ -2180,20 +2196,29 @@ export function WorkstationDeployedAgentsPane({
                               }}
                               className={`deployed-agents-card${selected ? ' deployed-agents-card--selected' : ''}`}
                             >
-                              <span className="deployed-agents-card__avatar" aria-hidden="true">
-                                {displayName.charAt(0).toUpperCase()}
+                              <span className="deployed-agents-card__header">
+                                <span className="deployed-agents-card__avatar" aria-hidden="true">
+                                  {displayName.charAt(0).toUpperCase()}
+                                </span>
+                                <span className="deployed-agents-card__copy">
+                                  <span className="deployed-agents-card__name-row">
+                                    <strong className="deployed-agents-card__title">{displayName}</strong>
+                                  </span>
+                                  <span className="deployed-agents-card__state-row">
+                                    <span
+                                      className={`deployed-agents-card__status deployed-agents-card__status--${rosterStatusTone(agent.deployment_state)}`}
+                                      aria-hidden="true"
+                                    />
+                                    <span className="deployed-agents-card__state">{stateLabel}</span>
+                                  </span>
+                                </span>
                               </span>
-                              <strong className="deployed-agents-card__title">{displayName}</strong>
-                              <div className="deployed-agents-card__state-row">
-                                <span
-                                  className={`deployed-agents-card__status deployed-agents-card__status--${rosterStatusTone(agent.deployment_state)}`}
-                                  aria-hidden="true"
-                                />
-                                <span className="deployed-agents-card__state">{stateLabel}</span>
-                              </div>
+                              <span className="deployed-agents-card__meta">{latestActivityLabel}</span>
+                              <span className="deployed-agents-card__subtle">
+                                {`${conversationLabel} · ${memoryEnabled ? 'Memory on' : 'Memory off'} · ${escalationLabel}`}
+                              </span>
                               <div className="deployed-agents-card__badges">
                                 <span className="deployed-agents-card__badge">{channelLabel}</span>
-                                <span className="deployed-agents-card__badge">{memoryEnabled ? 'Memory' : 'No memory'}</span>
                                 <span className="deployed-agents-card__badge">{modelLabel}</span>
                               </div>
                             </button>
@@ -2206,9 +2231,10 @@ export function WorkstationDeployedAgentsPane({
 
                 {showReadinessPanel ? (
                   <ListDetailPanel
+                    className="studio-panel studio-panel--readiness"
                     eyebrow="Readiness"
                     title="Launch readiness"
-                    subtitle="Channel and runtime state."
+                    subtitle="The live channel, runtime target, and go-live posture for the selected specialist."
                   >
                     <FormGrid columns="repeat(auto-fit, minmax(12rem, 1fr))">
                       <FormReadout label="Primary channel" value={activeChannels[0] ? humanizeToken(activeChannels[0], activeChannels[0]) : 'No live channel'} />
@@ -2223,9 +2249,10 @@ export function WorkstationDeployedAgentsPane({
               <div className="app-stack-4">
                 {showDetailPanel ? (
                 <ListDetailPanel
+                  className="studio-panel studio-panel--detail"
                   eyebrow="Detail"
                   title={selectedAgent ? readString(selectedAgent.name, 'Specialist details') : 'Specialist details'}
-                  subtitle={selectedAgent ? readString(selectedAgent.persona, 'Selected specialist') : 'Select a specialist.'}
+                  subtitle={selectedAgent ? 'Launch state, tools, memory, and cost posture for the selected specialist.' : 'Select a specialist.'}
                   actions={selectedAgent ? (
                     <div className="app-inline-actions app-inline-actions--tight">
                       <AppButton type="button" tone="secondary" onClick={openEditWizard}>
@@ -2361,7 +2388,7 @@ export function WorkstationDeployedAgentsPane({
                       {detailConfigDraft ? (
                         <>
                           <FormField label="Tools" hint="Choose the minimum allowed tools for this specialist after creation.">
-                            <div className="app-inline-actions" style={{ flexWrap: 'wrap' }}>
+                            <div className="app-inline-actions studio-inline-wrap">
                               {STUDIO_TOOL_OPTIONS.map((tool) => {
                                 const selected = detailConfigDraft.selectedToolIds.includes(tool.id);
                                 return (
@@ -2457,9 +2484,10 @@ export function WorkstationDeployedAgentsPane({
 
                 {showInboxPanels ? (
                 <ListDetailPanel
+                  className="studio-panel studio-panel--inbox"
                   eyebrow="Conversations"
                   title="Live conversation inbox"
-                  subtitle="Current sessions."
+                  subtitle="Open customer sessions for the selected specialist, with filters for channel, escalation, and outcome."
                 >
                   {!selectedAgent ? (
                     <EmptyPanel
@@ -2596,9 +2624,10 @@ export function WorkstationDeployedAgentsPane({
 
                 {showInboxPanels ? (
                 <ListDetailPanel
+                  className="studio-panel studio-panel--transcript"
                   eyebrow="Transcript"
                   title={selectedConversation ? conversationCustomerLabel(selectedConversation) : 'Transcript detail'}
-                  subtitle="Timeline."
+                  subtitle="Message history, runs, and escalation events for the selected customer session."
                   actions={selectedConversation && selectedExternalUserId ? (
                     <AppButton
                       type="button"
@@ -3024,7 +3053,7 @@ export function WorkstationDeployedAgentsPane({
       <CommandSheet
         open={isWizardOpen}
         title={wizardMode === 'create' ? 'New Specialist' : 'Edit Specialist'}
-        description="Setup, connect Telegram, and deploy."
+        description="Set the specialist up, connect the customer channel, and review launch settings."
         onClose={closeWizard}
           actions={(
             <div className="app-inline-actions">

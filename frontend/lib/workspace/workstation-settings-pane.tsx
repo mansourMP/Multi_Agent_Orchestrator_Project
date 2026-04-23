@@ -1,13 +1,14 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import { useRouter, useSearchParams } from 'next/navigation';
+import { useSearchParams } from 'next/navigation';
 
-import { AppButton, joinClassNames } from '@/lib/ui/primitives';
+import { joinClassNames } from '@/lib/ui/primitives';
 import { FormGrid, FormReadout } from '@/lib/ui/form-controls';
 import { useWorkspaceBoundary } from '@/lib/workspace/workspace-boundary';
 import { WorkstationBillingPane } from '@/lib/workspace/workstation-billing-pane';
 import { WorkstationDesktopStatus } from '@/lib/workspace/workstation-desktop-status';
+import { WorkstationGatewayOperatorPane } from '@/lib/workspace/workstation-gateway-operator-pane';
 import { WorkstationPlatformAnalyticsPane } from '@/lib/workspace/workstation-platform-analytics-pane';
 import { WorkspaceChannelOperationsConsole } from '@/lib/workspace/workspace-channel-operations-console';
 
@@ -32,14 +33,14 @@ const SETTINGS_SECTIONS: Array<{
     label: 'Devices',
     eyebrow: 'Runtime',
     title: 'Devices',
-    description: 'Runtime targets and local status.',
+    description: 'Trusted devices, gateway health, and local runtime readiness.',
   },
   {
     id: 'channels',
     label: 'Channels',
     eyebrow: 'Operations',
     title: 'Channels',
-    description: 'Channel health and delivery.',
+    description: 'Quick connectors, paired personal lanes, and delivery health.',
   },
   {
     id: 'usage',
@@ -82,7 +83,6 @@ function isSettingsSectionId(value: string | null): value is SettingsSectionId {
 }
 
 export function WorkstationSettingsPane() {
-  const router = useRouter();
   const searchParams = useSearchParams();
   const { bootstrap } = useWorkspaceBoundary();
   const [selectedSection, setSelectedSection] = useState<SettingsSectionId>(() => {
@@ -159,23 +159,13 @@ export function WorkstationSettingsPane() {
                 <FormReadout label="Plan" value={bootstrap.entitlements.label} />
                 <FormReadout label="Default experience" value="Sage" />
               </FormGrid>
-              <div className="settings-action-row">
-                <AppButton
-                  type="button"
-                  tone="secondary"
-                  onClick={() => {
-                    setSelectedSection('privacy');
-                  }}
-                >
-                  Trust settings
-                </AppButton>
-              </div>
             </div>
           ) : null}
 
           {selectedSection === 'devices' ? (
             <div className="settings-section-stack">
               <WorkstationDesktopStatus />
+              <WorkstationGatewayOperatorPane />
               <FormGrid>
                 <FormReadout label="Deployment mode" value={humanizeToken(bootstrap.runtime.deploymentMode)} />
                 <FormReadout
@@ -241,17 +231,6 @@ export function WorkstationSettingsPane() {
                     Local execution stays on trusted machines.
                   </p>
                 </article>
-              </div>
-              <div className="settings-action-row">
-                <AppButton
-                  type="button"
-                  tone="secondary"
-                  onClick={() => {
-                    router.push(`/w/${encodeURIComponent(bootstrap.workspace.id)}/approvals`);
-                  }}
-                >
-                  Open approvals
-                </AppButton>
               </div>
             </div>
           ) : null}

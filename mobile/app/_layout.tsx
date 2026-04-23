@@ -22,6 +22,8 @@ import { initDatabase } from "@/src/services/db";
 import { SessionProvider, useSessionState } from "@/src/lib/session-context";
 import { ThemeProvider } from "@/src/theme";
 import { queryClient } from "@/src/lib/queryClient";
+import { RootBottomSheetProvider } from "@/src/components/system/BottomSheetScaffold";
+import { MOBILE_STACK_MOTION_PRESETS } from "@/src/ui/motion";
 import {
   configureNotificationChannelAsync,
   getNotificationHref,
@@ -92,119 +94,78 @@ export default function RootLayout() {
         <ThemeProvider>
           <SessionProvider>
             <SafeAreaProvider>
-              <StatusBar style="dark" />
-              <MobileRuntimeNotificationBridge />
-              <Stack screenOptions={{ headerShown: false }}>
-                <Stack.Screen name="index" />
-                <Stack.Screen
-                  name="(auth)/login"
-                  options={{
-                    animation: "slide_from_right",
-                    presentation: "card",
-                  }}
-                />
-                <Stack.Screen name="(tabs)" />
-                <Stack.Screen 
-                  name="settings" 
-                  options={{ 
-                    animation: 'slide_from_left',
-                    presentation: 'card' 
-                  }} 
-                />
-                <Stack.Screen
-                  name="integrations"
-                  options={{
-                    animation: "slide_from_right",
-                    presentation: "card",
-                  }}
-                />
-                <Stack.Screen
-                  name="automations"
-                  options={{
-                    animation: "slide_from_right",
-                    presentation: "card",
-                  }}
-                />
-                <Stack.Screen
-                  name="memory"
-                  options={{
-                    animation: "slide_from_right",
-                    presentation: "card",
-                  }}
-                />
-                <Stack.Screen
-                  name="privacy"
-                  options={{
-                    animation: "slide_from_right",
-                    presentation: "card",
-                  }}
-                />
-                <Stack.Screen
-                  name="artifacts"
-                  options={{
-                    animation: "slide_from_right",
-                    presentation: "card",
-                  }}
-                />
-                <Stack.Screen
-                  name="approvals"
-                  options={{
-                    animation: "slide_from_right",
-                    presentation: "card",
-                  }}
-                />
-                <Stack.Screen
-                  name="connectors"
-                  options={{
-                    animation: "slide_from_right",
-                    presentation: "card",
-                  }}
-                />
-                <Stack.Screen
-                  name="machines"
-                  options={{
-                    animation: "slide_from_right",
-                    presentation: "card",
-                  }}
-                />
-                <Stack.Screen
-                  name="notifications"
-                  options={{
-                    animation: "slide_from_right",
-                    presentation: "card",
-                  }}
-                />
-                <Stack.Screen
-                  name="status"
-                  options={{
-                    animation: "slide_from_left",
-                    presentation: "card",
-                  }}
-                />
-                <Stack.Screen
-                  name="apps/store"
-                  options={{
-                    presentation: "transparentModal",
-                    animation: "slide_from_bottom",
-                    animationDuration: 520,
-                  }}
-                />
-                <Stack.Screen
-                  name="apps/[id]/home"
-                  options={{
-                    presentation: "transparentModal",
-                    animation: "slide_from_bottom",
-                    animationDuration: 520,
-                  }}
-                />
-                <Stack.Screen
-                  name="session"
-                  options={{
-                    animation: "slide_from_left",
-                    presentation: "card",
-                  }}
-                />
-              </Stack>
+              <RootBottomSheetProvider>
+                <StatusBar style="dark" />
+                <MobileRuntimeNotificationBridge />
+                <Stack screenOptions={{ headerShown: false }}>
+                  <Stack.Screen name="index" />
+                  <Stack.Screen
+                    name="(auth)/login"
+                    options={MOBILE_STACK_MOTION_PRESETS.forwardCard}
+                  />
+                  <Stack.Screen name="(tabs)" />
+                  <Stack.Screen
+                    name="settings"
+                    options={MOBILE_STACK_MOTION_PRESETS.backwardCard}
+                  />
+                  <Stack.Screen
+                    name="integrations"
+                    options={MOBILE_STACK_MOTION_PRESETS.forwardCard}
+                  />
+                  <Stack.Screen
+                    name="automations"
+                    options={MOBILE_STACK_MOTION_PRESETS.forwardCard}
+                  />
+                  <Stack.Screen
+                    name="memory"
+                    options={MOBILE_STACK_MOTION_PRESETS.forwardCard}
+                  />
+                  <Stack.Screen
+                    name="privacy"
+                    options={MOBILE_STACK_MOTION_PRESETS.forwardCard}
+                  />
+                  <Stack.Screen
+                    name="artifacts"
+                    options={MOBILE_STACK_MOTION_PRESETS.forwardCard}
+                  />
+                  <Stack.Screen
+                    name="approvals"
+                    options={MOBILE_STACK_MOTION_PRESETS.forwardCard}
+                  />
+                  <Stack.Screen
+                    name="gateway"
+                    options={MOBILE_STACK_MOTION_PRESETS.forwardCard}
+                  />
+                  <Stack.Screen
+                    name="connectors"
+                    options={MOBILE_STACK_MOTION_PRESETS.forwardCard}
+                  />
+                  <Stack.Screen
+                    name="machines"
+                    options={MOBILE_STACK_MOTION_PRESETS.forwardCard}
+                  />
+                  <Stack.Screen
+                    name="notifications"
+                    options={MOBILE_STACK_MOTION_PRESETS.forwardCard}
+                  />
+                  <Stack.Screen
+                    name="status"
+                    options={MOBILE_STACK_MOTION_PRESETS.backwardCard}
+                  />
+                  <Stack.Screen
+                    name="apps/store"
+                    options={MOBILE_STACK_MOTION_PRESETS.sheet}
+                  />
+                  <Stack.Screen
+                    name="apps/[id]/home"
+                    options={MOBILE_STACK_MOTION_PRESETS.sheet}
+                  />
+                  <Stack.Screen
+                    name="session"
+                    options={MOBILE_STACK_MOTION_PRESETS.backwardCard}
+                  />
+                </Stack>
+              </RootBottomSheetProvider>
             </SafeAreaProvider>
           </SessionProvider>
         </ThemeProvider>

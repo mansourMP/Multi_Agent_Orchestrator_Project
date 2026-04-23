@@ -95,6 +95,71 @@ class _FakePage:
         Path(path).write_bytes(b"%PDF-1.4")
 
 
+class _FakeContext:
+    def __init__(self, pages=None):
+        self.pages = list(pages or [])
+        self.events = []
+
+    def on(self, event_name: str, _handler):
+        self.events.append(event_name)
+
+    async def new_page(self):
+        page = _FakePage()
+        self.pages.append(page)
+        return page
+
+    async def close(self):
+        return None
+
+
+class _FakeBrowser:
+    def __init__(self, contexts=None, connected: bool = True):
+        self.contexts = list(contexts or [])
+        self._connected = connected
+        self.closed = False
+
+    def is_connected(self):
+        return self._connected
+
+    async def close(self):
+        self.closed = True
+
+
+class _FakeChromium:
+    def __init__(self, *, context=None, browser=None):
+        self.context = context
+        self.browser = browser
+        self.launch_calls = []
+        self.connect_calls = []
+
+    async def launch_persistent_context(self, **kwargs):
+        self.launch_calls.append(kwargs)
+        return self.context
+
+    async def connect_over_cdp(self, endpoint_url: str, timeout: int = 0):
+        self.connect_calls.append({"endpoint_url": endpoint_url, "timeout": timeout})
+        if self.browser is None:
+            raise RuntimeError("browser not configured")
+        return self.browser
+
+
+class _FakePlaywrightRuntime:
+    def __init__(self, chromium):
+        self.chromium = chromium
+        self.stopped = False
+
+    async def stop(self):
+        self.stopped = True
+
+
+class _FakePlaywrightBootstrap:
+    def __init__(self, runtime):
+        self.runtime = runtime
+
+    async def start(self):
+        return self.runtime
+
+
 class _FakeRequest:
     method = "GET"
 
@@ -184,3 +249,61 @@ class BrowserEngineTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(engine.profile_dir, (Path(tmpdir) / "browser-profile").resolve())
             self.assertEqual(engine.screenshots_dir, (Path(tmpdir) / "screenshots").resolve())
             BrowserEngine._instance = None
+
+    async def test_configure_session_returns_attach_required_without_endpoint(self):
+        state = await self.engine.configure_session("existing_session_attach", None)
+        self.assertEqual(state["session_mode"], "existing_session_attach")
+        self.assertEqual(state["status"], "attach_required")
+        self.assertEqual(state["attach_state"], "attach_required")
+        self.assertIsNone(self.engine._context)
+
+    async def test_configure_session_uses_connect_over_cdp_for_existing_session_attach(self):
+        BrowserEngine._instance = None
+        engine = BrowserEngine()
+        fake_context = _FakeContext([_FakePage()])
+        fake_browser = _FakeBrowser([fake_context])
+        fake_chromium = _FakeChromium(browser=fake_browser)
+        fake_runtime = _FakePlaywrightRuntime(fake_chromium)
+
+        engine._load_playwright = lambda: (lambda: _FakePlaywrightBootstrap(fake_runtime))  # type: ignore[method-assign]
+        state = await engine.configure_session("existing_session_attach", "http://127.0.0.1:9222")
+
+        self.assertEqual(state["session_mode"], "existing_session_attach")
+        self.assertEqual(state["status"], "attached")
+        self.assertEqual(state["attach_state"], "attached")
+        self.assertEqual(fake_chromium.connect_calls[0]["endpoint_url"], "http://127.0.0.1:9222")
+        self.assertEqual(engine._context, fake_context)
+        self.assertIn("response", fake_context.events)
+
+        await engine.close()
+        BrowserEngine._instance = None
+
+    async def test_configure_session_reports_attach_failed_when_cdp_connect_fails(self):
+        BrowserEngine._instance = None
+        engine = BrowserEngine()
+        fake_chromium = _FakeChromium(browser=None)
+        fake_runtime = _FakePlaywrightRuntime(fake_chromium)
+        engine._load_playwright = lambda: (lambda: _FakePlaywrightBootstrap(fake_runtime))  # type: ignore[method-assign]
+
+        state = await engine.configure_session("existing_session_attach", "http://127.0.0.1:9222")
+
+        self.assertEqual(state["status"], "attach_failed")
+        self.assertEqual(state["attach_state"], "attach_failed")
+        self.assertIn("Failed to attach", state["attach_failure"])
+        BrowserEngine._instance = None
+
+    async def test_configure_session_reports_not_attached_when_browser_is_disconnected(self):
+        BrowserEngine._instance = None
+        engine = BrowserEngine()
+        fake_context = _FakeContext([_FakePage()])
+        fake_browser = _FakeBrowser([fake_context], connected=False)
+        fake_chromium = _FakeChromium(browser=fake_browser)
+        fake_runtime = _FakePlaywrightRuntime(fake_chromium)
+        engine._load_playwright = lambda: (lambda: _FakePlaywrightBootstrap(fake_runtime))  # type: ignore[method-assign]
+
+        state = await engine.configure_session("existing_session_attach", "http://127.0.0.1:9222")
+
+        self.assertEqual(state["status"], "not_attached")
+        self.assertEqual(state["attach_state"], "not_attached")
+        self.assertIn("not currently attachable", state["attach_failure"])
+        BrowserEngine._instance = None

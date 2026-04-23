@@ -4,6 +4,7 @@ import { Fragment, type ClipboardEvent, type ReactNode, useCallback, useEffect, 
 import { X } from 'lucide-react';
 
 import { FormField, FormInput, FormSelect } from '@/lib/ui/form-controls';
+import { MotionSlidePanel } from '@/lib/ui/motion';
 import { AppButton, AppNotice, joinClassNames } from '@/lib/ui/primitives';
 import { SkeletonBlock } from '@/lib/ui/skeleton-block';
 import { WorkstationSageToolsPane } from '@/lib/workspace/workstation-sage-tools-pane';
@@ -70,6 +71,16 @@ type ChannelLinkRecord = {
   provider?: string | null;
   status?: string | null;
 };
+
+type SageConnectorsPaneCache = {
+  providers: ProviderSnapshot[];
+  profiles: ProviderProfileRecord[];
+  credentials: VaultCredentialRecord[];
+  connectorVault: VaultCredentialRecord[];
+  channelLinks: ChannelLinkRecord[];
+};
+
+const sageConnectorsPaneCache = new Map<string, SageConnectorsPaneCache>();
 
 const SUPPORTED_PROVIDER_IDS = [
   'openai',
@@ -339,31 +350,65 @@ function BrandLogo({
         width={40}
         height={40}
         className="sage-integration-brand__image"
-        style={{ objectFit: 'contain', borderRadius: '8px' }}
         onError={() => onError(id)}
       />
     </span>
   );
 }
 
+function describeProviderCard(record: ProviderCardRecord, localCompanionOnline: boolean): string {
+  const modelCount = record.provider.models.length;
+  const authMode = readString(record.profile?.auth_mode).replace(/_/g, ' ');
+  if (record.connected) {
+    if (record.provider.defaultModel) {
+      return record.provider.defaultModel;
+    }
+    if (modelCount > 0) {
+      return `${modelCount} model${modelCount === 1 ? '' : 's'} ready`;
+    }
+    if (authMode) {
+      return authMode;
+    }
+    if (record.provider.stateDetail) {
+      return record.provider.stateDetail;
+    }
+    return 'Ready';
+  }
+  if (record.provider.id === 'ollama') {
+    return localCompanionOnline ? 'Browse local models' : 'Needs local device';
+  }
+  return providerRequiresKey(record.provider.id) ? 'Add API key' : 'Connect to continue';
+}
+
+function describeConnectorCard(record: ConnectorCardRecord): string {
+  if (record.connected) {
+    return record.definition.capabilityTags.slice(0, 2).join(' · ') || 'Ready';
+  }
+  return record.definition.capabilityTags.slice(0, 2).join(' · ') || 'Connect to continue';
+}
+
 export function WorkstationSageConnectorsPane({
   showProviders = true,
   showTools = true,
   connectorIds,
+  className,
 }: {
   showProviders?: boolean;
   showTools?: boolean;
   connectorIds?: string[];
+  className?: string;
 } = {}) {
   const { bootstrap } = useWorkspaceBoundary();
   const services = useWorkspaceServices();
   const gridColumns = useResponsiveColumns();
-  const [providers, setProviders] = useState<ProviderSnapshot[]>([]);
-  const [profiles, setProfiles] = useState<ProviderProfileRecord[]>([]);
-  const [credentials, setCredentials] = useState<VaultCredentialRecord[]>([]);
-  const [connectorVault, setConnectorVault] = useState<VaultCredentialRecord[]>([]);
-  const [channelLinks, setChannelLinks] = useState<ChannelLinkRecord[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
+  const cacheKey = bootstrap.workspace.id;
+  const cachedState = sageConnectorsPaneCache.get(cacheKey) ?? null;
+  const [providers, setProviders] = useState<ProviderSnapshot[]>(() => cachedState?.providers ?? []);
+  const [profiles, setProfiles] = useState<ProviderProfileRecord[]>(() => cachedState?.profiles ?? []);
+  const [credentials, setCredentials] = useState<VaultCredentialRecord[]>(() => cachedState?.credentials ?? []);
+  const [connectorVault, setConnectorVault] = useState<VaultCredentialRecord[]>(() => cachedState?.connectorVault ?? []);
+  const [channelLinks, setChannelLinks] = useState<ChannelLinkRecord[]>(() => cachedState?.channelLinks ?? []);
+  const [isLoading, setIsLoading] = useState(() => cachedState === null);
   const [error, setError] = useState<string | null>(null);
   const [status, setStatus] = useState<string | null>(null);
   const [expandedCardId, setExpandedCardId] = useState<string | null>(null);
@@ -387,20 +432,28 @@ export function WorkstationSageConnectorsPane({
 
     const catalogPayload = catalogResult.status === 'fulfilled' ? catalogResult.value : null;
     const normalizedProviders = normalizeProviderCatalog(catalogPayload);
-    setProviders(normalizedProviders.length > 0 ? normalizedProviders : fallbackProviderCatalog());
-    setProfiles(profileResult.status === 'fulfilled' ? normalizeProviderProfiles(profileResult.value) : []);
-    setCredentials(credentialResult.status === 'fulfilled' ? normalizeVaultCredentials(credentialResult.value) : []);
-    setConnectorVault(connectorResult.status === 'fulfilled' ? normalizeVaultCredentials(connectorResult.value) : []);
-    setChannelLinks(channelResult.status === 'fulfilled' ? normalizeChannelLinks(channelResult.value) : []);
+    const nextState: SageConnectorsPaneCache = {
+      providers: normalizedProviders.length > 0 ? normalizedProviders : fallbackProviderCatalog(),
+      profiles: profileResult.status === 'fulfilled' ? normalizeProviderProfiles(profileResult.value) : [],
+      credentials: credentialResult.status === 'fulfilled' ? normalizeVaultCredentials(credentialResult.value) : [],
+      connectorVault: connectorResult.status === 'fulfilled' ? normalizeVaultCredentials(connectorResult.value) : [],
+      channelLinks: channelResult.status === 'fulfilled' ? normalizeChannelLinks(channelResult.value) : [],
+    };
+    sageConnectorsPaneCache.set(cacheKey, nextState);
+    setProviders(nextState.providers);
+    setProfiles(nextState.profiles);
+    setCredentials(nextState.credentials);
+    setConnectorVault(nextState.connectorVault);
+    setChannelLinks(nextState.channelLinks);
 
     if (catalogResult.status === 'rejected') {
       throw catalogResult.reason;
     }
-  }, [bootstrap.workspace.id, services.client]);
+  }, [cacheKey, services.client, bootstrap.workspace.id]);
 
   useEffect(() => {
     let cancelled = false;
-    setIsLoading(true);
+    setIsLoading(cachedState === null);
     setError(null);
     void loadState()
       .catch((loadError) => {
@@ -416,7 +469,7 @@ export function WorkstationSageConnectorsPane({
     return () => {
       cancelled = true;
     };
-  }, [loadState]);
+  }, [cachedState, loadState]);
 
   const localCompanionOnline = useMemo(
     () => bootstrap.runtime.runtimeTargets.some((target) => target.id === 'local_companion' && target.online),
@@ -653,6 +706,7 @@ export function WorkstationSageConnectorsPane({
           onError={markLogoFailed}
         />
         <strong className="sage-unified-card__title">{record.label}</strong>
+        <span className="sage-unified-card__detail">{describeProviderCard(record, localCompanionOnline)}</span>
         <span className={joinClassNames('sage-unified-card__status', record.status === 'connected' && 'sage-unified-card__status--connected')}>
           {record.status === 'connected' ? <span className="sage-unified-card__dot" aria-hidden="true" /> : null}
           {record.status === 'connected' ? 'Connected' : 'Not connected'}
@@ -680,6 +734,7 @@ export function WorkstationSageConnectorsPane({
           onError={markLogoFailed}
         />
         <strong className="sage-unified-card__title">{record.label}</strong>
+        <span className="sage-unified-card__detail">{describeConnectorCard(record)}</span>
         <span className={joinClassNames('sage-unified-card__status', record.status === 'connected' && 'sage-unified-card__status--connected')}>
           {record.status === 'connected' ? <span className="sage-unified-card__dot" aria-hidden="true" /> : null}
           {record.status === 'connected' ? 'Connected' : 'Not connected'}
@@ -691,7 +746,7 @@ export function WorkstationSageConnectorsPane({
   function renderProviderExpand(record: ProviderCardRecord) {
     const busy = busyCardId === record.id;
     return (
-      <div className="sage-unified-expand">
+      <MotionSlidePanel className="sage-unified-expand">
         <div className="sage-unified-expand__header">
           <strong className="sage-unified-expand__title">{record.label}</strong>
           <button
@@ -775,7 +830,7 @@ export function WorkstationSageConnectorsPane({
             </div>
           </>
         )}
-      </div>
+      </MotionSlidePanel>
     );
   }
 
@@ -805,7 +860,7 @@ export function WorkstationSageConnectorsPane({
   function renderConnectorExpand(record: ConnectorCardRecord) {
     if (record.id === 'telegram') {
       return (
-        <div className="sage-unified-expand sage-unified-expand--embed">
+        <MotionSlidePanel className="sage-unified-expand sage-unified-expand--embed">
           <div className="sage-unified-expand__header">
             <strong className="sage-unified-expand__title">Telegram</strong>
             <button
@@ -818,12 +873,12 @@ export function WorkstationSageConnectorsPane({
             </button>
           </div>
           <WorkspaceChannelPairingSurface featureId="integrations" />
-        </div>
+        </MotionSlidePanel>
       );
     }
 
     return (
-      <div className="sage-unified-expand">
+      <MotionSlidePanel className="sage-unified-expand">
         <div className="sage-unified-expand__header">
           <strong className="sage-unified-expand__title">{record.label}</strong>
           <button
@@ -872,7 +927,7 @@ export function WorkstationSageConnectorsPane({
             </div>
           </>
         ) : null}
-      </div>
+      </MotionSlidePanel>
     );
   }
 
@@ -902,7 +957,7 @@ export function WorkstationSageConnectorsPane({
   }
 
   return (
-    <div className="sage-settings-panel sage-settings-panel--connectors">
+    <div className={joinClassNames('sage-settings-panel sage-settings-panel--connectors', className)}>
       {status ? <AppNotice tone="success">{status}</AppNotice> : null}
       {error ? <AppNotice tone="warning">{error}</AppNotice> : null}
 

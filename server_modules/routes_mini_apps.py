@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from server_modules import auth as auth_module
+from server_modules import mini_app_host_service
 from server_modules import calorie_tracking_service
 from server_modules import flashcards_tracking_service
 from server_modules import mini_app_invoke_service
@@ -19,6 +20,13 @@ get_current_user = auth_module.get_current_user
 class MiniAppContractUpsertRequest(BaseModel):
     label: Optional[str] = None
     description: Optional[str] = None
+    delivery_mode: Optional[str] = None
+    hosted_url: Optional[str] = None
+    embed_kind: Optional[str] = None
+    allowed_origins: Optional[List[str]] = None
+    bridge_contracts: Optional[Dict[str, List[str]]] = None
+    permissions: Optional[List[str]] = None
+    context_envelope: Optional[Dict[str, List[str]]] = None
     current_state: Optional[Dict[str, Any]] = None
     recent_events: Optional[List[Dict[str, Any]]] = None
     daily_summary: Optional[Dict[str, Any]] = None
@@ -116,6 +124,16 @@ class MiniAppInvokeRequest(BaseModel):
     model: Optional[str] = None
 
 
+class HostedMiniAppBridgeRequest(BaseModel):
+    origin: str = Field(min_length=1)
+    bridge_kind: str = Field(min_length=1)
+    bridge_type: str = Field(min_length=1)
+    request_text: Optional[str] = None
+    target: Optional[Dict[str, Any]] = None
+    context_envelope: Optional[Dict[str, Any]] = None
+    metadata: Optional[Dict[str, Any]] = None
+
+
 @router.get("/workspaces/{workspace_id}/mini-apps")
 async def list_mini_apps(
     workspace_id: str,
@@ -152,6 +170,13 @@ async def upsert_mini_app_contract(
             app_id,
             label=body.label,
             description=body.description,
+            delivery_mode=body.delivery_mode,
+            hosted_url=body.hosted_url,
+            embed_kind=body.embed_kind,
+            allowed_origins=body.allowed_origins,
+            bridge_contracts=body.bridge_contracts,
+            permissions=body.permissions,
+            context_envelope=body.context_envelope,
             current_state=body.current_state,
             recent_events=body.recent_events,
             daily_summary=body.daily_summary,
@@ -179,6 +204,53 @@ async def retrieve_mini_app_records(
         )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.get("/workspaces/{workspace_id}/mini-apps/{app_id}/hosted-manifest")
+async def get_hosted_mini_app_manifest(
+    workspace_id: str,
+    app_id: str,
+    current_user=Depends(get_current_user),
+):
+    resolved_workspace_id = auth_module.enforce_workspace_access(current_user, workspace_id, minimum_role="viewer")
+    try:
+        return mini_apps_service.get_hosted_mini_app_manifest(resolved_workspace_id, app_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/workspaces/{workspace_id}/mini-apps/{app_id}/bridge/messages")
+async def bridge_hosted_mini_app_message(
+    workspace_id: str,
+    app_id: str,
+    body: HostedMiniAppBridgeRequest,
+    current_user=Depends(get_current_user),
+):
+    resolved_workspace_id = auth_module.enforce_workspace_access(current_user, workspace_id, minimum_role="viewer")
+    tenant_id = auth_module.workspace_tenant_id(current_user, resolved_workspace_id)
+    try:
+        contract = mini_apps_service.get_mini_app_contract(resolved_workspace_id, app_id)
+        return await mini_app_host_service.process_hosted_bridge_request(
+            workspace_id=resolved_workspace_id,
+            tenant_id=tenant_id,
+            current_user=current_user,
+            app_contract=contract,
+            origin=body.origin,
+            bridge_kind=body.bridge_kind,
+            bridge_type=body.bridge_type,
+            request_text=str(body.request_text or "").strip(),
+            target=body.target,
+            context_envelope=body.context_envelope,
+            metadata=body.metadata,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.post("/workspaces/{workspace_id}/mini-apps/{app_id}/invoke")

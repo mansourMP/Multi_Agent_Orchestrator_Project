@@ -50,9 +50,14 @@ export function WorkstationTitlebar({
         )}
       </div>
       {navigation ? (
-        <nav className="workstation-titlebar__nav" aria-label="Workspace views">
-          {navigation}
-        </nav>
+        <div
+          className="workstation-titlebar__nav-shell"
+          aria-label="Workspace views"
+        >
+          <nav className="workstation-titlebar__nav" aria-label="Workspace views">
+            {navigation}
+          </nav>
+        </div>
       ) : (
         <div className="workstation-titlebar__spacer" data-tauri-drag-region={desktop.available ? '' : undefined} />
       )}

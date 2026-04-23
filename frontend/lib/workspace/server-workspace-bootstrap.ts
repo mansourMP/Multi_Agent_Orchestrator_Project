@@ -23,6 +23,14 @@ export class WorkspaceBootstrapError extends Error {
 }
 
 const TRANSIENT_BOOTSTRAP_STATUSES = new Set([500, 502, 503, 504]);
+const WORKSPACE_BOOTSTRAP_CACHE_TTL_MS = 5_000;
+
+type WorkspaceBootstrapCacheEntry = {
+  expiresAt: number;
+  payload: WorkspaceBootstrapPayload;
+};
+
+const workspaceBootstrapCache = new Map<string, WorkspaceBootstrapCacheEntry>();
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => {
@@ -44,6 +52,15 @@ export async function loadWorkspaceBootstrap(workspaceId: string): Promise<Works
   if (authorization) {
     forwardHeaders.authorization = authorization;
   }
+  const cacheKey = [
+    workspaceId,
+    cookie ?? '',
+    authorization ?? '',
+  ].join('::');
+  const cachedEntry = workspaceBootstrapCache.get(cacheKey);
+  if (cachedEntry && cachedEntry.expiresAt > Date.now()) {
+    return cachedEntry.payload;
+  }
 
   let lastStatus = 500;
   let lastError: unknown = null;
@@ -57,7 +74,12 @@ export async function loadWorkspaceBootstrap(workspaceId: string): Promise<Works
 
       if (response.ok) {
         const payload = await response.json();
-        return parseWorkspaceBootstrapPayload(payload);
+        const parsedPayload = parseWorkspaceBootstrapPayload(payload);
+        workspaceBootstrapCache.set(cacheKey, {
+          expiresAt: Date.now() + WORKSPACE_BOOTSTRAP_CACHE_TTL_MS,
+          payload: parsedPayload,
+        });
+        return parsedPayload;
       }
 
       lastStatus = response.status;

@@ -257,6 +257,18 @@ def _bind_trace_id_to_turn_result(result: Any, trace_id: Optional[str]) -> Any:
     return payload
 
 
+def _should_persist_direct_chat_result(result: Any) -> bool:
+    if not isinstance(result, dict):
+        return False
+    metadata = _metadata_dict(result.get("metadata"))
+    kind = str(result.get("kind") or metadata.get("kind") or "").strip().lower()
+    if kind != "direct_chat_stream":
+        return True
+    reply = str(result.get("reply") or "").strip()
+    interventions = result.get("interventions") if isinstance(result.get("interventions"), list) else []
+    return bool(reply or interventions)
+
+
 def _direct_chat_request_metadata(body: Dict[str, Any]) -> Dict[str, Any]:
     context_hints = body.get("context_hints") if isinstance(body.get("context_hints"), dict) else {}
     metadata = context_hints.get("metadata") if isinstance(context_hints.get("metadata"), dict) else {}
@@ -613,6 +625,15 @@ def build_agent_turn_request(payload: Dict[str, Any]) -> AgentTurnRequest:
     next_context_hints = dict(context_hints)
     if request_id:
         next_context_hints.setdefault("request_id", request_id)
+    provider = str(payload.get("provider") or "").strip()
+    model = str(payload.get("model") or "").strip()
+    reasoning_effort = str(payload.get("reasoning_effort") or "").strip()
+    if provider:
+        next_context_hints.setdefault("provider", provider)
+    if model:
+        next_context_hints.setdefault("model", model)
+    if reasoning_effort:
+        next_context_hints.setdefault("reasoning_effort", reasoning_effort)
     request = AgentTurnRequest(
         tenant_id=str(payload.get("tenant_id") or "").strip(),
         workspace_id=str(payload.get("workspace_id") or "").strip(),
@@ -1223,29 +1244,6 @@ async def agent_turn(
     resolved_turn_request.thread_id = resolved_thread_id
     binding_metadata = _metadata_dict(resolved_turn_request.context_hints.get("metadata"))
     trace_context = None
-    try:
-        trace_context = await agent_trace_service.start_trace(
-            workspace_id=resolved_turn_request.workspace_id,
-            tenant_id=resolved_turn_request.tenant_id,
-            thread_id=resolved_thread_id,
-            run_id=(
-                str(getattr(run_request, "run_id", None) or "").strip()
-                or str((chat_body or {}).get("run_id") or "").strip()
-                or None
-            ),
-            surface=_trace_surface(resolved_turn_request.channel),
-            runtime_target=_trace_runtime_target(resolved_turn_request),
-            provider=_trace_provider(resolved_turn_request),
-            model=_trace_model(resolved_turn_request),
-            root_agent_id=_trace_root_agent_id(binding_metadata),
-        )
-        if trace_context is not None:
-            try:
-                await agent_trace_service.emit_trace_started(trace_context, "text")
-            except Exception:
-                pass
-    except Exception:
-        trace_context = None
     session_record = None
     if preferred_session_id:
         session_record = await session_service.get_session_scoped(
@@ -1331,6 +1329,29 @@ async def agent_turn(
             "session_id": resolved_turn_request.session_id,
         },
     )
+    try:
+        trace_context = await agent_trace_service.start_trace(
+            workspace_id=resolved_turn_request.workspace_id,
+            tenant_id=resolved_turn_request.tenant_id,
+            thread_id=resolved_thread_id,
+            run_id=(
+                str(getattr(run_request, "run_id", None) or "").strip()
+                or str((chat_body or {}).get("run_id") or "").strip()
+                or None
+            ),
+            surface=_trace_surface(resolved_turn_request.channel),
+            runtime_target=_trace_runtime_target(resolved_turn_request),
+            provider=_trace_provider(resolved_turn_request),
+            model=_trace_model(resolved_turn_request),
+            root_agent_id=_trace_root_agent_id(binding_metadata),
+        )
+        if trace_context is not None:
+            try:
+                await agent_trace_service.emit_trace_started(trace_context, "text")
+            except Exception:
+                pass
+    except Exception:
+        trace_context = None
     await thread_service.record_user_turn(
         thread_id=resolved_thread_id,
         tenant_id=resolved_turn_request.tenant_id,
@@ -1410,7 +1431,7 @@ async def agent_turn(
             )
             trace_id = trace_context.trace_id if trace_context is not None else None
             result = _bind_trace_id_to_turn_result(result, trace_id)
-            if isinstance(result, dict):
+            if _should_persist_direct_chat_result(result):
                 assistant_request_id = (
                     str(resolved_turn_request.context_hints.get("request_id") or "").strip()
                     or str(result.get("client_request_id") or "").strip()

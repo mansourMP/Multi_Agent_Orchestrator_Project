@@ -1,4 +1,5 @@
 import unittest
+from unittest.mock import patch
 
 from server_modules.connectors.autopilot_connector_shell_builder import build_autopilot_connector_shell_service
 
@@ -33,6 +34,38 @@ class AutopilotConnectorShellBuilderTests(unittest.TestCase):
 
         self.assertEqual(result, "run-1")
         self.assertEqual(create_calls[0]["engine"], "orion")
+
+    def test_builder_resolve_vault_credential_falls_back_to_runtime_common_shape(self) -> None:
+        namespace: dict[str, object] = {}
+
+        def fake_import_attr(module_name: str, attr_name: str):
+            if module_name == "server_modules.runtime_common" and attr_name == "resolve_vault_credential":
+                return lambda credential_id, workspace_id=None: {
+                    "credential_id": credential_id,
+                    "workspace_id": workspace_id,
+                }
+            if module_name == "server_modules.runtime_common" and attr_name == "http_json_request":
+                return lambda *args, **kwargs: {"args": args, "kwargs": kwargs}
+            raise AssertionError(f"unexpected import {module_name}.{attr_name}")
+
+        with patch("server_modules.connectors.autopilot_connector_shell_builder._import_attr", side_effect=fake_import_attr):
+            built = build_autopilot_connector_shell_service(
+                global_namespace=namespace,
+                sync_server_globals=("X",),
+                server_getter=lambda: None,
+                server_setter=lambda value: None,
+                import_server=lambda: object(),
+                shell_service_class=_FakeShellService,
+            )
+            resolved = built.kwargs["resolve_vault_credential"]("cred-1", "default")
+
+            self.assertEqual(
+                resolved,
+                {
+                    "credential_id": "cred-1",
+                    "workspace_id": "default",
+                },
+            )
 
 
 if __name__ == "__main__":

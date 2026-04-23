@@ -8,7 +8,7 @@ from server_modules import provider_catalog_service
 
 class ProviderCatalogServiceTests(unittest.IsolatedAsyncioTestCase):
     async def test_list_workspace_provider_catalog_exposes_models_and_governance(self) -> None:
-        runtime_truth = {
+        connection_truth = {
             "workspace_id": "ws-1",
             "summary": {"provider_total": 2},
             "providers": [
@@ -26,9 +26,46 @@ class ProviderCatalogServiceTests(unittest.IsolatedAsyncioTestCase):
                 },
             ],
         }
+        runtime_truth = {
+            "workspace_id": "ws-1",
+            "summary": {"provider_total": 2, "active": 2, "configured": 0, "setup_required": 0, "unavailable": 0, "degraded": 0},
+            "providers": [
+                {
+                    "id": "openai",
+                    "label": "OpenAI",
+                    "state": "active",
+                    "usable": True,
+                    "configured": True,
+                    "active": True,
+                    "credential_sources": ["env_api_key"],
+                    "active_source": "env_api_key",
+                    "identity_owner": "platform_account",
+                    "identity_owner_label": "Empyralis account",
+                    "identity_boundary_note": "Platform sign-in stays separate from provider capabilities and machine-local sessions.",
+                    "machine_bound": False,
+                },
+                {
+                    "id": "deepseek",
+                    "label": "DeepSeek",
+                    "state": "active",
+                    "usable": True,
+                    "configured": True,
+                    "active": True,
+                    "credential_sources": ["env-deepseek"],
+                    "active_source": "env-deepseek",
+                    "identity_owner": "platform_account",
+                    "identity_owner_label": "Empyralis account",
+                    "identity_boundary_note": "Platform sign-in stays separate from provider capabilities and machine-local sessions.",
+                    "machine_bound": False,
+                },
+            ],
+        }
 
         with patch(
             "server_modules.provider_catalog_service.provider_profiles.build_workspace_provider_connection_truth",
+            return_value=connection_truth,
+        ), patch(
+            "server_modules.provider_catalog_service.provider_profiles.build_provider_runtime_truth",
             return_value=runtime_truth,
         ):
             payload = await provider_catalog_service.list_workspace_provider_catalog(workspace_id="ws-1")
@@ -40,6 +77,8 @@ class ProviderCatalogServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("jurisdiction", providers["openai"])
         self.assertTrue(any(model["id"] == "gpt-4o" for model in providers["openai"]["models"]))
         self.assertTrue(any(model["id"] == "deepseek-chat" for model in providers["deepseek"]["models"]))
+        self.assertEqual(providers["deepseek"]["state"], "active")
+        self.assertEqual(providers["deepseek"]["active_source"], "env-deepseek")
 
     def test_openai_codex_catalog_exposes_reasoning_levels(self) -> None:
         models = provider_catalog_service.provider_profiles.provider_model_catalog("openai-codex")

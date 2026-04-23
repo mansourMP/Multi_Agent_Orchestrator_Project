@@ -1,4 +1,5 @@
 from __future__ import annotations
+import json
 import sentry_sdk
 import threading
 from datetime import datetime, timezone
@@ -158,6 +159,26 @@ def _chat_stream_assistant_status(payload: dict[str, Any]) -> str:
     return "failed" if error_code or error_message else "completed"
 
 
+def _assistant_turn_content(payload: dict[str, Any]) -> str:
+    reply = str(payload.get("reply") or "").strip()
+    if reply:
+        return reply
+    interventions = payload.get("interventions") if isinstance(payload.get("interventions"), list) else []
+    for item in interventions:
+        if not isinstance(item, dict):
+            continue
+        detail = str(item.get("detail") or item.get("message") or item.get("title") or "").strip()
+        if detail:
+            return detail
+    terminal_error = payload.get("terminal_error") if isinstance(payload.get("terminal_error"), dict) else {}
+    terminal_error_body = terminal_error.get("error") if isinstance(terminal_error.get("error"), dict) else {}
+    return (
+        str(terminal_error_body.get("message") or "").strip()
+        or str(payload.get("message") or "").strip()
+        or str(payload.get("error") or "").strip()
+    )
+
+
 def _persist_final_direct_chat_assistant_turn(session: dict[str, Any], payload: dict[str, Any]) -> None:
     session_metadata = _coerce_dict(session.get("metadata"))
     assistant_turn = _coerce_dict(session_metadata.get("assistant_turn"))
@@ -192,7 +213,7 @@ def _persist_final_direct_chat_assistant_turn(session: dict[str, Any], payload: 
                 "id": actor_id,
                 "display_name": "Empyralis",
             },
-            reply=str(payload.get("reply") or ""),
+            reply=_assistant_turn_content(payload),
             status=_chat_stream_assistant_status(payload),
             run_id=run_id,
             active_agent_install_id=str(assistant_turn.get("active_agent_install_id") or "").strip() or None,
@@ -262,6 +283,21 @@ def _payload_timestamp_seconds(payload: dict[str, Any], *keys: str) -> Optional[
     return None
 
 
+def _coerce_list_payload(value: Any) -> list[Any]:
+    if isinstance(value, list):
+        return list(value)
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return []
+        try:
+            parsed = json.loads(text)
+        except Exception:
+            return []
+        return list(parsed) if isinstance(parsed, list) else []
+    return []
+
+
 def _payload_within_workspace_history_window(
     *,
     payload: dict[str, Any],
@@ -288,8 +324,8 @@ def normalize_thread_turn_record(record: Dict[str, Any]) -> Dict[str, Any]:
         "content": str(payload.get("content") or ""),
         "run_id": str(payload.get("run_id") or "").strip() or None,
         "actor": _coerce_dict(payload.get("actor")),
-        "approvals": list(payload.get("approvals") or []),
-        "interventions": list(payload.get("interventions") or []),
+        "approvals": _coerce_list_payload(payload.get("approvals")),
+        "interventions": _coerce_list_payload(payload.get("interventions")),
         "metadata": _coerce_dict(payload.get("metadata")),
         "created_at": str(payload.get("created_at") or "").strip() or None,
         "updated_at": str(payload.get("updated_at") or "").strip() or None,

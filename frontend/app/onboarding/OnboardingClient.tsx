@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 
 import {
@@ -9,15 +9,18 @@ import {
   updateWorkspace,
   type CreateWorkspaceInput,
 } from '@/lib/account/account-workspaces-client';
+import { FirstLaunchPanel } from '@/lib/auth/first-launch-panel';
 import { useAccountShell } from '@/lib/shell/account-shell-context';
 import {
   sanitizeWorkspaceRoute,
   type WorkspaceMembershipRecord,
 } from '@/lib/shell/workspace-membership-model';
 import {
+  DEFAULT_ROUTE_BY_PROFILE,
   WorkspaceSetupForm,
   createDefaultWorkspaceSetupValues,
 } from '@/lib/workspace/workspace-setup-form';
+import { AppButton } from '@/lib/ui/primitives';
 
 function initialValuesForMembership(
   membership: WorkspaceMembershipRecord,
@@ -50,6 +53,7 @@ export function OnboardingClient({
   const { state, actions } = useAccountShell();
   const [submitting, setSubmitting] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [showSetupForm, setShowSetupForm] = useState(false);
 
   const membership = useMemo(
     () =>
@@ -57,6 +61,10 @@ export function OnboardingClient({
       ?? null,
     [state.workspaceMemberships, targetWorkspaceId],
   );
+
+  useEffect(() => {
+    setShowSetupForm(false);
+  }, [membership?.workspace.id]);
 
   async function handleSubmit(values: CreateWorkspaceInput) {
     if (!membership) {
@@ -126,15 +134,39 @@ export function OnboardingClient({
     );
   }
 
+  if (!showSetupForm) {
+    return (
+      <FirstLaunchPanel
+        primaryAction={(
+          <AppButton
+            type="button"
+            onClick={() => setShowSetupForm(true)}
+            className="app-first-launch__primary"
+          >
+            Set up your personal agent
+          </AppButton>
+        )}
+        secondaryAction={(
+          <Link href="/preview" className="app-first-launch__secondary">
+            Or explore agents by others
+          </Link>
+        )}
+      />
+    );
+  }
+
   return (
     <main className="app-auth-page">
       <div>
         <WorkspaceSetupForm
           workspaceId={membership.workspace.id}
           title="Finish workspace setup"
-          description="Name the workspace, pick the shell profile, and choose the safe default route before the workstation mounts."
+          description="Name the workspace and choose where Empyralis should open first."
           submitLabel="Save workspace setup"
-          initialValues={initialValuesForMembership(membership)}
+          initialValues={{
+            ...initialValuesForMembership(membership),
+            defaultRoute: membership.defaultRoute || `/w/${encodeURIComponent(membership.workspace.id)}${DEFAULT_ROUTE_BY_PROFILE.personal_shell}`,
+          }}
           submitting={submitting}
           errorMessage={errorMessage}
           onSubmit={handleSubmit}

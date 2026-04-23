@@ -1,0 +1,138 @@
+from __future__ import annotations
+
+import json
+import tempfile
+from pathlib import Path
+
+import httpx
+import pytest
+from fastapi import FastAPI
+
+from server_modules import app_registry_api
+from server_modules import routes_marketplace
+from server_modules import workspace_context
+
+
+def _build_app() -> FastAPI:
+    app = FastAPI()
+    app.include_router(routes_marketplace.router, prefix="/api")
+    return app
+
+
+def _patch_app_registry(monkeypatch: pytest.MonkeyPatch, temp_root: Path) -> None:
+    registry_path = temp_root / "apps.json"
+
+    def _safe_read_json(path, fallback):
+        if not path.exists():
+            return fallback
+        return json.loads(path.read_text(encoding="utf-8"))
+
+    def _safe_write_json(path, payload):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+
+    monkeypatch.setattr(app_registry_api, "ORION_APP_REGISTRY_FILE", registry_path, raising=False)
+    monkeypatch.setattr(app_registry_api, "_safe_read_json", _safe_read_json, raising=False)
+    monkeypatch.setattr(app_registry_api, "_safe_write_json", _safe_write_json, raising=False)
+    monkeypatch.setattr(app_registry_api, "_utc_now_iso", lambda: "2026-04-22T00:00:00Z", raising=False)
+
+
+@pytest.fixture
+def anyio_backend():
+    return "asyncio"
+
+
+@pytest.mark.anyio
+async def test_marketplace_routes_register_install_and_track_runtime(monkeypatch: pytest.MonkeyPatch):
+    app = _build_app()
+    app.dependency_overrides[routes_marketplace.get_current_user] = lambda: {
+        "user_id": "user-1",
+        "workspace_access": {"ws-1": {"tenant_id": "tenant-1", "role": "owner"}},
+    }
+    monkeypatch.setattr(
+        routes_marketplace.auth_module,
+        "enforce_workspace_access",
+        lambda current_user, workspace_id, minimum_role="viewer": workspace_id,
+    )
+
+    with tempfile.TemporaryDirectory(prefix="marketplace-routes-") as tmpdir:
+        temp_root = Path(tmpdir)
+        monkeypatch.setattr(workspace_context, "_WORKSPACE_DIR", temp_root / "workspace")
+        _patch_app_registry(monkeypatch, temp_root)
+
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            create_provider = await client.post(
+                "/api/workspaces/ws-1/marketplace/providers",
+                json={
+                    "label": "Signal Forge Models",
+                    "description": "Provider package for governed third-party models.",
+                    "verification_status": "partner",
+                    "review_state": "approved",
+                    "health_state": "healthy",
+                    "billing": {
+                        "monetization_kind": "metered",
+                        "revenue_share_bps": 900,
+                        "accounting_hook": {"ledger_key": "signal-forge.install"},
+                    },
+                    "provider": {
+                        "provider_id": "signalforge",
+                        "models": [
+                            {
+                                "id": "signalforge-chat",
+                                "label": "Signal Forge Chat",
+                            }
+                        ],
+                    },
+                },
+            )
+            assert create_provider.status_code == 200
+            provider_package_id = create_provider.json()["package_id"]
+
+            create_app = await client.post(
+                "/api/workspaces/ws-1/marketplace/apps",
+                json={
+                    "label": "Signal Forge Console",
+                    "description": "Hosted app package distributed through the Empyralis shell.",
+                    "verification_status": "verified",
+                    "review_state": "approved",
+                    "health_state": "healthy",
+                    "publisher": {"label": "Signal Forge"},
+                    "app": {
+                        "app_id": "signalforge_console",
+                        "hosted_url": "https://apps.signalforge.example/embed",
+                        "allowed_origins": ["https://apps.signalforge.example"],
+                        "permissions": ["app_bridge.read"],
+                    },
+                },
+            )
+            assert create_app.status_code == 200
+            app_package_id = create_app.json()["package_id"]
+
+            install_provider = await client.post(
+                f"/api/workspaces/ws-1/marketplace/packages/{provider_package_id}/install"
+            )
+            assert install_provider.status_code == 200
+            assert install_provider.json()["installed"] is True
+
+            install_app = await client.post(
+                f"/api/workspaces/ws-1/marketplace/packages/{app_package_id}/install"
+            )
+            assert install_app.status_code == 200
+            assert install_app.json()["runtime_truth"]["open_href"] == "/w/ws-1/applications/signalforge_console"
+
+            runtime_event = await client.post(
+                f"/api/workspaces/ws-1/marketplace/packages/{provider_package_id}/runtime-events",
+                json={"event_type": "runtime_ok", "health_state": "healthy", "metadata": {"probe": "smoke"}},
+            )
+            assert runtime_event.status_code == 200
+            assert runtime_event.json()["analytics"]["runtime_event_count"] == 1
+
+            list_response = await client.get("/api/workspaces/ws-1/marketplace/packages")
+            assert list_response.status_code == 200
+            payload = list_response.json()
+            assert payload["count"] == 2
+            installed_items = {item["package_id"]: item for item in payload["items"]}
+            assert installed_items[provider_package_id]["installed"] is True
+            assert installed_items[provider_package_id]["billing"]["revenue_share_bps"] == 900
+            assert installed_items[app_package_id]["runtime_truth"]["surface"] == "app_registry"

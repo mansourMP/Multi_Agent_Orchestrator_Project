@@ -1,6 +1,8 @@
 import hashlib
 import json
 import os
+import shutil
+import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 import ssl
@@ -391,6 +393,57 @@ def http_json_request(
             "text": raw,
             "json": parsed,
             "headers": dict(getattr(exc, "headers", {}).items()) if getattr(exc, "headers", None) else {},
+        }
+    except Exception:
+        # Telegram's edge occasionally drops urllib TLS sessions in this environment
+        # even though the same request succeeds via curl. Keep the fallback narrow.
+        if "api.telegram.org" not in str(url).lower() or not shutil.which("curl"):
+            raise
+        command = [
+            "curl",
+            "-sS",
+            "-L",
+            "-X",
+            verb,
+            "--max-time",
+            str(max(1, int(timeout))),
+            "-w",
+            "\n__CODEX_STATUS__:%{http_code}",
+        ]
+        for key, value in request_headers.items():
+            command.extend(["-H", f"{key}: {value}"])
+        if body is not None:
+            command.extend(["--data-binary", "@-"])
+        command.append(url)
+        completed = subprocess.run(
+            command,
+            input=body,
+            capture_output=True,
+            check=False,
+        )
+        if completed.returncode != 0:
+            raise
+        raw_output = completed.stdout.decode("utf-8", errors="replace")
+        marker = "\n__CODEX_STATUS__:"
+        body_text, _, status_text = raw_output.rpartition(marker)
+        if not status_text:
+            body_text = raw_output
+            status_code = 200
+        else:
+            try:
+                status_code = int(status_text.strip() or "0")
+            except Exception:
+                status_code = 0
+        parsed: Any = None
+        try:
+            parsed = json.loads(body_text) if body_text else None
+        except Exception:
+            parsed = None
+        return {
+            "status": status_code,
+            "text": body_text,
+            "json": parsed,
+            "headers": {},
         }
 
 

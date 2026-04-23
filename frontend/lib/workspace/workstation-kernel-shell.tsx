@@ -2,13 +2,12 @@
 
 import type { PropsWithChildren } from 'react';
 import Link from 'next/link';
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo } from 'react';
 import { usePathname } from 'next/navigation';
 
 import { joinClassNames } from '@/lib/ui/primitives';
 import { WorkstationTitlebar } from '@/lib/workspace/workstation-titlebar';
 import { useWorkspaceBoundary } from '@/lib/workspace/workspace-boundary';
-import { useWorkspaceServices, useWorkstationStreamState } from '@/lib/workspace/workspace-services';
 import { resolveRouteIdFromHref } from '@/lib/workspace/workspace-shell';
 import {
   getWorkspaceNavRouteDefinition,
@@ -23,26 +22,11 @@ const CONTEXT_ROUTE_IDS_BY_DESTINATION: Record<WorkspaceNavDestinationId, readon
   settings: ['settings'],
 };
 
-type SageTitlebarCounts = {
-  recentRuns: number;
-  memoryItems: number;
-};
-
-function readString(value: unknown): string {
-  return typeof value === 'string' && value.trim() ? value.trim() : '';
-}
-
 export function WorkstationKernelShell({
   children,
 }: PropsWithChildren) {
   const pathname = usePathname();
   const { bootstrap, routeManifest, workspaceId } = useWorkspaceBoundary();
-  const services = useWorkspaceServices();
-  const streamState = useWorkstationStreamState();
-  const [sageCounts, setSageCounts] = useState<SageTitlebarCounts>({
-    recentRuns: 0,
-    memoryItems: 0,
-  });
 
   const activeRouteId = useMemo(
     () => resolveRouteIdFromHref(workspaceId, pathname),
@@ -111,52 +95,6 @@ export function WorkstationKernelShell({
     return false;
   };
 
-  useEffect(() => {
-    let cancelled = false;
-    const cutoff = Date.now() - (24 * 60 * 60 * 1000);
-    void Promise.all([
-      services.client.listRuns({ limit: 120 }),
-      services.client.listSageMemory(),
-    ]).then(([runsPayload, memoryPayload]) => {
-      if (cancelled) {
-        return;
-      }
-      const runItems = runsPayload && typeof runsPayload === 'object' && Array.isArray((runsPayload as Record<string, unknown>).items)
-        ? (runsPayload as Record<string, unknown>).items as Array<Record<string, unknown>>
-        : [];
-      const recentRuns = runItems.filter((item) => {
-        const createdAt = readString(item.created_at);
-        if (!createdAt) {
-          return false;
-        }
-        const parsed = Date.parse(createdAt);
-        return Number.isFinite(parsed) && parsed >= cutoff;
-      }).length;
-      const memorySummary = memoryPayload && typeof memoryPayload === 'object'
-        ? (memoryPayload as Record<string, unknown>).summary
-        : null;
-      const memoryItems = memorySummary && typeof memorySummary === 'object'
-        ? Number((memorySummary as Record<string, unknown>).total_count ?? 0)
-        : Array.isArray((memoryPayload as Record<string, unknown> | null)?.items)
-          ? (((memoryPayload as Record<string, unknown>).items as unknown[]).length)
-          : 0;
-      setSageCounts({
-        recentRuns,
-        memoryItems: Number.isFinite(memoryItems) ? memoryItems : 0,
-      });
-    }).catch(() => {
-      if (!cancelled) {
-        setSageCounts({
-          recentRuns: 0,
-          memoryItems: 0,
-        });
-      }
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [services.client, streamState.activity.version]);
-
   return (
     <div
       data-workstation-shell="kernel"
@@ -183,16 +121,11 @@ export function WorkstationKernelShell({
               aria-current={isContextRouteActive(route.id) ? 'page' : undefined}
               className={joinClassNames(
                 'workstation-titlebar__link',
+                route.id === 'artifacts' && 'workstation-titlebar__link--muted',
                 isContextRouteActive(route.id) && 'workstation-titlebar__link--active',
               )}
             >
               <span>{route.label}</span>
-              {route.id === 'runs' && sageCounts.recentRuns > 0 ? (
-                <span className="workstation-titlebar__link-meta">· {sageCounts.recentRuns}</span>
-              ) : null}
-              {route.id === 'activity' && sageCounts.memoryItems > 0 ? (
-                <span className="workstation-titlebar__link-meta">· {sageCounts.memoryItems}</span>
-              ) : null}
             </Link>
           )) : null}
         />

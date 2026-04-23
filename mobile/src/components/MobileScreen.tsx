@@ -1,5 +1,5 @@
 import { ScrollView, View } from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
+import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { useTheme } from "@/src/theme";
 
@@ -11,8 +11,16 @@ export function MobileScreen({
   scroll?: boolean;
 }) {
   const theme = useTheme();
+  const insets = useSafeAreaInsets();
   const content = (
-    <View style={{ paddingHorizontal: 20, paddingTop: 12, paddingBottom: 32, gap: 20 }}>
+    <View
+      style={{
+        paddingHorizontal: 18,
+        paddingTop: 14,
+        paddingBottom: 24,
+        gap: theme.spacing.lg,
+      }}
+    >
       {children}
     </View>
   );
@@ -22,7 +30,7 @@ export function MobileScreen({
       {scroll ? (
         <ScrollView
           style={{ flex: 1 }}
-          contentContainerStyle={{ paddingBottom: 36 }}
+          contentContainerStyle={{ paddingBottom: Math.max(insets.bottom, 12) + 24 }}
           showsVerticalScrollIndicator={false}
         >
           {content}

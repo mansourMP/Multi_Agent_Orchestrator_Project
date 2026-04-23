@@ -1,6 +1,6 @@
 # Context
 
-Last verified: 2026-04-11
+Last verified: 2026-04-22
 Latest verified green commit: `b3eca81`
 
 ## Product Identity
@@ -136,6 +136,26 @@ The local cluster is not one vague process. It is:
 - a local runtime supervisor
 - local memory stores
 - a local artifact bridge
+
+Canonical Phase 0 local-gateway references:
+- `docs/gateway-architecture.md`
+- `docs/gateway-protocol.md`
+- `docs/personal-vs-studio-channel-model.md`
+
+Those documents freeze the future `empyralis-gateway` boundary in front of the
+local runtime supervisor without changing the current repo into a second auth
+plane or into the Studio webhook connector stack.
+
+Current repo truth as of 2026-04-22:
+- `empyralis-gateway` exists and owns paired WSS gateway sessions
+- the gateway already routes local supervisor/device actions through the cloud
+  control path
+- personal WhatsApp and Telegram already terminate at the gateway lane
+- gateway-governed browser execution, approvals, doctor, checkpoint, and
+  fallback surfaces already exist in the live backend
+- Studio/business webhook connectors remain a separate cloud-first lane
+- hosted mini-app and governed marketplace distribution contracts already exist
+  and should be treated as implemented scaffolding, not missing architecture
 
 Lifecycle is explicit:
 - register

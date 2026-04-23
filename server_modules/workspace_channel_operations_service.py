@@ -6,7 +6,10 @@ from typing import Any, Dict, List
 from fastapi import HTTPException
 
 from server_modules import auth as auth_module
+from server_modules import gateway_state_repository
+from server_modules import personal_channels_repository
 from server_modules import run_state_repository
+from server_modules import runtime_common
 from server_modules import runtime_config
 from server_modules import shared as shared_module
 from server_modules.connectors.autopilot_runtime_exports import (
@@ -18,6 +21,18 @@ from server_modules.runtime_common import _safe_read_json
 
 CHANNEL_PROVIDERS = ("telegram", "whatsapp")
 PAIRING_FAILURE_ACTIONS = {"pairing_required", "pairing_failed"}
+PERSONAL_MODE_PROVIDER = {
+    "telegram": "telegram_gramjs",
+    "whatsapp": "whatsapp_baileys",
+}
+QUICK_MODE_PROVIDER = {
+    "telegram": "telegram_bot_api",
+    "whatsapp": "twilio_whatsapp",
+}
+QUICK_MODE_CONNECTOR = {
+    "telegram": "telegram_bot",
+    "whatsapp": "whatsapp_twilio",
+}
 
 
 def _utc_now_iso() -> str:
@@ -40,6 +55,10 @@ def _normalize_channel_token(value: Any) -> str:
     return str(value or "").strip().lower()
 
 
+def _normalize_status_token(value: Any) -> str:
+    return str(value or "").strip().lower() or "unknown"
+
+
 def _parse_utc_ts(value: Any) -> datetime | None:
     token = str(value or "").strip()
     if not token:
@@ -57,6 +76,174 @@ def _issue_severity(issue: Dict[str, Any]) -> str:
     return "degraded"
 
 
+def _latest_workspace_gateway_registration(workspace_id: str) -> Dict[str, Any] | None:
+    items = gateway_state_repository.list_workspace_gateway_registrations(
+        workspace_id,
+        include_revoked=False,
+    )
+    for item in items:
+        if str(item.get("status") or "").strip().lower() == "active":
+            return item
+    return items[0] if items else None
+
+
+def _personal_state_for_family(family: str, gateway_id: str | None) -> Dict[str, Any]:
+    if not gateway_id:
+        return {}
+    if family == "telegram":
+        return personal_channels_repository.get_telegram_state(
+            str(gateway_id or "").strip(),
+            channel_key="telegram_personal",
+        ) or {}
+    return personal_channels_repository.get_whatsapp_state(
+        str(gateway_id or "").strip(),
+        channel_key="whatsapp_personal",
+    ) or {}
+
+
+def _personal_linked_identity(family: str, state: Dict[str, Any]) -> str | None:
+    if family == "telegram":
+        for key in ("linked_name", "linked_username", "linked_phone", "linked_user_id"):
+            token = str(state.get(key) or "").strip()
+            if token:
+                return token
+        return None
+    for key in ("linked_name", "linked_jid"):
+        token = str(state.get(key) or "").strip()
+        if token:
+            return token
+    return None
+
+
+def _personal_mode_hint(family: str, registration: Dict[str, Any] | None, state: Dict[str, Any]) -> str:
+    if not registration:
+        return f"Pair a gateway to use your real {family.title()} account."
+    status = _normalize_status_token(state.get("status"))
+    if status == "connected":
+        identity = _personal_linked_identity(family, state)
+        return (
+            f"Linked as {identity} on the paired gateway."
+            if identity
+            else f"{family.title()} personal is live on the paired gateway."
+        )
+    if status == "pairing_code_required":
+        return "Enter the pairing code from the gateway on your phone in Linked Devices."
+    if status == "qr_required":
+        return "Scan the gateway QR from your phone to finish linking the personal account."
+    if status == "authorization_required":
+        login_hint = _normalize_status_token(
+            state.get("login_hint") or _coerce_dict(state.get("metadata")).get("login_hint")
+        )
+        if family == "telegram":
+            mapping = {
+                "api_credentials_required": "Telegram personal needs API ID and API hash.",
+                "phone_number_required": "Telegram personal needs your phone number.",
+                "password_required": "Telegram personal is waiting for your Telegram 2FA password.",
+            }
+            return mapping.get(login_hint, "Telegram personal needs login inputs before it can connect.")
+        if login_hint == "phone_number_invalid":
+            return "WhatsApp personal needs a valid digits-only phone number with country code."
+        return "WhatsApp personal needs a valid local login path before it can connect."
+    if status == "code_required":
+        return "Telegram personal is waiting for the login code sent to your phone."
+    if status == "connecting":
+        return f"{family.title()} personal is opening the local session through the gateway."
+    if status in {"disconnected", "logged_out"}:
+        detail = str(_coerce_dict(state.get("metadata")).get("last_disconnect_reason") or "").strip()
+        return detail or f"{family.title()} personal disconnected and needs relink or retry."
+    if status == "idle":
+        return f"{family.title()} personal is enabled on the gateway but not linked yet."
+    return f"{family.title()} personal is waiting on the paired gateway."
+
+
+def _quick_mode_hint(family: str, provider_payload: Dict[str, Any]) -> str:
+    workspace_status = _normalize_status_token(provider_payload.get("workspace_status"))
+    connectors = [
+        _coerce_dict(item) for item in _coerce_list(provider_payload.get("connectors"))
+    ]
+    issues = [_coerce_dict(item) for item in _coerce_list(provider_payload.get("issues"))]
+    if workspace_status == "live":
+        return f"{family.title()} quick mode is live through the Studio connector stack."
+    if not connectors:
+        if family == "telegram":
+            return "Create a Telegram bot connector for the fastest setup path."
+        return "Create a Twilio WhatsApp connector for the fastest setup path."
+    first_issue = str((issues[0] or {}).get("message") or "").strip() if issues else ""
+    return first_issue or f"{family.title()} quick mode needs connector attention before it is fully live."
+
+
+def _build_channel_family_modes(
+    *,
+    family: str,
+    workspace_id: str,
+    provider_payload: Dict[str, Any],
+) -> Dict[str, Any]:
+    registration = _latest_workspace_gateway_registration(workspace_id)
+    gateway_id = str((registration or {}).get("gateway_id") or "").strip() or None
+    personal_state = _personal_state_for_family(family, gateway_id)
+    personal_status = _normalize_status_token(
+        personal_state.get("status") or ("gateway_required" if not registration else "idle")
+    )
+    quick_status = _normalize_status_token(
+        provider_payload.get("workspace_status") or provider_payload.get("status") or "setup_needed"
+    )
+    personal_mode = {
+        "id": f"{family}_personal",
+        "family": family,
+        "label": "Personal mode",
+        "mode_kind": "personal",
+        "strategy": "recommended_for_sage",
+        "setup_weight": "advanced",
+        "provider": PERSONAL_MODE_PROVIDER[family],
+        "runtime_lane": "personal_gateway",
+        "configured": bool(registration) and personal_status not in {"gateway_required", "unknown"},
+        "current_status": personal_status,
+        "description": f"Use your real {family.title()} account through the paired local gateway.",
+        "best_for": "Sage acting as you from your own account and device-resident session.",
+        "gateway_id": gateway_id,
+        "linked_identity": _personal_linked_identity(family, personal_state),
+        "setup_hint": _personal_mode_hint(family, registration, personal_state),
+    }
+    quick_mode = {
+        "id": f"{family}_quick",
+        "family": family,
+        "label": "Quick mode",
+        "mode_kind": "quick",
+        "strategy": "quick_start",
+        "setup_weight": "light",
+        "provider": QUICK_MODE_PROVIDER[family],
+        "runtime_lane": "studio_business_connector",
+        "configured": bool(provider_payload.get("workspace_configured")),
+        "current_status": quick_status,
+        "description": (
+            "Use a BotFather bot token through the Studio connector stack."
+            if family == "telegram"
+            else "Use Twilio WhatsApp through the Studio connector stack."
+        ),
+        "best_for": "Fast onboarding, cloud-managed reliability, and business-facing deployment flows.",
+        "connector_count": len(_coerce_list(provider_payload.get("connectors"))),
+        "setup_hint": _quick_mode_hint(family, provider_payload),
+    }
+    active_mode = (
+        "personal"
+        if personal_status == "connected"
+        else "quick"
+        if quick_status == "live"
+        else None
+    )
+    return {
+        "family": family,
+        "label": family.title(),
+        "summary": (
+            "Choose between your own account on the local gateway and a fast bot-based Studio connector."
+            if family == "telegram"
+            else "Choose between your own account on the local gateway and a fast provider-managed Studio connector."
+        ),
+        "active_mode": active_mode,
+        "modes": [personal_mode, quick_mode],
+    }
+
+
 def _workspace_status_from_issues(
     *,
     base_status: str,
@@ -65,7 +252,13 @@ def _workspace_status_from_issues(
 ) -> str:
     normalized_base = str(base_status or "").strip().lower()
     if normalized_base == "disabled":
-        return "disabled"
+        if not connectors:
+            return "disabled"
+        if any(_issue_severity(issue) == "setup_needed" for issue in issues):
+            return "setup_needed"
+        if issues:
+            return "degraded"
+        return "setup_needed"
     if not connectors:
         return "setup_needed"
     if any(_issue_severity(issue) == "setup_needed" for issue in issues):
@@ -75,17 +268,79 @@ def _workspace_status_from_issues(
     return "live"
 
 
+def _workspace_quick_vault_connectors(*, provider: str, workspace_id: str) -> List[Dict[str, Any]]:
+    connector_id = QUICK_MODE_CONNECTOR.get(provider)
+    if not connector_id:
+        return []
+    try:
+        rows = runtime_common.list_vault_connectors(workspace_id)
+    except Exception:
+        return []
+    items: List[Dict[str, Any]] = []
+    for raw_item in rows:
+        item = _coerce_dict(raw_item)
+        if str(item.get("connector") or "").strip().lower() != connector_id:
+            continue
+        items.append(
+            {
+                "id": str(item.get("id") or "").strip(),
+                "label": item.get("label"),
+                "workspace_id": _normalize_workspace_token(item.get("workspace_id")),
+                "profile_status": "configured",
+                "profile_issue_code": None,
+                "profile_issue": None,
+                "last_processed_at": item.get("updated_at") or item.get("created_at"),
+                "last_error": None,
+                "last_error_category": None,
+                "last_error_at": None,
+                "webhook_path": None,
+                "webhook_url": None,
+            }
+        )
+    return items
+
+
+def _workspace_relevant_provider_issues(
+    *,
+    provider: str,
+    connectors: List[Dict[str, Any]],
+    issues: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    filtered: List[Dict[str, Any]] = []
+    connectors_present = bool(connectors)
+    for raw_issue in issues:
+        issue = _coerce_dict(raw_issue)
+        code = str(issue.get("code") or "").strip().lower()
+        message = str(issue.get("message") or "").strip().lower()
+        if connectors_present and code == f"{provider}_workspace_connector_missing":
+            continue
+        if connectors_present and "not scoped to an explicit workspace" in message:
+            continue
+        filtered.append(issue)
+    return filtered
+
+
 def _workspace_channel_payload(
     *,
     provider: str,
     workspace_id: str,
     payload: Dict[str, Any],
 ) -> Dict[str, Any]:
-    connectors = [
+    payload_connectors = [
         _coerce_dict(item)
         for item in _coerce_list(payload.get("connectors"))
         if _normalize_workspace_token(_coerce_dict(item).get("workspace_id")) == workspace_id
     ]
+    connectors_by_id = {
+        str(item.get("id") or "").strip(): item
+        for item in payload_connectors
+        if str(item.get("id") or "").strip()
+    }
+    for item in _workspace_quick_vault_connectors(provider=provider, workspace_id=workspace_id):
+        connector_id = str(item.get("id") or "").strip()
+        if connector_id and connector_id not in connectors_by_id:
+            connectors_by_id[connector_id] = item
+    connectors = list(connectors_by_id.values())
     issues = [_coerce_dict(item) for item in _coerce_list(payload.get("issues")) if isinstance(item, dict)]
     if not connectors:
         issues.append(
@@ -121,6 +376,12 @@ def _workspace_channel_payload(
                     "occurred_at": connector.get("last_error_at"),
                 }
             )
+
+    issues = _workspace_relevant_provider_issues(
+        provider=provider,
+        connectors=connectors,
+        issues=issues,
+    )
 
     workspace_status = _workspace_status_from_issues(
         base_status=str(payload.get("status") or "").strip().lower(),
@@ -305,20 +566,34 @@ async def build_workspace_channel_operations(
         and _normalize_channel_token(_coerce_dict(item.get("payload")).get("channel")) in CHANNEL_PROVIDERS
     ]
 
+    channels = {
+        "telegram": _workspace_channel_payload(
+            provider="telegram",
+            workspace_id=resolved_workspace_id,
+            payload=_coerce_dict(telegram_status_payload),
+        ),
+        "whatsapp": _workspace_channel_payload(
+            provider="whatsapp",
+            workspace_id=resolved_workspace_id,
+            payload=_coerce_dict(whatsapp_status_payload),
+        ),
+    }
+
     return {
         "ok": True,
         "workspace_id": resolved_workspace_id,
         "generated_at": _utc_now_iso(),
-        "channels": {
-            "telegram": _workspace_channel_payload(
-                provider="telegram",
+        "channels": channels,
+        "channel_families": {
+            "telegram": _build_channel_family_modes(
+                family="telegram",
                 workspace_id=resolved_workspace_id,
-                payload=_coerce_dict(telegram_status_payload),
+                provider_payload=channels["telegram"],
             ),
-            "whatsapp": _workspace_channel_payload(
-                provider="whatsapp",
+            "whatsapp": _build_channel_family_modes(
+                family="whatsapp",
                 workspace_id=resolved_workspace_id,
-                payload=_coerce_dict(whatsapp_status_payload),
+                provider_payload=channels["whatsapp"],
             ),
         },
         "delivery": {

@@ -2,8 +2,8 @@
   color-scheme: light;
   font-family: var(
     --app-font-sans,
+    'DM Sans',
     'Inter',
-    'Geist',
     'SF Pro Text',
     'SF Pro Display',
     'Segoe UI',
@@ -41,6 +41,25 @@ input,
 select,
 textarea {
   font: inherit;
+}
+
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
+  font-family: var(
+    --app-font-heading,
+    'Fraunces',
+    'Iowan Old Style',
+    'Palatino Linotype',
+    'Book Antiqua',
+    Georgia,
+    serif
+  );
+  font-weight: 700;
+  letter-spacing: -0.02em;
 }
 
 body[data-emp-theme='light'] {

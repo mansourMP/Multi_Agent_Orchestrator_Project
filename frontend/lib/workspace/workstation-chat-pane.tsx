@@ -531,6 +531,37 @@ function isSyntheticTranscriptMessage(message: WorkstationChatMessageRecord): bo
   return SYNTHETIC_TRANSCRIPT_MESSAGES.has(readString(message.content));
 }
 
+function normalizeStructuredRecordList(value: unknown): Record<string, unknown>[] {
+  if (Array.isArray(value)) {
+    const records = value.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === 'object');
+    if (records.length > 0 || value.length === 0) {
+      return records;
+    }
+    if (value.every((item) => typeof item === 'string')) {
+      try {
+        const parsed = JSON.parse((value as string[]).join(''));
+        return Array.isArray(parsed)
+          ? parsed.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === 'object')
+          : [];
+      } catch {
+        return [];
+      }
+    }
+    return [];
+  }
+  if (typeof value === 'string') {
+    try {
+      const parsed = JSON.parse(value);
+      return Array.isArray(parsed)
+        ? parsed.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === 'object')
+        : [];
+    } catch {
+      return [];
+    }
+  }
+  return [];
+}
+
 function normalizeCanonicalChatThread(
   payload: unknown,
   threadId: string,
@@ -547,18 +578,35 @@ function normalizeCanonicalChatThread(
       entry.metadata && typeof entry.metadata === 'object'
         ? entry.metadata as Record<string, unknown>
         : {};
+    const approvals = normalizeStructuredRecordList(entry.approvals);
+    const interventions = normalizeStructuredRecordList(entry.interventions);
+    const nextMetadata = { ...metadata };
+    const providerFailureIntervention = findProviderFailureIntervention(interventions);
+    const interventionMessage = firstInterventionMessage(interventions);
+    const rawContent = String(entry.content ?? '');
+    const content = rawContent.trim()
+      ? rawContent
+      : interventionMessage || (
+        String(entry.role ?? 'assistant') === 'assistant'
+        && String(entry.status ?? '').trim().toLowerCase() === 'failed'
+          ? "Sage couldn't complete that turn."
+          : ''
+      );
+    if (!rawContent.trim() && providerFailureIntervention && typeof nextMetadata.display_kind !== 'string') {
+      nextMetadata.display_kind = 'provider_error';
+    }
 
     return [{
       id: String(entry.id ?? `${threadId}:message:${index}`),
       role: String(entry.role ?? 'assistant'),
-      content: String(entry.content ?? ''),
+      content,
       status: typeof entry.status === 'string' ? entry.status : null,
       createdAt: typeof entry.created_at === 'string' ? entry.created_at : null,
       runId: typeof entry.run_id === 'string' ? entry.run_id : null,
-      approvals: Array.isArray(entry.approvals) ? entry.approvals as Record<string, unknown>[] : [],
-      interventions: Array.isArray(entry.interventions) ? entry.interventions as Record<string, unknown>[] : [],
-      artifacts: normalizeArtifactReferences(metadata),
-      metadata,
+      approvals,
+      interventions,
+      artifacts: normalizeArtifactReferences(nextMetadata),
+      metadata: nextMetadata,
     }].filter((message) => !isSyntheticTranscriptMessage(message));
   });
 
@@ -869,16 +917,26 @@ function createCanonicalAssistantMessage(
   const runId = typeof response.run_id === 'string' ? response.run_id : null;
   const metadata =
     response.metadata && typeof response.metadata === 'object'
-      ? response.metadata as Record<string, unknown>
+      ? { ...(response.metadata as Record<string, unknown>) }
       : {};
-  if (!reply) {
+  const providerFailureIntervention = findProviderFailureIntervention(interventions);
+  const interventionMessage = firstInterventionMessage(interventions);
+  const content = reply || interventionMessage || (
+    String(response.status ?? '').trim().toLowerCase() === 'failed' || String(response.error ?? '').trim()
+      ? "Sage couldn't complete that turn."
+      : ''
+  );
+  if (!content) {
     return null;
+  }
+  if (!reply && providerFailureIntervention && typeof metadata.display_kind !== 'string') {
+    metadata.display_kind = 'provider_error';
   }
 
   return {
     id: `${threadId}:assistant:${Date.now()}`,
     role: 'assistant',
-    content: reply,
+    content,
     status: typeof response.status === 'string' ? response.status : 'completed',
     createdAt: new Date().toISOString(),
     runId,
@@ -1730,11 +1788,6 @@ export function WorkstationChatPane() {
     }
   };
 
-  const openFirstRunTip = () => {
-    openCreateMemory('profile_fact');
-    setStatusMessage('Tip: Sage can carry forward explicit facts, active projects, and preferences you save here.');
-  };
-
   useEffect(() => {
     const cachedThread = services.queryClient.peek<CanonicalChatThreadState>(threadQueryKey(activeThreadId));
     if (cachedThread) {
@@ -2541,7 +2594,7 @@ export function WorkstationChatPane() {
           <ScrollRegion className="app-chat-thread__scroll">
             <div className="app-chat-thread__body">
               {showBlankTranscript ? (
-                <div className="app-chat-empty-state">
+                <div className={`app-chat-empty-state${recentRunRows.length > 0 ? ' app-chat-empty-state--recent' : ''}`}>
                   {recentRunRows.length > 0 ? (
                     <div className="app-chat-empty-state__recent">
                       {recentRunRows.map((run, index) => (
@@ -2565,37 +2618,6 @@ export function WorkstationChatPane() {
                       ))}
                     </div>
                   ) : null}
-                  <div className="app-chat-empty-state__actions">
-                    {!selectedProviderContext.providerLabel ? (
-                      <button
-                        type="button"
-                        className="app-chat-empty-state__link"
-                        onClick={() => {
-                          router.push(integrationsHref);
-                        }}
-                      >
-                        Connect a provider
-                      </button>
-                    ) : null}
-                    <button
-                      type="button"
-                      className="app-chat-empty-state__link"
-                      onClick={() => {
-                        router.push(`/w/${encodeURIComponent(bootstrap.workspace.id)}/studio`);
-                      }}
-                    >
-                      Create a specialist
-                    </button>
-                    <button
-                      type="button"
-                      className="app-chat-empty-state__link"
-                      onClick={() => {
-                        openFirstRunTip();
-                      }}
-                    >
-                      Learn what Sage can do
-                    </button>
-                  </div>
                 </div>
               ) : null}
 
@@ -2801,7 +2823,7 @@ export function WorkstationChatPane() {
         controlsDisabled={false}
         sendDisabled={false}
         placeholder="Message Sage..."
-        providerGateVisible={false}
+        providerGateVisible={!selectedProviderContext.providerLabel}
         showAutonomySelector={localCompanionConnected}
         autonomyFallbackLabel="Offline"
       />

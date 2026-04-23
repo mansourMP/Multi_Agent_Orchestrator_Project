@@ -12,7 +12,7 @@ class TelegramTerminalService:
         *,
         normalize_workspace_id: Callable[[Any], str],
         chat_id_from_session_key: Callable[[str], str],
-        list_connector_entries: Callable[[], List[Dict[str, Any]]],
+        list_connector_entries: Callable[..., List[Dict[str, Any]]],
         get_secret: Callable[[Dict[str, Any]], Dict[str, Any]],
         resolve_profile: Callable[[Dict[str, Any]], Dict[str, Any]],
         route_message: Callable[[str, Dict[str, Any]], Dict[str, Any]],
@@ -62,7 +62,10 @@ class TelegramTerminalService:
         requested_workspace = self.normalize_workspace_id(workspace_id)
         requested_connector_id = str(connector_id or "").strip()
         requested_chat_id = str(chat_id or "").strip() or self.chat_id_from_session_key(str(session_key or "").strip())
-        entries = self.list_connector_entries()
+        try:
+            entries = self.list_connector_entries(requested_workspace)
+        except TypeError:
+            entries = self.list_connector_entries()
         if requested_workspace:
             entries = [item for item in entries if self.normalize_workspace_id(item.get("workspace_id")) == requested_workspace]
         if requested_connector_id:

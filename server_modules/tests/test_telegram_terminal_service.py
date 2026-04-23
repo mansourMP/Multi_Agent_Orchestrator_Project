@@ -48,6 +48,39 @@ class TelegramTerminalServiceTests(unittest.TestCase):
         self.assertEqual(len(self.sent), 1)
         self.assertEqual(self.state_updates[0][0], "conn-1")
 
+    def test_handle_send_message_respects_requested_workspace_across_visible_entries(self):
+        service = self._make_service(
+            list_connector_entries=lambda: [
+                {"id": "conn-default", "label": "Default Bot", "workspace_id": "default"},
+                {"id": "conn-ws1", "label": "Workspace Bot", "workspace_id": "ws-1"},
+            ],
+            get_secret=lambda entry: {
+                "bot_token": f"bot-{entry['id']}",
+                "chat_id": f"chat-{entry['id']}",
+            },
+        )
+        result = asyncio.run(service.handle_send_message(text="hello", workspace_id="ws-1"))
+        self.assertEqual(result["connector_id"], "conn-ws1")
+        self.assertEqual(self.sent[0]["bot_token"], "bot-conn-ws1")
+        self.assertEqual(self.sent[0]["chat_id"], "chat-conn-ws1")
+
+    def test_handle_send_message_prefers_requested_workspace_when_listing_service_supports_scope(self):
+        def _list_connector_entries(workspace_id=None):
+            if workspace_id == "ws-1":
+                return [{"id": "conn-ws1", "label": "Workspace Bot", "workspace_id": "ws-1"}]
+            return [{"id": "conn-default", "label": "Default Bot", "workspace_id": "default"}]
+
+        service = self._make_service(
+            list_connector_entries=_list_connector_entries,
+            get_secret=lambda entry: {
+                "bot_token": f"bot-{entry['id']}",
+                "chat_id": f"chat-{entry['id']}",
+            },
+        )
+        result = asyncio.run(service.handle_send_message(text="hello", workspace_id="ws-1"))
+        self.assertEqual(result["connector_id"], "conn-ws1")
+        self.assertEqual(self.sent[0]["bot_token"], "bot-conn-ws1")
+
     def test_autopilot_test_short_circuits_direct_response(self):
         service = self._make_service(
             installed_skill_query=lambda **kwargs: {"handled": True, "response": "direct", "prompt_append": ""},

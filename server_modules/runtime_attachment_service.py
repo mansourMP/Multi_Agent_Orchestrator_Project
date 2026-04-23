@@ -3,13 +3,16 @@ from __future__ import annotations
 import copy
 import json
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
 
 from server_modules import (
     agent_registry_repository,
+    auth,
     control_plane_repository,
     entitlements_service,
     execution_sandbox_service,
+    gateway_state_repository,
     hybrid_policy_service,
     memory_service,
     run_state_repository,
@@ -160,6 +163,7 @@ def _runtime_inventory_snapshot_version(
     workspace_id: str,
     runtime_profiles: List[Dict[str, Any]],
     fleet_workers: List[Dict[str, Any]],
+    gateway_registrations: Optional[List[Dict[str, Any]]] = None,
 ) -> str:
     return _stable_json(
         {
@@ -174,6 +178,18 @@ def _runtime_inventory_snapshot_version(
                 _fleet_worker_snapshot_value(worker)
                 for worker in fleet_workers
                 if isinstance(worker, dict)
+            ],
+            "gateway_registrations": [
+                {
+                    "gateway_id": str(item.get("gateway_id") or "").strip(),
+                    "device_id": str(item.get("device_id") or "").strip(),
+                    "status": str(item.get("status") or "").strip(),
+                    "device_trust_state": str(item.get("device_trust_state") or "").strip(),
+                    "updated_at": item.get("updated_at"),
+                    "last_heartbeat_at": item.get("last_heartbeat_at"),
+                }
+                for item in list(gateway_registrations or [])
+                if isinstance(item, dict)
             ],
         }
     )
@@ -359,15 +375,128 @@ def _attachment_lifecycle(runtime_kind: str, worker: Optional[Dict[str, Any]]) -
     }
 
 
+def _gateway_registration_online(registration: Dict[str, Any]) -> bool:
+    payload = {
+        "online": False,
+        "status": str((registration.get("metadata") or {}).get("status") or registration.get("status") or "offline").strip().lower(),
+        "control_state": "revoked"
+        if str(registration.get("status") or "").strip().lower() == "revoked"
+        or str(registration.get("device_trust_state") or "").strip().lower() == "revoked"
+        else "active",
+        "last_seen_at": registration.get("last_seen_at") or registration.get("last_heartbeat_at"),
+        "last_heartbeat_at": registration.get("last_heartbeat_at"),
+        "lease_seconds": 30,
+    }
+    return _infer_attachment_online(payload, payload["control_state"], payload["status"])
+
+
+def _gateway_attachment_from_registration(registration: Dict[str, Any]) -> Dict[str, Any]:
+    registration_metadata = dict(registration.get("metadata") or {})
+    registration_status = str(registration.get("status") or "active").strip().lower() or "active"
+    trust_state = str(registration.get("device_trust_state") or "verified").strip().lower() or "verified"
+    online = _gateway_registration_online(registration)
+    revoked = registration_status == "revoked" or trust_state == "revoked"
+    healthy = bool(online and not revoked)
+    attachment = {
+        "attachment_id": f"local_companion:{str(registration.get('gateway_id') or '').strip()}",
+        "attachment_kind": "local_companion",
+        "tenant_id": str(registration.get("tenant_id") or "").strip(),
+        "workspace_id": str(registration.get("workspace_id") or "").strip(),
+        "runtime_class": "desktop_companion",
+        "runtime_profile_id": None,
+        "runtime_profile_slug": None,
+        "runtime_profile_label": None,
+        "runtime_id": str(registration.get("gateway_id") or "").strip() or None,
+        "machine_id": str(registration.get("device_id") or "").strip() or None,
+        "runtime_type": "local_companion",
+        "label": str(registration.get("display_name") or registration.get("device_id") or registration.get("gateway_id") or "").strip()
+        or "Paired Gateway",
+        "online": online and not revoked,
+        "healthy": healthy,
+        "control_state": "revoked" if revoked else "active",
+        "status": "revoked"
+        if revoked
+        else str(registration_metadata.get("health_state") or registration_metadata.get("status") or "ready").strip().lower()
+        or "ready",
+        "capabilities": _list_strings(registration.get("capabilities")),
+        "connectors": [],
+        "execution_targets": ["local_companion"],
+        "supports_runtime_modes": _attachment_support("local_companion"),
+        "trust_model": {
+            **_attachment_trust("local_companion"),
+            "gateway_device_trust_state": trust_state,
+            "gateway_identity_bound": True,
+        },
+        "privacy_posture": {
+            "local_private_memory_supported": True,
+            "cloud_safe_summary_bridge": True,
+            "cloud_sync_required": False,
+        },
+        "lifecycle": {
+            **_attachment_lifecycle("local_companion", registration_metadata),
+            "gateway_registered": True,
+            "gateway_revocable": True,
+        },
+        "current_run_id": None,
+        "last_seen_at": registration.get("last_seen_at") or registration.get("last_heartbeat_at"),
+        "instance_id": str(registration.get("gateway_id") or "").strip() or None,
+        "note": str(registration_metadata.get("note") or "").strip() or None,
+        "gateway_identity": {
+            "gateway_id": str(registration.get("gateway_id") or "").strip() or None,
+            "device_id": str(registration.get("device_id") or "").strip() or None,
+            "user_id": str(registration.get("user_id") or "").strip() or None,
+            "tenant_id": str(registration.get("tenant_id") or "").strip() or None,
+            "workspace_id": str(registration.get("workspace_id") or "").strip() or None,
+            "device_trust_state": trust_state,
+            "status": registration_status,
+        },
+    }
+    return attachment
+
+
+def _merge_gateway_registration_into_attachment(
+    attachment: Dict[str, Any],
+    registration: Dict[str, Any],
+) -> Dict[str, Any]:
+    merged = dict(attachment)
+    gateway_attachment = _gateway_attachment_from_registration(registration)
+    merged["gateway_identity"] = dict(gateway_attachment.get("gateway_identity") or {})
+    merged["capabilities"] = sorted(
+        {
+            str(item or "").strip()
+            for item in list(attachment.get("capabilities") or []) + list(gateway_attachment.get("capabilities") or [])
+            if str(item or "").strip()
+        }
+    )
+    trust_state = str((gateway_attachment.get("gateway_identity") or {}).get("device_trust_state") or "verified").strip().lower()
+    if trust_state == "revoked":
+        merged["online"] = False
+        merged["healthy"] = False
+        merged["control_state"] = "revoked"
+        merged["status"] = "revoked"
+    else:
+        merged["online"] = bool(attachment.get("online")) or bool(gateway_attachment.get("online"))
+        merged["healthy"] = bool(attachment.get("healthy")) or bool(gateway_attachment.get("healthy"))
+    merged["machine_id"] = str(attachment.get("machine_id") or gateway_attachment.get("machine_id") or "").strip() or None
+    merged["runtime_id"] = str(attachment.get("runtime_id") or gateway_attachment.get("runtime_id") or "").strip() or None
+    merged["trust_model"] = {
+        **dict(attachment.get("trust_model") or {}),
+        "gateway_device_trust_state": str((gateway_attachment.get("gateway_identity") or {}).get("device_trust_state") or "").strip()
+        or None,
+        "gateway_identity_bound": True,
+    }
+    return merged
+
+
 def _deployment_mode(attachments: Iterable[Dict[str, Any]]) -> str:
     items = [dict(item) for item in attachments if isinstance(item, dict)]
     has_cloud = any(str(item.get("attachment_kind") or "").strip() == "managed_cloud" for item in items)
     has_local = any(str(item.get("attachment_kind") or "").strip() == "local_companion" for item in items)
     has_self_hosted = any(str(item.get("attachment_kind") or "").strip() == "self_hosted_business_node" for item in items)
+    if has_cloud and (has_local or has_self_hosted):
+        return "hybrid"
     if has_self_hosted:
         return "self_hosted_business"
-    if has_cloud and has_local:
-        return "hybrid"
     if has_local:
         return "local_only"
     return "cloud_only"
@@ -396,12 +525,12 @@ def _runtime_target_status(attachments: List[Dict[str, Any]]) -> str:
 
 def _default_runtime_target_id(*, deployment_mode: str, attachments: List[Dict[str, Any]]) -> str:
     mode = str(deployment_mode or "").strip().lower()
+    if _attachments_for_kind(attachments, "managed_cloud"):
+        return "cloud_default"
     if mode == "self_hosted_business" and _attachments_for_kind(attachments, "self_hosted_business_node"):
         return "self_host_runtime"
     if mode == "local_only" and _attachments_for_kind(attachments, "local_companion"):
         return "local_companion"
-    if _attachments_for_kind(attachments, "managed_cloud"):
-        return "cloud_default"
     if _attachments_for_kind(attachments, "self_hosted_business_node"):
         return "self_host_runtime"
     if _attachments_for_kind(attachments, "local_companion"):
@@ -470,6 +599,9 @@ def build_workspace_runtime_targets(
         "targets": targets,
         "routing_contract": {
             "product_default_target_id": "cloud_default",
+            "business_default_mode": "cloud_first",
+            "business_private_runtime_optional": True,
+            "self_host_runtime_requires_explicit_selection": True,
             "mobile_entry_mode": "platform_first",
             "direct_mobile_lan_default": False,
             "workspace_scoped_identity": True,
@@ -647,11 +779,37 @@ async def list_workspace_runtime_attachments(
             ]
         except Exception:
             workers = []
+    gateway_db_exists = Path(gateway_state_repository.GATEWAY_STATE_DB_FILE).expanduser().exists()
+    if gateway_db_exists:
+        try:
+            gateway_registrations = [
+                dict(item)
+                for item in gateway_state_repository.list_workspace_gateway_registrations(
+                    workspace_id,
+                    tenant_id=tenant_id,
+                    include_revoked=True,
+                )
+                if isinstance(item, dict)
+            ]
+        except Exception:
+            gateway_registrations = []
+    else:
+        gateway_registrations = []
+    for registration in gateway_registrations:
+        device_link = auth.get_user_device_link(str(registration.get("device_id") or "").strip())
+        if device_link:
+            registration["device_trust_state"] = str(device_link.get("trust_state") or registration.get("device_trust_state") or "verified").strip()
+            registration["status"] = (
+                "revoked"
+                if str(device_link.get("status") or "").strip().lower() == "revoked"
+                else str(registration.get("status") or "active").strip()
+            )
     snapshot_version = _runtime_inventory_snapshot_version(
         tenant_id=tenant_id,
         workspace_id=workspace_id,
         runtime_profiles=profiles,
         fleet_workers=workers,
+        gateway_registrations=gateway_registrations,
     )
     cached_inventory = _RUNTIME_ATTACHMENTS_CACHE.get(snapshot_version)
     if cached_inventory is not None:
@@ -716,6 +874,35 @@ async def list_workspace_runtime_attachments(
                 worker=worker,
             )
         )
+
+    for registration in gateway_registrations:
+        if not isinstance(registration, dict):
+            continue
+        matched_index = next(
+            (
+                index
+                for index, item in enumerate(attachments)
+                if str(item.get("attachment_kind") or "").strip() == "local_companion"
+                and (
+                    str(item.get("machine_id") or "").strip() == str(registration.get("device_id") or "").strip()
+                    or str(item.get("runtime_id") or "").strip() == str(registration.get("gateway_id") or "").strip()
+                )
+            ),
+            None,
+        )
+        if matched_index is None and len([item for item in attachments if str(item.get("attachment_kind") or "").strip() == "local_companion"]) == 1 and len(gateway_registrations) == 1:
+            matched_index = next(
+                (
+                    index
+                    for index, item in enumerate(attachments)
+                    if str(item.get("attachment_kind") or "").strip() == "local_companion"
+                ),
+                None,
+            )
+        if matched_index is not None:
+            attachments[matched_index] = _merge_gateway_registration_into_attachment(attachments[matched_index], registration)
+        else:
+            attachments.append(_gateway_attachment_from_registration(registration))
 
     attachments.sort(
         key=lambda item: (

@@ -86,6 +86,33 @@ class RuntimeRunsApiCanonicalRouteTests(unittest.TestCase):
             },
         }
 
+    def test_normalize_thread_turn_record_parses_stringified_lists(self):
+        record = runtime_runs_api.normalize_thread_turn_record(
+            {
+                "id": "turn-1",
+                "thread_id": "thread-1",
+                "role": "assistant",
+                "content": "",
+                "approvals": "[]",
+                "interventions": '[{"kind":"system_error","detail":"boom"}]',
+            }
+        )
+
+        self.assertEqual(record["approvals"], [])
+        self.assertEqual(record["interventions"], [{"kind": "system_error", "detail": "boom"}])
+
+    def test_assistant_turn_content_falls_back_to_intervention_detail(self):
+        content = runtime_runs_api._assistant_turn_content(
+            {
+                "reply": "",
+                "interventions": [
+                    {"kind": "system_error", "detail": "Chat failed: provider blew up"},
+                ],
+            }
+        )
+
+        self.assertEqual(content, "Chat failed: provider blew up")
+
     def test_register_run_routes_adds_turn_and_runs(self):
         fake_server = types.ModuleType("server")
         fake_server.require_api_key = object()

@@ -2,6 +2,7 @@
 
 import type { HTMLAttributes, PropsWithChildren, ReactNode } from 'react';
 
+import { MotionSlidePanel, MotionTabPanel } from '@/lib/ui/motion';
 import { joinClassNames } from '@/lib/ui/primitives';
 
 export function ListDetailShell({
@@ -28,9 +29,9 @@ export function ListDetailShell({
         {actions}
       </header>
 
-      <div className="app-list-detail-shell__body">
+      <MotionTabPanel className="app-list-detail-shell__body">
         {children}
-      </div>
+      </MotionTabPanel>
     </section>
   );
 }
@@ -68,7 +69,7 @@ export function ListDetailPanel({
   className?: string;
 }>) {
   return (
-    <section className={joinClassNames('app-list-detail-panel', className)}>
+    <MotionSlidePanel className={joinClassNames('app-list-detail-panel', className)}>
       <div className="app-list-detail-panel__header">
         <div className="app-list-detail-panel__title-group">
           {eyebrow ? (
@@ -84,6 +85,6 @@ export function ListDetailPanel({
       <div className="app-list-detail-panel__body">
         {children}
       </div>
-    </section>
+    </MotionSlidePanel>
   );
 }

@@ -35,6 +35,9 @@ class ApiAgentTurnRequest(BaseModel):
     channel: str = "web"
     actor: ApiTurnActor
     message: str
+    provider: Optional[str] = None
+    model: Optional[str] = None
+    reasoning_effort: Optional[str] = None
     attachments: List[ApiTurnAttachment] = Field(default_factory=list)
     context_hints: Dict[str, Any] = Field(default_factory=dict)
     execution_mode: Literal["sync", "durable"] = "sync"

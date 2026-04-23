@@ -389,6 +389,58 @@ async def create_session(
     return token
 
 
+async def create_local_gateway_session(
+    *,
+    tenant_id: str,
+    workspace_id: str,
+    user_id: str,
+    device_id: str,
+    gateway_id: str,
+    display_name: Optional[str] = None,
+    metadata: Optional[Dict[str, Any]] = None,
+    session_id: Optional[str] = None,
+    ttl_seconds: int = DEFAULT_SESSION_TTL_SECONDS,
+) -> str:
+    clean_gateway_id = str(gateway_id or "").strip()
+    clean_device_id = str(device_id or "").strip()
+    clean_user_id = str(user_id or "").strip()
+    clean_workspace_id = str(workspace_id or "").strip() or "default"
+    clean_tenant_id = str(tenant_id or "").strip() or "default"
+    if not clean_gateway_id or not clean_device_id or not clean_user_id:
+        raise ValueError("tenant_id, workspace_id, user_id, device_id, and gateway_id are required.")
+    clean_session_id = str(session_id or "").strip() or uuid.uuid4().hex
+    merged_metadata = {
+        "thread_id": clean_session_id,
+        "tenant_id": clean_tenant_id,
+        "workspace_id": clean_workspace_id,
+        "user_id": clean_user_id,
+        "device_id": clean_device_id,
+        "gateway_id": clean_gateway_id,
+        "session_kind": "local_gateway",
+        **dict(metadata or {}),
+    }
+    return await create_session(
+        clean_workspace_id,
+        clean_tenant_id,
+        actor={
+            "type": "gateway",
+            "id": clean_gateway_id,
+            "display_name": str(display_name or clean_gateway_id).strip() or clean_gateway_id,
+        },
+        channel="local_runtime_companion",
+        metadata=merged_metadata,
+        session_id=clean_session_id,
+        ttl_seconds=ttl_seconds,
+    )
+
+
+async def get_local_gateway_session(session_id: str) -> Optional[Dict[str, Any]]:
+    record = await get_session(session_id)
+    if isinstance(record, dict):
+        return record
+    return await get_checkpoint_session(session_id)
+
+
 async def get_session(session_id: str) -> Optional[Dict[str, Any]]:
     token = str(session_id or "").strip()
     if not token:

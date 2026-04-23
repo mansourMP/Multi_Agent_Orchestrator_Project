@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { Bot, LayoutGrid, Moon, Settings2, Sun } from 'lucide-react';
+import { Bot, Compass, LayoutGrid, Moon, Settings2, Sun, type LucideIcon } from 'lucide-react';
 
 import { joinClassNames } from '@/lib/ui/primitives';
 import { useAccountShell } from '@/lib/shell/account-shell-context';
@@ -12,24 +12,38 @@ import {
   resolvePrimaryProductWorkspaceId,
   resolveRouteWorkspaceId,
 } from '@/lib/shell/workspace-membership-model';
-import { getWorkspaceNavRouteDefinition, resolveWorkspaceRouteIdFromSegment } from '../../../shared/nav-manifest';
+import {
+  WORKSPACE_NAV_DESTINATIONS,
+  buildWorkspaceRouteHref,
+  getWorkspaceNavRouteDefinition,
+  resolveWorkspaceRouteIdFromSegment,
+  type WorkspaceNavDestinationId,
+} from '../../../shared/nav-manifest';
 
-const PRIMARY_DESTINATIONS = [
-  { id: 'sage', label: 'Sage', segment: 'sage', icon: Bot },
-  { id: 'studio', label: 'Studio', segment: 'studio', icon: LayoutGrid },
-] as const;
+const DESTINATION_ICON_MAP: Record<WorkspaceNavDestinationId, LucideIcon> = {
+  sage: Bot,
+  studio: LayoutGrid,
+  marketplace: Compass,
+  settings: Settings2,
+};
 
-const SECONDARY_DESTINATIONS = [
-  { id: 'settings', label: 'Settings', segment: 'settings', icon: Settings2 },
-] as const;
+const PRIMARY_DESTINATIONS = WORKSPACE_NAV_DESTINATIONS
+  .filter((destination) => destination.id !== 'settings')
+  .map((destination) => ({
+    id: destination.id,
+    label: destination.label,
+    defaultRouteId: destination.defaultRouteId,
+    icon: DESTINATION_ICON_MAP[destination.id],
+  }));
 
-type SwitcherDestinationId =
-  | typeof PRIMARY_DESTINATIONS[number]['id']
-  | typeof SECONDARY_DESTINATIONS[number]['id'];
-
-function destinationHref(workspaceId: string, segment: string): string {
-  return `/w/${encodeURIComponent(workspaceId)}/${segment}`;
-}
+const SECONDARY_DESTINATIONS = WORKSPACE_NAV_DESTINATIONS
+  .filter((destination) => destination.id === 'settings')
+  .map((destination) => ({
+    id: destination.id,
+    label: destination.label,
+    defaultRouteId: destination.defaultRouteId,
+    icon: DESTINATION_ICON_MAP[destination.id],
+  }));
 
 function extractRouteWorkspaceId(pathname: string | null): string | null {
   if (!pathname) {
@@ -44,7 +58,7 @@ function extractRouteWorkspaceId(pathname: string | null): string | null {
   return decodeURIComponent(segments[1]);
 }
 
-function extractActiveDestinationId(pathname: string | null): SwitcherDestinationId {
+function extractActiveDestinationId(pathname: string | null): WorkspaceNavDestinationId {
   if (!pathname) {
     return 'sage';
   }
@@ -60,7 +74,7 @@ function extractActiveDestinationId(pathname: string | null): SwitcherDestinatio
   }
 
   const destinationId = getWorkspaceNavRouteDefinition(routeId).destinationId;
-  if (destinationId === 'studio' || destinationId === 'settings') {
+  if (WORKSPACE_NAV_DESTINATIONS.some((destination) => destination.id === destinationId)) {
     return destinationId;
   }
   return 'sage';
@@ -158,7 +172,7 @@ export function AccountTenantSwitcher() {
           {PRIMARY_DESTINATIONS.map((destination) => (
             <Link
               key={destination.id}
-              href={activeWorkspaceId ? destinationHref(activeWorkspaceId, destination.segment) : '/'}
+              href={activeWorkspaceId ? buildWorkspaceRouteHref(activeWorkspaceId, destination.defaultRouteId) : '/'}
               prefetch
               aria-current={activeDestinationId === destination.id ? 'page' : undefined}
               data-workstation-destination-link={destination.id}
@@ -200,7 +214,7 @@ export function AccountTenantSwitcher() {
           {SECONDARY_DESTINATIONS.map((destination) => (
             <Link
               key={destination.id}
-              href={activeWorkspaceId ? destinationHref(activeWorkspaceId, destination.segment) : '/'}
+              href={activeWorkspaceId ? buildWorkspaceRouteHref(activeWorkspaceId, destination.defaultRouteId) : '/'}
               prefetch
               aria-current={activeDestinationId === destination.id ? 'page' : undefined}
               data-workstation-destination-link={destination.id}

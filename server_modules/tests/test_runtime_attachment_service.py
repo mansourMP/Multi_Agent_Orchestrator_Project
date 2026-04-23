@@ -1,5 +1,6 @@
 import asyncio
 from datetime import datetime, timezone
+from pathlib import Path
 import unittest
 from unittest.mock import AsyncMock, patch
 
@@ -167,6 +168,76 @@ class RuntimeAttachmentServiceTests(unittest.TestCase):
         self.assertEqual(inventory["deployment_mode"], "local_only")
         self.assertEqual([item["attachment_kind"] for item in inventory["attachments"]], ["local_companion"])
 
+    def test_list_workspace_runtime_attachments_includes_paired_gateway_truth(self) -> None:
+        runtime_attachment_service._RUNTIME_ATTACHMENTS_CACHE.clear()
+        with (
+            patch(
+                "server_modules.runtime_attachment_service.agent_registry_repository.list_runtime_profiles",
+                new=AsyncMock(return_value=[]),
+            ),
+            patch(
+                "server_modules.runtime_attachment_service.run_state_repository.list_fleet_workers",
+                new=AsyncMock(return_value=[]),
+            ),
+            patch(
+                "server_modules.runtime_attachment_service.gateway_state_repository.list_workspace_gateway_registrations",
+                return_value=[
+                    {
+                        "gateway_id": "gateway-local-1",
+                        "device_id": "device-local-1",
+                        "tenant_id": "tenant-1",
+                        "workspace_id": "workspace-1",
+                        "user_id": "user-1",
+                        "status": "active",
+                        "device_trust_state": "verified",
+                        "display_name": "Mansur Mac",
+                        "platform": "macos-arm64",
+                        "metadata": {"health_state": "online"},
+                        "capabilities": ["screen.read"],
+                        "journal_cursor": 0,
+                        "checkpoint_cursor": 0,
+                        "created_at": "2026-04-22T12:00:00Z",
+                        "updated_at": "2026-04-22T12:00:00Z",
+                        "last_seen_at": "2026-04-22T12:00:00Z",
+                        "last_heartbeat_at": "2026-04-22T12:00:00Z",
+                        "token_rotated_at": "2026-04-22T12:00:00Z",
+                        "revoked_at": None,
+                        "revoked_reason": None,
+                    }
+                ],
+            ),
+            patch(
+                "server_modules.runtime_attachment_service.gateway_state_repository.GATEWAY_STATE_DB_FILE",
+                Path(__file__),
+            ),
+            patch(
+                "server_modules.runtime_attachment_service.auth.get_user_device_link",
+                return_value={
+                    "device_id": "device-local-1",
+                    "user_id": "user-1",
+                    "workspace_id": "workspace-1",
+                    "channel": "local_runtime_companion",
+                    "status": "active",
+                    "trust_state": "verified",
+                    "metadata": {"gateway_id": "gateway-local-1"},
+                },
+            ),
+        ):
+            inventory = asyncio.run(
+                runtime_attachment_service.list_workspace_runtime_attachments(
+                    tenant_id="tenant-1",
+                    workspace_id="workspace-1",
+                )
+            )
+
+        self.assertEqual(inventory["deployment_mode"], "local_only")
+        self.assertEqual(len(inventory["attachments"]), 1)
+        attachment = inventory["attachments"][0]
+        self.assertEqual(attachment["attachment_kind"], "local_companion")
+        self.assertEqual(attachment["gateway_identity"]["gateway_id"], "gateway-local-1")
+        self.assertEqual(attachment["gateway_identity"]["device_id"], "device-local-1")
+        self.assertTrue(attachment["trust_model"]["gateway_identity_bound"])
+
     def test_list_workspace_runtime_attachments_maps_worker_only_local_runtime_to_local_companion(self) -> None:
         inventory = asyncio.run(
             runtime_attachment_service.list_workspace_runtime_attachments(
@@ -285,6 +356,77 @@ class RuntimeAttachmentServiceTests(unittest.TestCase):
         self.assertTrue(targets["self_host_runtime"]["default_for_workspace"])
         self.assertTrue(targets["self_host_runtime"]["workspace_scoped_identity"])
         self.assertEqual(targets["self_host_runtime"]["execution_target"], "cloud")
+
+    def test_list_workspace_runtime_attachments_treats_managed_cloud_plus_self_host_as_hybrid(self) -> None:
+        runtime_profiles = [
+            {
+                "id": "profile-cloud",
+                "slug": "empyralis-cloud",
+                "label": "Empyralis Cloud",
+                "runtime_class": "cloud_worker",
+                "status": "active",
+                "runtime_id": "runtime-cloud",
+            },
+            {
+                "id": "profile-enterprise",
+                "slug": "workspace-secure-node",
+                "label": "Workspace Secure Node",
+                "runtime_class": "self_hosted_business_node",
+                "status": "active",
+                "runtime_id": "runtime-enterprise",
+                "machine_id": "machine-enterprise",
+            },
+        ]
+
+        inventory = asyncio.run(
+            runtime_attachment_service.list_workspace_runtime_attachments(
+                tenant_id="tenant-1",
+                workspace_id="workspace-1",
+                runtime_profiles=runtime_profiles,
+                fleet_workers=[],
+            )
+        )
+
+        self.assertEqual(inventory["deployment_mode"], "hybrid")
+        self.assertEqual(
+            [item["attachment_kind"] for item in inventory["attachments"]],
+            ["managed_cloud", "self_hosted_business_node"],
+        )
+
+    def test_build_workspace_runtime_targets_keeps_cloud_default_when_self_host_is_optional(self) -> None:
+        inventory = {
+            "deployment_mode": "hybrid",
+            "attachments": [
+                {
+                    "attachment_id": "managed_cloud:profile-cloud",
+                    "attachment_kind": "managed_cloud",
+                    "online": True,
+                    "healthy": True,
+                    "supports_runtime_modes": ["hosted_secure"],
+                },
+                {
+                    "attachment_id": "self_hosted_business_node:profile-enterprise",
+                    "attachment_kind": "self_hosted_business_node",
+                    "online": True,
+                    "healthy": True,
+                    "supports_runtime_modes": ["hosted_secure"],
+                },
+            ],
+        }
+
+        payload = runtime_attachment_service.build_workspace_runtime_targets(
+            tenant_id="tenant-1",
+            workspace_id="workspace-1",
+            inventory=inventory,
+        )
+
+        self.assertEqual(payload["default_target_id"], "cloud_default")
+        self.assertEqual(payload["routing_contract"]["business_default_mode"], "cloud_first")
+        self.assertTrue(payload["routing_contract"]["business_private_runtime_optional"])
+        self.assertTrue(payload["routing_contract"]["self_host_runtime_requires_explicit_selection"])
+        targets = {item["target_id"]: item for item in payload["targets"]}
+        self.assertTrue(targets["cloud_default"]["default_for_workspace"])
+        self.assertFalse(targets["self_host_runtime"]["default_for_workspace"])
 
     def test_resolve_install_runtime_plan_selects_local_attachment_for_local_secure(self) -> None:
         install = {
@@ -481,6 +623,64 @@ class RuntimeAttachmentServiceTests(unittest.TestCase):
         self.assertEqual(plan["selected_attachment"]["attachment_kind"], "self_hosted_business_node")
         self.assertEqual(plan["execution_target_selected"], "cloud")
         self.assertEqual(plan["entitlements"]["enforcement_target"], "self_hosted")
+
+    def test_resolve_install_runtime_plan_keeps_managed_cloud_default_when_self_host_is_optional(self) -> None:
+        install = {
+            "runtime_mode": "hosted_secure",
+            "runtime_profile": {
+                "id": "profile-cloud",
+                "slug": "empyralis-cloud",
+                "runtime_class": "cloud_worker",
+                "runtime_id": "runtime-cloud",
+            },
+            "agent_definition_version": {
+                "placement_manifest": {
+                    "allowed_runtime_classes": ["cloud_worker", "self_hosted_business_node"],
+                }
+            },
+        }
+        inventory = {
+            "deployment_mode": "hybrid",
+            "attachments": [
+                {
+                    "attachment_id": "managed_cloud:profile-cloud",
+                    "attachment_kind": "managed_cloud",
+                    "runtime_class": "cloud_worker",
+                    "runtime_profile_id": "profile-cloud",
+                    "runtime_profile_slug": "empyralis-cloud",
+                    "runtime_id": "runtime-cloud",
+                    "online": True,
+                    "healthy": True,
+                    "control_state": "active",
+                },
+                {
+                    "attachment_id": "self_hosted_business_node:profile-enterprise",
+                    "attachment_kind": "self_hosted_business_node",
+                    "runtime_class": "self_hosted_business_node",
+                    "runtime_profile_id": "profile-enterprise",
+                    "runtime_profile_slug": "workspace-secure-node",
+                    "runtime_id": "runtime-enterprise",
+                    "online": True,
+                    "healthy": True,
+                    "control_state": "active",
+                },
+            ],
+        }
+
+        plan = asyncio.run(
+            runtime_attachment_service.resolve_install_runtime_plan(
+                tenant_id="tenant-1",
+                workspace_id="workspace-1",
+                install=install,
+                inventory=inventory,
+            )
+        )
+
+        self.assertEqual(plan["selected_attachment"]["attachment_kind"], "managed_cloud")
+        self.assertEqual(
+            plan["placement_enforcement"]["preferred_attachment_kinds"],
+            ["managed_cloud", "self_hosted_business_node"],
+        )
 
     def test_resolve_install_runtime_plan_rejects_hosted_quota_exhaustion(self) -> None:
         install = {

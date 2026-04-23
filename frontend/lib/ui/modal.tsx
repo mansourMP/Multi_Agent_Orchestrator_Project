@@ -2,6 +2,7 @@
 
 import { useEffect, type HTMLAttributes, type PropsWithChildren, type ReactNode } from 'react';
 
+import { AnimatePresence, MotionSheetSurface } from '@/lib/ui/motion';
 import { AppButton, joinClassNames } from '@/lib/ui/primitives';
 import {
   APP_LINE_HEIGHT,
@@ -45,10 +46,6 @@ export function Modal({
     };
   }, [onClose, open]);
 
-  if (!open) {
-    return null;
-  }
-
   const width =
     size === 'small'
       ? 'min(100%, 28rem)'
@@ -57,87 +54,91 @@ export function Modal({
         : 'min(100%, 38rem)';
 
   return (
-    <div
-      aria-modal="true"
-      role="dialog"
-      style={{
-        position: 'fixed',
-        inset: 0,
-        zIndex: 80,
-        display: 'grid',
-        placeItems: 'center',
-        padding: APP_SPACING[5],
-        background: 'color-mix(in srgb, var(--app-bg-overlay) 76%, transparent 24%)',
-        backdropFilter: 'blur(12px)',
-      }}
-      onClick={(event) => {
-        if (event.target === event.currentTarget) {
-          onClose();
-        }
-      }}
-    >
-      <div
-        className={joinClassNames('app-modal', className)}
-        style={{
-          width,
-          display: 'grid',
-          gridTemplateRows: 'auto minmax(0, 1fr) auto',
-          gap: APP_SPACE_SCALE.px16,
-          maxHeight: `calc(100vh - ${APP_SPACING[10]})`,
-          padding: `${APP_SPACING[4]} ${APP_SPACING[4]} ${APP_SPACING[4]}`,
-          borderRadius: APP_SPACE_SCALE.px18,
-          border: '1px solid var(--app-border-subtle)',
-          background: 'color-mix(in srgb, var(--app-bg-panel) 90%, var(--app-bg-overlay) 10%)',
-          boxShadow: APP_SHADOW.panel,
-          overflow: 'hidden',
-        }}
-      >
+    <AnimatePresence>
+      {open ? (
         <div
+          aria-modal="true"
+          role="dialog"
           style={{
-            display: 'flex',
-            justifyContent: 'space-between',
-            alignItems: 'start',
-            gap: APP_SPACING[3],
-          }}
-        >
-          <div style={{ display: 'grid', gap: APP_SPACING[1], minWidth: 0 }}>
-            <strong style={{ color: 'var(--app-text-primary)', fontSize: APP_TYPE_SCALE[16] }}>{title}</strong>
-            {description ? (
-              <span
-                style={{
-                  color: 'var(--app-text-secondary)',
-                  fontSize: APP_TYPE_SCALE[13],
-                  lineHeight: APP_LINE_HEIGHT.relaxed,
-                }}
-              >
-                {description}
-              </span>
-            ) : null}
-          </div>
-          <AppButton type="button" tone="ghost" onClick={onClose}>
-            Close
-          </AppButton>
-        </div>
-
-        <div
-          style={{
+            position: 'fixed',
+            inset: 0,
+            zIndex: 80,
             display: 'grid',
-            gap: APP_SPACE_SCALE.px14,
-            minHeight: 0,
-            overflowY: 'auto',
-            paddingRight: APP_SPACING[1],
+            placeItems: 'center',
+            padding: APP_SPACING[5],
+            background: 'color-mix(in srgb, var(--app-bg-overlay) 76%, transparent 24%)',
+            backdropFilter: 'blur(12px)',
+          }}
+          onClick={(event) => {
+            if (event.target === event.currentTarget) {
+              onClose();
+            }
           }}
         >
-          {children}
-        </div>
+          <MotionSheetSurface
+            className={joinClassNames('app-modal', className)}
+            style={{
+              width,
+              display: 'grid',
+              gridTemplateRows: 'auto minmax(0, 1fr) auto',
+              gap: APP_SPACE_SCALE.px16,
+              maxHeight: `calc(100vh - ${APP_SPACING[10]})`,
+              padding: `${APP_SPACING[4]} ${APP_SPACING[4]} ${APP_SPACING[4]}`,
+              borderRadius: APP_SPACE_SCALE.px18,
+              border: '1px solid var(--app-border-subtle)',
+              background: 'color-mix(in srgb, var(--app-bg-panel) 90%, var(--app-bg-overlay) 10%)',
+              boxShadow: APP_SHADOW.panel,
+              overflow: 'hidden',
+            }}
+          >
+            <div
+              style={{
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'start',
+                gap: APP_SPACING[3],
+              }}
+            >
+              <div style={{ display: 'grid', gap: APP_SPACING[1], minWidth: 0 }}>
+                <strong style={{ color: 'var(--app-text-primary)', fontSize: APP_TYPE_SCALE[16] }}>{title}</strong>
+                {description ? (
+                  <span
+                    style={{
+                      color: 'var(--app-text-secondary)',
+                      fontSize: APP_TYPE_SCALE[13],
+                      lineHeight: APP_LINE_HEIGHT.relaxed,
+                    }}
+                  >
+                    {description}
+                  </span>
+                ) : null}
+              </div>
+              <AppButton type="button" tone="ghost" onClick={onClose}>
+                Close
+              </AppButton>
+            </div>
 
-        {actions ? (
-          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: APP_SPACE_SCALE.px10, flexWrap: 'wrap' }}>
-            {actions}
-          </div>
-        ) : null}
-      </div>
-    </div>
+            <div
+              style={{
+                display: 'grid',
+                gap: APP_SPACE_SCALE.px14,
+                minHeight: 0,
+                overflowY: 'auto',
+                paddingRight: APP_SPACING[1],
+              }}
+            >
+              {children}
+            </div>
+
+            {actions ? (
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: APP_SPACE_SCALE.px10, flexWrap: 'wrap' }}>
+                {actions}
+              </div>
+            ) : null}
+          </MotionSheetSurface>
+        </div>
+      ) : null}
+    </AnimatePresence>
   );
 }
 

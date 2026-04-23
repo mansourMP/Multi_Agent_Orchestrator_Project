@@ -3,6 +3,8 @@ import { View, Text, StyleSheet } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useAppTheme } from '../../theme/useAppTheme';
 
+import { MotionRow } from './MotionRow';
+
 type TimelineRowProps = {
   title: string;
   time: string;
@@ -16,7 +18,7 @@ export const TimelineRow: React.FC<TimelineRowProps> = ({ title, time, descripti
   const tint = color || theme.colors.accent;
 
   return (
-    <View style={[styles.row, { backgroundColor: theme.colors.surface, borderColor: theme.colors.border }]}>
+    <MotionRow style={[styles.row, { backgroundColor: theme.colors.surface, borderColor: theme.colors.border }]}>
       <View style={[styles.iconBox, { backgroundColor: tint + '15' }]}>
         <Ionicons name={(icon || 'pulse') as any} size={14} color={tint} />
       </View>
@@ -25,7 +27,7 @@ export const TimelineRow: React.FC<TimelineRowProps> = ({ title, time, descripti
         {description ? <Text style={[styles.desc, { color: theme.colors.textSecondary }]} numberOfLines={2}>{description}</Text> : null}
       </View>
       <Text style={[styles.time, { color: theme.colors.textMuted }]}>{time}</Text>
-    </View>
+    </MotionRow>
   );
 };
 

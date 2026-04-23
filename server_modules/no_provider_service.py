@@ -226,11 +226,11 @@ def parse_http_tool_output(output: str) -> Any:
 
 def no_provider_reasoning_required_response() -> Dict[str, Any]:
     return {
-        "reply": "",
+        "reply": "Connect an AI provider in Integrations before sending a model-backed Sage message.",
         "message": "No AI provider configured",
         "actions": [],
-        "mode": "error",
-        "error": "no_provider",
+        "mode": "answer",
+        "error": "",
     }
 
 

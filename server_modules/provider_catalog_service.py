@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
+from server_modules import marketplace_distribution_service
 from server_modules import model_router
 from server_modules import provider_profiles
 
@@ -117,18 +118,113 @@ def _provider_catalog_projection(item: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _merge_runtime_truth(
+    connection_item: Dict[str, Any],
+    runtime_item: Dict[str, Any] | None,
+) -> Dict[str, Any]:
+    if not isinstance(runtime_item, dict):
+        return dict(connection_item)
+    merged = {
+        **dict(connection_item),
+        "state": runtime_item.get("state"),
+        "usable": bool(runtime_item.get("usable")),
+        "configured": bool(runtime_item.get("configured")),
+        "active": bool(runtime_item.get("active")),
+        "issues": list(runtime_item.get("issues") or []) if isinstance(runtime_item.get("issues"), list) else [],
+        "credential_sources": list(runtime_item.get("credential_sources") or []) if isinstance(runtime_item.get("credential_sources"), list) else [],
+        "backpressure": bool(runtime_item.get("backpressure")),
+        "retry_after_seconds": runtime_item.get("retry_after_seconds"),
+        "failure_class": runtime_item.get("failure_class"),
+        "issue_code": runtime_item.get("issue_code"),
+        "issue": runtime_item.get("issue"),
+        "state_detail": runtime_item.get("state_detail"),
+        "active_source": runtime_item.get("active_source"),
+        "profile_metadata": dict(runtime_item.get("profile_metadata") or {}) if isinstance(runtime_item.get("profile_metadata"), dict) else {},
+    }
+    runtime_identity_source = str(runtime_item.get("active_source") or "").strip().lower()
+    if runtime_identity_source and runtime_identity_source not in {"profile", "workspace_profile"}:
+        for key in ("identity_owner", "identity_owner_label", "identity_boundary_note", "machine_bound"):
+            if key in runtime_item:
+                merged[key] = runtime_item.get(key)
+    if runtime_item.get("default_model"):
+        merged["default_model"] = runtime_item.get("default_model")
+    return merged
+
+
+def _marketplace_provider_catalog_projection(item: Dict[str, Any]) -> Dict[str, Any]:
+    package = item.get("package") if isinstance(item.get("package"), dict) else {}
+    publisher = item.get("publisher") if isinstance(item.get("publisher"), dict) else {}
+    billing = item.get("billing") if isinstance(item.get("billing"), dict) else {}
+    runtime_truth = item.get("runtime_truth") if isinstance(item.get("runtime_truth"), dict) else {}
+    analytics = item.get("analytics") if isinstance(item.get("analytics"), dict) else {}
+    models = package.get("models") if isinstance(package.get("models"), list) else []
+    return {
+        "id": str(package.get("provider_id") or item.get("package_id") or "").strip(),
+        "label": str(item.get("label") or package.get("provider_id") or item.get("package_id") or "").strip(),
+        "state": str(runtime_truth.get("health_state") or item.get("health_state") or "setup_required").strip() or "setup_required",
+        "usable": False,
+        "active": False,
+        "configured": False,
+        "default_model": str(package.get("default_model") or "").strip() or None,
+        "privacy_posture": str(package.get("privacy_posture") or "").strip() or None,
+        "privacy_posture_summary": str(package.get("privacy_posture") or "").strip() or None,
+        "jurisdiction": str(package.get("jurisdiction") or "").strip() or None,
+        "residency": str(package.get("residency") or "").strip() or None,
+        "residency_caveat": str(package.get("residency") or "").strip() or None,
+        "enterprise_risk_note": str(package.get("enterprise_risk_note") or "").strip() or None,
+        "capability_labels": [
+            *[str(label).strip() for label in package.get("capability_labels", []) if str(label).strip()],
+            "Marketplace provider",
+        ],
+        "local_self_hosted_compatible": False,
+        "models": models,
+        "distribution_origin": "third_party_marketplace",
+        "verification_status": str(item.get("verification_status") or "unverified").strip() or "unverified",
+        "review_state": str(item.get("review_state") or "pending").strip() or "pending",
+        "health_state": str(item.get("health_state") or "setup_required").strip() or "setup_required",
+        "publisher": {
+            "publisher_id": str(publisher.get("publisher_id") or "").strip() or None,
+            "label": str(publisher.get("label") or "").strip() or None,
+            "website": str(publisher.get("website") or "").strip() or None,
+        },
+        "billing_hooks": {
+            "monetization_kind": str(billing.get("monetization_kind") or "free").strip() or "free",
+            "revenue_share_bps": int(billing.get("revenue_share_bps") or 0),
+            "billing_product_id": str(billing.get("billing_product_id") or "").strip() or None,
+            "accounting_hook": billing.get("accounting_hook") if isinstance(billing.get("accounting_hook"), dict) else {},
+        },
+        "analytics": {
+            "install_count": int(analytics.get("install_count") or 0),
+            "runtime_event_count": int(analytics.get("runtime_event_count") or 0),
+            "last_install_at": analytics.get("last_install_at"),
+            "last_runtime_at": analytics.get("last_runtime_at"),
+        },
+    }
+
+
 async def list_workspace_provider_catalog(
     *,
     workspace_id: Optional[str],
 ) -> Dict[str, Any]:
-    runtime_truth = provider_profiles.build_workspace_provider_connection_truth(workspace_id)
-    providers = [
-        _provider_catalog_projection(item)
+    connection_truth = provider_profiles.build_workspace_provider_connection_truth(workspace_id)
+    runtime_truth = provider_profiles.build_provider_runtime_truth(workspace_id)
+    runtime_by_id = {
+        str(item.get("id") or "").strip(): item
         for item in runtime_truth.get("providers", [])
+        if isinstance(item, dict) and str(item.get("id") or "").strip()
+    }
+    providers = [
+        _provider_catalog_projection(_merge_runtime_truth(item, runtime_by_id.get(str(item.get("id") or "").strip())))
+        for item in connection_truth.get("providers", [])
         if isinstance(item, dict)
     ]
+    normalized_workspace_id = str(connection_truth.get("workspace_id") or workspace_id or "default").strip() or "default"
+    for item in marketplace_distribution_service.installed_provider_marketplace_packages(normalized_workspace_id):
+        providers.append(_marketplace_provider_catalog_projection(item))
+    summary = dict(runtime_truth.get("summary") or {}) if isinstance(runtime_truth.get("summary"), dict) else {}
+    summary["provider_total"] = len(providers)
     return {
-        "workspace_id": runtime_truth.get("workspace_id"),
-        "summary": runtime_truth.get("summary"),
+        "workspace_id": normalized_workspace_id,
+        "summary": summary,
         "providers": providers,
     }

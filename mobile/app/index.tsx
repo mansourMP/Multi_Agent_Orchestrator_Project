@@ -1,5 +1,6 @@
 import { Redirect } from "expo-router";
 
+import WelcomeScreen from "@/src/screens/WelcomeScreen";
 import { useSessionState } from "@/src/lib/session-context";
 
 export default function HomeScreen() {
@@ -9,5 +10,9 @@ export default function HomeScreen() {
     return null;
   }
 
-  return <Redirect href={session?.runtimeKey ? "/chats" : "/login"} />;
+  if (session?.runtimeKey) {
+    return <Redirect href="/chats" />;
+  }
+
+  return <WelcomeScreen />;
 }

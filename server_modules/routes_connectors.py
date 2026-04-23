@@ -1,9 +1,10 @@
-from typing import Dict, Optional
+from typing import Any, Awaitable, Callable, Dict, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 
 from server_modules.auth import enforce_workspace_access
 from server_modules import provider_catalog_service
+from server_modules import channel_lane_contract_service
 from server_modules.runtime_common import require_admin_api_key, require_api_key
 from server_modules.runtime_models import (
     ConnectorPatchRequest,
@@ -20,6 +21,7 @@ from server_modules.schemas import ConnectorCreate, ConnectorDocumentCreateReque
 
 router = APIRouter()
 admin_deps = [Depends(require_admin_api_key)]
+_TELEGRAM_PUBLIC_WEBHOOK_LANE_PATH = "/channels/telegram/webhook"
 
 
 def _human_admin_connector_execution_context(current_user: Optional[dict], *, workspace_id: str, purpose: str) -> Dict[str, Optional[str]]:
@@ -32,6 +34,22 @@ def _human_admin_connector_execution_context(current_user: Optional[dict], *, wo
         "actor_id": str(payload.get("user_id") or payload.get("email") or "").strip() or None,
         "purpose": str(purpose or "").strip().lower() or "human_admin_connector_route",
     }
+
+
+def _assert_public_studio_webhook_lane(path: str) -> Dict[str, str]:
+    try:
+        return channel_lane_contract_service.assert_public_studio_webhook_path(path)
+    except ValueError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+
+
+async def _dispatch_public_studio_webhook(
+    *,
+    path: str,
+    delegate: Callable[[], Awaitable[Any]],
+) -> Any:
+    _assert_public_studio_webhook_lane(path)
+    return await delegate()
 
 async def provider_profiles(
     request: Request,
@@ -130,22 +148,42 @@ async def providers_health_check(
 
 async def whatsapp_twilio_webhook(request: Request):
     # This route stays public because Twilio authenticates through the webhook secret boundary.
-    return await actions.whatsapp_twilio_webhook(request)
+    return await _dispatch_public_studio_webhook(
+        path=str(request.url.path),
+        delegate=lambda: actions.whatsapp_twilio_webhook(request),
+    )
 
 
 async def telegram_webhook(request: Request, connector_id: str):
     # This route stays public because Telegram authenticates through the webhook secret boundary.
-    return await actions.telegram_webhook_canonical(request, connector_id)
+    return await _dispatch_public_studio_webhook(
+        path=_TELEGRAM_PUBLIC_WEBHOOK_LANE_PATH,
+        delegate=lambda: actions.telegram_webhook_canonical(request, connector_id),
+    )
 
 
 async def discord_webhook(request: Request):
     # This route stays public because Discord signs requests at the edge.
-    return await actions.discord_webhook(request)
+    return await _dispatch_public_studio_webhook(
+        path=str(request.url.path),
+        delegate=lambda: actions.discord_webhook(request),
+    )
 
 
 async def github_webhook(request: Request):
     # This route stays public because GitHub signs requests at the edge.
-    return await actions.github_events_webhook(request)
+    return await _dispatch_public_studio_webhook(
+        path=str(request.url.path),
+        delegate=lambda: actions.github_events_webhook(request),
+    )
+
+
+async def slack_events_webhook(request: Request):
+    # This route stays public because Slack signs requests at the edge.
+    return await _dispatch_public_studio_webhook(
+        path=str(request.url.path),
+        delegate=lambda: actions.slack_events_webhook(request),
+    )
 
 
 async def update_tool_contract(
@@ -434,7 +472,7 @@ router.add_api_route("/connectors/vault/{connector_id}/google-doc", create_googl
 router.add_api_route("/connectors/vault/{connector_id}/google-sheet", create_google_connector_spreadsheet, methods=['POST'])
 router.add_api_route("/channels/whatsapp/twilio/webhook", whatsapp_twilio_webhook, methods=['POST'])
 router.add_api_route("/channels/telegram/webhook/{connector_id}", telegram_webhook, methods=['POST'])
-router.add_api_route("/channels/slack/events", actions.slack_events_webhook, methods=['POST'])
+router.add_api_route("/channels/slack/events", slack_events_webhook, methods=['POST'])
 router.add_api_route("/channels/github/webhook", github_webhook, methods=['POST'])
 router.add_api_route("/connectors/discord/webhook", discord_webhook, methods=['POST'])
 router.add_api_route("/channels/telegram/autopilot/status", actions.telegram_autopilot_status, methods=['GET'], dependencies=[Depends(require_api_key)])

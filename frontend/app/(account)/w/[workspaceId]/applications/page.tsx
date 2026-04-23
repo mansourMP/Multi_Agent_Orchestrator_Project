@@ -1,10 +1,10 @@
-import { notFound } from 'next/navigation';
+import { HostedMiniAppsPane } from '@/lib/workspace/hosted-mini-apps-pane';
 
 export default async function WorkspaceApplicationsPage({
   params,
 }: {
   params: Promise<{ workspaceId: string }>;
 }) {
-  await params;
-  notFound();
+  const { workspaceId } = await params;
+  return <HostedMiniAppsPane workspaceId={workspaceId} />;
 }

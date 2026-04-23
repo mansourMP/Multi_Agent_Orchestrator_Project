@@ -147,7 +147,65 @@ class AgentTurnTests(unittest.TestCase):
         result, record_assistant_turn = asyncio.run(_run())
         self.assertEqual(result["metadata"]["trace_id"], "trace-stream-1")
         self.assertEqual(result["trace_id"], "trace-stream-1")
-        self.assertEqual(record_assistant_turn.await_args.kwargs["metadata"]["request_id"], "req-1")
+        record_assistant_turn.assert_not_awaited()
+
+    def test_agent_turn_ensures_thread_before_starting_trace(self):
+        turn_request = AgentTurnRequest(
+            tenant_id="tenant-1",
+            workspace_id="workspace-1",
+            thread_id="thread-1",
+            session_id="session-1",
+            channel="web",
+            actor=TurnActor(type="user", id="user-1", display_name="Alice"),
+            message="hello world",
+            execution_mode="sync",
+            response_mode="stream",
+            context_hints={"metadata": {}},
+        )
+        call_order: list[str] = []
+        trace_context = agent_trace_service.TraceContext(
+            trace_id="trace-order-1",
+            workspace_id="workspace-1",
+            tenant_id="tenant-1",
+            thread_id="thread-1",
+            run_id=None,
+            root_agent_id="sage",
+        )
+
+        async def _run():
+            async def _ensure_master_thread(**kwargs):
+                call_order.append("ensure_thread")
+                return {"id": kwargs["thread_id"]}
+
+            async def _start_trace(**kwargs):
+                call_order.append("start_trace")
+                return trace_context
+
+            with patch("server_modules.agent_turn.agent_trace_service.start_trace", new=AsyncMock(side_effect=_start_trace)), patch("server_modules.agent_turn.agent_trace_service.emit_trace_started", new=AsyncMock(return_value="tevent_started")), patch("server_modules.agent_turn.agent_trace_service.emit_trace_routed", new=AsyncMock(return_value="tevent_routed")), patch("server_modules.agent_turn.session_service.get_session_scoped", new=AsyncMock(return_value={
+                "session_id": "session-1",
+                "workspace_id": "workspace-1",
+                "tenant_id": "tenant-1",
+                "channel": "web",
+                "actor": {"type": "user", "id": "user-1"},
+                "created_at": "2026-04-08T00:00:00Z",
+                "expires_at": "2099-01-01T00:00:00Z",
+                "metadata": {"thread_id": "thread-1"},
+                "status": "active",
+            })), patch("server_modules.agent_turn.session_service.extend_session", new=AsyncMock(return_value=None)), patch("server_modules.agent_turn.thread_service.ensure_master_thread", new=AsyncMock(side_effect=_ensure_master_thread)), patch("server_modules.agent_turn.thread_service.record_user_turn", new=AsyncMock(return_value={"thread": {"id": "thread-1"}, "turn": {"id": "turn-user"}})), patch("server_modules.agent_turn.thread_service.record_assistant_turn", new=AsyncMock(return_value={"thread": {"id": "thread-1"}, "turn": {"id": "turn-assistant"}})), patch("server_modules.turn_runtime.build_turn_execution_services", return_value={"services": "ok"}), patch("server_modules.turn_runtime.execute_agent_turn_request", new=AsyncMock(return_value={
+                "status": "completed",
+                "reply": "done",
+                "metadata": {"agent_role": "master-agent"},
+            })):
+                return await agent_turn(
+                    turn_request=turn_request,
+                    current_user={"user_id": "user-1", "role": "owner", "is_admin": True},
+                    run_execution_services={"run": "services"},
+                    direct_chat_services={"direct_chat": "services"},
+                )
+
+        result = asyncio.run(_run())
+        self.assertEqual(result["reply"], "done")
+        self.assertEqual(call_order, ["ensure_thread", "start_trace"])
 
     def test_agent_turn_completes_when_trace_service_throws(self):
         turn_request = AgentTurnRequest(
@@ -323,6 +381,26 @@ class AgentTurnTests(unittest.TestCase):
         self.assertEqual(request.execution_mode, "durable")
         self.assertEqual(request.actor.display_name, "Alice")
         self.assertEqual(request.context_hints["source"], "discord")
+
+    def test_build_agent_turn_request_preserves_top_level_provider_fields(self):
+        request = build_agent_turn_request(
+            {
+                "tenant_id": "tenant-1",
+                "workspace_id": "workspace-1",
+                "thread_id": "thread-1",
+                "session_id": "session-1",
+                "channel": "web",
+                "actor": {"type": "user", "id": "user-1", "display_name": "Alice"},
+                "message": "hello",
+                "provider": "anthropic",
+                "model": "claude-sonnet-4-5",
+                "reasoning_effort": "medium",
+            }
+        )
+
+        self.assertEqual(request.context_hints["provider"], "anthropic")
+        self.assertEqual(request.context_hints["model"], "claude-sonnet-4-5")
+        self.assertEqual(request.context_hints["reasoning_effort"], "medium")
 
     def test_build_direct_chat_turn_request_normalizes_core_fields(self):
         request = build_direct_chat_turn_request(

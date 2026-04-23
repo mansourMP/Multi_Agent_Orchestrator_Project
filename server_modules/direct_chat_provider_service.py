@@ -68,9 +68,15 @@ def direct_chat_credentials(
     candidate_provider = "openai-codex" if normalized_provider == "codex_cli" else normalized_provider
     candidates = build_provider_credential_candidates_fn(
         {"workspace_id": normalized_workspace_id},
-        {"source": "chat_direct"},
+        {"source": "chat_direct", "workspace_only": True},
         candidate_provider,
     )
+    if not candidates:
+        candidates = build_provider_credential_candidates_fn(
+            {"workspace_id": normalized_workspace_id},
+            {"source": "chat_direct"},
+            candidate_provider,
+        )
     if normalized_provider == "codex_cli" and not candidates:
         openai_candidates = build_provider_credential_candidates_fn(
             {"workspace_id": normalized_workspace_id},

@@ -543,6 +543,44 @@ async function fetchAgentRegistryJson(
   return payload;
 }
 
+async function fetchSessionJson<T>(
+  session: MobileSession,
+  path: string,
+  options: {
+    method?: "GET" | "POST" | "PATCH" | "DELETE";
+    body?: Record<string, unknown> | null;
+    fallback: string;
+  },
+): Promise<T> {
+  const baseUrl = normalizeServerUrl(session.runtimeUrl);
+  let response: Response;
+  try {
+    response = await performSessionFetch(session, `${baseUrl}${path}`, {
+      method: options.method || "GET",
+      headers: options.body
+        ? {
+            "Content-Type": "application/json",
+          }
+        : undefined,
+      body: options.body ? JSON.stringify(options.body) : undefined,
+    });
+  } catch (error) {
+    if (error instanceof MobileAuthExpiredError) {
+      throw error;
+    }
+    if (error instanceof Error && error.message.trim()) {
+      throw error;
+    }
+    throw new Error(options.fallback);
+  }
+
+  if (!response.ok) {
+    throw new Error(await readResponseErrorMessage(response, options.fallback));
+  }
+
+  return response.json().catch(() => ({})) as Promise<T>;
+}
+
 function buildMobileRuntimeClient(session: MobileSession) {
   const baseUrl = normalizeServerUrl(session.runtimeUrl);
   return createApiClient({
@@ -1040,6 +1078,134 @@ export const mobileApi = {
     return buildMobileRuntimeClient(session).listConnectors(
       session.workspaceId ? { workspace_id: session.workspaceId } : {},
     ) as Promise<ConnectorListResponse>;
+  },
+  listGatewayRegistrations(session: MobileSession) {
+    const workspaceId = requireSessionWorkspaceId(session, "load paired gateways");
+    return fetchSessionJson<Record<string, unknown>>(
+      session,
+      `/api/gateway/registrations?workspace_id=${encodeURIComponent(workspaceId)}`,
+      {
+        fallback: "Could not load paired gateways.",
+      },
+    );
+  },
+  createGatewayPairingIntent(
+    session: MobileSession,
+    request: {
+      display_name?: string;
+      platform?: string;
+      ttl_seconds?: number;
+      metadata?: Record<string, unknown>;
+    } = {},
+  ) {
+    const workspaceId = requireSessionWorkspaceId(session, "pair a gateway");
+    return fetchSessionJson<Record<string, unknown>>(
+      session,
+      "/api/gateway/pairings/intents",
+      {
+        method: "POST",
+        body: {
+          workspace_id: workspaceId,
+          display_name: request.display_name,
+          platform: request.platform,
+          ttl_seconds: request.ttl_seconds,
+          metadata: request.metadata || {},
+        },
+        fallback: "Could not create a gateway pairing token.",
+      },
+    );
+  },
+  getGatewayDoctor(session: MobileSession, gatewayId: string) {
+    return fetchSessionJson<Record<string, unknown>>(
+      session,
+      `/api/gateway/registrations/${encodeURIComponent(gatewayId)}/doctor`,
+      {
+        fallback: "Could not load gateway health.",
+      },
+    );
+  },
+  getGatewayWhatsappStatus(session: MobileSession, gatewayId: string) {
+    return fetchSessionJson<Record<string, unknown>>(
+      session,
+      `/api/personal-channels/whatsapp/gateways/${encodeURIComponent(gatewayId)}`,
+      {
+        fallback: "Could not load WhatsApp personal state.",
+      },
+    );
+  },
+  getGatewayTelegramStatus(session: MobileSession, gatewayId: string) {
+    return fetchSessionJson<Record<string, unknown>>(
+      session,
+      `/api/personal-channels/telegram/gateways/${encodeURIComponent(gatewayId)}`,
+      {
+        fallback: "Could not load Telegram personal state.",
+      },
+    );
+  },
+  listGatewayApprovals(session: MobileSession, gatewayId: string) {
+    return fetchSessionJson<Record<string, unknown>>(
+      session,
+      `/api/gateway/registrations/${encodeURIComponent(gatewayId)}/approvals`,
+      {
+        fallback: "Could not load gateway approvals.",
+      },
+    );
+  },
+  resolveGatewayApproval(
+    session: MobileSession,
+    gatewayId: string,
+    approvalId: string,
+    decision: "approved" | "rejected",
+    note?: string,
+  ) {
+    return fetchSessionJson<Record<string, unknown>>(
+      session,
+      `/api/gateway/registrations/${encodeURIComponent(gatewayId)}/approvals/${encodeURIComponent(approvalId)}/resolve`,
+      {
+        method: "POST",
+        body: {
+          decision,
+          note,
+        },
+        fallback: "Could not resolve the gateway approval.",
+      },
+    );
+  },
+  listGatewayBrowserSessions(session: MobileSession, gatewayId: string) {
+    return fetchSessionJson<Record<string, unknown>>(
+      session,
+      `/api/gateway/registrations/${encodeURIComponent(gatewayId)}/browser/sessions`,
+      {
+        fallback: "Could not load gateway browser sessions.",
+      },
+    );
+  },
+  controlGatewayBrowserSession(
+    session: MobileSession,
+    gatewayId: string,
+    browserSessionId: string,
+    action: "takeover" | "resume" | "interrupt",
+    request: {
+      note?: string;
+      run_id?: string;
+      trace_id?: string;
+    } = {},
+  ) {
+    const workspaceId = requireSessionWorkspaceId(session, "control a gateway browser session");
+    return fetchSessionJson<Record<string, unknown>>(
+      session,
+      `/api/gateway/registrations/${encodeURIComponent(gatewayId)}/browser/sessions/${encodeURIComponent(browserSessionId)}/${action}`,
+      {
+        method: "POST",
+        body: {
+          workspace_id: workspaceId,
+          run_id: request.run_id || `mobile-gateway-${action}-${Date.now().toString(36)}`,
+          trace_id: request.trace_id || `mobile-gateway-${action}-${Date.now().toString(36)}`,
+          note: request.note,
+        },
+        fallback: `Could not ${action} the gateway browser session.`,
+      },
+    );
   },
   async getVaultConnectors(session: MobileSession) {
     const baseUrl = normalizeServerUrl(session.runtimeUrl);

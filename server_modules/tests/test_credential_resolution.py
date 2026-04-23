@@ -130,6 +130,31 @@ class CredentialResolutionTests(unittest.TestCase):
     @patch("server_modules.provider_profiles._openai_env_bearer_with_source")
     @patch("server_modules.provider_profiles.resolve_default_vault_credential")
     @patch("server_modules.provider_profiles.resolve_vault_credential")
+    def test_build_candidates_workspace_only_skips_runtime_env_fallbacks(
+        self,
+        resolve_vault_credential_mock,
+        resolve_default_vault_credential_mock,
+        env_bearer_mock,
+    ):
+        resolve_vault_credential_mock.side_effect = AssertionError("No profile credentials should be resolved.")
+        resolve_default_vault_credential_mock.return_value = {"access_token": "token-vault-default"}
+        env_bearer_mock.return_value = ("token-env", "OPENAI_API_KEY")
+
+        with patch.dict(provider_profiles._server.PROVIDER_PROFILES, {}, clear=True):
+            candidates = provider_profiles._build_provider_credential_candidates(
+                {"workspace_id": "ws-1"},
+                {"workspace_only": True},
+                "openai",
+            )
+
+        self.assertEqual(
+            [candidate["label"] for candidate in candidates],
+            ["vault-default"],
+        )
+
+    @patch("server_modules.provider_profiles._openai_env_bearer_with_source")
+    @patch("server_modules.provider_profiles.resolve_default_vault_credential")
+    @patch("server_modules.provider_profiles.resolve_vault_credential")
     def test_resolve_call_credentials_prefers_selected_profile_model_and_credentials(
         self,
         resolve_vault_credential_mock,

@@ -1,7 +1,9 @@
 import React from 'react';
-import { Text, TouchableOpacity, StyleSheet, ViewStyle } from 'react-native';
+import { Text, StyleSheet, StyleProp, ViewStyle } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useAppTheme } from '../../theme/useAppTheme';
+
+import { MotionPressable } from './MotionPressable';
 
 type Variant = 'primary' | 'secondary' | 'danger';
 
@@ -10,53 +12,63 @@ type ActionButtonProps = {
   icon?: string;
   variant?: Variant;
   onPress?: () => void;
-  style?: ViewStyle;
+  disabled?: boolean;
+  style?: StyleProp<ViewStyle>;
 };
 
-export const ActionButton: React.FC<ActionButtonProps> = ({ label, icon, variant = 'secondary', onPress, style }) => {
+export const ActionButton: React.FC<ActionButtonProps> = ({
+  label,
+  icon,
+  variant = 'secondary',
+  onPress,
+  disabled,
+  style,
+}) => {
   const theme = useAppTheme();
   const palette =
     variant === 'primary'
-      ? theme.colors.accent
+      ? { background: theme.colors.accent, border: theme.colors.accent, text: '#FFFFFF' }
       : variant === 'danger'
-        ? theme.colors.error
-        : theme.colors.text;
+        ? { background: theme.colors.errorMuted, border: 'rgba(194, 65, 59, 0.16)', text: theme.colors.error }
+        : { background: theme.colors.card, border: theme.colors.border, text: theme.colors.text };
 
   return (
-    <TouchableOpacity
+    <MotionPressable
+      disabled={disabled}
       onPress={onPress}
-      activeOpacity={0.85}
       style={[
         styles.button,
         {
-          backgroundColor: variant === 'primary' ? palette : theme.colors.surface,
-          borderColor: variant === 'secondary' ? theme.colors.border : palette,
+          backgroundColor: palette.background,
+          borderColor: palette.border,
+          opacity: disabled ? 0.56 : 1,
         },
         style,
       ]}
     >
-      {icon ? <Ionicons name={icon as any} size={14} color={variant === 'primary' ? '#fff' : palette} /> : null}
-      <Text style={[styles.label, { color: variant === 'primary' ? '#fff' : palette }]}>
+      {icon ? <Ionicons name={icon as any} size={14} color={palette.text} /> : null}
+      <Text style={[styles.label, { color: palette.text }]}>
         {label}
       </Text>
-    </TouchableOpacity>
+    </MotionPressable>
   );
 };
 
 const styles = StyleSheet.create({
   button: {
+    minHeight: 42,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
     gap: 6,
-    paddingHorizontal: 14,
+    paddingHorizontal: 16,
     paddingVertical: 10,
-    borderRadius: 16,
+    borderRadius: 20,
     borderWidth: 1,
   },
   label: {
-    fontSize: 12,
+    fontSize: 12.5,
     fontFamily: 'DMSans_700Bold',
-    letterSpacing: 0.3,
+    letterSpacing: 0.15,
   },
 });

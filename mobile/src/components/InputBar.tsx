@@ -2,7 +2,6 @@ import React, { useRef, useState } from "react";
 import {
   View,
   TextInput,
-  TouchableOpacity,
   StyleSheet,
   ActivityIndicator,
 } from "react-native";
@@ -12,6 +11,7 @@ import { Audio } from "expo-av";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { useAppTheme } from "../theme/useAppTheme";
+import { MotionPressable } from "./system/MotionPressable";
 
 interface InputBarProps {
   onSend: (text: string) => void;
@@ -124,23 +124,24 @@ export const InputBar: React.FC<InputBarProps> = ({
     <View style={styles.container}>
       <View style={styles.composer}>
         {textOnly ? null : (
-          <TouchableOpacity onPress={pickImage} style={styles.iconButton}>
+          <MotionPressable onPress={pickImage} style={styles.iconButton}>
             <Ionicons name="attach" size={18} color={theme.colors.textSecondary} />
-          </TouchableOpacity>
+          </MotionPressable>
         )}
 
         <TextInput
           style={styles.input}
           placeholder={placeholder || "Message"}
-          placeholderTextColor="#9A9A9A"
+          placeholderTextColor={theme.colors.textMuted}
           value={text}
           onChangeText={setText}
           multiline
           textAlignVertical="center"
+          keyboardAppearance="light"
         />
 
         {text.trim() || isLoading ? (
-          <TouchableOpacity
+          <MotionPressable
             onPress={handleSend} 
             style={[styles.sendButton, !text.trim() && styles.sendButtonDisabled]}
             disabled={!text.trim() || isLoading}
@@ -150,9 +151,9 @@ export const InputBar: React.FC<InputBarProps> = ({
             ) : (
               <Ionicons name="arrow-up" size={16} color="#FFFFFF" />
             )}
-          </TouchableOpacity>
+          </MotionPressable>
         ) : textOnly ? null : (
-          <TouchableOpacity
+          <MotionPressable
             onPressIn={startRecording} 
             onPressOut={stopRecording}
             style={styles.iconButton}
@@ -162,7 +163,7 @@ export const InputBar: React.FC<InputBarProps> = ({
               size={18}
               color={isRecording ? theme.colors.error : theme.colors.textSecondary}
             />
-          </TouchableOpacity>
+          </MotionPressable>
         )}
       </View>
     </View>
@@ -171,45 +172,50 @@ export const InputBar: React.FC<InputBarProps> = ({
 
 const useStyles = (theme: any, insets: any) => StyleSheet.create({
   container: {
-    paddingHorizontal: 16,
-    paddingTop: 8,
-    paddingBottom: (insets.bottom > 0 ? insets.bottom : 12) + 6,
-    backgroundColor: theme.colors.background,
+    paddingHorizontal: 14,
+    paddingTop: 6,
+    paddingBottom: Math.max(insets.bottom, 12) + 4,
+    backgroundColor: "transparent",
     borderTopWidth: 0,
   },
   composer: {
     flexDirection: "row",
     alignItems: "center",
     gap: 8,
-    backgroundColor: theme.colors.surface,
-    borderRadius: 26,
+    backgroundColor: theme.colors.card,
+    borderRadius: 24,
     borderWidth: 1,
     borderColor: theme.colors.border,
     paddingHorizontal: 12,
-    paddingVertical: 9,
+    paddingVertical: 10,
+    shadowColor: "#121417",
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.05,
+    shadowRadius: 16,
+    elevation: 2,
   },
   iconButton: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
+    width: 38,
+    height: 38,
+    borderRadius: 19,
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: "transparent",
+    backgroundColor: theme.colors.cardHover,
   },
   input: {
     flex: 1,
     color: theme.colors.text,
-    fontSize: 15.5,
+    fontSize: 15,
     fontFamily: "DMSans_400Regular",
-    minHeight: 38,
-    maxHeight: 120,
-    paddingHorizontal: 8,
+    minHeight: 40,
+    maxHeight: 112,
+    paddingHorizontal: 6,
     paddingVertical: 6,
   },
   sendButton: {
-    width: 38,
-    height: 38,
-    borderRadius: 19,
+    width: 40,
+    height: 40,
+    borderRadius: 20,
     backgroundColor: theme.colors.accent,
     alignItems: "center",
     justifyContent: "center",

@@ -4,6 +4,7 @@ import asyncio
 import unittest
 from unittest.mock import AsyncMock, patch
 
+from fastapi import HTTPException
 from fastapi.routing import APIRoute
 from starlette.requests import Request
 
@@ -95,6 +96,58 @@ class ConnectorRouteSecurityBoundaryTests(unittest.TestCase):
         )
         list_mock.assert_awaited_once_with(workspace_id="finance")
         self.assertEqual(result, {"providers": []})
+
+    def test_public_studio_webhook_wrapper_fails_closed_when_lane_contract_rejects_path(self) -> None:
+        request = Request(
+            {
+                "type": "http",
+                "method": "POST",
+                "path": "/channels/slack/events",
+                "query_string": b"",
+                "headers": [],
+            }
+        )
+        with patch.object(
+            routes_connectors.channel_lane_contract_service,
+            "assert_public_studio_webhook_path",
+            side_effect=ValueError("lane rejected"),
+        ) as assert_mock, patch.object(
+            routes_connectors.actions,
+            "slack_events_webhook",
+            new=AsyncMock(return_value={"ok": True}),
+        ) as slack_mock:
+            with self.assertRaises(HTTPException) as exc_info:
+                asyncio.run(routes_connectors.slack_events_webhook(request))
+
+        self.assertEqual(exc_info.exception.status_code, 403)
+        self.assertEqual(exc_info.exception.detail, "lane rejected")
+        assert_mock.assert_called_once_with("/channels/slack/events")
+        slack_mock.assert_not_awaited()
+
+    def test_public_telegram_webhook_wrapper_uses_canonical_studio_lane_path(self) -> None:
+        request = Request(
+            {
+                "type": "http",
+                "method": "POST",
+                "path": "/channels/telegram/webhook/tg-1",
+                "query_string": b"",
+                "headers": [],
+            }
+        )
+        with patch.object(
+            routes_connectors.channel_lane_contract_service,
+            "assert_public_studio_webhook_path",
+            return_value={"runtime_lane": "studio_business_connector"},
+        ) as assert_mock, patch.object(
+            routes_connectors.actions,
+            "telegram_webhook_canonical",
+            new=AsyncMock(return_value={"ok": True, "handled": 1}),
+        ) as telegram_mock:
+            result = asyncio.run(routes_connectors.telegram_webhook(request, "tg-1"))
+
+        assert_mock.assert_called_once_with("/channels/telegram/webhook")
+        telegram_mock.assert_awaited_once_with(request, "tg-1")
+        self.assertEqual(result, {"ok": True, "handled": 1})
 
 
 if __name__ == "__main__":

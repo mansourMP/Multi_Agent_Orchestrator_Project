@@ -9,6 +9,7 @@ import { EmptyPanel } from '@/lib/ui/empty-panel';
 import { FormField, FormGrid, FormInput, FormSection, FormTextarea } from '@/lib/ui/form-controls';
 import { SkeletonBlock } from '@/lib/ui/skeleton-block';
 import type { WorkstationSageMemoryRecord } from '@/lib/workspace/workstation-client';
+import { useWorkspaceBoundary } from '@/lib/workspace/workspace-boundary';
 import { useWorkspaceServices, useWorkstationStreamState } from '@/lib/workspace/workspace-services';
 import { WorkstationSurfaceRoot } from '@/lib/workspace/workstation-surface-primitives';
 
@@ -29,6 +30,8 @@ type SageMemoryDraft = {
   content: string;
   pinned: boolean;
 };
+
+const memoryPaneCache = new Map<string, SageMemorySnapshot>();
 
 const DEFAULT_MEMORY_CATEGORIES: readonly SageMemoryCategoryRecord[] = [
   { id: 'profile_fact', label: 'Profile facts' },
@@ -92,11 +95,40 @@ function sortMemoryEntries(items: WorkstationSageMemoryRecord[]): WorkstationSag
   });
 }
 
+function formatMemoryTimestamp(value: string | null): string | null {
+  if (!value) {
+    return null;
+  }
+  const parsed = Date.parse(value);
+  if (!Number.isFinite(parsed)) {
+    return null;
+  }
+  const diffMinutes = Math.round((parsed - Date.now()) / 60000);
+  const formatter = new Intl.RelativeTimeFormat(undefined, { numeric: 'auto' });
+  if (Math.abs(diffMinutes) < 60) {
+    return formatter.format(diffMinutes, 'minute');
+  }
+  const diffHours = Math.round(diffMinutes / 60);
+  if (Math.abs(diffHours) < 24) {
+    return formatter.format(diffHours, 'hour');
+  }
+  const diffDays = Math.round(diffHours / 24);
+  if (Math.abs(diffDays) < 7) {
+    return formatter.format(diffDays, 'day');
+  }
+  return new Date(value).toLocaleDateString([], {
+    month: 'short',
+    day: 'numeric',
+  });
+}
+
 export function WorkstationActivityPane() {
+  const { workspaceId } = useWorkspaceBoundary();
   const services = useWorkspaceServices();
   const streamState = useWorkstationStreamState();
-  const [snapshot, setSnapshot] = useState<SageMemorySnapshot>(() => normalizeMemorySnapshot(null));
-  const [isLoading, setIsLoading] = useState(true);
+  const cachedSnapshot = memoryPaneCache.get(workspaceId) ?? null;
+  const [snapshot, setSnapshot] = useState<SageMemorySnapshot>(() => cachedSnapshot ?? normalizeMemorySnapshot(null));
+  const [isLoading, setIsLoading] = useState(() => cachedSnapshot === null);
   const [error, setError] = useState<string | null>(null);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [isMemorySheetOpen, setIsMemorySheetOpen] = useState(false);
@@ -111,16 +143,18 @@ export function WorkstationActivityPane() {
     setError(null);
     const payload = await services.client.listSageMemory();
     const nextSnapshot = normalizeMemorySnapshot(payload);
-    setSnapshot({
+    const normalizedSnapshot = {
       ...nextSnapshot,
       items: sortMemoryEntries(nextSnapshot.items),
-    });
+    };
+    memoryPaneCache.set(workspaceId, normalizedSnapshot);
+    setSnapshot(normalizedSnapshot);
     setIsLoading(false);
   };
 
   useEffect(() => {
     let cancelled = false;
-    void refresh(true).catch((loadError) => {
+    void refresh(cachedSnapshot === null).catch((loadError) => {
       if (!cancelled) {
         setError(loadError instanceof Error ? loadError.message : 'Memory is unavailable right now.');
         setIsLoading(false);
@@ -129,7 +163,7 @@ export function WorkstationActivityPane() {
     return () => {
       cancelled = true;
     };
-  }, [services.client]);
+  }, [cachedSnapshot, services.client]);
 
   useEffect(() => {
     if (streamState.activity.version === 0) {
@@ -144,6 +178,10 @@ export function WorkstationActivityPane() {
   const pendingDeleteMemory = useMemo(
     () => snapshot.items.find((item) => readString(item.id) === pendingDeleteMemoryId) ?? null,
     [pendingDeleteMemoryId, snapshot.items],
+  );
+  const categoryLabels = useMemo(
+    () => new Map(snapshot.categories.map((category) => [readString(category.id), readString(category.label)])),
+    [snapshot.categories],
   );
 
   const openCreateMemory = () => {
@@ -287,10 +325,23 @@ export function WorkstationActivityPane() {
             {snapshot.items.map((entry) => {
               const entryId = readString(entry.id);
               const busy = mutatingMemory === entryId;
+              const categoryLabel = categoryLabels.get(readString(entry.category)) || 'Saved memory';
+              const updatedLabel = formatMemoryTimestamp(readString(entry.updated_at) || readString(entry.created_at) || null);
               return (
                 <article key={entryId || `memory-${readString(entry.title)}`} className="app-memory-minimal-entry">
                   <div className="app-memory-minimal-entry__row">
                     <div className="app-memory-minimal-entry__copy">
+                      <div className="app-memory-minimal-entry__meta">
+                        <span className="app-memory-minimal-entry__category">{categoryLabel}</span>
+                        {Boolean(entry.pinned) ? (
+                          <span className="app-memory-minimal-entry__badge">Pinned</span>
+                        ) : null}
+                        {updatedLabel ? (
+                          <time className="app-memory-minimal-entry__timestamp" dateTime={readString(entry.updated_at) || readString(entry.created_at) || undefined}>
+                            {updatedLabel}
+                          </time>
+                        ) : null}
+                      </div>
                       <div className="app-memory-minimal-entry__title">{readString(entry.title) || 'Saved memory'}</div>
                       <p className="app-memory-minimal-entry__content">{readString(entry.content) || 'No memory content recorded.'}</p>
                     </div>

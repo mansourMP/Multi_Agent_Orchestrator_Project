@@ -4,7 +4,7 @@ import type { KeyboardEvent } from 'react';
 import { useEffect, useRef } from 'react';
 import { ArrowUp, Brain, ChevronDown } from 'lucide-react';
 
-import { AppButton, AppSelect } from '@/lib/ui/primitives';
+import { AppButton, AppSelect, joinClassNames } from '@/lib/ui/primitives';
 
 type ComposerOption = {
   value: string;
@@ -79,7 +79,9 @@ export function ChatComposer({
   busy?: boolean;
 }) {
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
-  const canSend = !sendDisabled && !busy && draft.trim().length > 0;
+  const hasDraft = draft.trim().length > 0;
+  const canSend = !sendDisabled && !busy && hasDraft;
+  const showSendButton = busy || hasDraft;
 
   useEffect(() => {
     const element = textareaRef.current;
@@ -219,14 +221,13 @@ export function ChatComposer({
               onClick={onSubmit}
               disabled={!canSend}
               aria-label={busy ? 'Sending message' : 'Send message'}
-              className="app-chat-composer__send"
+              className={joinClassNames(
+                'app-chat-composer__send',
+                !showSendButton && 'app-chat-composer__send--hidden',
+              )}
             >
               {busy ? (
-                <span className="app-chat-composer__busy-dots" aria-hidden="true">
-                  <span />
-                  <span />
-                  <span />
-                </span>
+                <span className="app-chat-composer__busy-orb" aria-hidden="true" />
               ) : (
                 <ArrowUp size={16} strokeWidth={1.95} aria-hidden="true" />
               )}

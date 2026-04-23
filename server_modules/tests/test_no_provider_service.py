@@ -114,8 +114,9 @@ class NoProviderServiceTests(unittest.TestCase):
 
     def test_no_provider_reasoning_required_response_is_stable(self) -> None:
         payload = no_provider_service.no_provider_reasoning_required_response()
-        self.assertEqual(payload["mode"], "error")
-        self.assertEqual(payload["error"], "no_provider")
+        self.assertEqual(payload["mode"], "answer")
+        self.assertEqual(payload["error"], "")
+        self.assertIn("Connect an AI provider", payload["reply"])
 
     def test_execute_no_provider_request_handles_memory_reply_before_tool_path(self) -> None:
         services = no_provider_service.NoProviderExecutionServices(

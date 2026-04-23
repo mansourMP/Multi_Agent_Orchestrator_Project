@@ -25,6 +25,7 @@ export type WorkstationSessionRecord = {
 export type WorkstationTurnResponse = {
   status?: string;
   reply?: string;
+  error?: string;
   run_id?: string | null;
   thread_id?: string | null;
   session_id?: string | null;
@@ -41,6 +42,13 @@ export type WorkstationTurnStreamEvent = {
 
 function readString(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
+}
+
+function createClientRequestId(): string {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID();
+  }
+  return `req_${Date.now()}_${Math.random().toString(16).slice(2)}`;
 }
 
 export type WorkstationRunDetailPayload = Record<string, unknown> & {
@@ -320,6 +328,23 @@ export type DeployedAgentAdminDashboardRecord = Record<string, unknown> & {
   has_more?: boolean | null;
 };
 
+export type MarketplacePackageRecord = Record<string, unknown> & {
+  package_id?: string | null;
+  kind?: string | null;
+  label?: string | null;
+  description?: string | null;
+  category?: string | null;
+  verification_status?: string | null;
+  review_state?: string | null;
+  health_state?: string | null;
+  installed?: boolean | null;
+  runtime_truth?: Record<string, unknown> | null;
+  billing?: Record<string, unknown> | null;
+  analytics?: Record<string, unknown> | null;
+  publisher?: Record<string, unknown> | null;
+  package?: Record<string, unknown> | null;
+};
+
 export type MarketplaceAgentCardRecord = Record<string, unknown> & {
   id?: string | null;
   name?: string | null;
@@ -476,6 +501,10 @@ export type WorkstationClientPaths = {
   deployedAgentConversationDetail: (deployedAgentId: string, sessionId: string) => string;
   deployedAgentExternalUserDelete: (deployedAgentId: string, externalUserId: string) => string;
   marketplaceAgents: (filters?: { category?: string | null; costTier?: string | null; limit?: number; offset?: number }) => string;
+  marketplacePackages: (kind?: string | null) => string;
+  marketplaceProviderRegister: string;
+  marketplaceAppRegister: string;
+  marketplacePackageInstall: (packageId: string) => string;
   platformAnalytics: string;
   workspaceRouting: string;
   workspaceMembers: string;
@@ -741,6 +770,14 @@ export type WorkstationClient = {
     limit?: number;
     offset?: number;
   }) => Promise<Record<string, unknown>>;
+  listMarketplacePackages: (options?: {
+    kind?: string | null;
+  }) => Promise<Record<string, unknown>>;
+  registerMarketplaceProvider: (payload: Record<string, unknown>) => Promise<Record<string, unknown> | null>;
+  registerMarketplaceApp: (payload: Record<string, unknown>) => Promise<Record<string, unknown> | null>;
+  installMarketplacePackage: (options: {
+    packageId: string;
+  }) => Promise<Record<string, unknown> | null>;
   getPlatformAnalytics: () => Promise<Record<string, unknown>>;
   getWorkspaceRouting: () => Promise<Record<string, unknown>>;
   updateWorkspaceRouting: (options: {
@@ -1007,6 +1044,14 @@ export function buildWorkstationApiPaths(workspaceId: string): WorkstationClient
         limit: filters.limit,
         offset: filters.offset,
       })}`,
+    marketplacePackages: (kind = null) =>
+      `/api/workspaces/${encodeURIComponent(workspaceId)}/marketplace/packages${buildQueryString({
+        kind,
+      })}`,
+    marketplaceProviderRegister: `/api/workspaces/${encodeURIComponent(workspaceId)}/marketplace/providers`,
+    marketplaceAppRegister: `/api/workspaces/${encodeURIComponent(workspaceId)}/marketplace/apps`,
+    marketplacePackageInstall: (packageId) =>
+      `/api/workspaces/${encodeURIComponent(workspaceId)}/marketplace/packages/${encodeURIComponent(packageId)}/install`,
     platformAnalytics: `/api/platform-analytics${buildQueryString({ workspace_id: workspaceId })}`,
     workspaceRouting: `/api/workspaces/${encodeURIComponent(workspaceId)}/routing`,
     workspaceMembers: `/api/workspaces/${encodeURIComponent(workspaceId)}/members`,
@@ -1391,6 +1436,7 @@ export function createWorkstationClient(
     reasoningEffort?: string | null;
     policyContext?: Record<string, unknown>;
   }): Promise<WorkstationTurnResponse> {
+    const clientRequestId = createClientRequestId();
     return (await requestJson<WorkstationTurnResponse>({
       path: paths.turnSubmit,
       init: {
@@ -1401,6 +1447,7 @@ export function createWorkstationClient(
           workspace_id: scope.workspaceId,
           thread_id: threadId,
           session_id: sessionId,
+          client_request_id: clientRequestId,
           channel,
           actor,
           message,
@@ -1411,6 +1458,7 @@ export function createWorkstationClient(
           context_hints: {
             source,
             thread_id: threadId,
+            request_id: clientRequestId,
           },
           execution_mode: 'sync',
           response_mode: 'artifact',
@@ -1540,6 +1588,7 @@ export function createWorkstationClient(
     policyContext?: Record<string, unknown>;
     onEvent?: (event: WorkstationTurnStreamEvent) => void;
   }): Promise<WorkstationTurnResponse> {
+    const clientRequestId = createClientRequestId();
     let response: Response;
     try {
       response = await transport.request(
@@ -1552,6 +1601,7 @@ export function createWorkstationClient(
             workspace_id: scope.workspaceId,
             thread_id: threadId,
             session_id: sessionId,
+            client_request_id: clientRequestId,
             channel,
             actor,
             message,
@@ -1562,6 +1612,7 @@ export function createWorkstationClient(
             context_hints: {
               source,
               thread_id: threadId,
+              request_id: clientRequestId,
             },
             execution_mode: 'sync',
             response_mode: 'stream',
@@ -2266,6 +2317,40 @@ export function createWorkstationClient(
         }),
         policy: READ_REQUEST_POLICY,
       }) as Promise<Record<string, unknown>>,
+    listMarketplacePackages: ({ kind = null } = {}) =>
+      requestJson<Record<string, unknown>>({
+        path: paths.marketplacePackages(kind),
+        policy: READ_REQUEST_POLICY,
+      }) as Promise<Record<string, unknown>>,
+    registerMarketplaceProvider: (payload: Record<string, unknown>) =>
+      requestJson<Record<string, unknown>>({
+        path: paths.marketplaceProviderRegister,
+        init: {
+          method: 'POST',
+          headers: mergeJsonHeaders(),
+          body: JSON.stringify(payload),
+        },
+        policy: WRITE_REQUEST_POLICY,
+      }),
+    registerMarketplaceApp: (payload: Record<string, unknown>) =>
+      requestJson<Record<string, unknown>>({
+        path: paths.marketplaceAppRegister,
+        init: {
+          method: 'POST',
+          headers: mergeJsonHeaders(),
+          body: JSON.stringify(payload),
+        },
+        policy: WRITE_REQUEST_POLICY,
+      }),
+    installMarketplacePackage: ({ packageId }) =>
+      requestJson<Record<string, unknown>>({
+        path: paths.marketplacePackageInstall(packageId),
+        init: {
+          method: 'POST',
+          headers: mergeJsonHeaders(),
+        },
+        policy: WRITE_REQUEST_POLICY,
+      }),
     getPlatformAnalytics: () =>
       requestJson<Record<string, unknown>>({
         path: paths.platformAnalytics,

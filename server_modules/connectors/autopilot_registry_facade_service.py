@@ -751,8 +751,8 @@ class AutopilotRegistryFacadeService:
                 build_terminal_service=lambda: self.terminal_service_class(
                     normalize_workspace_id=self.normalize_workspace_id,
                     chat_id_from_session_key=lambda key: self.common_support_service().chat_id_from_session_key(key),
-                    list_connector_entries=lambda: self.telegram_service_registry().telegram_autopilot_state_service().list_connector_entries(
-                        self.telegram_default_workspace_id_getter()
+                    list_connector_entries=lambda requested_workspace_id=None: self.telegram_service_registry().telegram_autopilot_state_service().list_connector_entries(
+                        requested_workspace_id
                     ),
                     get_secret=lambda entry: self.connector_support_service().get_secret(entry),
                     resolve_profile=lambda entry: self.profile_service().resolve_telegram_profile(entry),

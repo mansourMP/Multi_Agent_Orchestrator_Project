@@ -4,6 +4,24 @@ from server_modules import direct_chat_provider_service
 
 
 class DirectChatProviderServiceTests(unittest.TestCase):
+    def test_direct_chat_credentials_falls_back_to_runtime_candidates_when_workspace_only_is_empty(self) -> None:
+        calls: list[tuple[dict[str, object], str]] = []
+
+        def fake_candidates(_context: dict[str, object], metadata: dict[str, object], provider: str) -> list[dict[str, object]]:
+            calls.append((dict(metadata), provider))
+            if metadata.get("workspace_only"):
+                return []
+            return [{"credentials": {"auth_mode": "local_cli"}, "label": "local-claude-cli"}]
+
+        credentials = direct_chat_provider_service.direct_chat_credentials(
+            "workspace-a",
+            "anthropic",
+            build_provider_credential_candidates_fn=fake_candidates,
+        )
+
+        self.assertEqual(credentials, {"auth_mode": "local_cli"})
+        self.assertEqual(calls, [({"source": "chat_direct", "workspace_only": True}, "anthropic"), ({"source": "chat_direct"}, "anthropic")])
+
     def test_preferred_provider_maps_openai_oauth_to_codex_cli_without_explicit_selection(self) -> None:
         def fake_credentials(_workspace_id: str, provider: str) -> dict[str, str]:
             if provider == "openai":
@@ -22,6 +40,7 @@ class DirectChatProviderServiceTests(unittest.TestCase):
             direct_chat_credentials_fn=fake_credentials,
             supports_direct_message_native_chat_fn=fake_support,
             credential_auth_mode_fn=lambda _provider, credentials: str((credentials or {}).get("auth_mode") or ""),
+            provider_runtime_usable_fn=lambda _workspace_id, _provider: True,
         )
 
         self.assertEqual(provider, "codex_cli")
@@ -45,6 +64,7 @@ class DirectChatProviderServiceTests(unittest.TestCase):
             direct_chat_credentials_fn=fake_credentials,
             supports_direct_message_native_chat_fn=fake_support,
             credential_auth_mode_fn=lambda _provider, credentials: str((credentials or {}).get("auth_mode") or ""),
+            provider_runtime_usable_fn=lambda _workspace_id, _provider: True,
         )
 
         self.assertEqual(provider, "codex_cli")
@@ -144,6 +164,7 @@ class DirectChatProviderServiceTests(unittest.TestCase):
             preferred_provider_fn=lambda _workspace_id, _requested_provider: ("openai", {"api_key": "sk-test"}),
             direct_chat_credentials_fn=lambda _workspace_id, provider: {"oauth_token": "token"} if provider == "codex_cli" else {},
             supports_direct_message_native_chat_fn=lambda provider, credentials: provider == "codex_cli" and bool(credentials),
+            provider_runtime_usable_fn=lambda _workspace_id, _provider: True,
             compact_text_fn=lambda value: str(value or "").strip().lower(),
             mentions_any_fn=lambda text, keywords: any(keyword in text for keyword in keywords),
             message_requests_local_file_tool_fn=lambda _message: False,

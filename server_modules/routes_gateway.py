@@ -438,25 +438,32 @@ async def start_gateway_browser_session(
         minimum_role="member",
     )
     trace_id = str(body.trace_id or body.request_id or body.run_id).strip() or body.run_id
+    session_mode = gateway_browser_service.normalize_browser_session_mode(body.session_mode)
+    attach_endpoint_url = str(body.attach_endpoint_url or "").strip() or None
+    reviewed_required = gateway_browser_service.browser_session_requires_reviewed_approval(
+        session_mode=session_mode,
+        attach_endpoint_url=attach_endpoint_url,
+        reviewed_approval_required=bool(body.reviewed_approval_required),
+    )
     plan_payload = {
         "url": str(body.url or "").strip() or None,
-        "session_mode": gateway_browser_service.normalize_browser_session_mode(body.session_mode),
-        "attach_endpoint_configured": bool(str(body.attach_endpoint_url or "").strip()),
+        "session_mode": session_mode,
+        "attach_endpoint_configured": bool(attach_endpoint_url),
         "interactive_actions": list(body.interactive_actions or []),
     }
     browser_metadata = gateway_browser_service.build_gateway_browser_metadata(
         session_profile=body.session_profile,
-        session_mode=body.session_mode,
-        attach_endpoint_url=body.attach_endpoint_url,
+        session_mode=session_mode,
+        attach_endpoint_url=attach_endpoint_url,
         interactive_actions=body.interactive_actions,
-        reviewed_approval_required=bool(body.reviewed_approval_required),
+        reviewed_approval_required=reviewed_required,
         plan_payload=plan_payload,
     )
     arguments = {
         "url": str(body.url or "").strip() or None,
         "session_profile": str(body.session_profile or "").strip() or None,
-        "session_mode": gateway_browser_service.normalize_browser_session_mode(body.session_mode),
-        "attach_endpoint_url": str(body.attach_endpoint_url or "").strip() or None,
+        "session_mode": session_mode,
+        "attach_endpoint_url": attach_endpoint_url,
         "interactive_actions": list(body.interactive_actions or []),
         "browser_metadata": browser_metadata,
     }
@@ -471,7 +478,7 @@ async def start_gateway_browser_session(
         return JSONResponse(status_code=status.HTTP_202_ACCEPTED, content=fallback)
     if body.interactive_approvals and gateway_browser_service.browser_action_requires_owner_approval(
         None,
-        reviewed_approval_required=bool(body.reviewed_approval_required),
+        reviewed_approval_required=reviewed_required,
     ):
         approval = await gateway_approval_service.request_gateway_tool_approval(
             registration=registration,
@@ -539,10 +546,14 @@ async def execute_gateway_browser_action(
     session_metadata = browser_session.get("metadata") if isinstance(browser_session.get("metadata"), dict) else {}
     session_mode = gateway_browser_service.normalize_browser_session_mode(session_metadata.get("browser_session_mode"))
     attach_endpoint_url = str(session_metadata.get("browser_attach_endpoint_url") or "").strip() or None
-    reviewed_required = (
-        bool(body.reviewed_approval_required)
-        if body.reviewed_approval_required is not None
-        else bool(browser_session.get("reviewed_approval_required"))
+    reviewed_required = gateway_browser_service.browser_session_requires_reviewed_approval(
+        session_mode=session_mode,
+        attach_endpoint_url=attach_endpoint_url,
+        reviewed_approval_required=(
+            bool(body.reviewed_approval_required)
+            if body.reviewed_approval_required is not None
+            else bool(browser_session.get("reviewed_approval_required"))
+        ),
     )
     browser_metadata = gateway_browser_service.build_gateway_browser_metadata(
         session_profile=browser_session.get("session_profile"),
@@ -767,6 +778,7 @@ async def interrupt_gateway_browser_session(
 @router.get("/gateway/registrations/{gateway_id}/doctor")
 async def get_gateway_registration_doctor(
     gateway_id: str,
+    force_provider_probe: bool = Query(False),
     current_user=Depends(require_api_key),
 ):
     registration = gateway_state_repository.get_gateway_registration(gateway_id)
@@ -781,7 +793,10 @@ async def get_gateway_registration_doctor(
     if resolved_workspace_id != registration_workspace_id:
         raise HTTPException(status_code=403, detail="Workspace is not accessible for this user.")
     try:
-        return gateway_health_service.gateway_doctor_payload(gateway_id)
+        return gateway_health_service.gateway_doctor_payload(
+            gateway_id,
+            force_provider_probe=bool(force_provider_probe),
+        )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

@@ -79,6 +79,24 @@ class TelegramAutopilotStateServiceTests(unittest.TestCase):
         self.assertEqual(len(entries), 1)
         self.assertEqual(entries[0]["id"], "a")
 
+    def test_list_connector_entries_skips_unscoped_telegram_connectors(self) -> None:
+        service = self._make_service(
+            vault_payload={
+                "credentials": [
+                    {"id": "legacy", "provider": "telegram_bot", "workspace_id": "default", "label": "Quick Mode"},
+                    {"id": "scoped", "provider": "telegram_bot", "workspace_id": "ws", "label": "Studio Bot"},
+                ]
+            },
+            resolve_secret=lambda entry: {
+                "bot_token": f"token-{entry['id']}",
+                "chat_id": "chat",
+            },
+        )
+
+        entries = service.list_connector_entries(None)
+
+        self.assertEqual([entry["id"] for entry in entries], ["scoped"])
+
     def test_snapshot_includes_connectors_counts_and_thread(self) -> None:
         service = self._make_service(
             state={

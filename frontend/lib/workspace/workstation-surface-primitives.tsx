@@ -91,7 +91,7 @@ export function WorkstationSurfaceStat({
   hint,
 }: {
   label: string;
-  value: string;
+  value: ReactNode;
   hint: string;
 }) {
   return <AppSurfaceStat label={label} value={value} hint={hint} />;

@@ -87,3 +87,16 @@ def test_interrupt_execution_posts_signed_interrupt_request():
     assert captured["json"]["run_id"] == "run-123"
     assert captured["json"]["target_request_id"] == "req-456"
     assert captured["json"]["workspace_id"] == "ws-1"
+
+
+def test_direct_supervisor_loopback_is_blocked_in_api_server_process():
+    with (
+        patch.dict(os.environ, {"EMPYRALIS_SUPERVISOR_SECRET": "test-secret"}, clear=False),
+        patch.object(supervisor_client.sys, "argv", ["uvicorn", "server:app"]),
+    ):
+        try:
+            supervisor_client.click(x=1, y=2)
+        except RuntimeError as exc:
+            assert str(exc) == supervisor_client.DIRECT_SUPERVISOR_BLOCKED_MESSAGE
+        else:
+            raise AssertionError("Expected direct supervisor loopback to be blocked in API server mode.")

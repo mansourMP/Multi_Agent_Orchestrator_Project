@@ -1,3 +1,5 @@
+import crypto from "crypto";
+
 import type { GatewayChannelInboundPayload } from "../../protocol/types";
 import { WHATSAPP_PERSONAL_CHANNEL_KEY, WHATSAPP_PERSONAL_PROVIDER } from "./session-store";
 
@@ -21,6 +23,12 @@ function pickMessageText(message: Record<string, unknown>): string {
 }
 
 export type WhatsAppInboundEventPayload = GatewayChannelInboundPayload;
+
+export function buildWhatsAppClientMessageId(idempotencyKey: string): string {
+  const normalized = String(idempotencyKey || "").trim();
+  const digest = crypto.createHash("sha256").update(normalized).digest("hex").toUpperCase();
+  return `3EB0${digest.slice(0, 18)}`;
+}
 
 export function mapWhatsAppInboundMessage(rawMessage: Record<string, unknown>): WhatsAppInboundEventPayload | null {
   const key = rawMessage.key as { id?: unknown; remoteJid?: unknown; participant?: unknown; fromMe?: unknown } | undefined;
@@ -54,6 +62,7 @@ export function mapWhatsAppOutboundResult(
     idempotencyKey: string;
     remoteJid: string;
     text: string;
+    clientMessageId?: string;
     replyToExternalMessageId?: string;
   },
   response: Record<string, unknown> | undefined,
@@ -63,7 +72,7 @@ export function mapWhatsAppOutboundResult(
     channel_key: WHATSAPP_PERSONAL_CHANNEL_KEY,
     provider: WHATSAPP_PERSONAL_PROVIDER,
     idempotency_key: outbound.idempotencyKey,
-    external_message_id: String(key?.id ?? "").trim() || undefined,
+    external_message_id: String(key?.id ?? outbound.clientMessageId ?? "").trim() || undefined,
     remote_jid: String(key?.remoteJid ?? outbound.remoteJid).trim() || outbound.remoteJid,
     text: outbound.text,
     reply_to_external_message_id: outbound.replyToExternalMessageId,

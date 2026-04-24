@@ -80,6 +80,11 @@ def _tool_broker_denial_reply(
             f"{manifest.identity.name} recognizes that this request needs {needed_skill.label}, "
             "but the current policy requires owner approval before that capability can execute."
         )
+    if error.code == "skill_disabled":
+        return (
+            f"{manifest.identity.name} recognizes that this request needs {needed_skill.label}, "
+            "but that skill is disabled for this workspace right now."
+        )
     if error.code == "connector_scope_not_granted":
         return (
             f"{manifest.identity.name} recognizes that this request needs {needed_skill.label}, "

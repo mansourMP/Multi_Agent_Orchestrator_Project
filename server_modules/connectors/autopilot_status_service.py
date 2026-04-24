@@ -376,6 +376,8 @@ class AutopilotStatusService:
         for entry in entries:
             credential_id = str(entry.get("id") or "").strip()
             state = connectors_index.get(credential_id) if isinstance(connectors_index.get(credential_id), dict) else {}
+            metadata = entry.get("metadata") if isinstance(entry.get("metadata"), dict) else {}
+            registration = metadata.get("telegram_webhook_registration") if isinstance(metadata.get("telegram_webhook_registration"), dict) else {}
             profile = self._safe_profile(
                 channel="telegram",
                 resolver=self.resolve_telegram_profile,
@@ -383,15 +385,28 @@ class AutopilotStatusService:
                 fallback_prefix=default_profile.get("prefix"),
                 fallback_require_prefix=default_profile.get("require_prefix"),
             )
+            profile_status = profile.get("status")
+            profile_issue_code = profile.get("issue_code")
+            profile_issue = profile.get("issue")
+            registration_status = self._resolve_string(registration.get("status")).lower()
+            delivery_mode = self._resolve_string(self.telegram_delivery_mode).lower() or "polling"
+            if delivery_mode == "webhook" and registration_status != "registered":
+                profile_status = "setup_needed"
+                profile_issue_code = "telegram_webhook_registration_not_ready"
+                profile_issue = (
+                    self._resolve_string(registration.get("last_error"))
+                    or "Telegram webhook is not registered for this connector."
+                )
             items.append(
                 {
                     "id": credential_id,
                     "label": entry.get("label"),
                     "workspace_id": self.normalize_workspace_id(entry.get("workspace_id")),
                     "profile_id": profile.get("id"),
-                    "profile_status": profile.get("status"),
-                    "profile_issue_code": profile.get("issue_code"),
-                    "profile_issue": profile.get("issue"),
+                    "profile_status": profile_status,
+                    "profile_issue_code": profile_issue_code,
+                    "profile_issue": profile_issue,
+                    "webhook_registration": registration,
                     "require_prefix": profile.get("require_prefix"),
                     "prefix": profile.get("prefix"),
                     "last_update_id": int(state.get("last_update_id") or 0),
@@ -439,6 +454,16 @@ class AutopilotStatusService:
                     "message": webhook.get("issue"),
                 }
             )
+        for item in items:
+            if item.get("profile_issue") and item.get("profile_issue_code") == "telegram_webhook_registration_not_ready":
+                issues.append(
+                    {
+                        "code": item.get("profile_issue_code"),
+                        "severity": "setup_needed",
+                        "message": item.get("profile_issue"),
+                        "connector_id": item.get("id"),
+                    }
+                )
         channel_status = "disabled" if webhook.get("status") == "disabled" else self._channel_status(issues)
         return {
             "ok": bool(snapshot.get("enabled")),

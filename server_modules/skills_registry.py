@@ -122,6 +122,7 @@ def _validate_manifest(payload: Dict[str, Any]) -> Dict[str, Any]:
     author = str(payload.get("author") or "").strip()
     if not author:
         raise ValueError("skill.json.author is required.")
+    runtime = payload.get("runtime") if isinstance(payload.get("runtime"), dict) else {}
     return {
         "name": name[:160],
         "id": normalize_skill_id(name)[:120],
@@ -133,6 +134,7 @@ def _validate_manifest(payload: Dict[str, Any]) -> Dict[str, Any]:
         "requires": _list_from_any(payload.get("requires"))[:60],
         "homepage": str(payload.get("homepage") or "").strip()[:1000],
         "source": str(payload.get("source") or "").strip()[:1000],
+        "runtime": runtime,
     }
 
 
@@ -154,6 +156,21 @@ def _legacy_manifest_from_dir(skill_dir: Path) -> Dict[str, Any]:
         "requires": frontmatter.get("requires") or frontmatter.get("required_bins") or [],
         "homepage": frontmatter.get("homepage") or "",
         "source": frontmatter.get("source") or "",
+        "runtime": {
+            key: value
+            for key, value in frontmatter.items()
+            if key in {
+                "skill_class",
+                "permission_label",
+                "execution_mode",
+                "action_class",
+                "connector_scopes",
+                "trigger_terms",
+                "allowed_runtime_modes",
+                "requires_approval",
+                "execution_adapter",
+            }
+        },
     }
     return _validate_manifest(payload)
 
@@ -193,6 +210,7 @@ def _normalize_skill_tree(skill_dir: Path) -> Dict[str, Any]:
             "requires": manifest["requires"],
             "homepage": manifest["homepage"],
             "source": manifest["source"],
+            "runtime": manifest.get("runtime") if isinstance(manifest.get("runtime"), dict) else {},
         })
     readme_path = skill_dir / "README.md"
     if not readme_path.exists():
@@ -307,6 +325,9 @@ def _public_skill_payload(item: Dict[str, Any]) -> Dict[str, Any]:
         "format": str(item.get("format") or "").strip(),
         "source_kind": str(item.get("source") or "").strip(),
         "installed_path": str(item.get("path") or "").strip(),
+        "skill_class": str(((item.get("runtime_metadata") or {}) if isinstance(item.get("runtime_metadata"), dict) else {}).get("skill_class") or "").strip(),
+        "action_class": str(((item.get("runtime_metadata") or {}) if isinstance(item.get("runtime_metadata"), dict) else {}).get("action_class") or "").strip(),
+        "execution_adapter": str(((item.get("runtime_metadata") or {}) if isinstance(item.get("runtime_metadata"), dict) else {}).get("execution_adapter") or "").strip(),
         "readme": str(item.get("readme") or item.get("skill_body") or "").strip(),
         "install_source": str(registry.get("install_source") or "").strip(),
         "installed_at": str(registry.get("installed_at") or "").strip(),
@@ -342,6 +363,9 @@ def _registry_items_from_payload(payload: Any) -> List[Dict[str, Any]]:
         readme = str(raw.get("readme") or "").strip()
         items.append({
             **manifest,
+            "skill_class": str(((manifest.get("runtime") or {}) if isinstance(manifest.get("runtime"), dict) else {}).get("skill_class") or "").strip(),
+            "action_class": str(((manifest.get("runtime") or {}) if isinstance(manifest.get("runtime"), dict) else {}).get("action_class") or "").strip(),
+            "execution_adapter": str(((manifest.get("runtime") or {}) if isinstance(manifest.get("runtime"), dict) else {}).get("execution_adapter") or "").strip(),
             "readme": readme,
             "installed": manifest["id"] in installed_ids,
         })
@@ -440,6 +464,7 @@ def publish_marketplace_skill(skill_name: str, output_path: Optional[str] = None
                 "requires": item.get("requires") or [],
                 "homepage": item.get("homepage") or "",
                 "source": item.get("source_url") or "",
+                "runtime": ((item.get("runtime_metadata") or {}) if isinstance(item.get("runtime_metadata"), dict) else {}),
             }
             break
     if skill_path is None or manifest is None:
@@ -482,6 +507,7 @@ def ensure_registry_seeded() -> None:
                 "requires": item.get("requires") or [],
                 "homepage": item.get("homepage") or "",
                 "source": f"local:bundled/{item.get('id')}",
+                "runtime": ((item.get("runtime_metadata") or {}) if isinstance(item.get("runtime_metadata"), dict) else {}),
                 "readme": item.get("readme") or item.get("skill_body") or "",
             }
         )

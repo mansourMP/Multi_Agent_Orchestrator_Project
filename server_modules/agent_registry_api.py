@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from typing import Any, Dict, Literal, Optional
 
 from fastapi import Depends, HTTPException
@@ -28,6 +29,8 @@ from server_modules import runtime_attachment_service
 from server_modules import activity_ledger_service
 from server_modules import specialist_service
 from server_modules import shared_operational_board_service
+from server_modules import skill_registry
+from server_modules import mcp_registry_service
 
 # Transitional compatibility shim for older tests and callers.
 execute_canonical_agent_turn = turn_ingress_service.start_turn
@@ -166,6 +169,21 @@ class SpecialistRuntimeProfileUpdateRequest(BaseModel):
     workspace_id: str
     runtime_profile_id: Optional[str] = None
     runtime_mode: Literal["hosted_secure", "local_secure", "privileged_device"] = "hosted_secure"
+
+
+class McpServerUpsertRequest(BaseModel):
+    workspace_id: str
+    label: Optional[str] = None
+    transport: Literal["streamable_http"] = "streamable_http"
+    endpoint: str
+    enabled: bool = True
+    tools: list[Dict[str, Any]] = Field(default_factory=list)
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+    discover_tools: bool = False
+
+
+class McpServerRefreshRequest(BaseModel):
+    workspace_id: str
 
 
 class SharedOperationalBoardWriteRequest(BaseModel):
@@ -377,6 +395,16 @@ def _raise_scheduler_error(error: Exception) -> None:
 
 def _raise_runtime_attachment_error(error: Exception) -> None:
     if isinstance(error, runtime_attachment_service.RuntimeAttachmentSelectionError):
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    raise error
+
+
+def _raise_mcp_registry_error(error: Exception) -> None:
+    if isinstance(error, FileNotFoundError):
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    if isinstance(error, ValueError):
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    if isinstance(error, RuntimeError):
         raise HTTPException(status_code=409, detail=str(error)) from error
     raise error
 
@@ -753,6 +781,137 @@ def register_agent_registry_routes(app) -> None:
         )
         return {"items": items}
 
+    @app.get("/agent-registry/mcp/servers", dependencies=[Depends(member_dependency)])
+    async def list_mcp_servers(
+        workspace_id: Optional[str] = None,
+        current_user=Depends(member_dependency),
+    ):
+        _refresh_server_exports()
+        resolved_workspace_id = enforce_workspace_access(
+            current_user,
+            _workspace_id_from_query_or_body(query_workspace_id=workspace_id),
+            minimum_role="viewer",
+        )
+        items = mcp_registry_service.list_workspace_mcp_servers(resolved_workspace_id)
+        return {"advanced_only": True, "items": items}
+
+    @app.get("/agent-registry/mcp/servers/{server_id}", dependencies=[Depends(member_dependency)])
+    async def get_mcp_server(
+        server_id: str,
+        workspace_id: Optional[str] = None,
+        current_user=Depends(member_dependency),
+    ):
+        _refresh_server_exports()
+        resolved_workspace_id = enforce_workspace_access(
+            current_user,
+            _workspace_id_from_query_or_body(query_workspace_id=workspace_id),
+            minimum_role="viewer",
+        )
+        record = mcp_registry_service.get_workspace_mcp_server(resolved_workspace_id, server_id)
+        if not isinstance(record, dict):
+            raise HTTPException(status_code=404, detail="MCP server not found.")
+        enriched = next(
+            (
+                item
+                for item in mcp_registry_service.list_workspace_mcp_servers(resolved_workspace_id)
+                if str(item.get("id") or "").strip() == str(record.get("id") or server_id).strip()
+            ),
+            record,
+        )
+        return {"advanced_only": True, **enriched}
+
+    @app.put("/agent-registry/mcp/servers/{server_id}", dependencies=[Depends(member_dependency)])
+    async def save_mcp_server(
+        server_id: str,
+        body: McpServerUpsertRequest,
+        current_user=Depends(member_dependency),
+    ):
+        _refresh_server_exports()
+        resolved_workspace_id = enforce_workspace_access(
+            current_user,
+            _workspace_id_from_query_or_body(query_workspace_id=None, body_workspace_id=body.workspace_id),
+            minimum_role="member",
+        )
+        try:
+            await asyncio.to_thread(
+                mcp_registry_service.upsert_workspace_mcp_server,
+                workspace_id=resolved_workspace_id,
+                server_id=server_id,
+                label=body.label,
+                transport=body.transport,
+                endpoint=body.endpoint,
+                enabled=body.enabled,
+                tools=_coerce_list(body.tools),
+                metadata=_coerce_dict(body.metadata),
+                discover_tools=bool(body.discover_tools),
+            )
+        except Exception as error:
+            _raise_mcp_registry_error(error)
+        record = next(
+            (
+                item
+                for item in mcp_registry_service.list_workspace_mcp_servers(resolved_workspace_id)
+                if str(item.get("id") or "").strip() == str(server_id or "").strip().lower()
+            ),
+            None,
+        )
+        if not isinstance(record, dict):
+            raise HTTPException(status_code=404, detail="MCP server not found after save.")
+        return {"advanced_only": True, **record}
+
+    @app.post("/agent-registry/mcp/servers/{server_id}/refresh", dependencies=[Depends(member_dependency)])
+    async def refresh_mcp_server(
+        server_id: str,
+        body: McpServerRefreshRequest,
+        current_user=Depends(member_dependency),
+    ):
+        _refresh_server_exports()
+        resolved_workspace_id = enforce_workspace_access(
+            current_user,
+            _workspace_id_from_query_or_body(query_workspace_id=None, body_workspace_id=body.workspace_id),
+            minimum_role="member",
+        )
+        try:
+            await asyncio.to_thread(
+                mcp_registry_service.refresh_workspace_mcp_server_tools,
+                workspace_id=resolved_workspace_id,
+                server_id=server_id,
+            )
+        except Exception as error:
+            _raise_mcp_registry_error(error)
+        record = next(
+            (
+                item
+                for item in mcp_registry_service.list_workspace_mcp_servers(resolved_workspace_id)
+                if str(item.get("id") or "").strip() == str(server_id or "").strip().lower()
+            ),
+            None,
+        )
+        if not isinstance(record, dict):
+            raise HTTPException(status_code=404, detail="MCP server not found after refresh.")
+        return {"advanced_only": True, **record}
+
+    @app.delete("/agent-registry/mcp/servers/{server_id}", dependencies=[Depends(member_dependency)])
+    async def delete_mcp_server(
+        server_id: str,
+        workspace_id: Optional[str] = None,
+        current_user=Depends(member_dependency),
+    ):
+        _refresh_server_exports()
+        resolved_workspace_id = enforce_workspace_access(
+            current_user,
+            _workspace_id_from_query_or_body(query_workspace_id=workspace_id),
+            minimum_role="member",
+        )
+        try:
+            removed = mcp_registry_service.delete_workspace_mcp_server(
+                workspace_id=resolved_workspace_id,
+                server_id=server_id,
+            )
+        except Exception as error:
+            _raise_mcp_registry_error(error)
+        return {"advanced_only": True, **removed}
+
     @app.get("/agent-registry/installs", dependencies=[Depends(member_dependency)])
     async def list_agent_installs(
         workspace_id: Optional[str] = None,
@@ -939,11 +1098,25 @@ def register_agent_registry_routes(app) -> None:
         if not isinstance(existing, dict):
             raise HTTPException(status_code=404, detail="Specialist not found.")
         _require_specialist_config_editable(existing)
+        requested_skill_ids = [str(skill_id or "").strip() for skill_id in list(body.skill_ids or []) if str(skill_id or "").strip()]
+        available_skill_ids = {
+            definition.id
+            for definition in skill_registry.list_skill_definitions(
+                workspace_id=resolved_workspace_id,
+                include_disabled=True,
+            )
+        }
+        invalid_skill_ids = [skill_id for skill_id in requested_skill_ids if skill_id not in available_skill_ids]
+        if invalid_skill_ids:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Unknown specialist skill binding(s): {', '.join(invalid_skill_ids)}.",
+            )
         record = await agent_specialist_repository.save_workspace_specialist_skill_bindings(
             install_id,
             tenant_id=tenant_id,
             workspace_id=resolved_workspace_id,
-            skill_ids=list(body.skill_ids or []),
+            skill_ids=requested_skill_ids,
             updated_by_user_id=str((current_user or {}).get("user_id") or "").strip() or None,
         )
         if not isinstance(record, dict):

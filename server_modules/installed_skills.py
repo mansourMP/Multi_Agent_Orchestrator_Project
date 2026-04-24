@@ -175,8 +175,9 @@ def normalize_skill_id(value: Any) -> str:
 
 def _default_installed_skill_registry() -> Dict[str, Any]:
     return {
-        "version": 1,
+        "version": 2,
         "items": {},
+        "workspace_overrides": {},
         "updated_at": None,
     }
 
@@ -184,9 +185,11 @@ def _default_installed_skill_registry() -> Dict[str, Any]:
 def load_installed_skill_registry() -> Dict[str, Any]:
     payload = _read_json(installed_skill_registry_file())
     items = payload.get("items") if isinstance(payload.get("items"), dict) else {}
+    workspace_overrides = payload.get("workspace_overrides") if isinstance(payload.get("workspace_overrides"), dict) else {}
     return {
-        "version": int(payload.get("version") or 1),
+        "version": int(payload.get("version") or 2),
         "items": items,
+        "workspace_overrides": workspace_overrides,
         "updated_at": payload.get("updated_at"),
     }
 
@@ -194,6 +197,9 @@ def load_installed_skill_registry() -> Dict[str, Any]:
 def save_installed_skill_registry(payload: Dict[str, Any]) -> Dict[str, Any]:
     data = _default_installed_skill_registry()
     data["items"] = payload.get("items") if isinstance(payload.get("items"), dict) else {}
+    data["workspace_overrides"] = (
+        payload.get("workspace_overrides") if isinstance(payload.get("workspace_overrides"), dict) else {}
+    )
     data["updated_at"] = payload.get("updated_at")
     _write_json(installed_skill_registry_file(), data)
     return data
@@ -202,6 +208,22 @@ def save_installed_skill_registry(payload: Dict[str, Any]) -> Dict[str, Any]:
 def get_installed_skill_registry_entry(skill_id: str) -> Dict[str, Any]:
     registry = load_installed_skill_registry()
     item = registry["items"].get(skill_id)
+    return dict(item) if isinstance(item, dict) else {}
+
+
+def _normalize_workspace_key(workspace_id: Any) -> str:
+    return str(workspace_id or "").strip()
+
+
+def get_workspace_installed_skill_registry_entry(skill_id: str, workspace_id: Any) -> Dict[str, Any]:
+    normalized_skill = normalize_skill_id(skill_id)
+    normalized_workspace = _normalize_workspace_key(workspace_id)
+    if not normalized_skill or not normalized_workspace:
+        return {}
+    registry = load_installed_skill_registry()
+    workspace_overrides = registry.get("workspace_overrides") if isinstance(registry.get("workspace_overrides"), dict) else {}
+    workspace_items = workspace_overrides.get(normalized_workspace) if isinstance(workspace_overrides.get(normalized_workspace), dict) else {}
+    item = workspace_items.get(normalized_skill)
     return dict(item) if isinstance(item, dict) else {}
 
 
@@ -219,6 +241,34 @@ def upsert_installed_skill_registry_entry(skill_id: str, patch: Dict[str, Any]) 
     return entry
 
 
+def upsert_workspace_installed_skill_registry_entry(skill_id: str, workspace_id: Any, patch: Dict[str, Any]) -> Dict[str, Any]:
+    normalized = normalize_skill_id(skill_id)
+    normalized_workspace = _normalize_workspace_key(workspace_id)
+    if not normalized or not normalized_workspace:
+        return {}
+    registry = load_installed_skill_registry()
+    workspace_overrides = registry.get("workspace_overrides") if isinstance(registry.get("workspace_overrides"), dict) else {}
+    workspace_items = workspace_overrides.get(normalized_workspace)
+    item_bucket = dict(workspace_items) if isinstance(workspace_items, dict) else {}
+    current = item_bucket.get(normalized)
+    entry = dict(current) if isinstance(current, dict) else {}
+    entry.update(patch)
+    item_bucket[normalized] = entry
+    workspace_overrides[normalized_workspace] = item_bucket
+    registry["workspace_overrides"] = workspace_overrides
+    registry["updated_at"] = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    save_installed_skill_registry(registry)
+    return entry
+
+
+def set_workspace_installed_skill_enabled(*, skill_id: str, workspace_id: Any, enabled: bool) -> Dict[str, Any]:
+    return upsert_workspace_installed_skill_registry_entry(
+        skill_id,
+        workspace_id,
+        {"enabled": bool(enabled)},
+    )
+
+
 def remove_installed_skill_registry_entry(skill_id: str) -> None:
     normalized = normalize_skill_id(skill_id)
     if not normalized:
@@ -228,6 +278,109 @@ def remove_installed_skill_registry_entry(skill_id: str) -> None:
         registry["items"].pop(normalized, None)
         registry["updated_at"] = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
         save_installed_skill_registry(registry)
+
+
+def _first_defined(*values: Any) -> Any:
+    for value in values:
+        if value is None:
+            continue
+        if isinstance(value, str) and not value.strip():
+            continue
+        if isinstance(value, list) and not value:
+            continue
+        if isinstance(value, dict) and not value:
+            continue
+        return value
+    return None
+
+
+def _runtime_section(value: Any) -> Dict[str, Any]:
+    if not isinstance(value, dict):
+        return {}
+    runtime = value.get("runtime")
+    return dict(runtime) if isinstance(runtime, dict) else {}
+
+
+def _normalize_runtime_metadata(*, raw_manifest: Dict[str, Any], frontmatter: Dict[str, Any], has_query_handler: bool) -> Dict[str, Any]:
+    runtime_manifest = _runtime_section(raw_manifest)
+    metadata_source = runtime_manifest or raw_manifest
+    trigger_terms = _list_from_any(
+        _first_defined(
+            runtime_manifest.get("trigger_terms"),
+            raw_manifest.get("trigger_terms"),
+            frontmatter.get("trigger_terms"),
+        )
+    )
+    connector_scopes = _list_from_any(
+        _first_defined(
+            runtime_manifest.get("connector_scopes"),
+            raw_manifest.get("connector_scopes"),
+            frontmatter.get("connector_scopes"),
+        )
+    )
+    allowed_runtime_modes = _list_from_any(
+        _first_defined(
+            runtime_manifest.get("allowed_runtime_modes"),
+            raw_manifest.get("allowed_runtime_modes"),
+            frontmatter.get("allowed_runtime_modes"),
+        )
+    )
+    execution_adapter = str(
+        _first_defined(
+            runtime_manifest.get("execution_adapter"),
+            raw_manifest.get("execution_adapter"),
+            frontmatter.get("execution_adapter"),
+            "handler" if has_query_handler else "",
+        )
+        or ""
+    ).strip().lower()
+    return {
+        "skill_class": str(
+            _first_defined(
+                runtime_manifest.get("skill_class"),
+                raw_manifest.get("skill_class"),
+                frontmatter.get("skill_class"),
+            )
+            or ""
+        ).strip().lower(),
+        "permission_label": str(
+            _first_defined(
+                runtime_manifest.get("permission_label"),
+                raw_manifest.get("permission_label"),
+                frontmatter.get("permission_label"),
+            )
+            or ""
+        ).strip(),
+        "execution_mode": str(
+            _first_defined(
+                runtime_manifest.get("execution_mode"),
+                raw_manifest.get("execution_mode"),
+                frontmatter.get("execution_mode"),
+            )
+            or ""
+        ).strip().lower(),
+        "action_class": str(
+            _first_defined(
+                runtime_manifest.get("action_class"),
+                raw_manifest.get("action_class"),
+                frontmatter.get("action_class"),
+            )
+            or ""
+        ).strip().lower(),
+        "connector_scopes": connector_scopes,
+        "trigger_terms": trigger_terms,
+        "allowed_runtime_modes": allowed_runtime_modes,
+        "requires_approval": _bool_from_any(
+            _first_defined(
+                runtime_manifest.get("requires_approval"),
+                raw_manifest.get("requires_approval"),
+                frontmatter.get("requires_approval"),
+            ),
+            False,
+        ),
+        "execution_adapter": execution_adapter,
+        "metadata_source": metadata_source,
+    }
 
 
 def _runtime_skill_configs() -> Dict[str, Any]:
@@ -316,11 +469,12 @@ def _missing_bins(required_bins: List[str]) -> List[str]:
     return [token for token in required_bins if not shutil.which(token)]
 
 
-def list_installed_skills() -> List[Dict[str, Any]]:
+def list_installed_skills(*, workspace_id: Optional[str] = None) -> List[Dict[str, Any]]:
     items: List[Dict[str, Any]] = []
     seen_ids: set[str] = set()
     registry = load_installed_skill_registry()
     registry_items = registry.get("items") if isinstance(registry.get("items"), dict) else {}
+    normalized_workspace_id = _normalize_workspace_key(workspace_id)
     for source, root in skill_roots():
         if not root.exists():
             continue
@@ -337,12 +491,18 @@ def list_installed_skills() -> List[Dict[str, Any]]:
             manifest = _load_skill_manifest(skill_dir)
             skill_text = _read_text(skill_dir / "SKILL.md")
             frontmatter = _parse_skill_frontmatter(skill_text)
+            raw_manifest = _read_json(skill_dir / "skill.json") if has_skill_json else {}
             config = _load_yaml(skill_dir / "config.yaml")
             skill_id = normalize_skill_id(manifest.get("id") or frontmatter.get("name") or skill_dir.name) or skill_dir.name.lower()
             if not skill_id or skill_id in seen_ids:
                 continue
             seen_ids.add(skill_id)
             registry_entry = registry_items.get(skill_id) if isinstance(registry_items.get(skill_id), dict) else {}
+            workspace_registry_entry = (
+                get_workspace_installed_skill_registry_entry(skill_id, normalized_workspace_id)
+                if normalized_workspace_id
+                else {}
+            )
             description = str(manifest.get("description") or frontmatter.get("description") or "").strip()
             runtime_config = _runtime_skill_config(skill_id)
             enabled_default = True if has_skill_json else source == "bundled"
@@ -351,8 +511,16 @@ def list_installed_skills() -> List[Dict[str, Any]]:
                 _bool_from_any(config.get("enabled"), _bool_from_any(frontmatter.get("enabled"), enabled_default)),
             )
             enabled = _bool_from_any(
-                registry_entry.get("enabled") if isinstance(registry_entry, dict) else None,
-                enabled_fallback,
+                workspace_registry_entry.get("enabled") if isinstance(workspace_registry_entry, dict) else None,
+                _bool_from_any(
+                    registry_entry.get("enabled") if isinstance(registry_entry, dict) else None,
+                    enabled_fallback,
+                ),
+            )
+            runtime_metadata = _normalize_runtime_metadata(
+                raw_manifest=raw_manifest,
+                frontmatter=frontmatter,
+                has_query_handler=(skill_dir / "query_handler.py").exists() or (skill_dir / "handler.py").exists(),
             )
             required_bins = _required_bins(frontmatter, config, runtime_config)
             missing_bins = _missing_bins(required_bins)
@@ -381,18 +549,21 @@ def list_installed_skills() -> List[Dict[str, Any]]:
                     "has_snapshot_worker": (skill_dir / "worker.py").exists(),
                     "config": config,
                     "runtime_config": runtime_config,
+                    "runtime_metadata": runtime_metadata,
                     "skill_body": _strip_skill_frontmatter(skill_text) or readme_text.strip(),
                     "readme": readme_text.strip() or _strip_skill_frontmatter(skill_text),
                     "registry": registry_entry if isinstance(registry_entry, dict) else {},
+                    "workspace_registry": workspace_registry_entry if isinstance(workspace_registry_entry, dict) else {},
+                    "workspace_id": normalized_workspace_id or None,
                 }
             )
     return items
 
 
-def active_installed_skills() -> List[Dict[str, Any]]:
+def active_installed_skills(*, workspace_id: Optional[str] = None) -> List[Dict[str, Any]]:
     return [
         item
-        for item in list_installed_skills()
+        for item in list_installed_skills(workspace_id=workspace_id)
         if bool(item.get("enabled")) and bool(item.get("available"))
     ]
 
@@ -408,8 +579,8 @@ def merge_skill_prompt_append(existing: str, extra: str, *, max_chars: int = 120
     return merged[:max_chars]
 
 
-def build_active_skill_prompt_append(*, max_chars: int = 12000) -> str:
-    active = active_installed_skills()
+def build_active_skill_prompt_append(*, workspace_id: Optional[str] = None, max_chars: int = 12000) -> str:
+    active = active_installed_skills(workspace_id=workspace_id)
     if not active:
         return ""
     chunks: List[str] = ["Installed skill instructions (active for this deployment):"]
@@ -430,8 +601,12 @@ def build_active_skill_prompt_append(*, max_chars: int = 12000) -> str:
     return "\n".join(chunks).strip()[:max_chars]
 
 
-def active_installed_skill_ids() -> List[str]:
-    return [str(item.get("id") or "").strip() for item in active_installed_skills() if str(item.get("id") or "").strip()]
+def active_installed_skill_ids(*, workspace_id: Optional[str] = None) -> List[str]:
+    return [
+        str(item.get("id") or "").strip()
+        for item in active_installed_skills(workspace_id=workspace_id)
+        if str(item.get("id") or "").strip()
+    ]
 
 
 def _run_skill_query_handler(skill: Dict[str, Any], payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -473,7 +648,7 @@ def query_active_installed_skills(
     chat_id: Optional[str] = None,
     session_key: Optional[str] = None,
 ) -> Dict[str, Any]:
-    active = active_installed_skills()
+    active = active_installed_skills(workspace_id=workspace_id)
     combined_prompt = ""
     combined_errors: List[Dict[str, Any]] = []
     first_handled: Optional[Dict[str, Any]] = None

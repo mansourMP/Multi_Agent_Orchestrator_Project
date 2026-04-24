@@ -135,7 +135,7 @@ export function AppSurfaceStat({
   ...props
 }: HTMLAttributes<HTMLDivElement> & {
   label: string;
-  value: string;
+  value: ReactNode;
   hint: string;
 }) {
   return (

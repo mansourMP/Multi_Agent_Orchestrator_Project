@@ -455,3 +455,16 @@ async def workspace_provider_credential_delete(
         current_user=current_user,
         provider=body.provider,
     )
+
+
+@router.post("/workspaces/{workspace_id}/providers/{provider_id}/models/refresh")
+async def workspace_provider_models_refresh(
+    workspace_id: str,
+    provider_id: str,
+    current_user=Depends(get_current_user),
+):
+    return await workspace_admin_service.refresh_workspace_provider_models(
+        workspace_id=workspace_id,
+        current_user=current_user,
+        provider=provider_id,
+    )

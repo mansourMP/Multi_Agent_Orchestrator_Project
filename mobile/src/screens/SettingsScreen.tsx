@@ -8,7 +8,7 @@ import { ScrollView, Text, View } from "react-native";
 import { PrimaryScreenHeader } from "@/src/components/navigation/PrimaryScreenHeader";
 import { ActionButton } from "@/src/components/system/ActionButton";
 import { MotionPressable } from "@/src/components/system/MotionPressable";
-import { useMobileConnectors, useMobileMachines, useMobileOverviewData } from "@/src/lib/mobile-data";
+import { useMobileConnectors, useMobileMachines, useMobileOverviewData, usePrimaryGatewayDoctor } from "@/src/lib/mobile-data";
 import { useSessionState } from "@/src/lib/session-context";
 import { useAppTheme as useTheme } from "@/src/theme/useAppTheme";
 
@@ -19,19 +19,32 @@ export function ProfileScreen() {
   const connectorsQuery = useMobileConnectors();
   const machinesQuery = useMobileMachines();
   const overview = useMobileOverviewData();
+  const gatewayDoctor = usePrimaryGatewayDoctor();
   const appVersion = Constants.expoConfig?.version || Constants.nativeAppVersion || "0.1.0";
   const connected = Boolean(session?.runtimeUrl && session?.runtimeKey);
   const connectorCount = (connectorsQuery.data ?? []).filter((item) => item.connected || item.runtime_usable).length;
   const machineCount = machinesQuery.data?.length ?? 0;
   const onlineMachineCount = (machinesQuery.data ?? []).filter((item) => item.online).length;
   const approvalCount = overview.approvals.length;
+  const gatewayDoctorStatus = String(gatewayDoctor.doctor?.status ?? "").trim().toLowerCase();
+  const gatewayDoctorApprovals = Number((gatewayDoctor.doctor?.approvals as { pending_count?: number } | undefined)?.pending_count ?? 0);
   const usageSummary = connected
     ? `${overview.runs.length} run${overview.runs.length === 1 ? "" : "s"} · ${overview.artifacts.length} output${overview.artifacts.length === 1 ? "" : "s"} · ${connectorCount} connected app${connectorCount === 1 ? "" : "s"}`
     : "Connect your personal runtime to see live runs, outputs, and linked apps.";
   const gatewaySummary = !connected
     ? "Connect your private runtime and pair a device."
-    : machinesQuery.isLoading
+    : gatewayDoctor.loading || machinesQuery.isLoading
       ? "Checking your paired devices and approvals…"
+      : gatewayDoctor.gateway && gatewayDoctor.doctor
+        ? gatewayDoctorStatus === "healthy"
+          ? `Gateway online${gatewayDoctorApprovals ? ` · ${gatewayDoctorApprovals} approval${gatewayDoctorApprovals === 1 ? "" : "s"} waiting` : ""}`
+          : gatewayDoctorStatus === "offline"
+            ? `Gateway offline${gatewayDoctorApprovals ? ` · ${gatewayDoctorApprovals} approval${gatewayDoctorApprovals === 1 ? "" : "s"} waiting` : ""}`
+            : gatewayDoctorStatus === "blocked"
+              ? "Gateway access is blocked and needs review."
+              : gatewayDoctorStatus === "degraded"
+                ? `Gateway needs attention${gatewayDoctorApprovals ? ` · ${gatewayDoctorApprovals} approval${gatewayDoctorApprovals === 1 ? "" : "s"} waiting` : ""}`
+                : "Gateway status is available."
       : onlineMachineCount > 0
         ? `${onlineMachineCount} device${onlineMachineCount === 1 ? "" : "s"} online${approvalCount ? ` · ${approvalCount} approval${approvalCount === 1 ? "" : "s"} waiting` : ""}`
         : machineCount > 0

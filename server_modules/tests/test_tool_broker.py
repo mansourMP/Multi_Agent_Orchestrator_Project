@@ -1,9 +1,12 @@
 import asyncio
+import os
+import tempfile
 import unittest
-from unittest.mock import patch
+from pathlib import Path
+from unittest.mock import AsyncMock, patch
 
-from server_modules.agent_manifest import AgentManifest, AgentManifestIdentity, AgentManifestSkillBinding
-from server_modules import egress_policy, safe_mode_service, tool_broker, tools_http
+from server_modules.agent_manifest import AgentManifest, AgentManifestIdentity, AgentManifestSkillBinding, SAGE_GLOBAL_MANIFEST
+from server_modules import egress_policy, mcp_registry_service, safe_mode_service, tool_broker, tools_http
 
 
 def _manifest(*, skills: list[str] | None = None, connectors: list[str] | None = None) -> AgentManifest:
@@ -24,8 +27,35 @@ def _manifest(*, skills: list[str] | None = None, connectors: list[str] | None =
 
 
 class ToolBrokerTests(unittest.TestCase):
+    def setUp(self) -> None:
+        super().setUp()
+        self._env_patcher = patch.dict(os.environ, {"EMPYRALIS_TOOL_BROKER_SECRET": "empyralis-test-broker-secret"}, clear=False)
+        self._env_patcher.start()
+
     def tearDown(self) -> None:
+        self._env_patcher.stop()
         safe_mode_service.reset_state_for_tests()
+
+    def _register_mcp_server(self, registry_path: Path) -> None:
+        with patch.object(mcp_registry_service, "MCP_SERVER_REGISTRY_FILE", registry_path):
+            mcp_registry_service.upsert_workspace_mcp_server(
+                workspace_id="workspace-1",
+                server_id="inventory-feed",
+                label="Inventory Feed",
+                transport="streamable_http",
+                endpoint="https://example.com/mcp",
+                tools=[
+                    {
+                        "name": "lookup_stock",
+                        "label": "Lookup Stock",
+                        "description": "Read live inventory data.",
+                        "action_class": "read",
+                        "connector_scopes": ["inventory"],
+                        "trigger_terms": ["lookup stock"],
+                    }
+                ],
+                metadata={},
+            )
 
     def test_verify_capability_token_rejects_expired_grant(self):
         grant = tool_broker.issue_capability_token(
@@ -147,6 +177,155 @@ class ToolBrokerTests(unittest.TestCase):
             )
             self.assertIn(result["status"], {"ok", "no_match"})
             self.assertIn("steps", result)
+
+        asyncio.run(_run())
+
+    def test_master_manifest_can_execute_web_search_skill(self):
+        async def _run() -> None:
+            grant = tool_broker.issue_capability_token(
+                manifest=SAGE_GLOBAL_MANIFEST,
+                tenant_id="tenant-1",
+                workspace_id="workspace-1",
+                runtime_mode="hosted_secure",
+                runtime_scope={"driver": "sandbox_exec", "workspace_kind": "ephemeral"},
+            )
+            html = (
+                '<a class="result__a" href="https://example.com">Example Domain</a>'
+                '<a class="result__snippet">A canonical example result.</a>'
+            )
+            with patch(
+                "server_modules.skill_registry.tools_http.http_request",
+                new=AsyncMock(return_value={"status_code": 200, "body": html}),
+            ):
+                result = await tool_broker.execute_skill(
+                    capability_token=grant.token,
+                    manifest_id=SAGE_GLOBAL_MANIFEST.manifest_id,
+                    tenant_id="tenant-1",
+                    workspace_id="workspace-1",
+                    runtime_mode="hosted_secure",
+                    skill_id="web-search",
+                    goal="Research example domain",
+                    agent_label="Sage",
+                    hard_context="",
+                    operational_policy="",
+                )
+            self.assertEqual(result["status"], "ok")
+            self.assertEqual(result["results"][0]["url"], "https://example.com")
+
+        asyncio.run(_run())
+
+    def test_master_manifest_can_execute_browser_skill(self):
+        class _FakeBrowser:
+            async def navigate(self, url: str):
+                return {"url": url, "title": "Example Domain", "status_code": 200}
+
+            async def observe(self):
+                return {
+                    "url": "https://example.com",
+                    "title": "Example Domain",
+                    "text": "Example page body",
+                    "interactive_elements": [],
+                    "screenshot_path": "/tmp/example.png",
+                }
+
+        async def _run() -> None:
+            grant = tool_broker.issue_capability_token(
+                manifest=SAGE_GLOBAL_MANIFEST,
+                tenant_id="tenant-1",
+                workspace_id="workspace-1",
+                runtime_mode="hosted_secure",
+                runtime_scope={"driver": "sandbox_exec", "workspace_kind": "ephemeral"},
+            )
+            with patch("server_modules.skill_registry.BrowserEngine", return_value=_FakeBrowser()):
+                result = await tool_broker.execute_skill(
+                    capability_token=grant.token,
+                    manifest_id=SAGE_GLOBAL_MANIFEST.manifest_id,
+                    tenant_id="tenant-1",
+                    workspace_id="workspace-1",
+                    runtime_mode="hosted_secure",
+                    skill_id="browser",
+                    goal="Open https://example.com and inspect the page",
+                    agent_label="Sage",
+                    hard_context="",
+                    operational_policy="",
+                )
+            self.assertEqual(result["status"], "ok")
+            self.assertEqual(result["observation"]["url"], "https://example.com")
+
+        asyncio.run(_run())
+
+    def test_master_manifest_can_execute_mcp_skill(self):
+        async def _run() -> None:
+            with tempfile.TemporaryDirectory() as temp_dir:
+                registry_path = Path(temp_dir) / "mcp_servers.json"
+                with (
+                    patch.object(mcp_registry_service, "MCP_SERVER_REGISTRY_FILE", registry_path),
+                    patch(
+                        "server_modules.mcp_registry_service._call_streamable_http_tool_async",
+                        new=AsyncMock(return_value={"reply": "SKU-1 is in stock."}),
+                    ),
+                ):
+                    self._register_mcp_server(registry_path)
+                    grant = tool_broker.issue_capability_token(
+                        manifest=SAGE_GLOBAL_MANIFEST,
+                        tenant_id="tenant-1",
+                        workspace_id="workspace-1",
+                        runtime_mode="hosted_secure",
+                        runtime_scope={"driver": "sandbox_exec", "workspace_kind": "ephemeral"},
+                    )
+                    result = await tool_broker.execute_skill(
+                        capability_token=grant.token,
+                        manifest_id=SAGE_GLOBAL_MANIFEST.manifest_id,
+                        tenant_id="tenant-1",
+                        workspace_id="workspace-1",
+                        runtime_mode="hosted_secure",
+                        skill_id="mcp:inventory-feed:lookup_stock",
+                        goal='{"sku":"SKU-1"}',
+                        agent_label="Sage",
+                        hard_context="",
+                        operational_policy="",
+                    )
+            self.assertEqual(result["status"], "ok")
+            self.assertEqual(result["mcp"]["server_id"], "inventory-feed")
+            self.assertEqual(result["mcp"]["arguments"], {"sku": "SKU-1"})
+
+        asyncio.run(_run())
+
+    def test_specialist_manifest_can_execute_bound_mcp_skill(self):
+        async def _run() -> None:
+            with tempfile.TemporaryDirectory() as temp_dir:
+                registry_path = Path(temp_dir) / "mcp_servers.json"
+                with (
+                    patch.object(mcp_registry_service, "MCP_SERVER_REGISTRY_FILE", registry_path),
+                    patch(
+                        "server_modules.mcp_registry_service._call_streamable_http_tool_async",
+                        new=AsyncMock(return_value={"reply": "Brake pad set is available."}),
+                    ),
+                ):
+                    self._register_mcp_server(registry_path)
+                    manifest = _manifest(skills=["mcp:inventory-feed:lookup_stock"])
+                    grant = tool_broker.issue_capability_token(
+                        manifest=manifest,
+                        tenant_id="tenant-1",
+                        workspace_id="workspace-1",
+                        runtime_mode="hosted_secure",
+                        runtime_scope={"driver": "sandbox_exec", "workspace_kind": "ephemeral"},
+                    )
+                    result = await tool_broker.execute_skill(
+                        capability_token=grant.token,
+                        manifest_id="manifest-parts-pro",
+                        tenant_id="tenant-1",
+                        workspace_id="workspace-1",
+                        runtime_mode="hosted_secure",
+                        skill_id="mcp:inventory-feed:lookup_stock",
+                        goal="brake pad set",
+                        agent_label="Parts Pro",
+                        hard_context="Use MCP live data only.",
+                        operational_policy="Never invent stock.",
+                    )
+            self.assertEqual(result["status"], "ok")
+            self.assertEqual(result["reply"], "Brake pad set is available.")
+            self.assertEqual(result["mcp"]["tool_name"], "lookup_stock")
 
         asyncio.run(_run())
 

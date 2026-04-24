@@ -23,6 +23,9 @@ type ProviderSnapshot = {
   defaultModel: string | null;
   activeSource: string | null;
   stateDetail: string | null;
+  hidden: boolean;
+  modelsError: string | null;
+  modelsSyncedAt: string | null;
   models: ProviderCatalogModelRecord[];
 };
 
@@ -32,18 +35,6 @@ type ProviderConnectionSnapshot = {
   profile: ProviderProfileRecord | null;
   connected: boolean;
   keyTail: string | null;
-};
-
-const SUPPORTED_PROVIDER_IDS = [
-  'openai',
-  'anthropic',
-  'gemini',
-] as const;
-
-const FALLBACK_PROVIDER_LABELS: Record<string, string> = {
-  openai: 'OpenAI',
-  anthropic: 'Anthropic',
-  gemini: 'Gemini',
 };
 
 function readString(value: unknown, fallback = ''): string {
@@ -62,7 +53,7 @@ function normalizeProviderCatalog(payload: unknown): ProviderSnapshot[] {
 
   return providers.flatMap((provider) => {
     const id = readString(provider.id).toLowerCase();
-    if (!id || !SUPPORTED_PROVIDER_IDS.includes(id as typeof SUPPORTED_PROVIDER_IDS[number])) {
+    if (!id || provider.hidden === true) {
       return [];
     }
     return [{
@@ -74,6 +65,9 @@ function normalizeProviderCatalog(payload: unknown): ProviderSnapshot[] {
       defaultModel: readOptionalString(provider.default_model),
       activeSource: readOptionalString(provider.active_source),
       stateDetail: readOptionalString(provider.state_detail),
+      hidden: provider.hidden === true,
+      modelsError: readOptionalString(provider.models_error),
+      modelsSyncedAt: readOptionalString(provider.models_synced_at),
       models: Array.isArray(provider.models)
         ? provider.models.filter((item): item is ProviderCatalogModelRecord => Boolean(item) && typeof item === 'object')
         : [],
@@ -82,17 +76,7 @@ function normalizeProviderCatalog(payload: unknown): ProviderSnapshot[] {
 }
 
 function fallbackProviderCatalog(): ProviderSnapshot[] {
-  return SUPPORTED_PROVIDER_IDS.map((id) => ({
-    id,
-    label: FALLBACK_PROVIDER_LABELS[id] ?? id,
-    state: 'unknown',
-    usable: false,
-    active: false,
-    defaultModel: null,
-    activeSource: null,
-    stateDetail: null,
-    models: [],
-  }));
+  return [];
 }
 
 function normalizeProviderProfiles(payload: unknown): ProviderProfileRecord[] {
@@ -147,18 +131,6 @@ function maskKeyTail(credential: VaultCredentialRecord | null): string | null {
   return readOptionalString((credential.metadata as Record<string, unknown>).credential_last4);
 }
 
-function normalizeProviderModels(payload: unknown): ProviderCatalogModelRecord[] {
-  const record = payload && typeof payload === 'object' ? payload as Record<string, unknown> : {};
-  const models = Array.isArray(record.models) ? record.models : [];
-  return models
-    .filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
-    .map((id) => ({
-      id,
-      label: id,
-      provider: 'ollama',
-    }));
-}
-
 export function WorkstationSageProvidersPane() {
   const services = useWorkspaceServices();
   const [providers, setProviders] = useState<ProviderSnapshot[]>([]);
@@ -171,7 +143,6 @@ export function WorkstationSageProvidersPane() {
   const [editorMode, setEditorMode] = useState<'connect' | 'manage' | 'rotate'>('connect');
   const [draftApiKey, setDraftApiKey] = useState('');
   const [savingProviderId, setSavingProviderId] = useState<string | null>(null);
-  const [providerModelOverrides, setProviderModelOverrides] = useState<Record<string, ProviderCatalogModelRecord[]>>({});
 
   async function loadProviders(): Promise<void> {
     const [catalogResult, profileResult, credentialResult] = await Promise.allSettled([
@@ -208,73 +179,25 @@ export function WorkstationSageProvidersPane() {
     };
   }, [services.client]);
 
-  useEffect(() => {
-    let cancelled = false;
-    void services.client.listRuntimeTargets()
-      .then((payload) => {
-        if (cancelled) {
-          return;
-        }
-        const record = payload && typeof payload === 'object' ? payload as Record<string, unknown> : {};
-        const items = Array.isArray(record.items) ? record.items : [];
-        const localOnline = items.some((item) => {
-          const target = item && typeof item === 'object' ? item as Record<string, unknown> : {};
-          return readString(target.id).toLowerCase() === 'local_companion' && Boolean(target.online);
-        });
-        if (!localOnline) {
-          setProviderModelOverrides((current) => (current.ollama ? { ...current, ollama: [] } : current));
-          return;
-        }
-        void services.client.listProviderModels({ providerId: 'ollama' })
-          .then((modelsPayload: Record<string, unknown>) => {
-            if (cancelled) {
-              return;
-            }
-            setProviderModelOverrides((current) => ({
-              ...current,
-              ollama: normalizeProviderModels(modelsPayload),
-            }));
-          })
-          .catch(() => {
-            if (cancelled) {
-              return;
-            }
-            setProviderModelOverrides((current) => ({
-              ...current,
-              ollama: [],
-            }));
-          });
-      })
-      .catch(() => undefined);
-    return () => {
-      cancelled = true;
-    };
-  }, [services.client]);
-
   const providerRows = useMemo<ProviderConnectionSnapshot[]>(() => providers.map((provider) => {
-    const resolvedProvider = provider.id === 'ollama'
-      ? { ...provider, models: providerModelOverrides.ollama ?? [] }
-      : providerModelOverrides[provider.id]?.length
-        ? { ...provider, models: providerModelOverrides[provider.id] }
-        : provider;
     const providerProfiles = sortProfiles(
-      profiles.filter((item) => readString(item.provider).toLowerCase() === resolvedProvider.id),
+      profiles.filter((item) => readString(item.provider).toLowerCase() === provider.id),
     );
     const providerCredentials = sortCredentials(
-      credentials.filter((item) => readString(item.provider).toLowerCase() === resolvedProvider.id),
+      credentials.filter((item) => readString(item.provider).toLowerCase() === provider.id),
     );
     const profile = providerProfiles[0] ?? null;
     const credential = providerCredentials[0] ?? null;
-    const secretlessConnected = isSecretlessConnection(resolvedProvider.id, profile);
+    const secretlessConnected = isSecretlessConnection(provider.id, profile);
     const connected = Boolean(credential) || secretlessConnected;
     return {
-      provider: resolvedProvider,
+      provider,
       credential,
       profile,
       connected,
       keyTail: maskKeyTail(credential),
     };
-  }), [credentials, profiles, providerModelOverrides, providers]);
+  }), [credentials, profiles, providers]);
 
   async function handleSave(providerId: string): Promise<void> {
     const trimmedKey = draftApiKey.trim();
@@ -325,6 +248,21 @@ export function WorkstationSageProvidersPane() {
       setStatus(`${providerRows.find((item) => item.provider.id === providerId)?.provider.label ?? 'Provider'} was disconnected from Sage.`);
     } catch (deleteError) {
       setError(deleteError instanceof Error ? deleteError.message : 'Provider disconnect failed.');
+    } finally {
+      setSavingProviderId(null);
+    }
+  }
+
+  async function handleRefreshModels(providerId: string): Promise<void> {
+    setSavingProviderId(providerId);
+    setError(null);
+    setStatus(null);
+    try {
+      await services.client.refreshWorkspaceProviderModels({ providerId });
+      await loadProviders();
+      setStatus(`${providerRows.find((item) => item.provider.id === providerId)?.provider.label ?? 'Provider'} model list was refreshed.`);
+    } catch (refreshError) {
+      setError(refreshError instanceof Error ? refreshError.message : 'Provider model refresh failed.');
     } finally {
       setSavingProviderId(null);
     }
@@ -410,10 +348,34 @@ export function WorkstationSageProvidersPane() {
                             ? `••••${keyTail}`
                             : providerRequiresKey(provider.id)
                               ? 'Saved key hidden'
-                              : 'No API key required'}
+                            : 'No API key required'}
                         </p>
+                        <p className="sage-provider-row__manage-label">Models</p>
+                        <p className="sage-provider-row__manage-value">
+                          {provider.models.length > 0
+                            ? provider.models.slice(0, 4).map((model) => readString(model.id)).filter(Boolean).join(', ')
+                            : connected
+                              ? 'No live models cached yet'
+                              : 'Connect provider to sync models'}
+                        </p>
+                        {provider.modelsSyncedAt ? (
+                          <p className="sage-provider-row__manage-label">Synced {provider.modelsSyncedAt}</p>
+                        ) : null}
+                        {provider.modelsError ? (
+                          <p className="sage-provider-row__manage-label">{provider.modelsError}</p>
+                        ) : null}
                       </div>
                       <div className="sage-provider-row__manage-actions">
+                        <AppButton
+                          type="button"
+                          tone="secondary"
+                          disabled={isSaving}
+                          onClick={() => {
+                            void handleRefreshModels(provider.id);
+                          }}
+                        >
+                          Refresh models
+                        </AppButton>
                         <AppButton
                           type="button"
                           tone="secondary"

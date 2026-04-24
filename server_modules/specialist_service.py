@@ -2,8 +2,9 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
-from server_modules import activity_ledger_service, runtime_attachment_service, unified_memory_service
+from server_modules import activity_ledger_service, mcp_registry_service, runtime_attachment_service, unified_memory_service
 from server_modules import agent_registry_repository
+from server_modules import skill_registry
 from server_modules.agent_specialist_repository import manifest_from_install_bundle
 
 
@@ -73,18 +74,86 @@ def _manifest_identity_payload(install: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def _skill_scope_payload(install: Dict[str, Any]) -> Dict[str, Any]:
+def _skill_scope_payload(install: Dict[str, Any], *, workspace_id: str) -> Dict[str, Any]:
     manifest = manifest_from_install_bundle(install or {})
     if manifest is None:
-        return {"enabled_skills": [], "count": 0}
+        return {"enabled_skills": [], "count": 0, "definitions": []}
     enabled_skills = sorted(
         str(item.id).strip()
         for item in list(manifest.skills or [])
         if str(getattr(item, "id", "") or "").strip() and bool(getattr(item, "enabled", True))
     )
+    definitions: List[Dict[str, Any]] = []
+    for skill_id in enabled_skills:
+        definition = skill_registry.get_skill_definition(skill_id, workspace_id=workspace_id, include_disabled=True)
+        if definition is None:
+            definitions.append({"id": skill_id, "label": skill_id, "available": False})
+            continue
+        definitions.append(
+            {
+                "id": definition.id,
+                "label": definition.label,
+                "skill_class": definition.skill_class,
+                "action_class": definition.action_class,
+                "execution_mode": definition.execution_mode,
+                "enabled": definition.enabled,
+                "available": True,
+            }
+        )
     return {
         "enabled_skills": enabled_skills,
         "count": len(enabled_skills),
+        "definitions": definitions,
+    }
+
+
+def _mcp_scope_payload(install: Dict[str, Any], *, workspace_id: str) -> Dict[str, Any]:
+    workspace_token = _token(workspace_id)
+    manifest = manifest_from_install_bundle(install or {})
+    if manifest is None or workspace_token is None:
+        return {
+            "advanced_only": True,
+            "registered_servers": [],
+            "server_count": 0,
+            "bound_skill_ids": [],
+            "bound_servers": [],
+        }
+    bound_skill_ids = sorted(
+        skill_id
+        for skill_id in (
+            str(item.id).strip()
+            for item in list(manifest.skills or [])
+            if str(getattr(item, "id", "") or "").strip() and bool(getattr(item, "enabled", True))
+        )
+        if mcp_registry_service.parse_mcp_skill_id(skill_id) is not None
+    )
+    registered_servers = mcp_registry_service.list_workspace_mcp_servers(workspace_token)
+    bound_server_ids = {
+        parsed["server_id"]
+        for parsed in (
+            mcp_registry_service.parse_mcp_skill_id(skill_id)
+            for skill_id in bound_skill_ids
+        )
+        if isinstance(parsed, dict)
+    }
+    return {
+        "advanced_only": True,
+        "registered_servers": [
+            {
+                "id": _token(server.get("id")),
+                "label": _token(server.get("label")) or _token(server.get("id")),
+                "transport": _token(server.get("transport")),
+                "enabled": bool(server.get("enabled", True)),
+                "tool_count": int(server.get("tool_count") or 0),
+                "last_synced_at": _token(server.get("last_synced_at")),
+                "skill_ids": _string_list(server.get("skill_ids")),
+            }
+            for server in registered_servers
+        ],
+        "server_count": len(registered_servers),
+        "bound_skill_ids": bound_skill_ids,
+        "bound_servers": sorted(bound_server_ids),
+        "policy": "MCP stays advanced-only and optional. Specialists can use registered MCP tools as scoped live data without making MCP part of the normal user path.",
     }
 
 
@@ -340,6 +409,7 @@ def _projection_summary(contract: Dict[str, Any]) -> Dict[str, Any]:
     memory_scope = _dict(contract.get("memory_scope"))
     operating_mode = _dict(contract.get("operating_mode"))
     skill_scope = _dict(contract.get("skill_scope"))
+    mcp_scope = _dict(contract.get("mcp_scope"))
     connector_scope = _dict(contract.get("connector_scope"))
     tool_scope = _dict(contract.get("tool_scope"))
     orchestration = _dict(contract.get("sage_orchestration"))
@@ -359,6 +429,7 @@ def _projection_summary(contract: Dict[str, Any]) -> Dict[str, Any]:
         "scope_summary": {
             "memory_layers": _list(memory_scope.get("accessible_layers")),
             "enabled_skills": _list(skill_scope.get("enabled_skills")),
+            "mcp_servers": _list(mcp_scope.get("bound_servers")),
             "enabled_connectors": _list(connector_scope.get("enabled_connectors")),
             "enabled_tools": _list(tool_scope.get("enabled_tools")),
         },
@@ -435,7 +506,8 @@ async def build_specialist_service_contract(
             "power_model": "runtime_and_policy_bound",
         },
         "memory_scope": _memory_scope_payload(memory_payload),
-        "skill_scope": _skill_scope_payload(payload),
+        "skill_scope": _skill_scope_payload(payload, workspace_id=workspace_id),
+        "mcp_scope": _mcp_scope_payload(payload, workspace_id=workspace_id),
         "tool_scope": _tool_scope_payload(payload),
         "connector_scope": _connector_scope_payload(payload),
         "artifact_scope": {

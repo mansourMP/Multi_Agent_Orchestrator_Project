@@ -10,7 +10,7 @@ class EntitlementsServiceTests(unittest.TestCase):
             workspace={"metadata": {"billing": {"plan": "power"}}},
         )
 
-        self.assertEqual(state.plan_id, "power")
+        self.assertEqual(state.plan_id, "pro")
         self.assertTrue(state.non_gated_capabilities["core_sage_identity"])
         self.assertTrue(state.non_gated_capabilities["basic_specialist_architecture"])
         self.assertTrue(state.non_gated_capabilities["local_runtime_mode"])
@@ -27,17 +27,17 @@ class EntitlementsServiceTests(unittest.TestCase):
             }
         }
 
-        with self.assertRaises(entitlements_service.EntitlementQuotaExceededError) as ctx:
+        with self.assertRaises(entitlements_service.EntitlementDeniedError) as ctx:
             entitlements_service.enforce_hosted_runtime_access(
                 workspace=workspace,
                 workspace_id="workspace-1",
                 selected_attachment={"attachment_kind": "managed_cloud"},
             )
 
-        self.assertEqual(ctx.exception.reason, "hosted_runtime_minutes_exhausted")
+        self.assertEqual(ctx.exception.reason, "hosted_runtime_unavailable")
 
     def test_enforce_hosted_runtime_access_counts_managed_cloud_concurrency_only(self) -> None:
-        workspace = {"metadata": {"billing": {"plan": "personal"}}}
+        workspace = {"metadata": {"billing": {"plan": "pro"}}}
 
         with self.assertRaises(entitlements_service.EntitlementQuotaExceededError) as ctx:
             entitlements_service.enforce_hosted_runtime_access(
@@ -56,6 +56,22 @@ class EntitlementsServiceTests(unittest.TestCase):
                     {
                         "run_id": "run-2",
                         "status": "queued",
+                        "context": {
+                            "workspace_id": "workspace-1",
+                            "metadata": {"execution_target_selected": "cloud"},
+                        },
+                    },
+                    {
+                        "run_id": "run-3",
+                        "status": "running",
+                        "context": {
+                            "workspace_id": "workspace-1",
+                            "metadata": {"execution_target_selected": "cloud"},
+                        },
+                    },
+                    {
+                        "run_id": "run-4",
+                        "status": "running",
                         "context": {
                             "workspace_id": "workspace-1",
                             "metadata": {"execution_target_selected": "cloud"},
@@ -98,7 +114,7 @@ class EntitlementsServiceTests(unittest.TestCase):
             workspace={"metadata": {"billing": {"plan": "free"}}},
         )
         paid_state = entitlements_service.resolve_workspace_entitlement_state(
-            workspace={"metadata": {"billing": {"plan": "personal"}}},
+            workspace={"metadata": {"billing": {"plan": "pro"}}},
         )
 
         free_flags = entitlements_service.workspace_capability_flags(state=free_state)
@@ -109,9 +125,22 @@ class EntitlementsServiceTests(unittest.TestCase):
         self.assertFalse(free_flags["artifacts_enabled"])
         self.assertTrue(free_flags["telegram_channel_enabled"])
         self.assertTrue(free_flags["whatsapp_channel_enabled"])
+        self.assertFalse(free_flags["priority_sync_enabled"])
+        self.assertEqual(free_flags["max_specialists"], 1)
         self.assertTrue(paid_flags["mobile_app_enabled"])
         self.assertTrue(paid_flags["approvals_enabled"])
         self.assertTrue(paid_flags["artifacts_enabled"])
+        self.assertTrue(paid_flags["priority_sync_enabled"])
+        self.assertEqual(paid_flags["max_specialists"], 3)
+
+    def test_enforce_specialist_slot_access_rejects_free_workspace_after_one_specialist(self) -> None:
+        with self.assertRaises(entitlements_service.EntitlementQuotaExceededError) as ctx:
+            entitlements_service.enforce_specialist_slot_access(
+                workspace={"metadata": {"billing": {"plan": "free"}}},
+                current_specialist_count=1,
+            )
+
+        self.assertEqual(ctx.exception.reason, "specialist_limit_exceeded")
 
     def test_enforce_mobile_app_access_rejects_free_workspace(self) -> None:
         with self.assertRaises(entitlements_service.EntitlementDeniedError) as ctx:

@@ -42,6 +42,9 @@ class BillingServiceTests(unittest.TestCase):
         self.assertEqual(summary["subscription"]["plan_id"], "free")
         self.assertEqual(summary["subscription"]["effective_plan_id"], "free")
         self.assertEqual(summary["subscription"]["status"], "active")
+        self.assertEqual([item["plan_id"] for item in summary["plans"]], ["free", "pro"])
+        self.assertEqual(summary["limits"]["max_specialists"], 1)
+        self.assertEqual(summary["usage"]["specialists_in_use"], 0)
 
     def test_checkout_session_uses_configured_plan_price_and_records_pending_state(self):
         with tempfile.TemporaryDirectory() as tempdir:
@@ -51,7 +54,7 @@ class BillingServiceTests(unittest.TestCase):
                 os.environ,
                 {
                     "EMPYRALIS_STRIPE_SECRET_KEY": "sk_test_123",
-                    "EMPYRALIS_STRIPE_PRICE_IDS": '{"team":"price_team_123"}',
+                    "EMPYRALIS_STRIPE_PRICE_IDS": '{"pro":"price_pro_123"}',
                 },
                 clear=False,
             ), patch.object(
@@ -69,19 +72,19 @@ class BillingServiceTests(unittest.TestCase):
             ) as stripe_request:
                 payload = billing_service.create_workspace_checkout_session(
                     workspace_id=workspace_id,
-                    plan_id="team",
+                    plan_id="pro",
                     billing_email="owner@example.com",
                 )
                 summary = billing_service.workspace_billing_summary_for_workspace_id(workspace_id)
 
-        self.assertEqual(payload["plan_id"], "team")
+        self.assertEqual(payload["plan_id"], "pro")
         self.assertEqual(payload["checkout_session_id"], "cs_test_123")
-        self.assertEqual(summary["subscription"]["plan_id"], "team")
+        self.assertEqual(summary["subscription"]["plan_id"], "pro")
         self.assertEqual(summary["subscription"]["status"], "checkout_pending")
         self.assertEqual(summary["subscription"]["effective_plan_id"], "free")
         request_args = stripe_request.call_args[0]
         self.assertEqual(request_args[0], "/checkout/sessions")
-        self.assertEqual(request_args[1]["line_items[0][price]"], "price_team_123")
+        self.assertEqual(request_args[1]["line_items[0][price]"], "price_pro_123")
 
 
 if __name__ == "__main__":

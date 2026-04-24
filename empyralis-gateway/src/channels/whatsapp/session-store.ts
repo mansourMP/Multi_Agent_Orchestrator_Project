@@ -50,6 +50,10 @@ export class WhatsAppSessionStore {
     return target;
   }
 
+  async clearAuthStateDir(): Promise<void> {
+    await fs.rm(this.authStateDir(), { recursive: true, force: true });
+  }
+
   async load(): Promise<WhatsAppSessionSnapshot> {
     return this.db.readJson<WhatsAppSessionSnapshot>("whatsapp-session.json", DEFAULT_SNAPSHOT);
   }

@@ -52,6 +52,12 @@ export class GatewayStateDb {
 
   async appendNdjson(name: string, value: unknown): Promise<void> {
     await this.ensureReady();
-    await fs.appendFile(this.filePath(name), `${JSON.stringify(value)}\n`, "utf8");
+    const handle = await fs.open(this.filePath(name), "a");
+    try {
+      await handle.writeFile(`${JSON.stringify(value)}\n`, "utf8");
+      await handle.sync();
+    } finally {
+      await handle.close();
+    }
   }
 }

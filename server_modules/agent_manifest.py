@@ -155,6 +155,7 @@ SAGE_GLOBAL_MANIFEST = AgentManifest(
     skills=[
         AgentManifestSkillBinding(id="email-access"),
         AgentManifestSkillBinding(id="web-search"),
+        AgentManifestSkillBinding(id="browser"),
         AgentManifestSkillBinding(id="calendar-access"),
         AgentManifestSkillBinding(id="task-runner"),
         AgentManifestSkillBinding(id="inventory-tool"),

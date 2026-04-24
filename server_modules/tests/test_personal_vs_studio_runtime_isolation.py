@@ -110,6 +110,154 @@ class PersonalVsStudioRuntimeIsolationTests(unittest.TestCase):
         self.assertEqual(len(recent_messages["outbound"]), 1)
         self.assertEqual(recent_messages["outbound"][0]["status"], "delivered")
 
+    def test_duplicate_whatsapp_inbound_retries_pending_personal_reply_after_disconnect(self) -> None:
+        pairing = gateway_pairing_service.create_gateway_pairing_intent(
+            tenant_id="tenant-1",
+            workspace_id="default",
+            user_id="user-1",
+        )
+        registration = gateway_pairing_service.register_gateway(
+            pairing_token=pairing["pairing_token"],
+            device_id="device-local-1",
+            gateway_id="gateway-local-1",
+            display_name="Mansur Mac",
+            platform="macos-arm64",
+            capabilities=["channel.whatsapp.personal"],
+        )
+
+        inbound_payload = {
+            "channel_key": "whatsapp_personal",
+            "provider": "whatsapp_baileys",
+            "message": {
+                "external_message_id": "wa-in-2",
+                "remote_jid": "15551234567@s.whatsapp.net",
+                "sender_jid": "15551234567@s.whatsapp.net",
+                "push_name": "Mansur",
+                "text": "do we still answer after reconnect?",
+                "received_at": "2026-04-22T16:05:00Z",
+                "from_me": False,
+            },
+        }
+
+        dispatch_mock = AsyncMock(
+            side_effect=[
+                ValueError("Gateway is not currently connected."),
+                {"external_message_id": "wa-out-2"},
+            ]
+        )
+        with (
+            patch(
+                "server_modules.personal_channel_sage_bridge_service.build_whatsapp_personal_reply",
+                return_value={"text": "Recovered Sage reply", "source": "test_bridge"},
+            ),
+            patch(
+                "server_modules.gateway_protocol_service.dispatch_channel_outbound",
+                new=dispatch_mock,
+            ),
+        ):
+            with self.assertRaisesRegex(ValueError, "not currently connected"):
+                asyncio.run(
+                    personal_channels_service.handle_gateway_channel_inbound(
+                        gateway_id="gateway-local-1",
+                        registration=registration,
+                        payload=inbound_payload,
+                    )
+                )
+
+            recovered = asyncio.run(
+                personal_channels_service.handle_gateway_channel_inbound(
+                    gateway_id="gateway-local-1",
+                    registration=registration,
+                    payload=inbound_payload,
+                )
+            )
+
+        self.assertTrue(recovered["duplicate"])
+        self.assertEqual(recovered["outbound"]["status"], "delivered")
+        self.assertEqual(recovered["outbound"]["external_message_id"], "wa-out-2")
+        recent_messages = personal_channels_repository.list_recent_gateway_messages(
+            "gateway-local-1",
+            channel_key="whatsapp_personal",
+        )
+        self.assertEqual(len(recent_messages["inbound"]), 1)
+        self.assertEqual(len(recent_messages["outbound"]), 1)
+        self.assertEqual(recent_messages["outbound"][0]["status"], "delivered")
+        self.assertEqual(dispatch_mock.await_count, 2)
+
+    def test_duplicate_telegram_inbound_retries_pending_personal_reply_after_disconnect(self) -> None:
+        pairing = gateway_pairing_service.create_gateway_pairing_intent(
+            tenant_id="tenant-1",
+            workspace_id="default",
+            user_id="user-1",
+        )
+        registration = gateway_pairing_service.register_gateway(
+            pairing_token=pairing["pairing_token"],
+            device_id="device-local-1",
+            gateway_id="gateway-local-1",
+            display_name="Mansur Mac",
+            platform="macos-arm64",
+            capabilities=["channel.telegram.personal"],
+        )
+
+        inbound_payload = {
+            "channel_key": "telegram_personal",
+            "provider": "telegram_gramjs",
+            "message": {
+                "external_message_id": "tg-in-2",
+                "remote_jid": "telegram-user-2",
+                "sender_jid": "telegram-user-2",
+                "push_name": "Mansur",
+                "text": "do we still answer after reconnect?",
+                "received_at": "2026-04-22T16:10:00Z",
+                "from_me": False,
+            },
+        }
+
+        dispatch_mock = AsyncMock(
+            side_effect=[
+                ValueError("Gateway is not currently connected."),
+                {"external_message_id": "tg-out-2"},
+            ]
+        )
+        with (
+            patch(
+                "server_modules.personal_channel_sage_bridge_service.build_telegram_personal_reply",
+                return_value={"text": "Recovered Telegram reply", "source": "test_bridge"},
+            ),
+            patch(
+                "server_modules.gateway_protocol_service.dispatch_channel_outbound",
+                new=dispatch_mock,
+            ),
+        ):
+            with self.assertRaisesRegex(ValueError, "not currently connected"):
+                asyncio.run(
+                    personal_channels_service.handle_gateway_channel_inbound(
+                        gateway_id="gateway-local-1",
+                        registration=registration,
+                        payload=inbound_payload,
+                    )
+                )
+
+            recovered = asyncio.run(
+                personal_channels_service.handle_gateway_channel_inbound(
+                    gateway_id="gateway-local-1",
+                    registration=registration,
+                    payload=inbound_payload,
+                )
+            )
+
+        self.assertTrue(recovered["duplicate"])
+        self.assertEqual(recovered["outbound"]["status"], "delivered")
+        self.assertEqual(recovered["outbound"]["external_message_id"], "tg-out-2")
+        recent_messages = personal_channels_repository.list_recent_gateway_messages(
+            "gateway-local-1",
+            channel_key="telegram_personal",
+        )
+        self.assertEqual(len(recent_messages["inbound"]), 1)
+        self.assertEqual(len(recent_messages["outbound"]), 1)
+        self.assertEqual(recent_messages["outbound"][0]["status"], "delivered")
+        self.assertEqual(dispatch_mock.await_count, 2)
+
 
 if __name__ == "__main__":
     unittest.main()

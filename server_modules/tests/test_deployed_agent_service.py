@@ -28,7 +28,7 @@ def _workspace_record() -> dict[str, object]:
         "workspace_type": "team",
         "status": "active",
         "created_by_user_id": "user-owner",
-        "metadata": {},
+        "metadata": {"billing": {"plan": "free"}},
     }
 
 
@@ -442,6 +442,10 @@ class DeployedAgentServiceTests(unittest.IsolatedAsyncioTestCase):
                 new=AsyncMock(return_value=_workspace_record()),
             ),
             patch(
+                "server_modules.deployed_agent_service.control_plane_repository.list_deployed_agents_for_workspace",
+                new=AsyncMock(return_value=[]),
+            ),
+            patch(
                 "server_modules.deployed_agent_service.agent_specialist_repository.create_workspace_specialist",
                 new=AsyncMock(return_value=backing_install),
             ) as create_specialist_mock,
@@ -479,6 +483,8 @@ class DeployedAgentServiceTests(unittest.IsolatedAsyncioTestCase):
             {
                 "web_search": False,
                 "http_request": False,
+                "spreadsheet_read": False,
+                "spreadsheet_append": False,
                 "gmail_send": False,
                 "calendar_write": False,
             },
@@ -504,6 +510,10 @@ class DeployedAgentServiceTests(unittest.IsolatedAsyncioTestCase):
             patch(
                 "server_modules.deployed_agent_service.control_plane_repository.get_workspace_by_id",
                 new=AsyncMock(return_value=_workspace_record()),
+            ),
+            patch(
+                "server_modules.deployed_agent_service.control_plane_repository.list_deployed_agents_for_workspace",
+                new=AsyncMock(return_value=[]),
             ),
             patch(
                 "server_modules.deployed_agent_service.agent_specialist_repository.create_workspace_specialist",
@@ -554,6 +564,10 @@ class DeployedAgentServiceTests(unittest.IsolatedAsyncioTestCase):
                 new=AsyncMock(return_value=_workspace_record()),
             ),
             patch(
+                "server_modules.deployed_agent_service.control_plane_repository.list_deployed_agents_for_workspace",
+                new=AsyncMock(return_value=[]),
+            ),
+            patch(
                 "server_modules.deployed_agent_service.agent_specialist_repository.create_workspace_specialist",
                 new=AsyncMock(return_value=backing_install),
             ),
@@ -590,6 +604,10 @@ class DeployedAgentServiceTests(unittest.IsolatedAsyncioTestCase):
             patch(
                 "server_modules.deployed_agent_service.control_plane_repository.get_workspace_by_id",
                 new=AsyncMock(return_value=_workspace_record()),
+            ),
+            patch(
+                "server_modules.deployed_agent_service.control_plane_repository.list_deployed_agents_for_workspace",
+                new=AsyncMock(return_value=[]),
             ),
             patch(
                 "server_modules.deployed_agent_service.agent_specialist_repository.create_workspace_specialist",
@@ -630,6 +648,10 @@ class DeployedAgentServiceTests(unittest.IsolatedAsyncioTestCase):
                 new=AsyncMock(return_value=_workspace_record()),
             ),
             patch(
+                "server_modules.deployed_agent_service.control_plane_repository.list_deployed_agents_for_workspace",
+                new=AsyncMock(return_value=[]),
+            ),
+            patch(
                 "server_modules.deployed_agent_service.agent_specialist_repository.create_workspace_specialist",
                 new=AsyncMock(return_value=backing_install),
             ),
@@ -667,6 +689,10 @@ class DeployedAgentServiceTests(unittest.IsolatedAsyncioTestCase):
             patch(
                 "server_modules.deployed_agent_service.control_plane_repository.get_workspace_by_id",
                 new=AsyncMock(return_value=_workspace_record()),
+            ),
+            patch(
+                "server_modules.deployed_agent_service.control_plane_repository.list_deployed_agents_for_workspace",
+                new=AsyncMock(return_value=[]),
             ),
             patch(
                 "server_modules.deployed_agent_service.agent_specialist_repository.create_workspace_specialist",
@@ -709,6 +735,7 @@ class DeployedAgentServiceTests(unittest.IsolatedAsyncioTestCase):
         )
         workspace = _workspace_record()
         workspace["metadata"] = {
+            "billing": {"plan": "free"},
             "admin_defaults": {
                 "payload": {
                     "runtime_target": "local",
@@ -726,6 +753,10 @@ class DeployedAgentServiceTests(unittest.IsolatedAsyncioTestCase):
             patch(
                 "server_modules.deployed_agent_service.control_plane_repository.get_workspace_by_id",
                 new=AsyncMock(return_value=workspace),
+            ),
+            patch(
+                "server_modules.deployed_agent_service.control_plane_repository.list_deployed_agents_for_workspace",
+                new=AsyncMock(return_value=[]),
             ),
             patch(
                 "server_modules.deployed_agent_service.agent_specialist_repository.create_workspace_specialist",
@@ -761,6 +792,26 @@ class DeployedAgentServiceTests(unittest.IsolatedAsyncioTestCase):
         specialist_kwargs = create_specialist_mock.await_args.kwargs
         self.assertEqual(specialist_kwargs["metadata"]["platform_cta_url"], "https://example.com/start")
         self.assertEqual(specialist_kwargs["metadata"]["public_intro"], "Fast help for shoppers.")
+
+    async def test_create_draft_deployed_agent_enforces_free_specialist_limit(self) -> None:
+        with (
+            patch(
+                "server_modules.deployed_agent_service.control_plane_repository.get_workspace_by_id",
+                new=AsyncMock(return_value=_workspace_record()),
+            ),
+            patch(
+                "server_modules.deployed_agent_service.control_plane_repository.list_deployed_agents_for_workspace",
+                new=AsyncMock(return_value=[_deployed_agent_row()]),
+            ),
+        ):
+            with self.assertRaises(deployed_agent_service.entitlements_service.EntitlementQuotaExceededError) as ctx:
+                await deployed_agent_service.create_draft_deployed_agent(
+                    current_user=_owner_user(),
+                    owner_workspace_id="ws-1",
+                    name="Second Specialist",
+                )
+
+        self.assertEqual(ctx.exception.reason, "specialist_limit_exceeded")
 
     async def test_list_deployed_agent_analytics_uses_workspace_roster_and_service_summary(self) -> None:
         analytics_payload = {
@@ -824,6 +875,44 @@ class DeployedAgentServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(payload, analytics_payload)
         self.assertEqual(get_agent_mock.await_args.kwargs["tenant_id"], "tenant-1")
         self.assertEqual(summarize_mock.await_args.kwargs["workspace_id"], "ws-1")
+
+    def test_project_deployed_agent_includes_restaurant_specialist_profile(self) -> None:
+        row = _deployed_agent_row(
+            metadata={
+                "source": "test",
+                "provider": "gemini",
+                "model": "gemini-2.5-flash",
+                "memory_enabled": True,
+                "context_budget_preset": "balanced",
+                "retention_preset": "standard",
+                "selected_tool_ids": ["spreadsheet_read", "spreadsheet_append"],
+                "platform_cta_label": "Open menu",
+                "platform_cta_url": "https://menu.example.com/bluebird",
+            }
+        )
+        row["knowledge_sources"] = [
+            {"id": "menu-pdf", "uri": "kb://menu-pdf", "title": "Main menu"},
+            {"id": "menu-sheet", "uri": "sheet://daily-menu", "title": "Daily menu"},
+        ]
+        row["channels"] = {
+            "telegram": {
+                "enabled": True,
+                "endpoint_key": "bluebird-cafe",
+                "bot_username": "bluebirdcafe_bot",
+            }
+        }
+
+        projected = deployed_agent_service.project_deployed_agent(row, include_internal=True)
+
+        self.assertIsInstance(projected, dict)
+        config = projected["config"]
+        profile = config["specialist_profile"]
+        self.assertEqual(profile["knowledge"]["mode"], "menu_reference")
+        self.assertEqual(profile["knowledge"]["source_count"], 2)
+        self.assertEqual(profile["live_data"]["connector_family"], "google_workspace")
+        self.assertTrue(profile["memory"]["memory_enabled"])
+        self.assertEqual(profile["actions"]["order_capture_mode"], "spreadsheet_append")
+        self.assertEqual(profile["channel"]["primary"], "telegram_bot")
 
     def test_require_deployed_agent_admin_access_allows_owner(self) -> None:
         resolved = deployed_agent_service.require_deployed_agent_admin_access(

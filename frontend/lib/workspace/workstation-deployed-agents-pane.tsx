@@ -114,6 +114,14 @@ type StudioPaneCache = {
   connectorVaultIds: string[];
   agentMetricsById: Record<string, AgentOperationalMetrics>;
   agentAnalyticsById: Record<string, AgentAnalyticsSnapshot>;
+  selectedAgentId: string | null;
+  overlayAgentId: string | null;
+  selectedAgentDetail: DeployedAgentRecord | null;
+  selectedAgentAnalytics: AgentAnalyticsSnapshot | null;
+  selectedTelegramReadiness: TelegramReadinessSnapshot | null;
+  conversations: DeployedAgentConversationRecord[];
+  selectedSessionId: string | null;
+  selectedTranscript: DeployedAgentConversationDetail | null;
 };
 
 type DetailConfigDraft = Pick<
@@ -131,6 +139,14 @@ function updateStudioPaneCache(workspaceId: string, partial: Partial<StudioPaneC
     connectorVaultIds: current?.connectorVaultIds ?? [],
     agentMetricsById: current?.agentMetricsById ?? {},
     agentAnalyticsById: current?.agentAnalyticsById ?? {},
+    selectedAgentId: current?.selectedAgentId ?? null,
+    overlayAgentId: current?.overlayAgentId ?? null,
+    selectedAgentDetail: current?.selectedAgentDetail ?? null,
+    selectedAgentAnalytics: current?.selectedAgentAnalytics ?? null,
+    selectedTelegramReadiness: current?.selectedTelegramReadiness ?? null,
+    conversations: current?.conversations ?? [],
+    selectedSessionId: current?.selectedSessionId ?? null,
+    selectedTranscript: current?.selectedTranscript ?? null,
     ...partial,
   });
 }
@@ -241,6 +257,16 @@ const STUDIO_TOOL_OPTIONS: ReadonlyArray<{
   label: string;
   description: string;
 }> = [
+  {
+    id: 'spreadsheet_read',
+    label: 'Spreadsheet read',
+    description: 'Read menu, availability, and daily specials from connected sheets.',
+  },
+  {
+    id: 'spreadsheet_append',
+    label: 'Spreadsheet append',
+    description: 'Log confirmed orders or owner follow-ups into a connected sheet.',
+  },
   {
     id: 'web_search',
     label: 'Web search',
@@ -737,13 +763,16 @@ function applyProviderCatalogDefaults(
     return state;
   }
   const catalogByProvider = providerCatalogById(catalog);
+  const preferredProviderId = catalogByProvider.gemini ? 'gemini' : catalog[0]?.id || '';
   const providerId = state.providerId && catalogByProvider[state.providerId]
     ? state.providerId
-    : catalog[0]?.id || '';
+    : preferredProviderId;
   const provider = catalogByProvider[providerId] ?? null;
   const availableModels = provider?.models ?? [];
   const nextModelId = state.modelId && availableModels.some((item) => item.id === state.modelId)
     ? state.modelId
+    : availableModels.some((item) => item.id === 'gemini-2.5-flash')
+      ? 'gemini-2.5-flash'
     : provider?.defaultModel && availableModels.some((item) => item.id === provider.defaultModel)
       ? provider.defaultModel
       : availableModels[0]?.id || '';
@@ -758,6 +787,7 @@ function applyProviderCatalogDefaults(
 }
 
 function buildWizardState(agent?: DeployedAgentRecord | null): WizardState {
+  const isNewDraft = !agent;
   const channels = readRecord(agent?.channels);
   const telegram = readRecord(channels.telegram);
   const config = readRecord(agent?.config);
@@ -771,8 +801,13 @@ function buildWizardState(agent?: DeployedAgentRecord | null): WizardState {
   return {
     name: readString(agent?.name),
     avatar: readString(agent?.avatar),
-    persona: readString(agent?.persona),
-    systemPrompt: readString(agent?.system_prompt),
+    persona: readString(agent?.persona, isNewDraft ? 'Fast, friendly Telegram ordering specialist for a cafe or restaurant.' : ''),
+    systemPrompt: readString(
+      agent?.system_prompt,
+      isNewDraft
+        ? 'Answer menu questions, confirm orders clearly, track availability from connected sheets, and escalate edge cases to a human when uncertain.'
+        : '',
+    ),
     knowledgeSourceText: serializeKnowledgeSources(agent?.knowledge_sources),
     telegramEnabled: telegram.enabled === true,
     telegramConnectorId: readString(telegram.connector_id ?? telegram.credential_id),
@@ -781,7 +816,7 @@ function buildWizardState(agent?: DeployedAgentRecord | null): WizardState {
     modelId: readString(agent?.model ?? metadata.model),
     runtimeTarget: readString(agent?.runtime_target, 'cloud'),
     billingPlan: readString(agent?.billing_plan, 'free'),
-    selectedToolIds: selectedToolIds.length > 0 ? selectedToolIds : ['web_search'],
+    selectedToolIds: selectedToolIds.length > 0 ? selectedToolIds : ['spreadsheet_read', 'spreadsheet_append'],
     memoryEnabled: agent
       ? memoryPolicy.memory_enabled === true || metadata.memory_enabled === true
       : true,
@@ -790,9 +825,9 @@ function buildWizardState(agent?: DeployedAgentRecord | null): WizardState {
     healthSafetyEnabled: safetyPolicy.health_safety_enabled === true || metadata.health_safety_enabled === true,
     healthSafetyAssistantName: readString(safetyPolicy.assistant_name ?? metadata.health_safety_assistant_name),
     pausedMessage: readString(customerPolicy.paused_message ?? metadata.paused_message),
-    welcomeIntro: readString(customerPolicy.public_intro ?? metadata.public_intro),
-    welcomeCoreValue: readString(customerPolicy.public_core_value ?? metadata.public_core_value),
-    publicStartCtaLabel: readString(customerPolicy.public_start_cta_label ?? metadata.platform_cta_label),
+    welcomeIntro: readString(customerPolicy.public_intro ?? metadata.public_intro, isNewDraft ? 'Scan to browse the menu, check specials, and place an order in minutes.' : ''),
+    welcomeCoreValue: readString(customerPolicy.public_core_value ?? metadata.public_core_value, isNewDraft ? 'Menu answers, availability, and order confirmation in one Telegram flow.' : ''),
+    publicStartCtaLabel: readString(customerPolicy.public_start_cta_label ?? metadata.platform_cta_label, isNewDraft ? 'Open menu' : ''),
     publicStartCtaUrl: readString(customerPolicy.public_start_cta_url ?? metadata.platform_cta_url),
     escalationPreset: readString(escalationPolicy.preset ?? metadata.escalation_preset, 'standard'),
     handoffMode: readString(escalationPolicy.handoff_mode ?? metadata.handoff_mode, 'notify_owner'),
@@ -1213,21 +1248,21 @@ export function WorkstationDeployedAgentsPane({
   const [connectorVaultIds, setConnectorVaultIds] = useState<Set<string>>(() => new Set(cachedStudioPane?.connectorVaultIds ?? []));
   const [agentMetricsById, setAgentMetricsById] = useState<Record<string, AgentOperationalMetrics>>(() => cachedStudioPane?.agentMetricsById ?? {});
   const [agentAnalyticsById, setAgentAnalyticsById] = useState<Record<string, AgentAnalyticsSnapshot>>(() => cachedStudioPane?.agentAnalyticsById ?? {});
-  const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
-  const [overlayAgentId, setOverlayAgentId] = useState<string | null>(null);
+  const [selectedAgentId, setSelectedAgentId] = useState<string | null>(() => cachedStudioPane?.selectedAgentId ?? null);
+  const [overlayAgentId, setOverlayAgentId] = useState<string | null>(() => cachedStudioPane?.overlayAgentId ?? cachedStudioPane?.selectedAgentId ?? null);
   const [overlayTab, setOverlayTab] = useState<SpecialistOverlayTabId>('overview');
   const [overlayName, setOverlayName] = useState('');
   const [overlayPersona, setOverlayPersona] = useState('');
   const [overlayMarketplaceListed, setOverlayMarketplaceListed] = useState(false);
   const [overlayMarketplaceCategory, setOverlayMarketplaceCategory] = useState('');
   const [isSavingOverlayOverview, setIsSavingOverlayOverview] = useState(false);
-  const [selectedAgentDetail, setSelectedAgentDetail] = useState<DeployedAgentRecord | null>(null);
-  const [selectedAgentAnalytics, setSelectedAgentAnalytics] = useState<AgentAnalyticsSnapshot | null>(null);
-  const [selectedTelegramReadiness, setSelectedTelegramReadiness] = useState<TelegramReadinessSnapshot | null>(null);
-  const [conversations, setConversations] = useState<DeployedAgentConversationRecord[]>([]);
+  const [selectedAgentDetail, setSelectedAgentDetail] = useState<DeployedAgentRecord | null>(() => cachedStudioPane?.selectedAgentDetail ?? null);
+  const [selectedAgentAnalytics, setSelectedAgentAnalytics] = useState<AgentAnalyticsSnapshot | null>(() => cachedStudioPane?.selectedAgentAnalytics ?? null);
+  const [selectedTelegramReadiness, setSelectedTelegramReadiness] = useState<TelegramReadinessSnapshot | null>(() => cachedStudioPane?.selectedTelegramReadiness ?? null);
+  const [conversations, setConversations] = useState<DeployedAgentConversationRecord[]>(() => cachedStudioPane?.conversations ?? []);
   const [agentMemoryById, setAgentMemoryById] = useState<Record<string, DeployedAgentMemoryRecord[]>>({});
-  const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
-  const [selectedTranscript, setSelectedTranscript] = useState<DeployedAgentConversationDetail | null>(null);
+  const [selectedSessionId, setSelectedSessionId] = useState<string | null>(() => cachedStudioPane?.selectedSessionId ?? null);
+  const [selectedTranscript, setSelectedTranscript] = useState<DeployedAgentConversationDetail | null>(() => cachedStudioPane?.selectedTranscript ?? null);
   const [isLoadingAgents, setIsLoadingAgents] = useState(() => (cachedStudioPane?.agents?.length ?? 0) === 0);
   const [isLoadingProviderCatalog, setIsLoadingProviderCatalog] = useState(false);
   const [isLoadingDetail, setIsLoadingDetail] = useState(false);
@@ -1389,7 +1424,11 @@ export function WorkstationDeployedAgentsPane({
       if (explicitSelection) {
         setSelectedAgentId(explicitSelection);
       } else if (!options.preserveSelection) {
-        setSelectedAgentId(readString(items[0]?.id) || null);
+        const cachedSelection = readString(cachedStudioPane?.selectedAgentId);
+        const nextSelection = cachedSelection && items.some((item) => readString(item.id) === cachedSelection)
+          ? cachedSelection
+          : readString(items[0]?.id) || null;
+        setSelectedAgentId(nextSelection);
       } else if (selectedAgentId && !items.some((item) => readString(item.id) === selectedAgentId)) {
         setSelectedAgentId(readString(items[0]?.id) || null);
       }
@@ -1407,9 +1446,12 @@ export function WorkstationDeployedAgentsPane({
         deployedAgentId: agentId,
         allowMissing: true,
       });
-      setSelectedAgentDetail(payload as DeployedAgentRecord | null);
+      const nextDetail = payload as DeployedAgentRecord | null;
+      setSelectedAgentDetail(nextDetail);
+      updateStudioPaneCache(workspaceId, { selectedAgentDetail: nextDetail });
     } catch (error) {
       setSelectedAgentDetail(null);
+      updateStudioPaneCache(workspaceId, { selectedAgentDetail: null });
       setErrorMessage(error instanceof Error ? error.message : 'Deployment detail is unavailable.');
     } finally {
       setIsLoadingDetail(false);
@@ -1425,6 +1467,7 @@ export function WorkstationDeployedAgentsPane({
       });
       const analytics = normalizeAgentAnalytics(payload as DeployedAgentAnalyticsRecord | null);
       setSelectedAgentAnalytics(analytics);
+      updateStudioPaneCache(workspaceId, { selectedAgentAnalytics: analytics });
       if (analytics) {
         setAgentAnalyticsById((current) => ({
           ...current,
@@ -1433,6 +1476,7 @@ export function WorkstationDeployedAgentsPane({
       }
     } catch (error) {
       setSelectedAgentAnalytics(null);
+      updateStudioPaneCache(workspaceId, { selectedAgentAnalytics: null });
       setErrorMessage(error instanceof Error ? error.message : 'Deployment analytics are unavailable.');
     } finally {
       setIsLoadingAnalytics(false);
@@ -1446,9 +1490,12 @@ export function WorkstationDeployedAgentsPane({
         deployedAgentId: agentId || undefined,
         allowMissing: true,
       });
-      setSelectedTelegramReadiness(normalizeTelegramReadiness(payload as DeployedAgentTelegramReadinessRecord | null));
+      const nextReadiness = normalizeTelegramReadiness(payload as DeployedAgentTelegramReadinessRecord | null);
+      setSelectedTelegramReadiness(nextReadiness);
+      updateStudioPaneCache(workspaceId, { selectedTelegramReadiness: nextReadiness });
     } catch (error) {
       setSelectedTelegramReadiness(null);
+      updateStudioPaneCache(workspaceId, { selectedTelegramReadiness: null });
       setErrorMessage(error instanceof Error ? error.message : 'Telegram launch readiness is unavailable.');
     } finally {
       setIsLoadingTelegramReadiness(false);
@@ -1465,6 +1512,7 @@ export function WorkstationDeployedAgentsPane({
       });
       const items = readItems<DeployedAgentConversationRecord>(payload);
       setConversations(items);
+      updateStudioPaneCache(workspaceId, { conversations: items });
       setAgentMetricsById((current) => {
         const nextValue = {
           ...current,
@@ -1483,6 +1531,7 @@ export function WorkstationDeployedAgentsPane({
       });
     } catch (error) {
       setConversations([]);
+      updateStudioPaneCache(workspaceId, { conversations: [] });
       setSelectedSessionId(null);
       setErrorMessage(error instanceof Error ? error.message : 'Conversation inbox is unavailable.');
     } finally {
@@ -1521,9 +1570,12 @@ export function WorkstationDeployedAgentsPane({
         sessionId,
         allowMissing: true,
       });
-      setSelectedTranscript(payload as DeployedAgentConversationDetail | null);
+      const nextTranscript = payload as DeployedAgentConversationDetail | null;
+      setSelectedTranscript(nextTranscript);
+      updateStudioPaneCache(workspaceId, { selectedTranscript: nextTranscript });
     } catch (error) {
       setSelectedTranscript(null);
+      updateStudioPaneCache(workspaceId, { selectedTranscript: null });
       setErrorMessage(error instanceof Error ? error.message : 'Transcript detail is unavailable.');
     } finally {
       setIsLoadingTranscript(false);
@@ -1531,10 +1583,15 @@ export function WorkstationDeployedAgentsPane({
   }
 
   useEffect(() => {
-    void refreshProviderCatalog();
     void refreshAgents();
+    const handle = window.setTimeout(() => {
+      void refreshProviderCatalog();
+    }, cachedStudioPane ? 120 : 260);
+    return () => {
+      window.clearTimeout(handle);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [services.client]);
+  }, [cachedStudioPane, services.client]);
 
   useEffect(() => {
     setCurrentStudioSubview(initialSubview);
@@ -1551,6 +1608,14 @@ export function WorkstationDeployedAgentsPane({
     setSelectedAgentId(requestedAgentId);
     setOverlayAgentId(requestedAgentId);
   }, [agents, requestedAgentId]);
+
+  useEffect(() => {
+    updateStudioPaneCache(workspaceId, {
+      selectedAgentId,
+      overlayAgentId,
+      selectedSessionId,
+    });
+  }, [overlayAgentId, selectedAgentId, selectedSessionId, workspaceId]);
 
   useEffect(() => {
     if (!isWizardOpen) {
@@ -1573,33 +1638,80 @@ export function WorkstationDeployedAgentsPane({
       });
       setSelectedSessionId(null);
       setSelectedTranscript(null);
+      updateStudioPaneCache(workspaceId, {
+        selectedAgentId: null,
+        overlayAgentId,
+        selectedAgentDetail: null,
+        selectedAgentAnalytics: null,
+        selectedTelegramReadiness: null,
+        conversations: [],
+        selectedSessionId: null,
+        selectedTranscript: null,
+      });
       return;
     }
-    setSelectedAgentDetail(null);
-    setSelectedAgentAnalytics(null);
-    setSelectedTelegramReadiness(null);
-    setConversations([]);
-    setConversationFilters({
-      channel: 'all',
-      escalationState: 'all',
-      outcome: 'all',
+    const currentDetailAgentId = readString(selectedAgentDetail?.id);
+    if (currentDetailAgentId && currentDetailAgentId !== agentId) {
+      setSelectedAgentDetail(null);
+      setSelectedAgentAnalytics(null);
+      setSelectedTelegramReadiness(null);
+      setConversations([]);
+      setSelectedSessionId(null);
+      setSelectedTranscript(null);
+      updateStudioPaneCache(workspaceId, {
+        selectedAgentDetail: null,
+        selectedAgentAnalytics: null,
+        selectedTelegramReadiness: null,
+        conversations: [],
+        selectedSessionId: null,
+        selectedTranscript: null,
+      });
+    }
+    setConversationFilters((current) => (
+      current.channel === 'all' && current.escalationState === 'all' && current.outcome === 'all'
+        ? current
+        : {
+          channel: 'all',
+          escalationState: 'all',
+          outcome: 'all',
+        }
+    ));
+    let cancelled = false;
+    let timeoutHandle: number | null = null;
+    const frameHandle = window.requestAnimationFrame(() => {
+      if (cancelled) {
+        return;
+      }
+      void Promise.all([
+        loadAgentDetail(agentId),
+        loadConversations(agentId),
+      ]);
+      timeoutHandle = window.setTimeout(() => {
+        if (cancelled) {
+          return;
+        }
+        void Promise.all([
+          loadAgentAnalytics(agentId),
+          loadTelegramReadiness(agentId),
+        ]);
+      }, 140);
     });
-    setSelectedSessionId(null);
-    setSelectedTranscript(null);
-    void Promise.all([
-      loadAgentDetail(agentId),
-      loadAgentAnalytics(agentId),
-      loadTelegramReadiness(agentId),
-      loadConversations(agentId),
-    ]);
+    return () => {
+      cancelled = true;
+      window.cancelAnimationFrame(frameHandle);
+      if (timeoutHandle !== null) {
+        window.clearTimeout(timeoutHandle);
+      }
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedAgentId]);
+  }, [overlayAgentId, selectedAgentDetail?.id, selectedAgentId, workspaceId]);
 
   useEffect(() => {
     const agentId = readString(selectedAgentId);
     const sessionId = readString(selectedSessionId);
     if (!agentId || !sessionId) {
       setSelectedTranscript(null);
+      updateStudioPaneCache(workspaceId, { selectedTranscript: null });
       return;
     }
     void loadTranscript(agentId, sessionId);
@@ -3109,11 +3221,11 @@ export function WorkstationDeployedAgentsPane({
             <ModalSection title={wizardStep.label} description={wizardStep.description}>
               {wizardStep.id === 'setup' ? (
                 <FormGrid columns="repeat(auto-fit, minmax(14rem, 1fr))">
-                  <FormField label="Specialist name" hint="The public name customers will see in Telegram.">
+                  <FormField label="Specialist name" hint="The public restaurant or cafe name customers will see in Telegram.">
                     <FormInput
                       value={wizardState.name}
                       onChange={(event) => setWizardField('name', event.currentTarget.value)}
-                      placeholder="Support Specialist"
+                      placeholder="Bluebird Cafe"
                     />
                   </FormField>
                   <FormField label="Avatar URL" hint="Optional public avatar or brand mark.">
@@ -3123,12 +3235,12 @@ export function WorkstationDeployedAgentsPane({
                       placeholder="https://example.com/avatar.png"
                     />
                   </FormField>
-                  <FormField label="Persona" hint="Short description of the specialist’s tone and behavior.">
+                  <FormField label="Persona" hint="Short description of how this ordering specialist should speak and behave.">
                     <FormTextarea
                       rows={4}
                       value={wizardState.persona}
                       onChange={(event) => setWizardField('persona', event.currentTarget.value)}
-                      placeholder="Fast and calm Telegram support specialist"
+                      placeholder="Fast, friendly Telegram ordering specialist for a cafe or restaurant."
                     />
                     <div className="deployed-agents-wizard__memory-toggle">
                       <div className="sage-tool-row__copy">
@@ -3150,20 +3262,20 @@ export function WorkstationDeployedAgentsPane({
                       onSelect={(nextValue) => setWizardField('contextBudgetPreset', nextValue)}
                     />
                   </FormField>
-                  <FormField label="Purpose and behavior" hint="Core instructions this specialist follows.">
+                  <FormField label="Purpose and behavior" hint="Core ordering, menu, and escalation instructions this specialist follows.">
                     <FormTextarea
                       rows={6}
                       value={wizardState.systemPrompt}
                       onChange={(event) => setWizardField('systemPrompt', event.currentTarget.value)}
-                      placeholder="Handle customer requests, escalate safely when needed, and keep replies short and accurate."
+                      placeholder="Answer menu questions, check specials and availability, confirm orders clearly, and escalate edge cases to a human."
                     />
                   </FormField>
-                  <FormField label="Knowledge references" hint="Optional reference URIs (one per line).">
+                  <FormField label="Knowledge references" hint="Menu PDF or Google Sheet references, one per line.">
                     <FormTextarea
                       rows={6}
                       value={wizardState.knowledgeSourceText}
                       onChange={(event) => setWizardField('knowledgeSourceText', event.currentTarget.value)}
-                      placeholder={'kb://faq\nkb://returns'}
+                      placeholder={'kb://menu-pdf\nsheet://daily-menu'}
                     />
                   </FormField>
                 </FormGrid>

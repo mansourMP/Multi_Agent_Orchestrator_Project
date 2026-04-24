@@ -3,7 +3,8 @@ from unittest.mock import MagicMock, patch
 
 from fastapi import HTTPException
 
-from server_modules import connectors_actions, provider_profiles, workspace_admin_service
+from server_modules import connectors_actions, provider_profiles, runtime_models, workspace_admin_service
+from server_modules.schemas import ConnectorCreate
 from server_modules.runtime_models import CredentialUpsertRequest, configure_runtime_model_context
 
 
@@ -321,6 +322,86 @@ class WorkspaceProviderCredentialFlowTests(unittest.IsolatedAsyncioTestCase):
 
         request = upsert_provider_profile_mock.call_args.args[0]
         self.assertIsNone(request.model)
+
+    @patch("server_modules.workspace_admin_service.connectors_core.upsert_provider_profile")
+    @patch("server_modules.workspace_admin_service.connectors_core.list_provider_profiles", return_value={"items": []})
+    @patch("server_modules.workspace_admin_service.connectors_actions.create_vault_credential")
+    @patch("server_modules.workspace_admin_service.provider_profiles_service.resolve_vault_credential", return_value={"api_key": "sk-ant-test"})
+    @patch("server_modules.workspace_admin_service.provider_profiles_service.resolve_provider_adapter")
+    @patch("server_modules.workspace_admin_service._enforce_owner_scope", return_value="ws-1")
+    async def test_upsert_workspace_provider_credential_persists_dynamic_cached_models(
+        self,
+        _enforce_owner_scope_mock,
+        resolve_provider_adapter_mock,
+        _resolve_vault_credential_mock,
+        create_vault_credential_mock,
+        _list_provider_profiles_mock,
+        upsert_provider_profile_mock,
+    ):
+        adapter = MagicMock()
+        adapter.list_models.return_value = ["claude-sonnet-4-6", "claude-opus-4-1"]
+        resolve_provider_adapter_mock.return_value = ("anthropic", "anthropic", adapter)
+        create_vault_credential_mock.return_value = {"id": "cred-1"}
+        upsert_provider_profile_mock.return_value = {"item": {"id": "profile-1"}}
+
+        await workspace_admin_service.upsert_workspace_provider_credential(
+            workspace_id="ws-1",
+            current_user={"user_id": "owner-1"},
+            provider="anthropic",
+            api_key="sk-ant-test",
+            model=None,
+        )
+
+        request = upsert_provider_profile_mock.call_args.args[0]
+        self.assertEqual(request.metadata["cached_models"], ["claude-sonnet-4-6", "claude-opus-4-1"])
+        self.assertEqual(request.metadata["cached_models_source"], "provider_adapter")
+        self.assertIsNone(request.metadata["cached_models_error"])
+
+
+class TelegramWebhookRegistrationTests(unittest.IsolatedAsyncioTestCase):
+    @patch.dict(
+        "os.environ",
+        {
+            "ORION_TELEGRAM_AUTOPILOT_PUBLIC_BASE_URL": "https://runtime.example",
+            "ORION_TELEGRAM_AUTOPILOT_WEBHOOK_SECRET": "secret-token",
+        },
+        clear=False,
+    )
+    @patch("server_modules.connectors_actions.ORION_TELEGRAM_AUTOPILOT_DELIVERY_MODE", "webhook")
+    @patch("server_modules.connectors_actions.ORION_TELEGRAM_AUTOPILOT_WEBHOOK_SECRET", "secret-token")
+    @patch("server_modules.connectors_actions.validate_telegram_connector", return_value={"ok": True, "bot": {"username": "cafe_bot"}})
+    @patch("server_modules.connectors_actions.http_json_request")
+    @patch("server_modules.connectors_actions.load_vault", return_value={"credentials": []})
+    @patch("server_modules.connectors_actions.save_vault")
+    async def test_create_telegram_connector_persists_webhook_registration_metadata(
+        self,
+        save_vault_mock,
+        _load_vault_mock,
+        http_json_request_mock,
+        _validate_mock,
+    ):
+        http_json_request_mock.side_effect = [
+            {"status": 200, "json": {"ok": True, "result": True}, "text": ""},
+            {"status": 200, "json": {"ok": True, "result": {"url": "https://runtime.example/channels/telegram/webhook/tg-1"}}, "text": ""},
+        ]
+        with patch("server_modules.connectors_actions.uuid.uuid4", return_value="tg-1"), patch.dict(
+            runtime_models._CONNECTOR_CATALOG,
+            {"telegram_bot": {"label": "Telegram Bot", "auth": ["bot_token"]}},
+            clear=False,
+        ):
+            result = await connectors_actions.create_connector_vault(
+                ConnectorCreate(
+                    label="Cafe bot",
+                    connector="telegram_bot",
+                    workspace_id="ws-1",
+                    credentials={"bot_token": "123:token", "chat_id": "42"},
+                )
+            )
+
+        registration = result["metadata"]["telegram_webhook_registration"]
+        self.assertEqual(registration["status"], "registered")
+        self.assertEqual(registration["webhook_url"], "https://runtime.example/channels/telegram/webhook/tg-1")
+        self.assertGreaterEqual(save_vault_mock.call_count, 1)
 
 
 if __name__ == "__main__":

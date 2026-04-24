@@ -537,6 +537,32 @@ def create_or_get_outbound_message(
     return (_outbound_message_from_row(row) or {}, created)
 
 
+def get_outbound_message(
+    *,
+    gateway_id: str,
+    channel_key: str,
+    idempotency_key: str,
+    db_path: Optional[Path | str] = None,
+) -> Optional[Dict[str, Any]]:
+    with _DB_LOCK:
+        connection = _connect(db_path)
+        try:
+            row = connection.execute(
+                """
+                SELECT * FROM personal_channel_outbound_messages
+                WHERE gateway_id = ? AND channel_key = ? AND idempotency_key = ?
+                """,
+                (
+                    str(gateway_id or "").strip(),
+                    str(channel_key or "").strip(),
+                    str(idempotency_key or "").strip(),
+                ),
+            ).fetchone()
+        finally:
+            connection.close()
+    return _outbound_message_from_row(row)
+
+
 def mark_outbound_delivered(
     *,
     gateway_id: str,

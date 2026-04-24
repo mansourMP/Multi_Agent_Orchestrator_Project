@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 import hashlib
 import hmac
 import json
@@ -13,6 +14,7 @@ from urllib import request as urlrequest
 from fastapi import HTTPException
 
 from server_modules import control_plane_repository
+from server_modules import run_state_repository
 from server_modules.direct_tool_config_service import run_async_tool_call
 
 
@@ -23,19 +25,19 @@ STRIPE_WEBHOOK_TOLERANCE_SECONDS = 300
 
 PLAN_LABELS: Dict[str, str] = {
     "free": "Free",
-    "personal": "Personal",
     "pro": "Pro",
-    "power": "Power",
-    "team": "Team",
-    "enterprise": "Enterprise",
 }
 
 PLAN_ALIASES: Dict[str, str] = {
     "starter": "free",
     "free_personal": "free",
-    "standard": "personal",
-    "business": "team",
-    "enterprise_plus": "enterprise",
+    "standard": "pro",
+    "personal": "pro",
+    "business": "pro",
+    "power": "pro",
+    "team": "pro",
+    "enterprise": "pro",
+    "enterprise_plus": "pro",
 }
 
 TERMINAL_SUBSCRIPTION_STATUSES = {
@@ -74,6 +76,15 @@ def _coerce_int(value: Any) -> Optional[int]:
         return None
     try:
         return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _coerce_float(value: Any) -> Optional[float]:
+    if value is None:
+        return None
+    try:
+        return float(value)
     except (TypeError, ValueError):
         return None
 
@@ -223,6 +234,84 @@ def _plan_catalog_summary(current_plan_id: str) -> list[Dict[str, Any]]:
     return plans
 
 
+def _utc_month_start(now: Optional[datetime] = None) -> datetime.date:
+    reference = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+    return reference.date().replace(day=1)
+
+
+def _parse_run_timestamp(value: Any) -> Optional[datetime]:
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    try:
+        if raw.endswith("Z"):
+            raw = raw[:-1] + "+00:00"
+        return datetime.fromisoformat(raw).astimezone(timezone.utc)
+    except Exception:
+        return None
+
+
+def _run_is_managed_cloud(run: Dict[str, Any]) -> bool:
+    context = run.get("context") if isinstance(run.get("context"), dict) else {}
+    metadata = context.get("metadata") if isinstance(context.get("metadata"), dict) else {}
+    if str(metadata.get("runtime_attachment_kind") or "").strip().lower() == "self_hosted_business_node":
+        return False
+    execution_target = str(metadata.get("execution_target_selected") or "").strip().lower()
+    runtime_mode = str(metadata.get("runtime_mode") or run.get("runtime_mode") or "").strip().lower()
+    return execution_target == "cloud" or runtime_mode == "hosted_secure"
+
+
+def _run_duration_minutes(run: Dict[str, Any], *, browser_only: bool = False) -> float:
+    context = run.get("context") if isinstance(run.get("context"), dict) else {}
+    metadata = context.get("metadata") if isinstance(context.get("metadata"), dict) else {}
+    if browser_only:
+        has_browser_signal = bool(
+            metadata.get("browser_execution_binding")
+            or metadata.get("browser_automation_policy")
+            or run.get("browser_checkpoint")
+        )
+        if not has_browser_signal:
+            return 0.0
+    started_at = _parse_run_timestamp(run.get("started_at"))
+    completed_at = _parse_run_timestamp(run.get("completed_at")) or _parse_run_timestamp(run.get("updated_at"))
+    if started_at is None or completed_at is None or completed_at < started_at:
+        return 0.0
+    return round(max((completed_at - started_at).total_seconds(), 0.0) / 60.0, 6)
+
+
+def _workspace_runtime_usage_summary(*, workspace_id: str, tenant_id: Optional[str]) -> Dict[str, float]:
+    month_start = _utc_month_start()
+    runs_by_id: Dict[str, Dict[str, Any]] = {}
+    for item in list(run_state_repository.sync_list_run_archive(limit=1000) or []) + list(run_state_repository.sync_list_live_runs() or []):
+        if not isinstance(item, dict):
+            continue
+        run_id = str(item.get("run_id") or "").strip()
+        if not run_id:
+            continue
+        context = item.get("context") if isinstance(item.get("context"), dict) else {}
+        run_workspace_id = str(item.get("workspace_id") or context.get("workspace_id") or "").strip()
+        run_tenant_id = str(item.get("tenant_id") or context.get("tenant_id") or "").strip()
+        if run_workspace_id != str(workspace_id or "").strip():
+            continue
+        if tenant_id and run_tenant_id and run_tenant_id != str(tenant_id or "").strip():
+            continue
+        completed_at = _parse_run_timestamp(item.get("completed_at")) or _parse_run_timestamp(item.get("updated_at"))
+        if completed_at is None or completed_at.date() < month_start:
+            continue
+        if not _run_is_managed_cloud(item):
+            continue
+        runs_by_id[run_id] = item
+    hosted_minutes = 0.0
+    browser_minutes = 0.0
+    for item in runs_by_id.values():
+        hosted_minutes += _run_duration_minutes(item)
+        browser_minutes += _run_duration_minutes(item, browser_only=True)
+    return {
+        "hosted_runtime_minutes_monthly": round(hosted_minutes, 6),
+        "browser_compute_minutes_monthly": round(browser_minutes, 6),
+    }
+
+
 def billing_proxy_from_summary(summary: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     payload = dict(summary or {}) if isinstance(summary, dict) else {}
     account = _coerce_dict(payload.get("account"))
@@ -261,10 +350,42 @@ def workspace_billing_summary_for_workspace_id(
     account = _coerce_dict(payload.get("account"))
     subscription = _coerce_dict(payload.get("subscription"))
     effective_plan_id = _subscription_effective_plan(subscription)
+    tenant_id = str(payload.get("tenant_id") or resolved_workspace.get("tenant_id") or "").strip() or None
+    usage_summary = run_async_tool_call(
+        control_plane_repository.summarize_workspace_billing_usage(
+            tenant_id=str(tenant_id or "").strip() or "default",
+            workspace_id=str(payload.get("workspace_id") or resolved_workspace.get("workspace_id") or "").strip(),
+        )
+    ) if tenant_id else {}
+    runtime_usage = _workspace_runtime_usage_summary(
+        workspace_id=str(payload.get("workspace_id") or resolved_workspace.get("workspace_id") or "").strip(),
+        tenant_id=tenant_id,
+    )
+    limits = {
+        "max_specialists": 1 if effective_plan_id == "free" else 3,
+        "hosted_runtime_minutes_monthly": 0 if effective_plan_id == "free" else 1500,
+        "hosted_ai_enabled": effective_plan_id == "pro",
+        "priority_sync_enabled": effective_plan_id == "pro",
+        "local_gateway_enabled": True,
+        "mini_apps_unlimited": True,
+    }
+    usage = {
+        **_coerce_dict(usage_summary),
+        **runtime_usage,
+        "max_specialists": limits["max_specialists"],
+        "specialists_in_use": len(
+            run_async_tool_call(
+                control_plane_repository.list_deployed_agents_for_workspace(
+                    str(payload.get("workspace_id") or resolved_workspace.get("workspace_id") or "").strip(),
+                    tenant_id=str(tenant_id or "").strip() or None,
+                )
+            ) or []
+        ),
+    }
     return {
         "ok": True,
         "workspace_id": str(payload.get("workspace_id") or resolved_workspace.get("workspace_id") or "").strip(),
-        "tenant_id": str(payload.get("tenant_id") or resolved_workspace.get("tenant_id") or "").strip() or None,
+        "tenant_id": tenant_id,
         "workspace_name": str(payload.get("workspace_name") or resolved_workspace.get("name") or "").strip()
         or str(resolved_workspace.get("workspace_id") or "").strip(),
         "provider": STRIPE_PROVIDER,
@@ -300,6 +421,8 @@ def workspace_billing_summary_for_workspace_id(
         },
         "portal_available": bool(account.get("provider_customer_id")) and _stripe_configured(),
         "plans": _plan_catalog_summary(effective_plan_id),
+        "limits": limits,
+        "usage": usage,
     }
 
 
@@ -324,6 +447,8 @@ def create_workspace_checkout_session(
     normalized_plan_id = normalize_billing_plan_id(plan_id)
     if normalized_plan_id == DEFAULT_BILLING_PLAN_ID:
         raise HTTPException(status_code=400, detail="Free does not require checkout.")
+    if normalized_plan_id != "pro":
+        raise HTTPException(status_code=400, detail="Only the Pro plan is available for checkout.")
     price_id = _stripe_price_map().get(normalized_plan_id)
     if not price_id:
         raise HTTPException(status_code=400, detail=f"Billing plan '{normalized_plan_id}' is not configured.")

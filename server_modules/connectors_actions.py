@@ -1,3 +1,4 @@
+import os
 from typing import Any, Dict, List, Optional
 
 from server_modules import runtime_config as config
@@ -52,6 +53,7 @@ SUPPORTED_CONNECTOR_EXECUTION_PATHS = {
 }
 CONNECTOR_SURFACE_DEEP_APP = "deep_application_connector"
 CONNECTOR_SURFACE_CHANNEL_SHELL = "channel_shell"
+TELEGRAM_WEBHOOK_REGISTRATION_METADATA_KEY = "telegram_webhook_registration"
 
 _CONNECTOR_CLASS_DEFAULTS: Dict[str, Dict[str, Any]] = {
     CONNECTOR_CLASS_API: {
@@ -768,6 +770,170 @@ async def telegram_autopilot_test_message(body: TelegramAutopilotTestRequest):
         raise HTTPException(status_code=400, detail=str(exc))
 
 
+def _telegram_webhook_base_url() -> str:
+    return str(os.getenv("ORION_TELEGRAM_AUTOPILOT_PUBLIC_BASE_URL") or "").strip().rstrip("/")
+
+
+def _telegram_connector_webhook_url(connector_id: str) -> str:
+    base_url = _telegram_webhook_base_url()
+    if not base_url:
+        return ""
+    return f"{base_url}/channels/telegram/webhook/{str(connector_id or '').strip()}"
+
+
+def _telegram_webhook_registration_result(
+    *,
+    connector_id: str,
+    credentials: Dict[str, Any],
+) -> Dict[str, Any]:
+    checked_at = datetime.utcnow().isoformat() + "Z"
+    delivery_mode = str(ORION_TELEGRAM_AUTOPILOT_DELIVERY_MODE or "polling").strip().lower() or "polling"
+    webhook_url = _telegram_connector_webhook_url(connector_id)
+    if delivery_mode != "webhook":
+        return {
+            "status": "skipped",
+            "webhook_url": webhook_url or None,
+            "checked_at": checked_at,
+            "registered_at": None,
+            "last_error": None,
+            "delivery_mode": delivery_mode,
+        }
+    secret_token = str(ORION_TELEGRAM_AUTOPILOT_WEBHOOK_SECRET or "").strip()
+    bot_token = str(credentials.get("bot_token") or credentials.get("token") or "").strip()
+    if not webhook_url:
+        return {
+            "status": "failed",
+            "webhook_url": None,
+            "checked_at": checked_at,
+            "registered_at": None,
+            "last_error": "ORION_TELEGRAM_AUTOPILOT_PUBLIC_BASE_URL is not configured.",
+            "delivery_mode": delivery_mode,
+        }
+    if not secret_token:
+        return {
+            "status": "failed",
+            "webhook_url": webhook_url,
+            "checked_at": checked_at,
+            "registered_at": None,
+            "last_error": "ORION_TELEGRAM_AUTOPILOT_WEBHOOK_SECRET is not configured.",
+            "delivery_mode": delivery_mode,
+        }
+    if not bot_token:
+        return {
+            "status": "failed",
+            "webhook_url": webhook_url,
+            "checked_at": checked_at,
+            "registered_at": None,
+            "last_error": "Telegram bot token is missing.",
+            "delivery_mode": delivery_mode,
+        }
+    try:
+        set_result = http_json_request(
+            f"https://api.telegram.org/bot{bot_token}/setWebhook",
+            method="POST",
+            payload={
+                "url": webhook_url,
+                "secret_token": secret_token,
+                "allowed_updates": ["message"],
+            },
+            timeout=20,
+        )
+        set_body = set_result.get("json") if isinstance(set_result.get("json"), dict) else {}
+        if int(set_result.get("status") or 500) >= 400 or set_body.get("ok") is False:
+            detail = str(set_body.get("description") or set_result.get("text") or "Telegram setWebhook failed.").strip()
+            raise RuntimeError(detail)
+        info_result = http_json_request(
+            f"https://api.telegram.org/bot{bot_token}/getWebhookInfo",
+            method="GET",
+            timeout=20,
+        )
+        info_body = info_result.get("json") if isinstance(info_result.get("json"), dict) else {}
+        info_payload = info_body.get("result") if isinstance(info_body.get("result"), dict) else {}
+        actual_url = str(info_payload.get("url") or "").strip()
+        if int(info_result.get("status") or 500) >= 400 or info_body.get("ok") is False:
+            detail = str(info_body.get("description") or info_result.get("text") or "Telegram getWebhookInfo failed.").strip()
+            raise RuntimeError(detail)
+        if actual_url and actual_url != webhook_url:
+            raise RuntimeError(f"Telegram webhook URL mismatch: {actual_url}")
+        registered_at = datetime.utcnow().isoformat() + "Z"
+        return {
+            "status": "registered",
+            "webhook_url": webhook_url,
+            "checked_at": registered_at,
+            "registered_at": registered_at,
+            "last_error": None,
+            "delivery_mode": delivery_mode,
+        }
+    except Exception as exc:
+        return {
+            "status": "failed",
+            "webhook_url": webhook_url,
+            "checked_at": datetime.utcnow().isoformat() + "Z",
+            "registered_at": None,
+            "last_error": str(exc).strip() or "Telegram webhook registration failed.",
+            "delivery_mode": delivery_mode,
+        }
+
+
+def _persist_connector_metadata_patch(credential_id: str, patch: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    vault = load_vault()
+    items = vault.get("credentials", [])
+    if not isinstance(items, list):
+        return None
+    updated_entry: Optional[Dict[str, Any]] = None
+    next_items: List[Dict[str, Any]] = []
+    for item in items:
+        if not isinstance(item, dict):
+            next_items.append(item)
+            continue
+        if str(item.get("id") or "").strip() != str(credential_id or "").strip():
+            next_items.append(item)
+            continue
+        next_item = dict(item)
+        metadata = dict(next_item.get("metadata") if isinstance(next_item.get("metadata"), dict) else {})
+        metadata.update(patch)
+        next_item["metadata"] = _sanitize_connector_metadata(metadata)
+        next_item["updated_at"] = datetime.utcnow().isoformat() + "Z"
+        updated_entry = next_item
+        next_items.append(next_item)
+    if updated_entry is None:
+        return None
+    vault["credentials"] = next_items
+    save_vault(vault)
+    return updated_entry
+
+
+def _register_telegram_webhook_for_connector(
+    *,
+    connector_id: str,
+    credentials: Dict[str, Any],
+) -> Dict[str, Any]:
+    registration = _telegram_webhook_registration_result(
+        connector_id=connector_id,
+        credentials=credentials,
+    )
+    _persist_connector_metadata_patch(
+        connector_id,
+        {TELEGRAM_WEBHOOK_REGISTRATION_METADATA_KEY: registration},
+    )
+    return registration
+
+
+def _delete_telegram_webhook_best_effort(credentials: Dict[str, Any]) -> None:
+    bot_token = str(credentials.get("bot_token") or credentials.get("token") or "").strip()
+    if not bot_token:
+        return
+    try:
+        http_json_request(
+            f"https://api.telegram.org/bot{bot_token}/deleteWebhook",
+            method="POST",
+            payload={"drop_pending_updates": False},
+            timeout=15,
+        )
+    except Exception:
+        return
+
+
 def _upsert_slack_oauth_connector_entry(
     *,
     workspace_id: Optional[str],
@@ -1460,6 +1626,19 @@ async def create_connector_vault(body: ConnectorCreate):
     vault["credentials"] = existing
     save_vault(vault)
 
+    if connector == "telegram_bot":
+        registration = _register_telegram_webhook_for_connector(
+            connector_id=str(entry["id"]),
+            credentials=credentials,
+        )
+        entry = {
+            **entry,
+            "metadata": {
+                **dict(entry.get("metadata") if isinstance(entry.get("metadata"), dict) else {}),
+                TELEGRAM_WEBHOOK_REGISTRATION_METADATA_KEY: registration,
+            },
+        }
+
     return {
         "id": entry["id"],
         "label": entry["label"],
@@ -1513,6 +1692,22 @@ async def update_connector_vault(credential_id: str, body: ConnectorPatchRequest
 
     vault["credentials"] = next_items
     save_vault(vault)
+    if str(updated_entry.get("provider") or "").strip().lower() == "telegram_bot":
+        try:
+            secret = resolve_vault_credential(str(updated_entry.get("id") or "").strip(), requested_workspace)
+        except Exception:
+            secret = {}
+        registration = _register_telegram_webhook_for_connector(
+            connector_id=str(updated_entry.get("id") or "").strip(),
+            credentials=secret,
+        )
+        updated_entry = {
+            **updated_entry,
+            "metadata": {
+                **dict(updated_entry.get("metadata") if isinstance(updated_entry.get("metadata"), dict) else {}),
+                TELEGRAM_WEBHOOK_REGISTRATION_METADATA_KEY: registration,
+            },
+        }
     return {
         "id": updated_entry["id"],
         "label": updated_entry["label"],
@@ -1541,6 +1736,11 @@ async def test_connector_vault(credential_id: str, workspace_id: Optional[str] =
             next_item = dict(item)
             metadata = dict(next_item.get("metadata") if isinstance(next_item.get("metadata"), dict) else {})
             metadata["capability_verification"] = capability_verification_metadata(connector, test_result)
+            if connector == "telegram_bot":
+                metadata[TELEGRAM_WEBHOOK_REGISTRATION_METADATA_KEY] = _telegram_webhook_registration_result(
+                    connector_id=str(credential_id or "").strip(),
+                    credentials=credentials,
+                )
             next_item["metadata"] = _sanitize_connector_metadata(metadata)
             next_item["updated_at"] = datetime.utcnow().isoformat() + "Z"
             next_items.append(next_item)
@@ -1671,6 +1871,12 @@ async def delete_connector_vault(credential_id: str, workspace_id: Optional[str]
             raise HTTPException(status_code=400, detail="Credential is not a connector.")
         if not _workspace_visible(item.get("workspace_id"), workspace_id):
             raise HTTPException(status_code=403, detail="Connector is not accessible for this workspace.")
+        if str(item.get("provider") or "").strip().lower() == "telegram_bot":
+            try:
+                secret = resolve_vault_credential(str(item.get("id") or "").strip(), workspace_id)
+            except Exception:
+                secret = {}
+            _delete_telegram_webhook_best_effort(secret)
     if not found:
         raise HTTPException(status_code=404, detail="Connector not found.")
     vault["credentials"] = next_items

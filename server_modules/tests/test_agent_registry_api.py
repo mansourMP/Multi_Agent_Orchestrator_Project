@@ -34,6 +34,9 @@ class _FakeApp:
     def put(self, path, **kwargs):
         return self._register("PUT", path, **kwargs)
 
+    def delete(self, path, **kwargs):
+        return self._register("DELETE", path, **kwargs)
+
 
 class AgentRegistryApiRouteTests(unittest.TestCase):
     def setUp(self) -> None:
@@ -60,6 +63,11 @@ class AgentRegistryApiRouteTests(unittest.TestCase):
             self.assertIn(("GET", "/agent-registry/definitions"), app.routes)
             self.assertIn(("GET", "/agent-registry/definitions/{definition_id}"), app.routes)
             self.assertIn(("GET", "/agent-registry/runtime-profiles"), app.routes)
+            self.assertIn(("GET", "/agent-registry/mcp/servers"), app.routes)
+            self.assertIn(("GET", "/agent-registry/mcp/servers/{server_id}"), app.routes)
+            self.assertIn(("PUT", "/agent-registry/mcp/servers/{server_id}"), app.routes)
+            self.assertIn(("POST", "/agent-registry/mcp/servers/{server_id}/refresh"), app.routes)
+            self.assertIn(("DELETE", "/agent-registry/mcp/servers/{server_id}"), app.routes)
             self.assertIn(("GET", "/agent-registry/chat-context"), app.routes)
             self.assertIn(("GET", "/agent-registry/runtime-targets"), app.routes)
             self.assertIn(("GET", "/agent-registry/shared-board"), app.routes)
@@ -150,6 +158,62 @@ class AgentRegistryApiRouteTests(unittest.TestCase):
             self.assertEqual(result["needed_skill_id"], "inventory-tool")
             self.assertEqual(execute_mock.await_args.kwargs["goal"], "Do you have Tesla wipers?")
             self.assertEqual(execute_mock.await_args.kwargs["manifest"].identity.name, "Parts Pro")
+        finally:
+            if previous_server is None:
+                sys.modules.pop("server", None)
+            else:
+                sys.modules["server"] = previous_server
+
+    def test_save_mcp_server_enforces_workspace_and_returns_registry_payload(self):
+        fake_server = types.ModuleType("server")
+        fake_server.require_api_key = object()
+
+        previous_server = sys.modules.get("server")
+        sys.modules["server"] = fake_server
+        try:
+            app = _FakeApp()
+            agent_registry_api.register_agent_registry_routes(app)
+            route = app.routes[("PUT", "/agent-registry/mcp/servers/{server_id}")]
+
+            with (
+                patch("server_modules.agent_registry_api.enforce_workspace_access", return_value="workspace-1"),
+                patch(
+                    "server_modules.agent_registry_api.mcp_registry_service.upsert_workspace_mcp_server",
+                    return_value={"id": "inventory-feed", "label": "Inventory Feed"},
+                ) as upsert_mock,
+                patch(
+                    "server_modules.agent_registry_api.mcp_registry_service.list_workspace_mcp_servers",
+                    return_value=[
+                        {
+                            "id": "inventory-feed",
+                            "label": "Inventory Feed",
+                            "transport": "streamable_http",
+                            "endpoint": "https://example.com/mcp",
+                            "enabled": True,
+                            "tool_count": 1,
+                            "skill_ids": ["mcp:inventory-feed:lookup_stock"],
+                        }
+                    ],
+                ),
+            ):
+                result = asyncio.run(
+                    route(
+                        "inventory-feed",
+                        agent_registry_api.McpServerUpsertRequest(
+                            workspace_id="workspace-1",
+                            label="Inventory Feed",
+                            endpoint="https://example.com/mcp",
+                            discover_tools=True,
+                        ),
+                        current_user={"user_id": "user-1", "role": "owner", "is_admin": True},
+                    )
+                )
+
+            self.assertTrue(result["advanced_only"])
+            self.assertEqual(result["id"], "inventory-feed")
+            self.assertEqual(result["skill_ids"], ["mcp:inventory-feed:lookup_stock"])
+            self.assertEqual(upsert_mock.call_args.kwargs["workspace_id"], "workspace-1")
+            self.assertTrue(upsert_mock.call_args.kwargs["discover_tools"])
         finally:
             if previous_server is None:
                 sys.modules.pop("server", None)
@@ -258,6 +322,44 @@ class AgentRegistryApiRouteTests(unittest.TestCase):
             self.assertEqual(result["audit"]["inbound_event_id"], "evt-in")
             self.assertEqual(route_mock.await_args.kwargs["channel_key"], "telegram")
             self.assertEqual(route_mock.await_args.kwargs["endpoint_key"], "@partspro_bot")
+        finally:
+            if previous_server is None:
+                sys.modules.pop("server", None)
+            else:
+                sys.modules["server"] = previous_server
+
+    def test_save_specialist_skills_rejects_unknown_skill_ids(self):
+        fake_server = types.ModuleType("server")
+        fake_server.require_api_key = object()
+
+        previous_server = sys.modules.get("server")
+        sys.modules["server"] = fake_server
+        try:
+            app = _FakeApp()
+            agent_registry_api.register_agent_registry_routes(app)
+            route = app.routes[("PUT", "/agent-registry/specialists/{install_id}/skills")]
+
+            with (
+                patch("server_modules.agent_registry_api.enforce_workspace_access", return_value="workspace-1"),
+                patch(
+                    "server_modules.agent_registry_api.agent_specialist_repository.get_workspace_specialist",
+                    new=AsyncMock(return_value={"install_id": "install-1", "specialist_mode": "owner_edit"}),
+                ),
+            ):
+                with self.assertRaises(HTTPException) as raised:
+                    asyncio.run(
+                        route(
+                            "install-1",
+                            agent_registry_api.SpecialistSkillBindingsUpdateRequest(
+                                workspace_id="workspace-1",
+                                skill_ids=["not-a-real-skill"],
+                            ),
+                            current_user={"user_id": "user-1", "role": "owner", "is_admin": True},
+                        )
+                    )
+
+            self.assertEqual(raised.exception.status_code, 400)
+            self.assertIn("Unknown specialist skill binding", str(raised.exception.detail))
         finally:
             if previous_server is None:
                 sys.modules.pop("server", None)

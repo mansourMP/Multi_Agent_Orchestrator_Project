@@ -11,7 +11,11 @@ import type {
 import { buildTelegramConnectedState, buildTelegramPreflightState, loadTelegramLoginConfig, type TelegramLinkedAccount, type TelegramLoginConfig } from "./login";
 import { mapTelegramInboundMessage, mapTelegramOutboundResult, type TelegramInboundMessage } from "./message-mapper";
 import { TelegramOutboundStore } from "./outbound";
-import { resolveTelegramReconnectState } from "./reconnect";
+import {
+  DEFAULT_TELEGRAM_RECONNECT_POLICY,
+  computeTelegramReconnectDelay,
+  resolveTelegramReconnectState,
+} from "./reconnect";
 import {
   TELEGRAM_PERSONAL_CHANNEL_KEY,
   TELEGRAM_PERSONAL_PROVIDER,
@@ -59,6 +63,8 @@ export class TelegramPersonalRuntime {
   private client: TelegramAdapterClient | null = null;
   private started = false;
   private reconnectTimer: NodeJS.Timeout | null = null;
+  private connectPromise: Promise<void> | null = null;
+  private reconnectAttempts = 0;
 
   constructor(
     private readonly db: GatewayStateDb,
@@ -165,6 +171,7 @@ export class TelegramPersonalRuntime {
         delivered: true,
       };
     }
+    await this.outboundStore.markAttemptStarted(idempotencyKey);
     const response = await this.client.sendMessage(
       remoteJid,
       text,
@@ -187,6 +194,19 @@ export class TelegramPersonalRuntime {
   }
 
   private async connectClient(): Promise<void> {
+    if (this.connectPromise) {
+      return this.connectPromise;
+    }
+    const task = this.connectClientInternal().finally(() => {
+      if (this.connectPromise === task) {
+        this.connectPromise = null;
+      }
+    });
+    this.connectPromise = task;
+    return task;
+  }
+
+  private async connectClientInternal(): Promise<void> {
     await this.sessionStore.ensureRuntimeDir();
     const loginConfig = loadTelegramLoginConfig();
     const persistedConfig = await this.configStore.loadTelegramConfig();
@@ -225,11 +245,15 @@ export class TelegramPersonalRuntime {
       if (exportedSession) {
         await this.sessionStore.saveSessionString(exportedSession);
       }
+      this.reconnectAttempts = 0;
       await this.configStore.clearTelegramSecrets();
       await this.sessionStore.save(buildTelegramConnectedState(account || {}));
       await this.flushState();
     } catch (error) {
       const reconnectState = resolveTelegramReconnectState(error);
+      if (!reconnectState.shouldReconnect) {
+        await this.sessionStore.clearSessionString();
+      }
       await this.sessionStore.save({
         status: reconnectState.status,
         loginHint: reconnectState.loginHint,
@@ -278,10 +302,21 @@ export class TelegramPersonalRuntime {
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
     }
+    const attempt = this.reconnectAttempts;
+    if (attempt >= DEFAULT_TELEGRAM_RECONNECT_POLICY.maxAttempts) {
+      void this.sessionStore.save({
+        status: "disconnected",
+        retryable: false,
+        lastDisconnectReason: "telegram_reconnect_attempts_exhausted",
+      }).then(() => this.flushState());
+      return;
+    }
+    const delayMs = computeTelegramReconnectDelay(attempt);
+    this.reconnectAttempts += 1;
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;
       void this.connectClient();
-    }, 2_000);
+    }, delayMs);
   }
 
   private async getAdapter(): Promise<TelegramRuntimeAdapter> {
@@ -496,6 +531,7 @@ export class TelegramPersonalRuntime {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
     }
+    this.reconnectAttempts = 0;
     await Promise.resolve(this.client?.disconnect?.());
     this.client = null;
     await this.connectClient();

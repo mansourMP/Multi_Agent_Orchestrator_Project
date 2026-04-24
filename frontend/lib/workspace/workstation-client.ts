@@ -316,12 +316,32 @@ export type DeployedAgentAdminDashboardUserRow = Record<string, unknown> & {
   last_5_messages?: DeployedAgentAdminDashboardMessage[] | null;
 };
 
+export type DeployedAgentAdminDashboardQuestion = Record<string, unknown> & {
+  question?: string | null;
+  count?: number | null;
+};
+
+export type DeployedAgentCustomerEntryRecord = Record<string, unknown> & {
+  entry_url?: string | null;
+  cta_label?: string | null;
+  telegram_deep_link?: string | null;
+  bot_username?: string | null;
+  qr_image_url?: string | null;
+  qr_target?: string | null;
+};
+
 export type DeployedAgentAdminDashboardRecord = Record<string, unknown> & {
   deployed_agent_id?: string | null;
   total_users?: number | null;
+  messages_today?: number | null;
   messages_this_calendar_month?: number | null;
+  orders_today?: number | null;
+  revenue_today_usd?: number | null;
   users_at_limit_today?: number | null;
   upgrade_clicks_this_month?: number | null;
+  common_questions?: DeployedAgentAdminDashboardQuestion[] | null;
+  customer_entry?: DeployedAgentCustomerEntryRecord | null;
+  specialist_profile?: Record<string, unknown> | null;
   user_rows?: DeployedAgentAdminDashboardUserRow[] | null;
   limit?: number | null;
   offset?: number | null;
@@ -477,6 +497,7 @@ export type WorkstationClientPaths = {
   providers: string;
   providersCatalog: string;
   providerModels: (providerId: string, profileId?: string | null) => string;
+  workspaceProviderModelsRefresh: (providerId: string) => string;
   providerProfiles: (provider?: string | null) => string;
   providerProfilesRoot: string;
   credentialsVault: string;
@@ -645,6 +666,7 @@ export type WorkstationClient = {
   listProviders: () => Promise<Record<string, unknown>>;
   listProviderCatalog: () => Promise<Record<string, unknown>>;
   listProviderModels: (options: { providerId: string; profileId?: string | null }) => Promise<Record<string, unknown>>;
+  refreshWorkspaceProviderModels: (options: { providerId: string }) => Promise<Record<string, unknown> | null>;
   listProviderProfiles: (options?: { provider?: string | null }) => Promise<Record<string, unknown>>;
   listVaultCredentials: () => Promise<Record<string, unknown>>;
   listConnectorsVault: () => Promise<Record<string, unknown>>;
@@ -972,6 +994,8 @@ export function buildWorkstationApiPaths(workspaceId: string): WorkstationClient
     providersCatalog: `/api/providers/catalog${buildQueryString({ workspace_id: workspaceId })}`,
     providerModels: (providerId: string, profileId: string | null = null) =>
       `/api/providers/${encodeURIComponent(providerId)}/models${buildQueryString({ workspace_id: workspaceId, profile_id: profileId })}`,
+    workspaceProviderModelsRefresh: (providerId: string) =>
+      `/api/workspaces/${encodeURIComponent(workspaceId)}/providers/${encodeURIComponent(providerId)}/models/refresh`,
     providerProfiles: (provider = null) =>
       `/api/providers/profiles${buildQueryString({ workspace_id: workspaceId, provider })}`,
     providerProfilesRoot: '/api/providers/profiles',
@@ -2011,6 +2035,15 @@ export function createWorkstationClient(
         path: paths.providerModels(providerId, profileId),
         policy: PROVIDER_READ_REQUEST_POLICY,
       }) as Promise<Record<string, unknown>>,
+    refreshWorkspaceProviderModels: ({ providerId }) =>
+      requestJson<Record<string, unknown>>({
+        path: paths.workspaceProviderModelsRefresh(providerId),
+        init: {
+          method: 'POST',
+          headers: mergeJsonHeaders(),
+        },
+        policy: WRITE_REQUEST_POLICY,
+      }),
     listProviderProfiles: ({ provider = null } = {}) =>
       requestJson<Record<string, unknown>>({
         path: paths.providerProfiles(provider),

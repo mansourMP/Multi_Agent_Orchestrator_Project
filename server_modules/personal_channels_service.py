@@ -22,6 +22,8 @@ TELEGRAM_PERSONAL_PROVIDER = channel_lane_contract_service.assert_personal_gatew
 
 TELEGRAM_PERSONAL_CONFIGURE_CAPABILITY = "channel.telegram.personal.configure"
 WHATSAPP_PERSONAL_CONFIGURE_CAPABILITY = "channel.whatsapp.personal.configure"
+WHATSAPP_PERSONAL_NO_REPLY_IDEMPOTENCY_PREFIX = "whatsapp_personal:noreply:"
+TELEGRAM_PERSONAL_NO_REPLY_IDEMPOTENCY_PREFIX = "telegram_personal:noreply:"
 
 
 def sync_gateway_personal_channel_state(
@@ -127,6 +129,104 @@ async def handle_gateway_channel_inbound(
     raise ValueError(f"Unsupported personal channel key: {channel_key}")
 
 
+async def _deliver_whatsapp_personal_reply(
+    *,
+    gateway_id: str,
+    registration: Dict[str, Any],
+    inbound: Dict[str, Any],
+    remote_jid: str,
+    external_message_id: str,
+    text: str,
+    push_name: Optional[str],
+    duplicate: bool,
+) -> Dict[str, Any]:
+    reply_idempotency_key = str(inbound.get("reply_idempotency_key") or "").strip() or None
+    if reply_idempotency_key and reply_idempotency_key.startswith(WHATSAPP_PERSONAL_NO_REPLY_IDEMPOTENCY_PREFIX):
+        return {"duplicate": duplicate, "inbound": inbound, "outbound": None}
+
+    outbound: Optional[Dict[str, Any]] = None
+    idempotency_key = reply_idempotency_key or f"whatsapp_personal:{external_message_id}"
+    if reply_idempotency_key:
+        outbound = personal_channels_repository.get_outbound_message(
+            gateway_id=str(gateway_id or "").strip(),
+            channel_key=WHATSAPP_PERSONAL_CHANNEL_KEY,
+            idempotency_key=reply_idempotency_key,
+        )
+    if outbound and str(outbound.get("status") or "").strip() == "delivered":
+        personal_channels_repository.mark_inbound_processed(
+            gateway_id=str(gateway_id or "").strip(),
+            channel_key=WHATSAPP_PERSONAL_CHANNEL_KEY,
+            external_message_id=external_message_id,
+            reply_idempotency_key=idempotency_key,
+        )
+        return {"duplicate": duplicate, "inbound": inbound, "outbound": outbound}
+
+    if outbound is None:
+        reply = personal_channel_sage_bridge_service.build_whatsapp_personal_reply(
+            workspace_id=str(registration.get("workspace_id") or "").strip(),
+            gateway_id=str(gateway_id or "").strip(),
+            remote_jid=remote_jid,
+            text=text,
+            push_name=push_name,
+        )
+        if not reply or not str(reply.get("text") or "").strip():
+            no_reply_idempotency_key = f"{WHATSAPP_PERSONAL_NO_REPLY_IDEMPOTENCY_PREFIX}{external_message_id}"
+            refreshed_inbound = personal_channels_repository.mark_inbound_processed(
+                gateway_id=str(gateway_id or "").strip(),
+                channel_key=WHATSAPP_PERSONAL_CHANNEL_KEY,
+                external_message_id=external_message_id,
+                reply_idempotency_key=no_reply_idempotency_key,
+            )
+            return {"duplicate": duplicate, "inbound": refreshed_inbound or inbound, "outbound": None}
+
+        outbound, _ = personal_channels_repository.create_or_get_outbound_message(
+            gateway_id=str(gateway_id or "").strip(),
+            channel_key=WHATSAPP_PERSONAL_CHANNEL_KEY,
+            idempotency_key=idempotency_key,
+            remote_jid=remote_jid,
+            text=str(reply.get("text") or "").strip(),
+            reply_to_external_message_id=external_message_id,
+            metadata={"reply_source": str(reply.get("source") or "").strip() or None},
+        )
+
+    if str(outbound.get("status") or "").strip() == "delivered":
+        personal_channels_repository.mark_inbound_processed(
+            gateway_id=str(gateway_id or "").strip(),
+            channel_key=WHATSAPP_PERSONAL_CHANNEL_KEY,
+            external_message_id=external_message_id,
+            reply_idempotency_key=idempotency_key,
+        )
+        return {"duplicate": duplicate, "inbound": inbound, "outbound": outbound}
+
+    from server_modules import gateway_protocol_service
+
+    dispatch_result = await gateway_protocol_service.dispatch_channel_outbound(
+        gateway_id=str(gateway_id or "").strip(),
+        channel_key=WHATSAPP_PERSONAL_CHANNEL_KEY,
+        provider=WHATSAPP_PERSONAL_PROVIDER,
+        remote_jid=str(outbound.get("remote_jid") or remote_jid).strip(),
+        text=str(outbound.get("text") or "").strip(),
+        idempotency_key=idempotency_key,
+        reply_to_external_message_id=(
+            str(outbound.get("reply_to_external_message_id") or "").strip() or external_message_id
+        ),
+    )
+    delivered = personal_channels_repository.mark_outbound_delivered(
+        gateway_id=str(gateway_id or "").strip(),
+        channel_key=WHATSAPP_PERSONAL_CHANNEL_KEY,
+        idempotency_key=idempotency_key,
+        external_message_id=str(dispatch_result.get("external_message_id") or "").strip() or None,
+        metadata={"dispatch_result": dispatch_result},
+    )
+    refreshed_inbound = personal_channels_repository.mark_inbound_processed(
+        gateway_id=str(gateway_id or "").strip(),
+        channel_key=WHATSAPP_PERSONAL_CHANNEL_KEY,
+        external_message_id=external_message_id,
+        reply_idempotency_key=idempotency_key,
+    )
+    return {"duplicate": duplicate, "inbound": refreshed_inbound or inbound, "outbound": delivered}
+
+
 async def _handle_whatsapp_gateway_channel_inbound(
     *,
     gateway_id: str,
@@ -170,63 +270,16 @@ async def _handle_whatsapp_gateway_channel_inbound(
             "from_me": bool(message.get("from_me")),
         },
     )
-    if not created:
-        return {"duplicate": True, "inbound": inbound}
-
-    reply = personal_channel_sage_bridge_service.build_whatsapp_personal_reply(
-        workspace_id=str(registration.get("workspace_id") or "").strip(),
-        gateway_id=str(gateway_id or "").strip(),
+    return await _deliver_whatsapp_personal_reply(
+        gateway_id=gateway_id,
+        registration=registration,
+        inbound=inbound,
         remote_jid=remote_jid,
+        external_message_id=external_message_id,
         text=text,
         push_name=str(message.get("push_name") or "").strip() or None,
+        duplicate=not created,
     )
-    if not reply or not str(reply.get("text") or "").strip():
-        return {"duplicate": False, "inbound": inbound, "outbound": None}
-
-    idempotency_key = f"whatsapp_personal:{external_message_id}"
-    outbound, _ = personal_channels_repository.create_or_get_outbound_message(
-        gateway_id=str(gateway_id or "").strip(),
-        channel_key=WHATSAPP_PERSONAL_CHANNEL_KEY,
-        idempotency_key=idempotency_key,
-        remote_jid=remote_jid,
-        text=str(reply.get("text") or "").strip(),
-        reply_to_external_message_id=external_message_id,
-        metadata={"reply_source": str(reply.get("source") or "").strip() or None},
-    )
-    if str(outbound.get("status") or "").strip() == "delivered":
-        personal_channels_repository.mark_inbound_processed(
-            gateway_id=str(gateway_id or "").strip(),
-            channel_key=WHATSAPP_PERSONAL_CHANNEL_KEY,
-            external_message_id=external_message_id,
-            reply_idempotency_key=idempotency_key,
-        )
-        return {"duplicate": False, "inbound": inbound, "outbound": outbound}
-
-    from server_modules import gateway_protocol_service
-
-    dispatch_result = await gateway_protocol_service.dispatch_channel_outbound(
-        gateway_id=str(gateway_id or "").strip(),
-        channel_key=WHATSAPP_PERSONAL_CHANNEL_KEY,
-        provider=WHATSAPP_PERSONAL_PROVIDER,
-        remote_jid=remote_jid,
-        text=str(reply.get("text") or "").strip(),
-        idempotency_key=idempotency_key,
-        reply_to_external_message_id=external_message_id,
-    )
-    delivered = personal_channels_repository.mark_outbound_delivered(
-        gateway_id=str(gateway_id or "").strip(),
-        channel_key=WHATSAPP_PERSONAL_CHANNEL_KEY,
-        idempotency_key=idempotency_key,
-        external_message_id=str(dispatch_result.get("external_message_id") or "").strip() or None,
-        metadata={"dispatch_result": dispatch_result},
-    )
-    personal_channels_repository.mark_inbound_processed(
-        gateway_id=str(gateway_id or "").strip(),
-        channel_key=WHATSAPP_PERSONAL_CHANNEL_KEY,
-        external_message_id=external_message_id,
-        reply_idempotency_key=idempotency_key,
-    )
-    return {"duplicate": False, "inbound": inbound, "outbound": delivered}
 
 
 async def _handle_telegram_gateway_channel_inbound(
@@ -273,29 +326,55 @@ async def _handle_telegram_gateway_channel_inbound(
             "from_me": bool(message.get("from_me")),
         },
     )
-    if not created:
-        return {"duplicate": True, "inbound": inbound}
+    reply_idempotency_key = str(inbound.get("reply_idempotency_key") or "").strip() or None
+    if reply_idempotency_key and reply_idempotency_key.startswith(TELEGRAM_PERSONAL_NO_REPLY_IDEMPOTENCY_PREFIX):
+        return {"duplicate": not created, "inbound": inbound, "outbound": None}
 
-    reply = personal_channel_sage_bridge_service.build_telegram_personal_reply(
-        workspace_id=str(registration.get("workspace_id") or "").strip(),
-        gateway_id=str(gateway_id or "").strip(),
-        remote_jid=remote_jid,
-        text=text,
-        push_name=str(message.get("push_name") or "").strip() or None,
-    )
-    if not reply or not str(reply.get("text") or "").strip():
-        return {"duplicate": False, "inbound": inbound, "outbound": None}
+    outbound: Optional[Dict[str, Any]] = None
+    idempotency_key = reply_idempotency_key or f"telegram_personal:{external_message_id}"
+    if reply_idempotency_key:
+        outbound = personal_channels_repository.get_outbound_message(
+            gateway_id=str(gateway_id or "").strip(),
+            channel_key=TELEGRAM_PERSONAL_CHANNEL_KEY,
+            idempotency_key=reply_idempotency_key,
+        )
+    if outbound and str(outbound.get("status") or "").strip() == "delivered":
+        personal_channels_repository.mark_inbound_processed(
+            gateway_id=str(gateway_id or "").strip(),
+            channel_key=TELEGRAM_PERSONAL_CHANNEL_KEY,
+            external_message_id=external_message_id,
+            reply_idempotency_key=idempotency_key,
+        )
+        return {"duplicate": not created, "inbound": inbound, "outbound": outbound}
 
-    idempotency_key = f"telegram_personal:{external_message_id}"
-    outbound, _ = personal_channels_repository.create_or_get_outbound_message(
-        gateway_id=str(gateway_id or "").strip(),
-        channel_key=TELEGRAM_PERSONAL_CHANNEL_KEY,
-        idempotency_key=idempotency_key,
-        remote_jid=remote_jid,
-        text=str(reply.get("text") or "").strip(),
-        reply_to_external_message_id=external_message_id,
-        metadata={"reply_source": str(reply.get("source") or "").strip() or None},
-    )
+    if outbound is None:
+        reply = personal_channel_sage_bridge_service.build_telegram_personal_reply(
+            workspace_id=str(registration.get("workspace_id") or "").strip(),
+            gateway_id=str(gateway_id or "").strip(),
+            remote_jid=remote_jid,
+            text=text,
+            push_name=str(message.get("push_name") or "").strip() or None,
+        )
+        if not reply or not str(reply.get("text") or "").strip():
+            no_reply_idempotency_key = f"{TELEGRAM_PERSONAL_NO_REPLY_IDEMPOTENCY_PREFIX}{external_message_id}"
+            refreshed_inbound = personal_channels_repository.mark_inbound_processed(
+                gateway_id=str(gateway_id or "").strip(),
+                channel_key=TELEGRAM_PERSONAL_CHANNEL_KEY,
+                external_message_id=external_message_id,
+                reply_idempotency_key=no_reply_idempotency_key,
+            )
+            return {"duplicate": not created, "inbound": refreshed_inbound or inbound, "outbound": None}
+
+        outbound, _ = personal_channels_repository.create_or_get_outbound_message(
+            gateway_id=str(gateway_id or "").strip(),
+            channel_key=TELEGRAM_PERSONAL_CHANNEL_KEY,
+            idempotency_key=idempotency_key,
+            remote_jid=remote_jid,
+            text=str(reply.get("text") or "").strip(),
+            reply_to_external_message_id=external_message_id,
+            metadata={"reply_source": str(reply.get("source") or "").strip() or None},
+        )
+
     if str(outbound.get("status") or "").strip() == "delivered":
         personal_channels_repository.mark_inbound_processed(
             gateway_id=str(gateway_id or "").strip(),
@@ -303,7 +382,7 @@ async def _handle_telegram_gateway_channel_inbound(
             external_message_id=external_message_id,
             reply_idempotency_key=idempotency_key,
         )
-        return {"duplicate": False, "inbound": inbound, "outbound": outbound}
+        return {"duplicate": not created, "inbound": inbound, "outbound": outbound}
 
     from server_modules import gateway_protocol_service
 
@@ -311,10 +390,12 @@ async def _handle_telegram_gateway_channel_inbound(
         gateway_id=str(gateway_id or "").strip(),
         channel_key=TELEGRAM_PERSONAL_CHANNEL_KEY,
         provider=TELEGRAM_PERSONAL_PROVIDER,
-        remote_jid=remote_jid,
-        text=str(reply.get("text") or "").strip(),
+        remote_jid=str(outbound.get("remote_jid") or remote_jid).strip(),
+        text=str(outbound.get("text") or "").strip(),
         idempotency_key=idempotency_key,
-        reply_to_external_message_id=external_message_id,
+        reply_to_external_message_id=(
+            str(outbound.get("reply_to_external_message_id") or "").strip() or external_message_id
+        ),
     )
     delivered = personal_channels_repository.mark_outbound_delivered(
         gateway_id=str(gateway_id or "").strip(),
@@ -323,13 +404,13 @@ async def _handle_telegram_gateway_channel_inbound(
         external_message_id=str(dispatch_result.get("external_message_id") or "").strip() or None,
         metadata={"dispatch_result": dispatch_result},
     )
-    personal_channels_repository.mark_inbound_processed(
+    refreshed_inbound = personal_channels_repository.mark_inbound_processed(
         gateway_id=str(gateway_id or "").strip(),
         channel_key=TELEGRAM_PERSONAL_CHANNEL_KEY,
         external_message_id=external_message_id,
         reply_idempotency_key=idempotency_key,
     )
-    return {"duplicate": False, "inbound": inbound, "outbound": delivered}
+    return {"duplicate": not created, "inbound": refreshed_inbound or inbound, "outbound": delivered}
 
 
 async def send_whatsapp_personal_message(

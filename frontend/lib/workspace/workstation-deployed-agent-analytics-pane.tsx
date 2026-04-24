@@ -8,7 +8,9 @@ import { AppButton, joinClassNames } from '@/lib/ui/primitives';
 import { SkeletonBlock } from '@/lib/ui/skeleton-block';
 import type {
   DeployedAgentAdminDashboardMessage,
+  DeployedAgentAdminDashboardQuestion,
   DeployedAgentAdminDashboardRecord,
+  DeployedAgentCustomerEntryRecord,
   DeployedAgentAdminDashboardUserRow,
 } from '@/lib/workspace/workstation-client';
 import { useWorkspaceServices } from '@/lib/workspace/workspace-services';
@@ -16,9 +18,15 @@ import { useWorkspaceServices } from '@/lib/workspace/workspace-services';
 type DashboardSnapshot = {
   deployedAgentId: string;
   totalUsers: number;
+  messagesToday: number;
   messagesThisCalendarMonth: number;
+  ordersToday: number;
+  revenueTodayUsd: number;
   usersAtLimitToday: number;
   upgradeClicksThisMonth: number;
+  commonQuestions: DeployedAgentAdminDashboardQuestion[];
+  customerEntry: DeployedAgentCustomerEntryRecord | null;
+  specialistProfile: Record<string, unknown>;
   userRows: DeployedAgentAdminDashboardUserRow[];
   limit: number;
   hasMore: boolean;
@@ -55,9 +63,21 @@ function normalizeDashboard(payload: unknown): DashboardSnapshot {
   return {
     deployedAgentId: readString(record.deployed_agent_id),
     totalUsers: readNumber(record.total_users),
+    messagesToday: readNumber((record as Record<string, unknown>).messages_today),
     messagesThisCalendarMonth: readNumber(record.messages_this_calendar_month),
+    ordersToday: readNumber((record as Record<string, unknown>).orders_today),
+    revenueTodayUsd: readNumber((record as Record<string, unknown>).revenue_today_usd),
     usersAtLimitToday: readNumber(record.users_at_limit_today),
     upgradeClicksThisMonth: readNumber(record.upgrade_clicks_this_month),
+    commonQuestions: readItems<DeployedAgentAdminDashboardQuestion>((record as Record<string, unknown>).common_questions),
+    customerEntry:
+      record.customer_entry && typeof record.customer_entry === 'object'
+        ? record.customer_entry as DeployedAgentCustomerEntryRecord
+        : null,
+    specialistProfile:
+      record.specialist_profile && typeof record.specialist_profile === 'object'
+        ? record.specialist_profile as Record<string, unknown>
+        : {},
     userRows: readItems<DeployedAgentAdminDashboardUserRow>(record.user_rows),
     limit: Math.max(1, readNumber(record.limit) || 50),
     hasMore: record.has_more === true,
@@ -153,6 +173,15 @@ function formatCount(value: number): string {
   return new Intl.NumberFormat().format(value);
 }
 
+function formatUsd(value: number): string {
+  return new Intl.NumberFormat(undefined, {
+    style: 'currency',
+    currency: 'USD',
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  }).format(value);
+}
+
 function formatRelativeTime(value: unknown): string {
   const token = readString(value);
   if (!token) {
@@ -200,11 +229,19 @@ function messageRoleLabel(message: DeployedAgentAdminDashboardMessage): string {
   return readString(message.role).toLowerCase() === 'agent' ? 'Agent' : 'User';
 }
 
+function profileBlock(
+  profile: Record<string, unknown>,
+  key: 'knowledge' | 'live_data' | 'memory' | 'actions' | 'channel',
+): Record<string, unknown> {
+  const value = profile[key];
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
+}
+
 function DashboardSkeleton() {
   return (
     <div className="deployed-agent-analytics">
       <div className="deployed-agent-analytics__stats">
-        {Array.from({ length: 4 }).map((_, index) => (
+        {Array.from({ length: 6 }).map((_, index) => (
           <div key={`analytics-stat-skeleton-${index}`} className="deployed-agent-analytics__stat">
             <SkeletonBlock height="2rem" width="5rem" />
             <SkeletonBlock height="0.875rem" width="8rem" />
@@ -340,6 +377,7 @@ export function WorkstationDeployedAgentAnalyticsPane({
     () => dashboard?.userRows ?? [],
     [dashboard],
   );
+  const customerEntry = dashboard?.customerEntry ?? null;
 
   if (loading && !dashboard) {
     return <DashboardSkeleton />;
@@ -367,12 +405,17 @@ export function WorkstationDeployedAgentAnalyticsPane({
         <div className="deployed-agent-analytics__stats">
           {[
             ['Total Users', dashboard?.totalUsers ?? 0],
+            ['Messages Today', dashboard?.messagesToday ?? 0],
             ['Messages This Month', dashboard?.messagesThisCalendarMonth ?? 0],
+            ['Orders Today', dashboard?.ordersToday ?? 0],
+            ['Revenue Today', formatUsd(dashboard?.revenueTodayUsd ?? 0)],
             ['Users At Limit Today', dashboard?.usersAtLimitToday ?? 0],
             ['Upgrade Clicks This Month', dashboard?.upgradeClicksThisMonth ?? 0],
           ].map(([label, value]) => (
             <div key={label} className="deployed-agent-analytics__stat">
-              <strong className="deployed-agent-analytics__stat-value">{formatCount(Number(value))}</strong>
+              <strong className="deployed-agent-analytics__stat-value">
+                {typeof value === 'string' ? value : formatCount(Number(value))}
+              </strong>
               <span className="deployed-agent-analytics__stat-label">{label}</span>
             </div>
           ))}
@@ -401,8 +444,20 @@ export function WorkstationDeployedAgentAnalyticsPane({
           <span className="deployed-agent-analytics__stat-label">Total Users</span>
         </div>
         <div className="deployed-agent-analytics__stat">
+          <strong className="deployed-agent-analytics__stat-value">{formatCount(dashboard.messagesToday)}</strong>
+          <span className="deployed-agent-analytics__stat-label">Messages Today</span>
+        </div>
+        <div className="deployed-agent-analytics__stat">
           <strong className="deployed-agent-analytics__stat-value">{formatCount(dashboard.messagesThisCalendarMonth)}</strong>
           <span className="deployed-agent-analytics__stat-label">Messages This Month</span>
+        </div>
+        <div className="deployed-agent-analytics__stat">
+          <strong className="deployed-agent-analytics__stat-value">{formatCount(dashboard.ordersToday)}</strong>
+          <span className="deployed-agent-analytics__stat-label">Orders Today</span>
+        </div>
+        <div className="deployed-agent-analytics__stat">
+          <strong className="deployed-agent-analytics__stat-value">{formatUsd(dashboard.revenueTodayUsd)}</strong>
+          <span className="deployed-agent-analytics__stat-label">Revenue Today</span>
         </div>
         <div className="deployed-agent-analytics__stat">
           <strong className="deployed-agent-analytics__stat-value">{formatCount(dashboard.usersAtLimitToday)}</strong>
@@ -411,6 +466,68 @@ export function WorkstationDeployedAgentAnalyticsPane({
         <div className="deployed-agent-analytics__stat">
           <strong className="deployed-agent-analytics__stat-value">{formatCount(dashboard.upgradeClicksThisMonth)}</strong>
           <span className="deployed-agent-analytics__stat-label">Upgrade Clicks This Month</span>
+        </div>
+      </div>
+
+      <div className="deployed-agent-analytics__expanded">
+        <div className="deployed-agent-analytics__message">
+          <div className="deployed-agent-analytics__message-meta">
+            <span className="deployed-agent-analytics__role deployed-agent-analytics__role--agent">Customer entry</span>
+            <span>{readString(customerEntry?.qr_target, 'waiting')}</span>
+          </div>
+          <div className="deployed-agent-analytics__message-body">
+            {readString(customerEntry?.entry_url, 'No QR entry URL configured yet.')}
+          </div>
+          {readString(customerEntry?.qr_image_url) ? (
+            <div className="app-stack-2">
+              <img
+                src={readString(customerEntry?.qr_image_url)}
+                alt="Customer entry QR code"
+                className="deployed-agent-analytics__qr"
+              />
+              {readString(customerEntry?.telegram_deep_link) ? (
+                <a href={readString(customerEntry?.telegram_deep_link)} target="_blank" rel="noreferrer">
+                  Open Telegram entry
+                </a>
+              ) : null}
+            </div>
+          ) : null}
+        </div>
+
+        <div className="deployed-agent-analytics__message">
+          <div className="deployed-agent-analytics__message-meta">
+            <span className="deployed-agent-analytics__role deployed-agent-analytics__role--agent">Common questions</span>
+            <span>{dashboard.commonQuestions.length > 0 ? `${dashboard.commonQuestions.length} tracked` : 'No repeats yet'}</span>
+          </div>
+          <div className="deployed-agent-analytics__message-body">
+            {dashboard.commonQuestions.length > 0
+              ? dashboard.commonQuestions.map((item) => `${readString(item.question, 'Question')} (${formatCount(readNumber(item.count) ?? 0)})`).join(' · ')
+              : 'Repeated menu and ordering questions will appear here once customers start asking them.'}
+          </div>
+        </div>
+
+        <div className="deployed-agent-analytics__table">
+          <div className="deployed-agent-analytics__table-head">
+            <span>Block</span>
+            <span>Mode</span>
+            <span>Summary</span>
+            <span aria-hidden="true" />
+            <span aria-hidden="true" />
+          </div>
+          {(['knowledge', 'live_data', 'memory', 'actions', 'channel'] as const).map((key) => {
+            const block = profileBlock(dashboard.specialistProfile, key);
+            return (
+              <div key={key} className="deployed-agent-analytics__table-row">
+                <span className="deployed-agent-analytics__cell">
+                  <strong>{readString(block.title, key.replace('_', ' '))}</strong>
+                </span>
+                <span className="deployed-agent-analytics__cell">{readString(block.mode, 'Configured')}</span>
+                <span className="deployed-agent-analytics__cell">{readString(block.summary, 'Configured')}</span>
+                <span className="deployed-agent-analytics__cell" />
+                <span className="deployed-agent-analytics__cell" />
+              </div>
+            );
+          })}
         </div>
       </div>
 

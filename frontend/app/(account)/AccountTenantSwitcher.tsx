@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { Bot, Compass, LayoutGrid, Moon, Settings2, Sun, type LucideIcon } from 'lucide-react';
+import { Bot, Compass, LayoutGrid, Settings2, Waypoints, type LucideIcon } from 'lucide-react';
 
 import { joinClassNames } from '@/lib/ui/primitives';
 import { useAccountShell } from '@/lib/shell/account-shell-context';
@@ -24,6 +24,7 @@ const DESTINATION_ICON_MAP: Record<WorkspaceNavDestinationId, LucideIcon> = {
   sage: Bot,
   studio: LayoutGrid,
   marketplace: Compass,
+  gateway: Waypoints,
   settings: Settings2,
 };
 
@@ -82,7 +83,7 @@ function extractActiveDestinationId(pathname: string | null): WorkspaceNavDestin
 
 export function AccountTenantSwitcher() {
   const pathname = usePathname();
-  const { state, actions } = useAccountShell();
+  const { state } = useAccountShell();
   const [usageCost, setUsageCost] = useState<number | null>(null);
   const routeWorkspaceId = resolveRouteWorkspaceId(
     state.workspaceMemberships,
@@ -98,6 +99,7 @@ export function AccountTenantSwitcher() {
   const activeMembership = state.workspaceMemberships.find((item) => item.workspace.id === activeWorkspaceId) ?? null;
   const activeTenantId = activeMembership?.workspace.tenantId ?? state.workspaceMemberships[0]?.workspace.tenantId ?? '';
   const isLightTheme = state.globalTheme === 'light';
+  const accountInitial = String(state.account?.displayName || state.account?.email || 'You').trim().charAt(0).toUpperCase() || 'Y';
   const usageClient = useMemo(() => {
     if (!activeWorkspaceId || !activeTenantId) {
       return null;
@@ -199,17 +201,6 @@ export function AccountTenantSwitcher() {
             ${usageCost.toFixed(2)}
           </div>
         ) : null}
-        <button
-          type="button"
-          className="account-switcher__link account-switcher__theme-toggle"
-          onClick={() => {
-            actions.setGlobalTheme(isLightTheme ? 'dark' : 'light');
-          }}
-          aria-label={isLightTheme ? 'Use dark theme' : 'Use light theme'}
-          title={isLightTheme ? 'Use dark theme' : 'Use light theme'}
-        >
-          {isLightTheme ? <Moon size={18} /> : <Sun size={18} />}
-        </button>
         <nav aria-label="Settings destination" className="account-switcher__nav account-switcher__nav--secondary">
           {SECONDARY_DESTINATIONS.map((destination) => (
             <Link
@@ -229,6 +220,15 @@ export function AccountTenantSwitcher() {
             </Link>
           ))}
         </nav>
+        <Link
+          href="/settings/account"
+          prefetch
+          className="account-switcher__link account-switcher__avatar"
+          aria-label="Account"
+          title={state.account?.displayName || state.account?.email || 'Account'}
+        >
+          {accountInitial}
+        </Link>
       </div>
     </aside>
   );

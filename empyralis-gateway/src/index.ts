@@ -1,3 +1,6 @@
+import { promises as fs } from "fs";
+import path from "path";
+
 import { loadGatewayConfig } from "./config";
 import { GatewayWsClient } from "./cloud/ws-client";
 import { resolveDeviceIdentity } from "./pairing/device-identity";
@@ -16,8 +19,70 @@ import { GatewayBrowserRuntime } from "./browser/runtime";
 
 const GATEWAY_VERSION = "0.1.0";
 
+async function acquireGatewayProcessLock(stateDir: string): Promise<() => Promise<void>> {
+  const lockPath = path.join(stateDir, "gateway.lock");
+  await fs.mkdir(stateDir, { recursive: true });
+  const payload = JSON.stringify(
+    {
+      pid: process.pid,
+      startedAt: new Date().toISOString(),
+    },
+    null,
+    2,
+  );
+
+  try {
+    const handle = await fs.open(lockPath, "wx");
+    await handle.writeFile(payload, "utf8");
+    await handle.close();
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException | undefined)?.code;
+    if (code !== "EEXIST") {
+      throw error;
+    }
+    const existing = await readExistingLock(lockPath);
+    const existingPid = Number(existing?.pid || 0);
+    if (existingPid > 0 && processAlive(existingPid)) {
+      throw new Error(`Empyralis gateway is already running for ${stateDir} (pid ${existingPid}).`);
+    }
+    await fs.rm(lockPath, { force: true });
+    const handle = await fs.open(lockPath, "wx");
+    await handle.writeFile(payload, "utf8");
+    await handle.close();
+  }
+
+  let released = false;
+  return async () => {
+    if (released) {
+      return;
+    }
+    released = true;
+    await fs.rm(lockPath, { force: true });
+  };
+}
+
+async function readExistingLock(lockPath: string): Promise<{ pid?: number } | null> {
+  try {
+    const raw = await fs.readFile(lockPath, "utf8");
+    const payload = JSON.parse(raw) as { pid?: number };
+    return typeof payload === "object" && payload ? payload : null;
+  } catch {
+    return null;
+  }
+}
+
+function processAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 async function main(): Promise<void> {
   const config = loadGatewayConfig();
+  const releaseLock = await acquireGatewayProcessLock(config.stateDir);
   const db = new GatewayStateDb(config.stateDir);
   const journal = new GatewayJournal(db);
   const outbox = new GatewayOutbox(db);
@@ -60,21 +125,48 @@ async function main(): Promise<void> {
   whatsappRuntime.setPublisher(client);
   telegramRuntime.setPublisher(client);
 
-  if (config.pairingToken) {
-    await client.registerFromPairing(config.pairingToken, identity, runtimeMetadata);
-  } else if (config.gatewayToken) {
-    await tokenStore.save({ gatewayToken: config.gatewayToken });
-  }
+  const cleanup = async (reason: string) => {
+    await journal.append("system", "gateway.process.stop", {
+      gatewayId: identity.gatewayId,
+      deviceId: identity.deviceId,
+      reason,
+    });
+    await releaseLock();
+  };
+  let shuttingDown = false;
+  const installSignalHandler = (signal: NodeJS.Signals) => {
+    process.once(signal, () => {
+      if (shuttingDown) {
+        return;
+      }
+      shuttingDown = true;
+      void cleanup(signal).finally(() => {
+        process.exit(0);
+      });
+    });
+  };
+  installSignalHandler("SIGINT");
+  installSignalHandler("SIGTERM");
 
-  await journal.append("system", "gateway.process.start", {
-    gatewayId: identity.gatewayId,
-    deviceId: identity.deviceId,
-    stateDir: config.stateDir,
-    apiBaseUrl: config.apiBaseUrl,
-  });
-  await whatsappRuntime.start();
-  await telegramRuntime.start();
-  await client.run(identity, runtimeMetadata);
+  try {
+    if (config.pairingToken) {
+      await client.registerFromPairing(config.pairingToken, identity, runtimeMetadata);
+    } else if (config.gatewayToken) {
+      await tokenStore.save({ gatewayToken: config.gatewayToken });
+    }
+
+    await journal.append("system", "gateway.process.start", {
+      gatewayId: identity.gatewayId,
+      deviceId: identity.deviceId,
+      stateDir: config.stateDir,
+      apiBaseUrl: config.apiBaseUrl,
+    });
+    await whatsappRuntime.start();
+    await telegramRuntime.start();
+    await client.run(identity, runtimeMetadata);
+  } finally {
+    await releaseLock();
+  }
 }
 
 if (require.main === module) {

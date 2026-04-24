@@ -168,6 +168,39 @@ def _analytics_payload() -> dict[str, object]:
     }
 
 
+def _admin_dashboard_payload() -> dict[str, object]:
+    return {
+        "deployed_agent_id": "dagent_1",
+        "total_users": 12,
+        "messages_today": 4,
+        "messages_this_calendar_month": 58,
+        "orders_today": 2,
+        "revenue_today_usd": 42.5,
+        "users_at_limit_today": 0,
+        "upgrade_clicks_this_month": 1,
+        "common_questions": [{"question": "Do you have oat milk?", "count": 2}],
+        "customer_entry": {
+            "entry_url": "https://menu.example.com/bluebird",
+            "cta_label": "Open menu",
+            "telegram_deep_link": "https://t.me/bluebirdcafe_bot?start=dagent_1",
+            "bot_username": "bluebirdcafe_bot",
+            "qr_image_url": "https://api.qrserver.com/v1/create-qr-code/?size=220x220&data=foo",
+            "qr_target": "web",
+        },
+        "specialist_profile": {
+            "knowledge": {"mode": "menu_reference"},
+            "live_data": {"mode": "daily_specials_and_availability"},
+            "memory": {"mode": "per_customer_order_history"},
+            "actions": {"enabled": ["place_order", "confirm_order", "escalate_to_human"]},
+            "channel": {"primary": "telegram_bot"},
+        },
+        "user_rows": [],
+        "limit": 50,
+        "offset": 0,
+        "has_more": False,
+    }
+
+
 def _telegram_readiness_payload() -> dict[str, object]:
     return {
         "channel": "telegram",
@@ -755,6 +788,39 @@ async def test_get_deployed_agent_analytics_route_returns_payload(monkeypatch: p
 
     assert response.status_code == 200
     assert response.json()["active_users_last_30d"] == 12
+
+
+@pytest.mark.anyio
+async def test_get_deployed_agent_admin_dashboard_route_returns_payload(monkeypatch: pytest.MonkeyPatch):
+    app = _build_app()
+    app.dependency_overrides[routes_deployed_agents.get_current_user] = _owner_user
+
+    async def fake_get_dashboard(**kwargs):
+        assert kwargs["agent_id"] == "dagent_1"
+        assert kwargs["workspace_id"] == "ws-1"
+        current_user = kwargs["current_user"]
+        assert isinstance(current_user, dict)
+        assert current_user["user_id"] == "user-owner"
+        return _admin_dashboard_payload()
+
+    monkeypatch.setattr(
+        routes_deployed_agents,
+        "get_deployed_agent_admin_dashboard_service",
+        lambda: type("DashboardService", (), {"get_dashboard": staticmethod(fake_get_dashboard)})(),
+    )
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        response = await client.get(
+            "/deployed-agents/dagent_1/admin-dashboard",
+            params={"workspace_id": "ws-1"},
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["orders_today"] == 2
+    assert payload["customer_entry"]["bot_username"] == "bluebirdcafe_bot"
+    assert payload["specialist_profile"]["channel"]["primary"] == "telegram_bot"
 
 
 @pytest.mark.anyio

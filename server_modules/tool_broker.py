@@ -128,20 +128,20 @@ def _is_master_manifest(manifest: AgentManifest) -> bool:
     return manifest.scope == "global_master" or manifest.identity.archetype == "master_os"
 
 
-def _skill_definitions_for_ids(skill_ids: list[str]) -> list[skill_registry.SkillDefinition]:
+def _skill_definitions_for_ids(skill_ids: list[str], *, workspace_id: str | None = None) -> list[skill_registry.SkillDefinition]:
     definitions: list[skill_registry.SkillDefinition] = []
     for skill_id in skill_ids:
-        definition = skill_registry.get_skill_definition(skill_id)
+        definition = skill_registry.get_skill_definition(skill_id, workspace_id=workspace_id)
         if definition is not None:
             definitions.append(definition)
     return definitions
 
 
-def _connector_scopes_for_manifest(manifest: AgentManifest, skill_ids: list[str]) -> list[str]:
+def _connector_scopes_for_manifest(manifest: AgentManifest, skill_ids: list[str], *, workspace_id: str | None = None) -> list[str]:
     if _is_master_manifest(manifest):
         return [MASTER_SCOPE_WILDCARD]
     manifest_scopes = _ordered_unique(list(manifest.connectors.bound))
-    derived_scopes = skill_registry.skill_connector_scopes(skill_ids)
+    derived_scopes = skill_registry.skill_connector_scopes(skill_ids, workspace_id=workspace_id)
     return _ordered_unique([*manifest_scopes, *derived_scopes])
 
 
@@ -168,11 +168,11 @@ def issue_capability_token(
     issued_at = int(time.time())
     expires_at = issued_at + max(int(ttl_seconds or DEFAULT_CAPABILITY_TOKEN_TTL_SECONDS), 1)
     skill_ids = (
-        [definition.id for definition in skill_registry.list_skill_definitions()]
+        [definition.id for definition in skill_registry.list_skill_definitions(workspace_id=workspace_id)]
         if _is_master_manifest(manifest)
         else manifest_skill_ids(manifest)
     )
-    definitions = _skill_definitions_for_ids(skill_ids)
+    definitions = _skill_definitions_for_ids(skill_ids, workspace_id=workspace_id)
     claims = {
         "version": _TOKEN_VERSION,
         "grant_id": f"grant_{secrets.token_urlsafe(12)}",
@@ -190,7 +190,7 @@ def issue_capability_token(
         "tenant_id": str(tenant_id or "").strip(),
         "workspace_id": str(workspace_id or "").strip(),
         "allowed_skills": skill_ids,
-        "allowed_connector_scopes": _connector_scopes_for_manifest(manifest, skill_ids),
+        "allowed_connector_scopes": _connector_scopes_for_manifest(manifest, skill_ids, workspace_id=workspace_id),
         "allowed_action_classes": _action_classes_for_manifest(manifest, definitions),
         "approval_granted": bool(privileged_runtime_approved or manifest.policy.approval_mode == "system"),
         "policy_approval_mode": manifest.policy.approval_mode,
@@ -365,7 +365,7 @@ async def execute_skill(
     operational_policy: str,
     seed_demo_if_empty: bool = False,
 ) -> Dict[str, Any]:
-    definition = skill_registry.get_skill_definition(skill_id)
+    definition = skill_registry.get_skill_definition(skill_id, workspace_id=workspace_id, include_disabled=True)
     if definition is None:
         return {
             "status": "missing",
@@ -375,6 +375,11 @@ async def execute_skill(
                 {"label": "Resolving skill registry", "detail": skill_id, "status": "error", "kind": "connector"},
             ],
         }
+    if not definition.enabled:
+        raise ToolExecutionDeniedError(
+            "skill_disabled",
+            f"The {definition.label} skill is disabled for this workspace.",
+        )
 
     claims = verify_capability_token(
         capability_token,

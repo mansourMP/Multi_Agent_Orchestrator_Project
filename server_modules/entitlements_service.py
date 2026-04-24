@@ -14,10 +14,14 @@ from server_modules.direct_tool_config_service import run_async_tool_call
 DEFAULT_PLAN_ID = "free"
 PLAN_ALIASES = {
     "starter": "free",
-    "free_personal": "personal",
-    "standard": "personal",
-    "business": "team",
-    "enterprise_plus": "enterprise",
+    "free_personal": "free",
+    "standard": "pro",
+    "personal": "pro",
+    "business": "pro",
+    "power": "pro",
+    "team": "pro",
+    "enterprise": "pro",
+    "enterprise_plus": "pro",
 }
 TERMINAL_RUN_STATES = {"completed", "failed", "cancelled", "canceled", "timeout", "aborted"}
 
@@ -31,9 +35,9 @@ NON_GATED_CAPABILITIES: Dict[str, bool] = {
 PLAN_DEFINITIONS: Dict[str, Dict[str, Any]] = {
     "free": {
         "label": "Free",
-        "hosted_runtime_enabled": True,
-        "hosted_runtime_minutes_monthly": 60,
-        "concurrent_hosted_executions": 1,
+        "hosted_runtime_enabled": False,
+        "hosted_runtime_minutes_monthly": 0,
+        "concurrent_hosted_executions": 0,
         "background_event_triggers_per_hour": 2,
         "background_self_proposed_per_hour": 1,
         "background_runtime_seconds": 15,
@@ -50,30 +54,9 @@ PLAN_DEFINITIONS: Dict[str, Dict[str, Any]] = {
         "artifacts_enabled": False,
         "advanced_features_enabled": False,
         "premium_tools_enabled": False,
-        "telegram_channel_enabled": True,
-        "whatsapp_channel_enabled": True,
-    },
-    "personal": {
-        "label": "Personal",
-        "hosted_runtime_enabled": True,
-        "hosted_runtime_minutes_monthly": 300,
-        "concurrent_hosted_executions": 2,
-        "background_event_triggers_per_hour": 4,
-        "background_self_proposed_per_hour": 2,
-        "background_runtime_seconds": 20,
-        "cloud_memory_storage_mb": 512,
-        "cloud_memory_retention_days": 30,
-        "sync_depth_days": 30,
-        "premium_connectors_enabled": False,
-        "team_features_enabled": False,
-        "admin_security_features_enabled": False,
-        "mobile_push_enabled": True,
-        "cloud_services_enabled": True,
-        "mobile_app_enabled": True,
-        "approvals_enabled": True,
-        "artifacts_enabled": True,
-        "advanced_features_enabled": True,
-        "premium_tools_enabled": True,
+        "max_deployed_agents": 1,
+        "priority_sync_enabled": False,
+        "mini_apps_unlimited": True,
         "telegram_channel_enabled": True,
         "whatsapp_channel_enabled": True,
     },
@@ -98,78 +81,9 @@ PLAN_DEFINITIONS: Dict[str, Dict[str, Any]] = {
         "artifacts_enabled": True,
         "advanced_features_enabled": True,
         "premium_tools_enabled": True,
-        "telegram_channel_enabled": True,
-        "whatsapp_channel_enabled": True,
-    },
-    "power": {
-        "label": "Power",
-        "hosted_runtime_enabled": True,
-        "hosted_runtime_minutes_monthly": 5_000,
-        "concurrent_hosted_executions": 8,
-        "background_event_triggers_per_hour": 16,
-        "background_self_proposed_per_hour": 8,
-        "background_runtime_seconds": 45,
-        "cloud_memory_storage_mb": 10_240,
-        "cloud_memory_retention_days": 365,
-        "sync_depth_days": 365,
-        "premium_connectors_enabled": True,
-        "team_features_enabled": False,
-        "admin_security_features_enabled": True,
-        "mobile_push_enabled": True,
-        "cloud_services_enabled": True,
-        "mobile_app_enabled": True,
-        "approvals_enabled": True,
-        "artifacts_enabled": True,
-        "advanced_features_enabled": True,
-        "premium_tools_enabled": True,
-        "telegram_channel_enabled": True,
-        "whatsapp_channel_enabled": True,
-    },
-    "team": {
-        "label": "Team",
-        "hosted_runtime_enabled": True,
-        "hosted_runtime_minutes_monthly": 12_000,
-        "concurrent_hosted_executions": 16,
-        "background_event_triggers_per_hour": 24,
-        "background_self_proposed_per_hour": 12,
-        "background_runtime_seconds": 60,
-        "cloud_memory_storage_mb": 20_480,
-        "cloud_memory_retention_days": 365,
-        "sync_depth_days": 365,
-        "premium_connectors_enabled": True,
-        "team_features_enabled": True,
-        "admin_security_features_enabled": True,
-        "mobile_push_enabled": True,
-        "cloud_services_enabled": True,
-        "mobile_app_enabled": True,
-        "approvals_enabled": True,
-        "artifacts_enabled": True,
-        "advanced_features_enabled": True,
-        "premium_tools_enabled": True,
-        "telegram_channel_enabled": True,
-        "whatsapp_channel_enabled": True,
-    },
-    "enterprise": {
-        "label": "Enterprise",
-        "hosted_runtime_enabled": True,
-        "hosted_runtime_minutes_monthly": None,
-        "concurrent_hosted_executions": 64,
-        "background_event_triggers_per_hour": 48,
-        "background_self_proposed_per_hour": 24,
-        "background_runtime_seconds": 90,
-        "cloud_memory_storage_mb": 102_400,
-        "cloud_memory_retention_days": 3650,
-        "sync_depth_days": 3650,
-        "premium_connectors_enabled": True,
-        "team_features_enabled": True,
-        "admin_security_features_enabled": True,
-        "mobile_push_enabled": True,
-        "cloud_services_enabled": True,
-        "mobile_app_enabled": True,
-        "approvals_enabled": True,
-        "artifacts_enabled": True,
-        "advanced_features_enabled": True,
-        "premium_tools_enabled": True,
+        "max_deployed_agents": 3,
+        "priority_sync_enabled": True,
+        "mini_apps_unlimited": True,
         "telegram_channel_enabled": True,
         "whatsapp_channel_enabled": True,
     },
@@ -271,12 +185,18 @@ def _install_entitlement_metadata(install: Optional[Dict[str, Any]]) -> Dict[str
     }
 
 
-def _merged_usage(workspace: Optional[Dict[str, Any]], install: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+def _merged_usage(
+    workspace: Optional[Dict[str, Any]],
+    install: Optional[Dict[str, Any]],
+    *,
+    billing_usage: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
     workspace_meta = _workspace_entitlement_metadata(workspace)
     install_meta = _install_entitlement_metadata(install)
     return {
         **_coerce_dict(workspace_meta.get("usage")),
         **_coerce_dict(workspace_meta.get("entitlement_usage")),
+        **_coerce_dict(billing_usage),
         **_coerce_dict(install_meta.get("usage")),
         **_coerce_dict(install_meta.get("entitlement_usage")),
     }
@@ -316,16 +236,26 @@ def resolve_workspace_entitlement_state(
     workspace_meta = _workspace_entitlement_metadata(workspace)
     install_meta = _install_entitlement_metadata(install)
     workspace_id = str(_coerce_dict(workspace).get("workspace_id") or "").strip()
+    explicit_plan = (
+        install_meta.get("plan")
+        or install_meta.get("plan_id")
+        or install_meta.get("plan_tier")
+        or workspace_meta.get("plan")
+        or workspace_meta.get("plan_id")
+        or workspace_meta.get("plan_tier")
+    )
     billing_summary = (
         billing_service.workspace_billing_summary_for_workspace_id(workspace_id, workspace=_coerce_dict(workspace))
-        if workspace_id
+        if workspace_id and not str(explicit_plan or "").strip()
         else None
     )
     billing_plan_id = None
     billing_source = None
     billing_metadata: Dict[str, Any] = {}
+    billing_usage: Dict[str, Any] = {}
     if isinstance(billing_summary, dict):
         subscription = _coerce_dict(billing_summary.get("subscription"))
+        billing_usage = _coerce_dict(billing_summary.get("usage"))
         billing_plan_id = str(
             subscription.get("effective_plan_id")
             or subscription.get("plan_id")
@@ -333,14 +263,7 @@ def resolve_workspace_entitlement_state(
         ).strip()
         billing_source = "workspace_billing"
         billing_metadata = _coerce_dict(subscription.get("metadata"))
-    workspace_plan_id = (
-        install_meta.get("plan")
-        or install_meta.get("plan_id")
-        or workspace_meta.get("plan")
-        or workspace_meta.get("plan_id")
-        or install_meta.get("plan_tier")
-        or workspace_meta.get("plan_tier")
-    )
+    workspace_plan_id = explicit_plan
     if (
         billing_plan_id == DEFAULT_PLAN_ID
         and str(billing_metadata.get("source") or "").strip().lower() == "workspace_default"
@@ -374,7 +297,7 @@ def resolve_workspace_entitlement_state(
         plan_label=str(entitlements.get("label") or plan_id.title()).strip() or plan_id.title(),
         source=source,
         entitlements=entitlements,
-        usage=_merged_usage(workspace, install),
+        usage=_merged_usage(workspace, install, billing_usage=billing_usage),
         non_gated_capabilities=dict(NON_GATED_CAPABILITIES),
     )
 
@@ -416,6 +339,9 @@ def workspace_capability_flags(
         "artifacts_enabled": bool(entitlements.get("artifacts_enabled")),
         "advanced_features_enabled": bool(entitlements.get("advanced_features_enabled")),
         "premium_tools_enabled": bool(entitlements.get("premium_tools_enabled")),
+        "priority_sync_enabled": bool(entitlements.get("priority_sync_enabled")),
+        "mini_apps_unlimited": bool(entitlements.get("mini_apps_unlimited")),
+        "max_specialists": _coerce_int(entitlements.get("max_deployed_agents"), 1),
         "history_window_days": history_window_days,
         "telegram_channel_enabled": bool(entitlements.get("telegram_channel_enabled")),
         "whatsapp_channel_enabled": bool(entitlements.get("whatsapp_channel_enabled")),
@@ -450,6 +376,27 @@ def workspace_entitlement_payload_for_workspace_id(
         workspace=workspace,
         install=install,
     )
+    return workspace_entitlement_payload(state=state)
+
+
+def enforce_specialist_slot_access(
+    *,
+    workspace: Optional[Dict[str, Any]],
+    install: Optional[Dict[str, Any]] = None,
+    current_specialist_count: int,
+) -> Dict[str, Any]:
+    state = resolve_workspace_entitlement_state(workspace=workspace, install=install)
+    max_specialists = max(1, _coerce_int(state.entitlements.get("max_deployed_agents"), 1))
+    if int(current_specialist_count or 0) >= max_specialists:
+        raise EntitlementQuotaExceededError(
+            reason="specialist_limit_exceeded",
+            message=(
+                "This workspace has reached its specialist limit for the current plan. "
+                "Free allows 1 specialist and Pro allows 3."
+            ),
+            entitlement_state=workspace_entitlement_payload(state=state),
+            retry_after_seconds=3600,
+        )
     return workspace_entitlement_payload(state=state)
 
 

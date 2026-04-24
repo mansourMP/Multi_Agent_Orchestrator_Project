@@ -179,6 +179,11 @@ class TelegramAutopilotStateService:
                 continue
             if str(item.get("provider") or "").strip().lower() != "telegram_bot":
                 continue
+            entry_ws = str(self.normalize_workspace_id(item.get("workspace_id")) or "").strip()
+            if not entry_ws or entry_ws == "default":
+                # Studio Telegram bot delivery is workspace-scoped. Legacy quick-mode
+                # entries without an explicit workspace must not poison the runtime loop.
+                continue
             if not self.workspace_visible(item.get("workspace_id"), requested_ws):
                 continue
             if self.connector_paused(item):

@@ -16,9 +16,17 @@ import {
   type WhatsAppLoginConfig,
 } from "./login";
 import { buildWhatsAppQrPayload } from "./qr-login";
-import { mapWhatsAppInboundMessage, mapWhatsAppOutboundResult } from "./message-mapper";
+import {
+  buildWhatsAppClientMessageId,
+  mapWhatsAppInboundMessage,
+  mapWhatsAppOutboundResult,
+} from "./message-mapper";
 import { WhatsAppOutboundStore } from "./outbound";
-import { resolveWhatsAppReconnectState } from "./reconnect";
+import {
+  DEFAULT_WHATSAPP_RECONNECT_POLICY,
+  computeWhatsAppReconnectDelay,
+  resolveWhatsAppReconnectState,
+} from "./reconnect";
 import {
   WhatsAppSessionSnapshot,
   WhatsAppSessionStore,
@@ -43,7 +51,11 @@ interface BaileysSocketLike {
   ev: {
     on: (eventName: string, handler: (payload: any) => void | Promise<void>) => void;
   };
-  sendMessage: (jid: string, content: Record<string, unknown>) => Promise<Record<string, unknown> | undefined>;
+  sendMessage: (
+    jid: string,
+    content: Record<string, unknown>,
+    options?: { messageId?: string },
+  ) => Promise<Record<string, unknown> | undefined>;
   requestPairingCode?: (phoneNumber: string, customPairingCode?: string) => Promise<string>;
   user?: { id?: string; name?: string };
 }
@@ -77,6 +89,8 @@ export class WhatsAppPersonalRuntime {
   private started = false;
   private reconnectTimer: NodeJS.Timeout | null = null;
   private pairingCodeRequested = false;
+  private connectPromise: Promise<void> | null = null;
+  private reconnectAttempts = 0;
 
   constructor(
     private readonly db: GatewayStateDb,
@@ -135,6 +149,7 @@ export class WhatsAppPersonalRuntime {
 
   async stop(): Promise<void> {
     this.started = false;
+    this.connectPromise = null;
     this.pairingCodeRequested = false;
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
@@ -170,9 +185,11 @@ export class WhatsAppPersonalRuntime {
     if (!idempotencyKey || !remoteJid || !text) {
       throw new Error("channel.outbound requires idempotency_key, remote_jid, and text.");
     }
+    const clientMessageId = buildWhatsAppClientMessageId(idempotencyKey);
     const existing = await this.outboundStore.beginSend(idempotencyKey, {
       remoteJid,
       text,
+      clientMessageId,
       replyToExternalMessageId: String(payload.reply_to_external_message_id || "").trim() || undefined,
     });
     if (existing.status === "delivered") {
@@ -180,18 +197,24 @@ export class WhatsAppPersonalRuntime {
         channel_key: WHATSAPP_PERSONAL_CHANNEL_KEY,
         provider: WHATSAPP_PERSONAL_PROVIDER,
         idempotency_key: existing.idempotencyKey,
-        external_message_id: existing.externalMessageId,
+        external_message_id: existing.externalMessageId ?? existing.clientMessageId,
         remote_jid: existing.remoteJid,
         text: existing.text,
         delivered: true,
       };
     }
-    const response = await this.socket.sendMessage(remoteJid, { text });
+    const outboundRecord = await this.outboundStore.markAttemptStarted(idempotencyKey);
+    const response = await this.socket.sendMessage(
+      remoteJid,
+      { text },
+      { messageId: outboundRecord.clientMessageId || clientMessageId },
+    );
     const mapped = mapWhatsAppOutboundResult(
       {
         idempotencyKey,
         remoteJid,
         text,
+        clientMessageId: outboundRecord.clientMessageId || clientMessageId,
         replyToExternalMessageId: String(payload.reply_to_external_message_id || "").trim() || undefined,
       },
       response,
@@ -204,6 +227,19 @@ export class WhatsAppPersonalRuntime {
   }
 
   private async connectSocket(): Promise<void> {
+    if (this.connectPromise) {
+      return this.connectPromise;
+    }
+    const task = this.connectSocketInternal().finally(() => {
+      if (this.connectPromise === task) {
+        this.connectPromise = null;
+      }
+    });
+    this.connectPromise = task;
+    return task;
+  }
+
+  private async connectSocketInternal(): Promise<void> {
     const loginConfig = {
       ...loadWhatsAppLoginConfig(),
       ...(await this.configStore.loadWhatsAppConfig()),
@@ -269,6 +305,8 @@ export class WhatsAppPersonalRuntime {
     }
     const connection = String(update.connection ?? "").trim();
     if (connection === "open") {
+      this.reconnectAttempts = 0;
+      this.pairingCodeRequested = false;
       await this.sessionStore.save({
         status: "connected",
         qrCode: undefined,
@@ -291,6 +329,12 @@ export class WhatsAppPersonalRuntime {
         update.lastDisconnect,
         adapter.disconnectReason,
       );
+      this.socket = null;
+      this.authBundle = null;
+      this.pairingCodeRequested = false;
+      if (!reconnectState.shouldReconnect) {
+        await this.sessionStore.clearAuthStateDir();
+      }
       await this.sessionStore.save({
         status: reconnectState.shouldReconnect ? "disconnected" : "logged_out",
         retryable: reconnectState.shouldReconnect,
@@ -333,10 +377,25 @@ export class WhatsAppPersonalRuntime {
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
     }
+    if (this.reconnectAttempts >= DEFAULT_WHATSAPP_RECONNECT_POLICY.maxAttempts) {
+      void this.sessionStore
+        .save({
+          retryable: false,
+          lastDisconnectReason: "reconnect_exhausted",
+        })
+        .then(() => this.flushState())
+        .catch(() => undefined);
+      return;
+    }
+    const delayMs = computeWhatsAppReconnectDelay(this.reconnectAttempts);
+    this.reconnectAttempts += 1;
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;
+      if (!this.started) {
+        return;
+      }
       void this.connectSocket();
-    }, 1_000);
+    }, delayMs);
   }
 
   private async flushState(): Promise<void> {
@@ -474,6 +533,7 @@ export class WhatsAppPersonalRuntime {
     this.socket = null;
     this.authBundle = null;
     this.pairingCodeRequested = false;
+    this.reconnectAttempts = 0;
     await this.connectSocket();
   }
 }

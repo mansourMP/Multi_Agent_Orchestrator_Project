@@ -11,7 +11,7 @@ import time
 import uuid
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -1241,6 +1241,13 @@ def _current_utc_month_bounds(now: Optional[datetime] = None) -> tuple[datetime,
     else:
         month_end = month_start.replace(month=month_start.month + 1)
     return month_start, month_end
+
+
+def _current_utc_day_bounds(now: Optional[datetime] = None) -> tuple[datetime, datetime]:
+    current = now.astimezone(timezone.utc) if isinstance(now, datetime) else _utc_now_ts()
+    day_start = current.replace(hour=0, minute=0, second=0, microsecond=0)
+    day_end = day_start + timedelta(days=1)
+    return day_start, day_end
 
 
 def _slugify(value: str, fallback: str) -> str:
@@ -5013,6 +5020,89 @@ async def summarize_deployed_agent_monthly_cost_ledger(
     }
 
 
+async def summarize_workspace_billing_usage(
+    *,
+    tenant_id: str,
+    workspace_id: str,
+    usage_month: Optional[Any] = None,
+    usage_day: Optional[Any] = None,
+) -> Dict[str, Any]:
+    resolved_tenant_id = _require_scope_token(tenant_id, "tenant_id")
+    resolved_workspace_id = _require_scope_token(workspace_id, "workspace_id")
+    resolved_usage_month = _coerce_month_start_date(usage_month)
+    if usage_month is not None and resolved_usage_month is None:
+        raise ValueError("usage_month must be an ISO date string or date value.")
+    resolved_usage_month = resolved_usage_month or datetime.now(timezone.utc).date().replace(day=1)
+    resolved_usage_day = _coerce_date(usage_day)
+    if usage_day is not None and resolved_usage_day is None:
+        raise ValueError("usage_day must be an ISO date string or date value.")
+    resolved_usage_day = resolved_usage_day or datetime.now(timezone.utc).date()
+    async with _scoped_connection(tenant_id=resolved_tenant_id, workspace_id=resolved_workspace_id) as connection:
+        if connection is None:
+            return {
+                "tenant_id": resolved_tenant_id,
+                "workspace_id": resolved_workspace_id,
+                "usage_month": resolved_usage_month.isoformat(),
+                "usage_day": resolved_usage_day.isoformat(),
+                "hosted_input_tokens_monthly": 0,
+                "hosted_output_tokens_monthly": 0,
+                "hosted_total_tokens_monthly": 0,
+                "hosted_cost_usd_monthly": 0.0,
+                "hosted_runs_monthly": 0,
+                "specialist_external_messages_today": 0,
+                "specialist_external_users_today": 0,
+                "daily_quota_subjects_today": 0,
+            }
+        cost_row = await connection.fetchrow(
+            """
+            SELECT
+                COALESCE(SUM(prompt_tokens), 0)::bigint AS hosted_input_tokens_monthly,
+                COALESCE(SUM(completion_tokens), 0)::bigint AS hosted_output_tokens_monthly,
+                COALESCE(SUM(total_tokens), 0)::bigint AS hosted_total_tokens_monthly,
+                COALESCE(SUM(estimated_cost_usd), 0)::double precision AS hosted_cost_usd_monthly,
+                COUNT(*)::int AS hosted_runs_monthly
+            FROM deployed_agent_monthly_cost_ledger
+            WHERE tenant_id = $1
+              AND workspace_id = $2
+              AND usage_month = $3::date
+            """,
+            resolved_tenant_id,
+            resolved_workspace_id,
+            resolved_usage_month,
+        )
+        daily_message_row = await connection.fetchrow(
+            """
+            SELECT
+                COALESCE(SUM(message_count), 0)::bigint AS specialist_external_messages_today,
+                COUNT(DISTINCT external_user_id)::int AS specialist_external_users_today,
+                COUNT(*)::int AS daily_quota_subjects_today
+            FROM deployed_agent_daily_message_usage
+            WHERE tenant_id = $1
+              AND workspace_id = $2
+              AND usage_day = $3::date
+            """,
+            resolved_tenant_id,
+            resolved_workspace_id,
+            resolved_usage_day,
+        )
+    cost_payload = dict(cost_row or {})
+    daily_payload = dict(daily_message_row or {})
+    return {
+        "tenant_id": resolved_tenant_id,
+        "workspace_id": resolved_workspace_id,
+        "usage_month": resolved_usage_month.isoformat(),
+        "usage_day": resolved_usage_day.isoformat(),
+        "hosted_input_tokens_monthly": int(cost_payload.get("hosted_input_tokens_monthly") or 0),
+        "hosted_output_tokens_monthly": int(cost_payload.get("hosted_output_tokens_monthly") or 0),
+        "hosted_total_tokens_monthly": int(cost_payload.get("hosted_total_tokens_monthly") or 0),
+        "hosted_cost_usd_monthly": round(float(cost_payload.get("hosted_cost_usd_monthly") or 0.0), 6),
+        "hosted_runs_monthly": int(cost_payload.get("hosted_runs_monthly") or 0),
+        "specialist_external_messages_today": int(daily_payload.get("specialist_external_messages_today") or 0),
+        "specialist_external_users_today": int(daily_payload.get("specialist_external_users_today") or 0),
+        "daily_quota_subjects_today": int(daily_payload.get("daily_quota_subjects_today") or 0),
+    }
+
+
 async def summarize_deployed_agent_activity_rollup(
     *,
     tenant_id: str,
@@ -5123,6 +5213,7 @@ async def get_deployed_agent_admin_dashboard(
     resolved_cursor_last_message_at = _coerce_timestamptz(cursor_last_message_at)
     resolved_cursor_external_user_id = str(cursor_external_user_id or "").strip()
     month_start, month_end = _current_utc_month_bounds()
+    day_start, day_end = _current_utc_day_bounds()
     today = _utc_now_ts().date()
     async with _scoped_connection(tenant_id=resolved_tenant_id, workspace_id=resolved_workspace_id) as connection:
         if connection is None:
@@ -5206,6 +5297,72 @@ async def get_deployed_agent_admin_dashboard(
             month_end,
             daily_message_limit,
             today,
+        )
+        specialist_stats_row = await connection.fetchrow(
+            """
+            WITH todays_messages AS (
+                SELECT COUNT(*)::int AS messages_today
+                FROM agent_channel_events
+                WHERE tenant_id = $1
+                  AND workspace_id = $2
+                  AND direction = 'inbound'
+                  AND event_type = 'message'
+                  AND created_at >= $4::timestamptz
+                  AND created_at < $5::timestamptz
+                  AND (
+                    COALESCE(metadata->>'deployed_agent_id', '') = $6
+                    OR responder_install_id = $3
+                  )
+            ),
+            scoped_activity AS (
+                SELECT *
+                FROM activity_ledger_events
+                WHERE tenant_id = $1
+                  AND workspace_id = $2
+                  AND install_id = $3
+            ),
+            todays_activity AS (
+                SELECT *
+                FROM scoped_activity
+                WHERE created_at >= $4::timestamptz
+                  AND created_at < $5::timestamptz
+            )
+            SELECT
+                COALESCE((SELECT messages_today FROM todays_messages), 0)::int AS messages_today,
+                COUNT(*) FILTER (
+                    WHERE
+                        LOWER(COALESCE(action, '')) IN ('place_order', 'confirm_order')
+                        OR LOWER(COALESCE(payload->>'restaurant_event', metadata->>'restaurant_event', '')) IN ('order_confirmed', 'order_placed')
+                )::int AS orders_today,
+                COALESCE(SUM(
+                    CASE
+                        WHEN
+                            LOWER(COALESCE(action, '')) IN ('place_order', 'confirm_order')
+                            OR LOWER(COALESCE(payload->>'restaurant_event', metadata->>'restaurant_event', '')) IN ('order_confirmed', 'order_placed')
+                        THEN COALESCE(
+                            CASE
+                            WHEN COALESCE(payload->>'order_total_usd', '') ~ '^-?[0-9]+(\\.[0-9]+)?$'
+                                THEN (payload->>'order_total_usd')::numeric
+                                ELSE NULL
+                            END,
+                            CASE
+                                WHEN COALESCE(metadata->>'order_total_usd', '') ~ '^-?[0-9]+(\\.[0-9]+)?$'
+                                THEN (metadata->>'order_total_usd')::numeric
+                                ELSE NULL
+                            END,
+                            0
+                        )
+                        ELSE 0
+                    END
+                ), 0)::numeric AS revenue_today_usd
+            FROM todays_activity
+            """,
+            resolved_tenant_id,
+            resolved_workspace_id,
+            backing_install_id,
+            day_start,
+            day_end,
+            resolved_deployed_agent_id,
         )
         summary_rows = await connection.fetch(
             """
@@ -5377,6 +5534,62 @@ async def get_deployed_agent_admin_dashboard(
                     "last_5_messages": messages_by_user.get(external_user_id, []),
                 }
             )
+        common_question_rows = await connection.fetch(
+            """
+            WITH inbound_questions AS (
+                SELECT
+                    LOWER(
+                        BTRIM(
+                            REGEXP_REPLACE(
+                                COALESCE(
+                                    NULLIF(BTRIM(text), ''),
+                                    NULLIF(BTRIM(payload->>'text'), ''),
+                                    NULLIF(BTRIM(payload->>'summary'), ''),
+                                    NULLIF(BTRIM(payload->>'message'), '')
+                                ),
+                    '\\s+',
+                                ' ',
+                                'g'
+                            )
+                        )
+                    ) AS normalized_question,
+                    MIN(
+                        BTRIM(
+                            COALESCE(
+                                NULLIF(text, ''),
+                                NULLIF(payload->>'text', ''),
+                                NULLIF(payload->>'summary', ''),
+                                NULLIF(payload->>'message', '')
+                            )
+                        )
+                    ) AS sample_question,
+                    COUNT(*)::int AS question_count
+                FROM agent_channel_events
+                WHERE tenant_id = $1
+                  AND workspace_id = $2
+                  AND direction = 'inbound'
+                  AND event_type = 'message'
+                  AND created_at >= $3::timestamptz
+                  AND created_at < $4::timestamptz
+                  AND (
+                    COALESCE(metadata->>'deployed_agent_id', '') = $5
+                    OR responder_install_id = $6
+                  )
+                GROUP BY normalized_question
+            )
+            SELECT sample_question, question_count
+            FROM inbound_questions
+            WHERE COALESCE(normalized_question, '') <> ''
+            ORDER BY question_count DESC, sample_question ASC
+            LIMIT 5
+            """,
+            resolved_tenant_id,
+            resolved_workspace_id,
+            month_start,
+            month_end,
+            resolved_deployed_agent_id,
+            backing_install_id,
+        )
     next_cursor_last_message_at: Optional[str] = None
     next_cursor_external_user_id: Optional[str] = None
     if has_more and trimmed_summary_rows:
@@ -5385,13 +5598,25 @@ async def get_deployed_agent_admin_dashboard(
         token = str(final_row.get("external_user_id") or "").strip()
         next_cursor_external_user_id = token or None
     stats_payload = dict(stats_row) if stats_row is not None else {}
+    specialist_stats_payload = dict(specialist_stats_row) if specialist_stats_row is not None else {}
     total_users = int(stats_payload.get("total_users") or 0)
     return {
         "deployed_agent_id": resolved_deployed_agent_id,
         "total_users": total_users,
+        "messages_today": int(specialist_stats_payload.get("messages_today") or 0),
         "messages_this_calendar_month": int(stats_payload.get("messages_this_calendar_month") or 0),
+        "orders_today": int(specialist_stats_payload.get("orders_today") or 0),
+        "revenue_today_usd": float(specialist_stats_payload.get("revenue_today_usd") or 0.0),
         "users_at_limit_today": int(stats_payload.get("users_at_limit_today") or 0),
         "upgrade_clicks_this_month": int(stats_payload.get("upgrade_clicks_this_month") or 0),
+        "common_questions": [
+            {
+                "question": str(dict(row).get("sample_question") or "").strip(),
+                "count": int(dict(row).get("question_count") or 0),
+            }
+            for row in list(common_question_rows or [])
+            if str(dict(row).get("sample_question") or "").strip()
+        ],
         "user_rows": user_rows,
         "limit": safe_limit,
         "offset": max(0, int(offset or 0)),

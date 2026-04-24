@@ -38,6 +38,8 @@ KNOWN_OWNER_METADATA_KEYS = frozenset(
 STUDIO_TOOL_SCOPE_ALLOWED_IDS = (
     "web_search",
     "http_request",
+    "spreadsheet_read",
+    "spreadsheet_append",
     "gmail_send",
     "calendar_write",
 )

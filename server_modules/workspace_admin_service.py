@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from fastapi import HTTPException
@@ -153,8 +154,6 @@ def _cached_provider_model_metadata(
     credential_id: Optional[str],
     api_key: str,
 ) -> Dict[str, Any]:
-    if provider_id not in {"openai", "openai-codex"}:
-        return {}
     try:
         credentials: Dict[str, Any]
         if credential_id:
@@ -163,16 +162,27 @@ def _cached_provider_model_metadata(
             credentials = {"api_key": api_key}
         _, _, adapter = provider_profiles_service.resolve_provider_adapter(provider_id, credentials)
         model_ids = adapter.list_models(credentials)
-    except Exception:
-        return {}
+    except Exception as exc:
+        return {
+            "cached_models_error": str(exc).strip() or "Provider model sync failed.",
+            "cached_models_synced_at": datetime.utcnow().isoformat() + "Z",
+            "cached_models_source": "provider_adapter",
+        }
     filtered = _filter_openai_model_ids(model_ids) if provider_id == "openai" else [
         _read_string(model_id) for model_id in model_ids if _read_string(model_id)
     ]
     if not filtered:
-        return {}
+        return {
+            "cached_models": [],
+            "cached_models_error": "Provider returned no models.",
+            "cached_models_synced_at": datetime.utcnow().isoformat() + "Z",
+            "cached_models_source": "provider_adapter",
+        }
     return {
         "cached_models": filtered,
         "cached_models_source": "openai_models_api" if provider_id == "openai" else "provider_adapter",
+        "cached_models_synced_at": datetime.utcnow().isoformat() + "Z",
+        "cached_models_error": None,
     }
 
 
@@ -321,6 +331,81 @@ async def upsert_workspace_provider_credential(
         "provider": provider_id,
         "credential": credential_payload,
         "profile": (profile_payload or {}).get("item") if isinstance(profile_payload, dict) else None,
+    }
+
+
+async def refresh_workspace_provider_models(
+    workspace_id: str,
+    current_user: Any,
+    *,
+    provider: str,
+) -> Dict[str, Any]:
+    resolved_workspace_id = _enforce_owner_scope(current_user, workspace_id)
+    provider_id = _normalize_provider_id(provider)
+    profiles_payload = await connectors_core.list_provider_profiles(
+        workspace_id=resolved_workspace_id,
+        provider=provider_id,
+    )
+    profiles = _sort_by_priority(
+        [
+            dict(item)
+            for item in ((profiles_payload or {}).get("items") or [])
+            if isinstance(item, dict)
+        ]
+    )
+    current_profile = profiles[0] if profiles else {}
+    profile_id = _read_string(current_profile.get("id")) or None
+    credential_id = _read_string(current_profile.get("credential_id")) or None
+    metadata = _coerce_dict(current_profile.get("metadata"))
+    model_metadata = _cached_provider_model_metadata(
+        provider_id,
+        resolved_workspace_id,
+        credential_id,
+        "",
+    )
+    next_metadata = {
+        **metadata,
+        **model_metadata,
+    }
+    if not profile_id:
+        entry = provider_profiles_service.provider_catalog_entry(provider_id)
+        profile_payload = await connectors_core.upsert_provider_profile(
+            ProviderProfileUpsertRequest(
+                provider=provider_id,
+                label=f"Sage {entry.get('label') or provider_id}",
+                credential_id=credential_id,
+                auth_mode=provider_profiles_service.normalize_auth_mode(provider_id),
+                workspace_id=resolved_workspace_id,
+                priority=0,
+                enabled=True,
+                model=None,
+                metadata=next_metadata,
+            )
+        )
+    else:
+        profile_payload = await connectors_core.upsert_provider_profile(
+            ProviderProfileUpsertRequest(
+                id=profile_id,
+                provider=provider_id,
+                label=_read_string(
+                    current_profile.get("label"),
+                    f"Sage {provider_profiles_service.provider_catalog_entry(provider_id).get('label') or provider_id}",
+                ),
+                credential_id=credential_id,
+                auth_mode=_read_string(current_profile.get("auth_mode")) or provider_profiles_service.normalize_auth_mode(provider_id),
+                workspace_id=resolved_workspace_id,
+                priority=int(current_profile.get("priority") or 0),
+                enabled=bool(current_profile.get("enabled", True)),
+                model=_read_string(current_profile.get("model")) or None,
+                metadata=next_metadata,
+            )
+        )
+    profile = (profile_payload or {}).get("item") if isinstance(profile_payload, dict) else None
+    return {
+        "workspace_id": resolved_workspace_id,
+        "provider": provider_id,
+        "models": list(next_metadata.get("cached_models") or []),
+        "profile": profile,
     }
 
 

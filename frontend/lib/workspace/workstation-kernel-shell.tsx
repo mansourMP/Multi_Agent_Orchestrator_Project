@@ -18,6 +18,7 @@ import {
 const CONTEXT_ROUTE_IDS_BY_DESTINATION: Record<WorkspaceNavDestinationId, readonly WorkspaceRouteId[]> = {
   sage: [],
   studio: ['studio', 'inbox', 'deploy', 'studioIntegrations'],
+  gateway: ['gateway', 'channels', 'gatewayApprovals', 'gatewayActivity'],
   marketplace: [],
   settings: ['settings'],
 };
@@ -45,7 +46,6 @@ export function WorkstationKernelShell({
       const historyRoute = routeManifest.routeIndex.runs;
       const memoryRoute = routeManifest.routeIndex.activity;
       const integrationsRoute = routeManifest.routeIndex.integrations;
-      const filesRoute = routeManifest.routeIndex.artifacts;
       return [
         chatRoute
           ? { ...chatRoute, label: 'Chat' as const }
@@ -58,9 +58,6 @@ export function WorkstationKernelShell({
           : null,
         integrationsRoute
           ? { ...integrationsRoute, label: 'Integrations' as const }
-          : null,
-        filesRoute
-          ? { ...filesRoute, label: 'Files' as const }
           : null,
       ].filter((route): route is NonNullable<typeof route> => Boolean(route));
     }
@@ -81,6 +78,9 @@ export function WorkstationKernelShell({
     }
     if (activeDestinationId === 'marketplace') {
       return routeManifest.routeIndex.marketplace?.href ?? `/w/${encodeURIComponent(workspaceId)}/marketplace`;
+    }
+    if (activeDestinationId === 'gateway') {
+      return routeManifest.routeIndex.gateway?.href ?? `/w/${encodeURIComponent(workspaceId)}/gateway`;
     }
     return routeManifest.routeIndex.settings?.href ?? `/w/${encodeURIComponent(workspaceId)}/settings`;
   }, [activeDestinationId, routeManifest.routeIndex, workspaceId]);

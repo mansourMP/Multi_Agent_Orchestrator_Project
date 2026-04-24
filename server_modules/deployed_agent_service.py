@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
+from urllib.parse import quote
 
 from fastapi import HTTPException
 
@@ -11,6 +12,7 @@ from server_modules import config_defaults_service
 from server_modules import control_plane_repository
 from server_modules import deployed_agent_config_schema
 from server_modules import deployed_agent_analytics_service
+from server_modules import entitlements_service
 from server_modules import external_user_privacy_service
 from server_modules import provider_catalog_service
 from server_modules import run_state_repository
@@ -81,6 +83,16 @@ _STUDIO_TOOL_SCOPE_CATALOG = (
         "id": "http_request",
         "label": "HTTP request",
         "description": "Call approved APIs and webhooks inside the deployment boundary.",
+    },
+    {
+        "id": "spreadsheet_read",
+        "label": "Spreadsheet read",
+        "description": "Read menu, availability, and daily-special data from connected spreadsheets.",
+    },
+    {
+        "id": "spreadsheet_append",
+        "label": "Spreadsheet append",
+        "description": "Append confirmed orders or handoff notes into a connected order log sheet.",
     },
     {
         "id": "gmail_send",
@@ -260,6 +272,178 @@ def _tool_toggles_from_config(
         str(item.get("id") or "").strip().lower(): str(item.get("id") or "").strip().lower() in enabled
         for item in _STUDIO_TOOL_SCOPE_CATALOG
         if str(item.get("id") or "").strip()
+    }
+
+
+def _clean_mapping(value: Any) -> Dict[str, Any]:
+    payload = _coerce_dict(value)
+    return {
+        key: item
+        for key, item in payload.items()
+        if item not in (None, "", [], {})
+    }
+
+
+def _knowledge_reference_summary(item: Any) -> Optional[Dict[str, Any]]:
+    payload = _coerce_dict(item)
+    if not payload:
+        return None
+    reference_id = (
+        _normalize_optional_text(payload.get("id"))
+        or _normalize_optional_text(payload.get("uri"))
+        or _normalize_optional_text(payload.get("path"))
+        or _normalize_optional_text(payload.get("document_id"))
+    )
+    label = (
+        _normalize_optional_text(payload.get("label"))
+        or _normalize_optional_text(payload.get("title"))
+        or _normalize_optional_text(payload.get("name"))
+        or reference_id
+    )
+    source_kind = (
+        _normalize_optional_text(payload.get("source_kind"))
+        or _normalize_optional_text(payload.get("kind"))
+        or ("google_sheet" if "sheet" in _normalize_text(payload.get("uri")).lower() else "document")
+    )
+    if not label and not source_kind:
+        return None
+    summary = {
+        "id": reference_id,
+        "label": label,
+        "source_kind": source_kind,
+        "uri": _normalize_optional_text(payload.get("uri")),
+        "path": _normalize_optional_text(payload.get("path")),
+    }
+    return {
+        key: value
+        for key, value in summary.items()
+        if value is not None
+    }
+
+
+def _derive_studio_specialist_profile(
+    *,
+    deployed_agent: Optional[Dict[str, Any]],
+    config: deployed_agent_config_schema.DeployedAgentConfig,
+) -> Dict[str, Any]:
+    metadata = _coerce_dict((deployed_agent or {}).get("metadata"))
+    stored_profile = _coerce_dict(metadata.get("specialist_profile"))
+    tool_ids = {
+        _normalize_text(item).lower()
+        for item in list(config.tool_policy.enabled_tools or [])
+        if _normalize_text(item)
+    }
+    has_sheet_read = "spreadsheet_read" in tool_ids
+    has_sheet_append = "spreadsheet_append" in tool_ids
+    knowledge_sources = [
+        item
+        for item in (
+            _knowledge_reference_summary(item)
+            for item in list(config.knowledge_sources or [])
+        )
+        if isinstance(item, dict)
+    ]
+    channel_payload = _coerce_dict(_channels_payload_from_config(config).get("telegram"))
+    knowledge_defaults = {
+        "title": "Knowledge",
+        "mode": "menu_reference",
+        "accepted_sources": ["pdf_upload", "google_sheet"],
+        "source_count": len(knowledge_sources),
+        "sources": knowledge_sources,
+        "summary": (
+            f"{len(knowledge_sources)} menu source{'s' if len(knowledge_sources) != 1 else ''} connected."
+            if knowledge_sources
+            else "Add a menu PDF or Google Sheet so the specialist can answer menu questions accurately."
+        ),
+    }
+    live_data_defaults = {
+        "title": "Live data",
+        "mode": "daily_specials_and_availability",
+        "connector_family": "google_workspace" if has_sheet_read else "manual_or_future_connector",
+        "sheet_sync_enabled": has_sheet_read,
+        "summary": (
+            "Reads daily specials and item availability from a connected spreadsheet."
+            if has_sheet_read
+            else "Enable spreadsheet read to keep specials and availability live."
+        ),
+    }
+    memory_defaults = {
+        "title": "Memory",
+        "mode": "per_customer_order_history",
+        "memory_enabled": bool(config.memory_policy.memory_enabled),
+        "context_budget_preset": config.memory_policy.context_budget_preset,
+        "retention_preset": config.memory_policy.retention_preset,
+        "summary": (
+            "Keeps per-customer order context and repeat preferences."
+            if config.memory_policy.memory_enabled
+            else "Memory is disabled; repeat customers will not retain order history yet."
+        ),
+    }
+    actions_defaults = {
+        "title": "Actions",
+        "enabled": ["place_order", "confirm_order", "escalate_to_human"],
+        "order_capture_mode": "spreadsheet_append" if has_sheet_append else "manual_confirmation",
+        "summary": (
+            "Can confirm and log orders to a connected sheet, then escalate edge cases to a human."
+            if has_sheet_append
+            else "Can place and confirm orders in chat; enable spreadsheet append to log confirmed orders automatically."
+        ),
+    }
+    channel_defaults = {
+        "title": "Channel",
+        "primary": "telegram_bot",
+        "secondary": "whatsapp_business",
+        "telegram_enabled": bool(channel_payload.get("enabled")),
+        "endpoint_key": _normalize_optional_text(channel_payload.get("endpoint_key")),
+        "bot_username": _normalize_optional_text(channel_payload.get("bot_username")),
+        "summary": (
+            "Primary customer traffic enters through Telegram bot; WhatsApp Business stays optional and out of scope by default."
+        ),
+    }
+
+    profile = {
+        "knowledge": {**knowledge_defaults, **_clean_mapping(stored_profile.get("knowledge"))},
+        "live_data": {**live_data_defaults, **_clean_mapping(stored_profile.get("live_data"))},
+        "memory": {**memory_defaults, **_clean_mapping(stored_profile.get("memory"))},
+        "actions": {**actions_defaults, **_clean_mapping(stored_profile.get("actions"))},
+        "channel": {**channel_defaults, **_clean_mapping(stored_profile.get("channel"))},
+    }
+    return profile
+
+
+def build_deployed_agent_customer_entry(
+    *,
+    deployed_agent: Optional[Dict[str, Any]],
+    bot_username: Optional[str] = None,
+    endpoint_key: Optional[str] = None,
+) -> Dict[str, Any]:
+    config = _config_from_record(deployed_agent)
+    deployed_agent_id = _normalize_optional_text((deployed_agent or {}).get("id"))
+    resolved_bot_username = _normalize_optional_text(bot_username)
+    resolved_telegram_url = (
+        f"https://t.me/{resolved_bot_username}?start={quote(deployed_agent_id, safe='')}"
+        if resolved_bot_username and deployed_agent_id
+        else None
+    )
+    entry_url = _normalize_optional_text(config.customer_policy.public_start_cta_url) or resolved_telegram_url
+    if not entry_url:
+        entry_url = (
+            f"https://t.me/{quote(endpoint_key or '', safe='')}"
+            if _normalize_optional_text(endpoint_key)
+            else None
+        )
+    qr_image_url = (
+        f"https://api.qrserver.com/v1/create-qr-code/?size=220x220&data={quote(entry_url, safe='')}"
+        if entry_url
+        else None
+    )
+    return {
+        "entry_url": entry_url,
+        "cta_label": _normalize_optional_text(config.customer_policy.public_start_cta_label) or "Open menu",
+        "telegram_deep_link": resolved_telegram_url,
+        "bot_username": resolved_bot_username,
+        "qr_image_url": qr_image_url,
+        "qr_target": "web" if _normalize_optional_text(config.customer_policy.public_start_cta_url) else "telegram",
     }
 
 
@@ -523,12 +707,18 @@ def _apply_provider_model_selection_to_config(
     *,
     provider: Any = None,
     model: Any = None,
+    owner_workspace_id: Any = None,
 ) -> deployed_agent_config_schema.DeployedAgentConfig:
+    requested_provider = provider if provider is not None else config.provider
     resolved = provider_catalog_service.resolve_provider_model_selection(
-        provider=provider if provider is not None else config.provider,
+        provider=requested_provider,
         model=model if model is not None else config.model,
         existing_provider=config.provider,
         existing_model=config.model,
+        cached_models=provider_catalog_service.cached_provider_model_ids(
+            workspace_id=owner_workspace_id,
+            provider=requested_provider,
+        ),
     )
     next_payload = config.model_dump(exclude_none=True)
     next_payload["provider"] = resolved.get("provider")
@@ -570,6 +760,7 @@ def _apply_provider_model_selection(
     *,
     provider: Any = None,
     model: Any = None,
+    owner_workspace_id: Any = None,
 ) -> Dict[str, Any]:
     config = _config_from_record({"name": "Draft deployed agent", "metadata": metadata})
     return _metadata_from_config(
@@ -577,6 +768,7 @@ def _apply_provider_model_selection(
             config,
             provider=provider,
             model=model,
+            owner_workspace_id=owner_workspace_id,
         ),
         existing_metadata=metadata,
     )
@@ -1260,7 +1452,12 @@ def project_deployed_agent(
     }
     projected["provider"] = _normalize_optional_text(config.provider)
     projected["model"] = _normalize_optional_text(config.model)
-    projected["config"] = _config_payload(config)
+    config_payload = _config_payload(config)
+    config_payload["specialist_profile"] = _derive_studio_specialist_profile(
+        deployed_agent=deployed_agent,
+        config=config,
+    )
+    projected["config"] = config_payload
     projected["operational_state"] = _operational_state_payload(operational_state)
     if include_internal:
         for field in DEPLOYED_AGENT_INTERNAL_FIELDS:
@@ -1464,6 +1661,14 @@ async def create_draft_deployed_agent(
     tenant_id = _normalize_text(workspace.get("tenant_id"))
     if not tenant_id:
         raise ValueError("Workspace is missing a tenant binding.")
+    existing_deployed_agents = await control_plane_repository.list_deployed_agents_for_workspace(
+        resolved_workspace_id,
+        tenant_id=tenant_id,
+    )
+    entitlements_service.enforce_specialist_slot_access(
+        workspace=workspace,
+        current_specialist_count=len(list(existing_deployed_agents or [])),
+    )
     normalized_name = _normalize_text(name)
     if not normalized_name:
         raise ValueError("name is required.")
@@ -1497,6 +1702,7 @@ async def create_draft_deployed_agent(
         ),
         provider=provider,
         model=model,
+        owner_workspace_id=resolved_workspace_id,
     )
     operational_state = _operational_state_from_record({"deployment_state": "draft"})
     manifest = _base_manifest(
@@ -2010,6 +2216,7 @@ async def update_deployed_agent(
             _config_from_record(candidate_record),
             provider=updates.get("provider") if "provider" in updates else None,
             model=updates.get("model") if "model" in updates else None,
+            owner_workspace_id=resolved_workspace_id,
         )
     except ValueError as error:
         raise _http_bad_request(str(error)) from error

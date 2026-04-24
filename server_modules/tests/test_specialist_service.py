@@ -205,6 +205,52 @@ class SpecialistServiceTests(unittest.TestCase):
         self.assertFalse(contract["separation_contract"]["inherits_other_specialist_memory_by_default"])
         self.assertIn("local_private_memory", contract["memory_scope"]["summary_only_layers"])
 
+    def test_build_specialist_service_contract_surfaces_mcp_scope_for_bound_live_data_tools(self) -> None:
+        install = _install_payload()
+        install["metadata"]["agent_manifest"]["skills"].append({"id": "mcp:inventory-feed:lookup_stock", "enabled": True})
+
+        with (
+            patch(
+                "server_modules.specialist_service.unified_memory_service.build_specialist_memory_payload",
+                new=AsyncMock(return_value=_memory_payload()),
+            ),
+            patch(
+                "server_modules.specialist_service.runtime_attachment_service.resolve_install_runtime_plan",
+                new=AsyncMock(return_value=_runtime_plan()),
+            ),
+            patch(
+                "server_modules.specialist_service.activity_ledger_service.list_activity_timeline_payload",
+                new=AsyncMock(return_value=_timeline_payload()),
+            ),
+            patch(
+                "server_modules.specialist_service.mcp_registry_service.list_workspace_mcp_servers",
+                return_value=[
+                    {
+                        "id": "inventory-feed",
+                        "label": "Inventory Feed",
+                        "transport": "streamable_http",
+                        "enabled": True,
+                        "tool_count": 1,
+                        "skill_ids": ["mcp:inventory-feed:lookup_stock"],
+                        "last_synced_at": "2026-04-23T00:00:00Z",
+                    }
+                ],
+            ),
+        ):
+            contract = asyncio.run(
+                specialist_service.build_specialist_service_contract(
+                    tenant_id="tenant-1",
+                    workspace_id="workspace-1",
+                    install=install,
+                )
+            )
+
+        self.assertEqual(contract["mcp_scope"]["bound_skill_ids"], ["mcp:inventory-feed:lookup_stock"])
+        self.assertEqual(contract["mcp_scope"]["bound_servers"], ["inventory-feed"])
+        self.assertEqual(contract["mcp_scope"]["server_count"], 1)
+        summary = specialist_service._projection_summary(contract)
+        self.assertEqual(summary["scope_summary"]["mcp_servers"], ["inventory-feed"])
+
 
 if __name__ == "__main__":
     unittest.main()

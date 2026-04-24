@@ -1,3 +1,4 @@
+import os
 import unittest
 from unittest.mock import AsyncMock, patch
 
@@ -25,7 +26,13 @@ def _parts_pro_manifest(*, skills: list[str] | None = None) -> AgentManifest:
 
 
 class UniversalOperatorTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self) -> None:
+        super().setUp()
+        self._env_patcher = patch.dict(os.environ, {"EMPYRALIS_TOOL_BROKER_SECRET": "empyralis-test-broker-secret"}, clear=False)
+        self._env_patcher.start()
+
     def tearDown(self) -> None:
+        self._env_patcher.stop()
         safe_mode_service.reset_state_for_tests()
 
     async def test_execute_customer_turn_uses_skill_registry_when_skill_is_bound(self):

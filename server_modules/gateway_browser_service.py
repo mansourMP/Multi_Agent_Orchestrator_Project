@@ -78,6 +78,20 @@ def normalize_browser_session_mode(value: Any) -> str:
     return BROWSER_SESSION_MODE_MANAGED_PROFILE
 
 
+def browser_session_requires_reviewed_approval(
+    *,
+    session_mode: Optional[str],
+    attach_endpoint_url: Optional[str] = None,
+    reviewed_approval_required: bool = False,
+) -> bool:
+    if reviewed_approval_required:
+        return True
+    return (
+        normalize_browser_session_mode(session_mode) == BROWSER_SESSION_MODE_EXISTING_SESSION_ATTACH
+        and bool(str(attach_endpoint_url or "").strip())
+    )
+
+
 def _browser_plan_hash(payload: Dict[str, Any]) -> str:
     encoded = json.dumps(dict(payload or {}), sort_keys=True, separators=(",", ":"), ensure_ascii=True)
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
@@ -123,6 +137,15 @@ def _browser_metadata(
     )
     metadata["browser_session_mode"] = resolved_session_mode
     metadata["browser_attach_requested"] = resolved_session_mode == BROWSER_SESSION_MODE_EXISTING_SESSION_ATTACH
+    metadata["browser_sensitive_access"] = bool(reviewed_approval_required)
+    if reviewed_approval_required:
+        metadata["browser_sensitive_reason"] = (
+            "existing_session_attach"
+            if resolved_session_mode == BROWSER_SESSION_MODE_EXISTING_SESSION_ATTACH
+            else "reviewed_browser_access"
+        )
+    else:
+        metadata.pop("browser_sensitive_reason", None)
     if resolved_attach_endpoint_url:
         metadata["browser_attach_endpoint_url"] = resolved_attach_endpoint_url
     else:

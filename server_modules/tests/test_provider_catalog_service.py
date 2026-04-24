@@ -17,6 +17,10 @@ class ProviderCatalogServiceTests(unittest.IsolatedAsyncioTestCase):
                     "label": "OpenAI",
                     "state": "active",
                     "default_model": "gpt-4o",
+                    "profile_metadata": {
+                        "cached_models": ["gpt-live-new"],
+                        "cached_models_synced_at": "2099-01-01T00:00:00Z",
+                    },
                 },
                 {
                     "id": "deepseek",
@@ -75,7 +79,8 @@ class ProviderCatalogServiceTests(unittest.IsolatedAsyncioTestCase):
         providers = {item["id"]: item for item in payload["providers"]}
         self.assertIn("privacy_posture", providers["openai"])
         self.assertIn("jurisdiction", providers["openai"])
-        self.assertTrue(any(model["id"] == "gpt-4o" for model in providers["openai"]["models"]))
+        self.assertTrue(any(model["id"] == "gpt-live-new" for model in providers["openai"]["models"]))
+        self.assertEqual(providers["openai"]["models_source"], "workspace_cached_models")
         self.assertTrue(any(model["id"] == "deepseek-chat" for model in providers["deepseek"]["models"]))
         self.assertEqual(providers["deepseek"]["state"], "active")
         self.assertEqual(providers["deepseek"]["active_source"], "env-deepseek")
@@ -108,7 +113,39 @@ class ProviderCatalogServiceTests(unittest.IsolatedAsyncioTestCase):
             model="anthropic/claude-3-5-sonnet-20241022",
         )
 
-        self.assertEqual(selection, {"provider": "anthropic", "model": "claude-3-7-sonnet-20250219"})
+        self.assertEqual(selection, {"provider": "anthropic", "model": "claude-3-5-sonnet-20241022"})
+
+    def test_resolve_provider_model_selection_accepts_cached_live_model_ids(self) -> None:
+        selection = provider_catalog_service.resolve_provider_model_selection(
+            provider="anthropic",
+            model="claude-sonnet-4-6",
+            cached_models=["claude-sonnet-4-6", "claude-opus-4-1"],
+        )
+
+        self.assertEqual(selection, {"provider": "anthropic", "model": "claude-sonnet-4-6"})
+
+    def test_cached_provider_model_ids_reads_workspace_profile_metadata(self) -> None:
+        connection_truth = {
+            "workspace_id": "ws-1",
+            "providers": [
+                {
+                    "id": "openai",
+                    "profile_metadata": {
+                        "cached_models": ["gpt-live-new"],
+                    },
+                },
+            ],
+        }
+        with patch(
+            "server_modules.provider_catalog_service.provider_profiles.build_workspace_provider_connection_truth",
+            return_value=connection_truth,
+        ):
+            models = provider_catalog_service.cached_provider_model_ids(
+                workspace_id="ws-1",
+                provider="openai",
+            )
+
+        self.assertEqual(models, ["gpt-live-new"])
 
     def test_provider_profiles_normalize_anthropic_latest_alias_to_live_model(self) -> None:
         normalized = provider_catalog_service.provider_profiles.normalize_provider_model_id(

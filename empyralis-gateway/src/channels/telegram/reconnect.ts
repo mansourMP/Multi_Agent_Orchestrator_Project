@@ -6,6 +6,22 @@ export interface TelegramReconnectState {
   statusCode?: number;
 }
 
+export interface TelegramReconnectPolicy {
+  initialDelayMs: number;
+  maxDelayMs: number;
+  factor: number;
+  jitterRatio: number;
+  maxAttempts: number;
+}
+
+export const DEFAULT_TELEGRAM_RECONNECT_POLICY: TelegramReconnectPolicy = {
+  initialDelayMs: 1_000,
+  maxDelayMs: 30_000,
+  factor: 1.8,
+  jitterRatio: 0.25,
+  maxAttempts: 12,
+};
+
 function normalizeStatusCode(value: unknown): number | undefined {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : undefined;
@@ -79,4 +95,24 @@ export function resolveTelegramReconnectState(error: unknown): TelegramReconnect
     reason: message,
     statusCode,
   };
+}
+
+export function computeTelegramReconnectDelay(
+  attempt: number,
+  policy: TelegramReconnectPolicy = DEFAULT_TELEGRAM_RECONNECT_POLICY,
+): number {
+  const normalizedAttempt = Math.max(Math.floor(attempt), 0);
+  const baseDelay = Math.min(
+    policy.maxDelayMs,
+    Math.max(
+      policy.initialDelayMs,
+      policy.initialDelayMs * Math.pow(Math.max(policy.factor, 1), normalizedAttempt),
+    ),
+  );
+  const jitterWindow = Math.max(Math.floor(baseDelay * Math.max(policy.jitterRatio, 0)), 0);
+  if (!jitterWindow) {
+    return Math.floor(baseDelay);
+  }
+  const offset = Math.floor((Math.random() * 2 - 1) * jitterWindow);
+  return Math.max(policy.initialDelayMs, Math.floor(baseDelay + offset));
 }

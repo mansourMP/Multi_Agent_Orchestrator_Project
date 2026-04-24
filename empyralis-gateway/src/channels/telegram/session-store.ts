@@ -79,6 +79,10 @@ export class TelegramSessionStore {
     });
   }
 
+  async clearSessionString(): Promise<void> {
+    await this.saveSessionString(undefined);
+  }
+
   toGatewayStatePayload(snapshot: TelegramSessionSnapshot): Record<string, unknown> {
     return {
       personal_channels: {

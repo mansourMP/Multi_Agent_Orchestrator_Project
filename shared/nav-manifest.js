@@ -12,7 +12,7 @@ export const WORKSPACE_NAV_DESTINATIONS = [
     label: 'Studio',
     iconName: 'boxes',
     defaultRouteId: 'studio',
-    childRouteIds: ['studio', 'channels', 'inbox', 'deploy', 'studioIntegrations'],
+    childRouteIds: ['studio', 'inbox', 'deploy', 'studioIntegrations'],
     direct: false,
   },
   {
@@ -22,6 +22,14 @@ export const WORKSPACE_NAV_DESTINATIONS = [
     defaultRouteId: 'marketplace',
     childRouteIds: ['marketplace'],
     direct: true,
+  },
+  {
+    id: 'gateway',
+    label: 'Gateway',
+    iconName: 'waypoints',
+    defaultRouteId: 'gateway',
+    childRouteIds: ['gateway', 'channels', 'gatewayApprovals', 'gatewayActivity'],
+    direct: false,
   },
   {
     id: 'settings',
@@ -57,7 +65,7 @@ export const WORKSPACE_ROUTE_DEFINITIONS = [
       screen: '/(workspace)/chat',
       screenName: 'chat',
       groupId: 'sage',
-      tabLabel: 'Sage',
+      tabLabel: 'Chat',
       includeInBottomTabs: true,
     },
   },
@@ -75,7 +83,7 @@ export const WORKSPACE_ROUTE_DEFINITIONS = [
       screenName: 'runs',
       groupId: 'sage',
       tabLabel: 'Tasks',
-      includeInBottomTabs: true,
+      includeInBottomTabs: false,
     },
   },
   {
@@ -109,7 +117,7 @@ export const WORKSPACE_ROUTE_DEFINITIONS = [
       screenName: 'artifacts',
       groupId: 'sage',
       tabLabel: 'Files',
-      includeInBottomTabs: true,
+      includeInBottomTabs: false,
     },
   },
   {
@@ -154,6 +162,13 @@ export const WORKSPACE_ROUTE_DEFINITIONS = [
     destinationId: 'studio',
     requiredCapabilities: ['workspace_admin_enabled'],
     web: {},
+    mobile: {
+      screen: '/(tabs)/kin',
+      screenName: 'kin',
+      groupId: 'studio',
+      tabLabel: 'Agents',
+      includeInBottomTabs: true,
+    },
   },
   {
     id: 'studioIntegrations',
@@ -169,9 +184,10 @@ export const WORKSPACE_ROUTE_DEFINITIONS = [
     id: 'channels',
     label: 'Channels',
     segment: 'channels',
-    destinationId: 'studio',
-    requiredCapabilities: ['workspace_admin_enabled', 'channel_pairing_enabled'],
-    web: {},
+    destinationId: 'gateway',
+    web: {
+      hiddenFromNavigation: true,
+    },
   },
   {
     id: 'inbox',
@@ -198,6 +214,13 @@ export const WORKSPACE_ROUTE_DEFINITIONS = [
     legacySegments: ['control', 'admin', 'admin/platform', 'admin/billing', 'admin/routing', 'admin/members', 'admin/policies'],
     destinationId: 'settings',
     web: {},
+    mobile: {
+      screen: '/(tabs)/profile/index',
+      screenName: 'profile/index',
+      groupId: 'settings',
+      tabLabel: 'You',
+      includeInBottomTabs: true,
+    },
   },
   {
     id: 'marketplace',
@@ -205,6 +228,38 @@ export const WORKSPACE_ROUTE_DEFINITIONS = [
     segment: 'marketplace',
     destinationId: 'marketplace',
     web: {},
+    mobile: {
+      screen: '/(tabs)/apps/index',
+      screenName: 'apps/index',
+      groupId: 'marketplace',
+      tabLabel: 'Apps',
+      includeInBottomTabs: true,
+    },
+  },
+  {
+    id: 'gateway',
+    label: 'Status',
+    segment: 'gateway',
+    destinationId: 'gateway',
+    web: {},
+  },
+  {
+    id: 'gatewayApprovals',
+    label: 'Approvals',
+    segment: 'gateway-approvals',
+    destinationId: 'gateway',
+    web: {
+      hiddenFromNavigation: true,
+    },
+  },
+  {
+    id: 'gatewayActivity',
+    label: 'Activity',
+    segment: 'gateway-activity',
+    destinationId: 'gateway',
+    web: {
+      hiddenFromNavigation: true,
+    },
   },
 ];
 

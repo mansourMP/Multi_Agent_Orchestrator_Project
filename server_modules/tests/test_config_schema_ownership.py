@@ -18,6 +18,7 @@ def test_deployed_agent_schema_splits_owner_config_from_operational_state() -> N
             "memory_enabled": True,
             "provider": "openai",
             "model": "gpt-4o",
+            "selected_tool_ids": ["spreadsheet_read", "spreadsheet_append"],
             "current_budget_cycle": {
                 "usage_month": "2026-04-01",
                 "current_burn_usd": 8.5,
@@ -35,6 +36,8 @@ def test_deployed_agent_schema_splits_owner_config_from_operational_state() -> N
     assert config.commerce_policy.monthly_cost_cap_usd == 25.0
     assert config.memory_policy.memory_enabled is True
     assert config.provider == "openai"
+    assert config.tool_policy.enabled_tools == ["spreadsheet_read", "spreadsheet_append"]
+    assert metadata["selected_tool_ids"] == ["spreadsheet_read", "spreadsheet_append"]
     assert state.current_budget_cycle["current_burn_usd"] == 8.5
     assert "current_budget_cycle" not in metadata
 

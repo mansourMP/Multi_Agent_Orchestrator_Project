@@ -46,6 +46,34 @@ class DeployedAgentAdminDashboardService:
         )
         if not isinstance(payload, dict):
             raise HTTPException(status_code=404, detail="Deployed agent not found.")
+        deployed_agent = await control_plane_repository.get_deployed_agent_by_id(
+            agent_id,
+            tenant_id=tenant_id,
+            owner_workspace_id=resolved_workspace_id,
+        )
+        readiness_payload: Dict[str, Any] = {}
+        if isinstance(deployed_agent, dict):
+            try:
+                readiness_payload = await deployed_agent_service.get_deployed_agent_telegram_readiness(
+                    current_user=current_user,
+                    owner_workspace_id=resolved_workspace_id,
+                    deployed_agent_id=agent_id,
+                )
+            except HTTPException:
+                readiness_payload = {}
+            configured_binding = dict(readiness_payload.get("configured_binding") or {})
+            projected_agent = deployed_agent_service.project_deployed_agent(
+                deployed_agent,
+                include_internal=False,
+            ) or {}
+            payload["customer_entry"] = deployed_agent_service.build_deployed_agent_customer_entry(
+                deployed_agent=deployed_agent,
+                bot_username=_normalize_text(configured_binding.get("bot_username")) or None,
+                endpoint_key=_normalize_text(configured_binding.get("endpoint_key")) or None,
+            )
+            payload["specialist_profile"] = dict(
+                (projected_agent.get("config") or {}).get("specialist_profile") or {}
+            )
         return DeployedAgentAdminDashboardResponse.model_validate(payload)
 
 

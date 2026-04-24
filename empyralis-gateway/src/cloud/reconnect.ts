@@ -5,6 +5,11 @@ export interface ReconnectBackoffOptions {
   jitterRatio?: number;
 }
 
+export interface ReconnectDecision {
+  retryable: boolean;
+  reason: string;
+}
+
 export class ReconnectBackoff {
   private attempts = 0;
   private readonly factor: number;
@@ -26,10 +31,39 @@ export class ReconnectBackoff {
     );
     this.attempts += 1;
     const jitter = base * this.jitterRatio * Math.random();
-    return Math.round(base + jitter);
+    return Math.max(Math.round(base + jitter), Math.max(250, this.options.minDelayMs));
   }
 }
 
+export function classifyReconnectError(error: unknown): ReconnectDecision {
+  const message = String(error instanceof Error ? error.message : error || "")
+    .trim()
+    .toLowerCase();
+  if (!message) {
+    return { retryable: true, reason: "unknown" };
+  }
+  if (
+    message.includes("credentials are invalid") ||
+    message.includes("device trust was revoked") ||
+    message.includes("registration has been revoked") ||
+    message.includes("registration revoked") ||
+    message.includes("session has expired") ||
+    message.includes("status 401") ||
+    message.includes("status 403") ||
+    message.includes("token is missing") ||
+    message.includes("scope mismatch") ||
+    message.includes("binding validation failed") ||
+    message.includes("4401") ||
+    message.includes("4403")
+  ) {
+    return { retryable: false, reason: message };
+  }
+  return { retryable: true, reason: message };
+}
+
 export function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+  return new Promise((resolve) => {
+    const timer = setTimeout(resolve, ms);
+    timer.unref?.();
+  });
 }

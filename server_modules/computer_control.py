@@ -1,5 +1,12 @@
 from __future__ import annotations
 
+"""Legacy local-script facade around `server_modules.supervisor_client`.
+
+Production backend code must not import this module to reach the local
+supervisor. The canonical cloud path is gateway execution over the paired
+gateway websocket.
+"""
+
 import logging
 from typing import Any, Dict, Optional
 

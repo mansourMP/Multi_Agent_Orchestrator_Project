@@ -30,6 +30,15 @@ export class GatewayOutbox {
     return this.db.readJson<GatewayOutboxItem[]>("outbox.json", []);
   }
 
+  async get(requestId: string): Promise<GatewayOutboxItem | null> {
+    const token = String(requestId || "").trim();
+    if (!token) {
+      return null;
+    }
+    const items = await this.list();
+    return items.find((item) => item.requestId === token) ?? null;
+  }
+
   async enqueue(
     requestId: string,
     messageType: string,
@@ -55,6 +64,22 @@ export class GatewayOutbox {
     return item;
   }
 
+  async markAttemptStarted(requestId: string): Promise<void> {
+    const items = await this.list();
+    const now = new Date().toISOString();
+    const next = items.map((item) =>
+      item.requestId === requestId
+        ? {
+            ...item,
+            status: "pending" as const,
+            lastAttemptAt: now,
+            updatedAt: now,
+          }
+        : item,
+    );
+    await this.db.writeJson("outbox.json", next);
+  }
+
   async acknowledge(requestId: string): Promise<void> {
     const items = await this.list();
     const now = new Date().toISOString();
@@ -67,13 +92,37 @@ export class GatewayOutbox {
   }
 
   async markAttemptFailed(requestId: string, errorMessage: string): Promise<void> {
+    await this.updateFailureState(requestId, errorMessage, "failed");
+  }
+
+  async markForReplay(requestId: string, errorMessage: string): Promise<void> {
+    await this.updateFailureState(requestId, errorMessage, "pending", true);
+  }
+
+  async listReplayablePending(): Promise<GatewayOutboxItem[]> {
+    const items = await this.list();
+    return items
+      .filter((item) => item.replayable && item.status !== "acknowledged" && item.status !== "abandoned")
+      .sort((left, right) => {
+        const leftTime = Date.parse(left.createdAt || "");
+        const rightTime = Date.parse(right.createdAt || "");
+        return (Number.isFinite(leftTime) ? leftTime : 0) - (Number.isFinite(rightTime) ? rightTime : 0);
+      });
+  }
+
+  private async updateFailureState(
+    requestId: string,
+    errorMessage: string,
+    nextStatus: GatewayOutboxItem["status"],
+    keepReplayablePending = false,
+  ): Promise<void> {
     const items = await this.list();
     const now = new Date().toISOString();
     const next = items.map((item) =>
-      item.requestId === requestId && item.status === "pending"
+      item.requestId === requestId && item.status !== "acknowledged" && item.status !== "abandoned"
         ? {
             ...item,
-            status: "failed" as const,
+            status: keepReplayablePending && item.replayable ? ("pending" as const) : nextStatus,
             retryCount: item.retryCount + 1,
             lastAttemptAt: now,
             lastError: String(errorMessage || "").trim() || "Gateway request failed.",

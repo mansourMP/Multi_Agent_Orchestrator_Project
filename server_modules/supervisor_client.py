@@ -1,3 +1,11 @@
+"""Legacy direct loopback client for local worker and demo scripts only.
+
+Production backend code must route local device control through the gateway
+execution path (`gateway_execution_service` -> `gateway_protocol_service` ->
+gateway websocket -> supervisor). This module remains only for local scripts
+that execute on the same machine as `empyralis-supervisor`.
+"""
+
 from __future__ import annotations
 
 from contextlib import contextmanager
@@ -6,6 +14,8 @@ from dataclasses import dataclass
 import hashlib
 import hmac
 import os
+from pathlib import Path
+import sys
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any, Iterator, Optional
@@ -21,6 +31,10 @@ SUPERVISOR_UNREACHABLE_MESSAGE = (
     "Supervisor not running. Start empyralis-supervisor before using computer control."
 )
 SUPERVISOR_INTERRUPTED_MESSAGE = "execution interrupted by operator"
+DIRECT_SUPERVISOR_BLOCKED_MESSAGE = (
+    "Direct supervisor loopback is disabled in the API server process. "
+    "Route local control through the gateway execution path instead."
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -236,6 +250,7 @@ def interrupt_execution(
     trace_id: str | None = None,
     workspace_id: str = "default",
 ) -> dict[str, Any]:
+    _assert_direct_supervisor_allowed()
     interrupt_request_id = str(uuid.uuid4())
     nonce = str(uuid.uuid4())
     expires_at = (datetime.now(timezone.utc) + timedelta(seconds=30)).isoformat().replace("+00:00", "Z")
@@ -276,6 +291,7 @@ def _execute(
     *,
     execution_context: Optional[SupervisorExecutionContext] = None,
 ) -> dict[str, Any]:
+    _assert_direct_supervisor_allowed()
     resolved_context = execution_context or _ACTIVE_EXECUTION_CONTEXT.get()
     request_id = str(uuid.uuid4())
     nonce = str(uuid.uuid4())
@@ -369,6 +385,28 @@ def _decode_response(response: requests.Response, *, request_type: str) -> dict[
     if not isinstance(result, dict):
         raise RuntimeError("Supervisor returned an invalid result payload.")
     return result
+
+
+def _assert_direct_supervisor_allowed() -> None:
+    if _env_truthy("EMPYRALIS_ALLOW_DIRECT_SUPERVISOR_LOOPBACK"):
+        return
+    if _running_inside_api_server():
+        raise RuntimeError(DIRECT_SUPERVISOR_BLOCKED_MESSAGE)
+    if "PYTEST_CURRENT_TEST" in os.environ:
+        return
+
+
+def _running_inside_api_server() -> bool:
+    argv = [str(item or "").strip().lower() for item in sys.argv]
+    executable = Path(sys.argv[0]).name.lower() if sys.argv else ""
+    server_markers = ("uvicorn", "server:app", "fastapi")
+    return any(marker in executable for marker in server_markers) or any(
+        marker in token for marker in server_markers for token in argv
+    )
+
+
+def _env_truthy(name: str) -> bool:
+    return str(os.getenv(name) or "").strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _sign_request(

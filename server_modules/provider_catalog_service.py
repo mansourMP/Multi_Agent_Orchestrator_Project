@@ -8,7 +8,6 @@ from server_modules import provider_profiles
 
 ANTHROPIC_MODEL_ALIASES = {
     "claude-3-7-sonnet-latest": "claude-3-7-sonnet-20250219",
-    "claude-3-5-sonnet-20241022": "claude-3-7-sonnet-20250219",
 }
 
 def _cached_model_records(provider_id: str, metadata: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -31,8 +30,31 @@ def _cached_model_records(provider_id: str, metadata: Dict[str, Any]) -> List[Di
         record["id"] = model_id
         record["label"] = str(record.get("label") or model_id)
         record["provider"] = provider_id
+        record["source"] = "workspace_cached_models"
         items.append(record)
     return items
+
+
+def cached_provider_model_ids(*, workspace_id: Any = None, provider: Any = None) -> List[str]:
+    provider_id = provider_profiles.normalize_provider_id(provider)
+    if not provider_id:
+        return []
+    try:
+        connection_truth = provider_profiles.build_workspace_provider_connection_truth(workspace_id)
+    except Exception:
+        return []
+    for item in connection_truth.get("providers", []):
+        if not isinstance(item, dict):
+            continue
+        if provider_profiles.normalize_provider_id(item.get("id")) != provider_id:
+            continue
+        metadata = dict(item.get("profile_metadata") or {}) if isinstance(item.get("profile_metadata"), dict) else {}
+        return [
+            record["id"]
+            for record in _cached_model_records(provider_id, metadata)
+            if str(record.get("id") or "").strip()
+        ]
+    return []
 
 
 def _normalize_model_token(provider_id: str, model_id: Any) -> str:
@@ -60,6 +82,7 @@ def resolve_provider_model_selection(
     model: Any = None,
     existing_provider: Any = None,
     existing_model: Any = None,
+    cached_models: Any = None,
 ) -> Dict[str, Optional[str]]:
     raw_provider = provider_profiles.normalize_provider_id(provider) if str(provider or "").strip() else ""
     raw_model = str(model or "").strip()
@@ -90,6 +113,12 @@ def resolve_provider_model_selection(
 
     model_catalog = provider_profiles.provider_model_catalog(raw_provider)
     supported_models = {str(item.get("id") or "").strip() for item in model_catalog if str(item.get("id") or "").strip()}
+    if isinstance(cached_models, list):
+        supported_models.update(
+            _normalize_model_token(raw_provider, cached_model)
+            for cached_model in cached_models
+            if _normalize_model_token(raw_provider, cached_model)
+        )
     if normalized_model and supported_models and normalized_model not in supported_models:
         raise ValueError(f"Model '{normalized_model}' is not supported for provider '{raw_provider}'.")
 
@@ -102,10 +131,13 @@ def resolve_provider_model_selection(
 def _provider_catalog_projection(item: Dict[str, Any]) -> Dict[str, Any]:
     provider_id = str(item.get("id") or "").strip()
     governance = provider_profiles.provider_governance_entry(provider_id)
+    catalog_entry = provider_profiles.provider_catalog_entry(provider_id)
     profile_metadata = dict(item.get("profile_metadata") or {}) if isinstance(item.get("profile_metadata"), dict) else {}
-    models = _cached_model_records(provider_id, profile_metadata) or provider_profiles.provider_model_catalog(provider_id)
+    cached_models = _cached_model_records(provider_id, profile_metadata)
+    models = cached_models or provider_profiles.provider_model_catalog(provider_id)
     return {
         **dict(item),
+        "hidden": bool(catalog_entry.get("hidden")),
         "privacy_posture": governance.get("privacy_posture"),
         "privacy_posture_summary": governance.get("privacy_posture"),
         "jurisdiction": governance.get("jurisdiction"),
@@ -115,6 +147,9 @@ def _provider_catalog_projection(item: Dict[str, Any]) -> Dict[str, Any]:
         "capability_labels": list(governance.get("capability_labels") or []),
         "local_self_hosted_compatible": bool(governance.get("local_self_hosted_compatible")),
         "models": models,
+        "models_source": "workspace_cached_models" if cached_models else "static_catalog",
+        "models_synced_at": profile_metadata.get("cached_models_synced_at"),
+        "models_error": profile_metadata.get("cached_models_error"),
     }
 
 
@@ -139,7 +174,13 @@ def _merge_runtime_truth(
         "issue": runtime_item.get("issue"),
         "state_detail": runtime_item.get("state_detail"),
         "active_source": runtime_item.get("active_source"),
-        "profile_metadata": dict(runtime_item.get("profile_metadata") or {}) if isinstance(runtime_item.get("profile_metadata"), dict) else {},
+        "profile_metadata": (
+            dict(runtime_item.get("profile_metadata"))
+            if isinstance(runtime_item.get("profile_metadata"), dict)
+            else dict(connection_item.get("profile_metadata") or {})
+            if isinstance(connection_item.get("profile_metadata"), dict)
+            else {}
+        ),
     }
     runtime_identity_source = str(runtime_item.get("active_source") or "").strip().lower()
     if runtime_identity_source and runtime_identity_source not in {"profile", "workspace_profile"}:

@@ -14,6 +14,7 @@ import {
 } from "react-native";
 import * as Haptics from "expo-haptics";
 import { Ionicons } from "@expo/vector-icons";
+import { useRouter } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import Animated, {
   interpolate,
@@ -24,13 +25,14 @@ import Animated, {
 } from "react-native-reanimated";
 
 import { TransientBanner } from "@/src/components/TransientBanner";
+import { CoreStatusBar } from "@/src/components/CoreStatusBar";
 import { InputBar } from "@/src/components/InputBar";
 import { AgentPayload } from "@/src/components/Renderer";
 import { ActionButton } from "@/src/components/system/ActionButton";
 import { MotionPressable } from "@/src/components/system/MotionPressable";
 import { buildAgentThreadFromInstall, getPrimaryAgent } from "@/src/lib/agents";
 import { MobileAuthExpiredError, mobileApi } from "@/src/lib/api";
-import { useMobileChatContext } from "@/src/lib/mobile-data";
+import { useMobileChatContext, usePrimaryGatewayDoctor } from "@/src/lib/mobile-data";
 import { useSessionState } from "@/src/lib/session-context";
 import { useChatStore } from "@/src/stores/chatStore";
 import { useAppTheme as useTheme } from "@/src/theme/useAppTheme";
@@ -136,9 +138,11 @@ function formatChatTimestamp(timestamp?: number) {
 
 export default function ChatScreen({ sessionId, agentId, specialistId }: ChatScreenProps) {
   const theme = useTheme();
+  const router = useRouter();
   const insets = useSafeAreaInsets();
   const { session } = useSessionState();
   const chatContextQuery = useMobileChatContext();
+  const gatewayDoctor = usePrimaryGatewayDoctor();
   const {
     sessions,
     activeSessionId,
@@ -160,6 +164,7 @@ export default function ChatScreen({ sessionId, agentId, specialistId }: ChatScr
   const historyProgress = useRef(new LegacyAnimated.Value(0)).current;
   const embeddedMode = !sessionId;
   const requestedAgentId = String(specialistId || agentId || "").trim();
+  const pendingGatewayApprovals = Number((gatewayDoctor.doctor?.approvals as { pending_count?: number } | undefined)?.pending_count ?? 0);
   const sortedSessions = useMemo(
     () =>
       [...sessions]
@@ -727,18 +732,28 @@ export default function ChatScreen({ sessionId, agentId, specialistId }: ChatScr
           </MotionPressable>
         ) : null}
         <View style={{ flex: 1, minWidth: 0 }}>
-          <Text
-            numberOfLines={1}
+          <View
             style={{
-              fontSize: 16,
-              color: theme.colors.text,
-              fontFamily: "DMSans_700Bold",
-              lineHeight: 22,
-              textAlign: embeddedMode ? "center" : "left",
+              flexDirection: "row",
+              alignItems: "center",
+              justifyContent: embeddedMode ? "center" : "flex-start",
+              gap: 6,
             }}
           >
-            {activeAgent.label}
-          </Text>
+            <Text
+              numberOfLines={1}
+              style={{
+                fontSize: 16,
+                color: theme.colors.text,
+                fontFamily: "DMSans_700Bold",
+                lineHeight: 22,
+                textAlign: embeddedMode ? "center" : "left",
+              }}
+            >
+              {activeAgent.label}
+            </Text>
+            <CoreStatusBar variant="dot" />
+          </View>
           {requestedAgentId ? (
             <Text
               numberOfLines={1}
@@ -775,6 +790,49 @@ export default function ChatScreen({ sessionId, agentId, specialistId }: ChatScr
         ) : null}
       </View>
       <View style={{ flex: 1 }}>
+        <CoreStatusBar
+          variant="banner"
+          offlineOnly
+          style={{
+            marginTop: 8,
+            marginHorizontal: SPACING.md,
+            marginBottom: 4,
+          }}
+        />
+        {pendingGatewayApprovals > 0 ? (
+          <View
+            style={{
+              marginHorizontal: SPACING.md,
+              marginTop: 4,
+              marginBottom: 4,
+              paddingHorizontal: 14,
+              paddingVertical: 12,
+              borderRadius: 16,
+              borderWidth: 1,
+              borderColor: theme.colors.border,
+              backgroundColor: theme.colors.surface,
+              flexDirection: "row",
+              alignItems: "center",
+              justifyContent: "space-between",
+              gap: 12,
+            }}
+          >
+            <View style={{ flex: 1 }}>
+              <Text style={{ fontSize: 13, fontFamily: "DMSans_700Bold", color: theme.colors.text }}>
+                Approval required
+              </Text>
+              <Text style={{ marginTop: 2, fontSize: 12.5, color: theme.colors.textSecondary }}>
+                {pendingGatewayApprovals} approval{pendingGatewayApprovals === 1 ? "" : "s"} waiting before Sage can continue on your paired device.
+              </Text>
+            </View>
+            <ActionButton
+              label="Open"
+              variant="secondary"
+              onPress={() => router.push("/gateway")}
+              style={{ alignSelf: "center" }}
+            />
+          </View>
+        ) : null}
         <FlatList
           ref={messagesListRef}
           data={messages}

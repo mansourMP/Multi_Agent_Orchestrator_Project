@@ -185,12 +185,32 @@ class DeployedAgentAdminDashboardUserRow(BaseModel):
     last_5_messages: list[DeployedAgentAdminDashboardMessage] = Field(default_factory=list)
 
 
+class DeployedAgentAdminDashboardQuestion(BaseModel):
+    question: str
+    count: int = 0
+
+
+class DeployedAgentCustomerEntry(BaseModel):
+    entry_url: Optional[str] = None
+    cta_label: Optional[str] = None
+    telegram_deep_link: Optional[str] = None
+    bot_username: Optional[str] = None
+    qr_image_url: Optional[str] = None
+    qr_target: Optional[str] = None
+
+
 class DeployedAgentAdminDashboardResponse(BaseModel):
     deployed_agent_id: str
     total_users: int = 0
+    messages_today: int = 0
     messages_this_calendar_month: int = 0
+    orders_today: int = 0
+    revenue_today_usd: float = 0.0
     users_at_limit_today: int = 0
     upgrade_clicks_this_month: int = 0
+    common_questions: list[DeployedAgentAdminDashboardQuestion] = Field(default_factory=list)
+    customer_entry: Optional[DeployedAgentCustomerEntry] = None
+    specialist_profile: Dict[str, Any] = Field(default_factory=dict)
     user_rows: list[DeployedAgentAdminDashboardUserRow] = Field(default_factory=list)
     limit: int = 50
     offset: int = 0

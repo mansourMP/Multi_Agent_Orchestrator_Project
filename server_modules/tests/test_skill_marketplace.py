@@ -13,6 +13,7 @@ def _write_skill(
     name: str = "sample-skill",
     description: str = "Sample marketplace skill.",
     author: str = "Empyralis",
+    runtime: dict | None = None,
 ) -> Path:
     skill_dir = root / name
     skill_dir.mkdir(parents=True, exist_ok=True)
@@ -27,6 +28,7 @@ def _write_skill(
                 "slash_commands": ["/sample"],
                 "requires": ["requests"],
                 "source": f"https://example.com/{name}.git",
+                "runtime": runtime or {},
             },
             indent=2,
         ),
@@ -67,7 +69,11 @@ class SkillMarketplaceTests(unittest.TestCase):
         self.temp_dir.cleanup()
 
     def test_list_installed_skills(self):
-        _write_skill(self.workspace_root, name="alpha-skill")
+        _write_skill(
+            self.workspace_root,
+            name="alpha-skill",
+            runtime={"skill_class": "system", "action_class": "read", "execution_adapter": "web_search"},
+        )
 
         payload = skills_registry.list_marketplace_skills()
 
@@ -75,6 +81,8 @@ class SkillMarketplaceTests(unittest.TestCase):
         self.assertEqual(payload["count"], 1)
         self.assertEqual(payload["items"][0]["id"], "alpha-skill")
         self.assertTrue(payload["items"][0]["enabled"])
+        self.assertEqual(payload["items"][0]["skill_class"], "system")
+        self.assertEqual(payload["items"][0]["execution_adapter"], "web_search")
 
     @patch("server_modules.skills_registry._install_requirements")
     @patch("server_modules.skills_registry._clone_git_source")

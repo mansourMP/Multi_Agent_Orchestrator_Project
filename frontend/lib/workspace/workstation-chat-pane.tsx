@@ -111,6 +111,13 @@ type RuntimeSummaryCard = {
   localPill: string;
 };
 
+type SageReadinessPill = {
+  id: string;
+  label: string;
+  tone: 'muted' | 'warning' | 'danger';
+  target: 'gateway' | 'integrations';
+};
+
 type SendFailureNotice = {
   message: string;
   retryable: boolean;
@@ -133,15 +140,6 @@ type ChatModelOption = {
 };
 
 const VALID_REASONING_LEVELS: ChatReasoningEffort[] = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh'];
-
-const SYNTHETIC_TRANSCRIPT_MESSAGES = new Set([
-  'Approval is required before Sage can use the local companion.',
-  'Approval is required before Sage can continue.',
-  'Local companion is unavailable right now, so Sage could not start device work.',
-  'Sage needs your help before it can continue.',
-  'Task accepted. Sage started work with the local companion.',
-  'Task accepted. Sage started working on it.',
-]);
 
 const PRIMARY_THREAD_ID = 'primary';
 const ACTIVE_THREAD_QUERY_KEY = 'chat:canonical:active-thread';
@@ -528,7 +526,34 @@ function isSyntheticTranscriptMessage(message: WorkstationChatMessageRecord): bo
   if (message.role === 'user') {
     return false;
   }
-  return SYNTHETIC_TRANSCRIPT_MESSAGES.has(readString(message.content));
+  const metadata = readObject(message.metadata);
+  const displayKind = readString(metadata.display_kind).toLowerCase();
+  if (displayKind === 'status_notice' || displayKind === 'local_access_notice') {
+    return true;
+  }
+  const normalized = readString(message.content).toLowerCase();
+  if (!normalized) {
+    return false;
+  }
+  if (normalized.startsWith('turn submitted.')) {
+    return true;
+  }
+  if (normalized === 'approval is required before sage can continue.') {
+    return true;
+  }
+  if (normalized === 'sage needs your help before it can continue.') {
+    return true;
+  }
+  if (normalized === 'sage cannot run that request in this workspace right now.') {
+    return true;
+  }
+  return normalized.includes('local companion')
+    && (
+      normalized.includes('approval is required')
+      || normalized.includes('could not start device work')
+      || normalized.includes('started work')
+      || normalized.includes('started working on it')
+    );
 }
 
 function normalizeStructuredRecordList(value: unknown): Record<string, unknown>[] {
@@ -1097,6 +1122,8 @@ function classifyStatusNotice(message: string): {
   title: string;
   body: string;
   requiresLocalAccess: boolean;
+  actionTarget: 'gateway' | 'integrations' | null;
+  actionLabel: string | null;
 } {
   if (/^(memory|notification|policy|service|channel).*(saved|updated|pinned|unpinned|forgotten|corrected)/i.test(message)) {
     return {
@@ -1104,6 +1131,18 @@ function classifyStatusNotice(message: string): {
       title: 'Updated',
       body: message,
       requiresLocalAccess: false,
+      actionTarget: null,
+      actionLabel: null,
+    };
+  }
+  if (isLocalCompanionGateMessage(message)) {
+    return {
+      tone: 'warning',
+      title: 'Gateway attention needed',
+      body: message,
+      requiresLocalAccess: true,
+      actionTarget: 'gateway',
+      actionLabel: 'Open Gateway',
     };
   }
   if (/^turn submitted/i.test(message)) {
@@ -1112,6 +1151,18 @@ function classifyStatusNotice(message: string): {
       title: 'Submitted',
       body: message,
       requiresLocalAccess: false,
+      actionTarget: null,
+      actionLabel: null,
+    };
+  }
+  if (/provider error|api key|credential/i.test(message)) {
+    return {
+      tone: 'warning',
+      title: 'Provider attention needed',
+      body: message,
+      requiresLocalAccess: false,
+      actionTarget: 'integrations',
+      actionLabel: 'Open Integrations',
     };
   }
   return {
@@ -1119,6 +1170,8 @@ function classifyStatusNotice(message: string): {
     title: 'Notice',
     body: message,
     requiresLocalAccess: false,
+    actionTarget: null,
+    actionLabel: null,
   };
 }
 
@@ -2076,6 +2129,10 @@ export function WorkstationChatPane() {
     () => routeManifest.routeIndex.integrations?.href ?? `/w/${encodeURIComponent(bootstrap.workspace.id)}/integrations`,
     [bootstrap.workspace.id, routeManifest.routeIndex.integrations],
   );
+  const gatewayHref = useMemo(
+    () => routeManifest.routeIndex.gateway?.href ?? `/w/${encodeURIComponent(bootstrap.workspace.id)}/gateway`,
+    [bootstrap.workspace.id, routeManifest.routeIndex.gateway],
+  );
   const runTargetOptions = useMemo(
     () => [
       {
@@ -2235,6 +2292,26 @@ export function WorkstationChatPane() {
     }
     return `${localDevicePlatformLabel(desktop.platform, desktop.localCompanion.label)} connected`;
   }, [desktop.localCompanion.label, desktop.localCompanion.online, desktop.localCompanion.present, desktop.platform]);
+  const readinessPills = useMemo<SageReadinessPill[]>(() => {
+    const pills: SageReadinessPill[] = [];
+    if (!selectedProviderContext.providerLabel) {
+      pills.push({
+        id: 'provider',
+        label: 'AI: Connect provider',
+        tone: 'danger',
+        target: 'integrations',
+      });
+    }
+    if (!localCompanionOnline) {
+      pills.push({
+        id: 'gateway',
+        label: 'Gateway: Offline',
+        tone: 'danger',
+        target: 'gateway',
+      });
+    }
+    return pills;
+  }, [localCompanionOnline, selectedProviderContext.providerLabel]);
   const showContextStrip = true;
 
   useEffect(() => {
@@ -2591,6 +2668,23 @@ export function WorkstationChatPane() {
               ) : null}
             </div>
           ) : null}
+          {readinessPills.length > 0 ? (
+            <div className="app-chat-readiness-strip" aria-label="Sage readiness">
+              {readinessPills.map((pill) => (
+                <button
+                  key={pill.id}
+                  type="button"
+                  className={`app-chat-readiness-pill app-chat-readiness-pill--${pill.tone}`}
+                  onClick={() => {
+                    router.push(pill.target === 'gateway' ? gatewayHref : integrationsHref);
+                  }}
+                >
+                  <span className="app-chat-readiness-pill__dot" aria-hidden="true" />
+                  <span>{pill.label}</span>
+                </button>
+              ))}
+            </div>
+          ) : null}
           <ScrollRegion className="app-chat-thread__scroll">
             <div className="app-chat-thread__body">
               {showBlankTranscript ? (
@@ -2775,10 +2869,20 @@ export function WorkstationChatPane() {
                   type="button"
                   tone="secondary"
                   onClick={() => {
+                    if (statusNotice?.actionTarget === 'gateway') {
+                      setStatusMessage(null);
+                      router.push(gatewayHref);
+                      return;
+                    }
+                    if (statusNotice?.actionTarget === 'integrations') {
+                      setStatusMessage(null);
+                      router.push(integrationsHref);
+                      return;
+                    }
                     setStatusMessage(null);
                   }}
                 >
-                  {statusNotice?.requiresLocalAccess ? 'Got it' : 'Dismiss'}
+                  {statusNotice?.actionLabel ?? (statusNotice?.requiresLocalAccess ? 'Got it' : 'Dismiss')}
                 </AppButton>
               </div>
             </AppNotice>

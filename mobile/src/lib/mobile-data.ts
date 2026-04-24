@@ -386,6 +386,47 @@ export function useMobileMachines() {
   });
 }
 
+export function usePrimaryGatewayDoctor() {
+  const { session } = useSessionState();
+  const enabled = Boolean(session?.runtimeUrl && session?.runtimeKey && session?.workspaceId);
+
+  const registrationsQuery = useQuery({
+    queryKey: ["mobile", "gateway-registrations", session?.runtimeUrl, session?.workspaceId],
+    enabled,
+    retry: false,
+    refetchInterval: enabled ? 15_000 : false,
+    queryFn: async () => {
+      const payload = await mobileApi.listGatewayRegistrations(session!);
+      return Array.isArray(payload?.items)
+        ? payload.items.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object")
+        : [];
+    },
+  });
+
+  const selectedGateway = (registrationsQuery.data ?? []).find((item) => {
+    const status = String(item.status ?? item.connection_status ?? "").trim().toLowerCase();
+    return status === "online" || status === "healthy" || status === "active";
+  }) ?? (registrationsQuery.data ?? [])[0] ?? null;
+
+  const gatewayId = typeof selectedGateway?.gateway_id === "string" ? selectedGateway.gateway_id.trim() : "";
+
+  const doctorQuery = useQuery({
+    queryKey: ["mobile", "gateway-doctor", session?.runtimeUrl, session?.workspaceId, gatewayId],
+    enabled: enabled && Boolean(gatewayId),
+    retry: false,
+    refetchInterval: enabled && gatewayId ? 15_000 : false,
+    queryFn: async () => mobileApi.getGatewayDoctor(session!, gatewayId),
+  });
+
+  return {
+    gateway: selectedGateway,
+    doctor: doctorQuery.data ?? null,
+    loading: registrationsQuery.isLoading || doctorQuery.isLoading,
+    refreshing: registrationsQuery.isFetching || doctorQuery.isFetching,
+    error: registrationsQuery.error ?? doctorQuery.error ?? null,
+  };
+}
+
 export function useMobileConnectors() {
   const { session } = useSessionState();
   const enabled = Boolean(session?.runtimeUrl && session?.runtimeKey);

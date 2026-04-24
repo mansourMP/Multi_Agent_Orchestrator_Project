@@ -3,13 +3,13 @@
 import { type ReactNode, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 
-import { WorkspaceChannelPairingSurface } from '@/lib/workspace/workspace-channel-pairing-surface';
 import { useWorkspaceBoundary } from '@/lib/workspace/workspace-boundary';
 import { WorkstationActivityPane } from '@/lib/workspace/workstation-activity-pane';
 import { WorkstationApprovalsPane } from '@/lib/workspace/workstation-approvals-pane';
 import { WorkstationArtifactsPane } from '@/lib/workspace/workstation-artifacts-pane';
 import { WorkstationChatPane } from '@/lib/workspace/workstation-chat-pane';
 import { WorkstationDeployedAgentsPane } from '@/lib/workspace/workstation-deployed-agents-pane';
+import { WorkstationGatewayOperatorPane } from '@/lib/workspace/workstation-gateway-operator-pane';
 import { MarketplacePane } from '@/lib/marketplace/marketplace-pane';
 import { WorkstationNotificationsPane } from '@/lib/workspace/workstation-notifications-pane';
 import { WorkstationRunsPane } from '@/lib/workspace/workstation-runs-pane';
@@ -67,9 +67,13 @@ const WORKSPACE_SURFACE_RENDERERS: Record<WorkspaceRouteId, SurfaceRouteRenderer
     destinationId: 'studio',
     render: () => <WorkstationDeployedAgentsPane initialSubview="agents" />,
   },
+  gateway: {
+    destinationId: 'gateway',
+    render: () => <WorkstationGatewayOperatorPane initialSection="status" />,
+  },
   channels: {
-    destinationId: 'studio',
-    render: () => <WorkspaceChannelPairingSurface featureId="integrations" />,
+    destinationId: 'gateway',
+    render: () => <WorkstationGatewayOperatorPane initialSection="channels" />,
   },
   inbox: {
     destinationId: 'studio',
@@ -82,6 +86,14 @@ const WORKSPACE_SURFACE_RENDERERS: Record<WorkspaceRouteId, SurfaceRouteRenderer
   marketplace: {
     destinationId: 'marketplace',
     render: () => <MarketplacePane />,
+  },
+  gatewayApprovals: {
+    destinationId: 'gateway',
+    render: () => <WorkstationGatewayOperatorPane initialSection="approvals" />,
+  },
+  gatewayActivity: {
+    destinationId: 'gateway',
+    render: () => <WorkstationGatewayOperatorPane initialSection="activity" />,
   },
   settings: {
     destinationId: 'settings',

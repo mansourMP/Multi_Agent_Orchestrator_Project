@@ -10,7 +10,6 @@ import {
   FormInput,
   FormReadout,
   FormSection,
-  FormSelect,
 } from '@/lib/ui/form-controls';
 import {
   WorkstationActionButton,
@@ -29,6 +28,7 @@ type GatewayRegistrationRecord = Record<string, unknown> & {
   display_name?: string | null;
   platform?: string | null;
   status?: string | null;
+  connection_status?: string | null;
   device_trust_state?: string | null;
   last_seen_at?: string | null;
 };
@@ -52,6 +52,9 @@ type GatewayDoctorPayload = Record<string, unknown> & {
   approvals?: Record<string, unknown> | null;
   checkpoint?: Record<string, unknown> | null;
   browser?: Record<string, unknown> | null;
+  specialists?: Record<string, unknown> | null;
+  providers?: Record<string, unknown> | null;
+  quota?: Record<string, unknown> | null;
 };
 
 type PersonalChannelStateRecord = Record<string, unknown> & {
@@ -101,6 +104,8 @@ type PairingDraft = {
   displayName: string;
   platform: string;
 };
+
+type GatewayOperatorSection = 'all' | 'status' | 'channels' | 'approvals' | 'activity';
 
 function buildQueryString(params: Record<string, string | number | null | undefined>): string {
   const query = new URLSearchParams();
@@ -237,7 +242,58 @@ function summarizeDoctorFacet(value: unknown): {
   };
 }
 
-export function WorkstationGatewayOperatorPane() {
+function gatewayPairingCommand(token: unknown): string {
+  const pairingToken = readString(token, '');
+  if (!pairingToken) {
+    return 'Pairing token unavailable';
+  }
+  return [
+    'cd /Users/mansur/Multi_Agent_Orchestrator_Project/empyralis-gateway',
+    'npm run build',
+    `EMPYRALIS_GATEWAY_API_URL=http://127.0.0.1:8001/api EMPYRALIS_GATEWAY_PAIRING_TOKEN=${pairingToken} npm start`,
+  ].join('\n');
+}
+
+function detectGatewayPlatform(): string {
+  if (typeof navigator === 'undefined') {
+    return 'macos';
+  }
+  const source = `${navigator.platform || ''} ${navigator.userAgent || ''}`.toLowerCase();
+  if (source.includes('win')) {
+    return 'windows';
+  }
+  if (source.includes('linux')) {
+    return 'linux';
+  }
+  return 'macos';
+}
+
+function gatewayConnectionSummary(gateways: GatewayRegistrationRecord[]): string {
+  if (gateways.length === 0) {
+    return 'No gateways paired';
+  }
+  const onlineCount = gateways.filter((gateway) =>
+    String(gateway.connection_status ?? gateway.status ?? '').trim().toLowerCase() === 'online',
+  ).length;
+  return onlineCount > 0 ? `${gateways.length} · ${onlineCount} online` : `${gateways.length} · Offline`;
+}
+
+function doctorDisplayStatus(status: unknown): { label: string; tone: 'neutral' | 'success' | 'warning' | 'danger' | 'accent' } {
+  const normalized = String(status ?? '').trim().toLowerCase();
+  if (['healthy', 'pass', 'online'].includes(normalized)) {
+    return { label: 'Healthy', tone: 'success' };
+  }
+  if (['warn', 'warning', 'degraded', 'issues_found', 'offline', 'fail', 'failed', 'blocked'].includes(normalized)) {
+    return { label: 'Issues found', tone: normalized === 'offline' || normalized === 'fail' || normalized === 'failed' || normalized === 'blocked' ? 'danger' : 'warning' };
+  }
+  return { label: 'Unknown', tone: 'neutral' };
+}
+
+export function WorkstationGatewayOperatorPane({
+  initialSection = 'all',
+}: {
+  initialSection?: GatewayOperatorSection;
+}) {
   const services = useWorkspaceServices();
   const { bootstrap } = useWorkspaceBoundary();
   const workspaceId = bootstrap.workspace.id;
@@ -255,6 +311,7 @@ export function WorkstationGatewayOperatorPane() {
   });
   const [pairingIntent, setPairingIntent] = useState<GatewayPairingIntentRecord | null>(null);
   const [loadingRegistrations, setLoadingRegistrations] = useState(true);
+  const [registrationsTimedOut, setRegistrationsTimedOut] = useState(false);
   const [loadingGatewayDetail, setLoadingGatewayDetail] = useState(false);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -276,6 +333,27 @@ export function WorkstationGatewayOperatorPane() {
     [browserSessions],
   );
 
+  useEffect(() => {
+    setPairingDraft((current) => ({
+      ...current,
+      platform: detectGatewayPlatform(),
+    }));
+  }, []);
+
+  useEffect(() => {
+    if (!loadingRegistrations) {
+      setRegistrationsTimedOut(false);
+      return () => {};
+    }
+    const timeoutId = window.setTimeout(() => {
+      setRegistrationsTimedOut(true);
+      setLoadingRegistrations(false);
+    }, 5_000);
+    return () => {
+      window.clearTimeout(timeoutId);
+    };
+  }, [loadingRegistrations]);
+
   async function requestPayload<T>(
     path: string,
     init?: RequestInit,
@@ -288,8 +366,44 @@ export function WorkstationGatewayOperatorPane() {
     });
   }
 
+  async function requestOptionalPayload<T>(path: string): Promise<T | null> {
+    try {
+      return await requestPayload<T>(path, undefined, [403, 404]);
+    } catch {
+      return null;
+    }
+  }
+
+  async function copyToClipboard(label: string, value: string): Promise<void> {
+    const text = readString(value, '');
+    if (!text) {
+      setErrorMessage(`${label} is not available yet.`);
+      return;
+    }
+    try {
+      if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(text);
+      } else {
+        const textarea = document.createElement('textarea');
+        textarea.value = text;
+        textarea.setAttribute('readonly', 'true');
+        textarea.style.position = 'fixed';
+        textarea.style.opacity = '0';
+        document.body.appendChild(textarea);
+        textarea.select();
+        document.execCommand('copy');
+        document.body.removeChild(textarea);
+      }
+      setErrorMessage(null);
+      setStatusMessage(`${label} copied. Paste it into Terminal and press Return.`);
+    } catch {
+      setErrorMessage(`Could not copy ${label.toLowerCase()}.`);
+    }
+  }
+
   async function refreshRegistrations(showLoading = false): Promise<void> {
     if (showLoading) {
+      setRegistrationsTimedOut(false);
       setLoadingRegistrations(true);
     }
     const payload = await requestPayload<Record<string, unknown>>(
@@ -308,7 +422,7 @@ export function WorkstationGatewayOperatorPane() {
     });
   }
 
-  async function refreshGatewayDetail(gatewayId: string, showLoading = false): Promise<void> {
+  async function refreshGatewayDetail(gatewayId: string, showLoading = false, forceProviderProbe = false): Promise<void> {
     if (!gatewayId) {
       setDoctor(null);
       setWhatsapp(null);
@@ -320,26 +434,25 @@ export function WorkstationGatewayOperatorPane() {
     if (showLoading) {
       setLoadingGatewayDetail(true);
     }
+    const nextDoctor = await requestPayload<GatewayDoctorPayload>(
+        `/api/gateway/registrations/${encodeURIComponent(gatewayId)}/doctor${forceProviderProbe ? '?force_provider_probe=1' : ''}`,
+    );
     const [
-      nextDoctor,
       nextWhatsapp,
       nextTelegram,
       nextApprovals,
       nextBrowserSessions,
     ] = await Promise.all([
-      requestPayload<GatewayDoctorPayload>(
-        `/api/gateway/registrations/${encodeURIComponent(gatewayId)}/doctor`,
-      ),
-      requestPayload<PersonalChannelViewPayload>(
+      requestOptionalPayload<PersonalChannelViewPayload>(
         `/api/personal-channels/whatsapp/gateways/${encodeURIComponent(gatewayId)}`,
       ),
-      requestPayload<PersonalChannelViewPayload>(
+      requestOptionalPayload<PersonalChannelViewPayload>(
         `/api/personal-channels/telegram/gateways/${encodeURIComponent(gatewayId)}`,
       ),
-      requestPayload<GatewayApprovalsPayload>(
+      requestOptionalPayload<GatewayApprovalsPayload>(
         `/api/gateway/registrations/${encodeURIComponent(gatewayId)}/approvals`,
       ),
-      requestPayload<GatewayBrowserSessionsPayload>(
+      requestOptionalPayload<GatewayBrowserSessionsPayload>(
         `/api/gateway/registrations/${encodeURIComponent(gatewayId)}/browser/sessions`,
       ),
     ]);
@@ -348,6 +461,7 @@ export function WorkstationGatewayOperatorPane() {
     setTelegram(nextTelegram);
     setApprovals(nextApprovals);
     setBrowserSessions(nextBrowserSessions);
+    setErrorMessage(null);
     setLoadingGatewayDetail(false);
   }
 
@@ -416,7 +530,7 @@ export function WorkstationGatewayOperatorPane() {
         },
       );
       setPairingIntent(payload);
-      setStatusMessage('Gateway pairing token is ready. Finish registration from the local gateway app on that device.');
+      setStatusMessage('Gateway pairing token is ready. Run the command below on this device to pair and connect the local gateway.');
       await refreshRegistrations(false);
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : 'Could not create a gateway pairing token.');
@@ -507,12 +621,26 @@ export function WorkstationGatewayOperatorPane() {
     : [];
 
   const doctorStatus = readString(doctor?.status, selectedGateway ? readString(selectedGateway.status, 'unknown') : 'unknown');
+  const doctorStatusDisplay = doctorDisplayStatus(doctorStatus);
   const checkpointStatus = summarizeDoctorFacet(doctor?.checkpoint);
   const browserLaneStatus = summarizeDoctorFacet(doctor?.browser);
+  const specialistStatus = summarizeDoctorFacet(doctor?.specialists);
+  const providerStatus = summarizeDoctorFacet(doctor?.providers);
+  const quotaStatus = summarizeDoctorFacet(doctor?.quota);
   const approvalsPendingCount = Number(approvals?.pending_count ?? 0);
   const browserSessionCount = browserItems.length;
   const whatsappRecentCount = Array.isArray(whatsapp?.recent_messages) ? whatsapp.recent_messages.length : 0;
   const telegramRecentCount = Array.isArray(telegram?.recent_messages) ? telegram.recent_messages.length : 0;
+  const specialistItems = Array.isArray(readRecord(doctor?.specialists).items)
+    ? (readRecord(doctor?.specialists).items as Record<string, unknown>[])
+    : [];
+  const providerItems = Array.isArray(readRecord(doctor?.providers).items)
+    ? (readRecord(doctor?.providers).items as Record<string, unknown>[])
+    : [];
+  const showStatusSection = initialSection === 'all' || initialSection === 'status';
+  const showChannelsSection = initialSection === 'all' || initialSection === 'channels';
+  const showApprovalsSection = initialSection === 'all' || initialSection === 'approvals';
+  const showActivitySection = initialSection === 'all' || initialSection === 'activity';
 
   return (
     <div className="gateway-operator-pane app-stack-3">
@@ -527,7 +655,7 @@ export function WorkstationGatewayOperatorPane() {
               setStatusMessage(null);
               setErrorMessage(null);
               void refreshRegistrations(true)
-                .then(() => (selectedGatewayId ? refreshGatewayDetail(selectedGatewayId, false) : undefined))
+                .then(() => (selectedGatewayId ? refreshGatewayDetail(selectedGatewayId, false, true) : undefined))
                 .catch((error) => {
                   setErrorMessage(error instanceof Error ? error.message : 'Could not refresh gateway operator state.');
                 });
@@ -543,12 +671,12 @@ export function WorkstationGatewayOperatorPane() {
         <WorkstationSurfaceStatGrid>
           <WorkstationSurfaceStat
             label="Gateways"
-            value={String(gateways.length)}
+            value={gatewayConnectionSummary(gateways)}
             hint="Trusted local runtime edges in this workspace"
           />
           <WorkstationSurfaceStat
             label="Doctor"
-            value={humanizeToken(doctorStatus, 'Unknown')}
+            value={<DataBadge tone={doctorStatusDisplay.tone}>{doctorStatusDisplay.label}</DataBadge>}
             hint="Selected gateway health posture"
           />
           <WorkstationSurfaceStat
@@ -580,21 +708,10 @@ export function WorkstationGatewayOperatorPane() {
                 placeholder="My MacBook"
               />
             </FormField>
-            <FormField label="Platform" hint="Used to help the operator identify the device target.">
-              <FormSelect
-                value={pairingDraft.platform}
-                onChange={(event) => {
-                  setPairingDraft((current) => ({
-                    ...current,
-                    platform: event.currentTarget.value,
-                  }));
-                }}
-              >
-                <option value="macos">macOS</option>
-                <option value="windows">Windows</option>
-                <option value="linux">Linux</option>
-              </FormSelect>
-            </FormField>
+            <FormReadout
+              label="Platform"
+              value={`${humanizeToken(pairingDraft.platform, 'Detected device')} · auto-detected`}
+            />
           </FormGrid>
           <div className="settings-action-row">
             <WorkstationActionButton
@@ -610,27 +727,63 @@ export function WorkstationGatewayOperatorPane() {
         </FormSection>
 
         {pairingIntent ? (
-          <FormGrid>
-            <FormReadout
-              label="Pairing token"
-              value={<code>{readString(pairingIntent.pairing_token, 'Unavailable')}</code>}
-            />
-            <FormReadout
-              label="Expires"
-              value={formatTimestamp(pairingIntent.expires_at)}
-            />
-            <FormReadout
-              label="Suggested device"
-              value={readString(pairingIntent.display_name, 'Unlabeled device')}
-            />
-            <FormReadout
-              label="Platform"
-              value={humanizeToken(pairingIntent.platform, 'Unknown')}
-            />
-          </FormGrid>
+          <FormSection
+            title="Finish on this Mac"
+            description="Copy one command, paste it into Terminal, and press Return. No manual token copying required."
+            className="gateway-pairing-command-section"
+          >
+            <FormGrid>
+              <FormReadout
+                label="Pairing token"
+                value={<code>{readString(pairingIntent.pairing_token, 'Unavailable')}</code>}
+              />
+              <FormReadout
+                label="Expires"
+                value={formatTimestamp(pairingIntent.expires_at)}
+              />
+              <FormReadout
+                label="Suggested device"
+                value={readString(pairingIntent.display_name, 'Unlabeled device')}
+              />
+              <FormReadout
+                label="Platform"
+                value={humanizeToken(pairingIntent.platform, 'Unknown')}
+              />
+            </FormGrid>
+            <div className="gateway-pairing-command-card">
+              <div className="app-inline-actions app-inline-actions--between app-inline-actions--start">
+                <div className="gateway-pairing-command-card__copy">
+                  <strong>Run on this Mac</strong>
+                  <span>Use this if the Gateway app is not already connected.</span>
+                </div>
+                <div className="app-inline-actions app-inline-actions--tight">
+                  <WorkstationActionButton
+                    type="button"
+                    tone="secondary"
+                    onClick={() => {
+                      void copyToClipboard('Pairing token', readString(pairingIntent.pairing_token, ''));
+                    }}
+                  >
+                    Copy token
+                  </WorkstationActionButton>
+                  <WorkstationActionButton
+                    type="button"
+                    onClick={() => {
+                      void copyToClipboard('Gateway command', gatewayPairingCommand(pairingIntent.pairing_token));
+                    }}
+                  >
+                    Copy command
+                  </WorkstationActionButton>
+                </div>
+              </div>
+              <pre className="gateway-pairing-command">
+                <code>{gatewayPairingCommand(pairingIntent.pairing_token)}</code>
+              </pre>
+            </div>
+          </FormSection>
         ) : null}
 
-        {loadingRegistrations ? (
+        {loadingRegistrations && !registrationsTimedOut ? (
           <WorkstationSurfaceNotice tone="neutral">Loading registered gateways…</WorkstationSurfaceNotice>
         ) : gateways.length === 0 ? (
           <EmptyPanel
@@ -650,8 +803,8 @@ export function WorkstationGatewayOperatorPane() {
                   description={`Trust ${humanizeToken(gateway.device_trust_state, 'unknown')} · last seen ${formatTimestamp(gateway.last_seen_at)}`}
                   actions={(
                     <div className="app-inline-actions app-inline-actions--tight">
-                      <DataBadge tone={statusTone(gateway.status)}>
-                        {humanizeToken(gateway.status, 'Unknown')}
+                      <DataBadge tone={statusTone(gateway.connection_status ?? gateway.status)}>
+                        {humanizeToken(gateway.connection_status ?? gateway.status, 'Unknown')}
                       </DataBadge>
                       <WorkstationActionButton
                         type="button"
@@ -669,7 +822,7 @@ export function WorkstationGatewayOperatorPane() {
         )}
       </WorkstationSurfaceCard>
 
-      {selectedGateway ? (
+      {selectedGateway && showStatusSection ? (
         <WorkstationSurfaceCard
           title="Gateway health"
           description="Doctor state, trust posture, checkpoint readiness, and browser attach truth for the selected gateway."
@@ -686,10 +839,13 @@ export function WorkstationGatewayOperatorPane() {
             <FormReadout label="Last seen" value={formatTimestamp(selectedGateway.last_seen_at)} />
             <FormReadout label="Checkpoint lane" value={<DataBadge tone={statusTone(readRecord(doctor?.checkpoint).status)}>{checkpointStatus.status}</DataBadge>} />
             <FormReadout label="Browser lane" value={<DataBadge tone={statusTone(readRecord(doctor?.browser).status)}>{browserLaneStatus.status}</DataBadge>} />
+            <FormReadout label="Studio specialists" value={<DataBadge tone={statusTone(readRecord(doctor?.specialists).status)}>{specialistStatus.status}</DataBadge>} />
+            <FormReadout label="Provider reachability" value={<DataBadge tone={statusTone(readRecord(doctor?.providers).status)}>{providerStatus.status}</DataBadge>} />
+            <FormReadout label="Quota state" value={<DataBadge tone={statusTone(readRecord(doctor?.quota).status)}>{quotaStatus.status}</DataBadge>} />
             <FormReadout label="Approvals waiting" value={String(approvalsPendingCount)} />
           </FormGrid>
 
-          {(readRecord(doctor?.checkpoint).status || readRecord(doctor?.browser).status) ? (
+          {(readRecord(doctor?.checkpoint).status || readRecord(doctor?.browser).status || readRecord(doctor?.specialists).status || readRecord(doctor?.providers).status || readRecord(doctor?.quota).status) ? (
             <WorkstationSurfaceList>
               <WorkstationSurfaceListItem
                 title="Checkpoint readiness"
@@ -711,6 +867,72 @@ export function WorkstationGatewayOperatorPane() {
                   </DataBadge>
                 )}
               />
+              <WorkstationSurfaceListItem
+                title="Studio specialist health"
+                subtitle={specialistStatus.status}
+                description={specialistStatus.summary}
+                actions={(
+                  <DataBadge tone={statusTone(readRecord(doctor?.specialists).status)}>
+                    {specialistStatus.status}
+                  </DataBadge>
+                )}
+              />
+              <WorkstationSurfaceListItem
+                title="Model provider reachability"
+                subtitle={providerStatus.status}
+                description={providerStatus.summary}
+                actions={(
+                  <DataBadge tone={statusTone(readRecord(doctor?.providers).status)}>
+                    {providerStatus.status}
+                  </DataBadge>
+                )}
+              />
+              <WorkstationSurfaceListItem
+                title="Quota state"
+                subtitle={quotaStatus.status}
+                description={quotaStatus.summary}
+                actions={(
+                  <DataBadge tone={statusTone(readRecord(doctor?.quota).status)}>
+                    {quotaStatus.status}
+                  </DataBadge>
+                )}
+              />
+            </WorkstationSurfaceList>
+          ) : null}
+
+          {specialistItems.length > 0 ? (
+            <WorkstationSurfaceList>
+              {specialistItems.map((item) => (
+                <WorkstationSurfaceListItem
+                  key={readString(item.deployed_agent_id, readString(item.name, 'specialist'))}
+                  title={readString(item.name, 'Studio specialist')}
+                  subtitle={humanizeToken(item.deployment_state, 'Unknown')}
+                  description={readString(item.summary, 'No detail available.')}
+                  actions={(
+                    <DataBadge tone={statusTone(item.status)}>
+                      {humanizeToken(item.status, 'Unknown')}
+                    </DataBadge>
+                  )}
+                />
+              ))}
+            </WorkstationSurfaceList>
+          ) : null}
+
+          {providerItems.length > 0 ? (
+            <WorkstationSurfaceList>
+              {providerItems.map((item) => (
+                <WorkstationSurfaceListItem
+                  key={readString(item.id, readString(item.label, 'provider'))}
+                  title={readString(item.label, 'Provider')}
+                  subtitle={humanizeToken(item.state, 'Unknown')}
+                  description={readString(item.state_detail, 'No provider detail available.')}
+                  actions={(
+                    <DataBadge tone={statusTone(item.state === 'active' ? 'pass' : 'fail')}>
+                      {humanizeToken(item.state, 'Unknown')}
+                    </DataBadge>
+                  )}
+                />
+              ))}
             </WorkstationSurfaceList>
           ) : null}
 
@@ -738,7 +960,7 @@ export function WorkstationGatewayOperatorPane() {
         </WorkstationSurfaceCard>
       ) : null}
 
-      {selectedGateway ? (
+      {selectedGateway && showChannelsSection ? (
         <WorkstationSurfaceCard
           title="Personal channel state"
           description="Current login, linked identity, and recent activity for the gateway-backed personal WhatsApp and Telegram lanes."
@@ -780,7 +1002,7 @@ export function WorkstationGatewayOperatorPane() {
         </WorkstationSurfaceCard>
       ) : null}
 
-      {selectedGateway ? (
+      {selectedGateway && showApprovalsSection ? (
         <WorkstationSurfaceCard
           title="Gateway approvals"
           description="Resolve risky local actions without leaving the product shell."
@@ -838,14 +1060,14 @@ export function WorkstationGatewayOperatorPane() {
         </WorkstationSurfaceCard>
       ) : null}
 
-      {selectedGateway ? (
+      {selectedGateway && showActivitySection ? (
         <WorkstationSurfaceCard
-          title="Browser sessions"
-          description="Inspect gateway-owned browser sessions and take over, resume, or interrupt them without dropping into raw APIs."
+          title="Gateway activity"
+          description="Inspect governed browser sessions and recent local browser activity without dropping into raw APIs."
         >
           {browserItems.length === 0 ? (
             <EmptyPanel
-              title="No browser sessions tracked"
+              title="No gateway activity tracked"
               body="Once the gateway starts or attaches a browser session, it will appear here with governed control actions."
             />
           ) : (

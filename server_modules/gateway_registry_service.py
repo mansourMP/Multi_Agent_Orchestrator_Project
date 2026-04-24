@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 from urllib.parse import quote
 
@@ -11,6 +12,61 @@ from server_modules import auth, gateway_state_repository, session_service
 
 DEFAULT_GATEWAY_SESSION_TTL_SECONDS = 15 * 60
 DEFAULT_GATEWAY_HEARTBEAT_INTERVAL_SECONDS = 20
+DEFAULT_GATEWAY_FRESH_HEARTBEAT_SECONDS = max(45, DEFAULT_GATEWAY_HEARTBEAT_INTERVAL_SECONDS * 2)
+
+
+def _parse_utc_ts(value: Any) -> Optional[datetime]:
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    try:
+        return datetime.fromisoformat(raw.replace("Z", "+00:00")).astimezone(timezone.utc)
+    except ValueError:
+        return None
+
+
+def _heartbeat_age_seconds(value: Any) -> Optional[int]:
+    parsed = _parse_utc_ts(value)
+    if parsed is None:
+        return None
+    age = (datetime.now(timezone.utc) - parsed).total_seconds()
+    return max(int(age), 0)
+
+
+def _gateway_connection_payload(registration: Dict[str, Any]) -> Dict[str, Any]:
+    latest_session = gateway_state_repository.get_latest_gateway_session(
+        str(registration.get("gateway_id") or "").strip(),
+        include_revoked=True,
+    )
+    last_heartbeat_at = (
+        (latest_session or {}).get("last_heartbeat_at")
+        or registration.get("last_heartbeat_at")
+    )
+    heartbeat_age_seconds = _heartbeat_age_seconds(last_heartbeat_at)
+    heartbeat_fresh = (
+        heartbeat_age_seconds is not None
+        and heartbeat_age_seconds <= DEFAULT_GATEWAY_FRESH_HEARTBEAT_SECONDS
+    )
+    registration_status = str(registration.get("status") or "").strip().lower()
+    device_trust_state = str(registration.get("device_trust_state") or "").strip().lower()
+    session_status = str((latest_session or {}).get("status") or "").strip().lower()
+    if registration_status == "revoked" or device_trust_state == "revoked":
+        connection_status = "revoked"
+    elif session_status == "connected" and heartbeat_fresh:
+        connection_status = "online"
+    elif session_status in {"connected", "pending"}:
+        connection_status = "degraded"
+    else:
+        connection_status = "offline"
+    return {
+        "connection_status": connection_status,
+        "heartbeat_fresh": bool(heartbeat_fresh),
+        "heartbeat_age_seconds": heartbeat_age_seconds,
+        "latest_session_id": str((latest_session or {}).get("session_id") or "").strip() or None,
+        "latest_session_status": session_status or None,
+        "latest_connected_at": (latest_session or {}).get("connected_at"),
+        "latest_disconnected_at": (latest_session or {}).get("disconnected_at"),
+    }
 
 
 def gateway_registration_public_payload(registration: Dict[str, Any]) -> Dict[str, Any]:
@@ -35,6 +91,7 @@ def gateway_registration_public_payload(registration: Dict[str, Any]) -> Dict[st
         "token_rotated_at": registration.get("token_rotated_at"),
         "revoked_at": registration.get("revoked_at"),
         "revoked_reason": registration.get("revoked_reason"),
+        **_gateway_connection_payload(registration),
     }
 
 

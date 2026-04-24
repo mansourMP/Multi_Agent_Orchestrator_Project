@@ -65,7 +65,17 @@ class AutopilotStatusServiceTests(unittest.TestCase):
     def test_telegram_status_payload_reports_live_for_public_webhook_contract(self) -> None:
         service = self._make_service(
             telegram_snapshot=lambda: {"enabled": True, "connectors_seen": 1, "connectors": {}},
-            telegram_list_entries=lambda: [{"id": "tg-1", "label": "Telegram 1", "workspace_id": "ws-1"}],
+            telegram_list_entries=lambda: [{
+                "id": "tg-1",
+                "label": "Telegram 1",
+                "workspace_id": "ws-1",
+                "metadata": {
+                    "telegram_webhook_registration": {
+                        "status": "registered",
+                        "webhook_url": "https://public.example.com/channels/telegram/webhook/tg-1",
+                    },
+                },
+            }],
             telegram_public_base_url="https://public.example.com",
             telegram_webhook_secret_configured=True,
             telegram_delivery_mode="webhook",

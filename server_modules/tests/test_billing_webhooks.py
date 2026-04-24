@@ -49,8 +49,8 @@ class BillingWebhookTests(unittest.TestCase):
                 "type": "customer.subscription.updated",
                 "data": {
                     "object": {
-                        "id": "sub_team_123",
-                        "customer": "cus_team_123",
+                        "id": "sub_pro_123",
+                        "customer": "cus_pro_123",
                         "status": "active",
                         "currency": "usd",
                         "current_period_start": 1710000000,
@@ -60,8 +60,8 @@ class BillingWebhookTests(unittest.TestCase):
                             "data": [
                                 {
                                     "price": {
-                                        "id": "price_team_123",
-                                        "product": "prod_team_123",
+                                        "id": "price_pro_123",
+                                        "product": "prod_pro_123",
                                         "currency": "usd",
                                         "recurring": {"interval": "month"},
                                     }
@@ -70,7 +70,7 @@ class BillingWebhookTests(unittest.TestCase):
                         },
                         "metadata": {
                             "workspace_id": workspace_id,
-                            "plan_id": "team",
+                            "plan_id": "pro",
                         },
                     }
                 },
@@ -81,7 +81,7 @@ class BillingWebhookTests(unittest.TestCase):
                 os.environ,
                 {
                     "EMPYRALIS_STRIPE_WEBHOOK_SECRET": secret,
-                    "EMPYRALIS_STRIPE_PRICE_IDS": '{"team":"price_team_123"}',
+                    "EMPYRALIS_STRIPE_PRICE_IDS": '{"pro":"price_pro_123"}',
                 },
                 clear=False,
             ), patch.object(
@@ -97,8 +97,8 @@ class BillingWebhookTests(unittest.TestCase):
                 summary = billing_service.workspace_billing_summary_for_workspace_id(workspace_id)
 
         self.assertTrue(result["ok"])
-        self.assertEqual(summary["subscription"]["plan_id"], "team")
-        self.assertEqual(summary["subscription"]["effective_plan_id"], "team")
+        self.assertEqual(summary["subscription"]["plan_id"], "pro")
+        self.assertEqual(summary["subscription"]["effective_plan_id"], "pro")
         self.assertEqual(summary["subscription"]["status"], "active")
 
     def test_cancellation_webhook_downgrades_workspace_back_to_free(self):
@@ -109,15 +109,15 @@ class BillingWebhookTests(unittest.TestCase):
                 "type": "customer.subscription.updated",
                 "data": {
                     "object": {
-                        "id": "sub_team_123",
-                        "customer": "cus_team_123",
+                        "id": "sub_pro_123",
+                        "customer": "cus_pro_123",
                         "status": "active",
                         "currency": "usd",
                         "current_period_start": 1710000000,
                         "current_period_end": 1712592000,
                         "cancel_at_period_end": False,
-                        "items": {"data": [{"price": {"id": "price_team_123", "product": "prod_team_123", "currency": "usd", "recurring": {"interval": "month"}}}]},
-                        "metadata": {"workspace_id": workspace_id, "plan_id": "team"},
+                        "items": {"data": [{"price": {"id": "price_pro_123", "product": "prod_pro_123", "currency": "usd", "recurring": {"interval": "month"}}}]},
+                        "metadata": {"workspace_id": workspace_id, "plan_id": "pro"},
                     }
                 },
             }
@@ -125,14 +125,14 @@ class BillingWebhookTests(unittest.TestCase):
                 "type": "customer.subscription.deleted",
                 "data": {
                     "object": {
-                        "id": "sub_team_123",
-                        "customer": "cus_team_123",
+                        "id": "sub_pro_123",
+                        "customer": "cus_pro_123",
                         "status": "canceled",
                         "currency": "usd",
                         "cancel_at_period_end": False,
                         "canceled_at": 1712000000,
-                        "items": {"data": [{"price": {"id": "price_team_123", "product": "prod_team_123", "currency": "usd", "recurring": {"interval": "month"}}}]},
-                        "metadata": {"workspace_id": workspace_id, "plan_id": "team"},
+                        "items": {"data": [{"price": {"id": "price_pro_123", "product": "prod_pro_123", "currency": "usd", "recurring": {"interval": "month"}}}]},
+                        "metadata": {"workspace_id": workspace_id, "plan_id": "pro"},
                     }
                 },
             }
@@ -141,7 +141,7 @@ class BillingWebhookTests(unittest.TestCase):
                 os.environ,
                 {
                     "EMPYRALIS_STRIPE_WEBHOOK_SECRET": secret,
-                    "EMPYRALIS_STRIPE_PRICE_IDS": '{"team":"price_team_123"}',
+                    "EMPYRALIS_STRIPE_PRICE_IDS": '{"pro":"price_pro_123"}',
                 },
                 clear=False,
             ), patch.object(
@@ -159,7 +159,7 @@ class BillingWebhookTests(unittest.TestCase):
                 billing_service.handle_stripe_webhook(cancel_payload, self._sign(secret, cancel_payload))
                 summary = billing_service.workspace_billing_summary_for_workspace_id(workspace_id)
 
-        self.assertEqual(summary["subscription"]["plan_id"], "team")
+        self.assertEqual(summary["subscription"]["plan_id"], "pro")
         self.assertEqual(summary["subscription"]["status"], "canceled")
         self.assertEqual(summary["subscription"]["effective_plan_id"], "free")
 

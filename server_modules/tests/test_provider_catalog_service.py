@@ -161,7 +161,7 @@ class ProviderCatalogServiceTests(unittest.IsolatedAsyncioTestCase):
     def test_resolve_provider_model_selection_defaults_to_live_anthropic_model(self) -> None:
         selection = provider_catalog_service.resolve_provider_model_selection(provider="anthropic", model=None)
 
-        self.assertEqual(selection, {"provider": "anthropic", "model": "claude-3-7-sonnet-20250219"})
+        self.assertEqual(selection, {"provider": "anthropic", "model": "claude-3-5-haiku-20241022"})
 
     def test_resolve_provider_model_selection_normalizes_prefixed_model_ids(self) -> None:
         selection = provider_catalog_service.resolve_provider_model_selection(

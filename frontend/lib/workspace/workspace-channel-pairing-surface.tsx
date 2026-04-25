@@ -64,15 +64,15 @@ const CHANNEL_PROVIDER_DEFINITIONS: Record<
   }
 > = {
   telegram: {
-    label: 'Telegram',
+    label: 'Telegram Bot',
     commandExample: '/pair EMP-ABCD-EFGH',
     helpText: 'Open the Telegram bot chat, paste the pairing command, then continue your conversation there.',
     capabilityKey: 'telegram_channel_enabled',
   },
   whatsapp: {
-    label: 'WhatsApp',
+    label: 'WhatsApp Business',
     commandExample: 'pair EMP-ABCD-EFGH',
-    helpText: 'Open the WhatsApp channel, paste the pairing command, then continue your conversation there.',
+    helpText: 'Open the WhatsApp Business channel, paste the pairing command, then continue your conversation there.',
     capabilityKey: 'whatsapp_channel_enabled',
   },
 };

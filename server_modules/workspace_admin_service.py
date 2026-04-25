@@ -91,6 +91,23 @@ def _provider_requires_secret(provider_id: str) -> bool:
     )
 
 
+def _provider_secret_payload(provider_id: str, secret_value: str) -> Dict[str, Any]:
+    auth_mode = provider_profiles_service.normalize_auth_mode(provider_id)
+    if not provider_profiles_service.provider_requires_credential(provider_id, auth_mode):
+        return provider_profiles_service.secretless_provider_credentials(provider_id, auth_mode)
+    if not secret_value:
+        return {}
+    if auth_mode in {"api_key", "oauth_token", "access_token"}:
+        return {
+            auth_mode: secret_value,
+            "auth_mode": auth_mode,
+        }
+    return {
+        "api_key": secret_value,
+        "auth_mode": auth_mode or "api_key",
+    }
+
+
 def _provider_default_model(provider_id: str) -> Optional[str]:
     entry = provider_profiles_service.provider_catalog_entry(provider_id)
     model = _read_string(entry.get("default_model"))
@@ -152,14 +169,14 @@ def _cached_provider_model_metadata(
     provider_id: str,
     workspace_id: str,
     credential_id: Optional[str],
-    api_key: str,
+    credentials_payload: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     try:
         credentials: Dict[str, Any]
         if credential_id:
             credentials = provider_profiles_service.resolve_vault_credential(credential_id, workspace_id)
         else:
-            credentials = {"api_key": api_key}
+            credentials = dict(credentials_payload or {})
         _, _, adapter = provider_profiles_service.resolve_provider_adapter(provider_id, credentials)
         model_ids = adapter.list_models(credentials)
     except Exception as exc:
@@ -268,19 +285,20 @@ async def upsert_workspace_provider_credential(
     provider_id = _normalize_provider_id(provider)
     key_value = _read_string(api_key)
     requires_secret = _provider_requires_secret(provider_id)
+    credential_secret_payload = _provider_secret_payload(provider_id, key_value)
 
     credential_id: Optional[str] = None
     credential_payload: Optional[Dict[str, Any]] = None
     if requires_secret:
         if not key_value:
-            raise HTTPException(status_code=400, detail="API key is required.")
+            raise HTTPException(status_code=400, detail="Provider credential is required.")
         credential_payload = await connectors_actions.create_vault_credential(
             CredentialUpsertRequest(
                 label=f"Sage {provider_profiles_service.provider_catalog_entry(provider_id).get('label') or provider_id}",
                 provider=provider_id,
                 workspace_id=resolved_workspace_id,
                 mode="byok",
-                credentials={"api_key": key_value},
+                credentials=credential_secret_payload,
             )
         )
         credential_id = _read_string((credential_payload or {}).get("id")) or None
@@ -308,16 +326,24 @@ async def upsert_workspace_provider_credential(
     )
     next_metadata = {
         **_coerce_dict(current_profile.get("metadata")),
-        **_cached_provider_model_metadata(provider_id, resolved_workspace_id, credential_id, key_value),
+        **_cached_provider_model_metadata(
+            provider_id,
+            resolved_workspace_id,
+            credential_id,
+            credential_secret_payload,
+        ),
     }
 
     profile_payload = await connectors_core.upsert_provider_profile(
         ProviderProfileUpsertRequest(
             id=_read_string(current_profile.get("id")) or None,
             provider=provider_id,
-            label=_read_string(current_profile.get("label"), f"Sage {provider_profiles_service.provider_catalog_entry(provider_id).get('label') or provider_id}"),
+            label=_read_string(
+                current_profile.get("label"),
+                f"Sage {provider_profiles_service.provider_catalog_entry(provider_id).get('label') or provider_id}",
+            ),
             credential_id=credential_id,
-            auth_mode=provider_profiles_service.normalize_auth_mode(provider_id),
+            auth_mode=provider_profiles_service.normalize_auth_mode(provider_id, credentials=credential_secret_payload),
             workspace_id=resolved_workspace_id,
             priority=int(current_profile.get("priority") or 0),
             enabled=True,
@@ -361,7 +387,7 @@ async def refresh_workspace_provider_models(
         provider_id,
         resolved_workspace_id,
         credential_id,
-        "",
+        None,
     )
     next_metadata = {
         **metadata,

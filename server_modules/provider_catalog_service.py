@@ -135,9 +135,18 @@ def _provider_catalog_projection(item: Dict[str, Any]) -> Dict[str, Any]:
     profile_metadata = dict(item.get("profile_metadata") or {}) if isinstance(item.get("profile_metadata"), dict) else {}
     cached_models = _cached_model_records(provider_id, profile_metadata)
     models = cached_models or provider_profiles.provider_model_catalog(provider_id)
+    provider_scopes = [
+        str(scope).strip()
+        for scope in list(catalog_entry.get("provider_scopes") or [])
+        if str(scope).strip()
+    ]
     return {
         **dict(item),
         "hidden": bool(catalog_entry.get("hidden")),
+        "provider_scopes": provider_scopes,
+        "sage_visible": "sage_personal" in provider_scopes and not bool(catalog_entry.get("hidden")),
+        "studio_visible": "studio_safe" in provider_scopes and not bool(catalog_entry.get("hidden")),
+        "local_only": "local_only" in provider_scopes,
         "privacy_posture": governance.get("privacy_posture"),
         "privacy_posture_summary": governance.get("privacy_posture"),
         "jurisdiction": governance.get("jurisdiction"),

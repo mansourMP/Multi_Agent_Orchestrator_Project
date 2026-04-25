@@ -118,6 +118,18 @@ type SageReadinessPill = {
   target: 'gateway' | 'integrations';
 };
 
+type GatewayReadinessRegistration = Record<string, unknown> & {
+  gateway_id?: string | null;
+  status?: string | null;
+  connection_status?: string | null;
+};
+
+type GatewayReadinessDoctorPayload = Record<string, unknown> & {
+  status?: string | null;
+  browser?: Record<string, unknown> | null;
+  browser_attach?: Record<string, unknown> | null;
+};
+
 type SendFailureNotice = {
   message: string;
   retryable: boolean;
@@ -722,9 +734,23 @@ function readExecutionTarget(metadata: Record<string, unknown>): string {
   return typeof selected === 'string' ? selected.trim().toLowerCase() : '';
 }
 
+function readProviderScopes(provider: ProviderCatalogRecord): string[] {
+  const value = provider.provider_scopes;
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value
+    .map((item) => readString(item).toLowerCase())
+    .filter(Boolean);
+}
+
 function isProviderEligibleForModelSelector(provider: ProviderCatalogRecord): boolean {
   const providerId = readString(provider.id).toLowerCase();
-  if (!providerId || providerId === 'openai-codex') {
+  if (!providerId || readString(provider.kind).toLowerCase() !== 'provider' || provider.hidden === true) {
+    return false;
+  }
+  const scopes = readProviderScopes(provider);
+  if (scopes.length > 0 && !scopes.includes('sage_personal')) {
     return false;
   }
   return provider.usable === true || provider.active === true;
@@ -732,7 +758,11 @@ function isProviderEligibleForModelSelector(provider: ProviderCatalogRecord): bo
 
 function isProviderEligibleForWorkspaceDefault(provider: ProviderCatalogRecord): boolean {
   const providerId = readString(provider.id).toLowerCase();
-  if (!providerId || providerId === 'openai-codex') {
+  if (!providerId || readString(provider.kind).toLowerCase() !== 'provider' || provider.hidden === true) {
+    return false;
+  }
+  const scopes = readProviderScopes(provider);
+  if (scopes.length > 0 && !scopes.includes('sage_personal')) {
     return false;
   }
   const state = readString(provider.state).toLowerCase();
@@ -1117,6 +1147,16 @@ function latestApprovalSummary(approval: CanonicalApprovalSummary | undefined): 
   return readString(approval.prompt) || 'A pending approval is attached to this thread.';
 }
 
+function isGatewayBrowserMessage(message: string): boolean {
+  const normalized = message.trim().toLowerCase();
+  return normalized.includes('browser attach')
+    || normalized.includes('browser session')
+    || normalized.includes('signed-in')
+    || normalized.includes('localhost')
+    || normalized.includes('private page')
+    || normalized.includes('private session');
+}
+
 function classifyStatusNotice(message: string): {
   tone: StatusNoticeTone;
   title: string;
@@ -1133,6 +1173,16 @@ function classifyStatusNotice(message: string): {
       requiresLocalAccess: false,
       actionTarget: null,
       actionLabel: null,
+    };
+  }
+  if (isGatewayBrowserMessage(message)) {
+    return {
+      tone: 'warning',
+      title: 'Gateway browser needed',
+      body: 'Localhost pages, signed-in sites, and private browser sessions stay on this device. Open Gateway when Sage needs browser access or approval.',
+      requiresLocalAccess: true,
+      actionTarget: 'gateway',
+      actionLabel: 'Open Gateway',
     };
   }
   if (isLocalCompanionGateMessage(message)) {
@@ -1182,6 +1232,69 @@ function isLocalCompanionGateMessage(message: string): boolean {
     || normalized.includes('requires local companion execution')
     || normalized.includes('cannot run that request in this workspace right now')
     || normalized.includes('path must stay inside local companion root');
+}
+
+function browserReadinessPill(
+  doctor: GatewayReadinessDoctorPayload | null,
+  {
+    gatewayOnline,
+  }: {
+    gatewayOnline: boolean;
+  },
+): SageReadinessPill | null {
+  if (!gatewayOnline || !doctor) {
+    return null;
+  }
+  const browserRecord = readObject(doctor.browser);
+  const browserAttachRecord = readObject(doctor.browser_attach);
+  const browserStatus = readString(browserRecord.status).toLowerCase();
+  const attachStatus = readString(browserAttachRecord.status).toLowerCase();
+  const attachApprovalRequiredCount = readNumber(browserAttachRecord.approval_required_count, 0);
+  const attachFailedCount = readNumber(browserAttachRecord.failed_count, 0);
+  const attachPendingCount = readNumber(browserAttachRecord.pending_count, 0);
+  const attachCount = readNumber(browserAttachRecord.count, 0);
+
+  if (attachApprovalRequiredCount > 0) {
+    return {
+      id: 'browser-approval',
+      label: 'Browser: Approval needed',
+      tone: 'warning',
+      target: 'gateway',
+    };
+  }
+  if (attachFailedCount > 0 || attachStatus === 'fail') {
+    return {
+      id: 'browser-attach-failed',
+      label: 'Browser: Attach failed',
+      tone: 'danger',
+      target: 'gateway',
+    };
+  }
+  if (attachCount > 0 && attachPendingCount > 0) {
+    return {
+      id: 'browser-attach-pending',
+      label: 'Browser: Finish attach',
+      tone: 'warning',
+      target: 'gateway',
+    };
+  }
+  if (browserStatus === 'fail') {
+    return {
+      id: 'browser-unavailable',
+      label: 'Browser: Unavailable',
+      tone: 'danger',
+      target: 'gateway',
+    };
+  }
+  if (browserStatus === 'warn') {
+    return {
+      id: 'browser-attention',
+      label: 'Browser: Needs attention',
+      tone: 'warning',
+      target: 'gateway',
+    };
+  }
+  return null;
 }
 
 function normalizeSageMemorySnapshot(payload: unknown): SageMemorySnapshot {
@@ -1496,6 +1609,7 @@ export function WorkstationChatPane() {
   ]);
   const [selectedModel, setSelectedModel] = useState<string>('');
   const [providerCatalog, setProviderCatalog] = useState<ProviderCatalogRecord[]>([]);
+  const [browserGatewayDoctor, setBrowserGatewayDoctor] = useState<GatewayReadinessDoctorPayload | null>(null);
   const [reasoningEffort, setReasoningEffort] = useState<ChatReasoningEffort>('medium');
   const [isApprovalsSheetOpen, setIsApprovalsSheetOpen] = useState(false);
   const [isMemorySheetOpen, setIsMemorySheetOpen] = useState(false);
@@ -1525,6 +1639,29 @@ export function WorkstationChatPane() {
       setModelOptions((current) => (current.length > 0 ? current : [disconnectedModelOption()]));
     }
   }, [services.client]);
+
+  const refreshBrowserGatewayReadiness = useCallback(async () => {
+    const registrationsPayload = await services.client.requestJson<Record<string, unknown>>({
+      path: `/api/gateway/registrations?workspace_id=${encodeURIComponent(bootstrap.workspace.id)}`,
+      allowStatuses: [404],
+    });
+    const registrations = Array.isArray(registrationsPayload?.items)
+      ? registrationsPayload.items.filter((item): item is GatewayReadinessRegistration => Boolean(item) && typeof item === 'object')
+      : [];
+    const selectedGateway = registrations.find((item) =>
+      readString(item.connection_status || item.status).toLowerCase() === 'online',
+    ) ?? registrations[0] ?? null;
+    const gatewayId = readString(selectedGateway?.gateway_id) || null;
+    if (!gatewayId) {
+      setBrowserGatewayDoctor(null);
+      return;
+    }
+    const doctorPayload = await services.client.requestJson<GatewayReadinessDoctorPayload>({
+      path: `/api/gateway/registrations/${encodeURIComponent(gatewayId)}/doctor`,
+      allowStatuses: [403, 404],
+    });
+    setBrowserGatewayDoctor(doctorPayload && typeof doctorPayload === 'object' ? doctorPayload : null);
+  }, [bootstrap.workspace.id, services.client]);
 
   const writeThreadState = (nextThread: CanonicalChatThreadState) => {
     services.queryClient.set(threadQueryKey(nextThread.threadId), nextThread);
@@ -2310,8 +2447,14 @@ export function WorkstationChatPane() {
         target: 'gateway',
       });
     }
+    const browserPill = browserReadinessPill(browserGatewayDoctor, {
+      gatewayOnline: localCompanionOnline || readString(browserGatewayDoctor?.status).toLowerCase() === 'healthy',
+    });
+    if (browserPill) {
+      pills.push(browserPill);
+    }
     return pills;
-  }, [localCompanionOnline, selectedProviderContext.providerLabel]);
+  }, [browserGatewayDoctor, localCompanionOnline, selectedProviderContext.providerLabel]);
   const showContextStrip = true;
 
   useEffect(() => {
@@ -2323,17 +2466,19 @@ export function WorkstationChatPane() {
           return;
         }
       });
+    void refreshBrowserGatewayReadiness().catch(() => undefined);
     return () => {
       cancelled = true;
     };
-  }, [refreshProviderCatalog]);
+  }, [refreshBrowserGatewayReadiness, refreshProviderCatalog]);
 
   useEffect(() => subscribeWorkstationProviderChanged((detail) => {
     if (detail.workspaceId !== bootstrap.workspace.id) {
       return;
     }
     void refreshProviderCatalog();
-  }), [bootstrap.workspace.id, refreshProviderCatalog]);
+    void refreshBrowserGatewayReadiness();
+  }), [bootstrap.workspace.id, refreshBrowserGatewayReadiness, refreshProviderCatalog]);
 
   useEffect(() => {
     if (typeof document === 'undefined') {
@@ -2341,10 +2486,12 @@ export function WorkstationChatPane() {
     }
     const handleFocus = () => {
       void refreshProviderCatalog();
+      void refreshBrowserGatewayReadiness();
     };
     const handleVisibilityChange = () => {
       if (document.visibilityState === 'visible') {
         void refreshProviderCatalog();
+        void refreshBrowserGatewayReadiness();
       }
     };
     window.addEventListener('focus', handleFocus);
@@ -2353,7 +2500,7 @@ export function WorkstationChatPane() {
       window.removeEventListener('focus', handleFocus);
       document.removeEventListener('visibilitychange', handleVisibilityChange);
     };
-  }, [refreshProviderCatalog]);
+  }, [refreshBrowserGatewayReadiness, refreshProviderCatalog]);
 
   useEffect(() => {
     if (!modelOptions.some((option) => option.id === selectedModel)) {

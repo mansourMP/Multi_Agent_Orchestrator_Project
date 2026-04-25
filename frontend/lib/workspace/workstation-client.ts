@@ -225,18 +225,29 @@ export type ProviderCatalogModelRecord = Record<string, unknown> & {
 
 export type ProviderCatalogRecord = Record<string, unknown> & {
   id?: string | null;
+  kind?: string | null;
   label?: string | null;
   state?: string | null;
   usable?: boolean | null;
   active?: boolean | null;
   configured?: boolean | null;
+  hidden?: boolean | null;
   default_model?: string | null;
+  default_auth_mode?: string | null;
+  auth_modes?: Record<string, unknown>[] | null;
+  provider_scopes?: string[] | null;
+  sage_visible?: boolean | null;
+  studio_visible?: boolean | null;
+  local_only?: boolean | null;
   privacy_posture?: string | null;
   jurisdiction?: string | null;
   residency?: string | null;
   local_self_hosted_compatible?: boolean | null;
   capability_labels?: string[] | null;
   models?: ProviderCatalogModelRecord[] | null;
+  models_source?: string | null;
+  models_synced_at?: string | null;
+  models_error?: string | null;
 };
 
 export type ProviderProfileRecord = Record<string, unknown> & {

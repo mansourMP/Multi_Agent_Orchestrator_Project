@@ -24,6 +24,7 @@ import { ThemeProvider } from "@/src/theme";
 import { queryClient } from "@/src/lib/queryClient";
 import { RootBottomSheetProvider } from "@/src/components/system/BottomSheetScaffold";
 import { MOBILE_STACK_MOTION_PRESETS } from "@/src/ui/motion";
+import { AppUpdateBanner } from "@/src/components/system/AppUpdateBanner";
 import {
   configureNotificationChannelAsync,
   getNotificationHref,
@@ -97,6 +98,7 @@ export default function RootLayout() {
               <RootBottomSheetProvider>
                 <StatusBar style="dark" />
                 <MobileRuntimeNotificationBridge />
+                <AppUpdateBanner />
                 <Stack screenOptions={{ headerShown: false }}>
                   <Stack.Screen name="index" />
                   <Stack.Screen

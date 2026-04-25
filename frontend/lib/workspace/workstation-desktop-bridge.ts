@@ -8,6 +8,16 @@ type RawDesktopWindowState = {
   maximized?: boolean;
 };
 
+export type WorkstationDesktopAppUpdateState = {
+  configured: boolean;
+  available: boolean;
+  current_version?: string;
+  version?: string | null;
+  body?: string | null;
+  state?: string | null;
+  detail?: string | null;
+};
+
 type RawEmpyralisDesktopBridge = {
   desktop?: boolean;
   platform?: string;
@@ -21,6 +31,8 @@ type RawEmpyralisDesktopBridge = {
   openPermissionSettings?: (permission: string) => Promise<boolean>;
   bootstrapMachineEnrollment?: (intent: unknown) => Promise<unknown>;
   openaiCodexOauthLogin?: () => Promise<unknown>;
+  checkAppUpdate?: () => Promise<WorkstationDesktopAppUpdateState | null>;
+  installAppUpdate?: () => Promise<WorkstationDesktopAppUpdateState | null>;
 };
 
 type DesktopWindowLike = Window & {
@@ -56,6 +68,10 @@ export type WorkstationDesktopBridgeState = {
   };
   openExternal: (target: string) => Promise<boolean>;
   openPermissionSettings: (permission: 'screen_recording' | 'accessibility' | 'filesystem') => Promise<boolean>;
+  updates: {
+    check: () => Promise<WorkstationDesktopAppUpdateState | null>;
+    install: () => Promise<WorkstationDesktopAppUpdateState | null>;
+  };
 };
 
 export function resolveWorkstationDesktopBridge(
@@ -213,6 +229,20 @@ export function useWorkstationDesktopBridge(): WorkstationDesktopBridgeState {
           return false;
         }
         return Boolean(await desktopBridge.openPermissionSettings(permission));
+      },
+      updates: {
+        check: async () => {
+          if (!desktopBridge || typeof desktopBridge.checkAppUpdate !== 'function') {
+            return null;
+          }
+          return await desktopBridge.checkAppUpdate();
+        },
+        install: async () => {
+          if (!desktopBridge || typeof desktopBridge.installAppUpdate !== 'function') {
+            return null;
+          }
+          return await desktopBridge.installAppUpdate();
+        },
       },
     };
   }, [bootstrap.runtime.runtimeTargets, desktopBridge, windowState.maximized]);

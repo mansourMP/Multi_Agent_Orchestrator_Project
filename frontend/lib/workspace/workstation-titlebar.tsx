@@ -3,6 +3,7 @@
 import type { ReactNode } from 'react';
 import Link from 'next/link';
 
+import { WorkstationAppUpdateAction } from '@/lib/workspace/workstation-app-update-action';
 import { DesktopWindowControls } from '@/lib/workspace/desktop-window-controls';
 import { useWorkstationDesktopBridge } from '@/lib/workspace/workstation-desktop-bridge';
 
@@ -58,6 +59,7 @@ export function WorkstationTitlebar({
       )}
       <div className="workstation-titlebar__right">
         <div className="workstation-titlebar__actions" id="workstation-titlebar-actions-slot">
+          <WorkstationAppUpdateAction />
           {actions}
         </div>
         <DesktopWindowControls />

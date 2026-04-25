@@ -65,7 +65,7 @@ function normalizeProviderCatalog(payload: unknown): ProviderSnapshot[] {
       defaultModel: readOptionalString(provider.default_model),
       activeSource: readOptionalString(provider.active_source),
       stateDetail: readOptionalString(provider.state_detail),
-      hidden: provider.hidden === true,
+      hidden: Boolean(provider.hidden),
       modelsError: readOptionalString(provider.models_error),
       modelsSyncedAt: readOptionalString(provider.models_synced_at),
       models: Array.isArray(provider.models)

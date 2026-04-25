@@ -81,9 +81,65 @@ class ProviderCatalogServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("jurisdiction", providers["openai"])
         self.assertTrue(any(model["id"] == "gpt-live-new" for model in providers["openai"]["models"]))
         self.assertEqual(providers["openai"]["models_source"], "workspace_cached_models")
+        self.assertEqual(
+            providers["openai"]["provider_scopes"],
+            ["sage_personal", "workspace_api", "studio_safe"],
+        )
+        self.assertTrue(providers["openai"]["sage_visible"])
+        self.assertTrue(providers["openai"]["studio_visible"])
         self.assertTrue(any(model["id"] == "deepseek-chat" for model in providers["deepseek"]["models"]))
         self.assertEqual(providers["deepseek"]["state"], "active")
         self.assertEqual(providers["deepseek"]["active_source"], "env-deepseek")
+
+    async def test_list_workspace_provider_catalog_marks_codex_as_sage_only(self) -> None:
+        connection_truth = {
+            "workspace_id": "ws-1",
+            "summary": {"provider_total": 1},
+            "providers": [
+                {
+                    "id": "openai-codex",
+                    "kind": "provider",
+                    "label": "OpenAI Codex",
+                    "state": "active",
+                    "default_model": "gpt-5.4",
+                    "provider_scopes": ["sage_personal"],
+                },
+            ],
+        }
+        runtime_truth = {
+            "workspace_id": "ws-1",
+            "summary": {"provider_total": 1, "active": 1, "configured": 0, "setup_required": 0, "unavailable": 0, "degraded": 0},
+            "providers": [
+                {
+                    "id": "openai-codex",
+                    "label": "OpenAI Codex",
+                    "state": "active",
+                    "usable": True,
+                    "configured": True,
+                    "active": True,
+                    "credential_sources": ["workspace_profile"],
+                    "active_source": "workspace_profile",
+                    "identity_owner": "workspace",
+                    "identity_owner_label": "Workspace connection",
+                    "identity_boundary_note": "Saved Codex transport only extends execution capability.",
+                    "machine_bound": False,
+                },
+            ],
+        }
+
+        with patch(
+            "server_modules.provider_catalog_service.provider_profiles.build_workspace_provider_connection_truth",
+            return_value=connection_truth,
+        ), patch(
+            "server_modules.provider_catalog_service.provider_profiles.build_provider_runtime_truth",
+            return_value=runtime_truth,
+        ):
+            payload = await provider_catalog_service.list_workspace_provider_catalog(workspace_id="ws-1")
+
+        providers = {item["id"]: item for item in payload["providers"]}
+        self.assertEqual(providers["openai-codex"]["provider_scopes"], ["sage_personal"])
+        self.assertTrue(providers["openai-codex"]["sage_visible"])
+        self.assertFalse(providers["openai-codex"]["studio_visible"])
 
     def test_openai_codex_catalog_exposes_reasoning_levels(self) -> None:
         models = provider_catalog_service.provider_profiles.provider_model_catalog("openai-codex")

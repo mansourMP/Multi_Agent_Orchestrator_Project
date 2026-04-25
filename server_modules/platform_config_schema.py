@@ -70,6 +70,7 @@ class PlatformProviderEntryConfig(BaseModel):
     alias_for: Optional[str] = None
     base_url: Optional[str] = None
     hidden: bool = False
+    provider_scopes: List[str] = Field(default_factory=list)
 
 
 class PlatformDefaultsConfig(BaseModel):
@@ -148,6 +149,7 @@ def build_platform_provider_catalog_config(
                 "alias_for": _token(raw_entry.get("alias_for")),
                 "base_url": _token(raw_entry.get("base_url")),
                 "hidden": bool(raw_entry.get("hidden")),
+                "provider_scopes": _token_list(raw_entry.get("provider_scopes")),
             }
         )
 

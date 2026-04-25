@@ -357,6 +357,44 @@ class WorkspaceProviderCredentialFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(request.metadata["cached_models_source"], "provider_adapter")
         self.assertIsNone(request.metadata["cached_models_error"])
 
+    @patch("server_modules.workspace_admin_service.connectors_core.upsert_provider_profile")
+    @patch("server_modules.workspace_admin_service.connectors_core.list_provider_profiles", return_value={"items": []})
+    @patch("server_modules.workspace_admin_service.connectors_actions.create_vault_credential")
+    @patch("server_modules.workspace_admin_service.provider_profiles_service.resolve_vault_credential", return_value={"oauth_token": "codex-token", "auth_mode": "oauth_token"})
+    @patch("server_modules.workspace_admin_service.provider_profiles_service.resolve_provider_adapter")
+    @patch("server_modules.workspace_admin_service._enforce_owner_scope", return_value="ws-1")
+    async def test_upsert_workspace_provider_credential_maps_codex_secret_to_oauth_token(
+        self,
+        _enforce_owner_scope_mock,
+        resolve_provider_adapter_mock,
+        _resolve_vault_credential_mock,
+        create_vault_credential_mock,
+        _list_provider_profiles_mock,
+        upsert_provider_profile_mock,
+    ):
+        adapter = MagicMock()
+        adapter.list_models.return_value = ["gpt-5.4", "gpt-5.3-codex"]
+        resolve_provider_adapter_mock.return_value = ("openai-codex", "openai-codex", adapter)
+        create_vault_credential_mock.return_value = {"id": "cred-codex"}
+        upsert_provider_profile_mock.return_value = {"item": {"id": "profile-1"}}
+
+        await workspace_admin_service.upsert_workspace_provider_credential(
+            workspace_id="ws-1",
+            current_user={"user_id": "owner-1"},
+            provider="openai-codex",
+            api_key="codex-token",
+            model=None,
+        )
+
+        request = create_vault_credential_mock.call_args.args[0]
+        self.assertEqual(
+            request.credentials,
+            {"oauth_token": "codex-token", "auth_mode": "oauth_token"},
+        )
+        profile_request = upsert_provider_profile_mock.call_args.args[0]
+        self.assertEqual(profile_request.auth_mode, "oauth_token")
+        self.assertEqual(profile_request.metadata["cached_models"], ["gpt-5.4", "gpt-5.3-codex"])
+
 
 class TelegramWebhookRegistrationTests(unittest.IsolatedAsyncioTestCase):
     @patch.dict(

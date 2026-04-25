@@ -19,6 +19,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use tauri::{LogicalSize, Manager, RunEvent, Runtime, Size, WebviewUrl, WebviewWindowBuilder};
+use tauri_plugin_updater::UpdaterExt;
 use url::Url;
 
 const RUNTIME_HOST: &str = "127.0.0.1";
@@ -74,6 +75,128 @@ struct OverlayActionEvent {
 #[serde(rename_all = "snake_case")]
 struct DesktopWindowState {
     maximized: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "snake_case")]
+struct DesktopAppUpdateState {
+    configured: bool,
+    available: bool,
+    current_version: String,
+    version: Option<String>,
+    body: Option<String>,
+    state: String,
+    detail: Option<String>,
+}
+
+fn desktop_update_current_version(app: &tauri::AppHandle) -> String {
+    app.package_info().version.to_string()
+}
+
+fn desktop_update_env_endpoints() -> Result<Option<Vec<Url>>, String> {
+    let configured = std::env::var("TAURI_UPDATER_ENDPOINTS")
+        .ok()
+        .map(|value| {
+            value
+                .split(',')
+                .filter_map(|item| {
+                    let normalized = item.trim();
+                    (!normalized.is_empty()).then_some(normalized.to_string())
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    if !configured.is_empty() {
+        let mut endpoints = Vec::with_capacity(configured.len());
+        for endpoint in configured {
+            endpoints.push(
+                Url::parse(&endpoint)
+                    .map_err(|error| format!("Invalid TAURI_UPDATER_ENDPOINTS value: {error}"))?,
+            );
+        }
+        return Ok(Some(endpoints));
+    }
+
+    let repository = std::env::var("GITHUB_REPOSITORY")
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
+    if let Some(repository) = repository {
+        let endpoint = format!("https://github.com/{repository}/releases/latest/download/latest.json");
+        return Ok(Some(vec![
+            Url::parse(&endpoint)
+                .map_err(|error| format!("Invalid derived updater endpoint: {error}"))?,
+        ]));
+    }
+
+    Ok(None)
+}
+
+fn desktop_update_env_pubkey() -> Option<String> {
+    std::env::var("TAURI_UPDATER_PUBLIC_KEY")
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+fn desktop_update_is_unconfigured_error(message: &str) -> bool {
+    let normalized = message.trim().to_lowercase();
+    normalized.contains("does not have any endpoints set")
+        || normalized.contains("tauri_updater_public_key")
+        || normalized.contains("failed to decode public key")
+        || normalized.contains("base64")
+}
+
+fn desktop_update_status(
+    app: &tauri::AppHandle,
+    configured: bool,
+    available: bool,
+    state: &str,
+    version: Option<String>,
+    body: Option<String>,
+    detail: Option<String>,
+) -> DesktopAppUpdateState {
+    DesktopAppUpdateState {
+        configured,
+        available,
+        current_version: desktop_update_current_version(app),
+        version,
+        body,
+        state: state.to_string(),
+        detail,
+    }
+}
+
+fn desktop_update_unconfigured(app: &tauri::AppHandle, detail: Option<String>) -> DesktopAppUpdateState {
+    desktop_update_status(
+        app,
+        false,
+        false,
+        "unconfigured",
+        None,
+        None,
+        Some(
+            detail.unwrap_or_else(|| {
+                "Configure TAURI_UPDATER_PUBLIC_KEY and TAURI_UPDATER_ENDPOINTS, or build with tauri.release.conf.json."
+                    .to_string()
+            }),
+        ),
+    )
+}
+
+fn desktop_update_builder(app: &tauri::AppHandle) -> Result<tauri_plugin_updater::Updater, String> {
+    let mut builder = app.updater_builder();
+    if let Some(pubkey) = desktop_update_env_pubkey() {
+        builder = builder.pubkey(pubkey);
+    }
+    if let Some(endpoints) = desktop_update_env_endpoints()? {
+        builder = builder
+            .endpoints(endpoints)
+            .map_err(|error| format!("Failed to configure updater endpoints: {error}"))?;
+    }
+    builder
+        .build()
+        .map_err(|error| format!("Failed to initialize desktop updater: {error}"))
 }
 
 #[tauri::command]
@@ -161,9 +284,18 @@ fn desktop_window_toggle_maximize(app: tauri::AppHandle) -> Result<DesktopWindow
     let window = app
         .get_webview_window(WINDOW_LABEL)
         .ok_or_else(|| "Desktop window is unavailable.".to_string())?;
-    window
-        .toggle_maximize()
-        .map_err(|error| format!("Failed to toggle desktop window maximize: {error}"))?;
+    let maximized = window
+        .is_maximized()
+        .map_err(|error| format!("Failed to inspect desktop window maximize state: {error}"))?;
+    if maximized {
+        window
+            .unmaximize()
+            .map_err(|error| format!("Failed to restore desktop window size: {error}"))?;
+    } else {
+        window
+            .maximize()
+            .map_err(|error| format!("Failed to maximize desktop window: {error}"))?;
+    }
     let maximized = window
         .is_maximized()
         .map_err(|error| format!("Failed to inspect desktop window maximize state: {error}"))?;
@@ -1545,6 +1677,18 @@ fn desktop_bridge_script() -> String {
       }}
       throw new Error("OpenAI provider linking is only available in the Empyralis desktop app.");
     }},
+    checkAppUpdate: async () => {{
+      if (window.__TAURI_INTERNALS__ && typeof window.__TAURI_INTERNALS__.invoke === "function") {{
+        return await window.__TAURI_INTERNALS__.invoke("desktop_app_update_check");
+      }}
+      return null;
+    }},
+    installAppUpdate: async () => {{
+      if (window.__TAURI_INTERNALS__ && typeof window.__TAURI_INTERNALS__.invoke === "function") {{
+        return await window.__TAURI_INTERNALS__.invoke("desktop_app_update_install");
+      }}
+      throw new Error("App updates are only available in the Empyralis desktop app.");
+    }},
   }};
   window.empyralisDesktop = Object.assign(window.empyralisDesktop || {{}}, bridge);
   window.orionDesktop = window.empyralisDesktop;
@@ -2059,6 +2203,89 @@ fn bootstrap_machine_enrollment(
     run_machine_bootstrap(&state, intent)
 }
 
+#[tauri::command]
+async fn desktop_app_update_check(app: tauri::AppHandle) -> Result<DesktopAppUpdateState, String> {
+    let updater = match desktop_update_builder(&app) {
+        Ok(updater) => updater,
+        Err(error) => return Ok(desktop_update_unconfigured(&app, Some(error))),
+    };
+
+    match updater.check().await {
+        Ok(Some(update)) => Ok(desktop_update_status(
+            &app,
+            true,
+            true,
+            "available",
+            Some(update.version),
+            update.body,
+            Some("Update ready to install.".to_string()),
+        )),
+        Ok(None) => Ok(desktop_update_status(
+            &app,
+            true,
+            false,
+            "up_to_date",
+            None,
+            None,
+            Some("Empyralis is up to date.".to_string()),
+        )),
+        Err(error) => {
+            let message = error.to_string();
+            if desktop_update_is_unconfigured_error(&message) {
+                Ok(desktop_update_unconfigured(&app, Some(message)))
+            } else {
+                Ok(desktop_update_status(
+                    &app,
+                    true,
+                    false,
+                    "error",
+                    None,
+                    None,
+                    Some(message),
+                ))
+            }
+        }
+    }
+}
+
+#[tauri::command]
+async fn desktop_app_update_install(app: tauri::AppHandle) -> Result<DesktopAppUpdateState, String> {
+    let updater = desktop_update_builder(&app)?;
+    let update = updater
+        .check()
+        .await
+        .map_err(|error| format!("Failed to check for updates: {error}"))?;
+    let Some(update) = update else {
+        return Ok(desktop_update_status(
+            &app,
+            true,
+            false,
+            "up_to_date",
+            None,
+            None,
+            Some("Empyralis is already up to date.".to_string()),
+        ));
+    };
+
+    let version = Some(update.version.clone());
+    let body = update.body.clone();
+    update
+        .download_and_install(|_, _| {}, || {})
+        .await
+        .map_err(|error| format!("Failed to install the update: {error}"))?;
+    app.request_restart();
+
+    Ok(desktop_update_status(
+        &app,
+        true,
+        true,
+        "installing",
+        version,
+        body,
+        Some("Restarting Empyralis to finish the update.".to_string()),
+    ))
+}
+
 pub fn run() {
     disable_macos_window_restoration();
     tauri::Builder::default()
@@ -2073,7 +2300,9 @@ pub fn run() {
             desktop_window_start_drag,
             open_permission_settings,
             openai_codex_oauth_login,
-            bootstrap_machine_enrollment
+            bootstrap_machine_enrollment,
+            desktop_app_update_check,
+            desktop_app_update_install
         ])
         .setup(|app| {
             #[cfg(target_os = "macos")]

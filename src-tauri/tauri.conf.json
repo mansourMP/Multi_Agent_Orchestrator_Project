@@ -28,9 +28,7 @@
     "externalBin": [
       "../dist/empyralis-backend"
     ],
-    "resources": [
-      "../frontend/app/favicon.ico"
-    ]
+    "resources": []
   },
   "plugins": {
     "updater": {

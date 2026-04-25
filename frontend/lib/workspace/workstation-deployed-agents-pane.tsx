@@ -168,6 +168,8 @@ type ProviderCatalogSnapshot = {
   label: string;
   state: string;
   defaultModel: string | null;
+  studioVisible: boolean;
+  providerScopes: string[];
   privacyPosture: string | null;
   jurisdiction: string | null;
   residency: string | null;
@@ -331,13 +333,13 @@ const SPECIALIST_CONNECTOR_CARDS: ReadonlyArray<{
 }> = [
   {
     id: 'telegram',
-    label: 'Telegram',
+    label: 'Telegram Bot',
     image: '/integrations/telegram.png',
     capabilityTags: ['Messages', 'Replies'],
   },
   {
     id: 'whatsapp',
-    label: 'WhatsApp',
+    label: 'WhatsApp Business',
     image: '/integrations/whatsapp.png',
     connectorIds: ['whatsapp_twilio'],
     capabilityTags: ['Messages', 'Autopilot'],
@@ -612,13 +614,37 @@ function readProviderCatalogItems(payload: unknown): ProviderCatalogRecord[] {
     : [];
 }
 
+function studioProviderRank(providerId: string): number {
+  switch (providerId) {
+    case 'gemini':
+      return 0;
+    case 'openai':
+      return 1;
+    case 'anthropic':
+      return 2;
+    case 'deepseek':
+      return 3;
+    case 'mistral':
+      return 4;
+    case 'qwen':
+      return 5;
+    case 'vertex':
+      return 6;
+    default:
+      return 99;
+  }
+}
+
 function normalizeProviderCatalog(payload: unknown): ProviderCatalogSnapshot[] {
   return readProviderCatalogItems(payload)
     .map((provider) => {
       const providerId = readString(provider.id);
-      if (!providerId) {
+      if (!providerId || readString(provider.kind).toLowerCase() !== 'provider' || provider.hidden === true) {
         return null;
       }
+      const providerScopes = Array.isArray(provider.provider_scopes)
+        ? provider.provider_scopes.map((item) => readString(item).toLowerCase()).filter(Boolean)
+        : [];
       const models = Array.isArray(provider.models)
         ? provider.models
           .filter((item): item is ProviderCatalogModelRecord => Boolean(item) && typeof item === 'object')
@@ -640,6 +666,8 @@ function normalizeProviderCatalog(payload: unknown): ProviderCatalogSnapshot[] {
         label: readString(provider.label, humanizeToken(providerId, providerId)),
         state: readString(provider.state, 'unknown'),
         defaultModel: readOptionalString(provider.default_model),
+        studioVisible: providerScopes.includes('studio_safe'),
+        providerScopes,
         privacyPosture: readOptionalString(provider.privacy_posture),
         jurisdiction: readOptionalString(provider.jurisdiction),
         residency: readOptionalString(provider.residency),
@@ -648,7 +676,15 @@ function normalizeProviderCatalog(payload: unknown): ProviderCatalogSnapshot[] {
         models,
       } satisfies ProviderCatalogSnapshot;
     })
-    .filter((item): item is ProviderCatalogSnapshot => Boolean(item));
+    .filter((item): item is ProviderCatalogSnapshot => Boolean(item))
+    .filter((item) => item.studioVisible)
+    .sort((left, right) => {
+      const rankDelta = studioProviderRank(left.id) - studioProviderRank(right.id);
+      if (rankDelta !== 0) {
+        return rankDelta;
+      }
+      return left.label.localeCompare(right.label);
+    });
 }
 
 function normalizeTelegramIssue(value: unknown): TelegramReadinessIssue | null {
@@ -1065,6 +1101,28 @@ function formatOutcomeSummary(snapshot: AgentAnalyticsSnapshot | null): string {
     .slice(0, 3)
     .map(([key, value]) => `${humanizeToken(key, key)} ${value}`)
     .join(' · ');
+}
+
+function formatRosterMetricValue(value: number, emptyLabel: string): string {
+  return value > 0 ? formatCompactCount(value) : emptyLabel;
+}
+
+function formatRosterOutcomeMetric(snapshot: AgentAnalyticsSnapshot | null): { label: string; value: string } {
+  if (!snapshot || snapshot.outcomes.length === 0) {
+    return { label: 'Outcome', value: 'None yet' };
+  }
+  const [topOutcome, topCount] = snapshot.outcomes[0];
+  return {
+    label: humanizeToken(topOutcome, 'Outcome'),
+    value: formatCompactCount(topCount),
+  };
+}
+
+function formatRosterSpendMetric(snapshot: AgentAnalyticsSnapshot | null): string {
+  if (!snapshot || snapshot.currentBurnUsd === null || !Number.isFinite(snapshot.currentBurnUsd)) {
+    return 'n/a';
+  }
+  return formatUsd(snapshot.currentBurnUsd);
 }
 
 function matchesConversationFilters(
@@ -2286,17 +2344,14 @@ export function WorkstationDeployedAgentsPane({
                           const agentId = readString(agent.id, `deployed-agent-${index}`);
                           const selected = agentId === selectedAgentId;
                           const agentMetrics = agentMetricsById[agentId] ?? null;
+                          const agentAnalytics = agentAnalyticsById[agentId] ?? null;
                           const channels = listEnabledChannels(agent.channels);
                           const channelLabel = humanizeToken(channels[0] || 'no_channel', 'No channel');
-                          const memoryEnabled =
-                            readRecord(readRecord(agent.config).memory_policy).memory_enabled === true
-                            || readRecord(agent.metadata).memory_enabled === true;
                           const stateLabel = deploymentStateLabel(agent.deployment_state);
                           const modelLabel = formatDeploymentModelLabel(agent, providerCatalogIndex);
                           const displayName = readString(agent.name, agentId);
                           const latestActivityLabel = agentMetrics?.latestActivityLabel ?? 'Syncing recent activity';
-                          const conversationLabel = agentMetrics?.conversationCountLabel ?? 'Syncing inbox';
-                          const escalationLabel = agentMetrics?.unresolvedEscalationsLabel ?? 'Checking escalations';
+                          const outcomeMetric = formatRosterOutcomeMetric(agentAnalytics);
                           return (
                             <button
                               key={agentId}
@@ -2325,14 +2380,32 @@ export function WorkstationDeployedAgentsPane({
                                   </span>
                                 </span>
                               </span>
-                              <span className="deployed-agents-card__meta">{latestActivityLabel}</span>
-                              <span className="deployed-agents-card__subtle">
-                                {`${conversationLabel} · ${memoryEnabled ? 'Memory on' : 'Memory off'} · ${escalationLabel}`}
-                              </span>
                               <div className="deployed-agents-card__badges">
                                 <span className="deployed-agents-card__badge">{channelLabel}</span>
                                 <span className="deployed-agents-card__badge">{modelLabel}</span>
                               </div>
+                              <span className="deployed-agents-card__meta">{latestActivityLabel}</span>
+                              <div className="deployed-agents-card__metrics" aria-label={`${displayName} operational summary`}>
+                                <span className="deployed-agents-card__metric">
+                                  <span className="deployed-agents-card__metric-label">Messages</span>
+                                  <strong className="deployed-agents-card__metric-value">
+                                    {formatRosterMetricValue(agentAnalytics?.messageVolumeDay ?? 0, '0')}
+                                  </strong>
+                                </span>
+                                <span className="deployed-agents-card__metric">
+                                  <span className="deployed-agents-card__metric-label">{outcomeMetric.label}</span>
+                                  <strong className="deployed-agents-card__metric-value">{outcomeMetric.value}</strong>
+                                </span>
+                                <span className="deployed-agents-card__metric">
+                                  <span className="deployed-agents-card__metric-label">Spend</span>
+                                  <strong className="deployed-agents-card__metric-value">{formatRosterSpendMetric(agentAnalytics)}</strong>
+                                </span>
+                              </div>
+                              {agentMetrics?.unresolvedEscalations ? (
+                                <span className="deployed-agents-card__subtle">
+                                  {agentMetrics.unresolvedEscalationsLabel}
+                                </span>
+                              ) : null}
                             </button>
                           );
                         })}
@@ -3423,14 +3496,14 @@ export function WorkstationDeployedAgentsPane({
                         ))}
                       </FormSelect>
                     </FormField>
-                    <FormField label="Run environment" hint="Choose where this specialist runs.">
+                    <FormField label="Run environment" hint="Cloud is the default. Use local targets only for advanced private-runtime cases.">
                       <FormSelect
                         value={wizardState.runtimeTarget}
                         onChange={(event) => setWizardField('runtimeTarget', event.currentTarget.value)}
                       >
                         <option value="cloud">Cloud</option>
-                        <option value="local">Local</option>
-                        <option value="device">Privileged device</option>
+                        <option value="local">Local runtime (advanced)</option>
+                        <option value="device">Privileged device (advanced)</option>
                       </FormSelect>
                     </FormField>
                     <FormField label="Billing plan" hint="Choose the plan tied to this specialist.">

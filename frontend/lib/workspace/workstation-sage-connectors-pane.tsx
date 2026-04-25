@@ -8,9 +8,7 @@ import { MotionSlidePanel } from '@/lib/ui/motion';
 import { AppButton, AppNotice, joinClassNames } from '@/lib/ui/primitives';
 import { SkeletonBlock } from '@/lib/ui/skeleton-block';
 import { WorkstationSageToolsPane } from '@/lib/workspace/workstation-sage-tools-pane';
-import { WorkspaceChannelPairingSurface } from '@/lib/workspace/workspace-channel-pairing-surface';
 import { useWorkspaceBoundary } from '@/lib/workspace/workspace-boundary';
-import { requestWorkspaceJson } from '@/lib/workspace/workspace-json-request';
 import { emitWorkstationProviderChanged } from '@/lib/workspace/workstation-provider-events';
 import { useWorkspaceServices } from '@/lib/workspace/workspace-services';
 import type {
@@ -22,15 +20,30 @@ import type {
 
 type IntegrationStatus = 'connected' | 'not_connected';
 
+type ProviderAuthModeSnapshot = {
+  id: string;
+  label: string;
+  secretRequired: boolean;
+};
+
 type ProviderSnapshot = {
   id: string;
   label: string;
   state: string;
   usable: boolean;
   active: boolean;
+  hidden: boolean;
+  sageVisible: boolean;
+  studioVisible: boolean;
+  localOnly: boolean;
   defaultModel: string | null;
+  defaultAuthMode: string | null;
+  authModes: ProviderAuthModeSnapshot[];
+  providerScopes: string[];
   activeSource: string | null;
   stateDetail: string | null;
+  modelsSyncedAt: string | null;
+  modelsError: string | null;
   models: ProviderCatalogModelRecord[];
 };
 
@@ -52,7 +65,6 @@ type ConnectorCardDefinition = {
   label: string;
   image: string;
   connectorIds?: string[];
-  provider?: 'telegram' | 'whatsapp';
   capabilityTags: string[];
 };
 
@@ -67,9 +79,48 @@ type ConnectorCardRecord = {
   definition: ConnectorCardDefinition;
 };
 
-type ChannelLinkRecord = {
-  provider?: string | null;
+type GatewayRegistrationRecord = Record<string, unknown> & {
+  gateway_id?: string | null;
+  display_name?: string | null;
   status?: string | null;
+  connection_status?: string | null;
+  device_trust_state?: string | null;
+  last_seen_at?: string | null;
+};
+
+type GatewayDoctorPayload = Record<string, unknown> & {
+  status?: string | null;
+  browser?: Record<string, unknown> | null;
+  browser_attach?: Record<string, unknown> | null;
+};
+
+type PersonalChannelStateRecord = Record<string, unknown> & {
+  status?: string | null;
+  qr_code?: string | null;
+  login_hint?: string | null;
+  linked_name?: string | null;
+  linked_jid?: string | null;
+  linked_phone?: string | null;
+  linked_username?: string | null;
+  connected_at?: string | null;
+  metadata?: Record<string, unknown> | null;
+};
+
+type PersonalChannelViewPayload = Record<string, unknown> & {
+  state?: PersonalChannelStateRecord | null;
+};
+
+type PersonalCardStatusTone = 'neutral' | 'connected' | 'warning' | 'danger';
+
+type PersonalCardRecord = {
+  id: 'device' | 'browser' | 'telegram_personal' | 'whatsapp_personal';
+  label: string;
+  image: string;
+  detail: string;
+  statusLabel: string;
+  statusTone: PersonalCardStatusTone;
+  summary: string;
+  nextStep: string | null;
 };
 
 type SageConnectorsPaneCache = {
@@ -77,27 +128,45 @@ type SageConnectorsPaneCache = {
   profiles: ProviderProfileRecord[];
   credentials: VaultCredentialRecord[];
   connectorVault: VaultCredentialRecord[];
-  channelLinks: ChannelLinkRecord[];
+  gateways: GatewayRegistrationRecord[];
+  selectedGatewayId: string | null;
+  doctor: GatewayDoctorPayload | null;
+  whatsappPersonal: PersonalChannelViewPayload | null;
+  telegramPersonal: PersonalChannelViewPayload | null;
 };
 
 const sageConnectorsPaneCache = new Map<string, SageConnectorsPaneCache>();
 
-const SUPPORTED_PROVIDER_IDS = [
+const FALLBACK_PROVIDER_IDS = [
   'openai',
+  'openai-codex',
   'anthropic',
   'gemini',
+  'vertex',
+  'deepseek',
+  'mistral',
+  'qwen',
+  'ollama',
 ] as const;
 
 const FALLBACK_PROVIDER_LABELS: Record<string, string> = {
   openai: 'OpenAI',
+  'openai-codex': 'OpenAI Codex',
   anthropic: 'Anthropic',
-  gemini: 'Gemini',
+  gemini: 'Google Gemini',
+  vertex: 'Google Vertex AI',
+  deepseek: 'DeepSeek',
+  mistral: 'Mistral',
+  qwen: 'Qwen',
+  ollama: 'Ollama',
 };
 
 const PROVIDER_IMAGE_BY_ID: Record<string, string> = {
   openai: '/integrations/openai.png',
+  'openai-codex': '/integrations/openai.png',
   anthropic: '/integrations/anthropic.png',
   gemini: '/integrations/gemini.jpg',
+  vertex: '/integrations/gemini.jpg',
   mistral: '/integrations/mistral.png',
   deepseek: '/integrations/deepseek.jpg',
   qwen: '/integrations/qwen.png',
@@ -105,22 +174,6 @@ const PROVIDER_IMAGE_BY_ID: Record<string, string> = {
 };
 
 const CONNECTOR_DEFINITIONS: ConnectorCardDefinition[] = [
-  {
-    id: 'telegram',
-    label: 'Telegram',
-    image: '/integrations/telegram.png',
-    connectorIds: ['telegram_bot'],
-    provider: 'telegram',
-    capabilityTags: ['Messages', 'Replies'],
-  },
-  {
-    id: 'whatsapp',
-    label: 'WhatsApp',
-    image: '/integrations/whatsapp.png',
-    connectorIds: ['whatsapp_twilio'],
-    provider: 'whatsapp',
-    capabilityTags: ['Messages', 'Autopilot'],
-  },
   {
     id: 'gmail',
     label: 'Gmail',
@@ -180,6 +233,33 @@ function readOptionalString(value: unknown): string | null {
   return typeof value === 'string' && value.trim() ? value.trim() : null;
 }
 
+function readStringList(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value
+    .map((item) => readString(item))
+    .filter(Boolean);
+}
+
+function normalizeProviderAuthModes(value: unknown): ProviderAuthModeSnapshot[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.flatMap((item) => {
+    const record = item && typeof item === 'object' ? item as Record<string, unknown> : {};
+    const id = readString(record.id).toLowerCase();
+    if (!id) {
+      return [];
+    }
+    return [{
+      id,
+      label: readString(record.label, id),
+      secretRequired: record.secret_required !== false,
+    }];
+  });
+}
+
 function chunkItems<T>(items: T[], size: number): T[][] {
   const rows: T[][] = [];
   for (let index = 0; index < items.length; index += size) {
@@ -217,7 +297,12 @@ function normalizeProviderCatalog(payload: unknown): ProviderSnapshot[] {
 
   return providers.flatMap((provider) => {
     const id = readString(provider.id).toLowerCase();
-    if (!id || !SUPPORTED_PROVIDER_IDS.includes(id as typeof SUPPORTED_PROVIDER_IDS[number])) {
+    if (!id || readString(provider.kind).toLowerCase() !== 'provider') {
+      return [];
+    }
+    const hidden = provider.hidden === true;
+    const sageVisible = provider.sage_visible !== false;
+    if (hidden || !sageVisible) {
       return [];
     }
     return [{
@@ -226,9 +311,18 @@ function normalizeProviderCatalog(payload: unknown): ProviderSnapshot[] {
       state: readString(provider.state, 'unknown'),
       usable: provider.usable === true,
       active: provider.active === true,
+      hidden,
+      sageVisible,
+      studioVisible: provider.studio_visible === true,
+      localOnly: provider.local_only === true,
       defaultModel: readOptionalString(provider.default_model),
+      defaultAuthMode: readOptionalString(provider.default_auth_mode),
+      authModes: normalizeProviderAuthModes(provider.auth_modes),
+      providerScopes: readStringList(provider.provider_scopes),
       activeSource: readOptionalString(provider.active_source),
       stateDetail: readOptionalString(provider.state_detail),
+      modelsSyncedAt: readOptionalString(provider.models_synced_at),
+      modelsError: readOptionalString(provider.models_error),
       models: Array.isArray(provider.models)
         ? provider.models.filter((item): item is ProviderCatalogModelRecord => Boolean(item) && typeof item === 'object')
         : [],
@@ -237,15 +331,24 @@ function normalizeProviderCatalog(payload: unknown): ProviderSnapshot[] {
 }
 
 function fallbackProviderCatalog(): ProviderSnapshot[] {
-  return SUPPORTED_PROVIDER_IDS.map((id) => ({
+  return FALLBACK_PROVIDER_IDS.map((id) => ({
     id,
     label: FALLBACK_PROVIDER_LABELS[id] ?? id,
     state: 'unknown',
     usable: false,
     active: false,
+    hidden: false,
+    sageVisible: true,
+    studioVisible: id !== 'openai-codex' && id !== 'ollama',
+    localOnly: id === 'ollama',
     defaultModel: null,
+    defaultAuthMode: id === 'openai-codex' ? 'oauth_token' : id === 'ollama' ? 'none' : 'api_key',
+    authModes: [],
+    providerScopes: [],
     activeSource: null,
     stateDetail: null,
+    modelsSyncedAt: null,
+    modelsError: null,
     models: [],
   }));
 }
@@ -261,13 +364,6 @@ function normalizeVaultCredentials(payload: unknown): VaultCredentialRecord[] {
   const record = payload && typeof payload === 'object' ? payload as Record<string, unknown> : {};
   return Array.isArray(record.items)
     ? record.items.filter((item): item is VaultCredentialRecord => Boolean(item) && typeof item === 'object')
-    : [];
-}
-
-function normalizeChannelLinks(payload: unknown): ChannelLinkRecord[] {
-  const record = payload && typeof payload === 'object' ? payload as Record<string, unknown> : {};
-  return Array.isArray(record.links)
-    ? record.links.filter((item): item is ChannelLinkRecord => Boolean(item) && typeof item === 'object')
     : [];
 }
 
@@ -310,8 +406,43 @@ function isSecretlessConnection(providerId: string, profile: ProviderProfileReco
   return false;
 }
 
-function providerRequiresKey(providerId: string): boolean {
-  return providerId !== 'ollama';
+function providerAuthModeConfig(provider: ProviderSnapshot, profile: ProviderProfileRecord | null = null): ProviderAuthModeSnapshot | null {
+  const activeMode = readString(profile?.auth_mode || provider.defaultAuthMode).toLowerCase();
+  if (activeMode) {
+    const match = provider.authModes.find((item) => item.id === activeMode);
+    if (match) {
+      return match;
+    }
+  }
+  return provider.authModes[0] ?? null;
+}
+
+function providerRequiresSecret(provider: ProviderSnapshot, profile: ProviderProfileRecord | null = null): boolean {
+  const mode = providerAuthModeConfig(provider, profile);
+  if (mode) {
+    return mode.secretRequired;
+  }
+  const authMode = readString(profile?.auth_mode || provider.defaultAuthMode).toLowerCase();
+  return authMode !== 'none' && authMode !== 'local_cli';
+}
+
+function providerCredentialLabel(provider: ProviderSnapshot, profile: ProviderProfileRecord | null = null): string {
+  const mode = providerAuthModeConfig(provider, profile);
+  if (mode?.label) {
+    return mode.label;
+  }
+  return providerRequiresSecret(provider, profile) ? 'Credential' : 'No credential required';
+}
+
+function providerCredentialPlaceholder(provider: ProviderSnapshot): string {
+  const authMode = readString(provider.defaultAuthMode).toLowerCase();
+  if (authMode === 'oauth_token' || authMode === 'access_token') {
+    return 'token-...';
+  }
+  if (authMode === 'none' || authMode === 'local_cli') {
+    return '';
+  }
+  return 'sk-...';
 }
 
 function maskKeyTail(credential: VaultCredentialRecord | null): string | null {
@@ -377,7 +508,12 @@ function describeProviderCard(record: ProviderCardRecord, localCompanionOnline: 
   if (record.provider.id === 'ollama') {
     return localCompanionOnline ? 'Browse local models' : 'Needs local device';
   }
-  return providerRequiresKey(record.provider.id) ? 'Add API key' : 'Connect to continue';
+  if (record.provider.modelsError) {
+    return 'Needs model refresh';
+  }
+  return providerRequiresSecret(record.provider, record.profile)
+    ? `Add ${providerCredentialLabel(record.provider, record.profile).toLowerCase()}`
+    : 'Connect to continue';
 }
 
 function describeConnectorCard(record: ConnectorCardRecord): string {
@@ -385,6 +521,275 @@ function describeConnectorCard(record: ConnectorCardRecord): string {
     return record.definition.capabilityTags.slice(0, 2).join(' · ') || 'Ready';
   }
   return record.definition.capabilityTags.slice(0, 2).join(' · ') || 'Connect to continue';
+}
+
+function summarizeGatewayState(gateway: GatewayRegistrationRecord | null, doctor: GatewayDoctorPayload | null): {
+  statusLabel: string;
+  statusTone: PersonalCardStatusTone;
+  detail: string;
+  summary: string;
+  nextStep: string | null;
+} {
+  if (!gateway) {
+    return {
+      statusLabel: 'Needs Gateway',
+      statusTone: 'warning',
+      detail: 'Pair this device so Sage can use your personal channels and browser.',
+      summary: 'Sage needs one paired local gateway before it can act as you from this device.',
+      nextStep: 'Open Gateway and pair this device.',
+    };
+  }
+  const connectionStatus = readString(gateway.connection_status || gateway.status).toLowerCase();
+  const doctorStatus = readString(doctor?.status).toLowerCase();
+  if (connectionStatus === 'online' && ['healthy', 'pass', 'connected'].includes(doctorStatus)) {
+    return {
+      statusLabel: 'Connected',
+      statusTone: 'connected',
+      detail: 'This device is paired and online for Sage.',
+      summary: 'Gateway is online and ready for personal channels, browser access, and local approvals.',
+      nextStep: null,
+    };
+  }
+  return {
+    statusLabel: 'Needs attention',
+    statusTone: 'danger',
+    detail: 'This device is paired, but the gateway is offline or degraded.',
+    summary: 'Open Gateway to reconnect the local runtime and clear device health issues.',
+    nextStep: 'Open Gateway to reconnect or inspect health.',
+  };
+}
+
+function summarizeBrowserState(gateway: GatewayRegistrationRecord | null, doctor: GatewayDoctorPayload | null): {
+  statusLabel: string;
+  statusTone: PersonalCardStatusTone;
+  detail: string;
+  summary: string;
+  nextStep: string | null;
+} {
+  if (!gateway) {
+    return {
+      statusLabel: 'Needs Gateway',
+      statusTone: 'warning',
+      detail: 'Pair this device before Sage can use your browser.',
+      summary: 'Signed-in sites, localhost pages, and your real browser session stay behind the gateway.',
+      nextStep: 'Open Gateway and pair this device first.',
+    };
+  }
+  const gatewayOnline = readString(gateway.connection_status || gateway.status).toLowerCase() === 'online';
+  if (!gatewayOnline) {
+    return {
+      statusLabel: 'Needs attention',
+      statusTone: 'danger',
+      detail: 'This device is paired, but Gateway is offline.',
+      summary: 'Localhost pages, signed-in sites, and private browser sessions only work while the paired gateway is online.',
+      nextStep: 'Open Gateway to reconnect this device first.',
+    };
+  }
+  const browserRecord = doctor && typeof doctor.browser === 'object' ? doctor.browser as Record<string, unknown> : {};
+  const browserAttachRecord = doctor && typeof doctor.browser_attach === 'object'
+    ? doctor.browser_attach as Record<string, unknown>
+    : {};
+  const activeCount = Number(browserRecord.active_count ?? 0);
+  const attachCount = Number(browserAttachRecord.count ?? 0);
+  const attachedCount = Number(browserAttachRecord.attached_count ?? 0);
+  const pendingAttachCount = Number(browserAttachRecord.pending_count ?? 0);
+  const attachApprovalRequiredCount = Number(browserAttachRecord.approval_required_count ?? 0);
+  const attachFailedCount = Number(browserAttachRecord.failed_count ?? 0);
+  const status = readString(browserRecord.status).toLowerCase();
+  const attachStatus = readString(browserAttachRecord.status).toLowerCase();
+  if (attachApprovalRequiredCount > 0) {
+    return {
+      statusLabel: 'Approval needed',
+      statusTone: 'warning',
+      detail: 'Signed-in browser attach is waiting for approval.',
+      summary: 'Public web search can stay in cloud, but your private browser sessions stay on this device and need Gateway approval first.',
+      nextStep: 'Open Gateway to review browser approvals.',
+    };
+  }
+  if (attachedCount > 0 && attachStatus === 'pass') {
+    return {
+      statusLabel: 'Connected',
+      statusTone: 'connected',
+      detail: 'Your signed-in browser is attached through Gateway.',
+      summary: readString(
+        browserAttachRecord.summary,
+        'Gateway is ready to use your existing signed-in browser session on this device.',
+      ),
+      nextStep: 'Open Gateway to inspect browser sessions or interrupt attach.',
+    };
+  }
+  if (attachFailedCount > 0 || attachStatus === 'fail') {
+    return {
+      statusLabel: 'Needs attention',
+      statusTone: 'danger',
+      detail: readString(browserAttachRecord.summary, 'Existing-session browser attach failed.'),
+      summary: 'Gateway could not attach to your signed-in browser session. Localhost and private sites stay unavailable until attach recovers.',
+      nextStep: 'Open Gateway to retry browser attach or inspect the failure.',
+    };
+  }
+  if (attachCount > 0 && pendingAttachCount > 0) {
+    return {
+      statusLabel: 'Needs attention',
+      statusTone: 'warning',
+      detail: readString(browserAttachRecord.summary, 'Existing-session browser attach is configured but not ready yet.'),
+      summary: 'Gateway knows about your browser attach flow, but it still needs a reachable local browser session before Sage can use it.',
+      nextStep: 'Open Gateway to finish browser attach.',
+    };
+  }
+  if (activeCount > 0 && status === 'pass') {
+    return {
+      statusLabel: 'Connected',
+      statusTone: 'connected',
+      detail: 'Gateway has a governed browser session ready.',
+      summary: `${readString(browserRecord.summary, 'Browser access is ready on this device.')} Localhost pages and private sessions still stay behind Gateway.`,
+      nextStep: 'Open Gateway to review governed browser sessions.',
+    };
+  }
+  if (activeCount === 0 && status === 'pass') {
+    return {
+      statusLabel: 'Not connected',
+      statusTone: 'neutral',
+      detail: 'No browser session is active yet.',
+      summary: 'Gateway is online and ready. Use Gateway when you want Sage to browse localhost, signed-in sites, or any other private browser state from this device.',
+      nextStep: 'Open Gateway to start or attach a browser session.',
+    };
+  }
+  return {
+    statusLabel: 'Needs attention',
+    statusTone: status === 'warn' ? 'warning' : 'danger',
+    detail: readString(browserRecord.summary, 'Browser access needs attention.'),
+    summary: 'Browser session health, localhost access, and signed-in session approvals all stay in Gateway.',
+    nextStep: 'Open Gateway to resolve browser session state.',
+  };
+}
+
+function summarizeWhatsappPersonalState(gateway: GatewayRegistrationRecord | null, payload: PersonalChannelViewPayload | null): {
+  statusLabel: string;
+  statusTone: PersonalCardStatusTone;
+  detail: string;
+  summary: string;
+  nextStep: string | null;
+} {
+  if (!gateway) {
+    return {
+      statusLabel: 'Needs Gateway',
+      statusTone: 'warning',
+      detail: 'Pair this device before Sage can use your WhatsApp.',
+      summary: 'Personal WhatsApp stays on your device and routes through the paired gateway.',
+      nextStep: 'Open Gateway and pair this device first.',
+    };
+  }
+  const state = payload?.state && typeof payload.state === 'object' ? payload.state : null;
+  const status = readString(state?.status).toLowerCase();
+  const metadata = state?.metadata && typeof state.metadata === 'object' ? state.metadata as Record<string, unknown> : {};
+  const linkedLabel = readString(state?.linked_name || state?.linked_jid, '');
+  if (!state || !status || status === 'idle' || status === 'disconnected') {
+    return {
+      statusLabel: 'Not connected',
+      statusTone: 'neutral',
+      detail: 'Your WhatsApp is not linked yet.',
+      summary: 'Open Gateway to finish the personal WhatsApp login flow for Sage.',
+      nextStep: 'Open Gateway to start WhatsApp login.',
+    };
+  }
+  if (status === 'connected') {
+    return {
+      statusLabel: 'Connected',
+      statusTone: 'connected',
+      detail: linkedLabel ? `${linkedLabel} is linked on this device.` : 'Your WhatsApp is linked on this device.',
+      summary: 'Sage can reply through your personal WhatsApp from the paired gateway.',
+      nextStep: null,
+    };
+  }
+  if (['qr_required', 'pairing_code_required', 'code_required', 'login_required'].includes(status) || Boolean(state?.qr_code) || Boolean(state?.login_hint) || Boolean(metadata.pairing_code)) {
+    return {
+      statusLabel: 'Waiting for QR/login',
+      statusTone: 'warning',
+      detail: 'WhatsApp is waiting for a QR scan or pairing code step.',
+      summary: 'Finish the personal WhatsApp login flow in Gateway.',
+      nextStep: 'Open Gateway to complete QR or pairing code login.',
+    };
+  }
+  if (['connecting', 'reconnecting', 'resuming'].includes(status)) {
+    return {
+      statusLabel: 'Reconnecting',
+      statusTone: 'warning',
+      detail: 'WhatsApp is reconnecting on the gateway.',
+      summary: 'Sage will use your WhatsApp again after the gateway session recovers.',
+      nextStep: 'Open Gateway if reconnect does not recover.',
+    };
+  }
+  return {
+    statusLabel: 'Needs attention',
+    statusTone: 'danger',
+    detail: `Your WhatsApp is ${status.replace(/_/g, ' ')}.`,
+    summary: 'Open Gateway to inspect the personal WhatsApp session on this device.',
+    nextStep: 'Open Gateway to inspect WhatsApp state.',
+  };
+}
+
+function summarizeTelegramPersonalState(gateway: GatewayRegistrationRecord | null, payload: PersonalChannelViewPayload | null): {
+  statusLabel: string;
+  statusTone: PersonalCardStatusTone;
+  detail: string;
+  summary: string;
+  nextStep: string | null;
+} {
+  if (!gateway) {
+    return {
+      statusLabel: 'Needs Gateway',
+      statusTone: 'warning',
+      detail: 'Pair this device before Sage can use your Telegram.',
+      summary: 'Personal Telegram stays on your device and routes through the paired gateway.',
+      nextStep: 'Open Gateway and pair this device first.',
+    };
+  }
+  const state = payload?.state && typeof payload.state === 'object' ? payload.state : null;
+  const status = readString(state?.status).toLowerCase();
+  const linkedLabel = readString(state?.linked_name || state?.linked_username || state?.linked_phone, '');
+  if (!state || !status || status === 'idle' || status === 'disconnected') {
+    return {
+      statusLabel: 'Not connected',
+      statusTone: 'neutral',
+      detail: 'Your Telegram is not linked yet.',
+      summary: 'Open Gateway to finish the personal Telegram login flow for Sage.',
+      nextStep: 'Open Gateway to start Telegram login.',
+    };
+  }
+  if (status === 'connected') {
+    return {
+      statusLabel: 'Connected',
+      statusTone: 'connected',
+      detail: linkedLabel ? `${linkedLabel} is linked on this device.` : 'Your Telegram is linked on this device.',
+      summary: 'Sage can reply through your personal Telegram from the paired gateway.',
+      nextStep: null,
+    };
+  }
+  if (['code_required', 'password_required', 'login_required'].includes(status) || Boolean(state?.login_hint)) {
+    return {
+      statusLabel: 'Waiting for QR/login',
+      statusTone: 'warning',
+      detail: 'Telegram is waiting for a login code or confirmation.',
+      summary: 'Finish the personal Telegram login flow in Gateway.',
+      nextStep: 'Open Gateway to complete Telegram login.',
+    };
+  }
+  if (['connecting', 'reconnecting', 'resuming'].includes(status)) {
+    return {
+      statusLabel: 'Reconnecting',
+      statusTone: 'warning',
+      detail: 'Telegram is reconnecting on the gateway.',
+      summary: 'Sage will use your Telegram again after the gateway session recovers.',
+      nextStep: 'Open Gateway if reconnect does not recover.',
+    };
+  }
+  return {
+    statusLabel: 'Needs attention',
+    statusTone: 'danger',
+    detail: `Your Telegram is ${status.replace(/_/g, ' ')}.`,
+    summary: 'Open Gateway to inspect the personal Telegram session on this device.',
+    nextStep: 'Open Gateway to inspect Telegram state.',
+  };
 }
 
 export function WorkstationSageConnectorsPane({
@@ -403,11 +808,16 @@ export function WorkstationSageConnectorsPane({
   const gridColumns = useResponsiveColumns();
   const cacheKey = bootstrap.workspace.id;
   const cachedState = sageConnectorsPaneCache.get(cacheKey) ?? null;
+  const workspaceId = bootstrap.workspace.id;
   const [providers, setProviders] = useState<ProviderSnapshot[]>(() => cachedState?.providers ?? []);
   const [profiles, setProfiles] = useState<ProviderProfileRecord[]>(() => cachedState?.profiles ?? []);
   const [credentials, setCredentials] = useState<VaultCredentialRecord[]>(() => cachedState?.credentials ?? []);
   const [connectorVault, setConnectorVault] = useState<VaultCredentialRecord[]>(() => cachedState?.connectorVault ?? []);
-  const [channelLinks, setChannelLinks] = useState<ChannelLinkRecord[]>(() => cachedState?.channelLinks ?? []);
+  const [gateways, setGateways] = useState<GatewayRegistrationRecord[]>(() => cachedState?.gateways ?? []);
+  const [selectedGatewayId, setSelectedGatewayId] = useState<string | null>(() => cachedState?.selectedGatewayId ?? null);
+  const [doctor, setDoctor] = useState<GatewayDoctorPayload | null>(() => cachedState?.doctor ?? null);
+  const [whatsappPersonal, setWhatsappPersonal] = useState<PersonalChannelViewPayload | null>(() => cachedState?.whatsappPersonal ?? null);
+  const [telegramPersonal, setTelegramPersonal] = useState<PersonalChannelViewPayload | null>(() => cachedState?.telegramPersonal ?? null);
   const [isLoading, setIsLoading] = useState(() => cachedState === null);
   const [error, setError] = useState<string | null>(null);
   const [status, setStatus] = useState<string | null>(null);
@@ -419,37 +829,91 @@ export function WorkstationSageConnectorsPane({
   const [busyCardId, setBusyCardId] = useState<string | null>(null);
 
   const loadState = useCallback(async () => {
-    const [catalogResult, profileResult, credentialResult, connectorResult, channelResult] = await Promise.allSettled([
+    const [catalogResult, profileResult, credentialResult, connectorResult, gatewayResult] = await Promise.allSettled([
       services.client.listProviderCatalog(),
       services.client.listProviderProfiles(),
       services.client.listVaultCredentials(),
       services.client.listConnectorsVault(),
-      requestWorkspaceJson<Record<string, unknown>>(
-        services,
-        `/api/channel-pairing/links?workspace_id=${encodeURIComponent(bootstrap.workspace.id)}&include_revoked=true`,
-      ),
+      (async () => {
+        const registrationsPayload = await services.client.requestJson<Record<string, unknown>>({
+          path: `/api/gateway/registrations?workspace_id=${encodeURIComponent(workspaceId)}`,
+          allowStatuses: [404],
+        });
+        const registrationItems = Array.isArray(registrationsPayload?.items)
+          ? registrationsPayload.items.filter((item): item is GatewayRegistrationRecord => Boolean(item) && typeof item === 'object')
+          : [];
+        const selectedGateway = registrationItems.find((item) =>
+          readString(item.connection_status || item.status).toLowerCase() === 'online',
+        ) ?? registrationItems[0] ?? null;
+        const gatewayId = readString(selectedGateway?.gateway_id, '') || null;
+        if (!gatewayId) {
+          return {
+            gateways: registrationItems,
+            selectedGatewayId: null,
+            doctor: null,
+            whatsappPersonal: null,
+            telegramPersonal: null,
+          };
+        }
+        const [doctorPayload, whatsappPayload, telegramPayload] = await Promise.all([
+          services.client.requestJson<GatewayDoctorPayload>({
+            path: `/api/gateway/registrations/${encodeURIComponent(gatewayId)}/doctor`,
+            allowStatuses: [403, 404],
+          }),
+          services.client.requestJson<PersonalChannelViewPayload>({
+            path: `/api/personal-channels/whatsapp/gateways/${encodeURIComponent(gatewayId)}`,
+            allowStatuses: [403, 404],
+          }),
+          services.client.requestJson<PersonalChannelViewPayload>({
+            path: `/api/personal-channels/telegram/gateways/${encodeURIComponent(gatewayId)}`,
+            allowStatuses: [403, 404],
+          }),
+        ]);
+        return {
+          gateways: registrationItems,
+          selectedGatewayId: gatewayId,
+          doctor: doctorPayload,
+          whatsappPersonal: whatsappPayload,
+          telegramPersonal: telegramPayload,
+        };
+      })(),
     ]);
 
     const catalogPayload = catalogResult.status === 'fulfilled' ? catalogResult.value : null;
+    const gatewayPayload = gatewayResult.status === 'fulfilled' ? gatewayResult.value : {
+      gateways: [],
+      selectedGatewayId: null,
+      doctor: null,
+      whatsappPersonal: null,
+      telegramPersonal: null,
+    };
     const normalizedProviders = normalizeProviderCatalog(catalogPayload);
     const nextState: SageConnectorsPaneCache = {
       providers: normalizedProviders.length > 0 ? normalizedProviders : fallbackProviderCatalog(),
       profiles: profileResult.status === 'fulfilled' ? normalizeProviderProfiles(profileResult.value) : [],
       credentials: credentialResult.status === 'fulfilled' ? normalizeVaultCredentials(credentialResult.value) : [],
       connectorVault: connectorResult.status === 'fulfilled' ? normalizeVaultCredentials(connectorResult.value) : [],
-      channelLinks: channelResult.status === 'fulfilled' ? normalizeChannelLinks(channelResult.value) : [],
+      gateways: gatewayPayload.gateways,
+      selectedGatewayId: gatewayPayload.selectedGatewayId,
+      doctor: gatewayPayload.doctor,
+      whatsappPersonal: gatewayPayload.whatsappPersonal,
+      telegramPersonal: gatewayPayload.telegramPersonal,
     };
     sageConnectorsPaneCache.set(cacheKey, nextState);
     setProviders(nextState.providers);
     setProfiles(nextState.profiles);
     setCredentials(nextState.credentials);
     setConnectorVault(nextState.connectorVault);
-    setChannelLinks(nextState.channelLinks);
+    setGateways(nextState.gateways);
+    setSelectedGatewayId(nextState.selectedGatewayId);
+    setDoctor(nextState.doctor);
+    setWhatsappPersonal(nextState.whatsappPersonal);
+    setTelegramPersonal(nextState.telegramPersonal);
 
     if (catalogResult.status === 'rejected') {
       throw catalogResult.reason;
     }
-  }, [cacheKey, services.client, bootstrap.workspace.id]);
+  }, [cacheKey, services.client, workspaceId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -536,6 +1000,24 @@ export function WorkstationSageConnectorsPane({
     };
   }), [credentials, profiles, providerModelOverrides, providers]);
 
+  const selectedGateway = useMemo(
+    () => gateways.find((gateway) => readString(gateway.gateway_id, '') === readString(selectedGatewayId, '')) ?? null,
+    [gateways, selectedGatewayId],
+  );
+
+  const personalCards = useMemo<PersonalCardRecord[]>(() => {
+    const device = summarizeGatewayState(selectedGateway, doctor);
+    const browser = summarizeBrowserState(selectedGateway, doctor);
+    const telegram = summarizeTelegramPersonalState(selectedGateway, telegramPersonal);
+    const whatsapp = summarizeWhatsappPersonalState(selectedGateway, whatsappPersonal);
+    return [
+      { id: 'device', label: 'This device', image: '', ...device },
+      { id: 'browser', label: 'Use my browser', image: '', ...browser },
+      { id: 'telegram_personal', label: 'Your Telegram', image: '/integrations/telegram.png', ...telegram },
+      { id: 'whatsapp_personal', label: 'Your WhatsApp', image: '/integrations/whatsapp.png', ...whatsapp },
+    ];
+  }, [doctor, selectedGateway, telegramPersonal, whatsappPersonal]);
+
   const connectorCards = useMemo<ConnectorCardRecord[]>(() => {
     const latestConnectorById = new Map<string, VaultCredentialRecord>();
     sortCredentials(connectorVault).forEach((item) => {
@@ -544,12 +1026,6 @@ export function WorkstationSageConnectorsPane({
         latestConnectorById.set(connectorId, item);
       }
     });
-    const activeChannelProviders = new Set(
-      channelLinks
-        .filter((item) => readString(item.status, 'active').toLowerCase() === 'active')
-        .map((item) => readString(item.provider).toLowerCase())
-        .filter(Boolean),
-    );
 
     return CONNECTOR_DEFINITIONS.flatMap((definition) => {
       if (Array.isArray(connectorIds) && connectorIds.length > 0 && !connectorIds.includes(definition.id)) {
@@ -558,8 +1034,7 @@ export function WorkstationSageConnectorsPane({
       const connectorCredential = (definition.connectorIds ?? [])
         .map((connectorId) => latestConnectorById.get(connectorId))
         .find((item): item is VaultCredentialRecord => Boolean(item)) ?? null;
-      const connectedByProvider = definition.provider ? activeChannelProviders.has(definition.provider) : false;
-      const connected = connectedByProvider || Boolean(connectorCredential);
+      const connected = Boolean(connectorCredential);
       return [{
         kind: 'connector',
         id: definition.id,
@@ -571,7 +1046,7 @@ export function WorkstationSageConnectorsPane({
         definition,
       }];
     });
-  }, [channelLinks, connectorIds, connectorVault]);
+  }, [connectorIds, connectorVault]);
 
   useEffect(() => {
     setConnectorMemoryEnabled((current) => {
@@ -601,8 +1076,8 @@ export function WorkstationSageConnectorsPane({
 
   async function handleProviderSave(record: ProviderCardRecord): Promise<void> {
     const draftApiKey = (providerDraftKeys[record.id] ?? '').trim();
-    if (providerRequiresKey(record.provider.id) && !draftApiKey) {
-      setError('API key is required before Sage can connect this provider.');
+    if (providerRequiresSecret(record.provider, record.profile) && !draftApiKey) {
+      setError(`${providerCredentialLabel(record.provider, record.profile)} is required before Sage can connect this provider.`);
       return;
     }
     setBusyCardId(record.id);
@@ -687,6 +1162,13 @@ export function WorkstationSageConnectorsPane({
     setProviderDraftKeys((current) => ({ ...current, [providerId]: pastedText }));
   }
 
+  function openGatewaySurface() {
+    if (typeof window === 'undefined') {
+      return;
+    }
+    window.location.assign(`/w/${encodeURIComponent(workspaceId)}/gateway`);
+  }
+
   function renderProviderCard(record: ProviderCardRecord) {
     const isExpanded = expandedCardId === record.id;
     return (
@@ -743,6 +1225,47 @@ export function WorkstationSageConnectorsPane({
     );
   }
 
+  function personalStatusClassName(record: PersonalCardRecord): string | null {
+    if (record.statusTone === 'connected') {
+      return 'sage-unified-card__status--connected';
+    }
+    if (record.statusTone === 'warning') {
+      return 'sage-unified-card__status--warning';
+    }
+    if (record.statusTone === 'danger') {
+      return 'sage-unified-card__status--danger';
+    }
+    return null;
+  }
+
+  function renderPersonalCard(record: PersonalCardRecord) {
+    const isExpanded = expandedCardId === record.id;
+    return (
+      <button
+        key={record.id}
+        type="button"
+        className={joinClassNames('sage-unified-card', isExpanded && 'sage-unified-card--selected')}
+        onClick={() => {
+          setExpandedCardId(isExpanded ? null : record.id);
+        }}
+      >
+        <BrandLogo
+          id={record.id}
+          label={record.label}
+          src={record.image}
+          failedLogos={failedLogos}
+          onError={markLogoFailed}
+        />
+        <strong className="sage-unified-card__title">{record.label}</strong>
+        <span className="sage-unified-card__detail">{record.detail}</span>
+        <span className={joinClassNames('sage-unified-card__status', personalStatusClassName(record))}>
+          {record.statusTone === 'connected' ? <span className="sage-unified-card__dot" aria-hidden="true" /> : null}
+          {record.statusLabel}
+        </span>
+      </button>
+    );
+  }
+
   function renderProviderExpand(record: ProviderCardRecord) {
     const busy = busyCardId === record.id;
     return (
@@ -761,11 +1284,16 @@ export function WorkstationSageConnectorsPane({
         {record.status === 'connected' ? (
           <>
             <div className="sage-unified-expand__text">
-              {`Connected · ${record.keyTail ? `••••${record.keyTail}` : providerRequiresKey(record.provider.id) ? 'Saved key hidden' : 'No API key required'}`}
+              {`Connected · ${record.keyTail ? `••••${record.keyTail}` : providerRequiresSecret(record.provider, record.profile) ? 'Saved credential hidden' : 'No credential required'}`}
             </div>
             {record.provider.id === 'ollama' && !localCompanionOnline ? (
               <div className="sage-unified-expand__text">
                 Connect local device to use Ollama
+              </div>
+            ) : null}
+            {record.provider.modelsError ? (
+              <div className="sage-unified-expand__text">
+                {record.provider.modelsError}
               </div>
             ) : null}
             <div className="sage-unified-expand__actions">
@@ -783,12 +1311,12 @@ export function WorkstationSageConnectorsPane({
           </>
         ) : (
           <>
-            {providerRequiresKey(record.provider.id) ? (
-              <FormField label="API key">
+            {providerRequiresSecret(record.provider, record.profile) ? (
+              <FormField label={providerCredentialLabel(record.provider, record.profile)}>
                 <FormInput
                   type="text"
                   value={providerDraftKeys[record.id] ?? ''}
-                  placeholder="sk-..."
+                  placeholder={providerCredentialPlaceholder(record.provider)}
                   autoComplete="off"
                   autoCapitalize="none"
                   autoCorrect="off"
@@ -857,25 +1385,48 @@ export function WorkstationSageConnectorsPane({
     );
   }
 
+  function renderPersonalExpand(record: PersonalCardRecord) {
+    return (
+      <MotionSlidePanel className="sage-unified-expand">
+        <div className="sage-unified-expand__header">
+          <strong className="sage-unified-expand__title">{record.label}</strong>
+          <button
+            type="button"
+            className="sage-unified-expand__close"
+            onClick={() => setExpandedCardId(null)}
+            aria-label={`Close ${record.label}`}
+          >
+            <X size={14} strokeWidth={1.9} aria-hidden="true" />
+          </button>
+        </div>
+        <div className="sage-unified-expand__text">{record.summary}</div>
+        {record.nextStep ? (
+          <div className="sage-unified-expand__text">{record.nextStep}</div>
+        ) : null}
+        <div className="sage-unified-expand__actions">
+          <AppButton
+            type="button"
+            onClick={openGatewaySurface}
+          >
+            {record.statusLabel === 'Needs Gateway'
+              ? 'Pair this device'
+              : record.id === 'browser'
+                ? 'Open browser sessions'
+                : 'Open Gateway'}
+          </AppButton>
+          <button
+            type="button"
+            className="sage-unified-expand__link"
+            onClick={() => setExpandedCardId(null)}
+          >
+            Close
+          </button>
+        </div>
+      </MotionSlidePanel>
+    );
+  }
+
   function renderConnectorExpand(record: ConnectorCardRecord) {
-    if (record.id === 'telegram') {
-      return (
-        <MotionSlidePanel className="sage-unified-expand sage-unified-expand--embed">
-          <div className="sage-unified-expand__header">
-            <strong className="sage-unified-expand__title">Telegram</strong>
-            <button
-              type="button"
-              className="sage-unified-expand__close"
-              onClick={() => setExpandedCardId(null)}
-              aria-label="Close Telegram"
-            >
-              <X size={14} strokeWidth={1.9} aria-hidden="true" />
-            </button>
-          </div>
-          <WorkspaceChannelPairingSurface featureId="integrations" />
-        </MotionSlidePanel>
-      );
-    }
 
     return (
       <MotionSlidePanel className="sage-unified-expand">
@@ -931,7 +1482,7 @@ export function WorkstationSageConnectorsPane({
     );
   }
 
-  function renderSection<T extends ProviderCardRecord | ConnectorCardRecord>(
+  function renderSection<T extends { id: string }>(
     label: string,
     items: T[],
     renderCard: (item: T) => ReactNode,
@@ -962,6 +1513,20 @@ export function WorkstationSageConnectorsPane({
       {error ? <AppNotice tone="warning">{error}</AppNotice> : null}
 
       <div className="sage-unified-page">
+        {isLoading ? (
+          <section className="sage-unified-section">
+            <p className="sage-unified-section__label">Personal</p>
+            <div className={joinClassNames('sage-unified-grid', gridColumns === 2 ? 'sage-unified-grid--2' : 'sage-unified-grid--4')}>
+              {Array.from({ length: gridColumns }).map((_, index) => (
+                <div key={`personal-skeleton-${index}`} className="sage-unified-card" aria-hidden="true">
+                  <SkeletonBlock height="40px" width="40px" />
+                  <SkeletonBlock height="16px" width="70%" />
+                  <SkeletonBlock height="12px" width="54%" />
+                </div>
+              ))}
+            </div>
+          </section>
+        ) : renderSection('Personal', personalCards, renderPersonalCard, renderPersonalExpand)}
         {showProviders ? (
           isLoading
             ? renderProviderSkeletons()
@@ -991,9 +1556,9 @@ export function WorkstationSageConnectorsPane({
         ) : null}
         {isLoading ? (
           <div className="sage-settings-empty">
-            Loading connectors…
+            Loading apps and accounts…
           </div>
-        ) : renderSection('Connectors', connectorCards, renderConnectorCard, renderConnectorExpand)}
+        ) : renderSection('Apps & Accounts', connectorCards, renderConnectorCard, renderConnectorExpand)}
       </div>
     </div>
   );

@@ -227,6 +227,7 @@ PROVIDER_CATALOG = {
         "default_auth_mode": "api_key",
         "default_model": "gpt-4o",
         "models": ["gpt-4o", "gpt-4o-mini", "gpt-4.1", "gpt-4.1-mini"],
+        "provider_scopes": ["sage_personal", "workspace_api", "studio_safe"],
         "note": "Direct OpenAI credentials only. Empyralis does not provide an in-product ChatGPT or Codex sign-in flow yet.",
     },
     "openai-codex": {
@@ -238,6 +239,7 @@ PROVIDER_CATALOG = {
         "default_auth_mode": "oauth_token",
         "default_model": "gpt-5.4",
         "models": ["gpt-5.4", "gpt-5.3-codex", "gpt-5.2"],
+        "provider_scopes": ["sage_personal"],
         "note": "ChatGPT / Codex OAuth session for the Codex transport.",
     },
     "anthropic": {
@@ -250,6 +252,7 @@ PROVIDER_CATALOG = {
         "default_auth_mode": "api_key",
         "default_model": "claude-3-7-sonnet-20250219",
         "models": ["claude-3-7-sonnet-20250219", "claude-3-5-haiku-20241022", "claude-3-5-sonnet-20241022"],
+        "provider_scopes": ["sage_personal", "workspace_api", "studio_safe"],
         "note": "Use a direct Anthropic API key or the local Claude subscription already signed into the Claude CLI on this machine.",
     },
     "claude_code_cli": {
@@ -262,6 +265,7 @@ PROVIDER_CATALOG = {
         "default_model": "sonnet",
         "alias_for": "anthropic",
         "hidden": True,
+        "provider_scopes": ["sage_personal", "local_only", "hidden"],
     },
     "gemini": {
         "label": "Google Gemini",
@@ -273,6 +277,7 @@ PROVIDER_CATALOG = {
         "default_auth_mode": "api_key",
         "default_model": "gemini-2.5-flash",
         "models": ["gemini-2.5-flash", "gemini-2.5-pro", "gemini-2.0-flash", "gemini-1.5-flash", "gemini-1.5-pro"],
+        "provider_scopes": ["sage_personal", "workspace_api", "studio_safe"],
         "note": "Direct Gemini API key or Gemini CLI OAuth.",
     },
     "vertex": {
@@ -284,6 +289,7 @@ PROVIDER_CATALOG = {
         "default_auth_mode": "access_token",
         "default_model": "gemini-1.5-pro",
         "models": ["gemini-1.5-pro", "gemini-1.5-flash"],
+        "provider_scopes": ["sage_personal", "workspace_api", "studio_safe"],
         "note": "Direct Vertex AI access token with project and region.",
     },
     "qwen": {
@@ -296,6 +302,7 @@ PROVIDER_CATALOG = {
         "default_model": "qwen-plus",
         "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
         "models": ["qwen-plus", "qwen-turbo", "qwen-max"],
+        "provider_scopes": ["sage_personal", "workspace_api", "studio_safe"],
         "note": "Direct Qwen API key using Alibaba DashScope's OpenAI-compatible endpoint.",
     },
     "deepseek": {
@@ -308,6 +315,7 @@ PROVIDER_CATALOG = {
         "default_model": "deepseek-chat",
         "base_url": "https://api.deepseek.com/v1",
         "models": ["deepseek-chat", "deepseek-reasoner"],
+        "provider_scopes": ["sage_personal", "workspace_api", "studio_safe"],
         "note": "Direct DeepSeek API key using the OpenAI-compatible endpoint.",
     },
     "mistral": {
@@ -320,6 +328,7 @@ PROVIDER_CATALOG = {
         "default_model": "mistral-large-latest",
         "base_url": "https://api.mistral.ai/v1",
         "models": ["mistral-large-latest", "mistral-medium-latest", "mistral-small-latest"],
+        "provider_scopes": ["sage_personal", "workspace_api", "studio_safe"],
         "note": "Direct Mistral API key using the OpenAI-compatible endpoint.",
     },
     "ollama": {
@@ -332,6 +341,7 @@ PROVIDER_CATALOG = {
         "default_model": "llama3.2",
         "base_url": "http://localhost:11434/v1",
         "models": ["llama3.2", "llama3", "mistral", "gemma", "phi3"],
+        "provider_scopes": ["sage_personal", "local_only"],
         "note": "Local Ollama endpoint on this machine. No credential is required.",
     },
 }
@@ -2629,6 +2639,7 @@ def build_workspace_provider_connection_truth(
             "auth_modes": auth_modes,
             "default_auth_mode": default_auth_mode or None,
             "default_model": default_model or None,
+            "provider_scopes": list(catalog_entry.get("provider_scopes") or []),
             "note": catalog_entry.get("note"),
             "profile_count": len(workspace_profiles),
             "enabled_profile_count": len(enabled_profiles),

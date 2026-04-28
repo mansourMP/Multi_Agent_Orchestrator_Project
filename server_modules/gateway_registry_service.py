@@ -111,8 +111,11 @@ def build_gateway_ws_url(
     gateway_id: str,
     session_token: str,
 ) -> str:
-    scheme = "wss" if str(request.url.scheme or "").strip().lower() == "https" else "ws"
-    netloc = request.headers.get("host") or request.url.netloc
+    forwarded_proto = str(request.headers.get("x-forwarded-proto") or "").split(",", 1)[0].strip().lower()
+    request_scheme = str(request.url.scheme or "").strip().lower()
+    scheme = "wss" if (forwarded_proto or request_scheme) == "https" else "ws"
+    forwarded_host = str(request.headers.get("x-forwarded-host") or "").split(",", 1)[0].strip()
+    netloc = forwarded_host or request.headers.get("host") or request.url.netloc
     return (
         f"{scheme}://{netloc}/api/gateway/ws"
         f"?gateway_id={quote(str(gateway_id or '').strip())}"

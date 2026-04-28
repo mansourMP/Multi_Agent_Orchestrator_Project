@@ -39,6 +39,8 @@ services:
         generateValue: true
       - key: ORION_JWT_SECRET
         generateValue: true
+      - key: CREDENTIAL_VAULT_KEY
+        generateValue: true
       - key: EMPYRALIS_SECRETS_BROKER_SECRET
         generateValue: true
       - key: EMPYRALIS_TOOL_BROKER_SECRET

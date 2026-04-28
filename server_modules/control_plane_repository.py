@@ -6803,13 +6803,15 @@ async def upsert_agent_turn(
                     WHEN title = 'New chat' AND $3 <> '' AND $4 = 'user' THEN $3
                     ELSE title
                 END
-            WHERE id = $1
+            WHERE id = $1 AND tenant_id = $5 AND workspace_id = $6
             RETURNING id, tenant_id, workspace_id, owner_user_id, master_agent_install_id, channel, title, status, metadata, created_at, updated_at, last_turn_at
             """,
             resolved_thread_id,
             now_ts,
             build_default_thread_title(content),
             str(role or "").strip().lower(),
+            resolved_tenant_id,
+            resolved_workspace_id,
         )
     return {
         "thread": dict(thread_row) if thread_row is not None else None,
@@ -6835,11 +6837,15 @@ async def list_agent_turns(
                 SELECT *
                 FROM agent_turns
                 WHERE thread_id = $1
-                  AND (active_agent_install_id = $2 OR active_agent_install_id IS NULL OR active_agent_install_id = '')
+                  AND tenant_id = $2
+                  AND workspace_id = $3
+                  AND (active_agent_install_id = $4 OR active_agent_install_id IS NULL OR active_agent_install_id = '')
                 ORDER BY created_at ASC
-                LIMIT $3
+                LIMIT $5
                 """,
                 str(thread_id or "").strip(),
+                tenant_id,
+                workspace_id,
                 resolved_install_id,
                 max(1, int(limit or 200)),
             )
@@ -6849,10 +6855,14 @@ async def list_agent_turns(
                 SELECT *
                 FROM agent_turns
                 WHERE thread_id = $1
+                  AND tenant_id = $2
+                  AND workspace_id = $3
                 ORDER BY created_at ASC
-                LIMIT $2
+                LIMIT $4
                 """,
                 str(thread_id or "").strip(),
+                tenant_id,
+                workspace_id,
                 max(1, int(limit or 200)),
             )
     return [dict(row) for row in rows]
@@ -6874,9 +6884,13 @@ async def get_agent_thread(
             SELECT id, tenant_id, workspace_id, owner_user_id, master_agent_install_id, channel, title, status, metadata, created_at, updated_at, last_turn_at
             FROM agent_threads
             WHERE id = $1
+              AND tenant_id = $2
+              AND workspace_id = $3
             LIMIT 1
             """,
             str(thread_id or "").strip(),
+            tenant_id,
+            workspace_id,
         )
     if row is None:
         return None
